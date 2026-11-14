@@ -1,0 +1,35 @@
+[package]
+name = "codemason-gui"
+# One integration-test binary for the crate (see AGENTS.md, "Test Layout").
+autotests = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "egui/eframe desktop frontend for codemason, rendering the frontend-neutral App"
+
+[lints]
+workspace = true
+
+[dependencies]
+codemason-agent = { path = "../codemason-agent" }
+codemason-app-core = { workspace = true }
+codemason-types = { workspace = true }
+anyhow = { workspace = true }
+eframe = { workspace = true }
+egui = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+# Only to let the event loop start off the process main thread (`cdmn` runs
+# its program body on a dedicated thread); the patch redirects it to the fork.
+winit = { version = "0.30.13", default-features = false }
+
+[dev-dependencies]
+egui_kittest = { workspace = true }
+parking_lot = { workspace = true }
+tokio = { workspace = true }
+
+[[test]]
+name = "all"
+path = "tests/all.rs"

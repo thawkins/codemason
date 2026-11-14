@@ -71,9 +71,14 @@ multiple-versions = "warn"
 wildcards = "warn"
 
 [sources]
-# Only allow crates from crates.io and local paths.
+# Only allow crates from crates.io, local paths and the storytold forks below.
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# No git dependencies are allowed; all third-party crates come from crates.io.
-allow-git = []
+# The GUI frontend builds on the storytold egui/winit forks and craft-libs
+# (pinned by rev in the root Cargo.toml); no other git source is allowed.
+allow-git = [
+    "https://github.com/storytold/craft-libs",
+    "https://github.com/storytold/egui",
+    "https://github.com/storytold/winit",
+]

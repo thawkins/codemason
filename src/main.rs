@@ -92,6 +92,10 @@ struct Cli {
     #[arg(long, global = true)]
     no_tui: bool,
 
+    /// Open the desktop GUI instead of the terminal UI
+    #[arg(long, global = true, conflicts_with = "no_tui")]
+    gui: bool,
+
     /// Auto-approve all permissions
     #[arg(long, alias = "no-prompt", global = true)]
     yes: bool,
@@ -551,6 +555,11 @@ async fn async_main() -> Result<()> {
         );
         EnvFilter::new("warn")
     });
+    // `--gui` with no reachable display fails here, before the tracing layer
+    // and the stderr spool take over the terminal, so the reason is visible.
+    if cli.gui {
+        codemason_gui::check_display()?;
+    }
     let tui_will_run = !cli.no_tui
         && matches!(
             cli.command,
@@ -631,7 +640,8 @@ async fn async_main() -> Result<()> {
     // panic hook, `cliprintln_err!`, and any C-library diagnostic would be lost.
     // Redirect fd 2 into a truncating spool (`log/logwindow/stderr-*.log`) and
     // mirror it into the log panel; non-TUI modes keep writing to the terminal.
-    let stderr_spool = if tui_will_run {
+    // The GUI paints in its own window, so stderr stays on the terminal.
+    let stderr_spool = if tui_will_run && !cli.gui {
         stderr_spool::install(&working_dir.join("log").join("logwindow"))
     } else {
         None
@@ -1282,6 +1292,27 @@ async fn async_main() -> Result<()> {
                         Err(e) => tracing::error!(error = %e, "Failed to process message"),
                     }
                 }
+            } else if cli.gui {
+                Box::pin(codemason_gui::run_gui(codemason_gui::GuiOptions {
+                    event_bus,
+                    storage,
+                    provider_registry,
+                    session_processor,
+                    agent: (*resolved_agent).clone(),
+                    show_log: cli.log,
+                    startup: if cli.new_session {
+                        codemason_tui::StartupSession::New
+                    } else {
+                        codemason_tui::StartupSession::Restore
+                    },
+                    log_rx: tui_log_rx
+                        .unwrap_or_else(|| codemason_tui::tracing_layer::tui_log_channel(1).1),
+                    db_path: db_path.clone(),
+                    config_paths: config.read().await.config_paths.clone(),
+                    timings: startup,
+                    stderr_spool: stderr_spool.clone(),
+                }))
+                .await?;
             } else {
                 // Print startup banner before entering TUI alternate screen
                 print_banner();
@@ -1530,24 +1561,43 @@ async fn async_main() -> Result<()> {
                     anyhow::bail!("Session not found: {id}");
                 }
                 tracing::info!(session_id = %id, "Resuming session");
-                print_banner();
-                // See the `run_tui` call above: box the large future.
-                Box::pin(codemason_tui::run_tui(
-                    event_bus,
-                    storage,
-                    provider_registry,
-                    session_processor,
-                    (*resolved_agent).clone(),
-                    cli.log,
-                    codemason_tui::StartupSession::Resume(id),
-                    tui_log_rx
-                        .unwrap_or_else(|| codemason_tui::tracing_layer::tui_log_channel(1).1),
-                    db_path.clone(),
-                    config.read().await.config_paths.clone(),
-                    startup,
-                    stderr_spool.clone(),
-                ))
-                .await?;
+                if cli.gui {
+                    Box::pin(codemason_gui::run_gui(codemason_gui::GuiOptions {
+                        event_bus,
+                        storage,
+                        provider_registry,
+                        session_processor,
+                        agent: (*resolved_agent).clone(),
+                        show_log: cli.log,
+                        startup: codemason_tui::StartupSession::Resume(id),
+                        log_rx: tui_log_rx
+                            .unwrap_or_else(|| codemason_tui::tracing_layer::tui_log_channel(1).1),
+                        db_path: db_path.clone(),
+                        config_paths: config.read().await.config_paths.clone(),
+                        timings: startup,
+                        stderr_spool: stderr_spool.clone(),
+                    }))
+                    .await?;
+                } else {
+                    print_banner();
+                    // See the `run_tui` call above: box the large future.
+                    Box::pin(codemason_tui::run_tui(
+                        event_bus,
+                        storage,
+                        provider_registry,
+                        session_processor,
+                        (*resolved_agent).clone(),
+                        cli.log,
+                        codemason_tui::StartupSession::Resume(id),
+                        tui_log_rx
+                            .unwrap_or_else(|| codemason_tui::tracing_layer::tui_log_channel(1).1),
+                        db_path.clone(),
+                        config.read().await.config_paths.clone(),
+                        startup,
+                        stderr_spool.clone(),
+                    ))
+                    .await?;
+                }
             }
             SessionCommands::ExportArchive {
                 id,

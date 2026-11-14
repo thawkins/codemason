@@ -10,8 +10,9 @@ edition = "2024"
 # `const`-context stabilisations from 1.91, so any lower floor is a claim clippy
 # rejects. Every crate inherits this via `rust-version.workspace = true`, so the
 # floor has one source of truth (audit finding: the field was previously absent,
-# and when added it understated the real floor).
-rust-version = "1.91"
+# and when added it understated the real floor). 1.95 is the floor of the
+# storytold egui/craft-libs forks the GUI frontend builds on.
+rust-version = "1.95"
 license = "MIT"
 repository = "https://github.com/thawkins/codemason"
 authors = ["Tim Hawkins <tim.thawkins@gmail.com>"]
@@ -180,6 +181,13 @@ codemason-plugins = { path = "crates/codemason-plugins" }
 codemason-server = { path = "crates/codemason-server" }
 codemason-app-core = { path = "crates/codemason-app-core" }
 codemason-tui = { path = "crates/codemason-tui" }
+codemason-gui = { path = "crates/codemason-gui" }
+
+# -- GUI frontend (egui) -----------------------------------------------------
+# Resolved to the storytold forks by the `[patch.crates-io]` table below.
+egui = "0.37"
+eframe = "0.37"
+egui_kittest = "0.37"
 
 # ── Hashing / file-locking ───────────────────────────────────────────────
 num_cpus = "1.16"
@@ -318,6 +326,23 @@ pdf-extract = { path = "vendor/pdf-extract" }
 # `WrappedBlock::flush_word` — upstream 0.16.7 computes `self.width - self.line.len`
 # with plain subtraction. See vendor/html2text/src/render/text_renderer.rs.
 html2text = { path = "vendor/html2text" }
+# egui/winit forks, copied from the storytold/craft-libs root Cargo.toml at rev
+# d15bf1f35b17b759870f9e5111b9a5d243f64888 (its vendor/ path patches are
+# craft-libs-local and are not copied; nor are egui_extras, egui_demo_lib and
+# egui_inspection, which nothing here uses yet and cargo warns about as unused
+# patches - add each back with the first crate that depends on it).
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
 
 [[bin]]
 name = "cdmn"
@@ -362,6 +387,7 @@ codemason-llm = { workspace = true }
 codemason-plugins = { workspace = true }
 codemason-server = { workspace = true }
 codemason-tui = { workspace = true }
+codemason-gui = { workspace = true }
 codemason-specs = { workspace = true }
 codemason-research = { workspace = true }
 codemason-types = { workspace = true }
