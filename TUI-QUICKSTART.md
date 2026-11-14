@@ -627,7 +627,7 @@ to commit them.
 
 The **`/new`** slash command scaffolds a brand-new project in the current
 directory (it must be empty apart from codemason artifacts). The same surface is
-available as the `codemason new` CLI subcommand.
+available as the `cdmn new` CLI subcommand.
 
 ### Scaffold a minimal project
 
@@ -676,7 +676,7 @@ values (derived from the scaffolder's registries, so they cannot drift).
 The **`/plugins`** slash command manages sandboxed Codex- and Claude
 Code/Desktop-dialect plugins from the TUI. Enabled plugins contribute tools
 (registered as `plugin_<id>_<tool>`) and slash commands. The same operations
-are available from a shell as `codemason plugins <sub>`.
+are available from a shell as `cdmn plugins <sub>`.
 
 ```text
 /plugins list --verbose          # list plugins, state, contributions, telemetry
@@ -1027,7 +1027,7 @@ Keys:
 With the mouse, click a row to open it and drag the sidebar's right border
 to resize it. The same actions are available as `/session` commands
 (`/session help`); projects are managed with `/project` (`/project help`). codemason reopens your open sessions on the next start;
-use `codemason --new` to start fresh.
+use `cdmn --new` to start fresh.
 
 ### Session menu
 
@@ -1166,4 +1166,4 @@ shortcut again to close the panel.
 - Browse the per-command howtos in `docs/howtos/slashcommands/` (INDEX.md lists every command).
 - See `docs/custom-agents.md` to create your own agent profiles.
 - See `docs/howtos/teams.md` to coordinate multi-agent teams.
-- Run `codemason --help` for a complete list of command-line options.
+- Run `cdmn --help` for a complete list of command-line options.

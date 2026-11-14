@@ -13,6 +13,9 @@
   `codemason_info`. Settings stored under the old names are not read.
 - `test_fr030_surface_agreement` pins the new tool-name digest, which changed
   with the `codemason_info` rename.
+- README, QUICKSTART, TUI-QUICKSTART and SPEC show `cdmn` in every command
+  example (inline as well as code blocks); README, SPEC and STATS note the
+  fork from ragent and the new names.
 
 ### Fixed - "New session on branch" no longer leaves an orphaned worktree
 

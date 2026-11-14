@@ -4,6 +4,10 @@
 
 **Update prompt:** Update @STATS.md to show the composition of the project, show breakdown by crate
 
+> **Rename:** the project is now codemason (crates `codemason-*`, binary
+> `cdmn`). The rename changes names only - no crate, binary, tool or test
+> target is added or removed - so every count below still holds.
+>
 > **`1.0.169` is a release-only bump.** It publishes the project Properties,
 > project-heading/selection menus, PR/MR history, session context menu and
 > PR/MR Auto-fix work that the paragraphs below already describe as

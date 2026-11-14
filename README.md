@@ -13,6 +13,10 @@ single binary that links only against the system C runtime (libc, libm, libgcc_s
 
 It is implemented in Rust as a learning exercise for the author.
 
+codemason started as a copy of [ragent](https://github.com/thawkins/ragent).
+The binary is `cdmn`; environment variables use the `CODEMASON_` prefix and
+local state lives in `.codemason/`.
+
 Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
 [QUICKSTART.md](QUICKSTART.md) for the guided tour.
 
@@ -50,7 +54,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
 - **Comprehensive tool system** — a registry of tools grouped into permission
   categories in the default build (the engine-gated `mf_screenshot` tool registers
   only when a drivable headless browser is present — spec `openhands` FR-029).
-  `codemason run --dry-run` prints the live total and per-category counts (see
+  `cdmn run --dry-run` prints the live total and per-category counts (see
   [docs/howtos/tools/INDEX.md](docs/howtos/tools/INDEX.md)); the groups are:
 
 ![codemason tool session](assets/screens/codemasonsession.png)
@@ -113,7 +117,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   of a team's `config.json` goes through `TeamStore::update`, which holds the
   exclusive lock from read to write, so two teammates changing status at once no
   longer lose one change. The team runtime is bound before tool dispatch in every
-  entry point - TUI, `codemason run`, `codemason serve` and ACP - so `team_spawn` works
+  entry point - TUI, `cdmn run`, `cdmn serve` and ACP - so `team_spawn` works
   outside the TUI, and it is rebindable (`TeamManagerSlot`) rather than pinned to
   the first team the process ever created: a manager whose team is gone is
   unbound atomically, a manager refuses to spawn into a team it does not drive,
@@ -244,7 +248,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   remote. A session can run in its own `git worktree` at a branch
   (`/session new --branch`), and the session sidebar groups sessions by
   project and shows the pull/merge request count for each session's branch
-  (`/project`, `codemason project`)
+  (`/project`, `cdmn project`)
 - **Session menu and Auto-fix** — right-click (or `m` on) a sidebar session
   for Open PR/MR, Open in (editor, file manager, terminal), Pin, Mark as
   unread, Rename, Fork, Move to section, Archive, Delete and, on a machine that
@@ -267,7 +271,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   submenu that opens any of them in the browser
 - **Session management** — persistent conversation history stored in SQLite;
   list, resume, export-archive, and import sessions. A session's transcript can be
-  aged out with `/db prune [--days N] [--dry-run]` (TUI) or `codemason db prune`
+  aged out with `/db prune [--days N] [--dry-run]` (TUI) or `cdmn db prune`
   (CLI): messages older than the window are deleted and **the session itself is
   kept**, so an expired conversation stays listed and resumable with an empty
   transcript. A real prune asks for confirmation first and the dialog opens on
@@ -321,7 +325,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
 - **ACP integration** — Agent Client Protocol support in both directions: an ACP
   **client** that drives Claude Code, Codex, or Gemini CLI as an external
   subprocess over JSON-RPC on stdio, and a **feature-gated, off-by-default ACP
-  server** (`cargo build --features acp-server`; `codemason acp-server`) that an
+  server** (`cargo build --features acp-server`; `cdmn acp-server`) that an
   ACP-capable editor (Zed, VS Code, JetBrains) attaches to, streaming the driven
   session's updates back as `session/update` notifications
 - **Snapshot & undo** — file snapshots before edits so changes can be rolled back
@@ -420,8 +424,8 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   stack layers (`--stack axum`), starter docs (`README.md`, `QUICKSTART.md`,
   `STATS.md`, `docs/`), git init + initial commit, and optional GitHub/GitLab
   remote creation + push (`--github`/`--gitlab`); progress streams live in the
-  message window; also available as the `codemason new` CLI subcommand
-- **Research system** — `/research` slash command family and `codemason research` CLI for
+  message window; also available as the `cdmn new` CLI subcommand
+- **Research system** — `/research` slash command family and `cdmn research` CLI for
   structured information gathering (web search + local file cross-referencing) with
   self-contained dated report outputs (`research/<name>/RESEARCH-<YYYY-MM-DD>.md`
   plus the `CORPA-<YYYY-MM-DD>.md` QA companion, so a `/research update` re-run
@@ -521,7 +525,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   `/plugins list|add|remove|enable|disable|test|stores|marketplace|help` in the TUI
   (`/plugins list [--verbose]` opens an interactive table panel with the capability
   blocks listed at the end; `Space` toggles the highlighted plugin's enabled state) and
-  the `codemason plugins <sub>` CLI (`/plugins marketplace show` and `/plugins marketplace <codex|claude> list` list the marketplaces configured for each store,
+  the `cdmn plugins <sub>` CLI (`/plugins marketplace show` and `/plugins marketplace <codex|claude> list` list the marketplaces configured for each store,
   one section per store with a name/url/description table; `/plugins marketplace <codex|claude> add <source>` registers an additional marketplace from an
   `owner/repo` slug, an SSH remote, an `https://` URL, or a local directory, in the
   user-global `plugins.stores.marketplaces`, and the two browse panels fetch and
@@ -546,7 +550,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   `remove <id>`, `enable <id>`, `disable <id>`, `connect <id>`,
   `disconnect <id>`, `auth <id>`, `test <id>`, `stores [--check]`,
   `marketplace show|claude list|add|remove`, `help`) in the TUI and the
-  `codemason connectors <sub>` CLI. `/connectors claude` opens an interactive,
+  `cdmn connectors <sub>` CLI. `/connectors claude` opens an interactive,
   off-the-event-loop catalogue browser wearing the same design language as
   `/plugins claude` (filter by query, category, and marketplace; browse; install with
   one key): a calm slate accent frame and a structured title line; a left column
@@ -584,7 +588,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   output reference, and can notify Slack/GitHub/Linear/Notion/a generic webhook.
   A run executes only in its configured backend. Managed through
   `/automation [list]`, `/automation runs <id>`, `/automation run <id>`,
-  `/automation help` in the TUI, `codemason automation list|runs <id>|run <id>` on
+  `/automation help` in the TUI, `cdmn automation list|runs <id>|run <id>` on
   the CLI, and `GET /automation`, `GET /automation/runs/{id}`,
   `POST /automation/{id}/run` over HTTP. `automation.enabled: false` (or an
   absent block) makes the subsystem inert
@@ -594,7 +598,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   companion test asserts the table and the router agree in both directions. The
   same table generates a dependency-free typed TypeScript client
   (`docs/openapi/codemason-client.d.ts`), emitted from the CLI with
-  `codemason openapi --client`. The document carries no runtime data or secrets,
+  `cdmn openapi --client`. The document carries no runtime data or secrets,
   so `/openapi.json` is public while every described operation declares the
   native bearer security scheme
 - **OpenAI-compatible surface** — an inbound `POST /v1/chat/completions` and
@@ -603,7 +607,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   `chat.completion` JSON object; `stream:true` streams `chat.completion.chunk`
   `text/event-stream` events terminated by `data: [DONE]` (FR-011, FR-012).
   Enable it with `openai.enabled` plus an `openai.token`; enabling it without a
-  token makes `codemason serve` refuse to start the surface rather than serve it
+  token makes `cdmn serve` refuse to start the surface rather than serve it
   unauthenticated (FR-032). Permission checks are preserved on both paths
   (FR-038).
 - **Input queue** — the TUI input field stays editable while the primary agent
@@ -736,11 +740,11 @@ cdmn [OPTIONS] [COMMAND]
   new          Scaffold a new project in the current directory (the `/new` command)
 ```
 
-With no command, `codemason` launches the interactive TUI. Run `codemason --help` for
+With no command, `cdmn` launches the interactive TUI. Run `cdmn --help` for
 the full list of commands and options, and `codemason <command> --help` for one
 command.
 
-`codemason run --dry-run` is the fastest way to confirm a machine is set up: it loads
+`cdmn run --dry-run` is the fastest way to confirm a machine is set up: it loads
 config, resolves the provider, lists the registered skills and tools by category, and
 connects MCP servers, then prints a `READY` / `WARNING` / `BLOCKED` verdict.
 
@@ -809,7 +813,7 @@ live in the user-global config. Rejected keys are logged at `warn!`.
   },
   // OpenAI-compatible inbound surface (spec `openhands` FR-012, FR-024,
   // FR-032). When `enabled` is true a `token` (or the ambient `CODEMASON_TOKEN`)
-  // is required or `codemason serve` refuses to start the surface.
+  // is required or `cdmn serve` refuses to start the surface.
   "openai": {
     "enabled": true,
     "token": "sk-codemason-local"

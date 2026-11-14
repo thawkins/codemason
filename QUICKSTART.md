@@ -26,7 +26,7 @@ cargo build --release
 cp target/release/cdmn ~/.local/bin/
 
 # Check the installed version:
-cdmn --version    # or: codemason -V
+cdmn --version    # or: cdmn -V
 ```
 
 Build requirements, the incremental-build setting and expected build cost are in
@@ -487,7 +487,7 @@ the user-global `~/.config/codemason/codemason.json`. Rejected keys are logged a
   },
 
   // OpenAI-compatible inbound surface (optional). When `enabled` is true a
-  // `token` (or the ambient `CODEMASON_TOKEN`) is required or `codemason serve`
+  // `token` (or the ambient `CODEMASON_TOKEN`) is required or `cdmn serve`
   // refuses to start the surface.
   "openai": {
     "enabled": true,
@@ -883,7 +883,7 @@ The AI agent can use these tools during a session:
 | `autofix_add`| Push the current branch, open (or reuse) its PR/MR against the branch it came from, bind it and turn Auto-fix on | `git:write` |
 | `DateTime` | Current date/time: RFC 3339 UTC instant, an optional fixed UTC-offset rendering, date/time fields, Unix timestamp | `none`          |
 
-Run `/tools` in the TUI to list every registered tool, or `codemason --dry-run --json
+Run `/tools` in the TUI to list every registered tool, or `cdmn --dry-run --json
 run x` for the total and per-category counts (see
 [docs/howtos/tools/INDEX.md](docs/howtos/tools/INDEX.md)). `mf_screenshot` is
 registered only when a drivable headless browser engine is present — spec
@@ -1129,7 +1129,7 @@ Manage plugins from the TUI or the CLI:
 | `/plugins claude [query] [--category <name>] [--refresh]` | Open the interactive Claude plugin-marketplace browser, with the same `query`, `--category`, and `--refresh` arguments (and the same per-row marketplace column) |
 | `/plugins help` | Show the usage block |
 
-The same operations are available from a shell as `codemason plugins <sub> …`.
+The same operations are available from a shell as `cdmn plugins <sub> …`.
 Plugins are discovered under `.codemason/plugins/` (project) or
 `~/.config/codemason/plugins/` (user-global). Set `plugins.enabled: false` to make
 the whole subsystem inert.
@@ -1196,7 +1196,7 @@ Manage connectors from the TUI or the CLI:
 | `/connectors marketplace claude list\|add <source> [--force]\|remove <name>` | List, add, or remove an additional catalogue marketplace (an `owner/repo` slug, a GitHub SSH remote, an `https://` URL, or a local directory), written to the user-global `connectors.stores.marketplaces` |
 | `/connectors help` | Show the usage block |
 
-The same operations are available from a shell as `codemason connectors <sub> …`.
+The same operations are available from a shell as `cdmn connectors <sub> …`.
 Connectors are discovered under `.codemason/connectors/` (project) or
 `~/.config/codemason/connectors/` (user-global). Their secrets live in the encrypted
 credential store — the manifest stores only the credential *name*. Set
@@ -1379,7 +1379,7 @@ question) its sidebar row shows `!` and the status bar shows `N need you`.
 ```
 
 `codemason` reopens the sessions that were open when it last exited;
-`codemason --new` starts a fresh one. Untitled sessions take their title from
+`cdmn --new` starts a fresh one. Untitled sessions take their title from
 the first prompt.
 
 The left-hand sidebar lists sessions by project. `Alt+S` shows, focuses or
@@ -1607,7 +1607,7 @@ a command-launched server needs no transport key:
 
 A config that is written back still carries an explicit `"type": "stdio"`.
 
-### ACP server for IDE clients (`codemason acp-server`)
+### ACP server for IDE clients (`cdmn acp-server`)
 
 codemason can serve the Agent Client Protocol (ACP) over stdio so an ACP-capable
 editor (Zed, VS Code, JetBrains) can attach to it. This is **feature-gated and
@@ -1652,7 +1652,7 @@ sandboxed tool cannot read or write the host working directory; `Bash` is still
 gated by the full 7-layer host validator, and a provisioning failure fails the
 turn instead of falling back to the host. Configure backends under the
 `execution_backend` / `backends` keys (see the example `codemason.json` above).
-`codemason config` prints the resolved registry.
+`cdmn config` prints the resolved registry.
 
 ### LLM security analyzer (`/security`)
 
@@ -1672,7 +1672,7 @@ model, provider error, timeout) degrades to the normal interactive prompt.
 
 ### OpenAI-compatible surface
 
-When enabled, `codemason serve` exposes `POST /v1/chat/completions` and
+When enabled, `cdmn serve` exposes `POST /v1/chat/completions` and
 `GET /v1/models` behind the native bearer token, bridging to the same agent loop
 (permission checks preserved):
 
@@ -1684,7 +1684,7 @@ curl -s http://127.0.0.1:3000/v1/chat/completions \
 
 `stream:false` returns an OpenAI `chat.completion` object; `stream:true` returns a
 `chat.completion.chunk` `text/event-stream` ending in `data: [DONE]`. Enabling the
-surface without a token makes `codemason serve` refuse to start it rather than serve
+surface without a token makes `cdmn serve` refuse to start it rather than serve
 it unauthenticated.
 
 ---
@@ -1783,7 +1783,7 @@ cdmn run "Add input validation to the create_user endpoint"
 
 ### Scaffold a New Project
 
-The `/new` command (TUI) and `codemason new` (CLI) scaffold a brand-new,
+The `/new` command (TUI) and `cdmn new` (CLI) scaffold a brand-new,
 agent-friendly project in an **empty** directory:
 
 ```bash
@@ -1817,7 +1817,7 @@ See [`docs/howtos/newproj.md`](docs/howtos/newproj.md) for the full manual.
 
 ### Research → Spec → Implement
 
-The `codemason research` workflow lets you gather information on a topic
+The `cdmn research` workflow lets you gather information on a topic
 before turning it into a spec. The new iterative engine decomposes the topic
 into sub-questions, gathers sources for each one in parallel, verifies claims,
 detects missing links, and stops adaptively.
@@ -1970,9 +1970,9 @@ undated `RESEARCH.md` / `CORPA.md`, and every read surface resolves whichever
 file exists (newest dated first, legacy last).
 
 Every report frontmatter also records an `invocation` line — the
-verbatim `codemason research create ...` command, `/research ...` TUI slash
+verbatim `cdmn research create ...` command, `/research ...` TUI slash
 command, or `POST /research` request summary that started the run. The
-`/research update <name>` command (or `codemason research update <name>` /
+`/research update <name>` command (or `cdmn research update <name>` /
 `PUT /research/<name>`) reads that line and replays the exact run,
 writing a fresh dated report and companion while the earlier run's report
 stays on disk. The original invocation is preserved on
@@ -2037,7 +2037,7 @@ is sent to the model for review and error resolution.
 ! git status
 ```
 
-This also works in headless `codemason run` mode:
+This also works in headless `cdmn run` mode:
 
 ```bash
 cdmn run "! cargo check"
@@ -2315,7 +2315,7 @@ cluster.start_job(desc).await?; // routes to elected leader
 
 ### HTTP API
 
-When running `codemason serve`, the orchestration endpoints are available under `/orchestrator`:
+When running `cdmn serve`, the orchestration endpoints are available under `/orchestrator`:
 
 ```sh
 # Start a job (async)
@@ -2410,7 +2410,7 @@ each dispatch target names the environment variable holding its credential
 → Ensure GitHub Copilot is active in VS Code or JetBrains, or set `GITHUB_COPILOT_TOKEN`. The token is read from `~/.config/github-copilot/apps.json`.
 
 **"No API key found for provider"**
-→ Set the environment variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) or run `codemason auth <provider> <key>`.
+→ Set the environment variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) or run `cdmn auth <provider> <key>`.
 
 **"Failed to connect to Ollama server"**
 → Ensure Ollama is running (`ollama serve`) and accessible at the configured host.
@@ -2422,7 +2422,7 @@ each dispatch target names the environment variable holding its credential
 → Add `"permission": [{"permission": "file:read", "action": "allow"}]` to your config, or use `--yes`.
 
 **See debug output**
-→ Run with `codemason --log-level debug run "..."` for verbose logging.
+→ Run with `cdmn --log-level debug run "..."` for verbose logging.
 
 ---
 

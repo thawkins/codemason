@@ -199,7 +199,11 @@ below documents the current state of all subsystems.
 
 ## 1. Overview
 
-Codemason is an AI coding agent for the terminal, built in Rust. It provides multi-provider LLM orchestration, a built-in tool system, terminal UI, and client/server architecture — all compiled into a single statically-linked binary.
+Codemason is an AI coding agent for the terminal, built in Rust. It provides multi-provider LLM orchestration, a built-in tool system, terminal UI, and client/server architecture — all compiled into a single statically-linked binary named `cdmn`.
+
+Codemason was forked from ragent: crates are named `codemason-*`, environment
+variables use the `CODEMASON_` prefix, project and user state live in
+`.codemason/`, and the self-description tool is `codemason_info`.
 
 ### 1.1 Key Characteristics
 
@@ -207,7 +211,7 @@ Codemason is an AI coding agent for the terminal, built in Rust. It provides mul
 |----------------|-------------|
 | **Single binary** | Statically linked, zero runtime dependencies beyond OS libraries |
 | **Multi-provider** | 13 first-class LLM provider IDs with auto-discovery and health checks |
-| **Tool-rich** | A tool registry grouped into permission categories; `codemason --dry-run --json run x` reports the live total (`mf_screenshot` is engine-gated, spec `openhands` FR-029) |
+| **Tool-rich** | A tool registry grouped into permission categories; `cdmn --dry-run --json run x` reports the live total (`mf_screenshot` is engine-gated, spec `openhands` FR-029) |
 | **Local-first** | SQLite, Tantivy, and tree-sitter compiled in; no external services required |
 | **Streaming** | Real-time token, tool, and event streaming via TUI and HTTP SSE |
 | **Extensible** | Custom agents, skills, MCP servers, and provider modules |
@@ -522,7 +526,7 @@ selects a downstream model based on request characteristics.)
 
 #### OpenRouter Provider
 
-- API key via `OPENROUTER_API_KEY` or `codemason auth openrouter <key>`
+- API key via `OPENROUTER_API_KEY` or `cdmn auth openrouter <key>`
 - Single `GET /api/v1/models` discovery call returns all 100+ upstream models
 - OpenAI-compatible `POST /api/v1/chat/completions` streaming with tool-call and reasoning deltas
 - Per-model metadata (context window, pricing, vision/reasoning flags) mapped from discovery
@@ -556,7 +560,7 @@ row: an id with no declared contract fails the coverage assertion in
 `crates/codemason-llm/tests/test_wire_profile_table.rs` at build time, so a
 provider cannot join the build without stating its tool-calling terms.
 
-`codemason --wire-matrix` prints that contract per registered provider as one
+`cdmn --wire-matrix` prints that contract per registered provider as one
 aligned ASCII table (ten columns - the provider id plus the nine fields, one row
 per id, sorted, no blank or `-` cell) and exits without contacting a provider or
 executing a tool; a registered id with no row is reported by name and exits
@@ -780,7 +784,7 @@ and nowhere else.
 ### 3.2.3 Tool Surface Agreement (FR-030, spec `uniformtools`)
 
 The registered tool surface is grouped into permission families (the `tools`
-section of `codemason --dry-run --json run x` reports the live total and per-family
+section of `cdmn --dry-run --json run x` reports the live total and per-family
 counts), and every enumeration of it is checked against the registry rather than
 against a remembered number:
 
@@ -1413,7 +1417,7 @@ occurrence is rejected. An intentional call is exempted with a same-line
 - Crash markers, panic reports, and the stderr spool are created owner-only
   (`0o600`), and the `/bug-report` dump is written `0o600` too. The crash
   record's argv is redacted before serialisation, because
-  `codemason auth openai sk-...` would otherwise persist a live credential to a
+  `cdmn auth openai sk-...` would otherwise persist a live credential to a
   world-readable file.
 
 **Failure reporting.**
@@ -1619,7 +1623,7 @@ provider entry (`thinking`, `env`, `models`) still merges.
   },
   // Session-message retention (opt-in; the section is omitted entirely while
   // disabled). When enabled, messages older than `message_days` are deleted at
-  // startup and by `/db prune` / `codemason db prune`. Session rows are kept, so
+  // startup and by `/db prune` / `cdmn db prune`. Session rows are kept, so
   // an expired transcript stays listed and resumable but reads back empty.
   // `message_days` must be >= 1: a zero-day window would empty the store on
   // every start and is rejected by `validate()`.
@@ -1837,7 +1841,7 @@ age-based expiry. The `storage` section makes that opt-in explicit:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `retention.enabled` | `bool` | `false` | Run age-based expiry at startup and permit `/db prune` / `codemason db prune`. |
+| `retention.enabled` | `bool` | `false` | Run age-based expiry at startup and permit `/db prune` / `cdmn db prune`. |
 | `retention.message_days` | `u32` | `14` | Window, in days, a message survives. Must be `>= 1`. |
 
 Rules:
@@ -1861,7 +1865,7 @@ Rules:
   `codemason.db` keeps its size until a `VACUUM`, which requires exclusive access.
 
 Surfaces: the startup pass (on `spawn_blocking`, so it never stalls startup),
-`codemason db prune [--days N] [--dry-run]`, and `/db prune [--days N] [--dry-run]`
+`cdmn db prune [--days N] [--dry-run]`, and `/db prune [--days N] [--dry-run]`
 in the TUI. A real TUI prune asks for confirmation and the dialog opens on `No`,
 so a stray `Enter` deletes nothing.
 
@@ -2058,7 +2062,7 @@ queues, and run state; focusing a session moves the TUI's working
 directory there, and the agent loop loads a session's own
 `.codemason/codemason.json` when its directory has one (`Config::load_for`).
 The open sessions are saved under the `tui.sessions.open` setting and
-reopened at startup (`codemason --new` skips this). Untitled sessions are
+reopened at startup (`cdmn --new` skips this). Untitled sessions are
 titled from the first prompt. The `on_notification` hook trigger
 (Claude: `Notification`) fires when a background session starts waiting,
 finishes or fails. Each open project has its own services: code index
@@ -2124,8 +2128,8 @@ on first use. Design and tasks: `specs/projects/PLAN.md`.
   leaves every other branch's last known count alone. The last known count is stored in
   `sessions.pr_count`; a failure leaves it unchanged. A GitLab token is only
   sent to the configured GitLab instance.
-- **Surfaces.** `/project`, `codemason project list|show|add|remove`,
-  `codemason session list [--project <name>] [--json]` (grouped by project),
+- **Surfaces.** `/project`, `cdmn project list|show|add|remove`,
+  `cdmn session list [--project <name>] [--json]` (grouped by project),
   and the `/projects` HTTP routes. Session archives record the project
   name, remote and branch; an imported session is attached to the project
   of the directory it is imported into.
@@ -2312,8 +2316,8 @@ repository and does not use ETags.
 | `/spawn <agent> <prompt...>` | Launch a detached fire-and-forget background sub-agent from the input line (spec `spawnagent`); not listed by `list_agents`, not awaitable via `wait_agents`, its result never injected back into the chat |
 | `/autopilot on\|off` | Toggle autonomous mode |
 | `/spec create\|specify\|plan\|tasks\|update\|add\|feedback\|jtbd\|list\|search\|show\|validate\|status\|task\|impl\|coverage\|activate\|deactivate\|delete` | Spec lifecycle and SDD commands |
-| `/plugins list\|add\|remove\|enable\|disable\|test\|stores\|marketplace\|help` | Manage sandboxed Codex/Claude plugins; `/plugins list [--verbose]` opens an interactive panel (the plugin table pinned at the top - a fixed column heading and separator - above a scrollable block-cursor list, with the capability blocks listed at the end of the same body; `Up`/`Down`/`Home`/`End` move the cursor, `Space` toggles the highlighted plugin's enabled state (enable/disable, reporting the outcome on a feedback line), and `Esc` closes); `/plugins test` runs an isolated harness; `/plugins codex [query] [--category <name>] [--refresh]` and `/plugins claude [query] [--category <name>] [--refresh]` browse each store's official marketplace with a left-hand category navigator (`ALL` plus the distinct categories the fetched index declares) operated by keyboard and mouse, its own document shape normalised by that store's `StoreProvider`, and each row showing the plugin id, version, the marketplace it came from, and the description; `/plugins stores [--check]` reports each store's effective endpoint and its source, and with `--check` also contacts each store to report availability and plugin count; `/plugins marketplace show` lists the marketplaces configured for both stores in one section each (Codex, Claude) as a name/url/description table; `/plugins marketplace <codex|claude> add <source> [--force]|remove <name>|list` manages additional marketplaces (from an `owner/repo` slug, an SSH remote, an `https://` URL, or a local directory) in the user-global `plugins.stores.marketplaces`, which the two browse panels fetch and merge into the one panel; `/plugins add` accepts a `git+<https-url>#<ref>[:<subpath>]` git source; CLI parity via `codemason plugins` |
-| `/connectors list\|claude\|add\|remove\|enable\|disable\|connect\|disconnect\|auth\|test\|stores\|marketplace\|help` | Manage MCP-backed connectors (named integrations carrying a category, an auth shape, and one or more MCP servers); `/connectors claude [query] [--category <name>] [--refresh]` opens the interactive catalogue browser (the single catalogue surface), which merges the base catalogue endpoint and every marketplace added with `/connectors marketplace claude add`, shows each row's id, category, the marketplace it came from, and its description, and resolves blank descriptions from each entry's own repository manifest off-loop with a `loading details...` title hint; `/connectors marketplace show` lists the marketplaces configured for the Claude catalogue and `/connectors marketplace claude list\|add <source> [--force]\|remove <name>` manages them in the user-global `connectors.stores.marketplaces`; `/connectors test` runs an isolated connect-and-invoke harness; `/connectors stores [--check]` reports each catalogue endpoint's provenance; `/connectors add` accepts a catalogue id, a local directory, a local `.zip`/`.tar.gz`, or an `https://` package URL; CLI parity via `codemason connectors` (spec `connectors`, section 19C) |
+| `/plugins list\|add\|remove\|enable\|disable\|test\|stores\|marketplace\|help` | Manage sandboxed Codex/Claude plugins; `/plugins list [--verbose]` opens an interactive panel (the plugin table pinned at the top - a fixed column heading and separator - above a scrollable block-cursor list, with the capability blocks listed at the end of the same body; `Up`/`Down`/`Home`/`End` move the cursor, `Space` toggles the highlighted plugin's enabled state (enable/disable, reporting the outcome on a feedback line), and `Esc` closes); `/plugins test` runs an isolated harness; `/plugins codex [query] [--category <name>] [--refresh]` and `/plugins claude [query] [--category <name>] [--refresh]` browse each store's official marketplace with a left-hand category navigator (`ALL` plus the distinct categories the fetched index declares) operated by keyboard and mouse, its own document shape normalised by that store's `StoreProvider`, and each row showing the plugin id, version, the marketplace it came from, and the description; `/plugins stores [--check]` reports each store's effective endpoint and its source, and with `--check` also contacts each store to report availability and plugin count; `/plugins marketplace show` lists the marketplaces configured for both stores in one section each (Codex, Claude) as a name/url/description table; `/plugins marketplace <codex|claude> add <source> [--force]|remove <name>|list` manages additional marketplaces (from an `owner/repo` slug, an SSH remote, an `https://` URL, or a local directory) in the user-global `plugins.stores.marketplaces`, which the two browse panels fetch and merge into the one panel; `/plugins add` accepts a `git+<https-url>#<ref>[:<subpath>]` git source; CLI parity via `cdmn plugins` |
+| `/connectors list\|claude\|add\|remove\|enable\|disable\|connect\|disconnect\|auth\|test\|stores\|marketplace\|help` | Manage MCP-backed connectors (named integrations carrying a category, an auth shape, and one or more MCP servers); `/connectors claude [query] [--category <name>] [--refresh]` opens the interactive catalogue browser (the single catalogue surface), which merges the base catalogue endpoint and every marketplace added with `/connectors marketplace claude add`, shows each row's id, category, the marketplace it came from, and its description, and resolves blank descriptions from each entry's own repository manifest off-loop with a `loading details...` title hint; `/connectors marketplace show` lists the marketplaces configured for the Claude catalogue and `/connectors marketplace claude list\|add <source> [--force]\|remove <name>` manages them in the user-global `connectors.stores.marketplaces`; `/connectors test` runs an isolated connect-and-invoke harness; `/connectors stores [--check]` reports each catalogue endpoint's provenance; `/connectors add` accepts a catalogue id, a local directory, a local `.zip`/`.tar.gz`, or an `https://` package URL; CLI parity via `cdmn connectors` (spec `connectors`, section 19C) |
 | `/backend [<kind>]` | Open the execution-backend switcher (active backend + each backend's health) or switch to a kind/id directly; `/backend help`. See section 19D (spec `openhands` FR-008) |
 | `/security on\|off\|status\|revert\|help` | LLM security-analyzer mode (spec `openhands` FR-006, FR-017). `security-analyzer` is accepted as an alias. See section 19D.7 |
 | `/automation [list]\|runs <id>\|run <id>\|help` | Manage the automation service (spec `openhands` FR-013, FR-014, FR-018). See section 19F |
@@ -2524,7 +2528,7 @@ cdmn openapi              # print the OpenAPI 3.1 document
 cdmn openapi --client     # print the generated typed TypeScript client
 ```
 
-For `codemason openapi`, tracing is routed to stderr so the machine-readable stdout
+For `cdmn openapi`, tracing is routed to stderr so the machine-readable stdout
 stays clean.
 
 MCP servers configured with the `http` transport (`"type": "http"`, `"url"`)
@@ -3017,7 +3021,7 @@ progress lines update a single in-place progress message.
 
 ### 11.1 Overview
 
-The `/research` slash command and `codemason research` CLI create structured
+The `/research` slash command and `cdmn research` CLI create structured
 research items under `research/<name>/`. Each item contains captured sources
 (web pages, local files, prior specs) and one or more dated report documents
 (`RESEARCH-<YYYY-MM-DD>.md`; an item created by an older codemason keeps its
@@ -3137,7 +3141,7 @@ Every report (`RESEARCH-<YYYY-MM-DD>.md`) contains:
   boundary - and otherwise a reduced-length version of the `## Summary`
   content capped at 80 characters, so the headline reflects the synthesis
   rather than the original prompt) plus an optional `invocation` line recording
-  the verbatim front-end command (`codemason research create ...` from the CLI,
+  the verbatim front-end command (`cdmn research create ...` from the CLI,
   `/research ...` from the TUI, or a `POST /research` summary from the HTTP
   API) so the
   `/research update` command can replay the run
@@ -3193,7 +3197,7 @@ Every report (`RESEARCH-<YYYY-MM-DD>.md`) contains:
     `RESEARCH.md` / `CORPA.md` (`LEGACY_RESEARCH_FILE_NAME` /
     `LEGACY_CORPA_FILE_NAME`). No command joins a hardcoded file name; every
     read surface (`ResearchManager::{list, show_validated, set_status, search,
-    complete_gathering, write_document, continue_item}`, `codemason research open`
+    complete_gathering, write_document, continue_item}`, `cdmn research open`
     and the TUI `/research open`) resolves the report first.
 
   When an LLM is configured, `/research create` also runs a concept-extraction
@@ -3210,7 +3214,7 @@ Every report (`RESEARCH-<YYYY-MM-DD>.md`) contains:
 
 ### 11.4.1 Diff Deck (`/research deck`)
 
-`/research deck <name>` (CLI: `codemason research deck <name>`, spec `diffdeck`)
+`/research deck <name>` (CLI: `cdmn research deck <name>`, spec `diffdeck`)
 consumes an item's *series* of dated reports as a change narrative: it selects
 two of them, diffs them element by element, and writes a single Markdown slide
 deck. The deck is **deterministic and LLM-free** - a pure function of the two
@@ -3450,7 +3454,7 @@ ceiling; `--depth` therefore bounds web volume by default.
 
 ## 11A. Project Scaffolding (`/new`)
 
-The `/new` slash command (and the `codemason new` CLI subcommand / `codemason run
+The `/new` slash command (and the `cdmn new` CLI subcommand / `cdmn run
 "/new ..."` surface) scaffolds a new project in the current working
 directory (spec `newproj`). The pipeline is: flag validation (`--language`
 rust/python/go/typescript, `--type` library/cmdline/tui/gui/webapp, optional
@@ -5095,11 +5099,11 @@ is disabled (FR-021).
 
 ### 19C.9 CLI parity
 
-The same operations are available from a shell via the `codemason connectors <sub>`
+The same operations are available from a shell via the `cdmn connectors <sub>`
 CLI parity surface (`src/connectors.rs`), mirroring `src/plugins.rs`: the
 session-free subcommands, the management subcommands (over an ephemeral
 lifecycle session), and the `test` harness. The report is re-spelled for the CLI
-surface (`From: /connectors X` -> `codemason connectors X`).
+surface (`From: /connectors X` -> `cdmn connectors X`).
 
 ---
 
@@ -5400,7 +5404,7 @@ notifications (FR-022):
 
 **Feature-gated and disabled by default (FR-028).** The endpoint compiles only
 behind the `acp-server` Cargo feature and runs only when `acp.server_enabled` is
-`true` in the configuration. It is reachable only through the `codemason acp-server`
+`true` in the configuration. It is reachable only through the `cdmn acp-server`
 subcommand; when either gate is closed the command prints a diagnostic and exits
 with a usage error (code 2) rather than serving. A malformed request frame is
 skipped (never tears the connection down) and an unknown request method gets a
@@ -5446,7 +5450,7 @@ dispatch targets:
   `scheduler_tick_secs`, enqueues a run when a schedule automation's due time
   passes (skipping one whose previous run is still in flight), and advances its
   next-due time with `CronSchedule::advance_next_due`. The TUI (`codemason-tui`)
-  and `codemason serve` each start one scheduler when the config enables the
+  and `cdmn serve` each start one scheduler when the config enables the
   service.
 - **Run history (FR-018).** `codemason-storage`'s `automation_runs` table records
   one row per run (`Storage::insert_automation_run` / `finish_automation_run` /
@@ -5479,7 +5483,7 @@ generic JSON POST). A target names its credential's environment variable
 | Surface | Command / path |
 | ------- | -------------- |
 | TUI | `/automation [list]`, `/automation runs <id>`, `/automation run <id>`, `/automation help` |
-| CLI | `codemason automation list\|runs <id>\|run <id>\|help` |
+| CLI | `cdmn automation list\|runs <id>\|run <id>\|help` |
 | HTTP | `POST /auto/{id}` (public), `GET /automation`, `GET /automation/runs/{id}`, `POST /automation/{id}/run` (bearer) |
 | OpenAPI | The three admin routes and the webhook route are in the route table (`crates/codemason-server/src/routes/openapi.rs`) |
 
@@ -5533,7 +5537,7 @@ wall-clock duration.
 
 ### 21.3 Dry-Run Readiness Report
 
-The `codemason --dry-run` / `codemason config check` flow builds a
+The `cdmn --dry-run` / `cdmn config check` flow builds a
 `ReadinessReport` by loading and merging configuration, resolving provider/model
 auth state, discovering skills via the skill catalog, enumerating visible tools,
 and performing lightweight MCP connectivity checks — all without invoking the
@@ -5670,7 +5674,7 @@ wins over this value.
 
 Appends a deterministic quality scorecard to every run's `RESEARCH.md`
 (FR-015). A per-run `--evaluate` on the TUI `/research create` command turns it
-on for one run; the `codemason research create` CLI has no `--evaluate` flag, so
+on for one run; the `cdmn research create` CLI has no `--evaluate` flag, so
 this key is how CLI runs enable it.
 
 ### Example stanza
