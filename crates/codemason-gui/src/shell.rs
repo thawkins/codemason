@@ -15,11 +15,17 @@
 //! with [`dock::pane_wanted`], so `Alt+L`, `Alt+S` and every other path
 //! that flips a flag (slash commands, app-core's own rules such as "the log
 //! dismisses the other side panels") shows or hides the matching pane in
-//! the same frame. A pane closed from the dock's chrome clears its App flag
-//! ([`dock::hide_in_app`]) instead of changing the layout, and the next
-//! sync hides it. The other actions the dock returns (moves, resizes, tab
+//! the same frame. A pane closed from the dock's chrome is hidden through
+//! app-core ([`dock::close_in_app`]: app-core's own hide action, or the
+//! pane's toggle chord sent through `App::handle_key` as the shortcut is)
+//! instead of changing the layout, and the next sync hides it. A pane
+//! app-core starts sending the keyboard to ([`dock::pane_takes_keys`]) is
+//! brought to the front of its tab group, and the sessions sidebar is kept
+//! in front for as long as it has the keyboard, so keys never go to a
+//! covered pane. The other actions the dock returns (moves, resizes, tab
 //! switches, floats) are applied to the layout. With a layout file
-//! ([`Shell::with_layout_file`]) the layout is loaded at start, and every
+//! ([`Shell::with_layout_file`]) the layout and the hidden panes' places
+//! are loaded at start ([`dock::load_dock`]), and every
 //! change is saved once no pointer button is held (so a drag is saved once,
 //! when it ends) and when the window is asked to close.
 //! [`Shell::logic`], which eframe also runs while the window is hidden,
@@ -32,10 +38,12 @@
 //! [`KeyRouter`] before any widget reads them. After drawing it runs the key
 //! presses the dialogs' buttons sent ([`dialogs::take_keys`]).
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use codemason_agent::event::Event;
 use codemason_app_core::app::{App, LogLevel, SelectionPane};
+use codemason_app_core::input_event::KeyInput;
 use codemason_app_core::log_channel::TuiLogReceiver;
 use craft_ui::docking::{Action, DockArea, DockStyle, Layout};
 use tokio::runtime::Handle;
@@ -82,6 +90,11 @@ pub struct Shell {
     layout_file: Option<PathBuf>,
     /// Whether the layout changed since it was last saved.
     layout_dirty: bool,
+    /// The panes app-core sent the keyboard to last frame.
+    key_panes: BTreeSet<PaneId>,
+    /// Toggle chords that close panes closed from the dock's chrome, run
+    /// through `App::handle_key` after drawing.
+    close_keys: Vec<KeyInput>,
 }
 
 impl std::fmt::Debug for Shell {
@@ -121,6 +134,8 @@ impl Shell {
             hidden: HiddenPanes::new(),
             layout_file: None,
             layout_dirty: false,
+            key_panes: BTreeSet::new(),
+            close_keys: Vec::new(),
         }
     }
 
@@ -137,8 +152,7 @@ impl Shell {
     /// The shell drawing the stored layout.
     #[must_use]
     pub fn with_layout_file(mut self, path: PathBuf) -> Self {
-        self.layout = dock::load_layout(&path);
-        self.hidden.clear();
+        (self.layout, self.hidden) = dock::load_dock(&path);
         self.layout_file = Some(path);
         self
     }
@@ -212,7 +226,25 @@ impl Shell {
         });
         dialogs::show(ui.ctx(), &mut self.app);
         self.unfocus_sidebar_on_press_outside(ui.ctx(), sessions_rect);
+        self.run_close_keys(ui.ctx());
         self.save_layout_when_due(ui.ctx());
+    }
+
+    /// Send the toggle chords of panes closed from the dock's chrome
+    /// through `App::handle_key`, as the keyboard shortcut does. Without
+    /// attached sources there is no runtime, so they are dropped.
+    fn run_close_keys(&mut self, ctx: &egui::Context) {
+        let keys = std::mem::take(&mut self.close_keys);
+        let Some(sources) = self.sources.as_ref() else {
+            return;
+        };
+        if keys.is_empty() {
+            return;
+        }
+        for key in keys {
+            sources.runtime.block_on(self.app.handle_key(key));
+        }
+        ctx.request_repaint();
     }
 
     /// Hide or show the dock's panes to match the App's flags.
@@ -228,6 +260,38 @@ impl Shell {
             Ok(false) => {}
             Err(err) => tracing::warn!(%err, "dock visibility sync failed"),
         }
+        self.front_key_panes(ctx);
+    }
+
+    /// Bring a pane app-core has just started sending the keyboard to to
+    /// the front of its tab group, and keep the sessions sidebar in front
+    /// while it has the keyboard (it shares a group with Profile and
+    /// Memory; the TUI never covers it).
+    fn front_key_panes(&mut self, ctx: &egui::Context) {
+        let takes: BTreeSet<PaneId> = PaneId::ALL
+            .into_iter()
+            .filter(|pane| dock::pane_takes_keys(&self.app, *pane))
+            .collect();
+        let mut front: Vec<PaneId> = takes
+            .iter()
+            .copied()
+            .filter(|pane| !self.key_panes.contains(pane) && *pane != PaneId::Sessions)
+            .collect();
+        // The sidebar goes last, so it wins a group it shares.
+        if takes.contains(&PaneId::Sessions) {
+            front.push(PaneId::Sessions);
+        }
+        for pane in front {
+            match dock::bring_to_front(&mut self.layout, pane) {
+                Ok(true) => {
+                    self.layout_dirty = true;
+                    ctx.request_repaint();
+                }
+                Ok(false) => {}
+                Err(err) => tracing::debug!(?pane, %err, "pane not brought to front"),
+            }
+        }
+        self.key_panes = takes;
     }
 
     /// Draw the dock and apply what the user did to it; returns the
@@ -272,10 +336,12 @@ impl Shell {
         }
         for action in output.actions {
             match action {
-                // The App's flag owns visibility: clear it, and the next
-                // sync hides the pane where it is.
+                // The App's flag owns visibility: hide the pane through
+                // app-core, and the next sync hides it where it is.
                 Action::Close { panel } => {
-                    dock::hide_in_app(&mut self.app, panel);
+                    if let Some(key) = dock::close_in_app(&mut self.app, panel) {
+                        self.close_keys.push(key);
+                    }
                     ui.ctx().request_repaint();
                 }
                 other => match self.layout.apply(other) {
@@ -324,7 +390,7 @@ impl Shell {
         if !closing && ctx.input(|i| i.pointer.any_down()) {
             return;
         }
-        if let Err(err) = dock::save_layout(path, &self.layout) {
+        if let Err(err) = dock::save_dock(path, &self.layout, &self.hidden) {
             tracing::warn!(path = %path.display(), %err, "cannot save GUI layout");
         }
         self.layout_dirty = false;

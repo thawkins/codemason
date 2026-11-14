@@ -19,13 +19,15 @@ use codemason_app_core::app::App;
 use codemason_app_core::log_channel::{TuiLogRecord, TuiLogSender, tui_log_channel};
 use codemason_gui::Shell;
 use codemason_gui::dialogs::session_menu::SESSION_MENU_TITLE;
-use codemason_gui::dock::{PaneId, hide_in_app, load_layout};
+use codemason_gui::dock::{PaneId, default_layout, load_dock, load_layout, save_layout};
 use codemason_gui::keys::default_keymap;
 use codemason_gui::panels::log::LOG_LABEL;
 use codemason_gui::panels::prompt::PROMPT_LABEL;
 use codemason_gui::panels::sessions::SESSIONS_LABEL;
 use codemason_gui::panels::status_bar::STATUS_BAR_LABEL;
 use craft_keymap::Platform;
+use craft_ui::docking::{Location, PanelState, Placement, Zone};
+use craft_ui::layout::SplitSize;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -358,13 +360,180 @@ fn test_dock_closing_a_pane_clears_its_app_flag() {
     rig.harness.run();
     assert!(rig.harness.state().layout().contains(&PaneId::Log));
 
-    // What the shell does with the dock's `Action::Close` for the pane.
-    hide_in_app(rig.harness.state_mut().app_mut(), PaneId::Log);
+    // The dock's own close control: the Log tab's context menu, `Close
+    // Panel`. The shell hides the pane through app-core's Alt+L toggle.
+    rig.harness
+        .get_by_role_and_label(Role::Tab, LOG_LABEL)
+        .click_secondary();
+    rig.harness.run();
+    rig.harness.get_by_label("Close Panel").click();
+    rig.harness.run();
     rig.harness.run();
 
-    assert!(!rig.harness.state().app().show_log);
+    let app = rig.harness.state().app();
+    assert!(!app.show_log);
+    assert_eq!(app.status, "log panel hidden", "app-core's toggle ran");
     assert!(!rig.harness.state().layout().contains(&PaneId::Log));
     assert!(!log_shown(&rig.harness));
+}
+
+#[test]
+fn test_dock_closing_the_sessions_tab_hides_the_sidebar() {
+    let mut rig = rig(|_, app| app.sidebar.visible = true);
+    rig.harness.run();
+
+    rig.harness
+        .get_by_role_and_label(Role::Tab, SESSIONS_LABEL)
+        .click_secondary();
+    rig.harness.run();
+    rig.harness.get_by_label("Close Panel").click();
+    rig.harness.run();
+
+    assert!(!rig.harness.state().app().sidebar.visible);
+    assert!(!rig.harness.state().layout().contains(&PaneId::Sessions));
+    assert!(!sessions_shown(&rig.harness));
+}
+
+#[test]
+fn test_sessions_panel_alt_s_fronts_the_sidebar_over_profile() {
+    let mut ids = None;
+    let mut rig = rig(|rt, app| ids = Some(two_sessions(rt, app)));
+    let _ = ids.expect("sessions");
+    rig.harness.run();
+    focus_prompt(&mut rig.harness);
+
+    // Alt+P puts Profile in front of Sessions (same tab group).
+    alt(&mut rig.harness, egui::Key::P, "p");
+    rig.harness.run();
+    assert_eq!(
+        rig.harness.state().layout().panel_state(&PaneId::Profile),
+        PanelState::Front
+    );
+    assert!(!sessions_shown(&rig.harness));
+
+    // Alt+S gives the sidebar the keyboard: it comes to the front.
+    alt(&mut rig.harness, egui::Key::S, "s");
+    rig.harness.run();
+    assert!(rig.harness.state().app().sidebar.focused);
+    assert_eq!(
+        rig.harness.state().layout().panel_state(&PaneId::Sessions),
+        PanelState::Front
+    );
+    assert!(sessions_shown(&rig.harness));
+
+    // And it receives the keys: `m` on the last row opens the session menu.
+    press(
+        &mut rig.harness,
+        egui::Key::End,
+        egui::Modifiers::NONE,
+        None,
+    );
+    press(
+        &mut rig.harness,
+        egui::Key::M,
+        egui::Modifiers::NONE,
+        Some("m"),
+    );
+    assert!(rig.harness.state().app().sidebar.menu.is_some());
+    assert_eq!(rig.harness.state().app().session.input, "");
+}
+
+#[test]
+fn test_dock_hidden_pane_returns_to_its_place_after_restart() {
+    let path = scratch_file("hidden-after-restart");
+    // First run: the log is shown, the user moves nothing, then hides it.
+    let before = {
+        let mut rig = rig_with(|_, app| app.show_log = true, Some(path.clone()));
+        rig.harness.run();
+        focus_prompt(&mut rig.harness);
+        let before = rig
+            .harness
+            .state()
+            .layout()
+            .location(&PaneId::Log)
+            .expect("log docked");
+        alt(&mut rig.harness, egui::Key::L, "l");
+        rig.harness.run();
+        assert!(!rig.harness.state().layout().contains(&PaneId::Log));
+        before
+    };
+    let (_, hidden) = load_dock(&path);
+    assert!(
+        hidden.contains_key(&PaneId::Log),
+        "the hidden place is saved"
+    );
+
+    // Second run: showing the log puts it back where it was.
+    let mut rig = rig_with(|_, _| {}, Some(path));
+    rig.harness.run();
+    focus_prompt(&mut rig.harness);
+    alt(&mut rig.harness, egui::Key::L, "l");
+    rig.harness.run();
+    assert_eq!(
+        rig.harness.state().layout().location(&PaneId::Log).ok(),
+        Some(before)
+    );
+}
+
+/// Show the log and then the sidebar with their shortcuts, starting from
+/// every side flag off, and return where each pane lands.
+fn show_log_and_sidebar(layout_file: Option<PathBuf>) -> Vec<Option<Location<PaneId>>> {
+    let mut rig = rig_with(|_, app| app.sidebar.visible = false, layout_file);
+    rig.harness.run();
+    focus_prompt(&mut rig.harness);
+    alt(&mut rig.harness, egui::Key::L, "l");
+    rig.harness.run();
+    alt(&mut rig.harness, egui::Key::S, "s");
+    rig.harness.run();
+    let layout = rig.harness.state().layout();
+    [PaneId::Log, PaneId::Sessions]
+        .iter()
+        .map(|pane| layout.location(pane).ok())
+        .collect()
+}
+
+#[test]
+fn test_dock_fresh_start_shows_panes_at_their_default_places() {
+    // Without a file the hidden places come straight from the default
+    // layout: this is where each pane is designed to appear.
+    let designed = show_log_and_sidebar(None);
+    // The log goes back to the default right-hand column, beside the
+    // transcript at the default 3:1 split, not into a new edge frame.
+    let log = designed[0].as_ref().expect("log docked");
+    assert_eq!(log.anchor, Some(PaneId::Messages));
+    assert_eq!(log.placement, Placement::Split(Zone::Right));
+    assert_eq!(log.size, Some(SplitSize::Ratio(0.75)));
+    let sessions = designed[1].as_ref().expect("sessions docked");
+    assert_eq!(
+        sessions.placement,
+        Placement::Split(Zone::Left),
+        "{sessions:?}"
+    );
+
+    // First run with a file and every side flag off: the pruned layout and
+    // the hidden places are saved; the second run shows the panes.
+    let path = scratch_file("fresh-start");
+    {
+        let mut rig = rig_with(|_, app| app.sidebar.visible = false, Some(path.clone()));
+        rig.harness.run();
+    }
+    assert_eq!(show_log_and_sidebar(Some(path)), designed);
+}
+
+#[test]
+fn test_dock_old_format_layout_file_loads() {
+    let path = scratch_file("old-format");
+    let mut old = default_layout();
+    let mut hidden = codemason_gui::dock::HiddenPanes::new();
+    codemason_gui::dock::toggle_pane(&mut old, &mut hidden, PaneId::Teams).expect("hide teams");
+    // The format before hidden places were saved: the bare layout.
+    save_layout(&path, &old).expect("write old format");
+
+    let (layout, hidden) = load_dock(&path);
+    assert_eq!(layout, old);
+    assert!(hidden.is_empty());
+    let rig = rig_with(|_, _| {}, Some(path));
+    assert!(!rig.harness.state().layout().contains(&PaneId::Teams));
 }
 
 #[test]

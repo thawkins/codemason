@@ -690,9 +690,18 @@ pub fn toggle(app: &mut App) {
     } else if !state.focused {
         state.focused = true;
     } else {
-        state.visible = false;
-        state.focused = false;
+        hide(app);
+        return;
     }
+    app.sidebar.save(&app.storage);
+}
+
+/// Hides the sidebar and takes the keyboard from it, saving the preference,
+/// as the third `Alt+S` press does. Frontends with their own close control
+/// (the GUI's dock tab) call this.
+pub fn hide(app: &mut App) {
+    app.sidebar.visible = false;
+    app.sidebar.focused = false;
     app.sidebar.save(&app.storage);
 }
 

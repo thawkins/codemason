@@ -3,7 +3,8 @@
 //! The window's panes ([`PaneId`]) are arranged by craft-ui's docking model,
 //! [`craft_ui::docking::Layout`]. This module builds the default arrangement,
 //! shows and hides a pane while remembering where it was, and persists the
-//! layout as JSON at `<config_dir>/codemason/gui-layout.json`.
+//! layout, with where each hidden pane was, as JSON at
+//! `<config_dir>/codemason/gui-layout.json` ([`save_dock`], [`load_dock`]).
 //!
 //! # Visibility
 //!
@@ -12,11 +13,15 @@
 //! them, and [`sync_visibility`] hides or shows each pane through
 //! [`toggle_pane`] until the layout matches, so a hidden pane comes back
 //! where it was. The shell runs the sync every frame; when the user closes a
-//! pane from the dock's own chrome, [`hide_in_app`] clears the App's flag
-//! instead and the next sync hides it.
+//! pane from the dock's own chrome, [`close_in_app`] hides it through
+//! app-core's own action or toggle chord, and the next sync hides it.
 //!
 //! The shell renders the layout with craft-ui's `DockArea` and maps each
 //! pane to its panel (`crate::panels`).
+//!
+//! A pane app-core starts sending the keyboard to ([`pane_takes_keys`], e.g.
+//! the sessions sidebar after `Alt+S`) is brought to the front of its tab
+//! group ([`bring_to_front`]), so keys never go to a covered pane.
 //!
 //! Dependencies: `craft-ui` (feature `serde`) for the layout model,
 //! `serde`/`serde_json` for persistence, `codemason-config` for the config
@@ -28,7 +33,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use codemason_app_core::app::App;
-use craft_ui::docking::{Action, DockError, Layout, Location, Node, Permissions};
+use codemason_app_core::input_event::KeyInput;
+use craft_ui::docking::{Action, DockError, Layout, Location, Node, PanelState, Permissions};
 use craft_ui::layout::{SplitAxis, SplitSize};
 use serde::{Deserialize, Serialize};
 
@@ -152,30 +158,95 @@ pub fn pane_wanted(app: &App, pane: PaneId) -> bool {
     }
 }
 
-/// Clear the App's flag for `pane`, as when the user closes the pane from
-/// the dock's chrome. The next [`sync_visibility`] then hides it, keeping
-/// its place. Closing the sessions sidebar also takes its focus away and
-/// saves its preference, as `Alt+S` does when it hides it.
+/// Hide `pane` through app-core, as when the user closes it from the
+/// dock's chrome, so every side effect of app-core's own hide runs (the
+/// pane's text selection and context menu are dropped, the status line
+/// says so, the sidebar preference is saved). The next
+/// [`sync_visibility`] then hides the pane, keeping its place.
+///
+/// The sessions sidebar, the agents window and the teams window are hidden
+/// by app-core's own actions here (`sessions_sidebar_state::hide`,
+/// `App::close_agents_window`, `App::close_teams_window`). The log, profile,
+/// tasks and memory panels are hidden by their toggle chord, which the
+/// caller sends through `App::handle_key` exactly as the keyboard shortcut
+/// does: this function returns it.
 ///
 /// # Arguments
 ///
-/// * `app` - the App whose flag is cleared.
-/// * `pane` - the closed pane; the always-shown panes are left alone.
-pub fn hide_in_app(app: &mut App, pane: PaneId) {
-    match pane {
-        PaneId::Messages | PaneId::Prompt | PaneId::Queue => {}
-        PaneId::Sessions => {
-            app.sidebar.visible = false;
-            app.sidebar.focused = false;
-            app.sidebar.save(&app.storage);
-        }
-        PaneId::Log => app.show_log = false,
-        PaneId::Profile => app.show_profile = false,
-        PaneId::Tasks => app.show_tasks_panel = false,
-        PaneId::Memory => app.show_memory = false,
-        PaneId::ActiveAgents => app.show_agents_window = false,
-        PaneId::Teams => app.show_teams_window = false,
+/// * `app` - the App whose pane is closed.
+/// * `pane` - the closed pane; an always-shown or already hidden pane is
+///   left alone.
+///
+/// # Returns
+///
+/// The key press to send to `App::handle_key`, if the pane is hidden by
+/// its toggle chord.
+pub fn close_in_app(app: &mut App, pane: PaneId) -> Option<KeyInput> {
+    if !pane_wanted(app, pane) {
+        return None;
     }
+    let command = match pane {
+        PaneId::Messages | PaneId::Prompt | PaneId::Queue => return None,
+        PaneId::Sessions => {
+            codemason_app_core::sessions_sidebar_state::hide(app);
+            return None;
+        }
+        PaneId::ActiveAgents => {
+            app.close_agents_window();
+            return None;
+        }
+        PaneId::Teams => {
+            app.close_teams_window();
+            return None;
+        }
+        PaneId::Log => "panel.log",
+        PaneId::Profile => "panel.profile",
+        PaneId::Tasks => "panel.tasks",
+        PaneId::Memory => "panel.memory",
+    };
+    crate::keys::command_key_input(&craft_keymap::CommandRef::new(command))
+}
+
+/// Whether app-core sends the keyboard to `pane` now: the focused sessions
+/// sidebar, the shown Memory panel (Up/Down move its cursor), and the
+/// shown agents or teams window (while no output view covers it).
+///
+/// # Arguments
+///
+/// * `app` - the App whose key routing is read.
+/// * `pane` - the pane in question.
+///
+/// # Returns
+///
+/// `true` when app-core's key handler acts on the pane.
+#[must_use]
+pub fn pane_takes_keys(app: &App, pane: PaneId) -> bool {
+    match pane {
+        PaneId::Sessions => app.sidebar.focused && app.sidebar.visible,
+        PaneId::Memory => app.show_memory,
+        PaneId::ActiveAgents => app.show_agents_window && app.output_view.is_none(),
+        PaneId::Teams => app.show_teams_window && app.output_view.is_none(),
+        PaneId::Messages
+        | PaneId::Prompt
+        | PaneId::Log
+        | PaneId::Profile
+        | PaneId::Tasks
+        | PaneId::Queue => false,
+    }
+}
+
+/// Bring `pane` to the front of its tab group when it is in `layout` and
+/// not already there.
+///
+/// # Errors
+///
+/// Returns the [`DockError`] craft-ui reports for the activation.
+pub fn bring_to_front(layout: &mut Layout<PaneId>, pane: PaneId) -> Result<bool, DockError> {
+    if !layout.contains(&pane) || layout.panel_state(&pane) == PanelState::Front {
+        return Ok(false);
+    }
+    layout.apply(Action::Activate { panel: pane })?;
+    Ok(true)
 }
 
 /// Hide or show panes until `layout` holds exactly the panes `wanted`
@@ -285,8 +356,10 @@ pub fn default_layout() -> Layout<PaneId> {
 /// Hide `pane` if it is in `layout`, otherwise show it again.
 ///
 /// Hiding records the pane's [`Location`] in `hidden` before closing it.
-/// Showing restores it at that location; when none was recorded, or its
-/// anchor is gone, the pane is opened at craft-ui's default place.
+/// Showing restores it at that location while the panes it was next to are
+/// still shown. Otherwise (nothing recorded, or its neighbours hidden too)
+/// the pane goes where [`default_layout`] puts it among the panes shown
+/// now, and only when that fails at craft-ui's default place.
 ///
 /// # Arguments
 ///
@@ -309,17 +382,47 @@ pub fn toggle_pane(
         hidden.insert(pane, location);
         return Ok(());
     }
-    let restored = hidden
+    let remembered = hidden
         .remove(&pane)
-        .map(|location| layout.restore(pane, &location));
-    match restored {
-        Some(Ok(())) => Ok(()),
-        Some(Err(err)) => {
-            tracing::debug!(?pane, %err, "saved pane location unusable; opening at default");
-            open_default(layout, pane)
+        .filter(|location| place_still_exists(layout, location));
+    if let Some(location) = remembered {
+        match layout.restore(pane, &location) {
+            Ok(()) => return Ok(()),
+            Err(err) => tracing::debug!(?pane, %err, "saved pane location unusable"),
         }
-        None => open_default(layout, pane),
     }
+    if let Some(location) = designed_location(layout, pane) {
+        match layout.restore(pane, &location) {
+            Ok(()) => return Ok(()),
+            Err(err) => tracing::debug!(?pane, %err, "designed pane location unusable"),
+        }
+    }
+    open_default(layout, pane)
+}
+
+/// Whether the place `location` describes is still in `layout`: its
+/// anchor and every pane of the sibling subtree it was split from are
+/// shown. A place next to panes that have since been hidden would put the
+/// pane beside only part of what it was next to.
+fn place_still_exists(layout: &Layout<PaneId>, location: &Location<PaneId>) -> bool {
+    location
+        .anchor
+        .as_ref()
+        .is_none_or(|anchor| layout.contains(anchor))
+        && location.sibling.iter().all(|pane| layout.contains(pane))
+}
+
+/// Where [`default_layout`] puts `pane` among the panes `layout` shows now:
+/// the default layout with every other pane `layout` does not show closed,
+/// then `pane`'s place in it.
+fn designed_location(layout: &Layout<PaneId>, pane: PaneId) -> Option<Location<PaneId>> {
+    let mut designed = default_layout();
+    for other in PaneId::ALL {
+        if other != pane && !layout.contains(&other) && designed.contains(&other) {
+            designed.apply(Action::Close { panel: other }).ok()?;
+        }
+    }
+    designed.location(&pane).ok()
 }
 
 /// Open `pane` at craft-ui's default place for a panel with no anchor.
@@ -342,7 +445,80 @@ pub fn layout_path() -> Option<PathBuf> {
     codemason_config::config::Config::global_config_dir().map(|dir| dir.join(LAYOUT_FILE))
 }
 
-/// Read the layout persisted at `path`.
+/// The layout file: the layout and where each hidden pane was.
+#[derive(Serialize)]
+struct DockFile<'a> {
+    layout: &'a Layout<PaneId>,
+    hidden: &'a HiddenPanes,
+}
+
+/// A layout file as read: the current format, or the older one holding the
+/// bare layout only (written before hidden panes were saved).
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StoredDock {
+    /// `{ "layout": ..., "hidden": ... }`.
+    Full {
+        layout: Layout<PaneId>,
+        #[serde(default)]
+        hidden: HiddenPanes,
+    },
+    /// The bare layout.
+    Bare(Layout<PaneId>),
+}
+
+/// Read the layout and the hidden panes' places persisted at `path` (see
+/// [`save_dock`]); a file holding only a layout (the older format, or
+/// [`save_layout`]) loads with no hidden places.
+///
+/// # Arguments
+///
+/// * `path` - the JSON layout file.
+///
+/// # Returns
+///
+/// The stored layout and hidden places, or [`default_layout`] with none
+/// when the file is missing, cannot be parsed, or its layout fails
+/// [`Layout::validate`]. An unreadable or invalid file is reported with
+/// `tracing::warn!`. A hidden place recorded for a pane the layout shows is
+/// dropped.
+pub fn load_dock(path: &Path) -> (Layout<PaneId>, HiddenPanes) {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return (default_layout(), HiddenPanes::new());
+        }
+        Err(err) => {
+            tracing::warn!(path = %path.display(), %err, "cannot read GUI layout; using default");
+            return (default_layout(), HiddenPanes::new());
+        }
+    };
+    let parsed = serde_json::from_str::<StoredDock>(&text)
+        .map_err(|err| err.to_string())
+        .map(|stored| match stored {
+            StoredDock::Full { layout, hidden } => (layout, hidden),
+            StoredDock::Bare(layout) => (layout, HiddenPanes::new()),
+        })
+        .and_then(|(layout, hidden)| {
+            layout
+                .validate()
+                .map(|()| (layout, hidden))
+                .map_err(|err| err.to_string())
+        });
+    match parsed {
+        Ok((layout, mut hidden)) => {
+            hidden.retain(|pane, _| !layout.contains(pane));
+            (layout, hidden)
+        }
+        Err(err) => {
+            tracing::warn!(path = %path.display(), %err, "invalid GUI layout; using default");
+            (default_layout(), HiddenPanes::new())
+        }
+    }
+}
+
+/// Read the layout persisted at `path`, without the hidden panes' places
+/// (see [`load_dock`]).
 ///
 /// # Arguments
 ///
@@ -351,36 +527,37 @@ pub fn layout_path() -> Option<PathBuf> {
 /// # Returns
 ///
 /// The stored layout, or [`default_layout`] when the file is missing, cannot
-/// be parsed, or fails [`Layout::validate`]. An unreadable or invalid file is
-/// reported with `tracing::warn!`.
+/// be parsed, or fails [`Layout::validate`].
 pub fn load_layout(path: &Path) -> Layout<PaneId> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return default_layout(),
-        Err(err) => {
-            tracing::warn!(path = %path.display(), %err, "cannot read GUI layout; using default");
-            return default_layout();
-        }
-    };
-    let parsed = serde_json::from_str::<Layout<PaneId>>(&text)
-        .map_err(|err| err.to_string())
-        .and_then(|layout| {
-            layout
-                .validate()
-                .map(|()| layout)
-                .map_err(|err| err.to_string())
-        });
-    match parsed {
-        Ok(layout) => layout,
-        Err(err) => {
-            tracing::warn!(path = %path.display(), %err, "invalid GUI layout; using default");
-            default_layout()
-        }
-    }
+    load_dock(path).0
 }
 
-/// Write `layout` to `path` as pretty-printed JSON, creating the parent
-/// directory if needed.
+/// Write `layout` and the hidden panes' places to `path` as pretty-printed
+/// JSON (`{ "layout": ..., "hidden": ... }`), creating the parent directory
+/// if needed, so a pane hidden at exit reopens where it was.
+///
+/// # Arguments
+///
+/// * `path` - the JSON layout file to write.
+/// * `layout` - the layout to persist.
+/// * `hidden` - where each hidden pane was docked.
+///
+/// # Errors
+///
+/// Returns an error when the directory cannot be created, the state cannot
+/// be serialized, or the file cannot be written.
+pub fn save_dock(path: &Path, layout: &Layout<PaneId>, hidden: &HiddenPanes) -> anyhow::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    let json = serde_json::to_string_pretty(&DockFile { layout, hidden })
+        .context("serializing GUI layout")?;
+    std::fs::write(path, json).with_context(|| format!("writing {}", path.display()))
+}
+
+/// Write `layout` alone to `path` as pretty-printed JSON (the older file
+/// format, with no hidden places; [`save_dock`] writes both), creating the
+/// parent directory if needed.
 ///
 /// # Arguments
 ///
