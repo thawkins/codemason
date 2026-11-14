@@ -2,16 +2,18 @@
 //!
 //! [`styled_to_layout_job`] turns the styled lines the core produces (the
 //! transcript, markdown) into one [`LayoutJob`] that egui wraps and paints.
-//! [`drawable`] swaps the characters the window's fonts cannot draw (the
-//! TUI's status icons, emoji) for ASCII stand-ins.
+//! Bold spans use the bold families of [`crate::fonts`] when they are
+//! installed ([`Bold`]). [`drawable`] swaps the characters the window's
+//! fonts still cannot draw for ASCII stand-ins.
 //!
-//! Dependencies: `egui` (text layout), `codemason-app-core` (styled text)
-//! and [`crate::palette`] (colours).
+//! Dependencies: `egui` (text layout), `codemason-app-core` (styled text),
+//! [`crate::palette`] (colours) and [`crate::fonts`] (the bold families).
 
 use codemason_app_core::styled::{StyledLine, TextStyle};
 use egui::text::{LayoutJob, TextFormat};
-use egui::{Color32, FontId, Stroke};
+use egui::{Color32, FontFamily, FontId, Stroke};
 
+use crate::fonts::{BOLD_FAMILY, bold_font};
 use crate::palette::Palette;
 
 /// Font size, in points, of transcript text (proportional and monospace
@@ -21,26 +23,64 @@ pub const FONT_SIZE: f32 = 14.0;
 /// Opacity factor applied to `dim` text.
 const DIM_FACTOR: f32 = 0.6;
 
+/// How `bold` spans are drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bold {
+    /// In the bold families of [`crate::fonts`] (installed in the context).
+    Face,
+    /// At regular weight: the context has no bold faces (e.g. a test
+    /// harness that did not install [`crate::fonts`]).
+    Regular,
+}
+
+impl Bold {
+    /// How `ctx` can draw bold text.
+    ///
+    /// # Arguments
+    ///
+    /// * `ctx` - the context the text is laid out in.
+    ///
+    /// # Returns
+    ///
+    /// [`Bold::Face`] when the context's fonts have the bold family, else
+    /// [`Bold::Regular`].
+    #[must_use]
+    pub fn of(ctx: &egui::Context) -> Self {
+        let family = FontFamily::Name(BOLD_FAMILY.into());
+        if ctx.fonts(|fonts| fonts.definitions().families.contains_key(&family)) {
+            Self::Face
+        } else {
+            Self::Regular
+        }
+    }
+}
+
 /// Build one layout job from `lines`.
 ///
 /// Lines are joined with `\n`, so an empty line is an empty row. Each span
 /// keeps its style: the foreground colour (or [`Palette::text`]), the
 /// background, italics, underline in the text colour, a dimmed colour for
 /// `dim`, and [`FontId::monospace`] for `monospace` (proportional
-/// otherwise). `bold` has no weight in egui's default fonts and is drawn
-/// at regular weight.
+/// otherwise). `bold` uses the bold face of the span's family when `bold`
+/// is [`Bold::Face`].
 ///
 /// # Arguments
 ///
 /// * `lines` - the styled lines to lay out.
 /// * `palette` - resolves each [`codemason_app_core::styled::ThemeColor`].
 /// * `wrap_width` - the width, in points, rows wrap at.
+/// * `bold` - whether bold spans have a bold face ([`Bold::of`]).
 ///
 /// # Returns
 ///
 /// A job ready for `Painter::layout_job` or a label.
 #[must_use]
-pub fn styled_to_layout_job(lines: &[StyledLine], palette: &Palette, wrap_width: f32) -> LayoutJob {
+pub fn styled_to_layout_job(
+    lines: &[StyledLine],
+    palette: &Palette,
+    wrap_width: f32,
+    bold: Bold,
+) -> LayoutJob {
     let mut job = LayoutJob::default();
     job.wrap.max_width = wrap_width;
     let newline = TextFormat {
@@ -53,22 +93,22 @@ pub fn styled_to_layout_job(lines: &[StyledLine], palette: &Palette, wrap_width:
             job.append("\n", 0.0, newline.clone());
         }
         for span in &line.spans {
-            job.append(&span.text, 0.0, text_format(&span.style, palette));
+            job.append(&span.text, 0.0, text_format(&span.style, palette, bold));
         }
     }
     job
 }
 
 /// The egui format of one span `style`.
-fn text_format(style: &TextStyle, palette: &Palette) -> TextFormat {
+fn text_format(style: &TextStyle, palette: &Palette, bold: Bold) -> TextFormat {
     let mut color = style.fg.map_or(palette.text, |c| palette.color(c));
     if style.dim {
         color = color.gamma_multiply(DIM_FACTOR);
     }
-    let font_id = if style.monospace {
-        FontId::monospace(FONT_SIZE)
-    } else {
-        FontId::proportional(FONT_SIZE)
+    let font_id = match (style.bold, bold, style.monospace) {
+        (true, Bold::Face, monospace) => bold_font(FONT_SIZE, monospace),
+        (false, _, true) | (true, Bold::Regular, true) => FontId::monospace(FONT_SIZE),
+        (false, _, false) | (true, Bold::Regular, false) => FontId::proportional(FONT_SIZE),
     };
     TextFormat {
         font_id,
@@ -87,10 +127,12 @@ fn text_format(style: &TextStyle, palette: &Palette) -> TextFormat {
 /// `text` with every character `font` has no glyph for replaced by an ASCII
 /// stand-in, so the window never draws a box ("tofu") for it.
 ///
-/// app-core's status icons keep their meaning: the running diamond and the
-/// success dot become `*`, the error cross `x`, the info sign `i` and the
-/// warning sign `!`; any other missing character becomes `?`. Control
-/// characters are kept (egui lays them out itself).
+/// With [`crate::fonts`] installed the bundled faces draw app-core's
+/// running diamond and success dot, the block logo and box drawing, and
+/// system fonts draw the rest. The status icons no bundled face has become
+/// ASCII when no system font has them either: the error cross `x`, the info
+/// sign `i` and the warning sign `!`; any other missing character becomes
+/// `?`. Control characters are kept (egui lays them out itself).
 ///
 /// # Arguments
 ///
@@ -123,9 +165,8 @@ pub fn drawable(ctx: &egui::Context, font: &FontId, text: &str) -> String {
 /// The ASCII character drawn in place of `c`.
 fn ascii_stand_in(c: char) -> char {
     match c {
-        // Running diamond and success dot (`codemason_app_core::status`).
-        '\u{25C6}' | '\u{25CF}' => '*',
-        // Error cross.
+        // Status icons in no bundled face, only in some system fonts.
+        // Error cross (`codemason_app_core::status::ICON_ERROR`).
         '\u{2717}' => 'x',
         // Information source.
         '\u{2139}' => 'i',

@@ -19,6 +19,8 @@
 //!   sessions sidebar, [`panels::log`] the log panel) and the
 //!   [`panels::status_bar`], drawn with [`palette`] colours and
 //!   [`styled_text`] layout.
+//! - [`fonts`] builds the font stack (block and status glyphs, a bold
+//!   face, system fonts for CJK and the rest) the window installs at start.
 //! - [`theme`] installs the egui visuals of the App's theme mode and
 //!   restyles the window when the mode changes.
 //! - [`bridge::spawn_event_bridge`] forwards agent events from the
@@ -34,6 +36,7 @@
 pub mod bridge;
 pub mod dialogs;
 pub mod dock;
+pub mod fonts;
 pub mod keys;
 pub mod main_thread;
 pub mod palette;

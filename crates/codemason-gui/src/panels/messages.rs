@@ -47,7 +47,7 @@ use codemason_app_core::styled::StyledLine;
 use egui::{FontId, Rect, Role, ScrollArea, Sense, WidgetInfo, pos2, vec2};
 
 use crate::palette::Palette;
-use crate::styled_text::{FONT_SIZE, styled_to_layout_job};
+use crate::styled_text::{Bold, FONT_SIZE, styled_to_layout_job};
 
 /// Accessible label of the transcript.
 pub const MESSAGES_LABEL: &str = "Messages";
@@ -495,11 +495,12 @@ impl MessagesView {
         let mut y = self.offsets.get(first).copied().unwrap_or(0.0);
         self.first_visible = (first < self.entries.len()).then_some(first);
         let mut height_changed = false;
+        let bold = Bold::of(ui.ctx());
         for entry in self.entries.iter_mut().skip(first) {
             if y >= viewport.max.y {
                 break;
             }
-            let job = styled_to_layout_job(&entry.lines, palette, width);
+            let job = styled_to_layout_job(&entry.lines, palette, width, bold);
             let galley = ui.painter().layout_job(job);
             self.laid_out += 1;
 

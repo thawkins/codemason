@@ -7,7 +7,7 @@ use codemason_app_core::markdown::markdown_to_styled;
 use codemason_app_core::styled::{StyledLine, StyledSpan, TextStyle, ThemeColor};
 use codemason_app_core::theme_mode::ThemeMode;
 use codemason_gui::palette::palette_for;
-use codemason_gui::styled_text::styled_to_layout_job;
+use codemason_gui::styled_text::{Bold, styled_to_layout_job};
 use egui::FontFamily;
 use egui::text::{LayoutJob, LayoutSection};
 
@@ -20,7 +20,7 @@ fn section_text<'a>(job: &'a LayoutJob, section: &LayoutSection) -> &'a str {
 fn test_markdown_code_block_is_monospace() {
     let lines = markdown_to_styled("intro\n\n```\nlet x = 1;\n```\n", Path::new("/"), 80);
     let palette = palette_for(ThemeMode::Default);
-    let job = styled_to_layout_job(&lines, &palette, 400.0);
+    let job = styled_to_layout_job(&lines, &palette, 400.0, Bold::Regular);
 
     let family_of = |needle: &str| -> FontFamily {
         let section = job
@@ -50,7 +50,7 @@ fn test_styled_to_layout_job_joins_lines_and_maps_style() {
         StyledLine::plain("plain"),
     ];
     let palette = palette_for(ThemeMode::Default);
-    let job = styled_to_layout_job(&lines, &palette, 300.0);
+    let job = styled_to_layout_job(&lines, &palette, 300.0, Bold::Regular);
 
     assert_eq!(job.text, "err\n\nplain");
     let err = &job.sections[0].format;

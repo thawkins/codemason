@@ -142,6 +142,9 @@ fn run_window(launch: GuiLaunch) -> Result<(), GuiLaunchError> {
         APP_NAME,
         native_options,
         Box::new(|cc| {
+            // Bundled block/status glyphs and a bold face, then installed
+            // system fonts for CJK and every other script.
+            crate::fonts::install(&cc.egui_ctx, craft_ui::fonts::SystemFonts::AfterCraft);
             let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
             let _enter = runtime.enter();
             bridge_task = Some(bridge::spawn_event_bridge(

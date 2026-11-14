@@ -23,7 +23,7 @@ codemason-tools-core = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 craft-keymap = { workspace = true }
-craft-ui = { workspace = true }
+craft-ui = { workspace = true, features = ["system_fonts"] }
 eframe = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }
