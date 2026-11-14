@@ -311,8 +311,8 @@ pub use self::loop_dialog::{
 /// Shared helpers for listing installed team blueprints.
 pub use codemason_app_core::app::blueprints;
 
-// Re-export status types from theme for use in app
-pub use crate::theme::{StatusCategory, StatusHistory, StatusMessage};
+// Re-export the frontend-neutral status types for use in app
+pub use crate::status::{StatusCategory, StatusHistory, StatusMessage};
 
 #[cfg(test)]
 mod tests;

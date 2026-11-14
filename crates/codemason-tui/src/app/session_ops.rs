@@ -38,7 +38,7 @@ use crate::app::state::{
 use crate::app::helpers::{MentionSpan, short_id, short_session_id};
 
 // Re-export status types from theme
-use crate::theme::{StatusCategory, StatusMessage};
+use crate::status::{StatusCategory, StatusMessage};
 
 /// Recover from a poisoned mutex, logging the incident and returning the
 /// guarded value so the caller can keep running.

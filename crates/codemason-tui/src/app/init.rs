@@ -19,7 +19,7 @@ use crate::tips;
 use crate::app::state::{App, LogLevel, ScreenMode};
 
 // Theme status types
-use crate::theme::StatusHistory;
+use crate::status::StatusHistory;
 
 impl App {
     /// Collapse `$HOME` at the front of `path` to `~` for display.
@@ -464,7 +464,7 @@ impl App {
             memory_entry_count_pending: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             memory_last_updated: None,
             memory_stats_last_refresh: std::time::Instant::now(),
-            theme_mode: crate::theme::ThemeMode::Default,
+            theme_mode: crate::theme_mode::ThemeMode::Default,
             mouse_enabled: true,
             status_history: StatusHistory::new(),
             needs_redraw: true,

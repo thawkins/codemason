@@ -38,7 +38,9 @@ use codemason_tui::app::{
     OutputViewState, OutputViewTarget, PluginStoreBrowser, PluginStoreStatus, QuestionRequest,
     ResearchViewState, RoleMode, SelectionPane, StorePane, TextSelection, resolve_default_index,
 };
-use codemason_tui::theme::{self, StatusCategory, StatusHistory, StatusMessage, ThemeMode};
+use codemason_tui::theme::{
+    self, StatusCategory, StatusHistory, StatusMessage, StatusStyle, ThemeMode,
+};
 use codemason_tui::widgets::button::{Button, ButtonBar, ButtonRender, ButtonState, ButtonVariant};
 
 #[path = "support/mod.rs"]

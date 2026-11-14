@@ -30,7 +30,7 @@ use serde::Serialize;
 
 use crate::app::helpers::short_id;
 use crate::app::session_ops::recover_poisoned;
-use crate::theme::StatusHistory;
+use crate::status::StatusHistory;
 
 // Pending confirmation field is stored on App (defined in app.rs) as Option<PendingForceCleanup>.
 
@@ -4018,7 +4018,7 @@ pub struct App {
     /// When the cached memory stats were last refreshed.
     pub memory_stats_last_refresh: std::time::Instant,
     /// Current theme mode (default or high-contrast for accessibility)
-    pub theme_mode: crate::theme::ThemeMode,
+    pub theme_mode: crate::theme_mode::ThemeMode,
     /// Whether mouse input is enabled (default: true). Set to false for
     /// keyboard-only accessibility mode.
     pub mouse_enabled: bool,
