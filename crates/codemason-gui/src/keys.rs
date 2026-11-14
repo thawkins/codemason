@@ -271,6 +271,41 @@ pub fn is_tui_alt_chord(input: KeyInput) -> bool {
     }
 }
 
+/// Whether `text` is the `Event::Text` that the press `input` typed.
+///
+/// egui-winit (`State::on_keyboard_input`) emits the press, then a `Text`
+/// with winit's `KeyEvent::text` when it is printable and neither Ctrl nor
+/// Cmd is held. With Alt (no Ctrl) on Linux and Windows that text is the
+/// key's base character, upper case with Shift, so it equals the
+/// [`Key::Char`] that [`to_key_input`] reports, ignoring ASCII case.
+/// egui-winit drops control characters (`is_printable_char`), so Enter
+/// ("\r"), Tab, Backspace, arrows and other named keys never type a `Text`:
+/// a `Text` after one of them belongs to another press.
+fn is_key_text(input: KeyInput, text: &str) -> bool {
+    match input.key {
+        Key::Char(c) => {
+            let mut buf = [0u8; 4];
+            text.eq_ignore_ascii_case(c.encode_utf8(&mut buf))
+        }
+        Key::Enter
+        | Key::Esc
+        | Key::Tab
+        | Key::BackTab
+        | Key::Backspace
+        | Key::Delete
+        | Key::Up
+        | Key::Down
+        | Key::Left
+        | Key::Right
+        | Key::Home
+        | Key::End
+        | Key::PageUp
+        | Key::PageDown
+        | Key::F(_)
+        | Key::Other => false,
+    }
+}
+
 /// Whether `input` holds Alt without Ctrl or Cmd.
 fn is_plain_alt(input: KeyInput) -> bool {
     input.mods.alt && !input.mods.ctrl && !input.mods.cmd
@@ -370,12 +405,14 @@ impl KeyRouter {
     /// never sent to the App, so it is never inserted twice. The rules:
     ///
     /// - A TUI Alt chord ([`is_tui_alt_chord`]) is forwarded and the text it
-    ///   typed is dropped, so its letter never reaches the prompt (the TUI
+    ///   typed (`is_key_text`: the next `Text`, equal to the key's
+    ///   character ignoring ASCII case) is dropped, so its letter never reaches the prompt (the TUI
     ///   never types these letters). On macOS an Alt (Option) press that
     ///   typed a character is left to the prompt instead, as a terminal does
     ///   unless Option is set to act as Meta.
     /// - Off macOS, any other Alt press without Ctrl that typed text has its
-    ///   text dropped and is not forwarded: app-core ignores an unbound
+    ///   text dropped and is not forwarded (a `Text` that is not the press's
+    ///   own is never dropped): app-core ignores an unbound
     ///   Alt+character, so the prompt does not type it either. Ctrl+Alt
     ///   (AltGr on Windows) and Linux AltGr (reported without Alt) still type.
     /// - Ctrl+C and Ctrl+X (egui `Copy` and `Cut` events off macOS, see
@@ -428,12 +465,22 @@ impl KeyRouter {
             let Some(key) = to_key_input(event) else {
                 continue;
             };
-            let typed_text = matches!(events.get(i + 1), Some(egui::Event::Text(_)));
+            let next_text = match events.get(i + 1) {
+                Some(egui::Event::Text(text)) => Some(text.as_str()),
+                _ => None,
+            };
+            // Only the Text this press typed is paired with it; an unrelated
+            // Text that follows in the same frame (fast typing, an IME
+            // commit) is never dropped and never makes the press "typed".
+            let typed_text = next_text.is_some_and(|text| is_key_text(key, text));
             if typing && is_tui_alt_chord(key) {
+                // macOS Option composes its own character (e.g. Option+A
+                // types an a-ring), so any following Text is left to the
+                // prompt there, as before.
+                if platform.is_mac() && next_text.is_some() {
+                    continue;
+                }
                 if typed_text {
-                    if platform.is_mac() {
-                        continue;
-                    }
                     drop[i + 1] = true;
                 }
                 keys.push(key);

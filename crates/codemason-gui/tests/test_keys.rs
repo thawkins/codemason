@@ -535,3 +535,76 @@ fn test_route_keeps_mac_option_text_while_typing() {
 
     assert!(has_text(&input), "macOS Option keeps typing");
 }
+
+/// The `Text` events left in `input`, in order.
+fn texts(input: &egui::InputState) -> Vec<String> {
+    input
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            egui::Event::Text(t) => Some(t.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn test_route_keeps_unrelated_text_after_textless_alt_key_while_typing() {
+    for (key, text) in [
+        (egui::Key::Backspace, "a"),
+        (egui::Key::ArrowLeft, "b"),
+        (egui::Key::ArrowUp, "c"),
+    ] {
+        let mut router = KeyRouter::new(default_keymap(Platform::Linux));
+        let mut input = input_with(vec![
+            press(key, egui::Modifiers::ALT),
+            egui::Event::Text(text.into()),
+        ]);
+
+        router.route(&mut input, TYPING);
+
+        assert_eq!(
+            texts(&input),
+            vec![text.to_owned()],
+            "Alt+{key:?} keeps {text}"
+        );
+    }
+}
+
+#[test]
+fn test_route_forwards_alt_up_and_keeps_following_text_while_typing() {
+    let mut router = KeyRouter::new(default_keymap(Platform::Linux));
+    let mut input = input_with(vec![
+        press(egui::Key::ArrowUp, egui::Modifiers::ALT),
+        egui::Event::Text("c".into()),
+    ]);
+
+    let keys = router.route(&mut input, TYPING);
+
+    assert_eq!(
+        keys,
+        vec![KeyInput {
+            key: Key::Up,
+            mods: Modifiers::ALT,
+        }]
+    );
+    assert_eq!(texts(&input), vec!["c".to_owned()]);
+}
+
+#[test]
+fn test_route_keeps_unmatched_text_after_unbound_alt_letter_while_typing() {
+    let mut router = KeyRouter::new(default_keymap(Platform::Linux));
+    let mut input = input_with(vec![
+        press(egui::Key::Z, egui::Modifiers::ALT),
+        egui::Event::Text("q".into()),
+    ]);
+
+    let keys = router.route(&mut input, TYPING);
+
+    assert_eq!(keys, Vec::new(), "Alt+Z is not forwarded");
+    assert_eq!(
+        texts(&input),
+        vec!["q".to_owned()],
+        "only the unrelated q is typed"
+    );
+}
