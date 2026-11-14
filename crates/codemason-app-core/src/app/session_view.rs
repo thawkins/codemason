@@ -235,6 +235,9 @@ pub struct SessionView {
     pub permission_front: Option<(String, std::time::Instant)>,
     /// Queue of pending direct question requests awaiting user answers.
     pub question_queue: VecDeque<QuestionRequest>,
+    /// The front question's id and when it became the front, for the answer
+    /// guard (`App::question_answerable`).
+    pub question_front: Option<(String, std::time::Instant)>,
     /// Text typed by the user in response to the active question dialog.
     pub pending_question_input: String,
     /// Selected index for multiple-choice question dialogs.
@@ -445,6 +448,7 @@ impl SessionView {
             autopilot_continued_this_wake: false,
             permission_queue: VecDeque::new(),
             permission_front: None,
+            question_front: None,
             question_queue: VecDeque::new(),
             pending_question_input: String::new(),
             question_selected_index: 0,

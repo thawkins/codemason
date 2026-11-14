@@ -43,6 +43,11 @@ use crate::app::helpers::{MentionSpan, short_id, short_session_id};
 /// request.
 pub const PERMISSION_ANSWER_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
 
+/// How long a question must have been the front of the queue before Enter
+/// or Esc answers it (see `App::question_answerable`); the permission delay,
+/// for the same reason.
+pub const QUESTION_ANSWER_DELAY: std::time::Duration = PERMISSION_ANSWER_DELAY;
+
 // Re-export status types from theme
 use crate::status::{StatusCategory, StatusMessage};
 
@@ -1049,17 +1054,19 @@ impl App {
             || self.session.pending_send_after_compact.is_some()
     }
 
-    /// The time the permission answer guard reads: the test clock when one
-    /// was started ([`Self::advance_permission_clock_for_tests`]), else now.
+    /// The time the permission and question answer guards read: the test
+    /// clock when one was started
+    /// ([`Self::advance_permission_clock_for_tests`]), else now.
     fn permission_now(&self) -> std::time::Instant {
         self.permission_clock
             .unwrap_or_else(std::time::Instant::now)
     }
 
-    /// Freeze the clock the permission answer guard reads (at the real now,
-    /// on the first call) and move it forward by `by`, so tests can place a
-    /// key press before or after [`PERMISSION_ANSWER_DELAY`] without
-    /// sleeping. `Duration::ZERO` just freezes it.
+    /// Freeze the clock the permission and question answer guards read (at
+    /// the real now, on the first call) and move it forward by `by`, so tests
+    /// can place a key press before or after [`PERMISSION_ANSWER_DELAY`]
+    /// (or [`QUESTION_ANSWER_DELAY`]) without sleeping. `Duration::ZERO`
+    /// just freezes it.
     ///
     /// # Arguments
     ///
@@ -1103,6 +1110,52 @@ impl App {
             .as_ref()
             .is_some_and(|(id, since)| {
                 *id == front.id && now.saturating_duration_since(*since) >= PERMISSION_ANSWER_DELAY
+            })
+    }
+
+    /// Record the front question as shown now, when it changed since the
+    /// last call, starting its answer delay ([`QUESTION_ANSWER_DELAY`]).
+    ///
+    /// The typed answer and the highlight belong to the front question, so
+    /// they are reset here, when a new question becomes the front, and only
+    /// then: a question queued behind it or the late echo of an answer leaves
+    /// them alone. The highlight starts on the new question's default option.
+    ///
+    /// Called when a question arrives, is answered or is removed, before a
+    /// key reaches the question dialog, and by a frontend when it draws it.
+    pub fn note_question_front(&mut self) {
+        let front = self
+            .session
+            .question_queue
+            .front()
+            .map(|r| (r.id.clone(), r.resolved_default_index()));
+        let noted = self.session.question_front.as_ref().map(|(id, _)| id);
+        if front.as_ref().map(|(id, _)| id) != noted {
+            let now = self.permission_now();
+            self.session.pending_question_input.clear();
+            self.session.question_selected_index = front.as_ref().map_or(0, |(_, i)| *i);
+            self.session.question_front = front.map(|(id, _)| (id, now));
+        }
+    }
+
+    /// Whether the front question may be answered now: it has been the
+    /// front for [`QUESTION_ANSWER_DELAY`], so a quick second Enter or Esc
+    /// cannot answer the question that replaced an answered one before the
+    /// user saw it.
+    ///
+    /// # Returns
+    ///
+    /// `true` when Enter or Esc would answer the front question.
+    pub fn question_answerable(&self) -> bool {
+        let Some(front) = self.session.question_queue.front() else {
+            return false;
+        };
+        let now = self.permission_now();
+        self.session
+            .question_front
+            .as_ref()
+            .is_some_and(|(id, since)| {
+                *id == front.id && now.saturating_duration_since(*since) >= QUESTION_ANSWER_DELAY
             })
     }
 

@@ -457,6 +457,8 @@ mod test_prompt_tool_free;
 mod test_prompt_units;
 #[path = "test_provider_detection.rs"]
 mod test_provider_detection;
+#[path = "test_question_answer_guard.rs"]
+mod test_question_answer_guard;
 #[path = "test_question_multiple_choice.rs"]
 mod test_question_multiple_choice;
 #[path = "test_render_cost_scaling.rs"]

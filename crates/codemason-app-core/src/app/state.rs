@@ -5173,8 +5173,11 @@ impl App {
             );
         }
 
+        // The typed answer and the highlight belonged to the answered
+        // question; the next one starts on its own default.
         self.session.pending_question_input.clear();
         self.session.question_selected_index = 0;
+        self.note_question_front();
         if self.session.question_queue.is_empty() {
             self.set_status_working("processing");
         }

@@ -498,8 +498,13 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
         return None;
     }
 
-    // If question dialog is active, intercept keys.
+    // If question dialog is active, intercept keys. Enter and Esc answer
+    // only once the front question has been shown for the answer delay, so a
+    // double press cannot answer the next question unread; the answered
+    // question leaves the queue at once (see `App::question_answerable`).
     if !app.session.question_queue.is_empty() {
+        app.note_question_front();
+        let answerable = app.question_answerable();
         let has_options = app
             .session
             .question_queue
@@ -523,6 +528,7 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
                     }
                     None
                 }
+                Key::Enter if !answerable => None,
                 Key::Enter => {
                     if let Some(req) = app.session.question_queue.front().cloned() {
                         // FUNC-060: clamp the selection to the current option
@@ -546,11 +552,12 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
                                 },
                             );
                             app.session.question_queue.pop_front();
-                            app.session.question_selected_index = 0;
+                            app.note_question_front();
                         }
                     }
                     None
                 }
+                Key::Esc if !answerable => None,
                 Key::Esc => {
                     if let Some(req) = app.session.question_queue.front().cloned() {
                         app.event_bus
@@ -562,7 +569,7 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
                             });
                     }
                     app.session.question_queue.pop_front();
-                    app.session.question_selected_index = 0;
+                    app.note_question_front();
                     None
                 }
                 _ => None,
@@ -571,6 +578,7 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
 
         // Free-text question: accept typed input, submit on Enter, cancel on Esc.
         return match key.key {
+            Key::Enter | Key::Esc if !answerable => None,
             Key::Enter => {
                 if let Some(req) = app.session.question_queue.front().cloned() {
                     let response = app.session.pending_question_input.trim().to_string();
@@ -583,7 +591,7 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
                                 secret: req.secret,
                             });
                         app.session.question_queue.pop_front();
-                        app.session.pending_question_input.clear();
+                        app.note_question_front();
                     }
                 }
                 None
@@ -599,7 +607,7 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
                         });
                 }
                 app.session.question_queue.pop_front();
-                app.session.pending_question_input.clear();
+                app.note_question_front();
                 None
             }
             Key::Backspace => {

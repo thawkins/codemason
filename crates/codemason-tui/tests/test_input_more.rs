@@ -27,6 +27,13 @@ fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
 
+/// Show the front question and move the frozen answer clock past
+/// `QUESTION_ANSWER_DELAY`, so Enter and Esc answer it. Nothing sleeps.
+fn wait_question_shown(app: &mut App) {
+    app.note_question_front();
+    app.advance_permission_clock_for_tests(codemason_app_core::app::QUESTION_ANSWER_DELAY);
+}
+
 fn kmod(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
     KeyEvent::new(code, mods)
 }
@@ -247,6 +254,7 @@ async fn question_dialog_with_options() {
     assert_eq!(app.session.question_selected_index, 0);
 
     // Enter answers the highlighted option and pops the queue.
+    wait_question_shown(&mut app);
     assert!(handle_key(&mut app, key(KeyCode::Enter)).await.is_none());
     assert!(app.session.question_queue.is_empty());
     assert_eq!(app.session.question_selected_index, 0);
@@ -264,6 +272,7 @@ async fn question_dialog_with_options_esc_dismisses() {
         expire_at_ms: None,
         secret: false,
     });
+    wait_question_shown(&mut app);
     assert!(handle_key(&mut app, key(KeyCode::Esc)).await.is_none());
     assert!(app.session.question_queue.is_empty());
 }
@@ -297,6 +306,7 @@ async fn question_dialog_free_text_edit_and_submit() {
             .is_none()
     );
     assert_eq!(app.session.pending_question_input, "h");
+    wait_question_shown(&mut app);
     // Whitespace-only input does not submit; the dialog stays open.
     app.session.pending_question_input = "   ".to_string();
     assert!(handle_key(&mut app, key(KeyCode::Enter)).await.is_none());
@@ -320,6 +330,7 @@ async fn question_dialog_free_text_esc_dismisses() {
         expire_at_ms: None,
         secret: false,
     });
+    wait_question_shown(&mut app);
     app.session.pending_question_input = "typed".to_string();
     assert!(handle_key(&mut app, key(KeyCode::Esc)).await.is_none());
     assert!(app.session.question_queue.is_empty());

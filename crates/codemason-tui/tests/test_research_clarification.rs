@@ -125,6 +125,9 @@ async fn test_research_clarification_dialog_round_trip_publishes_answer() {
         "dialog should be queued"
     );
 
+    // The dialog has been shown for the answer delay
+    // (`QUESTION_ANSWER_DELAY`); the frozen test clock moves, nothing sleeps.
+    app.advance_permission_clock_for_tests(codemason_app_core::app::QUESTION_ANSWER_DELAY);
     // Type the answer and submit it with Enter (the free-text dialog path).
     app.session.pending_question_input = "  async runtimes  ".to_string();
     let _ = codemason_tui::crossterm_input::handle_key(
@@ -175,6 +178,7 @@ async fn test_research_clarification_dismissed_marker_rejected() {
         secret: false,
     })
     .await;
+    app.advance_permission_clock_for_tests(codemason_app_core::app::QUESTION_ANSWER_DELAY);
 
     let _ = codemason_tui::crossterm_input::handle_key(
         &mut app,

@@ -680,7 +680,6 @@ impl App {
                             }),
                             tool_call_id: None,
                         });
-                        self.session.question_selected_index = 0;
                         self.note_permission_front();
                         self.status = "awaiting permission".to_string();
                         self.push_log_no_agent(
@@ -723,11 +722,6 @@ impl App {
                         request_id = %request_id,
                         "TUI received QuestionRequested, showing dialog"
                     );
-                    // Default/fallback selection: the tool's resolved index, or
-                    // the first option, or 0. Clamp so a stale/out-of-range
-                    // index can never pre-select a non-existent row.
-                    let selected =
-                        crate::app::state::resolve_default_index(options.len(), default_index);
                     let expire_at_ms =
                         crate::text_utils::now_unix_ms() + QUESTION_TIMEOUT_SECS * 1000;
                     self.session.question_queue.push_back(QuestionRequest {
@@ -739,8 +733,10 @@ impl App {
                         expire_at_ms: Some(expire_at_ms),
                         secret,
                     });
-                    self.session.pending_question_input.clear();
-                    self.session.question_selected_index = selected;
+                    // The typed answer and highlight are reset only when this
+                    // question becomes the front: one queued behind the
+                    // question being answered leaves them alone.
+                    self.note_question_front();
                     self.status = "awaiting question".to_string();
                     self.needs_redraw = true;
                     self.push_log_no_agent(
@@ -766,8 +762,6 @@ impl App {
                 if self.session.permission_queue.len() != before {
                     // The next request is shown from now on.
                     self.note_permission_front();
-                    self.session.pending_question_input.clear();
-                    self.session.question_selected_index = 0;
                     if self.session.permission_queue.is_empty() {
                         self.set_status_working("processing");
                     }
@@ -782,11 +776,16 @@ impl App {
                 ref request_id,
                 ..
             } if self.is_current_session(session_id) => {
+                // A question answered in this App already left the queue,
+                // so its echo removes nothing and changes nothing else (it
+                // never clears the answer being typed to the next one).
+                let before = self.session.question_queue.len();
                 self.session.question_queue.retain(|r| r.id != *request_id);
-                self.session.pending_question_input.clear();
-                self.session.question_selected_index = 0;
-                if self.session.question_queue.is_empty() {
-                    self.set_status_working("processing");
+                if self.session.question_queue.len() != before {
+                    self.note_question_front();
+                    if self.session.question_queue.is_empty() {
+                        self.set_status_working("processing");
+                    }
                 }
             }
             Event::AgentSwitched {
