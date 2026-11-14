@@ -38,6 +38,8 @@ mod test_palette;
 mod test_panels;
 #[path = "test_prompt.rs"]
 mod test_prompt;
+#[path = "test_research.rs"]
+mod test_research;
 #[path = "test_side_panels.rs"]
 mod test_side_panels;
 #[path = "test_theme.rs"]

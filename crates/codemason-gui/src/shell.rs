@@ -3,7 +3,8 @@
 //! The shell renders the dock ([`crate::dock`], craft-ui's `DockArea`)
 //! above the status bar ([`status_bar_ui`]), and over them the App's active
 //! modal dialog ([`dialogs::show`]). Each dock pane maps to its panel: the
-//! message transcript ([`MessagesView`]), the input queue ([`queue_ui`])
+//! message transcript ([`MessagesView`]) under the running research and
+//! deck progress views ([`research_ui`]), the input queue ([`queue_ui`])
 //! above the prompt editor ([`prompt_ui`]), which edits the App's own input
 //! buffer, the sessions sidebar ([`SessionsView`]), the log panel
 //! ([`log_ui`]), the profiler table ([`profile_ui`]), the task list
@@ -67,6 +68,7 @@ use crate::panels::messages::MessagesView;
 use crate::panels::profile::profile_ui;
 use crate::panels::prompt::{PromptInput, prompt_ui};
 use crate::panels::queue::queue_ui;
+use crate::panels::research::research_ui;
 use crate::panels::sessions::SessionsView;
 use crate::panels::status_bar::status_bar_ui;
 use crate::panels::tasks::tasks_ui;
@@ -640,6 +642,7 @@ fn is_focus_move(event: &egui::Event) -> bool {
 /// The Messages pane: the transcript, whose right-click opens the context
 /// menu.
 fn messages_body(ui: &mut egui::Ui, app: &mut App, messages: &mut MessagesView, palette: &Palette) {
+    research_ui(ui, app, palette);
     let transcript = messages.show(ui, app, palette);
     let right_click = ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Secondary));
     if right_click && transcript.hovered() && !dialogs::locks_prompt(app) {

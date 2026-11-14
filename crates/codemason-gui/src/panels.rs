@@ -13,6 +13,8 @@
 //! - [`agents`] is the Agents window table
 //!   ([`crate::dock::PaneId::ActiveAgents`]).
 //! - [`teams`] is the Teams window table ([`crate::dock::PaneId::Teams`]).
+//! - [`research`] is the research and deck progress views, drawn above
+//!   the transcript while a `/research` run is going.
 //! - [`rows`] is the line list those five panels draw with.
 
 pub mod agents;
@@ -22,6 +24,7 @@ pub mod messages;
 pub mod profile;
 pub mod prompt;
 pub mod queue;
+pub mod research;
 pub mod rows;
 pub mod sessions;
 pub mod status_bar;
