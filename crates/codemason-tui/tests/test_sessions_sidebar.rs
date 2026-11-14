@@ -1055,3 +1055,28 @@ fn test_sessions_sidebar_branch_name_skips_taken_names() {
         assert!(!taken.contains(&name), "{name} is taken");
     }
 }
+
+#[tokio::test]
+async fn test_sessions_sidebar_focused_passes_alt_panel_chords_through() {
+    let (mut app, a, _b) = app_with_sidebar().await;
+    let rows = sidebar_rows(&mut app);
+    let a_row = row_of(&rows, &untitled(&a)).expect("A");
+    app.sidebar.focused = true;
+    // The cursor sits on a session row, where plain `p` pins and `m` opens
+    // the session menu.
+    app.sidebar.cursor = a_row - usize::from(app.sidebar.area.y) - 1;
+
+    app.handle_key_event(key(KeyCode::Char('p'), KeyModifiers::ALT))
+        .await;
+    assert!(app.show_profile, "Alt+P toggles the profile panel");
+    assert!(
+        app.storage.pinned_session_ids().expect("pins").is_empty(),
+        "Alt+P does not pin the cursor session"
+    );
+
+    app.handle_key_event(key(KeyCode::Char('m'), KeyModifiers::ALT))
+        .await;
+    assert!(app.show_memory, "Alt+M toggles the memory panel");
+    assert!(app.sidebar.menu.is_none(), "Alt+M opens no session menu");
+    assert!(app.sidebar.focused, "the sidebar keeps the keyboard");
+}

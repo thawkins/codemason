@@ -705,6 +705,13 @@ pub fn hide(app: &mut App) {
     app.sidebar.save(&app.storage);
 }
 
+/// Takes the keyboard from the sidebar, leaving it shown, as a mouse press
+/// outside it does. Frontends that move the keyboard elsewhere (the GUI,
+/// when a pane toggled on covers the sidebar's tab) call this.
+pub fn unfocus(app: &mut App) {
+    app.sidebar.focused = false;
+}
+
 /// Acts on the row at `index`: open a session, toggle a section, or switch.
 fn activate_row(app: &mut App, index: usize) {
     let rows = build_rows(app);
@@ -1162,6 +1169,13 @@ pub fn handle_key(app: &mut App, key: KeyInput) -> bool {
     if !app.sidebar.focused || !app.sidebar.visible {
         return false;
     }
+    // An Alt+letter chord the arms above do not bind (Alt+L, Alt+P, Alt+M,
+    // ...) is a global shortcut, not a sidebar letter: it falls through to
+    // the input handler, so Alt+P toggles the profile panel instead of
+    // pinning the cursor session. Ctrl+Alt is left alone (AltGr).
+    if alt && !ctrl && matches!(key.key, Key::Char(_)) {
+        return false;
+    }
     if app.sidebar.filter_editing {
         match key.key {
             Key::Char(c) if !ctrl && !alt => app.sidebar.filter.push(c),
@@ -1366,7 +1380,7 @@ pub fn handle_mouse(app: &mut App, event: MouseInput) -> bool {
     let inside = area.width > 0 && area.contains((event.column, event.row));
     if !inside {
         match event.kind {
-            MouseKind::Down(_) => app.sidebar.focused = false,
+            MouseKind::Down(_) => unfocus(app),
             // A drag that ends outside the sidebar drops nothing.
             MouseKind::Up(MouseButton::Left) => app.sidebar.drag_session = None,
             _ => {}
