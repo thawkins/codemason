@@ -7,45 +7,37 @@
 #![deny(unsafe_code)]
 
 pub mod adapters;
-pub mod app;
 #[doc(hidden)]
 pub mod crossterm_input;
-pub mod input;
-pub mod input_field;
-pub mod input_prompt;
 pub mod layout;
 pub mod layout_active_agents;
 pub mod layout_statusbar;
 pub mod layout_table_rows;
 pub mod layout_teams;
-pub mod line_wrap;
-pub mod log_channel;
-pub mod message_lines;
-pub mod message_text;
 pub mod panels;
-pub mod project_properties;
 pub mod project_properties_render;
-pub mod research_adapter;
-pub mod research_progress;
-pub mod session_menu;
 pub mod session_menu_render;
 pub mod sessions_sidebar;
-pub mod sessions_sidebar_state;
-pub mod status;
 pub mod teammate_strip;
-pub mod text_utils;
 pub mod theme;
-pub mod theme_mode;
 pub mod tracing_layer;
 pub mod utils;
 pub mod widgets;
+
+/// Frontend-neutral application state and its supporting modules, which live
+/// in `codemason-app-core`. Re-exported so every `codemason_tui::<module>` path
+/// (and `crate::<module>` inside the renderer) keeps resolving.
+pub use codemason_app_core::{
+    app, branch_names, clipboard, deck_progress, input, input_field, input_prompt, line_wrap,
+    log_channel, logo, message_lines, message_text, open_in, project_properties, research_adapter,
+    research_progress, session_menu, sessions_sidebar_state, status, text_utils, theme_mode, tips,
+};
 
 /// Truncating stderr spool shared with the binary's fd-2 redirection.
 ///
 /// The binary owns the `dup2` redirection (it is the only crate that may use
 /// the approved FFI); the TUI only needs the [`Spool`] handle to attach its
 /// log-panel mirror, so it re-exports the binary-side type.
-pub use codemason_app_core::{branch_names, clipboard, deck_progress, logo, open_in, tips};
 pub use codemason_types::stderr_spool::Spool as StderrSpool;
 
 pub use app::App;
@@ -171,23 +163,6 @@ use tracing_layer::TuiLogReceiver;
 /// the entire transcript through unicode segmentation each frame and burned
 /// 10-15% of a core while idle.
 const IDLE_REDRAW_INTERVAL_MS: u64 = 2000;
-
-/// Self-healing staleness caps for spinner/progress latches (in seconds).
-///
-/// The model-list and model-download spinners are set on a single event and
-/// cleared by a single `*Finished` event. The event bus is broadcast, so an
-/// event burst can make the bridge drop the clearing event (`Lagged`), after
-/// which the latch would otherwise stay set forever: a stuck popup plus a
-/// 250 ms idle deadline for the remaining process lifetime. When a latch
-/// outlives its cap, `App::poll_stale_spinners` clears it.
-const MODEL_LOADING_STALE_SECS: u64 = 120;
-
-/// Self-healing staleness cap for model downloads (large models can take
-/// tens of minutes over slow links).
-const MODEL_DOWNLOAD_STALE_SECS: u64 = 45 * 60;
-
-/// Self-healing staleness cap for a wedged benchmark run.
-const BENCH_STALE_SECS: u64 = 30 * 60;
 
 /// Decide whether a panic raised on the current thread must restore the
 /// terminal.

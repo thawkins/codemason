@@ -10,7 +10,7 @@
 //! cached signature; if they match, the cached spans are reused directly,
 //! avoiding per-frame `format!()` and `String::clone()` allocations.
 
-use codemason_app_core::styled::StyledSpan;
+use crate::styled::StyledSpan;
 
 /// Cached status-bar lines and the signature they were built from.
 ///

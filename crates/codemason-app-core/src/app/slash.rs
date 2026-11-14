@@ -1478,7 +1478,8 @@ impl App {
     /// Short label for the state of the OTLP logs signal, shared by
     /// `/telemetry logs` and the telemetry side panel so both describe the
     /// same four states the `/telemetry counters` output distinguishes.
-    pub(crate) fn telemetry_logs_state(
+    #[doc(hidden)]
+    pub fn telemetry_logs_state(
         otel: &codemason_config::OtelConfig,
         logs_exporting: bool,
     ) -> &'static str {

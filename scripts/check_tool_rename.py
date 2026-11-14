@@ -642,14 +642,14 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         "slash-command trigger `/bash` (the command-list editor), not a tool",
     ),
     Exemption(
-        "crates/codemason-tui/src/app/state.rs",
+        "crates/codemason-app-core/src/app/state.rs",
         ("bash",),
         'trigger: "bash",',
         1,
         "slash-command trigger `/bash` in the TUI's command table",
     ),
     Exemption(
-        "crates/codemason-tui/src/app/slash.rs",
+        "crates/codemason-app-core/src/app/slash.rs",
         ("bash",),
         '"bash" => {',
         1,
@@ -657,7 +657,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         ("e", "b"),
     ),
     Exemption(
-        "crates/codemason-tui/src/app/slash.rs",
+        "crates/codemason-app-core/src/app/slash.rs",
         ("bash",),
         '"bash",',
         1,

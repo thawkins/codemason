@@ -10,7 +10,7 @@ use codemason_tools_extended::masterfetch::search::SearchOptions;
 use codemason_tools_extended::masterfetch::tools::search_tool::MfSearchTool;
 
 fn tui_ctx() -> ToolContext {
-    // Mirrors websearch_diag_ctx() in crates/codemason-tui/src/app/slash.rs:
+    // Mirrors websearch_diag_ctx() in crates/codemason-app-core/src/app/slash.rs:
     // Config::load() + cwd-based working dir. cargo test runs with cwd set to
     // the crate dir, so hop up to the workspace root where .codemason/codemason.json
     // lives.

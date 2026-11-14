@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, LockResult, MutexGuard};
 
-use codemason_app_core::geometry::Area;
+use crate::geometry::Area;
 
 use codemason_agent::team::{Mailbox, MessageType, TeamStore};
 use codemason_agent::{
@@ -1050,7 +1050,8 @@ impl App {
     /// renders its unlocked border (FR-002, FR-011, FR-012). Input is only
     /// locked when an overlay would swallow keystrokes (a modal dialog, picker,
     /// or full-screen view) or while a compaction run owns the turn.
-    pub(crate) fn is_input_locked(&self) -> bool {
+    #[doc(hidden)]
+    pub fn is_input_locked(&self) -> bool {
         !self.session.permission_queue.is_empty()
             || !self.session.question_queue.is_empty()
             || self.provider_setup.is_some()
@@ -3811,7 +3812,8 @@ impl App {
 
     /// Return the `(start, end)` character range of the current keyboard
     /// selection, or `None` when the anchor and cursor coincide.
-    pub(crate) fn kb_selection_char_range(&self) -> Option<(usize, usize)> {
+    #[doc(hidden)]
+    pub fn kb_selection_char_range(&self) -> Option<(usize, usize)> {
         let anchor = self.session.kb_select_anchor?;
         let cursor = self.session.input_cursor;
         if anchor == cursor {
@@ -3907,16 +3909,15 @@ impl App {
     }
 
     /// Set the active code index handle and trigger stats refresh.
-    pub(crate) fn set_code_index(
-        &mut self,
-        code_index: Option<Arc<codemason_codeindex::CodeIndex>>,
-    ) {
+    #[doc(hidden)]
+    pub fn set_code_index(&mut self, code_index: Option<Arc<codemason_codeindex::CodeIndex>>) {
         self.code_index = code_index;
     }
 
     /// Refresh cached code-index stats (file/symbol counts and busy flag)
     /// on a throttled interval (1s while busy, 5s otherwise).
-    pub(crate) fn refresh_code_index_stats(&mut self) {
+    #[doc(hidden)]
+    pub fn refresh_code_index_stats(&mut self) {
         let interval = if self.code_index_busy {
             std::time::Duration::from_secs(1)
         } else {
@@ -4219,7 +4220,8 @@ impl App {
     }
 
     /// Refresh cached structured-memory stats on a throttled 5s interval.
-    pub(crate) fn refresh_memory_stats(&mut self) {
+    #[doc(hidden)]
+    pub fn refresh_memory_stats(&mut self) {
         if self.memory_stats_last_refresh.elapsed() < std::time::Duration::from_secs(5) {
             return;
         }
@@ -4235,7 +4237,8 @@ impl App {
         });
     }
     /// Map the primary session's short id to the current agent name for log display.
-    pub(crate) fn register_primary_session_mapping(&mut self) {
+    #[doc(hidden)]
+    pub fn register_primary_session_mapping(&mut self) {
         if let Some(ref sid) = self.session.session_id {
             let short_sid = short_session_id(sid);
             self.sid_to_display_name
@@ -5318,7 +5321,8 @@ impl App {
     /// logs layer has already exported. See
     /// [`emit_log_entry_to_tracing`] for why the duplicate guard lives on the
     /// caller rather than on a universally quiet level.
-    pub(crate) fn push_log_deferred(
+    #[doc(hidden)]
+    pub fn push_log_deferred(
         &mut self,
         level: LogLevel,
         message: String,
@@ -5462,7 +5466,8 @@ impl App {
     /// [`push_log_exported`](Self::push_log_exported) for a panel line with no
     /// native event behind it - which includes every agent-event-bus entry
     /// reached through [`push_log_no_agent`](Self::push_log_no_agent).
-    pub(crate) fn push_log(&mut self, level: LogLevel, message: String, agent_id: Option<String>) {
+    #[doc(hidden)]
+    pub fn push_log(&mut self, level: LogLevel, message: String, agent_id: Option<String>) {
         self.push_log_for_inner_quiet(level, message, agent_id, None);
     }
 

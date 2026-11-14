@@ -35,10 +35,8 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
-use codemason_app_core::geometry::Area;
-use codemason_app_core::input_event::{
-    Key, KeyInput, Modifiers, MouseButton, MouseInput, MouseKind,
-};
+use crate::geometry::Area;
+use crate::input_event::{Key, KeyInput, Modifiers, MouseButton, MouseInput, MouseKind};
 use codemason_storage::{ProjectSessions, SessionCheckout, SidebarSection, Storage, project_root};
 use serde::{Deserialize, Serialize};
 
@@ -54,14 +52,17 @@ pub const MIN_WIDTH: u16 = 20;
 pub const MIN_TERMINAL_WIDTH: u16 = 100;
 /// Narrowest room, name and chevron included, that still shows a project's
 /// description on its heading: ` (` plus one character plus `)`.
-pub(crate) const HEADER_NOTE_MIN: usize = 3;
+#[doc(hidden)]
+pub const HEADER_NOTE_MIN: usize = 3;
 /// Section key of the `Pinned` pseudo-project; NUL keeps it apart from ids.
-pub(crate) const PINNED_KEY: &str = "\0pinned";
+#[doc(hidden)]
+pub const PINNED_KEY: &str = "\0pinned";
 /// ASCII marker shown before a session's request count; it stands for a
 /// branch.
 pub const BRANCH_MARK: char = 'Y';
 /// Narrowest title a session row keeps before it gives up its age column.
-pub(crate) const MIN_TITLE_WIDTH: usize = 12;
+#[doc(hidden)]
+pub const MIN_TITLE_WIDTH: usize = 12;
 
 /// Sidebar layout and cached session data.
 #[derive(Debug)]
@@ -600,7 +601,8 @@ pub fn relative_age(timestamp: &str, now: chrono::DateTime<chrono::Utc>) -> Stri
 
 /// Attention of the session `id`: its open view's state, or `Unread` when
 /// an otherwise idle session is marked unread in storage.
-pub(crate) fn attention_of(app: &App, id: &str) -> Attention {
+#[doc(hidden)]
+pub fn attention_of(app: &App, id: &str) -> Attention {
     let live = if app.session.session_id.as_deref() == Some(id) {
         app.session.attention()
     } else {
@@ -737,7 +739,8 @@ fn drop_session(app: &mut App, id: &str, area: Area, row: u16) {
 /// The nearest selectable row to `index`, moving `forward` (down) or back
 /// past [`SidebarRow::Spacer`] rows, and the other way when that runs off
 /// the end.
-pub(crate) fn selectable(rows: &[SidebarRow], index: usize, forward: bool) -> usize {
+#[doc(hidden)]
+pub fn selectable(rows: &[SidebarRow], index: usize, forward: bool) -> usize {
     let is_spacer = |i: usize| matches!(rows.get(i), Some(SidebarRow::Spacer));
     if !is_spacer(index) {
         return index;

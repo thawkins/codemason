@@ -29,7 +29,8 @@ const AWAITED_EXEMPTIONS: &[(&str, &str)] = &[
 ];
 
 fn slash_source() -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/app/slash.rs");
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../codemason-app-core/src/app/slash.rs");
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
 }
 

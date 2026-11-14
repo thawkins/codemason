@@ -3,9 +3,9 @@
 //! This module contains the primary `App` state struct, related UI state enums,
 //! and small helpers used by the TUI renderer and input handler.
 
+use crate::geometry::Area;
+use crate::styled::StyledLine;
 use anyhow::Result;
-use codemason_app_core::geometry::Area;
-use codemason_app_core::styled::StyledLine;
 use lru::LruCache;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -1512,7 +1512,7 @@ impl TextSelection {
     /// # Examples
     ///
     /// ```rust
-    /// use codemason_tui::app::{TextSelection, SelectionPane};
+    /// use codemason_app_core::app::{TextSelection, SelectionPane};
     ///
     /// let sel = TextSelection {
     ///     pane: SelectionPane::Messages,
@@ -4866,7 +4866,8 @@ impl App {
     /// The tracked snapshot is preferred; when it is empty (the startup bridge
     /// connects on the shared client rather than driving this session) the
     /// statuses are derived from the client's per-server state instead.
-    pub(crate) async fn refresh_connector_statuses(&self) {
+    #[doc(hidden)]
+    pub async fn refresh_connector_statuses(&self) {
         let Some(session) = self.live_connector_session().await else {
             return;
         };

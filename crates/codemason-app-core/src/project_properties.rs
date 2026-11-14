@@ -14,10 +14,8 @@
 //! through the enabled choices and `Space` opens the full list. A backend
 //! that cannot run here (no runtime, no remote configured) is greyed out.
 
-use codemason_app_core::geometry::Area;
-use codemason_app_core::input_event::{
-    Key, KeyInput, Modifiers, MouseButton, MouseInput, MouseKind,
-};
+use crate::geometry::Area;
+use crate::input_event::{Key, KeyInput, Modifiers, MouseButton, MouseInput, MouseKind};
 
 use codemason_agent::project::{MAX_DESCRIPTION_CHARS, parse_model_ref};
 use codemason_config::ExecutionBackendKind;
@@ -25,7 +23,8 @@ use codemason_config::ExecutionBackendKind;
 use crate::app::App;
 
 /// Most choices the open list shows at once.
-pub(crate) const LIST_ROWS: usize = 10;
+#[doc(hidden)]
+pub const LIST_ROWS: usize = 10;
 
 /// One entry of a choice field.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,7 +90,8 @@ pub struct ProjectProperties {
 
 impl ProjectProperties {
     /// The choices and chosen index of the focused field, if it is a choice.
-    pub(crate) fn focused_choices(&self) -> Option<(&[Choice], usize)> {
+    #[doc(hidden)]
+    pub fn focused_choices(&self) -> Option<(&[Choice], usize)> {
         match self.focus {
             Field::Description => None,
             Field::Backend => Some((&self.backends, self.backend)),

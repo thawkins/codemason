@@ -1,9 +1,7 @@
 //! Keyboard and mouse event handling for the TUI.
 use std::sync::atomic::Ordering;
 
-use codemason_app_core::input_event::{
-    Key, KeyInput, Modifiers, MouseButton, MouseInput, MouseKind,
-};
+use crate::input_event::{Key, KeyInput, Modifiers, MouseButton, MouseInput, MouseKind};
 
 use codemason_agent::event::Event;
 
@@ -42,7 +40,7 @@ fn alt_o_default_autopilot_time_limit() -> u64 {
 
 impl App {
     pub(crate) fn handle_history_picker_key(&mut self, key: KeyInput) {
-        use codemason_app_core::input_event::Key;
+        use crate::input_event::Key;
         let picker = match self.history_picker.as_mut() {
             Some(p) => p,
             None => return,
@@ -83,7 +81,7 @@ impl App {
     /// Enter restores the highlighted backup over the global `codemason.json`,
     /// and Esc/q close the picker without taking any action.
     pub fn handle_config_save_picker_key(&mut self, key: KeyInput) {
-        use codemason_app_core::input_event::Key;
+        use crate::input_event::Key;
 
         let picker = match self.config_save_picker.as_mut() {
             Some(p) => p,

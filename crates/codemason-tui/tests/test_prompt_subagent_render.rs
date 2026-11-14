@@ -9,7 +9,7 @@
 //! - header summary shows the subagent mode.
 //!
 //! The mode-forcing rules live in `handle_prompt_render`
-//! (`crates/codemason-tui/src/app/slash.rs`): the forced mode picks the detailed
+//! (`crates/codemason-app-core/src/app/slash.rs`): the forced mode picks the detailed
 //! tool reference when `subagent_mode` is set and feeds the assembler the
 //! same agent the session loop would, so the tests run the canonical paths
 //! end to end rather than re-implementing the assembly.

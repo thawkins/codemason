@@ -21,7 +21,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use codemason_app_core::input_event::{Key, KeyInput};
+use crate::input_event::{Key, KeyInput};
 
 use codemason_agent::agent::AgentInfo;
 use codemason_agent::session::loop_state::LoopSpec;

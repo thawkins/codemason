@@ -82,6 +82,7 @@ fn bare_argument_decodes(source: &str) -> Vec<String> {
 fn no_harness_source_parses_argument_text_around_the_shared_helper() {
     for tree in [
         "crates/codemason-agent/src",
+        "crates/codemason-app-core/src",
         "crates/codemason-tui/src",
         "src",
     ] {
@@ -113,7 +114,7 @@ fn every_harness_decode_site_names_the_shared_helper() {
     for relative in [
         "crates/codemason-agent/src/session/processor.rs",
         "crates/codemason-agent/src/hooks/mod.rs",
-        "crates/codemason-tui/src/app/event_handler.rs",
+        "crates/codemason-app-core/src/app/event_handler.rs",
     ] {
         let source = read_workspace_file(relative);
         assert!(

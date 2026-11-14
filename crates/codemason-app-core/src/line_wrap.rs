@@ -8,7 +8,7 @@
 //! Depends on `unicode-segmentation` / `unicode-width` (grapheme widths, the
 //! same versions the renderer uses) and `codemason-app-core` (styled text).
 
-use codemason_app_core::styled::{StyledLine, StyledSpan, TextStyle};
+use crate::styled::{StyledLine, StyledSpan, TextStyle};
 
 /// Wrap one rendered [`StyledLine`] into styled display rows that match the
 /// terminal renderer's `Paragraph` word-wrapping (`Wrap { trim: false }`).

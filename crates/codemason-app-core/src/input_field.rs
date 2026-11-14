@@ -4,7 +4,7 @@
 //! word navigation, and deletion - mirroring the behaviour of the main
 //! message input but in a self-contained, reusable struct.
 
-use codemason_app_core::input_event::{Key, KeyInput, Modifiers};
+use crate::input_event::{Key, KeyInput, Modifiers};
 
 /// A single-line text input field.
 ///

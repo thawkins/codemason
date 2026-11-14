@@ -99,7 +99,8 @@ impl App {
     /// Called each housekeeping frame alongside the other `poll_*` fns. Each
     /// outcome releases its slot and then reports in the words of the surface
     /// that requested the launch, so no surface needs its own poll arm.
-    pub(crate) fn poll_subagent_launch_results(&mut self) {
+    #[doc(hidden)]
+    pub fn poll_subagent_launch_results(&mut self) {
         let results = {
             let mut queue = recover_poisoned(
                 self.subagent_launch_results.lock(),

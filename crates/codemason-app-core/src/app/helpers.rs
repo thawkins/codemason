@@ -106,7 +106,8 @@ pub(crate) fn short_session_id(session_id: &str) -> String {
 /// every id abbreviation in the workspace comes from one helper (FR-008), and
 /// takes its cut on a char boundary so a multi-byte UTF-8 sequence straddling
 /// the cut point cannot panic.
-pub(crate) fn short_id(id: &str) -> String {
+#[doc(hidden)]
+pub fn short_id(id: &str) -> String {
     codemason_types::strutil::short_prefix(id, 8)
 }
 

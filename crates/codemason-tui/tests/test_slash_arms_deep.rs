@@ -1,5 +1,5 @@
 //! Deep dispatch coverage for the remaining `/slash` match arms in
-//! `crates/codemason-tui/src/app/slash.rs`.
+//! `crates/codemason-app-core/src/app/slash.rs`.
 //!
 //! The sibling suites (`test_slash_commands`, `test_slash_info`,
 //! `test_slash_config_write`, `test_slash_teams_deep`, `test_slash_heavy_deep`,

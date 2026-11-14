@@ -20,7 +20,7 @@ fn workspace_root() -> PathBuf {
 }
 
 fn slash_rs_path() -> PathBuf {
-    workspace_root().join("crates/codemason-tui/src/app/slash.rs")
+    workspace_root().join("crates/codemason-app-core/src/app/slash.rs")
 }
 
 /// The empty-graph guard message must instruct the user to run

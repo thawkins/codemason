@@ -579,7 +579,7 @@ fn test_all_three_restriction_sites_report_and_the_prompt_path_does_not() {
     // including plugin skills the session never runs.
     let sites = [
         "crates/codemason-agent/src/tool/skill_manage.rs",
-        "crates/codemason-tui/src/app/slash.rs",
+        "crates/codemason-app-core/src/app/slash.rs",
         "crates/codemason-agent/src/skill/invoke.rs",
     ];
     for relative in sites {

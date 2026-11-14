@@ -12,30 +12,45 @@ workspace = true
 
 [dependencies]
 codemason-agent = { path = "../codemason-agent" }
+codemason-bench = { path = "../codemason-bench" }
 codemason-codeindex = { path = "../codemason-codeindex" }
 codemason-config = { path = "../codemason-config" }
 codemason-connectors = { path = "../codemason-connectors" }
+codemason-llm = { path = "../codemason-llm" }
+codemason-plugins = { path = "../codemason-plugins" }
 codemason-research = { path = "../codemason-research" }
+codemason-server = { path = "../codemason-server" }
+codemason-specs = { path = "../codemason-specs" }
 codemason-storage = { path = "../codemason-storage" }
+codemason-telemetry = { path = "../codemason-telemetry" }
 codemason-tools-core = { path = "../codemason-tools-core" }
+codemason-tools-extended = { path = "../codemason-tools-extended" }
+codemason-tools-vcs = { path = "../codemason-tools-vcs" }
 codemason-types = { path = "../codemason-types" }
 anyhow = { workspace = true }
 arboard = { workspace = true }
+async-trait = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
+fs2 = { workspace = true }
+futures = { workspace = true }
 image = { workspace = true }
+lru = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true }
 html2text = { workspace = true }
 pulldown-cmark = "0.13"
 tempfile = "3.5"
+# Width/grapheme handling for the message/log line caches (must match
+# ratatui's WordWrapper so pre-wrapped cache rows are stable).
+unicode-segmentation = "1.12"
+unicode-width = "0.2"
 
 [dev-dependencies]
-codemason-llm = { path = "../codemason-llm" }
-codemason-telemetry = { path = "../codemason-telemetry" }
 parking_lot = { workspace = true }
 
 [[test]]

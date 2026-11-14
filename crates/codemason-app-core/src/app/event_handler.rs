@@ -56,7 +56,8 @@ impl App {
 
     /// Poll the pending swarm decomposition result and, if ready, render the
     /// team summary (or surface an error) into the chat log.
-    pub(crate) async fn poll_pending_swarm(&mut self) {
+    #[doc(hidden)]
+    pub async fn poll_pending_swarm(&mut self) {
         let outcome = {
             let mut guard = recover_poisoned(self.session.swarm_result.lock(), "swarm_result");
             guard.take()

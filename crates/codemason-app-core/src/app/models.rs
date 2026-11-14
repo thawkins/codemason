@@ -370,7 +370,8 @@ impl App {
     }
 
     /// Return the short display label for a [`ThinkingLevel`] (e.g. `"Med"`).
-    pub(crate) fn thinking_level_short(level: ThinkingLevel) -> &'static str {
+    #[doc(hidden)]
+    pub fn thinking_level_short(level: ThinkingLevel) -> &'static str {
         match level {
             ThinkingLevel::Auto => "Auto",
             ThinkingLevel::Off => "Off",
@@ -380,7 +381,8 @@ impl App {
         }
     }
 
-    pub(crate) fn format_thinking_levels(levels: &[ThinkingLevel]) -> String {
+    #[doc(hidden)]
+    pub fn format_thinking_levels(levels: &[ThinkingLevel]) -> String {
         if levels.is_empty() {
             "-".to_string()
         } else {
@@ -1463,11 +1465,13 @@ impl App {
 
     /// Populate the cached status-bar model label (C-006). Called from the
     /// render path where `&mut self` is available.
-    pub(crate) fn update_cached_provider_model_label(&mut self, label: Option<String>) {
+    #[doc(hidden)]
+    pub fn update_cached_provider_model_label(&mut self, label: Option<String>) {
         self.session.cached_provider_model_label = label;
     }
 
-    pub(crate) fn compute_provider_model_label(&self) -> Option<String> {
+    #[doc(hidden)]
+    pub fn compute_provider_model_label(&self) -> Option<String> {
         let model_ref = self.active_model_ref_string()?;
         let (provider_id, model_id) = model_ref
             .split_once('/')
@@ -1500,7 +1504,8 @@ impl App {
         Some(format!("{} / {}", provider_name, model_id))
     }
 
-    pub(crate) fn active_model_ref_string(&self) -> Option<String> {
+    #[doc(hidden)]
+    pub fn active_model_ref_string(&self) -> Option<String> {
         self.session.selected_model.clone().or_else(|| {
             self.session
                 .agent_info
@@ -1769,7 +1774,8 @@ impl App {
 
     /// Return a human-readable cost estimate for a provider/model pair, if the
     /// registry advertises pricing information for the model.
-    pub(crate) fn estimate_entry_cost(&self, provider_id: &str, model_id: &str) -> Option<String> {
+    #[doc(hidden)]
+    pub fn estimate_entry_cost(&self, provider_id: &str, model_id: &str) -> Option<String> {
         let model = self
             .provider_registry
             .resolve_model(provider_id, model_id)?;
@@ -1790,7 +1796,8 @@ impl App {
     /// provider registry's static default catalog via [`ProviderRegistry::resolve_model`].
     /// Returns `None` when neither source advertises the model, in which case
     /// the caller renders a minimal `provider / model` label.
-    pub(crate) fn router_model_picker_entry(
+    #[doc(hidden)]
+    pub fn router_model_picker_entry(
         &self,
         provider_id: &str,
         model_id: &str,
@@ -2008,7 +2015,8 @@ impl App {
     /// The Copilot token resolution (which may spawn `gh auth token` as a
     /// subprocess) is performed **inside** the spawned async task so it does
     /// not block the TUI render loop during startup.
-    pub(crate) fn check_provider_health(&mut self) {
+    #[doc(hidden)]
+    pub fn check_provider_health(&mut self) {
         let provider = match &self.configured_provider {
             Some(p) => p.clone(),
             None => {
@@ -2076,7 +2084,8 @@ impl App {
 
     /// Return the last known provider health state, or `None` if no check
     /// has completed yet.
-    pub(crate) fn provider_health_status(&self) -> Option<bool> {
+    #[doc(hidden)]
+    pub fn provider_health_status(&self) -> Option<bool> {
         match self.session.provider_health.load(Ordering::Relaxed) {
             1 => Some(true),
             2 => Some(false),

@@ -3,7 +3,7 @@
 //! Maps frontend-neutral key presses ([`KeyInput`]) to high-level [`InputAction`]s, handling both
 //! normal editing mode and the permission dialog intercept.
 
-use codemason_app_core::input_event::{Key, KeyInput, Modifiers};
+use crate::input_event::{Key, KeyInput, Modifiers};
 use codemason_types::ThinkingLevel;
 
 use crate::app::{
@@ -233,8 +233,8 @@ pub enum InputAction {
 ///
 /// ```rust,no_run
 /// # use codemason_app_core::input_event::{Key, KeyInput, Modifiers};
-/// # use codemason_tui::App;
-/// # use codemason_tui::input::handle_key;
+/// # use codemason_app_core::app::App;
+/// # use codemason_app_core::input::handle_key;
 /// # async fn example(app: &mut App) {
 /// let key = KeyInput {
 ///     key: Key::Enter,

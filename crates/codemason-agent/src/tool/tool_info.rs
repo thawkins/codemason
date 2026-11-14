@@ -9,7 +9,7 @@
 //!
 //! The slash-command data comes from the static catalog in
 //! [`super::command_catalog`], which mirrors `SLASH_COMMANDS` in
-//! `crates/codemason-tui/src/app/state.rs` (`codemason-agent` cannot depend on
+//! `crates/codemason-app-core/src/app/state.rs` (`codemason-agent` cannot depend on
 //! `codemason-tui`); a drift test in `crates/codemason-tui/tests/` keeps the two in
 //! sync.
 

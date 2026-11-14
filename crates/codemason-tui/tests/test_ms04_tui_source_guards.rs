@@ -13,7 +13,7 @@ fn read(rel: &str) -> String {
 
 #[test]
 fn alog_run_id_is_character_validated() {
-    let source = read("src/app/helpers.rs");
+    let source = read("../codemason-app-core/src/app/helpers.rs");
     assert!(
         source.contains("Invalid run id"),
         "parse_alog_run_id_yes must reject a run id that is not [A-Za-z0-9_-]+"
@@ -28,7 +28,7 @@ fn log_window_spool_is_owner_only_on_unix() {
     // helper re-asserts 0600, that `open_log_spool` delegates to it, and that
     // every spool writer routes through the wrapper rather than opening the
     // file directly.
-    let helper = read("src/app/helpers.rs");
+    let helper = read("../codemason-app-core/src/app/helpers.rs");
     assert!(
         helper.contains("Permissions::from_mode(0o600)") && helper.contains("OpenOptionsExt"),
         "the shared owner-only helper must set and re-assert 0600"
@@ -37,7 +37,7 @@ fn log_window_spool_is_owner_only_on_unix() {
         helper.contains("fn open_log_spool") && helper.contains("open_owner_only(path, false)"),
         "open_log_spool must delegate to open_owner_only"
     );
-    let source = read("src/app/session_ops.rs");
+    let source = read("../codemason-app-core/src/app/session_ops.rs");
     let calls = source.matches("open_log_spool").count();
     assert!(
         calls >= 2,

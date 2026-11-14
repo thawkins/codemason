@@ -15,7 +15,7 @@ fn workspace_root() -> PathBuf {
 }
 
 fn slash_rs_path() -> PathBuf {
-    workspace_root().join("crates/codemason-tui/src/app/slash.rs")
+    workspace_root().join("crates/codemason-app-core/src/app/slash.rs")
 }
 
 /// The core "not active" message text (without the emoji prefix, which varies

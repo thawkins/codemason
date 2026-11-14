@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use lru::LruCache;
 
-use codemason_app_core::geometry::Area;
+use crate::geometry::Area;
 
 use codemason_agent::{
     StartupTimings, agent::AgentInfo, event::EventBus, provider::ProviderRegistry,

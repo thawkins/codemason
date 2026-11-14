@@ -8,7 +8,7 @@
 //! Depends on `codemason-agent`/`codemason-types` (messages, string helpers)
 //! and `codemason-app-core` (styled text).
 
-use codemason_app_core::styled::{StyledLine, StyledSpan, TextStyle, ThemeColor};
+use crate::styled::{StyledLine, StyledSpan, TextStyle, ThemeColor};
 
 use crate::app::short_id;
 use crate::text_utils::{pluralize, truncate_str};
@@ -1418,7 +1418,8 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
 ///
 /// Reads from the tool's output metadata which contains the actual lines read.
 /// Returns `None` when metadata is not available or tool did not complete.
-pub(crate) fn read_line_range(metadata: &Option<serde_json::Value>) -> Option<String> {
+#[doc(hidden)]
+pub fn read_line_range(metadata: &Option<serde_json::Value>) -> Option<String> {
     let meta = metadata.as_ref()?;
     let start = meta.get("start_line").and_then(|v| v.as_u64());
     let end = meta.get("end_line").and_then(|v| v.as_u64());
@@ -1433,10 +1434,8 @@ pub(crate) fn read_line_range(metadata: &Option<serde_json::Value>) -> Option<St
 ///
 /// Currently only the `Edit`, `multiedit`, and `patch` tools
 /// provide the necessary `old_lines` / `new_lines` metadata.
-pub(crate) fn tool_inline_diff(
-    tool: &str,
-    output: &Option<serde_json::Value>,
-) -> Option<(usize, usize)> {
+#[doc(hidden)]
+pub fn tool_inline_diff(tool: &str, output: &Option<serde_json::Value>) -> Option<(usize, usize)> {
     let out = output.as_ref()?;
     let tool = canonical_tool_name(tool);
     match tool {

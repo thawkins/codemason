@@ -16,7 +16,8 @@ const COUNTER_WIDTH: usize = 2;
 /// two-digit, zero-padded counter immediately before `>`) while entries are
 /// pending (spec `inputqueue` FR-009, FR-010). The counter is clamped to `99`
 /// so the prefix never widens beyond four columns (NFR-002).
-pub(crate) fn input_prompt_prefix(queue_len: usize) -> String {
+#[doc(hidden)]
+pub fn input_prompt_prefix(queue_len: usize) -> String {
     if queue_len == 0 {
         "> ".to_string()
     } else {
@@ -30,7 +31,8 @@ pub(crate) fn input_prompt_prefix(queue_len: usize) -> String {
 /// consumer (wrapped rows, cursor position, selection mapping) derives its
 /// prefix width from this so the cursor column and wrapped-row geometry stay
 /// aligned to the counter prefix (spec `inputqueue` NFR-002, FR-020).
-pub(crate) fn input_prompt_prefix_len(queue_len: usize) -> usize {
+#[doc(hidden)]
+pub fn input_prompt_prefix_len(queue_len: usize) -> usize {
     if queue_len == 0 {
         PROMPT_WIDTH
     } else {

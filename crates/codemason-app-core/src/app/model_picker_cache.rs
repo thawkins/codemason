@@ -11,7 +11,7 @@
 //! changed since the last render, the cached rows are reused directly,
 //! avoiding the per-frame `format!()` churn.
 
-use codemason_app_core::styled::StyledLine;
+use crate::styled::StyledLine;
 
 /// Cached model-picker table rows and the signature they were built from.
 #[derive(Clone)]

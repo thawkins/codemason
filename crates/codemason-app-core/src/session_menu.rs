@@ -18,8 +18,8 @@
 //! sidebar's single-key shortcut or `/session` subcommand, so the paths
 //! cannot drift apart.
 
-use codemason_app_core::geometry::Area;
-use codemason_app_core::input_event::{Key, KeyInput, MouseButton, MouseInput, MouseKind};
+use crate::geometry::Area;
+use crate::input_event::{Key, KeyInput, MouseButton, MouseInput, MouseKind};
 
 use std::path::PathBuf;
 
@@ -102,7 +102,8 @@ pub enum MenuAction {
 
 impl MenuAction {
     /// Whether the item opens a submenu instead of running.
-    pub(crate) fn opens_submenu(&self) -> bool {
+    #[doc(hidden)]
+    pub fn opens_submenu(&self) -> bool {
         matches!(self, Self::Requests | Self::OpenIn | Self::MoveTo)
     }
 
@@ -179,7 +180,8 @@ impl SessionMenu {
     }
 
     /// Number of painted lines inside the border.
-    pub(crate) fn line_count(&self) -> usize {
+    #[doc(hidden)]
+    pub fn line_count(&self) -> usize {
         self.items
             .len()
             .checked_sub(1)
@@ -188,7 +190,8 @@ impl SessionMenu {
 
     /// Moves `scroll` so the highlighted item's line is among the
     /// `visible` painted lines.
-    pub(crate) fn keep_cursor_visible(&mut self, visible: usize) {
+    #[doc(hidden)]
+    pub fn keep_cursor_visible(&mut self, visible: usize) {
         let line = self.line_of(self.cursor);
         if visible == 0 {
             self.scroll = 0;

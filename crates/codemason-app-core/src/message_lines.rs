@@ -13,8 +13,8 @@
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 
+use crate::styled::{StyledLine, StyledSpan, TextStyle, ThemeColor};
 use codemason_agent::message::{Message, MessagePart, Role, ToolCallStatus};
-use codemason_app_core::styled::{StyledLine, StyledSpan, TextStyle, ThemeColor};
 use codemason_types::sanitize_terminal::sanitize_terminal;
 
 use crate::app::App;
