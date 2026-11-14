@@ -5,12 +5,12 @@
 //! working directory, git branch, task count, processing flag, etc.).
 //!
 //! This module provides [`StatusBarCache`] which stores the two pre-built
-//! `Vec<Span<'static>>` lines alongside a signature of the inputs they were
+//! `Vec<StyledSpan>` lines (frontend-neutral styled text) alongside a signature of the inputs they were
 //! built from.  On each render the caller compares the current inputs to the
 //! cached signature; if they match, the cached spans are reused directly,
 //! avoiding per-frame `format!()` and `String::clone()` allocations.
 
-use ratatui::text::Span;
+use codemason_app_core::styled::StyledSpan;
 
 /// Cached status-bar lines and the signature they were built from.
 ///
@@ -20,9 +20,9 @@ use ratatui::text::Span;
 #[derive(Clone)]
 pub struct StatusBarCache {
     /// Pre-built top status line (session / agent / cwd / git / status).
-    pub line1: Vec<Span<'static>>,
+    pub line1: Vec<StyledSpan>,
     /// Pre-built bottom status line (model / tokens / tasks / index / log).
-    pub line2: Vec<Span<'static>>,
+    pub line2: Vec<StyledSpan>,
 
     // -- Signature fields --------------------------------------------------
     /// Current status text used to build line1.

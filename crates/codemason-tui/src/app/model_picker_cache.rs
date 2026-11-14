@@ -2,21 +2,23 @@
 //!
 //! The `SelectModel` picker dialog renders a table of available models with
 //! columns for name, context window, cost tier, thinking levels, and feature
-//! indicators.  Building the `Row` widgets from `ModelPickerEntry` data
+//! indicators.  Building the table rows from `ModelPickerEntry` data
 //! requires multiple `format!()` calls per model per frame.
 //!
-//! This cache stores the pre-built `Vec<Row<'static>>` alongside a cheap
+//! This cache stores the pre-built rows (one frontend-neutral
+//! [`StyledLine`] per cell) alongside a cheap
 //! signature (model count + first model ID).  When the model list hasn't
 //! changed since the last render, the cached rows are reused directly,
 //! avoiding the per-frame `format!()` churn.
 
-use ratatui::widgets::Row;
+use codemason_app_core::styled::StyledLine;
 
 /// Cached model-picker table rows and the signature they were built from.
 #[derive(Clone)]
 pub struct ModelPickerRowsCache {
-    /// Pre-built table rows for the model picker.
-    pub rows: Vec<Row<'static>>,
+    /// Pre-built table rows for the model picker: one `Vec` of cells per
+    /// row, each cell a single styled line.
+    pub rows: Vec<Vec<StyledLine>>,
     /// Number of models when the rows were built.
     pub model_count: usize,
     /// ID of the first model when the rows were built (cheap identity check).

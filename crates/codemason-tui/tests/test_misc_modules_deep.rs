@@ -19,6 +19,7 @@
 #![cfg(test)]
 #![allow(clippy::await_holding_lock)]
 
+use codemason_app_core::styled::{StyledSpan, TextStyle};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -26,7 +27,6 @@ use chrono::Utc;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use ratatui::text::Span;
 
 use codemason_agent::message::Message;
 use codemason_agent::task::{ReportStatus, TaskEntry, TaskStatus};
@@ -126,8 +126,14 @@ fn report_row(id: &'static str, class: LanguageClass, probes: Vec<CommandProbe>)
 /// The cache literal every `signature_matches` case starts from.
 fn status_cache() -> StatusBarCache {
     StatusBarCache {
-        line1: vec![Span::raw("line1")],
-        line2: vec![Span::raw("line2")],
+        line1: vec![StyledSpan {
+            text: "line1".to_string(),
+            style: TextStyle::default(),
+        }],
+        line2: vec![StyledSpan {
+            text: "line2".to_string(),
+            style: TextStyle::default(),
+        }],
         status: "Ready".to_string(),
         agent_name: "general".to_string(),
         selected_model: Some("anthropic/claude".to_string()),
