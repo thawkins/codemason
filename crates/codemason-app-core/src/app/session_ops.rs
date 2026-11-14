@@ -3557,6 +3557,25 @@ impl App {
         self.assert_input_cursor_invariant();
     }
 
+    /// Record an edit a frontend's own text editor made to `session.input`.
+    ///
+    /// A GUI editor edits the input buffer in place (typing, IME commits,
+    /// paste, mouse selection) instead of sending each key through
+    /// `handle_key`. Afterwards it calls this so the App sees the same state
+    /// as after typing: the cursor moves to `cursor`, any keyboard selection
+    /// is dropped (the editor owns its selection), and the `/` and `@`
+    /// completion menus are refreshed.
+    ///
+    /// # Arguments
+    ///
+    /// * `cursor` - the editor's cursor as a character index; clamped to
+    ///   the input length.
+    pub fn input_edited(&mut self, cursor: usize) {
+        self.session.kb_select_anchor = None;
+        self.set_cursor_char_index_clamped(cursor);
+        self.refresh_input_menus();
+    }
+
     /// Delete the character before the cursor (backspace).
     pub fn delete_prev_char(&mut self) {
         if self.session.input_cursor == 0 {
