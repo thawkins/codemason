@@ -618,3 +618,49 @@ fn test_prompt_shows_pending_attachments() {
     harness.get_by_label(ATTACHMENTS_LABEL);
     harness.get_by_label_contains("screen.png");
 }
+
+#[test]
+fn test_prompt_typing_is_not_swallowed_by_a_focused_button() {
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let app = {
+        let _enter = runtime.enter();
+        support::make_app()
+    };
+    let (_events_tx, events) = tokio::sync::mpsc::unbounded_channel();
+    let (_logs_tx, logs) = tui_log_channel(16);
+    let shell = Shell::new(app)
+        .with_keymap(default_keymap(Platform::Linux))
+        .with_sources(events, logs, runtime.handle().clone());
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(800.0, 600.0))
+        .build_ui_state(
+            |ui, shell: &mut Shell| {
+                shell.update(ui);
+                egui::Area::new(egui::Id::unique("other_button"))
+                    .fixed_pos(egui::pos2(20.0, 20.0))
+                    .show(ui.ctx(), |ui| {
+                        let _ = ui.button("Other button"); // INTENTIONAL: only its focus matters
+                    });
+            },
+            shell,
+        );
+    harness.run();
+    // As if Tab had moved egui's focus onto the button.
+    harness.get_by_label("Other button").focus();
+    harness.run();
+    assert!(harness.get_by_label("Other button").is_focused());
+
+    harness.input_mut().events.extend([
+        key_event(egui::Key::A, true),
+        egui::Event::Text("a".to_string()),
+        key_event(egui::Key::A, false),
+    ]);
+    harness.run();
+
+    assert_eq!(
+        harness.state().app().session.input,
+        "a",
+        "a button keeps no typing: the prompt takes it"
+    );
+    assert!(prompt(&harness).is_focused());
+}

@@ -395,6 +395,8 @@ mod test_perf_message_cache;
 mod test_perf_render_idle;
 #[path = "test_perf_single_copy_lines.rs"]
 mod test_perf_single_copy_lines;
+#[path = "test_permission_answer_guard.rs"]
+mod test_permission_answer_guard;
 #[path = "test_permission_countdown.rs"]
 mod test_permission_countdown;
 #[path = "test_plugin_commands.rs"]

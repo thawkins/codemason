@@ -29,8 +29,8 @@
 //!   the prompt take the focus, so the editor applies it once and by
 //!   grapheme, never the App's char-based editing (carriage returns are
 //!   stripped from a paste, as the TUI does). It takes the focus only when
-//!   no widget has it and no modal is open: another focused widget keeps
-//!   its typing ([`Focus::Widget`]);
+//!   no other text field has it and no modal is open: another focused text
+//!   field keeps its typing ([`Focus::Widget`]);
 //! - while an app-core modal locks the prompt, the router gets
 //!   [`Focus::Modal`] and the App every key; a composition the IME had not
 //!   committed is removed from the buffer, since the editor keeps marked
@@ -130,7 +130,7 @@ impl PromptInput {
     /// The focus to pass to [`crate::keys::KeyRouter::route`]:
     /// [`Focus::Prompt`] while the prompt is focused and editable,
     /// [`Focus::Modal`] while an app-core modal locks it, [`Focus::Widget`]
-    /// while another widget has the keyboard, else [`Focus::Elsewhere`].
+    /// while another text field has the keyboard, else [`Focus::Elsewhere`].
     pub fn prepare(&mut self, ctx: &egui::Context, app: &mut App) -> Focus {
         if !self.deferred.is_empty() {
             let deferred = std::mem::take(&mut self.deferred);
@@ -148,10 +148,15 @@ impl PromptInput {
                 self.drop_preedit(ctx, app);
             }
             let field_focused = ctx.text_edit_focused() && focused_id != Some(id);
-            return Focus::Modal { field_focused };
+            return Focus::Modal {
+                field_focused,
+                field_selection: field_focused && focused_has_selection(ctx),
+            };
         }
         let mut focused = focused_id == Some(id);
-        let other_focused = focused_id.is_some_and(|other| other != id);
+        // Only another text field keeps the typing; a button focused with
+        // Tab does not, so typing still reaches the prompt.
+        let other_focused = ctx.text_edit_focused() && focused_id != Some(id);
         let modal_open = ctx.memory(|m| m.top_modal_layer().is_some());
         // Typing takes the focus only from nobody: never from another widget
         // or from under a modal.
@@ -165,7 +170,9 @@ impl PromptInput {
                 self.composer = Composer::new();
             }
             return if other_focused {
-                Focus::Widget
+                Focus::Widget {
+                    has_selection: focused_has_selection(ctx),
+                }
             } else {
                 Focus::Elsewhere
             };
@@ -241,6 +248,14 @@ impl PromptInput {
         state.store(ctx, id);
         app.input_edited(start);
     }
+}
+
+/// Whether the focused text field has a non-empty selection.
+fn focused_has_selection(ctx: &egui::Context) -> bool {
+    ctx.memory(|m| m.focused())
+        .and_then(|id| egui::TextEdit::load_state(ctx, id))
+        .and_then(|state| state.cursor.char_range())
+        .is_some_and(|range| !range.is_empty())
 }
 
 /// Whether the frame holds input the prompt editor must apply: text, an IME

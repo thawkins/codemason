@@ -45,7 +45,12 @@ fn filter_id() -> Id {
 }
 
 /// Widget id of the filter field.
-fn filter_field_id() -> Id {
+///
+/// # Returns
+///
+/// The id of the filter `TextEdit`, whose state holds its selection.
+#[must_use]
+pub fn filter_field_id() -> Id {
     Id::unique("codemason_model_filter_field")
 }
 

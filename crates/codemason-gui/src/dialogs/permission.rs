@@ -7,6 +7,11 @@
 //! (deny); each button sends that key to the App, whose handler publishes
 //! the reply. The keys themselves reach the App through the router.
 //!
+//! app-core answers a request only after it has been shown for
+//! `PERMISSION_ANSWER_DELAY` and only once (`App::permission_answerable`),
+//! so a double-click or a double `y` cannot answer twice or grant the next
+//! request unread. The buttons are disabled while that holds.
+//!
 //! Dependencies: `codemason-app-core` and `egui`.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -43,6 +48,10 @@ const DEFAULT_TIMEOUT_SECS: u64 = 120;
 ///
 /// `true` while a request is waiting.
 pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
+    // The request is shown from this frame on; its buttons work once
+    // app-core's answer delay has passed and until it is answered.
+    app.note_permission_front();
+    let answerable = app.permission_answerable();
     let Some(request) = app.session.permission_queue.front() else {
         return false;
     };
@@ -59,18 +68,24 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
             ui.weak(format!("{queued} queued"));
         }
         ui.add_space(6.0);
-        key_buttons(
-            ui,
-            &[
-                (ALLOW_ONCE, plain(Key::Char('y'))),
-                (ALWAYS_ALLOW, plain(Key::Char('a'))),
-                (DENY, plain(Key::Char('n'))),
-            ],
-        );
+        ui.add_enabled_ui(answerable, |ui| {
+            key_buttons(
+                ui,
+                &[
+                    (ALLOW_ONCE, plain(Key::Char('y'))),
+                    (ALWAYS_ALLOW, plain(Key::Char('a'))),
+                    (DENY, plain(Key::Char('n'))),
+                ],
+            );
+        });
         ui.weak("Press y to allow, a to always allow, n to deny");
     });
-    // The countdown changes every second.
-    ctx.request_repaint_after(Duration::from_secs(1));
+    // The countdown changes every second; disabled buttons wake sooner.
+    ctx.request_repaint_after(if answerable {
+        Duration::from_secs(1)
+    } else {
+        Duration::from_millis(100)
+    });
     true
 }
 

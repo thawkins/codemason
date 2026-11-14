@@ -37,6 +37,12 @@ use crate::app::state::{
 // Helpers
 use crate::app::helpers::{MentionSpan, short_id, short_session_id};
 
+/// How long a permission request must have been the front of the queue
+/// before `y`, `a` or `n` answers it (see `App::permission_answerable`).
+/// Longer than a double-click or a key repeat, shorter than reading the
+/// request.
+pub const PERMISSION_ANSWER_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+
 // Re-export status types from theme
 use crate::status::{StatusCategory, StatusMessage};
 
@@ -1041,6 +1047,45 @@ impl App {
             || self.session.compact_in_progress
             || self.session.auto_compact_in_progress
             || self.session.pending_send_after_compact.is_some()
+    }
+
+    /// Record the front permission request as shown now, when it changed
+    /// since the last call, starting its answer delay
+    /// ([`PERMISSION_ANSWER_DELAY`]).
+    ///
+    /// The event handler calls it when a request arrives or an answered one
+    /// is removed; a frontend may call it when it draws the dialog.
+    pub fn note_permission_front(&mut self) {
+        let front = self.session.permission_queue.front().map(|r| r.id.clone());
+        let noted = self.session.permission_front.as_ref().map(|(id, _)| id);
+        if front.as_ref() != noted {
+            self.session.permission_front = front.map(|id| (id, std::time::Instant::now()));
+        }
+    }
+
+    /// Whether the front permission request may be answered now.
+    ///
+    /// A reply removes its request only when it comes back through the event
+    /// bus, so a quick second answer (a double `y`, a double-click) would
+    /// answer the same request twice or grant the next one unread. A request
+    /// is answerable once it has been the front for
+    /// [`PERMISSION_ANSWER_DELAY`] and has not been answered yet.
+    ///
+    /// # Returns
+    ///
+    /// `true` when a `y`, `a` or `n` would answer the front request.
+    pub fn permission_answerable(&self) -> bool {
+        let Some(front) = self.session.permission_queue.front() else {
+            return false;
+        };
+        let shown = self
+            .session
+            .permission_front
+            .as_ref()
+            .is_some_and(|(id, since)| {
+                *id == front.id && since.elapsed() >= PERMISSION_ANSWER_DELAY
+            });
+        shown && self.session.permission_answered.as_deref() != Some(front.id.as_str())
     }
 
     /// Return whether the input field is genuinely locked, as opposed to merely

@@ -12,7 +12,9 @@
 //!   sends Enter;
 //! - a step with text fields shows them as the App holds them (secrets
 //!   masked as the TUI masks them), with the active field marked; typing
-//!   reaches them as key presses through the router, as in the TUI;
+//!   reaches them as key presses through the router, as in the TUI, and a
+//!   paste (Ctrl+V, which egui reports as a paste event alone) goes to
+//!   `App::paste_text_into_provider_setup` ([`prepare`]);
 //! - Cancel sends Esc, and every other button sends the key the TUI names
 //!   for it.
 //!
@@ -431,6 +433,45 @@ fn set_selected(app: &mut App, index: usize) {
             | ProviderSetupStep::TelemetrySetup { .. },
         )
         | None => {}
+    }
+}
+
+/// Paste into the step's active text field before the key router.
+///
+/// egui turns Ctrl+V into an `Event::Paste` alone, so app-core never sees
+/// the key the TUI pastes with. While a step with text fields is open
+/// (EnterKey, GitLabSetup, TelemetrySetup), each paste is taken out of the
+/// input and handed to `App::paste_text_into_provider_setup`, the app-core
+/// action that strips carriage returns and fills the active field.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context, before the router reads input.
+/// * `app` - the App whose provider step receives the paste.
+pub fn prepare(ctx: &egui::Context, app: &mut App) {
+    let takes_text = matches!(
+        app.provider_setup,
+        Some(
+            ProviderSetupStep::EnterKey { .. }
+                | ProviderSetupStep::GitLabSetup { .. }
+                | ProviderSetupStep::TelemetrySetup { .. }
+        )
+    );
+    if !takes_text {
+        return;
+    }
+    let mut pasted = Vec::new();
+    ctx.input_mut(|input| {
+        input.events.retain(|event| match event {
+            egui::Event::Paste(text) => {
+                pasted.push(text.clone());
+                false
+            }
+            _ => true,
+        });
+    });
+    for text in pasted {
+        app.paste_text_into_provider_setup(&text);
     }
 }
 

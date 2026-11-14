@@ -775,6 +775,7 @@ fn test_route_modal_forwards_and_removes_every_press() {
     let (keys, left) = route_events(
         Focus::Modal {
             field_focused: false,
+            field_selection: false,
         },
         vec![
             press(egui::Key::Enter, egui::Modifiers::NONE),
@@ -807,6 +808,7 @@ fn test_route_modal_text_field_keeps_typing_and_editing_keys() {
     let (keys, left) = route_events(
         Focus::Modal {
             field_focused: true,
+            field_selection: false,
         },
         vec![
             press(egui::Key::S, egui::Modifiers::NONE),
@@ -827,25 +829,77 @@ fn test_route_modal_text_field_keeps_typing_and_editing_keys() {
 }
 
 #[test]
-fn test_route_other_widget_keeps_typing_and_clipboard() {
+fn test_route_other_widget_keeps_typing_and_clipboard_only_with_a_selection() {
     let mut router = KeyRouter::new(default_keymap(Platform::Linux));
     let mut input = input_with(vec![
         press(egui::Key::A, egui::Modifiers::NONE),
         egui::Event::Text("a".to_string()),
         press(egui::Key::Escape, egui::Modifiers::NONE),
     ]);
-    let keys = router.route(&mut input, Focus::Widget);
+    let keys = router.route(
+        &mut input,
+        Focus::Widget {
+            has_selection: false,
+        },
+    );
     assert_eq!(keys, vec![plain(Key::Esc)], "only Esc reaches the App");
     assert_eq!(input.events.len(), 3, "the widget keeps its events");
 
-    let mut input = input_mods(
-        vec![egui::Event::Copy],
-        egui::Modifiers::CTRL | egui::Modifiers::COMMAND,
+    let ctrl_c = || {
+        input_mods(
+            vec![egui::Event::Copy],
+            egui::Modifiers::CTRL | egui::Modifiers::COMMAND,
+        )
+    };
+    assert_eq!(
+        router.route(
+            &mut ctrl_c(),
+            Focus::Widget {
+                has_selection: true
+            }
+        ),
+        Vec::new(),
+        "Ctrl+C copies the focused field's selection"
     );
     assert_eq!(
-        router.route(&mut input, Focus::Widget),
-        Vec::new(),
-        "Ctrl+C copies from the focused widget"
+        router.route(
+            &mut ctrl_c(),
+            Focus::Widget {
+                has_selection: false
+            }
+        ),
+        vec![KeyInput {
+            key: Key::Char('c'),
+            mods: Modifiers::CTRL,
+        }],
+        "without a selection Ctrl+C goes to the App, as from the prompt"
+    );
+}
+
+#[test]
+fn test_route_modal_text_field_keeps_ctrl_c_only_with_a_selection() {
+    let ctrl_c = || {
+        input_mods(
+            vec![egui::Event::Copy],
+            egui::Modifiers::CTRL | egui::Modifiers::COMMAND,
+        )
+    };
+    let mut router = KeyRouter::new(default_keymap(Platform::Linux));
+    let with = Focus::Modal {
+        field_focused: true,
+        field_selection: true,
+    };
+    let without = Focus::Modal {
+        field_focused: true,
+        field_selection: false,
+    };
+    assert_eq!(router.route(&mut ctrl_c(), with), Vec::new());
+    assert_eq!(
+        router.route(&mut ctrl_c(), without),
+        vec![KeyInput {
+            key: Key::Char('c'),
+            mods: Modifiers::CTRL,
+        }]
     );
 }
 

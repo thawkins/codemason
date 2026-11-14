@@ -616,7 +616,21 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
 
     // If permission dialog is active, intercept keys
     if !app.session.permission_queue.is_empty() {
-        // Standard permission dialog: y/a/n only.
+        // Standard permission dialog: y/a/n only. An answer counts only once
+        // the front request has been shown for the answer delay and was not
+        // answered yet, so a double press cannot answer twice or grant the
+        // next request unread.
+        if matches!(key.key, Key::Char('y' | 'a' | 'n')) {
+            app.note_permission_front();
+            if !app.permission_answerable() {
+                return None;
+            }
+            app.session.permission_answered = app
+                .session
+                .permission_queue
+                .front()
+                .map(|req| req.id.clone());
+        }
         return match key.key {
             Key::Char('y') => {
                 if let Some(ref req) = app.session.permission_queue.front() {

@@ -52,7 +52,7 @@ mod session_ops;
 mod session_registry;
 mod session_view;
 pub(crate) mod sessions;
-pub use self::session_ops::emit_log_entry_to_tracing;
+pub use self::session_ops::{PERMISSION_ANSWER_DELAY, emit_log_entry_to_tracing};
 pub use self::session_registry::SessionRegistry;
 pub use self::session_view::{Attention, SessionView};
 pub use self::sessions::title_from_prompt;

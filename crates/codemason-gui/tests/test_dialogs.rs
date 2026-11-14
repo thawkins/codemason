@@ -13,10 +13,12 @@ mod support;
 
 use codemason_agent::event::Event;
 use codemason_agent::permission::PermissionDecision;
-use codemason_app_core::app::{App, ModelPickerEntry, ProviderSetupStep};
+use codemason_app_core::app::{App, ModelPickerEntry, PERMISSION_ANSWER_DELAY, ProviderSetupStep};
 use codemason_app_core::log_channel::tui_log_channel;
 use codemason_gui::Shell;
-use codemason_gui::dialogs::model_picker::{FILTER_LABEL, MODEL_PICKER_TITLE, MODELS_LABEL};
+use codemason_gui::dialogs::model_picker::{
+    FILTER_LABEL, MODEL_PICKER_TITLE, MODELS_LABEL, filter_field_id,
+};
 use codemason_gui::dialogs::permission::{ALLOW_ONCE, ALWAYS_ALLOW, DENY, PERMISSION_TITLE};
 use codemason_gui::dialogs::provider::{CONTINUE, PROVIDER_CHOICE_LABEL, SELECT_PROVIDER_TITLE};
 use codemason_gui::dialogs::shortcuts::SHORTCUTS_TITLE;
@@ -113,6 +115,34 @@ fn type_key(harness: &mut Harness<'static, Shell>, key: egui::Key, text: Option<
     harness.run();
 }
 
+/// Wait until app-core lets the shown permission request be answered
+/// (`PERMISSION_ANSWER_DELAY`), then draw a frame.
+fn wait_shown(harness: &mut Harness<'static, Shell>) {
+    std::thread::sleep(PERMISSION_ANSWER_DELAY + std::time::Duration::from_millis(50));
+    harness.run();
+}
+
+/// The ids of the `PermissionReplied` events the App published so far.
+fn reply_ids(bus: &mut tokio::sync::broadcast::Receiver<Event>) -> Vec<String> {
+    let mut ids = Vec::new();
+    while let Some((id, _, _)) = reply(bus) {
+        ids.push(id);
+    }
+    ids
+}
+
+/// The agent's reply to `id` comes back through the bus.
+fn reply_returns(events: &UnboundedSender<Event>, id: &str) {
+    events
+        .send(Event::PermissionReplied {
+            session_id: SESSION.to_string(),
+            request_id: id.to_string(),
+            allowed: true,
+            decision: PermissionDecision::Once,
+        })
+        .expect("send reply");
+}
+
 /// A model picker entry with `id` and `name` and no thinking levels, so
 /// Enter selects it directly.
 fn model(id: &str, name: &str) -> ModelPickerEntry {
@@ -160,6 +190,7 @@ fn test_permission_dialog_allow_once_resolves_request() {
     let mut bus = harness.state().app().event_bus.subscribe();
     request_permission(&events, "req-1");
     harness.run();
+    wait_shown(&mut harness);
     assert!(
         harness
             .query_by_role_and_label(Role::Dialog, PERMISSION_TITLE)
@@ -204,6 +235,7 @@ fn test_permission_dialog_always_and_deny_buttons_reply() {
         let mut bus = harness.state().app().event_bus.subscribe();
         request_permission(&events, "req-2");
         harness.run();
+        wait_shown(&mut harness);
 
         harness.get_by_label(button).click();
         harness.run();
@@ -227,6 +259,7 @@ fn test_permission_dialog_keys_answer_like_the_tui() {
         let mut bus = harness.state().app().event_bus.subscribe();
         request_permission(&events, "req-3");
         harness.run();
+        wait_shown(&mut harness);
 
         type_key(&mut harness, key, Some(text));
 
@@ -522,6 +555,7 @@ fn test_closing_a_dialog_gives_the_keyboard_back_to_the_prompt() {
     harness.run();
     request_permission(&events, "req-7");
     harness.run();
+    wait_shown(&mut harness);
     type_key(&mut harness, egui::Key::Y, Some("y"));
     events
         .send(Event::PermissionReplied {
@@ -538,5 +572,154 @@ fn test_closing_a_dialog_gives_the_keyboard_back_to_the_prompt() {
         harness
             .get_by_role_and_label(Role::MultilineTextInput, PROMPT_LABEL)
             .is_focused()
+    );
+}
+
+#[test]
+fn test_permission_double_click_answers_once() {
+    let (_rt, events, mut harness) = rig(|_| {});
+    let mut bus = harness.state().app().event_bus.subscribe();
+    request_permission(&events, "req-a");
+    request_permission(&events, "req-b");
+    harness.run();
+    wait_shown(&mut harness);
+
+    // Two clicks in one frame, then a third in the next frame.
+    harness.get_by_label(ALLOW_ONCE).click();
+    harness.get_by_label(ALLOW_ONCE).click();
+    harness.run();
+    harness.get_by_label(ALLOW_ONCE).click();
+    harness.run();
+    assert_eq!(reply_ids(&mut bus), vec!["req-a"], "one answer, for req-a");
+
+    // req-a's reply comes back and req-b is drawn: the second half of the
+    // double-click lands on it and must not grant it.
+    reply_returns(&events, "req-a");
+    harness.run();
+    harness.get_by_label(ALLOW_ONCE).click();
+    harness.run();
+    assert!(reply_ids(&mut bus).is_empty());
+    assert_eq!(
+        harness.state().app().session.permission_queue.len(),
+        1,
+        "req-b stays pending until it is shown and answered"
+    );
+
+    wait_shown(&mut harness);
+    harness.get_by_label(ALLOW_ONCE).click();
+    harness.run();
+    assert_eq!(reply_ids(&mut bus), vec!["req-b"]);
+}
+
+#[test]
+fn test_permission_double_y_answers_once() {
+    let (_rt, events, mut harness) = rig(|_| {});
+    let mut bus = harness.state().app().event_bus.subscribe();
+    request_permission(&events, "req-c");
+    request_permission(&events, "req-d");
+    harness.run();
+    wait_shown(&mut harness);
+
+    type_key(&mut harness, egui::Key::Y, Some("y"));
+    type_key(&mut harness, egui::Key::Y, Some("y"));
+    assert_eq!(reply_ids(&mut bus), vec!["req-c"]);
+
+    reply_returns(&events, "req-c");
+    harness.run();
+    type_key(&mut harness, egui::Key::Y, Some("y"));
+    assert!(
+        reply_ids(&mut bus).is_empty(),
+        "req-d was not shown long enough"
+    );
+    assert_eq!(harness.state().app().session.permission_queue.len(), 1);
+
+    wait_shown(&mut harness);
+    type_key(&mut harness, egui::Key::Y, Some("y"));
+    assert_eq!(reply_ids(&mut bus), vec!["req-d"]);
+}
+
+#[test]
+fn test_provider_dialog_paste_fills_the_key_field() {
+    let (_rt, _events, mut harness) = rig(|app| {
+        app.provider_setup = Some(ProviderSetupStep::EnterKey {
+            provider_id: "openai".to_string(),
+            provider_name: "OpenAI (GPT)".to_string(),
+            key_field: codemason_app_core::input_field::InputField::new(),
+            endpoint_field: codemason_app_core::input_field::InputField::new(),
+            active_field: 0,
+            error: None,
+        });
+    });
+    harness.run();
+
+    // egui-winit sends Ctrl+V as a Paste event alone.
+    harness.event(egui::Event::Paste("sk-\rabc".to_string()));
+    harness.run();
+
+    let app = harness.state().app();
+    let Some(ProviderSetupStep::EnterKey { ref key_field, .. }) = app.provider_setup else {
+        panic!("still entering the key: {:?}", app.provider_setup);
+    };
+    assert_eq!(
+        key_field.text(),
+        "sk-abc",
+        "pasted once, without the carriage return"
+    );
+    assert_eq!(app.session.input, "", "the prompt behind it is untouched");
+}
+
+/// Press Ctrl+C as egui-winit reports it: a `Copy` event with Ctrl held.
+fn ctrl_c(harness: &mut Harness<'static, Shell>) {
+    let ctrl = egui::Modifiers::CTRL | egui::Modifiers::COMMAND;
+    harness
+        .input_mut()
+        .events
+        .extend([egui::Event::ModifiersChanged(ctrl), egui::Event::Copy]);
+    harness.run();
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    harness.run();
+}
+
+#[test]
+fn test_model_picker_ctrl_c_without_selection_arms_quit() {
+    let (_rt, _events, mut harness) = rig(open_model_picker);
+    harness.run();
+    harness.run();
+    assert!(harness.get_by_label(FILTER_LABEL).is_focused());
+
+    ctrl_c(&mut harness);
+
+    assert!(
+        harness.state().app().quit_armed,
+        "with nothing selected Ctrl+C goes to the App, as from the prompt"
+    );
+}
+
+#[test]
+fn test_model_picker_ctrl_c_with_selection_copies() {
+    let (_rt, _events, mut harness) = rig(open_model_picker);
+    harness.run();
+    for (key, text) in [(egui::Key::S, "s"), (egui::Key::O, "o")] {
+        type_key(&mut harness, key, Some(text));
+    }
+    // Select the filter's text.
+    let mut state = egui::TextEdit::load_state(&harness.ctx, filter_field_id()).unwrap_or_default();
+    state
+        .cursor
+        .set_char_range(Some(egui::text::CCursorRange::two(
+            egui::text::CCursor::new(0),
+            egui::text::CCursor::new(2),
+        )));
+    state.store(&harness.ctx, filter_field_id());
+    harness.run();
+
+    ctrl_c(&mut harness);
+
+    assert!(
+        !harness.state().app().quit_armed,
+        "Ctrl+C copies the filter's selection"
     );
 }

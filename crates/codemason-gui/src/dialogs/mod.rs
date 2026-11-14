@@ -25,7 +25,7 @@
 //! as in the TUI and egui never sees it, except the typing and editing keys of
 //! a dialog's own text field (the model filter). [`prepare`] runs before the
 //! router for the one dialog that needs it (the model picker's filtered
-//! list). A closing dialog gives egui's keyboard focus back to the prompt, so
+//! list, the provider fields' paste). A closing dialog gives egui's keyboard focus back to the prompt, so
 //! typing goes on there.
 //!
 //! Dependencies: `codemason-app-core` (the App and its key types), `egui`
@@ -145,17 +145,20 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
 
 /// Let the active dialog handle this frame's input before the key router.
 ///
-/// Only the model picker uses it: while its filter hides rows, Up and Down
-/// move between the shown rows and Enter on an empty list does nothing (see
-/// [`model_picker::prepare`]).
+/// The model picker uses it so that, while its filter hides rows, Up and
+/// Down move between the shown rows and Enter on an empty list does nothing
+/// ([`model_picker::prepare`]); the provider dialog to paste into its text
+/// fields ([`provider::prepare`]).
 ///
 /// # Arguments
 ///
 /// * `ctx` - the frame's context, before the router reads input.
 /// * `app` - the App whose dialog state is read.
 pub fn prepare(ctx: &egui::Context, app: &mut App) {
-    if active(app) == Some(ActiveDialog::ModelPicker) {
-        model_picker::prepare(ctx, app);
+    match active(app) {
+        Some(ActiveDialog::ModelPicker) => model_picker::prepare(ctx, app),
+        Some(ActiveDialog::Provider) => provider::prepare(ctx, app),
+        Some(ActiveDialog::Shortcuts | ActiveDialog::Permission) | None => {}
     }
 }
 

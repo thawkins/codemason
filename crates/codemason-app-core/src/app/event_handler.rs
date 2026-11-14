@@ -681,6 +681,7 @@ impl App {
                             tool_call_id: None,
                         });
                         self.session.question_selected_index = 0;
+                        self.note_permission_front();
                         self.status = "awaiting permission".to_string();
                         self.push_log_no_agent(
                             LogLevel::Warn,
@@ -758,6 +759,8 @@ impl App {
                 self.session
                     .permission_queue
                     .retain(|r| r.id != *request_id);
+                // The next request is shown from now on.
+                self.note_permission_front();
                 self.session.pending_question_input.clear();
                 self.session.question_selected_index = 0;
                 if self.session.permission_queue.is_empty() {

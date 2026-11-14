@@ -462,20 +462,27 @@ pub enum Focus {
     /// No widget has the keyboard and no modal is open: every press goes to
     /// the App and stays in the input for egui.
     Elsewhere,
-    /// Another widget than the prompt has the keyboard and no modal is open.
-    /// It keeps its text, its editing keys and Ctrl+C/Ctrl+X, as the prompt
-    /// does with a selection; Esc, function keys, PageUp/PageDown and the TUI
-    /// Alt chords still reach the App.
-    Widget,
+    /// Another text field than the prompt has the keyboard and no modal is
+    /// open. It keeps its text and editing keys, and Ctrl+C/Ctrl+X while it
+    /// has a selection, as the prompt does; Esc, function keys,
+    /// PageUp/PageDown, the TUI Alt chords and Ctrl+C/Ctrl+X without a
+    /// selection still reach the App.
+    Widget {
+        /// Whether the field has a non-empty text selection.
+        has_selection: bool,
+    },
     /// An app-core modal (a dialog, a menu, the shortcuts panel, a running
     /// compaction) owns the keyboard, as in the TUI: every press goes to the
     /// App and is removed from egui's input with the text it typed, so no
     /// dialog button is also pressed by Enter or Space, and Tab does not move
     /// egui's focus. The exception is a dialog's own text field (a filter):
-    /// while one has the keyboard it keeps its text and editing keys.
+    /// while one has the keyboard it keeps its text and editing keys, and
+    /// Ctrl+C/Ctrl+X while it has a selection.
     Modal {
         /// Whether a dialog's text field (not the prompt) has the keyboard.
         field_focused: bool,
+        /// Whether that field has a non-empty text selection.
+        field_selection: bool,
     },
     /// The prompt TextEdit has the keyboard.
     Prompt {
@@ -559,8 +566,8 @@ impl KeyRouter {
     /// - Other presses are forwarded only when they typed no text and the
     ///   prompt ignores them: Esc, function keys, PageUp and PageDown.
     ///
-    /// Under [`Focus::Widget`] the same typing rules apply, with the widget
-    /// keeping Ctrl+C and Ctrl+X and no prompt keys. Under [`Focus::Modal`]
+    /// Under [`Focus::Widget`] the same typing rules apply, with no prompt
+    /// keys. Under [`Focus::Modal`]
     /// every press is forwarded and removed from `input` with the text it
     /// typed, except the typing and editing keys of a focused dialog text
     /// field, which stay with the field and are not forwarded.
@@ -582,13 +589,15 @@ impl KeyRouter {
         let platform = self.keymap.platform();
         let (typing, has_selection) = match focus {
             Focus::Elsewhere | Focus::Modal { .. } => (false, false),
-            Focus::Prompt { has_selection, .. } => (true, has_selection),
-            Focus::Widget => (true, true),
+            Focus::Prompt { has_selection, .. } | Focus::Widget { has_selection } => {
+                (true, has_selection)
+            }
         };
-        let field_focused = matches!(
+        let field_selection = matches!(
             focus,
             Focus::Modal {
-                field_focused: true
+                field_selection: true,
+                ..
             }
         );
         let active = Active {
@@ -604,9 +613,9 @@ impl KeyRouter {
         let mut drop = vec![false; events.len()];
         for (i, event) in events.iter().enumerate() {
             if let Some(key) = clipboard_key_input(event, platform, &input.modifiers) {
-                // A prompt selection (or another focused widget, or a
-                // dialog's text field) takes Ctrl+C and Ctrl+X for itself.
-                let keeps_clipboard = (typing && has_selection) || field_focused;
+                // A selection in the prompt, another text field or a
+                // dialog's text field takes Ctrl+C and Ctrl+X for itself.
+                let keeps_clipboard = (typing && has_selection) || field_selection;
                 if !keeps_clipboard {
                     keys.push(key);
                 }
@@ -623,7 +632,7 @@ impl KeyRouter {
             // Text that follows in the same frame (fast typing, an IME
             // commit) is never dropped and never makes the press "typed".
             let typed_text = next_text.is_some_and(|text| is_key_text(key, text));
-            if let Focus::Modal { field_focused } = focus {
+            if let Focus::Modal { field_focused, .. } = focus {
                 // A dialog's text field keeps its typing and editing keys.
                 if field_focused && is_field_edit_key(key) {
                     continue;
