@@ -269,6 +269,8 @@ mod test_history;
 mod test_hit_rect_lifecycle;
 #[path = "test_hook_warning_flagged.rs"]
 mod test_hook_warning_flagged;
+#[path = "test_housekeeping.rs"]
+mod test_housekeeping;
 #[path = "test_i18n_command.rs"]
 mod test_i18n_command;
 #[path = "test_init_config.rs"]

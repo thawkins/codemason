@@ -6,6 +6,7 @@
 
 - Changed: permission requests ignore answers for 500 ms after they appear, and accept one answer only, so a double press cannot approve the next request unseen (TUI and GUI).
 - Changed: agent questions likewise ignore Enter and Esc for 500 ms after they become the front question, so a double press cannot answer the next question unseen; a question queued behind the one being answered, a permission request, or the late echo of an answer no longer clears the typed answer or moves the highlighted option (TUI and GUI).
+- Changed: the background polls the terminal event loop ran inline (compaction, rollback, `/swarm`, `/bench`, sub-agent launches, background sessions, store fetches, stat refreshes, history flush, ...) are one app-core pass, `App::housekeeping`, so both frontends apply background results the same way; `App::next_timer_due` also counts background sessions' timed questions.
 
 ### Removed
 

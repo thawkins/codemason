@@ -5144,7 +5144,8 @@ impl App {
     }
 
     /// How long until the next timer [`Self::poll_timers`] runs is due, so
-    /// an idle frontend can wake for it.
+    /// an idle frontend can wake for it. Background sessions' timed
+    /// questions count too (the housekeeping pass answers them).
     ///
     /// # Returns
     ///
@@ -5161,14 +5162,14 @@ impl App {
             (shown_at + std::time::Duration::from_secs(RUN_COST_BANNER_EXPIRY_SECS))
                 .saturating_duration_since(now)
         });
-        let question = self
-            .session
-            .question_queue
-            .front()
-            .and_then(|q| q.expire_at_ms)
-            .map(|deadline| {
-                std::time::Duration::from_millis(deadline.saturating_sub(self.timer_now_ms()))
-            });
+        // The focused session's timed question, and every background
+        // session's: `poll_background_sessions` answers those too.
+        let now_ms = self.timer_now_ms();
+        let question = std::iter::once(&self.session)
+            .chain(self.background.iter())
+            .filter_map(|view| view.question_queue.front().and_then(|q| q.expire_at_ms))
+            .min()
+            .map(|deadline| std::time::Duration::from_millis(deadline.saturating_sub(now_ms)));
         [status, banner, question].into_iter().flatten().min()
     }
 
