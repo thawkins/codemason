@@ -23,7 +23,7 @@ const TIPS: &[&str] = &[
 /// # Examples
 ///
 /// ```rust
-/// let tip = codemason_tui::tips::random_tip();
+/// let tip = codemason_app_core::tips::random_tip();
 /// assert!(!tip.is_empty());
 /// ```
 pub fn random_tip() -> &'static str {
