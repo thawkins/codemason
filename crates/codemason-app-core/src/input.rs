@@ -853,6 +853,10 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
                 };
                 return Some(InputAction::SlashCommand(command));
             }
+            Key::Tab => {
+                app.accept_slash_menu_selection();
+                return None;
+            }
             Key::Esc => {
                 app.slash_menu = None;
                 app.set_cursor_char_index_clamped(app.input_len_chars());
@@ -1099,7 +1103,7 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
             app.paste_image_from_clipboard();
             None
         }
-        Key::Char('?') if app.session.input.is_empty() => {
+        Key::Char('?') if app.session.input.is_empty() && app.shortcuts_panel_enabled => {
             // Show keybindings help panel when '?' is typed on an empty input.
             app.show_shortcuts = true;
             None

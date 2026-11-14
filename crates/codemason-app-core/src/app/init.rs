@@ -404,6 +404,7 @@ impl App {
             active_tasks_reconcile_inflight: false,
             bg_tasks: Vec::new(),
             show_shortcuts: false,
+            shortcuts_panel_enabled: true,
             quit_armed: false,
             context_menu: None,
             history_file_path: None,

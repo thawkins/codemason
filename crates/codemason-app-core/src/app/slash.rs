@@ -1216,6 +1216,30 @@ impl App {
         }
     }
 
+    /// Complete the input with the highlighted slash-menu command: the input
+    /// becomes `/<trigger> ` with the cursor at the end, which closes the
+    /// menu so arguments can follow. Bound to Tab while the menu is open.
+    ///
+    /// # Returns
+    ///
+    /// `true` when a command was inserted, `false` when the menu is closed
+    /// or has no matches.
+    pub fn accept_slash_menu_selection(&mut self) -> bool {
+        let Some(trigger) = self
+            .slash_menu
+            .as_ref()
+            .and_then(|menu| menu.matches.get(menu.selected))
+            .map(|entry| entry.trigger.clone())
+        else {
+            return false;
+        };
+        self.session.input = format!("/{trigger} ");
+        self.session.input_cursor = self.input_len_chars();
+        self.session.kb_select_anchor = None;
+        self.refresh_input_menus();
+        true
+    }
+
     /// Refresh the slash-command autocomplete menu based on the current input
     /// buffer. Closes the menu once a space is typed (so subcommand args are
     /// not obscured) and filters built-in + agent commands by prefix.

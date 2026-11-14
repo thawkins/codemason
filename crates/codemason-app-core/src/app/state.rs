@@ -3815,6 +3815,10 @@ pub struct App {
     pub bg_tasks: Vec<BgTaskView>,
     /// Whether the keybindings help panel is currently visible.
     pub show_shortcuts: bool,
+    /// Whether this frontend draws the keybindings help panel. When `false`,
+    /// `?` on an empty prompt is typed like any other character instead of
+    /// opening an invisible, input-locking panel. Defaults to `true`.
+    pub shortcuts_panel_enabled: bool,
     /// Whether Ctrl+C has armed a guarded keyboard exit sequence.
     pub quit_armed: bool,
     /// Active right-click context menu, if any.
