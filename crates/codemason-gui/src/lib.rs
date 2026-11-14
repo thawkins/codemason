@@ -8,14 +8,17 @@
 //! - [`main_thread`] hands the built session to the process main thread,
 //!   which runs the eframe window ([`MainThreadHost::serve`]).
 //! - [`Shell`] is the `eframe::App` that draws the window.
-//! - [`dock`] is the dockable pane layout model (craft-ui docking).
+//! - [`dock`] is the dockable pane layout model (craft-ui docking) the
+//!   shell renders and keeps in step with the App's panel flags.
 //! - [`keys`] is the keyboard shortcut map (craft-keymap).
 //! - [`dialogs`] draws the App's modal dialogs (permission, provider
 //!   setup, model picker, keyboard shortcuts) from one dispatch.
 //! - [`panels`] holds the pane contents ([`panels::messages`] is the
 //!   transcript, [`panels::prompt`] the prompt editor over the App's input
-//!   buffer, [`panels::queue`] the input queue), drawn with [`palette`]
-//!   colours and [`styled_text`] layout.
+//!   buffer, [`panels::queue`] the input queue, [`panels::sessions`] the
+//!   sessions sidebar, [`panels::log`] the log panel) and the
+//!   [`panels::status_bar`], drawn with [`palette`] colours and
+//!   [`styled_text`] layout.
 //! - [`bridge::spawn_event_bridge`] forwards agent events from the
 //!   [`EventBus`] into the shell's queue and wakes egui.
 //!

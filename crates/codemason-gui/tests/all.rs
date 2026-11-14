@@ -32,6 +32,8 @@ mod test_messages;
 mod test_overlays;
 #[path = "test_palette.rs"]
 mod test_palette;
+#[path = "test_panels.rs"]
+mod test_panels;
 #[path = "test_prompt.rs"]
 mod test_prompt;
 

@@ -5,18 +5,30 @@
 //! shows and hides a pane while remembering where it was, and persists the
 //! layout as JSON at `<config_dir>/codemason/gui-layout.json`.
 //!
-//! Rendering each pane is left to the pane tasks; this module is only the
-//! layout model.
+//! # Visibility
+//!
+//! The App's own panel flags (`sidebar.visible`, `show_log`, ...) are the
+//! single source of truth for which panes are shown: [`pane_wanted`] reads
+//! them, and [`sync_visibility`] hides or shows each pane through
+//! [`toggle_pane`] until the layout matches, so a hidden pane comes back
+//! where it was. The shell runs the sync every frame; when the user closes a
+//! pane from the dock's own chrome, [`hide_in_app`] clears the App's flag
+//! instead and the next sync hides it.
+//!
+//! The shell renders the layout with craft-ui's `DockArea` and maps each
+//! pane to its panel (`crate::panels`).
 //!
 //! Dependencies: `craft-ui` (feature `serde`) for the layout model,
 //! `serde`/`serde_json` for persistence, `codemason-config` for the config
-//! directory, and `tracing` for load warnings.
+//! directory, `codemason-app-core` for the App's panel flags, and `tracing`
+//! for load warnings.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use craft_ui::docking::{Action, DockError, Layout, Location, Node};
+use codemason_app_core::app::App;
+use craft_ui::docking::{Action, DockError, Layout, Location, Node, Permissions};
 use craft_ui::layout::{SplitAxis, SplitSize};
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +58,164 @@ pub enum PaneId {
     Teams,
     /// The queued prompts.
     Queue,
+}
+
+impl PaneId {
+    /// Every pane, in declaration order.
+    pub const ALL: [Self; 10] = [
+        Self::Messages,
+        Self::Prompt,
+        Self::Sessions,
+        Self::Log,
+        Self::Profile,
+        Self::Tasks,
+        Self::Memory,
+        Self::ActiveAgents,
+        Self::Teams,
+        Self::Queue,
+    ];
+
+    /// The pane's name: its tab text and the accessible label of its panel.
+    ///
+    /// # Returns
+    ///
+    /// A short title-case name, e.g. `"Sessions"`.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Messages => "Messages",
+            Self::Prompt => "Prompt",
+            Self::Sessions => "Sessions",
+            Self::Log => "Log",
+            Self::Profile => "Profile",
+            Self::Tasks => "Tasks",
+            Self::Memory => "Memory",
+            Self::ActiveAgents => "Active agents",
+            Self::Teams => "Teams",
+            Self::Queue => "Queue",
+        }
+    }
+
+    /// What the dock's chrome may do with the pane.
+    ///
+    /// The transcript and the prompt are the window's canvas: they can
+    /// neither move, close nor take tabs, so craft-ui draws them without a
+    /// tab strip. Every other pane takes craft-ui's defaults.
+    ///
+    /// # Returns
+    ///
+    /// The pane's docking permissions.
+    #[must_use]
+    pub fn permissions(self) -> Permissions {
+        match self {
+            Self::Messages | Self::Prompt => Permissions {
+                accepts_splits: true,
+                ..Permissions::PROTECTED
+            },
+            Self::Sessions
+            | Self::Log
+            | Self::Profile
+            | Self::Tasks
+            | Self::Memory
+            | Self::ActiveAgents
+            | Self::Teams
+            | Self::Queue => Permissions::default(),
+        }
+    }
+}
+
+/// Whether the App wants `pane` shown, read from the App's own flags.
+///
+/// The transcript and the prompt are always shown. The input queue is drawn
+/// above the prompt (as in the TUI), so its pane stays closed.
+///
+/// # Arguments
+///
+/// * `app` - the App whose panel flags are read.
+/// * `pane` - the pane in question.
+///
+/// # Returns
+///
+/// `true` when the pane should be in the layout.
+#[must_use]
+pub fn pane_wanted(app: &App, pane: PaneId) -> bool {
+    match pane {
+        PaneId::Messages | PaneId::Prompt => true,
+        PaneId::Sessions => app.sidebar.visible,
+        PaneId::Log => app.show_log,
+        PaneId::Profile => app.show_profile,
+        PaneId::Tasks => app.show_tasks_panel,
+        PaneId::Memory => app.show_memory,
+        PaneId::ActiveAgents => app.show_agents_window,
+        PaneId::Teams => app.show_teams_window,
+        PaneId::Queue => false,
+    }
+}
+
+/// Clear the App's flag for `pane`, as when the user closes the pane from
+/// the dock's chrome. The next [`sync_visibility`] then hides it, keeping
+/// its place. Closing the sessions sidebar also takes its focus away and
+/// saves its preference, as `Alt+S` does when it hides it.
+///
+/// # Arguments
+///
+/// * `app` - the App whose flag is cleared.
+/// * `pane` - the closed pane; the always-shown panes are left alone.
+pub fn hide_in_app(app: &mut App, pane: PaneId) {
+    match pane {
+        PaneId::Messages | PaneId::Prompt | PaneId::Queue => {}
+        PaneId::Sessions => {
+            app.sidebar.visible = false;
+            app.sidebar.focused = false;
+            app.sidebar.save(&app.storage);
+        }
+        PaneId::Log => app.show_log = false,
+        PaneId::Profile => app.show_profile = false,
+        PaneId::Tasks => app.show_tasks_panel = false,
+        PaneId::Memory => app.show_memory = false,
+        PaneId::ActiveAgents => app.show_agents_window = false,
+        PaneId::Teams => app.show_teams_window = false,
+    }
+}
+
+/// Hide or show panes until `layout` holds exactly the panes `wanted`
+/// accepts, through [`toggle_pane`] (so a pane shown again goes back where
+/// it was hidden). A pane that is shown again becomes the active tab of its
+/// group.
+///
+/// # Arguments
+///
+/// * `layout` - the layout to change.
+/// * `hidden` - the remembered locations of hidden panes.
+/// * `wanted` - whether each pane should be shown, e.g. [`pane_wanted`].
+///
+/// # Returns
+///
+/// Whether the layout changed.
+///
+/// # Errors
+///
+/// Returns the first [`DockError`] craft-ui reports; the panes before it
+/// are already synced.
+pub fn sync_visibility(
+    layout: &mut Layout<PaneId>,
+    hidden: &mut HiddenPanes,
+    wanted: impl Fn(PaneId) -> bool,
+) -> Result<bool, DockError> {
+    let mut changed = false;
+    for pane in PaneId::ALL {
+        let shown = layout.contains(&pane);
+        if shown != wanted(pane) {
+            toggle_pane(layout, hidden, pane)?;
+            if !shown {
+                // A pane that comes back is brought to the front of its tab
+                // group, as the TUI shows the panel its key turned on.
+                layout.apply(Action::Activate { panel: pane })?;
+            }
+            changed = true;
+        }
+    }
+    Ok(changed)
 }
 
 /// Where each hidden pane was docked, keyed by pane, so showing it again

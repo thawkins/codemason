@@ -2,6 +2,8 @@
 //!
 //! [`styled_to_layout_job`] turns the styled lines the core produces (the
 //! transcript, markdown) into one [`LayoutJob`] that egui wraps and paints.
+//! [`drawable`] swaps the characters the window's fonts cannot draw (the
+//! TUI's status icons, emoji) for ASCII stand-ins.
 //!
 //! Dependencies: `egui` (text layout), `codemason-app-core` (styled text)
 //! and [`crate::palette`] (colours).
@@ -79,5 +81,56 @@ fn text_format(style: &TextStyle, palette: &Palette) -> TextFormat {
             Stroke::NONE
         },
         ..TextFormat::default()
+    }
+}
+
+/// `text` with every character `font` has no glyph for replaced by an ASCII
+/// stand-in, so the window never draws a box ("tofu") for it.
+///
+/// app-core's status icons keep their meaning: the running diamond and the
+/// success dot become `*`, the error cross `x`, the info sign `i` and the
+/// warning sign `!`; any other missing character becomes `?`. Control
+/// characters are kept (egui lays them out itself).
+///
+/// # Arguments
+///
+/// * `ctx` - the context whose fonts draw the text.
+/// * `font` - the font the text is drawn in.
+/// * `text` - the text to draw.
+///
+/// # Returns
+///
+/// `text` itself when every character can be drawn, else the substituted
+/// copy.
+#[must_use]
+pub fn drawable(ctx: &egui::Context, font: &FontId, text: &str) -> String {
+    ctx.fonts_mut(|fonts| {
+        if fonts.has_glyphs(font, text) {
+            return text.to_string();
+        }
+        text.chars()
+            .map(|c| {
+                if c.is_control() || fonts.has_glyph(font, c) {
+                    c
+                } else {
+                    ascii_stand_in(c)
+                }
+            })
+            .collect()
+    })
+}
+
+/// The ASCII character drawn in place of `c`.
+fn ascii_stand_in(c: char) -> char {
+    match c {
+        // Running diamond and success dot (`codemason_app_core::status`).
+        '\u{25C6}' | '\u{25CF}' => '*',
+        // Error cross.
+        '\u{2717}' => 'x',
+        // Information source.
+        '\u{2139}' => 'i',
+        // Warning sign.
+        '\u{26A0}' => '!',
+        _ => '?',
     }
 }

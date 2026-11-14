@@ -1589,11 +1589,13 @@ name = "codemason-gui"
 version = "1.0.169"
 dependencies = [
  "anyhow",
+ "chrono",
  "codemason-agent",
  "codemason-app-core",
  "codemason-config",
  "codemason-connectors",
  "codemason-plugins",
+ "codemason-tools-core",
  "codemason-types",
  "craft-keymap",
  "craft-ui",

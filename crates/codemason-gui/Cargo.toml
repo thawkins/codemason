@@ -18,7 +18,9 @@ codemason-connectors = { workspace = true }
 codemason-plugins = { workspace = true }
 codemason-types = { workspace = true }
 codemason-config = { workspace = true }
+codemason-tools-core = { workspace = true }
 anyhow = { workspace = true }
+chrono = { workspace = true }
 craft-keymap = { workspace = true }
 craft-ui = { workspace = true }
 eframe = { workspace = true }

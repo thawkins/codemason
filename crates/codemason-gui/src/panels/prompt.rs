@@ -37,6 +37,11 @@
 //!   removed from the buffer, since the editor keeps marked text in it while
 //!   composing. A dialog's own text field keeps its typing, and a second
 //!   composer removes the keys its input method owns;
+//! - while the sessions sidebar has the keyboard (`App::sidebar.focused`,
+//!   given by `Alt+S` or a click on it), the prompt gives up the focus and
+//!   the router gets [`Focus::Modal`], so the sidebar's keys (arrows,
+//!   Enter, `m`, the filter's letters) reach the App and none is typed, as
+//!   in the TUI;
 //! - `?` on an empty prompt goes to the App, which opens the shortcuts
 //!   panel, as in the TUI; after text it types;
 //! - Up and Down go to the App on the first and last logical line (input
@@ -135,7 +140,8 @@ impl PromptInput {
     ///
     /// The focus to pass to [`crate::keys::KeyRouter::route`]:
     /// [`Focus::Prompt`] while the prompt is focused and editable,
-    /// [`Focus::Modal`] while an app-core modal locks it, [`Focus::Widget`]
+    /// [`Focus::Modal`] while an app-core modal locks it or the sessions
+    /// sidebar has the keyboard, [`Focus::Widget`]
     /// while another text field has the keyboard, else [`Focus::Elsewhere`].
     pub fn prepare(&mut self, ctx: &egui::Context, app: &mut App) -> Focus {
         if !self.deferred.is_empty() {
@@ -158,6 +164,22 @@ impl PromptInput {
             return Focus::Modal {
                 field_focused,
                 field_selection: field_focused && focused_has_selection(ctx),
+            };
+        }
+        // The focused sessions sidebar owns the keyboard, as in the TUI,
+        // where it takes every key before the input does: the prompt gives
+        // up the focus, and the keys reach the App as under a modal, so none
+        // is typed and Enter or Space presses no button.
+        if app.sidebar.focused && app.sidebar.visible {
+            if self.composer.is_composing() {
+                self.drop_preedit(ctx, app);
+            }
+            if focused_id == Some(id) {
+                ctx.memory_mut(|m| m.surrender_focus(id));
+            }
+            return Focus::Modal {
+                field_focused: false,
+                field_selection: false,
             };
         }
         let mut focused = focused_id == Some(id);

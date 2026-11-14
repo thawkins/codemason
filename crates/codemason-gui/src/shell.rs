@@ -1,10 +1,27 @@
 //! The eframe application that draws the codemason window.
 //!
-//! The shell draws the message transcript ([`MessagesView`]) above the
-//! input queue ([`queue_ui`]) and the prompt editor ([`prompt_ui`]), which
-//! edits the App's own input buffer, and over them the App's active modal
-//! dialog ([`dialogs::show`]); later tasks render the other panes from the
-//! `App` state.
+//! The shell renders the dock ([`crate::dock`], craft-ui's `DockArea`)
+//! above the status bar ([`status_bar_ui`]), and over them the App's active
+//! modal dialog ([`dialogs::show`]). Each dock pane maps to its panel: the
+//! message transcript ([`MessagesView`]), the input queue ([`queue_ui`])
+//! above the prompt editor ([`prompt_ui`]), which edits the App's own input
+//! buffer, the sessions sidebar ([`SessionsView`]) and the log panel
+//! ([`log_ui`]); the panes later tasks fill draw a labelled placeholder.
+//!
+//! # Dock visibility and persistence
+//!
+//! The App's panel flags are the single source of truth for which panes
+//! are shown. Before drawing, each frame runs [`dock::sync_visibility`]
+//! with [`dock::pane_wanted`], so `Alt+L`, `Alt+S` and every other path
+//! that flips a flag (slash commands, app-core's own rules such as "the log
+//! dismisses the other side panels") shows or hides the matching pane in
+//! the same frame. A pane closed from the dock's chrome clears its App flag
+//! ([`dock::hide_in_app`]) instead of changing the layout, and the next
+//! sync hides it. The other actions the dock returns (moves, resizes, tab
+//! switches, floats) are applied to the layout. With a layout file
+//! ([`Shell::with_layout_file`]) the layout is loaded at start, and every
+//! change is saved once no pointer button is held (so a drag is saved once,
+//! when it ends) and when the window is asked to close.
 //! [`Shell::logic`], which eframe also runs while the window is hidden,
 //! drains the agent-event queue and the tracing log channel into the `App`
 //! and runs app-core's background housekeeping pass (`App::housekeeping`)
@@ -15,18 +32,25 @@
 //! [`KeyRouter`] before any widget reads them. After drawing it runs the key
 //! presses the dialogs' buttons sent ([`dialogs::take_keys`]).
 
+use std::path::PathBuf;
+
 use codemason_agent::event::Event;
 use codemason_app_core::app::{App, LogLevel, SelectionPane};
 use codemason_app_core::log_channel::TuiLogReceiver;
+use craft_ui::docking::{Action, DockArea, DockStyle, Layout};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::dialogs;
+use crate::dock::{self, HiddenPanes, PaneId};
 use crate::keys::{Focus, KeyRouter, default_keymap};
-use crate::palette::palette_for;
+use crate::palette::{Palette, palette_for};
+use crate::panels::log::log_ui;
 use crate::panels::messages::MessagesView;
 use crate::panels::prompt::{PromptInput, prompt_ui};
 use crate::panels::queue::queue_ui;
+use crate::panels::sessions::SessionsView;
+use crate::panels::status_bar::status_bar_ui;
 
 /// Most log records moved into the app per frame, so a burst cannot stall
 /// a frame (the terminal frontend uses the same limit).
@@ -49,6 +73,15 @@ pub struct Shell {
     sources: Option<Sources>,
     keys: KeyRouter,
     messages: MessagesView,
+    sessions: SessionsView,
+    /// The dock layout drawn each frame.
+    layout: Layout<PaneId>,
+    /// Where each hidden pane was, so showing it again puts it back.
+    hidden: HiddenPanes,
+    /// The file the layout is loaded from and saved to, if any.
+    layout_file: Option<PathBuf>,
+    /// Whether the layout changed since it was last saved.
+    layout_dirty: bool,
 }
 
 impl std::fmt::Debug for Shell {
@@ -83,7 +116,42 @@ impl Shell {
             sources: None,
             keys: KeyRouter::new(default_keymap(craft_keymap::Platform::current())),
             messages: MessagesView::default(),
+            sessions: SessionsView::default(),
+            layout: dock::default_layout(),
+            hidden: HiddenPanes::new(),
+            layout_file: None,
+            layout_dirty: false,
         }
+    }
+
+    /// Load the dock layout from `path` and save it back there when it
+    /// changes ([`dock::load_layout`], [`dock::save_layout`]).
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - the JSON layout file, e.g. [`dock::layout_path`]; a
+    ///   missing or invalid file starts from [`dock::default_layout`].
+    ///
+    /// # Returns
+    ///
+    /// The shell drawing the stored layout.
+    #[must_use]
+    pub fn with_layout_file(mut self, path: PathBuf) -> Self {
+        self.layout = dock::load_layout(&path);
+        self.hidden.clear();
+        self.layout_file = Some(path);
+        self
+    }
+
+    /// The dock layout as last drawn.
+    ///
+    /// # Returns
+    ///
+    /// The layout, after this frame's visibility sync and dock actions.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn layout(&self) -> &Layout<PaneId> {
+        &self.layout
     }
 
     /// Replace the keyboard shortcuts.
@@ -133,27 +201,133 @@ impl Shell {
     ///
     /// * `ui` - the root ui of the window.
     pub fn show(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::bottom("prompt_panel").show(ui, |ui| {
-            queue_ui(ui, &self.app);
-            prompt_ui(ui, &mut self.app);
+        self.sync_dock(ui.ctx());
+        let palette = palette_for(self.app.theme_mode);
+        egui::Panel::bottom("status_bar").show(ui, |ui| {
+            status_bar_ui(ui, &mut self.app, &palette);
         });
+        let mut sessions_rect = None;
         egui::CentralPanel::default().show(ui, |ui| {
-            let palette = palette_for(self.app.theme_mode);
-            let transcript = self.messages.show(ui, &self.app, &palette);
-            let right_click =
-                ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Secondary));
-            if right_click && transcript.hovered() && !dialogs::locks_prompt(&self.app) {
-                // The transcript has no text selection in the GUI, so its
-                // menu has nothing enabled, as the TUI's without one.
-                dialogs::context_menu::open(
-                    ui.ctx(),
-                    &mut self.app,
-                    SelectionPane::Messages,
-                    false,
-                );
-            }
+            sessions_rect = self.show_dock(ui, &palette);
         });
         dialogs::show(ui.ctx(), &mut self.app);
+        self.unfocus_sidebar_on_press_outside(ui.ctx(), sessions_rect);
+        self.save_layout_when_due(ui.ctx());
+    }
+
+    /// Hide or show the dock's panes to match the App's flags.
+    fn sync_dock(&mut self, ctx: &egui::Context) {
+        let app = &self.app;
+        match dock::sync_visibility(&mut self.layout, &mut self.hidden, |pane| {
+            dock::pane_wanted(app, pane)
+        }) {
+            Ok(true) => {
+                self.layout_dirty = true;
+                ctx.request_repaint();
+            }
+            Ok(false) => {}
+            Err(err) => tracing::warn!(%err, "dock visibility sync failed"),
+        }
+    }
+
+    /// Draw the dock and apply what the user did to it; returns the
+    /// sessions sidebar's rectangle when it was drawn.
+    fn show_dock(&mut self, ui: &mut egui::Ui, palette: &Palette) -> Option<egui::Rect> {
+        let style = DockStyle::from_ui(ui);
+        let mut sessions_rect = None;
+        let Self {
+            app,
+            messages,
+            sessions,
+            layout,
+            ..
+        } = self;
+        let output = DockArea::new(egui::Id::unique("codemason_dock")).show(
+            ui,
+            layout,
+            &style,
+            |pane: &PaneId| pane.label().to_string(),
+            |pane: &PaneId| pane.permissions(),
+            |ui, pane| match pane {
+                PaneId::Messages => messages_body(ui, app, messages, palette),
+                PaneId::Prompt => {
+                    queue_ui(ui, app);
+                    prompt_ui(ui, app);
+                }
+                PaneId::Sessions => {
+                    sessions.show(ui, app, palette);
+                    sessions_rect = Some(ui.max_rect());
+                }
+                PaneId::Log => log_ui(ui, app, palette),
+                PaneId::Profile
+                | PaneId::Tasks
+                | PaneId::Memory
+                | PaneId::ActiveAgents
+                | PaneId::Teams
+                | PaneId::Queue => placeholder(ui, *pane),
+            },
+        );
+        if let Some(err) = output.error {
+            tracing::warn!(%err, "dock layout not drawn");
+        }
+        for action in output.actions {
+            match action {
+                // The App's flag owns visibility: clear it, and the next
+                // sync hides the pane where it is.
+                Action::Close { panel } => {
+                    dock::hide_in_app(&mut self.app, panel);
+                    ui.ctx().request_repaint();
+                }
+                other => match self.layout.apply(other) {
+                    Ok(_) => self.layout_dirty = true,
+                    Err(err) => tracing::debug!(%err, "dock action rejected"),
+                },
+            }
+        }
+        sessions_rect
+    }
+
+    /// A press anywhere outside the sessions sidebar takes the keyboard
+    /// from it, as a click outside it does in the TUI.
+    fn unfocus_sidebar_on_press_outside(
+        &mut self,
+        ctx: &egui::Context,
+        sessions_rect: Option<egui::Rect>,
+    ) {
+        if !self.app.sidebar.focused {
+            return;
+        }
+        let press = ctx.input(|i| {
+            i.pointer
+                .any_pressed()
+                .then(|| i.pointer.press_origin())
+                .flatten()
+        });
+        if let Some(at) = press
+            && !sessions_rect.is_some_and(|rect| rect.contains(at))
+            && ctx.memory(|m| m.top_modal_layer().is_none())
+        {
+            self.app.sidebar.focused = false;
+        }
+    }
+
+    /// Save a changed layout to the layout file once no pointer button is
+    /// held, or at once when the window is asked to close.
+    fn save_layout_when_due(&mut self, ctx: &egui::Context) {
+        if !self.layout_dirty {
+            return;
+        }
+        let Some(path) = self.layout_file.as_ref() else {
+            return;
+        };
+        let closing = ctx.input(|i| i.viewport().close_requested()) || !self.app.is_running;
+        if !closing && ctx.input(|i| i.pointer.any_down()) {
+            return;
+        }
+        if let Err(err) = dock::save_layout(path, &self.layout) {
+            tracing::warn!(path = %path.display(), %err, "cannot save GUI layout");
+        }
+        self.layout_dirty = false;
     }
 
     /// Run one whole frame: [`Self::logic`], then route the keys and draw.
@@ -294,6 +468,15 @@ impl Shell {
             return;
         };
         let keys = ctx.input_mut(|input| self.keys.route(input, focus));
+        // egui chose where Tab or an arrow moves its focus when the frame
+        // began, before the router took the press for the App; with the
+        // press gone, its focus move is cancelled too (Tab that accepts a
+        // completion stays in the prompt, a key the focused sidebar takes
+        // moves no widget focus).
+        let moves_focus = ctx.input(|input| input.events.iter().any(is_focus_move));
+        if !moves_focus {
+            ctx.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
+        }
         for key in keys {
             sources.runtime.block_on(self.app.handle_key(key));
         }
@@ -338,6 +521,40 @@ impl Shell {
             self.app.push_log(level, message, None);
         }
     }
+}
+
+/// Whether `event` is a press egui moves its keyboard focus on: Tab,
+/// Shift+Tab or an arrow key.
+fn is_focus_move(event: &egui::Event) -> bool {
+    matches!(
+        event,
+        egui::Event::Key {
+            key: egui::Key::Tab
+                | egui::Key::ArrowUp
+                | egui::Key::ArrowDown
+                | egui::Key::ArrowLeft
+                | egui::Key::ArrowRight,
+            pressed: true,
+            ..
+        }
+    )
+}
+
+/// The Messages pane: the transcript, whose right-click opens the context
+/// menu.
+fn messages_body(ui: &mut egui::Ui, app: &mut App, messages: &mut MessagesView, palette: &Palette) {
+    let transcript = messages.show(ui, app, palette);
+    let right_click = ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Secondary));
+    if right_click && transcript.hovered() && !dialogs::locks_prompt(app) {
+        // The transcript has no text selection in the GUI, so its menu has
+        // nothing enabled, as the TUI's without one.
+        dialogs::context_menu::open(ui.ctx(), app, SelectionPane::Messages, false);
+    }
+}
+
+/// A pane whose panel a later task draws: its name, so the pane is labelled.
+fn placeholder(ui: &mut egui::Ui, pane: PaneId) {
+    ui.weak(format!("{} panel", pane.label()));
 }
 
 impl eframe::App for Shell {
