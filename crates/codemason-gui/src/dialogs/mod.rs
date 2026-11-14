@@ -245,8 +245,8 @@ pub fn active(app: &App) -> Option<ActiveDialog> {
 
 /// Whether the prompt must give up the keyboard: an app-core modal locks
 /// the input (`App::is_input_locked`), or the sidebar's properties dialog,
-/// the session menu, the connector-catalogue browser or the `/memory clear`
-/// confirmation is open. Those take
+/// the session menu, the connector-catalogue browser, or the `/memory clear`
+/// or `/db prune` confirmation is open. Those take
 /// every key in app-core's `handle_key` without being input locks, so the
 /// prompt treats them as locks too: the router forwards every key and the
 /// prompt stops editing.
@@ -265,6 +265,7 @@ pub fn locks_prompt(app: &App) -> bool {
         || app.sidebar.menu.is_some()
         || app.connector_store.is_some()
         || app.memory_clear_confirm_open
+        || app.db_prune_confirm_open
 }
 
 /// Draw the active dialog ([`active`]), if any.

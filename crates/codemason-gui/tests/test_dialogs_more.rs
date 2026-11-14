@@ -887,3 +887,25 @@ fn test_properties_description_takes_paste_and_text_with_no_key() {
         .map(|p| p.description.clone());
     assert_eq!(description.as_deref(), Some("caf\u{e9}"));
 }
+
+#[test]
+fn test_db_prune_dialog_keys_work_with_the_prompt_focused() {
+    let (_rt, _events, mut harness) = rig(|_| {});
+    harness.run();
+    harness
+        .get_by_role_and_label(Role::MultilineTextInput, PROMPT_LABEL)
+        .focus();
+    harness.run();
+    // `/db prune` typed in the prompt opens the dialog while the prompt
+    // still has the keyboard; a Right pressed in the very next frame (before
+    // egui's modal takes the focus) must reach app-core, not the caret.
+    harness.state_mut().app_mut().open_db_prune_confirm(30);
+    type_key(&mut harness, egui::Key::ArrowRight, None);
+    assert!(dialog_shown(&harness, &db_prune_title(30)));
+    assert!(harness.state().app().db_prune_confirm_is_yes());
+    type_key(&mut harness, egui::Key::Enter, None);
+    harness.run();
+    let app = harness.state().app();
+    assert!(!app.db_prune_confirm_open, "Enter on Yes runs the prune");
+    assert_eq!(app.session.input, "");
+}
