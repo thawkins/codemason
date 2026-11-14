@@ -1,6 +1,6 @@
 //! Theme mode selection (default vs high contrast).
 //!
-//! Frontend-neutral (no ratatui); each frontend maps the mode to its palette.
+//! Frontend-neutral (no terminal-UI types); each frontend maps the mode to its palette.
 //!
 //! No dependencies.
 

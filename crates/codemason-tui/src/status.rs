@@ -1,6 +1,6 @@
 //! Status-bar message types: categories, timestamped messages and history.
 //!
-//! Frontend-neutral (no ratatui). Colors and styles for a category are
+//! Frontend-neutral (no terminal-UI types). Colors and styles for a category are
 //! resolved by the frontend (see `theme::StatusStyle` in the terminal UI).
 //!
 //! No dependencies beyond `std`.
