@@ -25,16 +25,17 @@ impl App {
     /// status-bar cache and the debounced history flush - runs on every call.
     ///
     /// Most awaits are short: the MCP and connector steps use `try_read` on
-    /// the client lock and skip when it is held. The swarm steps are not
-    /// always short. Applying a finished `/swarm` decomposition
-    /// (`poll_pending_swarm` -> `TaskStore::add_task`) and finalising a
-    /// swarm (`poll_swarm_completion`, also run per background session by
-    /// `poll_background_sessions` -> `TaskStore::complete`) take the task
+    /// the client lock and skip when it is held. Finalising a swarm
+    /// (`poll_swarm_completion`, also run per background session by
+    /// `poll_background_sessions`) completes the open tasks in a job spawned
+    /// on the runtime, because each `TaskStore::complete` takes the task
     /// store's blocking exclusive file lock, which teammate processes
-    /// contend for, and run the team's `TaskCreated` / `TaskCompleted` hook
-    /// inline for each task, in series, each with a 30 s timeout
-    /// (`HOOK_TIMEOUT`). A frontend that drives this on its UI thread, as
-    /// both frontends do, stops repainting until those hooks finish.
+    /// contend for, and runs the team's `TaskCompleted` hook (30 s timeout,
+    /// `HOOK_TIMEOUT`); the pass after the job ends applies the tally.
+    /// Applying a finished `/swarm` decomposition (`poll_pending_swarm` ->
+    /// `TaskStore::add_task`) still writes inline: the team was created in
+    /// the same step, so no teammate holds its lock yet and it has no hooks
+    /// configured, so no `TaskCreated` hook runs there.
     ///
     /// # Arguments
     ///

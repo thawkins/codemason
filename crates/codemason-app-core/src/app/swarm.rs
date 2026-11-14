@@ -542,9 +542,34 @@ impl App {
 
     /// Periodically (every 2s) check the active swarm's overall completion
     /// status and update the status line / log panel accordingly.
+    ///
+    /// Once every teammate is terminal, the tasks still open in the task
+    /// store are completed by a job spawned on the runtime
+    /// ([`SwarmAutoComplete`]): each `TaskStore::complete` takes the store's
+    /// blocking file lock and runs the team's `TaskCompleted` hook (up to
+    /// 30 s each), which must not stall the frontend's thread. While the job
+    /// runs, a pass starts no second job and reports nothing. The first pass
+    /// after it ends (the next housekeeping pass, not the next 2 s check)
+    /// reads the tally and finalises the swarm, as the same pass did when
+    /// the writes ran inline. A job left over from a swarm that was replaced
+    /// or cancelled is dropped.
     #[doc(hidden)]
     pub async fn poll_swarm_completion(&mut self) {
-        if self.session.swarm_completion_last_poll.elapsed() < std::time::Duration::from_secs(2) {
+        let landed = match self.session.swarm_autocomplete.as_ref() {
+            Some(job) if !job.handle.is_finished() => return,
+            Some(job) => {
+                let team_name = job.team_name.clone();
+                self.session.swarm_autocomplete = None;
+                self.session
+                    .swarm_state
+                    .as_ref()
+                    .is_some_and(|swarm| swarm.team_name == team_name)
+            }
+            None => false,
+        };
+        if !landed
+            && self.session.swarm_completion_last_poll.elapsed() < std::time::Duration::from_secs(2)
+        {
             return;
         }
         self.session.swarm_completion_last_poll = std::time::Instant::now();
@@ -575,21 +600,22 @@ impl App {
                 )
             });
 
-        // If all members are terminal, auto-complete any non-completed tasks in the task store
-        if all_members_terminal {
+        // If all members are terminal, auto-complete any non-completed tasks
+        // in the task store, off this thread; the pass after the job ends
+        // reads the tally below.
+        if all_members_terminal && !landed {
             if let Ok(store) = team::TeamStore::load_by_name(&team_name, &working_dir) {
                 if let Ok(ts) = team::TaskStore::open(&store.dir) {
-                    if let Ok(tl) = ts.read() {
-                        for task in &tl.tasks {
-                            if task.status != team::TaskStatus::Completed
-                                && task.status != team::TaskStatus::Cancelled
-                            {
-                                let agent_id = task.assigned_to.as_deref().unwrap_or("swarm");
-                                if let Err(e) = ts.complete(&task.id, agent_id).await {
-                                    tracing::warn!(task = %task.id, error = %e, "failed to auto-complete swarm task");
-                                }
-                            }
+                    match tokio::runtime::Handle::try_current() {
+                        Ok(runtime) => {
+                            self.session.swarm_autocomplete = Some(SwarmAutoComplete {
+                                team_name,
+                                handle: runtime.spawn(complete_open_swarm_tasks(ts)),
+                            });
+                            return;
                         }
+                        // No runtime to hand the job to: complete inline.
+                        Err(_) => complete_open_swarm_tasks(ts).await,
                     }
                 }
             }
@@ -642,6 +668,31 @@ impl App {
         }
     }
 
+    /// Whether a swarm auto-complete job is running (test hook).
+    ///
+    /// # Returns
+    ///
+    /// `true` from the pass that spawned the job until it ends.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn swarm_autocomplete_in_flight(&self) -> bool {
+        self.session
+            .swarm_autocomplete
+            .as_ref()
+            .is_some_and(|job| !job.handle.is_finished())
+    }
+
+    /// Wait until the swarm auto-complete job, if any, has ended (test
+    /// hook, in place of waiting for the next pass). The job stays recorded,
+    /// so the next `poll_swarm_completion` applies it.
+    #[doc(hidden)]
+    pub async fn wait_swarm_autocomplete_for_tests(&mut self) {
+        if let Some(job) = self.session.swarm_autocomplete.as_mut() {
+            // A job that panicked has ended too; the next pass drops it.
+            let _ = (&mut job.handle).await; // INTENTIONAL: only the end matters
+        }
+    }
+
     pub(crate) fn finalize_swarm_completion(
         &mut self,
         team_name: &str,
@@ -683,5 +734,37 @@ impl App {
             s.completed = true;
         }
         self.needs_redraw = true;
+    }
+}
+
+/// A finalising swarm's task auto-completion, running on the runtime (see
+/// [`App::poll_swarm_completion`]). The handle doubles as the in-flight
+/// flag and the result slot: the job's only results are the store writes
+/// and their warnings, so its end is what the next pass waits for.
+#[derive(Debug)]
+pub struct SwarmAutoComplete {
+    /// The swarm the job completes tasks for.
+    team_name: String,
+    /// The spawned job.
+    handle: tokio::task::JoinHandle<()>,
+}
+
+/// Complete every task of `ts` that is neither completed nor cancelled, on
+/// behalf of its assignee (or `"swarm"`), as a finalising swarm does once
+/// every teammate has stopped. Each completion takes the store's exclusive
+/// file lock for its read-modify-write only, then runs the team's
+/// `TaskCompleted` hook; failures are logged and the next task still runs.
+async fn complete_open_swarm_tasks(ts: team::TaskStore) {
+    let Ok(tl) = ts.read() else {
+        return;
+    };
+    for task in &tl.tasks {
+        if task.status != team::TaskStatus::Completed && task.status != team::TaskStatus::Cancelled
+        {
+            let agent_id = task.assigned_to.as_deref().unwrap_or("swarm");
+            if let Err(e) = ts.complete(&task.id, agent_id).await {
+                tracing::warn!(task = %task.id, error = %e, "failed to auto-complete swarm task");
+            }
+        }
     }
 }

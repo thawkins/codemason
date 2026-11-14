@@ -335,6 +335,10 @@ pub struct SessionView {
     pub swarm_unblock_last_poll: std::time::Instant,
     /// When swarm completion was last polled (debounces filesystem I/O).
     pub swarm_completion_last_poll: std::time::Instant,
+    /// The finalising swarm's task auto-completion while it runs off the
+    /// frontend's thread (`App::poll_swarm_completion`); `Some` is the
+    /// in-flight flag.
+    pub(crate) swarm_autocomplete: Option<crate::app::swarm::SwarmAutoComplete>,
     /// Session ID of the currently selected agent in the agents panel.
     /// When set, messages and logs are filtered to show only from this session.
     /// When `None`, shows primary session messages/logs.
@@ -482,6 +486,7 @@ impl SessionView {
             swarm_result: Arc::new(std::sync::Mutex::new(None)),
             swarm_unblock_last_poll: std::time::Instant::now(),
             swarm_completion_last_poll: std::time::Instant::now(),
+            swarm_autocomplete: None,
             selected_agent_session_id: None,
             pending_forcecleanup: None,
             unread: false,

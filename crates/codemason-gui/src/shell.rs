@@ -552,16 +552,12 @@ impl Shell {
     ///
     /// It runs on the UI thread through `Handle::block_on`, like
     /// `App::handle_event`, the same pass the TUI runs on its render loop.
-    /// Most awaits are short (lock `try_read`s that skip when held, small
-    /// task-store writes), but not all: when a finished `/swarm`
-    /// decomposition is applied or a swarm finalises, each task-store write
-    /// takes the store's blocking file lock and runs the team's
-    /// `TaskCreated` / `TaskCompleted` hook inline, each hook with a 30 s
-    /// timeout, one task after another. With such hooks configured the
-    /// window does not repaint or take input until they finish, exactly as
-    /// the TUI stalls. Moving that work off the thread is a recorded
-    /// follow-up. Without attached sources there is no runtime, so nothing
-    /// runs.
+    /// Its awaits are short (lock `try_read`s that skip when held, small
+    /// task-store writes): the one step that can run team hooks, a
+    /// finalising swarm's task completions with their `TaskCompleted` hooks
+    /// (30 s timeout each), runs in a job app-core spawns on the runtime,
+    /// and a later pass applies its result. Without attached sources there
+    /// is no runtime, so nothing runs.
     fn housekeeping(&mut self, ctx: &egui::Context) {
         let Some(sources) = self.sources.as_ref() else {
             return;

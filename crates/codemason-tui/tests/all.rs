@@ -579,6 +579,8 @@ mod test_subagent_events;
 mod test_subagent_step_log;
 #[path = "test_swarm_more.rs"]
 mod test_swarm_more;
+#[path = "test_swarm_offload.rs"]
+mod test_swarm_offload;
 #[path = "test_tasks_panel.rs"]
 mod test_tasks_panel;
 #[path = "test_teammate_strip.rs"]
