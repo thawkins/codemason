@@ -246,7 +246,11 @@ fn test_swebench_lite_repair_scenario_resolves_patch() {
         .iter()
         .find(|m| m.metric_name == "resolution_rate")
         .expect("resolution_rate");
-    assert_eq!(rate.metric_value, 1.0);
+    // A 1-of-1 resolution rate is exactly 1.0; strict equality is intended.
+    #[allow(clippy::float_cmp)]
+    {
+        assert_eq!(rate.metric_value, 1.0);
+    }
 }
 
 #[test]
