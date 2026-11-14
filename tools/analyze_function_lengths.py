@@ -25,7 +25,7 @@ Examples
         --output target/temp/function_length_report.json
 
     # Scan one crate and show which files were walked.
-    python3 tools/analyze_function_lengths.py --root crates/ragent-agent --verbose
+    python3 tools/analyze_function_lengths.py --root crates/codemason-agent --verbose
 
 Output
 ------

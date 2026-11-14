@@ -65,7 +65,7 @@ No skills loaded: the output ends after the built-in command block.
   registered commands (`/{trigger}` padded, then description), optionally
   followed by a `Skills:` list of user-invocable skills from the skill
   registry (name + argument hint on the left, description on the right).
-- The working directory and skill directories come from the loaded ragent
+- The working directory and skill directories come from the loaded codemason
   config; skills are discovered fresh at each invocation.
 - Status bar shows `help`.
 

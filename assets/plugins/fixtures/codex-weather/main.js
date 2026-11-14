@@ -5,7 +5,7 @@
 // top-level message proves entry execution is observable (FR-023: this message
 // must NOT appear while the plugin is only installed, never enabled).
 
-ragent.message.info("entry ran");
+codemason.message.info("entry ran");
 
 function get_weather(args) {
   var city = args && args.city ? String(args.city) : "unknown";

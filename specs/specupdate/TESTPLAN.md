@@ -6,9 +6,9 @@ status: draft
 
 ## Prerequisites
 
-1. **ragent binary built and available on PATH**
+1. **codemason binary built and available on PATH**
    ```bash
-   cd /home/thawkins/Projects/ragent
+   cd /home/thawkins/Projects/codemason
    cargo build
    ```
 
@@ -40,7 +40,7 @@ status: draft
 ### TC-001 — Parse and display help entry for `/spec update`
 
 **Preconditions:**
-- ragent TUI is open in the ragent project directory.
+- codemason TUI is open in the codemason project directory.
 
 **Steps:**
 1. Type `/spec help` in the TUI input field.
@@ -60,7 +60,7 @@ status: draft
 ### TC-002 — Usage error when spec ID is missing
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 
 **Steps:**
 1. Type `/spec update` in the TUI input field (no spec ID provided).
@@ -79,7 +79,7 @@ status: draft
 ### TC-003 — Invalid spec ID format
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 
 **Steps:**
 1. Type `/spec update invalid!id` in the TUI input field (contains `!` which
@@ -100,7 +100,7 @@ status: draft
 ### TC-004 — Spec not found
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - No spec directory named `nonexistent` exists under `specs/`.
 
 **Steps:**
@@ -153,7 +153,7 @@ status: draft
 1. Manually edit `specs/testspec/SPEC.md` — add a new requirement (e.g.
    `### FR-010 — New test requirement`) under the `## Requirements` section.
    Save the file.
-2. Return to the ragent TUI.
+2. Return to the codemason TUI.
 3. Type `/spec update testspec` in the TUI input field.
 4. Press `Enter`.
 

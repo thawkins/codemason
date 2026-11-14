@@ -16,9 +16,9 @@ otel
 ## Summary
 
 This specification defines an OpenTelemetry (OTEL) metrics export interface for
-ragent, enabling the agent harness to stream structured metrics to a designated
+codemason, enabling the agent harness to stream structured metrics to a designated
 OTLP-compatible endpoint (collector or direct backend). It introduces a
-configurable `telemetry.otel` block in `ragent.json`, a new `ragent-telemetry`
+configurable `telemetry.otel` block in `codemason.json`, a new `codemason-telemetry`
 crate that owns the meter provider and instrument registry, and a curated set of
 common metrics that track the **usage**, **performance**, **cost**, and
 **effectiveness** of the coding harness across sessions, agent loops, LLM calls,
@@ -35,7 +35,7 @@ wiring them into OTEL instruments rather than replacing them.
 - Add a `telemetry.otel` configuration schema for endpoint URL, protocol
   (HTTP/gRPC), export interval, resource attributes, and per-metric enable/disable
   toggles.
-- Introduce a `ragent-telemetry` crate that owns the `SdkMeterProvider`,
+- Introduce a `codemason-telemetry` crate that owns the `SdkMeterProvider`,
   instrument registry, and OTLP exporter lifecycle.
 - Define and register a curated catalog of OTEL metrics across four dimensions:
   usage, performance, cost, and effectiveness.
@@ -67,45 +67,45 @@ wiring them into OTEL instruments rather than replacing them.
 
 ### Existing Instrumentation Sources
 
-- **`AgentLoopProfiler`** (`crates/ragent-agent/src/session/profiler.rs`):
+- **`AgentLoopProfiler`** (`crates/codemason-agent/src/session/profiler.rs`):
   Tracks per-operation counters and timing aggregates (`count`, `total_ms`,
   `avg_ms`, `max_ms`, `last_ms`) for the session processor. It exposes
   `record_duration(label, duration)` and `ProfileSnapshot`. This is the primary
   source for performance histograms.
 
 - **`Coordinator::Metrics`**
-  (`crates/ragent-agent/src/orchestrator/coordinator.rs`):
+  (`crates/codemason-agent/src/orchestrator/coordinator.rs`):
   Atomic counters for `active_jobs`, `completed_jobs`, `timeouts`, and `errors`.
   Exposed via `metrics_snapshot() -> MetricsSnapshot`. These feed the
   usage/effectiveness gauges and counters.
 
-- **`StreamEvent::Usage`** (`crates/ragent-types/src/llm.rs`):
+- **`StreamEvent::Usage`** (`crates/codemason-types/src/llm.rs`):
   Carries `input_tokens` and `output_tokens` per LLM response. This is the
   source for token counters and derived cost.
 
-- **`StreamEvent::RateLimit`** (`crates/ragent-types/src/llm.rs`):
+- **`StreamEvent::RateLimit`** (`crates/codemason-types/src/llm.rs`):
   Carries `requests_used_pct` and `tokens_used_pct`. Source for quota gauges.
 
-- **`Cost`** (`crates/ragent-config/src/config.rs`):
+- **`Cost`** (`crates/codemason-config/src/config.rs`):
   Per-token cost in USD per million tokens for input and output. Used to derive
   estimated cost counters from token counts.
 
-- **`EventBus`** (`ragent_types::event::EventBus`):
+- **`EventBus`** (`codemason_types::event::EventBus`):
   Tokio broadcast bus used by the session processor, tool layer, TUI, and HTTP
   server. A telemetry subscriber can listen to events for instrumentation without
   coupling to internal structs.
 
 - **`ExperimentalFlags.open_telemetry`**
-  (`crates/ragent-config/src/config.rs`):
+  (`crates/codemason-config/src/config.rs`):
   An existing boolean flag (default `false`). This spec formalises the full
   telemetry subsystem; the flag becomes a deprecated alias for
   `telemetry.otel.enabled`.
 
 ### Existing Crate Layout
 
-The project is a 15-crate Cargo workspace. The new `ragent-telemetry` crate will
-sit alongside `ragent-config`, `ragent-types`, and `ragent-agent` and depend on
-`ragent-types` (for `EventBus`, `StreamEvent`) and `ragent-config` (for the
+The project is a 15-crate Cargo workspace. The new `codemason-telemetry` crate will
+sit alongside `codemason-config`, `codemason-types`, and `codemason-agent` and depend on
+`codemason-types` (for `EventBus`, `StreamEvent`) and `codemason-config` (for the
 `TelemetryConfig` schema).
 
 ### Agent Loop Flow
@@ -148,132 +148,132 @@ requirements that reference it.
 
 | Metric Name | Type | Unit | Source |
 |---|---|---|---|
-| `ragent.llm.requests` | Counter | `{request}` | LLM provider call sites |
-| `ragent.sessions.active` | UpDownCounter | `{session}` | SessionProcessor start/stop |
-| `ragent.sessions.total` | Counter | `{session}` | SessionProcessor creation |
-| `ragent.messages.user` | Counter | `{message}` | User input events |
-| `ragent.tool.invocations` | Counter (by `tool.name`) | `{invocation}` | Tool execution path |
-| `ragent.agents.active` | UpDownCounter | `{agent}` | Coordinator active_jobs |
-| `ragent.agents.completed` | Counter | `{agent}` | Coordinator completed_jobs |
-| `ragent.subagent.spawns` | Counter | `{subagent}` | Task subsystem |
-| `ragent.team.members` | Gauge | `{member}` | Team manager |
+| `codemason.llm.requests` | Counter | `{request}` | LLM provider call sites |
+| `codemason.sessions.active` | UpDownCounter | `{session}` | SessionProcessor start/stop |
+| `codemason.sessions.total` | Counter | `{session}` | SessionProcessor creation |
+| `codemason.messages.user` | Counter | `{message}` | User input events |
+| `codemason.tool.invocations` | Counter (by `tool.name`) | `{invocation}` | Tool execution path |
+| `codemason.agents.active` | UpDownCounter | `{agent}` | Coordinator active_jobs |
+| `codemason.agents.completed` | Counter | `{agent}` | Coordinator completed_jobs |
+| `codemason.subagent.spawns` | Counter | `{subagent}` | Task subsystem |
+| `codemason.team.members` | Gauge | `{member}` | Team manager |
 
 ### Performance Metrics
 
 | Metric Name | Type | Unit | Source |
 |---|---|---|---|
-| `ragent.llm.duration` | Histogram (by `model`, `provider`, `profile.bucket=loop.llm.total`) | `ms` | LLM call timing |
-| `ragent.llm.time_to_first_token` | Histogram (by `model`, `profile.bucket=loop.llm.first_event_wait`) | `ms` | Stream first delta |
-| `ragent.tool.duration` | Histogram (by `tool.name`, `profile.bucket=tool.total`) | `ms` | Tool execution timing |
-| `ragent.agent_loop.duration` | Histogram | `ms` | AgentLoopProfiler label `agent_loop` |
-| `ragent.agent_loop.iterations` | Histogram | `{iteration}` | Session loop iteration count |
-| `ragent.session.duration` | Histogram | `ms` | Session start to close |
-| `ragent.tool.permission_wait` | Histogram | `ms` | Permission request to resolution |
-| `ragent.profile.duration` | Histogram (by `profile.operation`, `profile.group`, `tool.name` for `tool.*:<tool>` labels) | `ms` | Every AgentLoopProfiler scope |
+| `codemason.llm.duration` | Histogram (by `model`, `provider`, `profile.bucket=loop.llm.total`) | `ms` | LLM call timing |
+| `codemason.llm.time_to_first_token` | Histogram (by `model`, `profile.bucket=loop.llm.first_event_wait`) | `ms` | Stream first delta |
+| `codemason.tool.duration` | Histogram (by `tool.name`, `profile.bucket=tool.total`) | `ms` | Tool execution timing |
+| `codemason.agent_loop.duration` | Histogram | `ms` | AgentLoopProfiler label `agent_loop` |
+| `codemason.agent_loop.iterations` | Histogram | `{iteration}` | Session loop iteration count |
+| `codemason.session.duration` | Histogram | `ms` | Session start to close |
+| `codemason.tool.permission_wait` | Histogram | `ms` | Permission request to resolution |
+| `codemason.profile.duration` | Histogram (by `profile.operation`, `profile.group`, `tool.name` for `tool.*:<tool>` labels) | `ms` | Every AgentLoopProfiler scope |
 
-`ragent.profile.duration` carries one series per profiler bucket: each
+`codemason.profile.duration` carries one series per profiler bucket: each
 AgentLoopProfiler scope (`loop.llm.stream`, `loop.tool_phase.total`,
 `tool.total:bash`, ...) is recorded with `profile.operation` set to the label
 and `profile.group` set to the label minus its last dot segment and any
 `:<tool>` suffix (`loop.llm`, `tool`). It is recorded whenever OTel export is
 enabled, independent of the `/profile` panel, and can be switched off with
-`"ragent.profile.duration": false` in `telemetry.otel.metrics`. The
-`profile.bucket` attribute on `ragent.llm.duration`,
-`ragent.llm.time_to_first_token` and `ragent.tool.duration` names the profiler
+`"codemason.profile.duration": false` in `telemetry.otel.metrics`. The
+`profile.bucket` attribute on `codemason.llm.duration`,
+`codemason.llm.time_to_first_token` and `codemason.tool.duration` names the profiler
 bucket each of those metrics measures, so the two can be joined in a dashboard.
 
 ### Cost Metrics
 
 | Metric Name | Type | Unit | Source |
 |---|---|---|---|
-| `ragent.tokens.input` | Counter (by `model`, `provider`) | `{token}` | `StreamEvent::Usage` |
-| `ragent.tokens.output` | Counter (by `model`, `provider`) | `{token}` | `StreamEvent::Usage` |
-| `ragent.tokens.cache_read` | Counter (by `model`) | `{token}` | Usage cache_read field |
-| `ragent.tokens.cache_write` | Counter (by `model`) | `{token}` | Usage cache_write field |
-| `ragent.cost.estimated` | Counter (by `model`, `provider`) | `USD` | Derived from tokens × Cost |
-| `ragent.cost.session` | Histogram | `USD` | Sum of costs per session |
-| `ragent.rate_limit.requests_pct` | Gauge (by `provider`) | `%` | `StreamEvent::RateLimit` |
-| `ragent.rate_limit.tokens_pct` | Gauge (by `provider`) | `%` | `StreamEvent::RateLimit` |
+| `codemason.tokens.input` | Counter (by `model`, `provider`) | `{token}` | `StreamEvent::Usage` |
+| `codemason.tokens.output` | Counter (by `model`, `provider`) | `{token}` | `StreamEvent::Usage` |
+| `codemason.tokens.cache_read` | Counter (by `model`) | `{token}` | Usage cache_read field |
+| `codemason.tokens.cache_write` | Counter (by `model`) | `{token}` | Usage cache_write field |
+| `codemason.cost.estimated` | Counter (by `model`, `provider`) | `USD` | Derived from tokens × Cost |
+| `codemason.cost.session` | Histogram | `USD` | Sum of costs per session |
+| `codemason.rate_limit.requests_pct` | Gauge (by `provider`) | `%` | `StreamEvent::RateLimit` |
+| `codemason.rate_limit.tokens_pct` | Gauge (by `provider`) | `%` | `StreamEvent::RateLimit` |
 
 ### Effectiveness Metrics
 
 | Metric Name | Type | Unit | Source |
 |---|---|---|---|
-| `ragent.errors.total` | Counter (by `component`) | `{error}` | Error events / Coordinator |
-| `ragent.timeouts.total` | Counter | `{timeout}` | Coordinator timeouts |
-| `ragent.permission.denied` | Counter (by `tool.name`) | `{denial}` | Permission system |
-| `ragent.permission.approved` | Counter (by `tool.name`) | `{approval}` | Permission system |
-| `ragent.context.compressions` | Counter | `{compression}` | Compression pipeline |
-| `ragent.context.compression_ratio` | Histogram | `%` | Before/after token count |
-| `ragent.tool.calls_per_session` | Histogram | `{call}` | Per-session tool call count |
-| `ragent.task.completions` | Counter | `{task}` | `task_complete` / team tasks |
-| `ragent.retries.llm` | Counter (by `model`) | `{retry}` | Provider retry logic |
-| `ragent.snapshot.restores` | Counter | `{restore}` | Snapshot undo system |
+| `codemason.errors.total` | Counter (by `component`) | `{error}` | Error events / Coordinator |
+| `codemason.timeouts.total` | Counter | `{timeout}` | Coordinator timeouts |
+| `codemason.permission.denied` | Counter (by `tool.name`) | `{denial}` | Permission system |
+| `codemason.permission.approved` | Counter (by `tool.name`) | `{approval}` | Permission system |
+| `codemason.context.compressions` | Counter | `{compression}` | Compression pipeline |
+| `codemason.context.compression_ratio` | Histogram | `%` | Before/after token count |
+| `codemason.tool.calls_per_session` | Histogram | `{call}` | Per-session tool call count |
+| `codemason.task.completions` | Counter | `{task}` | `task_complete` / team tasks |
+| `codemason.retries.llm` | Counter (by `model`) | `{retry}` | Provider retry logic |
+| `codemason.snapshot.restores` | Counter | `{restore}` | Snapshot undo system |
 
 ## Requirements
 
 ### Ubiquitous
 
-- **FR-001** The system shall provide a `ragent-telemetry` crate that owns the
+- **FR-001** The system shall provide a `codemason-telemetry` crate that owns the
   OpenTelemetry `SdkMeterProvider`, instrument registry, and OTLP exporter
   lifecycle.
 - **FR-002** The system shall read telemetry configuration from a
-  `telemetry.otel` block in `ragent.json` (or `ragent.jsonc`), falling back to
+  `telemetry.otel` block in `codemason.json` (or `codemason.jsonc`), falling back to
   disabled-by-default when the block is absent.
 - **FR-003** The system shall register every metric listed in the Metric
   Catalog as an OTEL instrument with the specified name, type, unit, and
   attribute dimensions.
 - **FR-004** The system shall attach the following resource attributes to all
-  exported metrics: `service.name` (default `"ragent"`), `service.version`
+  exported metrics: `service.name` (default `"codemason"`), `service.version`
   (from `CARGO_PKG_VERSION`), `host.name` (system hostname), and
   `session.id` (the active session ID when known).
 - **FR-005** The system shall export metrics using the OTLP/HTTP protocol by
   default and support OTLP/gRPC as a configurable alternative.
 - **FR-006** The system shall batch metric exports on a configurable interval
   (default 30 seconds) and flush all pending exports on process shutdown.
-- **FR-007** The system shall record `ragent.llm.requests`, `ragent.tokens.input`,
-  and `ragent.tokens.output` for every LLM provider call, tagged with `model`
+- **FR-007** The system shall record `codemason.llm.requests`, `codemason.tokens.input`,
+  and `codemason.tokens.output` for every LLM provider call, tagged with `model`
   and `provider` attributes.
-- **FR-008** The system shall compute `ragent.cost.estimated` by multiplying
+- **FR-008** The system shall compute `codemason.cost.estimated` by multiplying
   recorded token counts by the model's `Cost` metadata (USD per million tokens)
   and record it as a counter per `model` and `provider`.
-- **FR-009** The system shall record `ragent.tool.invocations` and
-  `ragent.tool.duration` for every tool execution, tagged with `tool.name`.
-- **FR-010** The system shall record `ragent.agent_loop.duration` and
-  `ragent.agent_loop.iterations` from the `AgentLoopProfiler` data for each
+- **FR-009** The system shall record `codemason.tool.invocations` and
+  `codemason.tool.duration` for every tool execution, tagged with `tool.name`.
+- **FR-010** The system shall record `codemason.agent_loop.duration` and
+  `codemason.agent_loop.iterations` from the `AgentLoopProfiler` data for each
   completed session.
-- **FR-011** The system shall record `ragent.sessions.active` as an
+- **FR-011** The system shall record `codemason.sessions.active` as an
   `UpDownCounter` incremented on session start and decremented on session end.
-- **FR-012** The system shall record `ragent.errors.total` and
-  `ragent.timeouts.total` from the `Coordinator::Metrics` counters, tagged with
+- **FR-012** The system shall record `codemason.errors.total` and
+  `codemason.timeouts.total` from the `Coordinator::Metrics` counters, tagged with
   `component` where identifiable.
 
 ### Event-Driven
 
 - **FR-013** When a `StreamEvent::Usage` is received from an LLM provider, the
-  system shall record `ragent.tokens.input` and `ragent.tokens.output` with the
+  system shall record `codemason.tokens.input` and `codemason.tokens.output` with the
   `model` and `provider` attributes.
 - **FR-014** When a `StreamEvent::RateLimit` is received, the system shall
-  update the `ragent.rate_limit.requests_pct` and `ragent.rate_limit.tokens_pct`
+  update the `codemason.rate_limit.requests_pct` and `codemason.rate_limit.tokens_pct`
   gauges for the corresponding `provider`.
 - **FR-015** When a tool invocation begins, the system shall start a timer and
-  record `ragent.tool.invocations`; when it completes, the system shall record
-  `ragent.tool.duration`.
+  record `codemason.tool.invocations`; when it completes, the system shall record
+  `codemason.tool.duration`.
 - **FR-016** When a permission request is resolved (approved or denied), the
-  system shall record `ragent.permission.approved` or
-  `ragent.permission.denied` tagged with `tool.name`.
+  system shall record `codemason.permission.approved` or
+  `codemason.permission.denied` tagged with `tool.name`.
 - **FR-017** When the context compression pipeline runs, the system shall
-  record `ragent.context.compressions` and observe the before/after ratio in
-  `ragent.context.compression_ratio`.
+  record `codemason.context.compressions` and observe the before/after ratio in
+  `codemason.context.compression_ratio`.
 - **FR-018** When a sub-agent is spawned, the system shall record
-  `ragent.subagent.spawns` and increment `ragent.agents.active`; when it
-  completes, the system shall decrement `ragent.agents.active` and increment
-  `ragent.agents.completed`.
+  `codemason.subagent.spawns` and increment `codemason.agents.active`; when it
+  completes, the system shall decrement `codemason.agents.active` and increment
+  `codemason.agents.completed`.
 - **FR-019** When the process receives a shutdown signal (SIGINT/SIGTERM), the
   system shall flush all pending metric exports to the configured endpoint
   before terminating.
 - **FR-020** When a tool execution results in an error, the system shall record
-  `ragent.errors.total` tagged with `component = "tool"` and the `tool.name`.
+  `codemason.errors.total` tagged with `component = "tool"` and the `tool.name`.
 
 ### State-Driven
 
@@ -291,14 +291,14 @@ bucket each of those metrics measures, so the two can be joined in a dashboard.
 ### Optional
 
 - **FR-026** The system may support custom resource attributes via
-  `telemetry.otel.resource_attributes` in `ragent.json`.
+  `telemetry.otel.resource_attributes` in `codemason.json`.
 - **FR-027** The system may support per-metric enable/disable toggles via a
-  `telemetry.otel.metrics` map in `ragent.json`, allowing users to disable
+  `telemetry.otel.metrics` map in `codemason.json`, allowing users to disable
   specific metrics to reduce cardinality or volume.
 - **FR-028** The system may support an in-process metrics endpoint
   (`telemetry.otel.internal_port`) that exposes metrics in Prometheus text
   format for local scraping without an OTLP collector.
-- **FR-029** The system may support exporting a `ragent.snapshot.restores`
+- **FR-029** The system may support exporting a `codemason.snapshot.restores`
   counter when the snapshot undo system is invoked.
 - **FR-030** The system may support a `/otel status` TUI sub-command that
   displays the configured endpoint, export count, last export time, and any
@@ -400,8 +400,8 @@ bucket each of those metrics measures, so the two can be joined in a dashboard.
 
 ## Non-Functional Requirements
 
-- **NFR-001** The `ragent-telemetry` crate shall depend only on
-  `ragent-types`, `ragent-config`, `opentelemetry`, `opentelemetry-otlp`, and
+- **NFR-001** The `codemason-telemetry` crate shall depend only on
+  `codemason-types`, `codemason-config`, `opentelemetry`, `opentelemetry-otlp`, and
   `tokio`; no additional heavyweight dependencies.
 - **NFR-002** Metric recording calls shall complete in under 1 µs per call
   when telemetry is disabled (no-op provider).
@@ -414,14 +414,14 @@ bucket each of those metrics measures, so the two can be joined in a dashboard.
 - **NFR-006** The telemetry subsystem shall be feature-gated behind a
   `telemetry` Cargo feature so users who do not need OTEL can build without the
   dependency.
-- **NFR-007** All public functions in `ragent-telemetry` shall have docblock
+- **NFR-007** All public functions in `codemason-telemetry` shall have docblock
   documentation per the project's documentation standards.
 - **NFR-008** With the OTLP logs signal disabled, the tracing layer shall add no
   more than one `None` check per emitted event, and shall allocate nothing.
 
 ## Configuration Schema
 
-The `telemetry.otel` block in `ragent.json`:
+The `telemetry.otel` block in `codemason.json`:
 
 ```jsonc
 {
@@ -431,14 +431,14 @@ The `telemetry.otel` block in `ragent.json`:
       "endpoint": "http://localhost:4318",
       "protocol": "http",
       "export_interval_seconds": 30,
-      "service_name": "ragent",
+      "service_name": "codemason",
       "resource_attributes": {
         "deployment.environment": "development"
       },
       "metrics": {
-        "ragent.tokens.input": true,
-        "ragent.cost.estimated": true,
-        "ragent.tool.invocations": false
+        "codemason.tokens.input": true,
+        "codemason.cost.estimated": true,
+        "codemason.tool.invocations": false
       },
       "logs": {
         "enabled": false,
@@ -455,7 +455,7 @@ The `telemetry.otel` block in `ragent.json`:
 | `endpoint` | string | `"http://localhost:4318"` | OTLP endpoint base URL |
 | `protocol` | `"http"` \| `"grpc"` | `"http"` | Export transport protocol |
 | `export_interval_seconds` | u64 | `30` | Batch export interval |
-| `service_name` | string | `"ragent"` | `service.name` resource attribute |
+| `service_name` | string | `"codemason"` | `service.name` resource attribute |
 | `resource_attributes` | map | `{}` | Custom resource attributes |
 | `metrics` | map<string, bool> | `{}` | Per-metric enable/disable |
 | `logs.enabled` | bool | `false` | Export `tracing` events over the OTLP logs signal |
@@ -469,29 +469,29 @@ emitted.
 ## Acceptance Criteria
 
 1. With `telemetry.otel.enabled: true` and a valid endpoint, running a
-   one-shot `ragent run "hello"` produces at least one export containing
-   `ragent.llm.requests`, `ragent.tokens.input`, and `ragent.tokens.output`
+   one-shot `codemason run "hello"` produces at least one export containing
+   `codemason.llm.requests`, `codemason.tokens.input`, and `codemason.tokens.output`
    metrics with correct `model` and `provider` attributes.
 2. With `telemetry.otel.enabled: false`, no HTTP/gRPC traffic is generated to
    the endpoint and the agent loop incurs no measurable overhead.
-3. Tool invocations are reflected in `ragent.tool.invocations` and
-   `ragent.tool.duration` with the `tool.name` attribute.
-4. Sub-agent spawns and completions are reflected in `ragent.agents.active`
-   (up/down) and `ragent.subagent.spawns`.
-5. A session with multiple LLM calls produces a `ragent.cost.estimated` counter
+3. Tool invocations are reflected in `codemason.tool.invocations` and
+   `codemason.tool.duration` with the `tool.name` attribute.
+4. Sub-agent spawns and completions are reflected in `codemason.agents.active`
+   (up/down) and `codemason.subagent.spawns`.
+5. A session with multiple LLM calls produces a `codemason.cost.estimated` counter
    whose value approximates `tokens × cost_per_million / 1_000_000`.
 6. Sending SIGINT during an active session flushes pending exports before the
    process exits.
 7. A malformed or unreachable endpoint does not crash the process; errors are
    logged at `warn` level.
-8. The `ragent-telemetry` crate compiles and all unit tests pass without a live
+8. The `codemason-telemetry` crate compiles and all unit tests pass without a live
    OTLP endpoint (using an in-memory exporter).
 9. The `/otel` TUI command toggles export on/off and displays current status.
 10. No API keys, file contents, or user prompts appear in any metric attribute
     or resource attribute.
 11. With `telemetry.otel.enabled: true` and `telemetry.otel.logs.enabled: true`,
-    `ragent run "hello"` posts at least one record to `/v1/logs` whose body is a
-    message ragent actually logged, and those same messages still appear in the
+    `codemason run "hello"` posts at least one record to `/v1/logs` whose body is a
+    message codemason actually logged, and those same messages still appear in the
     log panel (TUI) or on stderr.
 12. With `telemetry.otel.logs.enabled: false` (the default), no request is made
     to `/v1/logs` and the tracing layer adds no allocation to the emitting path.
@@ -506,13 +506,13 @@ emitted.
 
 ## Related Work
 
-- Existing profiler: `crates/ragent-agent/src/session/profiler.rs`
-- Existing coordinator metrics: `crates/ragent-agent/src/orchestrator/coordinator.rs`
-- Existing LLM stream events: `crates/ragent-types/src/llm.rs`
-- Existing config schema: `crates/ragent-config/src/config.rs`
-- Existing event bus: `crates/ragent-types/src/event/mod.rs`
+- Existing profiler: `crates/codemason-agent/src/session/profiler.rs`
+- Existing coordinator metrics: `crates/codemason-agent/src/orchestrator/coordinator.rs`
+- Existing LLM stream events: `crates/codemason-types/src/llm.rs`
+- Existing config schema: `crates/codemason-config/src/config.rs`
+- Existing event bus: `crates/codemason-types/src/event/mod.rs`
 - OpenTelemetry Rust SDK: <https://crates.io/crates/opentelemetry>
 - OTLP exporter crate: <https://crates.io/crates/opentelemetry-otlp>
 - OTel logs data model: <https://opentelemetry.io/docs/specs/otel/logs/data-model/>
-- Existing local sinks: `src/main.rs` (tracing init), `crates/ragent-tui/src/tracing_layer.rs`
+- Existing local sinks: `src/main.rs` (tracing init), `crates/codemason-tui/src/tracing_layer.rs`
 - OTEL semantic conventions: <https://opentelemetry.io/docs/specs/semconv/>

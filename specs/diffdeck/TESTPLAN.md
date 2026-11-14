@@ -8,9 +8,9 @@ person against a real research item fixture; no automated test code is involved.
 
 ## Preconditions Common to All Cases
 
-- A working ragent binary is built from the branch under test.
+- A working codemason binary is built from the branch under test.
 - The fixture root is a scratch research root under `target/temp/deckfixtures/`,
-  set in the ragent config so every command below reads it instead of the live
+  set in the codemason config so every command below reads it instead of the live
   research tree.
 - Fixture item `deckspec` contains exactly two dated reports:
   - `target/temp/deckfixtures/research/deckspec/RESEARCH-2025-01-10.md` (older)
@@ -319,12 +319,12 @@ sentence of more than 200 characters, and a research root that has no LLM
 provider configured.
 
 **Steps:**
-1. Run `ragent research deck deckspec --out target/temp/deckrun1.md --force`.
-2. Run `ragent research deck deckspec --out target/temp/deckrun2.md --force`.
+1. Run `codemason research deck deckspec --out target/temp/deckrun1.md --force`.
+2. Run `codemason research deck deckspec --out target/temp/deckrun2.md --force`.
 3. Compare the two files.
-4. Configure a provider, restart ragent, and repeat step 1 writing
+4. Configure a provider, restart codemason, and repeat step 1 writing
    `target/temp/deckrun3.md`.
-5. Run `ragent research deck hostile --force` and open the Top Implications
+5. Run `codemason research deck hostile --force` and open the Top Implications
    slide.
 6. Time the `deckspec` run with `time`.
 

@@ -1,11 +1,11 @@
 # How-To: The Connector System
 
-ragent can reach external systems through **connectors**: named, user-facing
+codemason can reach external systems through **connectors**: named, user-facing
 integrations (Google Drive, Slack, GitHub, Git, Postgres, Puppeteer, and the
 wider community catalogue) that connect through one or more **MCP servers**.
 A connector is a catalogue entry carrying a display name, a category, an
 authentication requirement, and one or more MCP servers; the MCP server remains
-the transport ragent already speaks, so the connector system is a management and
+the transport codemason already speaks, so the connector system is a management and
 catalogue layer over machinery that already exists.
 
 This document is the practical manual: what a connector is, how to browse,
@@ -28,7 +28,7 @@ install, authenticate, and manage one, and how the configuration works.
 
 ## 1. Overview
 
-ragent already has the transport (`McpClient`), a durable enable/disable ledger
+codemason already has the transport (`McpClient`), a durable enable/disable ledger
 (`mcp_state.json`), an MCP discovery scanner, and a plugin-store browser. What
 the connector system adds is the **connector abstraction**: a catalogue entry
 that names an integration, points at one or more MCP servers, and carries its
@@ -59,8 +59,8 @@ shape the plugin MCP bridge uses).
 
 Connectors are discovered under:
 
-- `.ragent/connectors/` (project; highest priority), or
-- `~/.config/ragent/connectors/` (user-global),
+- `.codemason/connectors/` (project; highest priority), or
+- `~/.config/codemason/connectors/` (user-global),
 
 with an optional `connectors.store_dir` override. A freshly installed connector
 is recorded **enabled**; run `/connectors enable <id>` to connect it now in a
@@ -178,7 +178,7 @@ connector you are unsure about.
 
 ## 8. Configuration Reference
 
-The `connectors` block in `ragent.json` controls the subsystem:
+The `connectors` block in `codemason.json` controls the subsystem:
 
 ```jsonc
 {
@@ -225,6 +225,6 @@ table.
 - [`docs/howtos/mcp.md`](mcp.md) - MCP server status, discovery, and enable/disable
 - [`docs/howtos/plugins.md`](plugins.md) - the sandboxed plugin system (a sibling
   catalogue)
-- `ragent connectors <sub>` - CLI parity for the same subcommands
+- `codemason connectors <sub>` - CLI parity for the same subcommands
 - [`specs/connectors/SPEC.md`](../../specs/connectors/SPEC.md) - the full
   connector-system specification

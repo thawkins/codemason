@@ -5,7 +5,7 @@
 //! over by the next ratatui frame and lost. On Unix this module replaces the
 //! process-wide standard-error *file descriptor* (fd 2) with the write end of a
 //! pipe and drains that pipe on a dedicated thread into a
-//! [`ragent_types::stderr_spool::Spool`], which keeps only the newest 1000
+//! [`codemason_types::stderr_spool::Spool`], which keeps only the newest 1000
 //! lines.
 //!
 //! This is the only module in the binary that performs FFI: Rust's standard
@@ -20,7 +20,7 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use ragent_types::stderr_spool::Spool;
+use codemason_types::stderr_spool::Spool;
 
 /// Whether [`install`] successfully redirected the process's stderr (fd 2) into
 /// a spool. Read by the binary's top-level error handler to decide whether a
@@ -96,7 +96,7 @@ pub fn install(log_dir: &Path) -> Option<Spool> {
 
     // Drain the pipe on a dedicated thread and spool each chunk.
     std::thread::Builder::new()
-        .name("ragent-stderr-spool".to_string())
+        .name("codemason-stderr-spool".to_string())
         .spawn(move || {
             use std::io::Read as _;
             use std::os::fd::FromRawFd;

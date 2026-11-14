@@ -20,8 +20,8 @@
 #   filmcraft-cli mcp      -> FilmCraft        (storytold/filmcraft)
 #   lightcraft-cli mcp     -> LightCraft       (storytold/lightcraft)
 #
-# This script writes one standalone MCP config file per app into ragent's MCP
-# discovery directory, `~/.config/ragent/servers/<app>.json`. ragent does NOT
+# This script writes one standalone MCP config file per app into codemason's MCP
+# discovery directory, `~/.config/codemason/servers/<app>.json`. codemason does NOT
 # auto-load that directory as session config: it is read only when the user runs
 # `/mcp discover` in the TUI, which offers each server for opt-in. Nothing is
 # connected, and no child process is spawned, until the user enables it there
@@ -39,7 +39,7 @@
 # Options:
 #   -a, --app NAME     Generate only this app (repeatable): any name listed above,
 #                      or "all". Default: every app.
-#   -d, --dir DIR      Output directory (default: ~/.config/ragent/servers).
+#   -d, --dir DIR      Output directory (default: ~/.config/codemason/servers).
 #   -f, --force        Overwrite an existing <app>.json (default: leave it).
 #   -n, --dry-run      Print the files that would be written, write nothing.
 #   -h, --help         Show this help.
@@ -59,10 +59,10 @@ set -u
 
 readonly SCRIPT_NAME="${0##*/}"
 
-# ragent consolidates its global state under the XDG config dir; the MCP
+# codemason consolidates its global state under the XDG config dir; the MCP
 # discovery directory is the "servers" subdirectory of that root. Mirror
-# ragent_config::user_dirs::global_mcp_servers_dir() ($XDG_CONFIG_HOME aware).
-readonly CONFIG_ROOT="${XDG_CONFIG_HOME:-${HOME}/.config}/ragent"
+# codemason_config::user_dirs::global_mcp_servers_dir() ($XDG_CONFIG_HOME aware).
+readonly CONFIG_ROOT="${XDG_CONFIG_HOME:-${HOME}/.config}/codemason"
 readonly DEFAULT_DIR="${CONFIG_ROOT}/servers"
 
 # Every app that ships an MCP server, in display order:
@@ -226,7 +226,7 @@ main() {
 
     log "done: ${wrote} written, ${skipped} left untouched, ${missing} unavailable"
     if [ "$wrote" -gt 0 ]; then
-        log "run '/mcp discover' in ragent to review and enable the servers"
+        log "run '/mcp discover' in codemason to review and enable the servers"
     fi
     [ "$missing" -eq 0 ] || exit 1
 }

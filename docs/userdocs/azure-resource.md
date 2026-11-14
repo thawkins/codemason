@@ -8,8 +8,8 @@ instead of rebuilding the application.
 
 `azureresources.json` is searched in this order:
 
-1. `~/.config/ragent/azureresources.json`
-2. `.ragent/azureresources.json` (current working directory)
+1. `~/.config/codemason/azureresources.json`
+2. `.codemason/azureresources.json` (current working directory)
 
 ## Full JSON schema
 
@@ -62,7 +62,7 @@ enabled, reasoning and vision disabled).
 ### Thinking overrides
 
 The `thinking` block follows the same format as model-specific thinking config in
-`ragent.json`:
+`codemason.json`:
 
 ```json
 "thinking": {

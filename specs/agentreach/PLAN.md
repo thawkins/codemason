@@ -8,15 +8,15 @@ M = ≤1 day, L = multi-day. All new tasks start `Pending`.
 
 | ID | Title | Requirement | Effort | Priority | Status | Dependencies |
 |----|-------|-------------|--------|----------|--------|--------------|
-| T-001 | Create `ragent-reach` crate skeleton | FR-014, FR-018 | S | Critical | Pending | — |
-| T-002 | Add `ReachConfig` to `ragent-config` | FR-002, FR-008 | S | Critical | Pending | — |
+| T-001 | Create `codemason-reach` crate skeleton | FR-014, FR-018 | S | Critical | Pending | — |
+| T-002 | Add `ReachConfig` to `codemason-config` | FR-002, FR-008 | S | Critical | Pending | — |
 | T-003 | Add `tool_visibility.reach` switch | FR-002, FR-008 | S | Critical | Pending | T-002 |
 | T-004 | Implement `Channel` trait + routing module | FR-003, FR-004, FR-015 | M | Critical | Pending | T-001 |
 | T-005 | Wire encrypted credential store delegate | FR-007, NFR-003 | M | Critical | Pending | T-001 |
 | T-006 | Implement `reach_credentials` tool | FR-009 | M | Critical | Pending | T-005 |
 | T-007 | Implement `reach_doctor` tool | FR-010, NFR-002 | M | Critical | Pending | T-004, T-005 |
-| T-008 | Add `register_extracted_reach_tools` in `ragent-agent` | FR-001, FR-011 | S | Critical | Pending | T-007 |
-| T-009 | Add `reach` Cargo feature gate on `ragent-tools-extended` | FR-018 | S | High | Pending | T-001 |
+| T-008 | Add `register_extracted_reach_tools` in `codemason-agent` | FR-001, FR-011 | S | Critical | Pending | T-007 |
+| T-009 | Add `reach` Cargo feature gate on `codemason-tools-extended` | FR-018 | S | High | Pending | T-001 |
 | T-010 | Implement `reach_web_read` channel (delegate to mf_fetch) | FR-013 | S | High | Pending | T-004 |
 | T-011 | Implement `reach_web_search` channel (delegate to mf_search) | FR-013 | S | High | Pending | T-004 |
 | T-012 | Implement `reach_github` channel (delegate to github_* tools) | FR-013 | S | Medium | Pending | T-004 |
@@ -50,7 +50,7 @@ M = ≤1 day, L = multi-day. All new tasks start `Pending`.
 | T-040 | Verify reach credential I/O uses only `StorageBackend` trait methods | FR-019 | S | Critical | Pending | T-032, T-039 |
 | T-041 | Return actionable error when `ToolContext.storage` is `None` | FR-020 | S | High | Pending | T-035 |
 | T-042 | Store reach credentials via `encrypt_key` (v2) on write | FR-021, NFR-003, NFR-007 | M | Critical | Pending | T-032 |
-| T-043 | Register/unregister reach secrets with `ragent_storage::sanitize` | FR-022 | S | High | Pending | T-006, T-026 |
+| T-043 | Register/unregister reach secrets with `codemason_storage::sanitize` | FR-022 | S | High | Pending | T-006, T-026 |
 | T-044 | Prohibit plaintext `set_setting`/`get_setting` for reach credentials | FR-023 | S | Critical | Pending | T-032, T-039 |
 | T-045 | Verify legacy v1 reach credentials rely on existing auto-migration | FR-024 | S | Medium | Pending | T-032 |
 | T-046 | Verify reach passes plaintext to `set_provider_auth` (no double-encrypt) | FR-025 | S | Critical | Pending | T-032, T-042 |
@@ -80,13 +80,13 @@ M = ≤1 day, L = multi-day. All new tasks start `Pending`.
 
 ## Task Detail
 
-### T-001 — Create `ragent-reach` crate skeleton
-Create `crates/ragent-reach/` with `Cargo.toml` (member of workspace), `src/lib.rs`
+### T-001 — Create `codemason-reach` crate skeleton
+Create `crates/codemason-reach/` with `Cargo.toml` (member of workspace), `src/lib.rs`
 exporting `create_reach_registry() -> ToolRegistry`, and the module tree from
 the spec's architecture diagram. Empty stubs for each channel/backend file.
 
-### T-002 — Add `ReachConfig` to `ragent-config`
-Add a `ReachConfig` struct to `ragent-config::config` with per-platform
+### T-002 — Add `ReachConfig` to `codemason-config`
+Add a `ReachConfig` struct to `codemason-config::config` with per-platform
 optional credential references (env-var indirection like `env:TWITTER_TOKEN`)
 and a `channels` sub-map for enabling/disabling individual channels. Wire into
 the top-level `Config` deserialisation.
@@ -94,7 +94,7 @@ the top-level `Config` deserialisation.
 ### T-003 — Add `tool_visibility.reach` switch
 Add `reach: bool` field to `ToolVisibilityConfig` and `ToolVisibilitySpecified`
 (default `true`). Add to `iter_switches()`. Update the hidden-tools computation
-in `ragent-agent/src/dry_run.rs` to map the `reach` family to `reach_*` names.
+in `codemason-agent/src/dry_run.rs` to map the `reach` family to `reach_*` names.
 
 ### T-004 — Implement `Channel` trait + routing module
 Define `trait Channel { fn name(); fn backends(); fn execute(). }` and a
@@ -103,7 +103,7 @@ or auth check. On 401/403/rate-limit, advance to next backend (FR-015).
 
 ### T-005 — Wire encrypted credential store delegate
 Add `reach::credentials::CredentialStore` that delegates get/set/list to
-`ragent-storage`'s encrypted store under a `reach::<platform>` namespace.
+`codemason-storage`'s encrypted store under a `reach::<platform>` namespace.
 Ensure 0600 file perms come from storage layer (verify, do not re-implement).
 This task creates the public `ReachCredentialStore` facade; T-032 adds the
 trait + adapter that it delegates to.
@@ -119,15 +119,15 @@ Iterates all registered channels, runs each backend's preflight with a 10s
 timeout (NFR-002), returns JSON: `[{channel, status, active_backend,
 fix_hint}]`. Masks credentials (FR-006).
 
-### T-008 — Add `register_extracted_reach_tools` in `ragent-agent`
-In `ragent-agent/src/tool/mod.rs`, add `fn register_extracted_reach_tools()`
+### T-008 — Add `register_extracted_reach_tools` in `codemason-agent`
+In `codemason-agent/src/tool/mod.rs`, add `fn register_extracted_reach_tools()`
 following the exact pattern of `register_extracted_extended_tools()`, and call
 it from `create_default_registry()`. Add `ExtractedReachToolAdapter` mirroring
 `ExtractedExtendedToolAdapter`.
 
 ### T-009 — Add `reach` Cargo feature gate
-Gate the `ragent-reach` dependency behind a `reach` feature on
-`ragent-tools-extended` (default on). When off, `create_reach_registry()`
+Gate the `codemason-reach` dependency behind a `reach` feature on
+`codemason-tools-extended` (default on). When off, `create_reach_registry()`
 returns an empty registry (FR-018).
 
 ### T-010 — `reach_web_read` channel (delegate to `mf_fetch`)
@@ -218,8 +218,8 @@ validated command path, never raw `std::process::Command` with user input
 (FR-012). Document which channels use this path.
 
 ### T-029 — Build + clippy verification
-Run `cargo build`, `cargo clippy -p ragent-reach`, `cargo clippy -p
-ragent-tools-extended`. Fix all warnings. Verify feature-off build
+Run `cargo build`, `cargo clippy -p codemason-reach`, `cargo clippy -p
+codemason-tools-extended`. Fix all warnings. Verify feature-off build
 (`--no-default-features` path for `reach`) still compiles (FR-018).
 
 ### T-030 — Update `docs/howtos/tools.md`
@@ -234,14 +234,14 @@ entry under the next version heading.
 
 ### T-032 — Implement `ReachCredentialStore` trait + storage adapter
 Define `reach::credentials::ReachCredentialStore` — a concrete struct wrapping
-a `dyn ragent_tools_vcs::storage::StorageBackend` (or the equivalent
+a `dyn codemason_tools_vcs::storage::StorageBackend` (or the equivalent
 `ToolContext.storage` trait). Implement `set`, `get`, `delete`, `list_names`
 methods that forward to `set_provider_auth` / `get_provider_auth` /
 `delete_provider_auth` / `set_setting` / `get_setting` / `delete_setting`
 under namespaced keys. This is the real implementation behind the T-005
 facade; it must call `encrypt_key` / `decrypt_key` via the storage layer (no
-new crypto in `ragent-reach`, NFR-003, NFR-007). All credentials are stored in
-the existing `ragent-storage` encrypted credential store keyed by platform
+new crypto in `codemason-reach`, NFR-003, NFR-007). All credentials are stored in
+the existing `codemason-storage` encrypted credential store keyed by platform
 name (FR-007).
 
 ### T-033 — Define `ReachCredentialKey` naming scheme
@@ -264,7 +264,7 @@ Add `reach::credentials::ReachStorageProvider` that adapts the
 `Option<Arc<dyn StorageBackend>>` from `ToolContext` into the
 `ReachCredentialStore`. Handle the `None` case (no storage configured) by
 returning an actionable error from all credential operations. This lets reach
-tools obtain credentials without a direct `ragent-storage` dependency at the
+tools obtain credentials without a direct `codemason-storage` dependency at the
 call site. All storage goes through the existing encrypted credential store
 (FR-007) with no new cryptographic code (NFR-003, NFR-007).
 
@@ -286,7 +286,7 @@ persists the credential and confirms without echoing (FR-009). Cache
 invalidation acquires a write lock on the `RwLock` (NFR-008).
 
 ### T-038 — Unit-test `ReachCredentialStore` set/get/delete/list round-trip
-Write manual unit tests (in `crates/ragent-reach/tests/`) that create an
+Write manual unit tests (in `crates/codemason-reach/tests/`) that create an
 in-memory `Storage::open_in_memory()`, wrap it in `ReachCredentialStore`,
 and verify: `set` then `get` returns the same value; `list_names` returns
 the key; `delete` removes it; `get` after `delete` returns `None`. Verify
@@ -328,11 +328,11 @@ compliance — credentials are encrypted at rest with the current v2 scheme,
 not the deprecated v1 obfuscation. See T-046 for the no-double-encrypt
 verification.
 
-### T-043 — Register/unregister reach secrets with `ragent_storage::sanitize`
+### T-043 — Register/unregister reach secrets with `codemason_storage::sanitize`
 When `ReachCredentialStore::set` stores a credential, call
-`ragent_storage::sanitize::register_secret(&plaintext_value)` so the
+`codemason_storage::sanitize::register_secret(&plaintext_value)` so the
 value is added to the in-memory redaction registry. When `delete` removes
-a credential, call `ragent_storage::sanitize::unregister_secret(&value)`
+a credential, call `codemason_storage::sanitize::unregister_secret(&value)`
 to remove it from the registry. This ensures that any accidental logging
 of the plaintext value is automatically redacted by the existing sanitize
 layer. Implements FR-022.
@@ -369,7 +369,7 @@ step. This corrects FR-025.
 
 ### T-047 — Remove direct `register_secret`/`unregister_secret` calls from reach credential path
 Audit `ReachCredentialStore::set` and `delete` for calls to
-`ragent_storage::sanitize::register_secret` / `unregister_secret`.
+`codemason_storage::sanitize::register_secret` / `unregister_secret`.
 `set_provider_auth` already calls `register_secret` (storage.rs:1250) and
 `delete_provider_auth` already calls `unregister_secret` (storage.rs:1273).
 Remove any reach-side duplicates so the secret is registered exactly once.
@@ -380,11 +380,11 @@ output remains valid). This implements FR-026.
 
 ### T-048 — Use `ToolContext.storage` handle, not `Storage::open`, in reach
 In `ReachStorageProvider` (T-035), confirm the `Storage` handle comes from
-`ToolContext.storage: Option<Arc<crate::storage::Storage>>` (ragent-agent) or
-`Option<Arc<dyn StorageBackend>>` (ragent-tools-extended/vcs), downcast/adapted
+`ToolContext.storage: Option<Arc<crate::storage::Storage>>` (codemason-agent) or
+`Option<Arc<dyn StorageBackend>>` (codemason-tools-extended/vcs), downcast/adapted
 to the reach storage trait. Ensure no reach code path calls
 `Storage::open(path)` or `Storage::open_in_memory()` outside of tests.
-Contrast with `ragent_tools_extended::gmail::SqliteTokenStore::shared()`,
+Contrast with `codemason_tools_extended::gmail::SqliteTokenStore::shared()`,
 which opens its own connection — that pattern is explicitly rejected for
 reach. Add a code comment in `credentials.rs` citing FR-027. This ensures a
 single connection, consistent sanitize state, and no WAL lock contention.
@@ -405,8 +405,8 @@ at rest and the config is plaintext. This implements FR-028.
 ### T-050 — Implement reach credential enumeration via storage layer or namespaced settings index
 Implement `ReachCredentialStore::list_names() -> Vec<ReachCredentialKey>`.
 Preferred path: add a `list_provider_auth_keys() -> Result<Vec<String>>`
-method to the `StorageBackend` trait (ragent-tools-vcs and
-ragent-tools-extended), backed by `ragent_storage::Storage` issuing
+method to the `StorageBackend` trait (codemason-tools-vcs and
+codemason-tools-extended), backed by `codemason_storage::Storage` issuing
 `SELECT provider_id FROM provider_auth` internally, then filter to
 `reach::` prefixed keys. Fallback path (if extending the trait is too
 invasive): maintain a reach-owned JSON array index under the settings key
@@ -440,7 +440,7 @@ Audit every `ReachCredentialStore` method (`get`, `set`, `delete`,
 blocking storage call in `tokio::task::spawn_blocking(move || { ... })` and
 `.await?` the `JoinHandle`. This prevents the `Storage` `Mutex<Connection>`
 lock from stalling the agent-loop executor. Use the existing workspace
-pattern (search for `spawn_blocking` in `ragent-storage` / `ragent-agent`
+pattern (search for `spawn_blocking` in `codemason-storage` / `codemason-agent`
 for reference). Add a test that asserts credential reads complete within a
 reasonable time even when the storage mutex is held briefly by another
 task. This implements NFR-005.
@@ -470,16 +470,16 @@ rejected as a provider-name collision; `reach::twitter::a::b` rejected
 (FR-032).
 
 ### T-055 — Isolate all reach credential tests from the real user database
-Audit every test in `crates/ragent-reach/tests/` (and any reach credential
+Audit every test in `crates/codemason-reach/tests/` (and any reach credential
 test elsewhere) to confirm it constructs its own storage via
 `Storage::open_in_memory()` or a unique file under `target/temp/`, and that
 no test resolves the default user database path. Add a CI-safe guard test
-that asserts the test harness never passes the real `ragent.db` path to
+that asserts the test harness never passes the real `codemason.db` path to
 `Storage::open`. Remove any test fixture that seeds or asserts against
 pre-existing real `provider_auth` rows (FR-033).
 
 ### T-056 — Keep derived short-lived tokens in memory only with TTL; never persist
-Introduce a small `EphemeralTokenCache` in `ragent-reach` (e.g.,
+Introduce a small `EphemeralTokenCache` in `codemason-reach` (e.g.,
 `RwLock<HashMap<&'static str /*backend*/, (String, Instant)>>`) used by the
 `reddit_oauth` (T-015) and `twitter_guest` (T-017) backends for
 runtime-minted access/guest tokens. Entries carry a TTL derived from the
@@ -493,7 +493,7 @@ contains only the `client_id`/`client_secret` keys, not the access token
 
 ### T-057 — Map storage errors to sanitized reach-level errors
 Add a `map_storage_err(platform, key, err) -> anyhow::Error` helper in
-`credentials.rs` that converts `ragent_storage`/rusqlite errors into messages
+`credentials.rs` that converts `codemason_storage`/rusqlite errors into messages
 of the form `"reach credential <reach::platform::key> could not be <op>:
 <actionable hint>"`, deliberately dropping the inner error's Display text
 (which may echo row identifiers or payload fragments). Use it at every
@@ -566,7 +566,7 @@ Implements FR-039.
 ### T-063 — Emit secret-free structured audit events on credential I/O
 Add a `tracing::debug!` call at the entry of each `ReachCredentialStore` method
 (`get`, `set`, `delete`, `list_names`) with `target =
-"ragent_reach::credentials"` and fields `op = "get"|"set"|"delete"|"list"` and
+"codemason_reach::credentials"` and fields `op = "get"|"set"|"delete"|"list"` and
 `key = <ReachCredentialKey as Display>`. Never include the `value` field. Run
 the existing workspace lint that rejects `value` as a tracing field name if
 present, or add a `#[deny]`-style code comment. Add a test that captures
@@ -579,7 +579,7 @@ sanitisation by providing an access trail. Implements FR-040.
 Update the NFR-003 prose in `SPEC.md` (and any code comment in
 `credentials.rs` that echoes "AES-GCM") to state that the at-rest cipher is the
 v2 blake3-derived keystream (`encrypt_key`) already implemented in
-`ragent-storage`, not AES-GCM. Add a cross-reference to FR-021. No code change
+`codemason-storage`, not AES-GCM. Add a cross-reference to FR-021. No code change
 required — this is a documentation correctness fix ensuring future
 contributors do not attempt to add an AES-GCM path. Verify T-042 and T-046
 (which test the `v2:` prefix round-trip) still pass unchanged. Implements
@@ -598,24 +598,24 @@ panic and that the final `get` for each key returns the last-written value
 T-036 cache and the T-037 invalidation path. Implements NFR-008.
 
 ### T-066 — Rely on existing `seed_secret_registry` for reach credential startup seeding
-Audit the `ragent-reach` crate and the `register_extracted_reach_tools`
+Audit the `codemason-reach` crate and the `register_extracted_reach_tools`
 adapter (T-008) to confirm that neither calls, wraps, or duplicates
-`ragent_storage::Storage::seed_secret_registry`. Reach credentials are stored
+`codemason_storage::Storage::seed_secret_registry`. Reach credentials are stored
 in the same `provider_auth` table as all other provider credentials, so the
 existing startup seeding pass — which iterates every `provider_auth` row,
 decrypts it, and feeds the plaintext into `crate::sanitize::seed_secrets` —
 already covers `reach::`-namespaced keys. Add a test that stores a reach
 credential via `ReachCredentialStore::set`, calls `seed_secret_registry` on
 the shared `Storage`, and asserts the credential plaintext is registered with
-`ragent_storage::sanitize` (i.e., `redact_secrets` masks it in a sample log
+`codemason_storage::sanitize` (i.e., `redact_secrets` masks it in a sample log
 line). Add a grep-based assertion that no `.rs` file under
-`crates/ragent-reach/src/` contains the string `seed_secret_registry`. This
-confirms reach credentials are covered by the existing ragent encrypted
+`crates/codemason-reach/src/` contains the string `seed_secret_registry`. This
+confirms reach credentials are covered by the existing codemason encrypted
 credential store's startup seeding with zero reach-specific seeding code.
 Implements FR-041.
 
 ### T-067 — Audit reach crate for zero SQLite schema mutations
-Grep all `.rs` files under `crates/ragent-reach/src/` for the SQL strings
+Grep all `.rs` files under `crates/codemason-reach/src/` for the SQL strings
 `CREATE TABLE`, `ALTER TABLE`, `CREATE INDEX`, `CREATE VIEW`, `CREATE TRIGGER`,
 `ADD COLUMN`, `DROP COLUMN`, `migration`, and `migrate`. Assert that none
 appear. Confirm that the `ReachCredentialStore` (T-032) and all reach backends
@@ -625,7 +625,7 @@ methods (`get_provider_auth`, `set_provider_auth`, `delete_provider_auth`,
 `provider_auth` and `settings` tables. Add a CI test that fails the build if
 any schema-mutation SQL string is introduced into the reach crate. This
 ensures reach has zero schema footprint in the shared encrypted credential
-store, leaving schema ownership entirely with `ragent-storage`. Implements
+store, leaving schema ownership entirely with `codemason-storage`. Implements
 FR-042 and NFR-009.
 
 ### T-068 — Surface machine-binding property in `reach_doctor` decryption-failure fix_hint
@@ -639,7 +639,7 @@ decryption failure (store a `v2:` blob encrypted under a different
 `MACHINE_KEY` by mocking or injecting a mismatched key), runs `reach_doctor`,
 and asserts the `fix_hint` contains the phrases "machine-local", "username",
 and "home directory". This surfaces the inherent machine-binding property of
-the existing `ragent-storage` v2 `encrypt_key` scheme so the user understands
+the existing `codemason-storage` v2 `encrypt_key` scheme so the user understands
 the failure cause. Implements FR-043.
 
 ### T-069 — Prohibit plaintext reach credential export and `dump`/`export-all` actions
@@ -647,13 +647,13 @@ Audit the `reach_credentials` tool (T-006) and `reach_doctor` tool (T-007) to
 confirm that neither exposes a `dump`, `export`, `export-all`, or
 `get-all-credentials` action. Confirm that the `list` action returns only key
 names (via `list_names`, FR-029), never decrypted values. Confirm that any
-existing or future ragent config/session export mechanism that iterates the
+existing or future codemason config/session export mechanism that iterates the
 `provider_auth` table treats reach credential rows identically to
 LLM-provider credential rows — emitting at most the `provider_id` (the
 `reach::` key name) and never the decrypted `api_key` value. Add a test that
 calls `reach_credentials` with every exposed action and asserts none returns
 a decrypted credential value; add a grep assertion that no `.rs` file under
-`crates/ragent-reach/src/` contains the strings `dump`, `export_all`, or
-`get_all_credentials`. This ensures the existing ragent encrypted credential
+`crates/codemason-reach/src/` contains the strings `dump`, `export_all`, or
+`get_all_credentials`. This ensures the existing codemason encrypted credential
 store's at-rest encryption and machine-binding properties are never bypassed
 by a reach export path. Implements FR-044.

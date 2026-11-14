@@ -1,17 +1,17 @@
 # How-To: Agent Client Protocol (ACP)
 
-ragent speaks the **Agent Client Protocol (ACP)** in both directions. ACP is an
+codemason speaks the **Agent Client Protocol (ACP)** in both directions. ACP is an
 open, editor-agnostic protocol in which a *client* drives an *agent* over
 JSON-RPC 2.0, one message per line, on the agent's standard input and output
-(stdio). ragent can play either role:
+(stdio). codemason can play either role:
 
-- **ACP client** - ragent drives an external coding agent as a **subprocess**:
+- **ACP client** - codemason drives an external coding agent as a **subprocess**:
   Claude Code, Codex, or Gemini CLI (or any custom ACP server). While such an
   agent is active, turns are relayed to it over JSON-RPC on its stdio instead of
-  being sent to a local ragent LLM provider (spec `openhands` FR-015, FR-022).
-- **ACP server** - ragent **serves** an ACP-capable editor (Zed, VS Code,
+  being sent to a local codemason LLM provider (spec `openhands` FR-015, FR-022).
+- **ACP server** - codemason **serves** an ACP-capable editor (Zed, VS Code,
   JetBrains) over JSON-RPC on its own stdio. Each editor session maps onto a
-  local ragent session whose agent-loop events stream back as ACP
+  local codemason session whose agent-loop events stream back as ACP
   `session/update` notifications (spec `openhands` FR-022, FR-028). This
   endpoint is **feature-gated and off by default**.
 
@@ -51,16 +51,16 @@ requirements see `specs/openhands/SPEC.md` FR-015, FR-022, FR-028, FR-036.
 
 | Term | Meaning |
 | ---- | ------- |
-| **ACP** | Agent Client Protocol: JSON-RPC 2.0, one frame per line, over stdio. ragent implements protocol version `1`. |
-| **ACP agent** | An external coding agent (Claude Code, Codex, Gemini CLI, or a custom ACP server) that ragent drives as a subprocess. |
-| **ACP session** | A conversation. In client mode ragent opens it with `session/new`; in server mode ragent returns a fresh id to the editor. |
+| **ACP** | Agent Client Protocol: JSON-RPC 2.0, one frame per line, over stdio. codemason implements protocol version `1`. |
+| **ACP agent** | An external coding agent (Claude Code, Codex, Gemini CLI, or a custom ACP server) that codemason drives as a subprocess. |
+| **ACP session** | A conversation. In client mode codemason opens it with `session/new`; in server mode codemason returns a fresh id to the editor. |
 | **Turn** | One user message (`session/prompt`) and everything the agent streams in reply, ending with a terminal `stopReason`. |
 | **`session/update`** | A notification the agent streams mid-turn: text chunks, thought chunks, tool calls, or a plan. |
-| **Client mode** | ragent is the client; the external agent is the agent. |
-| **Server mode** | ragent is the agent; an editor is the client. |
+| **Client mode** | codemason is the client; the external agent is the agent. |
+| **Server mode** | codemason is the agent; an editor is the client. |
 
 The wire protocol version is a single constant, `ACP_PROTOCOL_VERSION = 1`
-(`crates/ragent-agent/src/acp/mod.rs`). It is exchanged in the `initialize`
+(`crates/codemason-agent/src/acp/mod.rs`). It is exchanged in the `initialize`
 handshake; a peer that negotiates a different version is logged as a warning but
 the exchange continues.
 
@@ -68,8 +68,8 @@ the exchange continues.
 
 ## 2. The ACP Client
 
-`crates/ragent-agent/src/acp/mod.rs` owns the client transport and
-`crates/ragent-agent/src/session/acp_dispatch.rs` bridges its output onto the
+`crates/codemason-agent/src/acp/mod.rs` owns the client transport and
+`crates/codemason-agent/src/session/acp_dispatch.rs` bridges its output onto the
 local event bus.
 
 ### 2.1 The turn lifecycle
@@ -97,13 +97,13 @@ process down. Key transport facts:
   is never parsed as protocol.
 - **The handshake is bounded.** `initialize` and `session/new` each get a
   30-second timeout (`HANDSHAKE_TIMEOUT`); both are local subprocess round-trips.
-- **Client capabilities.** ragent advertises `fs.readTextFile: false`,
+- **Client capabilities.** codemason advertises `fs.readTextFile: false`,
   `fs.writeTextFile: false`, and `terminal: false`: the external agent does its
-  own filesystem and terminal work; ragent does not service those client-side
+  own filesystem and terminal work; codemason does not service those client-side
   requests.
 - **Cancellation.** A turn polls the session's cancellation flag; on cancel the
   child is killed and the turn fails with a "cancelled by user" protocol error.
-- **A client-side request ragent does not implement** (any inbound request
+- **A client-side request codemason does not implement** (any inbound request
   carrying an id) is answered with a JSON-RPC "method not found" so the agent is
   never left waiting.
 
@@ -126,7 +126,7 @@ So the two ways to route a turn to Claude Code are:
 ```jsonc
 // (a) a custom agent that delegates to the "claude" ACP entry by name
 { "agents": { "claude": { "id": "claude", "command": "claude-code-acp" } } }
-// then define a ragent agent named "claude", or:
+// then define a codemason agent named "claude", or:
 
 // (b) any agent whose options name the ACP id
 { "name": "coder", "options": { "acp": "claude" } }
@@ -180,7 +180,7 @@ nothing lingers.
 
 ## 3. Worked Examples
 
-All examples live under the `acp` block in `ragent.json` (see
+All examples live under the `acp` block in `codemason.json` (see
 [`config.md`](config.md) section 7.37). The block is absent by default, which
 leaves the client subsystem inert.
 
@@ -230,7 +230,7 @@ agent to it.
 }
 ```
 
-With a ragent agent named `claude` present, the `claude` agent binds by the
+With a codemason agent named `claude` present, the `claude` agent binds by the
 name-equals-id rule. Selecting `/agent claude` and sending a message relays the
 turn to the Claude Code subprocess; its text, thought, and tool-call updates
 stream into the TUI, and the assistant text is persisted for the session.
@@ -292,7 +292,7 @@ streaming updates is not cut off.
 
 `env` values are passed verbatim to the subprocess (the parent environment is
 also inherited, so an ambient `GEMINI_API_KEY` reaches the agent without being
-written here). Keep secrets out of `ragent.json`; rely on the inherited
+written here). Keep secrets out of `codemason.json`; rely on the inherited
 environment, or inject them at spawn time via the encrypted-store credential
 mechanism described in [`sandbox-backends.md`](sandbox-backends.md) for
 container runs.
@@ -347,16 +347,16 @@ for line in sys.stdin:
 
 This shape (a line-delimited loop, replying to `initialize` and `session/new`,
 then streaming one update and a terminal reply per `session/prompt`) is the
-contract ragent expects from any ACP agent.
+contract codemason expects from any ACP agent.
 
 ---
 
 ## 4. The ACP Server
 
-`crates/ragent-agent/src/acp/server.rs` is the mirror image of the client:
-instead of ragent driving an external agent, ragent **serves** an ACP-capable
-editor. The editor speaks JSON-RPC 2.0 over ragent's own stdin/stdout; ragent
-maps each editor session onto a local ragent session and streams that session's
+`crates/codemason-agent/src/acp/server.rs` is the mirror image of the client:
+instead of codemason driving an external agent, codemason **serves** an ACP-capable
+editor. The editor speaks JSON-RPC 2.0 over codemason's own stdin/stdout; codemason
+maps each editor session onto a local codemason session and streams that session's
 agent-loop events back as `session/update` notifications (FR-022).
 
 ### 4.1 Enabling the endpoint
@@ -367,10 +367,10 @@ unauthenticated surface:
 1. the binary must be built with the `acp-server` Cargo feature, and
 2. `acp.server_enabled` must be `true` in the loaded configuration.
 
-When either gate is closed, `ragent acp-server` prints a diagnostic that names
+When either gate is closed, `codemason acp-server` prints a diagnostic that names
 the specific closed gate and exits with a usage error (code 2). The endpoint is
-reachable only through the `ragent acp-server` subcommand - never through the
-TUI or `ragent run` - so a plain terminal launch never exposes an editor-facing
+reachable only through the `codemason acp-server` subcommand - never through the
+TUI or `codemason run` - so a plain terminal launch never exposes an editor-facing
 JSON-RPC surface.
 
 ```json
@@ -379,10 +379,10 @@ JSON-RPC surface.
 
 ```bash
 cargo build --features acp-server
-ragent acp-server            # editor attaches over stdin/stdout
+codemason acp-server            # editor attaches over stdin/stdout
 ```
 
-`server_agent` selects the local ragent agent the endpoint drives. It resolves
+`server_agent` selects the local codemason agent the endpoint drives. It resolves
 `acp.server_agent` -> `acp.default_agent` -> the top-level `defaultAgent`
 (`Config::acp_server_agent`).
 
@@ -391,8 +391,8 @@ ragent acp-server            # editor attaches over stdin/stdout
 | Request | Behaviour |
 | ------- | --------- |
 | `initialize` | Negotiates the protocol version (`1`) and advertises agent capabilities: `loadSession: false`; prompt capabilities `image: false`, `audio: false`, `embeddedContext: true`. |
-| `session/new` | Opens a local ragent session rooted at the editor's `cwd` (an absolute existing directory; otherwise the process working directory) and returns a fresh `sessionId`. |
-| `session/prompt` | Runs one ragent turn and streams updates; the reply carries the mapped `stopReason`. Only one turn runs at a time - a second prompt while one is in flight is rejected with a "a turn is already in progress" error. |
+| `session/new` | Opens a local codemason session rooted at the editor's `cwd` (an absolute existing directory; otherwise the process working directory) and returns a fresh `sessionId`. |
+| `session/prompt` | Runs one codemason turn and streams updates; the reply carries the mapped `stopReason`. Only one turn runs at a time - a second prompt while one is in flight is rejected with a "a turn is already in progress" error. |
 | `session/cancel` | Raises the current turn's cancellation flag. |
 
 Robustness rules that keep one bad frame from taking the editor connection down:
@@ -418,9 +418,9 @@ Each local session event is translated into an ACP `session/update` payload
 | `ToolCallEnd` | `tool_call_update` with `status: "completed"` or `"failed"` |
 | `AgentError` | `agent_message_chunk` carrying `error: <message>` |
 
-The terminal `stopReason` is mapped from ragent's `FinishReason`:
+The terminal `stopReason` is mapped from codemason's `FinishReason`:
 
-| ragent `FinishReason` | ACP `stopReason` |
+| codemason `FinishReason` | ACP `stopReason` |
 | --------------------- | ---------------- |
 | `Stop`, `ToolUse` | `end_turn` |
 | `Length`, `Truncation` | `max_tokens` |
@@ -433,16 +433,16 @@ turn's final event so the trailing assistant chunk is not dropped.
 
 ### 4.4 Wiring an editor
 
-Point the editor's ACP "agent command" at the ragent binary with the
+Point the editor's ACP "agent command" at the codemason binary with the
 `acp-server` subcommand. The editor launches it as a subprocess and speaks
-JSON-RPC over the pipe, exactly as ragent would launch Claude Code. A
+JSON-RPC over the pipe, exactly as codemason would launch Claude Code. A
 representative editor setting:
 
 ```jsonc
 {
   "agent_servers": {
-    "ragent": {
-      "command": "/path/to/ragent",
+    "codemason": {
+      "command": "/path/to/codemason",
       "args": ["acp-server"],
       "env": {}
     }
@@ -451,7 +451,7 @@ representative editor setting:
 ```
 
 The editor then issues `initialize`, `session/new`, and `session/prompt`, and
-sees ragent's local agent loop rendered in the editor's chat pane. The agent it
+sees codemason's local agent loop rendered in the editor's chat pane. The agent it
 drives is whatever `acp.server_agent` resolves to (`coder` by default).
 
 ---
@@ -459,7 +459,7 @@ drives is whatever `acp.server_agent` resolves to (`coder` by default).
 ## 5. Configuration Reference
 
 All ACP configuration lives under the `acp` block
-(`crates/ragent-config/src/config.rs`, `AcpConfig`). The block is optional and
+(`crates/codemason-config/src/config.rs`, `AcpConfig`). The block is optional and
 absent by default; a default config does not emit the key.
 
 ### `AcpConfig`
@@ -469,7 +469,7 @@ absent by default; a default config does not emit the key.
 | `default_agent` | string | none | Id of the ACP agent used when none is selected explicitly. |
 | `agents` | object | `{}` | Registered ACP agents keyed by stable id. |
 | `server_enabled` | bool | `false` | Master switch for the ACP **server** endpoint. Off by default; an editor can only attach once opted in. |
-| `server_agent` | string | none | The local ragent agent the server drives. Resolves `server_agent` -> `default_agent` -> top-level `defaultAgent`. |
+| `server_agent` | string | none | The local codemason agent the server drives. Resolves `server_agent` -> `default_agent` -> top-level `defaultAgent`. |
 
 ### `AcpAgentConfig` (one entry in `agents`)
 
@@ -506,9 +506,9 @@ merged by id.
 
 | Symptom | Cause | Fix |
 | ------- | ----- | --- |
-| `ragent acp-server` exits with code 2 mentioning the `acp-server` feature | The binary was built without the feature. | `cargo build --features acp-server`. |
-| `ragent acp-server` exits with code 2 mentioning `acp.server_enabled` | The feature is compiled in but the config key is not set. | Add `"acp": { "server_enabled": true }`. |
-| Turns still go to a local provider after registering an ACP agent | No ragent agent is bound to the ACP entry. | Name the ragent agent the same as the ACP id, or set the agent's `options.acp` to that id. |
+| `codemason acp-server` exits with code 2 mentioning the `acp-server` feature | The binary was built without the feature. | `cargo build --features acp-server`. |
+| `codemason acp-server` exits with code 2 mentioning `acp.server_enabled` | The feature is compiled in but the config key is not set. | Add `"acp": { "server_enabled": true }`. |
+| Turns still go to a local provider after registering an ACP agent | No codemason agent is bound to the ACP entry. | Name the codemason agent the same as the ACP id, or set the agent's `options.acp` to that id. |
 | `ACP agent '...' failed (Spawn): spawning '...' failed: ...` | The `command` is missing, not executable, or not on `PATH`. | Install the ACP adapter or give an absolute `command` path. |
 | `... (Exited): agent exited with status N before completing the turn; stderr: ...` | The external agent crashed; its stderr tail is included. | Read the stderr tail; check the agent's own auth/config. |
 | `... (MalformedFrame): malformed JSON-RPC frame on stdout: ...` | The subprocess printed a non-JSON line to stdout. | The program is not a real ACP agent, or logs to stdout; send logs to stderr. |
@@ -524,8 +524,8 @@ merged by id.
 - [`config.md`](config.md) section 7.37 - the `acp` config key reference.
 - [`sandbox-backends.md`](sandbox-backends.md) - switchable execution backends
   and container sandboxing, including credential injection for container runs.
-- [`custom-agents.md`](custom-agents.md) - defining the ragent agents that bind
+- [`custom-agents.md`](custom-agents.md) - defining the codemason agents that bind
   to ACP agents (`options.acp` and the name-equals-id rule).
-- [`mcp.md`](mcp.md) - the other stdio transport ragent speaks; MCP servers and
+- [`mcp.md`](mcp.md) - the other stdio transport codemason speaks; MCP servers and
   ACP agents are both subprocesses over stdin/stdout but serve different roles.
 - `specs/openhands/SPEC.md` - FR-015, FR-022, FR-028, FR-036.

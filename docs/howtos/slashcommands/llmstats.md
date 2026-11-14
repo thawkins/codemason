@@ -1,6 +1,6 @@
 # /llmstats
 
-> "Show average LLM response time and token throughput" (SlashCommandDef, crates/ragent-tui/src/app/state.rs).
+> "Show average LLM response time and token throughput" (SlashCommandDef, crates/codemason-tui/src/app/state.rs).
 
 ## Overview
 
@@ -11,7 +11,7 @@ response; with none of those present it explains what is missing instead of
 showing zeros. Use it to sanity-check that a local or remote endpoint is
 responding at expected speed, or to compare throughput across models.
 
-The handler is the `llmstats` arm in `crates/ragent-tui/src/app/slash.rs`
+The handler is the `llmstats` arm in `crates/codemason-tui/src/app/slash.rs`
 (lines 3468-3501).
 
 ## Syntax

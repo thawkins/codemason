@@ -8,7 +8,7 @@ Reference UX: Claude desktop app, Code mode (session sidebar + one focused trans
 Overview
 --------
 Today the TUI owns exactly one primary session. `App` (in
-`crates/ragent-tui/src/app/state.rs`, ~300 public fields) holds one
+`crates/codemason-tui/src/app/state.rs`, ~300 public fields) holds one
 `session_id: Option<String>`, one `messages: Vec<Message>`, one
 `is_processing` flag and one set of per-session caches (tool step map, log,
 input queue, context snapshot, teams/agents panels). Events from the
@@ -16,7 +16,7 @@ input queue, context snapshot, teams/agents panels). Events from the
 (`app/event_handler.rs`), so anything that belongs to another session is
 dropped. `App::load_session` (`app/session_ops.rs`) "switches" by
 overwriting the single slot, and the only entry point is the `--session`
-resume path in `crates/ragent-tui/src/lib.rs`.
+resume path in `crates/codemason-tui/src/lib.rs`.
 
 This plan turns the TUI into a multi-session host:
 
@@ -32,7 +32,7 @@ Claude desktop Code-mode conventions to follow
 These are the behaviours the sidebar and switching model copy. Each one is
 mapped to a concrete requirement below.
 
-| Convention (Claude desktop, Code mode) | ragent requirement |
+| Convention (Claude desktop, Code mode) | codemason requirement |
 | --- | --- |
 | "New session" action at the top of the sidebar | FR-01 |
 | Sessions grouped under their project (folder) heading; headings collapse | FR-02 |
@@ -52,7 +52,7 @@ Functional requirements
   sidebar create a session in the focused session's project directory.
   `/session new [path]` creates one in another directory; the path must pass
   the same containment rule as the HTTP server (cwd plus
-  `dirs.allowed_roots`, SEC-062 in `ragent-server/src/routes/mod.rs`).
+  `dirs.allowed_roots`, SEC-062 in `codemason-server/src/routes/mod.rs`).
   (`/new` is already the project-scaffold command.)
 - FR-02 Project sections: sessions are grouped by project. A project is the
   canonical git work-tree root of `sessions.directory`, falling back to the
@@ -137,7 +137,7 @@ Design
 
 ### D1. Split `App` into global state and `SessionView`
 
-Introduce `crates/ragent-tui/src/app/session_view.rs`:
+Introduce `crates/codemason-tui/src/app/session_view.rs`:
 
 ```rust
 /// Everything that belongs to one open session in the TUI.
@@ -193,7 +193,7 @@ step):
 
 ### D2. Event routing
 
-Implemented in M3 (`crates/ragent-tui/src/app/sessions.rs`).
+Implemented in M3 (`crates/codemason-tui/src/app/sessions.rs`).
 `App::handle_event` looks up the event's owner with
 `App::background_owner`: the background session with that id, the parent
 of a sub-agent (`TaskEntry::parent_session_id`), or the lead of a teammate
@@ -225,16 +225,16 @@ swapped back. The global status line is restored after the swap.
 
 - Session-scoped tools must resolve paths against `SessionView.directory`,
   not the process cwd. Audit every `std::env::current_dir()` and `App.cwd`
-  use in `ragent-agent` and the tools crates; pass the directory through
+  use in `codemason-agent` and the tools crates; pass the directory through
   the existing per-call context instead. Never call `set_current_dir` on
   switch: background sessions run concurrently.
-- Config: `Config::load` (`ragent-config/src/config.rs:1827`) resolves
+- Config: `Config::load` (`codemason-config/src/config.rs:1827`) resolves
   project config from the process cwd. Add `Config::load_for(dir)` and pass
   the session directory through `SessionProcessor::load_config_cached` so
   each session reads its own project config. Global (user) config remains
   shared.
 - Permissions: the `file:read` auto-grant inside cwd
-  (`ragent-agent/src/session/permissions.rs:809`) must use the session
+  (`codemason-agent/src/session/permissions.rs:809`) must use the session
   working directory.
 - The agent loop and tools already use `sessions.directory` /
   `ToolContext.working_dir` (M1 T1.2).
@@ -244,14 +244,14 @@ swapped back. The global status line is restored after the swap.
 Implemented in M6:
 
 - `Config::load_for(dir)` reads the global config plus
-  `<dir>/.ragent/ragent.json` under the same project-local guard. The M-025
+  `<dir>/.codemason/codemason.json` under the same project-local guard. The M-025
   cache became one entry per directory, so interleaved projects do not
   evict each other. Unlike `load()`, it never writes the first-run default
-  `ragent.json`: opening a session must not create files in a project.
+  `codemason.json`: opening a session must not create files in a project.
   `Config::load()` is unchanged; it still resolves the relative
-  `.ragent/ragent.json`, so its `config_paths` are byte-identical.
+  `.codemason/codemason.json`, so its `config_paths` are byte-identical.
 - `SessionProcessor::load_config_for(dir)`: a session whose directory has
-  its own `.ragent/ragent.json` (and is not the process cwd) gets that
+  its own `.codemason/codemason.json` (and is not the process cwd) gets that
   project's config. Every other session gets the launch config, exactly as
   before. Consequence: a project with no config file of its own inherits
   the launch project's overlay (pre-M6 behaviour). The agent loop now
@@ -267,7 +267,7 @@ Implemented in M6:
   calls, 9 `current_config()` calls and 5 `load_config_cached()` calls.
   All of them now read the focused session's `cwd_path` (a compiler-guided
   rewrite; closures capture a clone). They stay on the process cwd only
-  where that is right: startup, the log root, `/bench` (tied to the ragent
+  where that is right: startup, the log root, `/bench` (tied to the codemason
   checkout), the `target/temp` clipboard helper and the `/websearch`
   diagnostic.
 - `/session new <path>` checks the path the way the HTTP server does
@@ -281,7 +281,7 @@ session. A session in another project gets correct config, permissions,
 file tools and slash-command paths, but codeindex search and MCP tools
 still answer for the launch project.
 
-### D4. Storage changes (`crates/ragent-storage`)
+### D4. Storage changes (`crates/codemason-storage`)
 
 Additive migration in the `sessions` table:
 
@@ -293,7 +293,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_project_updated
 
 Implemented in M4 as schema version 4:
 
-- `ragent_storage::project_root(dir)` (`src/project.rs`) returns the nearest
+- `codemason_storage::project_root(dir)` (`src/project.rs`) returns the nearest
   ancestor holding a `.git` directory or file (linked worktrees count), or
   the directory itself. A missing directory is returned unchanged, so its
   sessions still group under their last known path; M5 marks those
@@ -315,7 +315,7 @@ Implemented in M4 as schema version 4:
   (width, visibility, collapsed projects) joins it under `tui.sessions.*`
   in M5.
 
-### D5. Sidebar rendering (`crates/ragent-tui/src/sessions_sidebar.rs`)
+### D5. Sidebar rendering (`crates/codemason-tui/src/sessions_sidebar.rs`)
 
 Implemented in M5:
 
@@ -370,7 +370,7 @@ halted agent) and `/clear` keep their current meaning.
 
 ### D7. Server and other surfaces
 
-Confirmed in M1: `crates/ragent-server` routes are session-addressed and
+Confirmed in M1: `crates/codemason-server` routes are session-addressed and
 the ACP server is a separate stdio process. No change in scope.
 
 Milestones
@@ -392,10 +392,10 @@ M2 - `SessionView` extraction, single session only (1-1.5 weeks) - DONE
   deferred to M3, where it first holds more than one view.
 - T2.2 Move per-session fields group by group (D1); one PR per group.
   Done: all 94 S1-S7 fields live in `SessionView`
-  (`crates/ragent-tui/src/app/session_view.rs`), built by
+  (`crates/codemason-tui/src/app/session_view.rs`), built by
   `SessionView::new(agent_name, agent_info, current_agent_index)`; the
   caller sets the startup model and backend.
-- Verify: full `ragent-tui` test suite passes after each PR; no
+- Verify: full `codemason-tui` test suite passes after each PR; no
   user-visible change (NFR-04).
 
 M3 - Multi-session core and routing (1 week) - DONE
@@ -413,7 +413,7 @@ M3 - Multi-session core and routing (1 week) - DONE
   `switch` matches an id, id prefix or suffix, or title prefix. Sessions
   and paths outside the launch directory are refused until M6. Keybindings
   (FR-10, FR-12) arrive with the sidebar in M5.
-- Verify: `crates/ragent-tui/tests/test_multisession.rs` (10 tests) drives
+- Verify: `crates/codemason-tui/tests/test_multisession.rs` (10 tests) drives
   two sessions with synthetic bus events instead of a mock provider (the
   provider only produces those same events). It asserts A's text lands in
   A's transcript and not B's, a permission request in A queues on A
@@ -430,12 +430,12 @@ M4 - Storage and project grouping (3-4 days) - DONE
   `/session archive` refuses a running session rather than asking to stop
   it.
 - T4.3 Persist and restore open sessions (FR-13): saved on every focus
-  change and at startup. `ragent` reopens up to 8 of them (skipping
+  change and at startup. `codemason` reopens up to 8 of them (skipping
   archived, deleted and other-directory sessions) and falls back to a fresh
-  session. `ragent --new` forces a fresh one, and `ragent session resume
+  session. `codemason --new` forces a fresh one, and `codemason session resume
   <id>` is unchanged. `run_tui` takes a `StartupSession` enum in place of
   `Option<String>`. Sidebar UI state is deferred to M5 with the sidebar.
-- Verify: `crates/ragent-storage/tests/test_session_grouping.rs` (6 tests:
+- Verify: `crates/codemason-storage/tests/test_session_grouping.rs` (6 tests:
   a v3 database rewound from a real file under `target/temp/` migrates and
   backfills; grouping across two git roots, a linked worktree and a missing
   directory; pin and archive round trips). `test_multisession.rs` gains 6
@@ -448,7 +448,7 @@ M5 - Sidebar UI (1 week) - DONE
 - T5.3 Status markers (`!` waiting, `*` running, `x` failed, `o` unread),
   relative time (`now`, `5m`, `3h`, `4d`, `2w`), status-bar badge.
 - T5.4 Auto-hide below 100 columns; `Alt+S` toggle (FR-10).
-- Verify: `crates/ragent-tui/tests/test_sessions_sidebar.rs` (15 tests)
+- Verify: `crates/codemason-tui/tests/test_sessions_sidebar.rs` (15 tests)
   renders the full layout into a `TestBackend` and asserts on the painted
   rows: project section and order, focused highlight, hidden when narrow
   or off, pinned section first, collapse, filter, waiting and failed
@@ -465,9 +465,9 @@ M6 - Per-session directory and config (1-1.5 weeks) - DONE (R4 open)
   directory).
 - T6.3 Lift the other-directory gate; `/session new <path>` with the
   SEC-062 containment rule.
-- Verify: `ragent-config/tests/test_config_load_for.rs` (3: reads the given
+- Verify: `codemason-config/tests/test_config_load_for.rs` (3: reads the given
   project, sees an edit, keeps two projects apart),
-  `ragent-agent/tests/test_permission_working_dir.rs` (3: auto-grant
+  `codemason-agent/tests/test_permission_working_dir.rs` (3: auto-grant
   inside the session directory, prompt outside it, relative paths resolved
   against it; the inside case fails under the old process-cwd rule), and `test_multisession.rs` (switching to
   a session in another directory moves `cwd_path` and back; `/session new
@@ -482,13 +482,13 @@ M7 - Titles, polish, docs (2-3 days) - DONE
   line, whitespace collapsed, cut at a word boundary to 60 characters. No
   model call, so no cost and no failure path; a user title
   (`/session rename`, F2) is never replaced.
-- T7.2 Notifications (FR-06): ragent had no built-in desktop notification
+- T7.2 Notifications (FR-06): codemason had no built-in desktop notification
   path, so the existing hooks system carries it. A new `on_notification`
   trigger (Claude: `Notification`) is fired by the TUI when a background
   session starts waiting, finishes or fails
   (`hooks::fire_notification_hooks`, the same configured-plus-plugin hook
-  list a turn uses), with `RAGENT_NOTIFICATION_KIND`,
-  `RAGENT_NOTIFICATION_MESSAGE` and `RAGENT_SESSION_ID`. The Claude stdin
+  list a turn uses), with `CODEMASON_NOTIFICATION_KIND`,
+  `CODEMASON_NOTIFICATION_MESSAGE` and `CODEMASON_SESSION_ID`. The Claude stdin
   payload carries the event name but not a `message` field.
 - T7.3 SPEC.md (6.1 sidebar row, new 6.1a, `/session` row), QUICKSTART.md
   (multiple sessions, the `on_notification` example, key bindings),
@@ -507,14 +507,14 @@ M8 - Per-project services (R4 decided: per project) (about 1.5-2 weeks)
   session in that project is first focused (if that project's config
   enables indexing), and drops it when no open session uses the project.
   Specs, custom agents and plugin commands are reloaded on project change.
-  Implemented in `crates/ragent-tui/src/app/project_services.rs` and
+  Implemented in `crates/codemason-tui/src/app/project_services.rs` and
   `SessionProcessor::code_index_for` / `register_project_code_index` /
   `release_project_code_index`. A project's index is opened only when its
-  config enables indexing and it already has a `.ragent` directory, so
+  config enables indexing and it already has a `.codemason` directory, so
   focusing a session never creates files in an unrelated project. A
   directory outside every open project gets no index (codeindex tools
   report it unavailable) rather than the launch project's. Verified by
-  `crates/ragent-tui/tests/test_project_services.rs` (4 tests).
+  `crates/codemason-tui/tests/test_project_services.rs` (4 tests).
 - Phase B implementation: `SessionProcessor::open_project_mcp` /
   `release_project_mcp` / `tool_registry_for` / `project_mcp_client`. A
   project's registry is the base tools without any MCP wrapper
@@ -528,7 +528,7 @@ M8 - Per-project services (R4 decided: per project) (about 1.5-2 weeks)
   a placeholder first, so a release that arrives during the connects stops
   that client rather than leaking it. `/mcp` lists the focused project's
   own client when it has one; the launch project's tracked list is
-  unchanged. Verified by `ragent-agent/tests/test_project_mcp.rs` (5:
+  unchanged. Verified by `codemason-agent/tests/test_project_mcp.rs` (5:
   isolation both ways, base-change rebuild, release fallback, distinct
   versions, and stdio servers starting in the project root) and an
   end-to-end TUI test in `test_project_services.rs` (open, `/mcp` lists the
@@ -540,7 +540,7 @@ M8 - Per-project services (R4 decided: per project) (about 1.5-2 weeks)
   entries, so a session in project B saw and called project A's MCP tools.
   Each non-launch project now gets its own client when its first session is
   focused. Its servers are the user-global ones plus its enabled plugins'.
-  A project's own `.ragent/ragent.json` cannot add servers: the
+  A project's own `.codemason/codemason.json` cannot add servers: the
   project-local config guard drops them (SEC-001), and that stays. Stdio
   servers start in the project root (`McpClient::with_working_dir`). The
   client is shut down when the project's last session closes, and on exit.
@@ -577,8 +577,8 @@ Testing
 - Tests write only under `target/temp/` (AGENTS.md "Tests must not write
   into the repository").
 - Proposed files: `test_session_registry.rs`, `test_session_routing.rs`,
-  `test_sessions_sidebar.rs` (ragent-tui); `test_session_grouping.rs`
-  (ragent-storage); `test_session_directory_isolation.rs` (ragent-agent).
+  `test_sessions_sidebar.rs` (codemason-tui); `test_session_grouping.rs`
+  (codemason-storage); `test_session_directory_isolation.rs` (codemason-agent).
 
 Risks and open questions
 ------------------------

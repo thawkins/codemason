@@ -2,7 +2,7 @@
 
 ## Summary
 
-The `ragent-tui` crate already contains a prior performance review
+The `codemason-tui` crate already contains a prior performance review
 (`performance_findings.md`) and three Criterion benchmarks. This audit
 confirms which findings are still applicable after recent code changes, notes
 current source locations, and identifies gaps in benchmark coverage that will
@@ -11,15 +11,15 @@ be addressed by later tasks.
 ## Status of Prior Findings
 
 ### 1. Unnecessary/redraw-per-frame of entire TUI
-- **Finding source:** `crates/ragent-tui/performance_findings.md` Finding 1.
+- **Finding source:** `crates/codemason-tui/performance_findings.md` Finding 1.
 - **Current state:** Partially addressed.
-- **Evidence:** `crates/ragent-tui/src/lib.rs:658-663` already gates `terminal.draw()` on `app.needs_redraw` or a 250 ms minimum refresh interval (`IDLE_REDRAW_INTERVAL_MS`).
+- **Evidence:** `crates/codemason-tui/src/lib.rs:658-663` already gates `terminal.draw()` on `app.needs_redraw` or a 250 ms minimum refresh interval (`IDLE_REDRAW_INTERVAL_MS`).
 - **Still a problem:** `lib.rs:671` uses `tokio::time::sleep(Duration::from_millis(50))`, which wakes the loop 20 times per second, runs the polling arms, and can force redraws at 4 Hz because of the 250 ms timer. This is covered by FR-001 / FR-007 and will be fixed in T-002.
 
 ### 2. Quadratic traversal in active-agents panel
 - **Finding source:** `performance_findings.md` Finding 2.
 - **Current state:** Partially addressed.
-- **Evidence:** `crates/ragent-tui/src/layout_active_agents.rs:191-197` now builds a `parent_session_id -> Vec<&TaskEntry>` map once per render, so the traversal is no longer quadratic.
+- **Evidence:** `crates/codemason-tui/src/layout_active_agents.rs:191-197` now builds a `parent_session_id -> Vec<&TaskEntry>` map once per render, so the traversal is no longer quadratic.
 - **Still a problem:** The function still calls `app.active_tasks.clone()` indirectly through borrowing? No — it now borrows (`for task in &app.active_tasks`). However, `format_elapsed` calls `Utc::now()` per row per frame, and the per-frame `custom_names` / `teammate_ids` HashSets are still rebuilt on every render at lines 201-210. FR-008 / T-005 will cache these.
 
 ### 3. Per-frame allocations in active panel
@@ -30,12 +30,12 @@ be addressed by later tasks.
 ### 4. UI-blocking synchronous model discovery
 - **Finding source:** `performance_findings.md` Finding 4.
 - **Current state:** Unchanged.
-- **Evidence:** `crates/ragent-tui/src/app/models.rs:1330-1356` still uses `tokio::task::block_in_place(|| handle.block_on(provider.discover_models()))`. The comment explains it is skipped in single-threaded tests. FR-004 / T-003.
+- **Evidence:** `crates/codemason-tui/src/app/models.rs:1330-1356` still uses `tokio::task::block_in_place(|| handle.block_on(provider.discover_models()))`. The comment explains it is skipped in single-threaded tests. FR-004 / T-003.
 
 ### 5. Markdown cache eviction
 - **Finding source:** `performance_findings.md` Finding 5.
 - **Current state:** Addressed.
-- **Evidence:** `crates/ragent-tui/src/app/state.rs:1488` uses `LruCache<u64, String>` with capacity 256. `crates/ragent-tui/src/app/models.rs:196-237` uses `get`, and the old `clear()` path is now a comment about LRU eviction. The cache no longer fully clears on capacity. FR-003 is already partly satisfied here; T-007 will still debounce streaming and reuse the markdown worker thread.
+- **Evidence:** `crates/codemason-tui/src/app/state.rs:1488` uses `LruCache<u64, String>` with capacity 256. `crates/codemason-tui/src/app/models.rs:196-237` uses `get`, and the old `clear()` path is now a comment about LRU eviction. The cache no longer fully clears on capacity. FR-003 is already partly satisfied here; T-007 will still debounce streaming and reuse the markdown worker thread.
 
 ### 6. Blocking git detection at startup
 - **Finding source:** `performance_findings.md` Finding 6.
@@ -59,25 +59,25 @@ be addressed by later tasks.
 ## Additional Issues Identified During Audit
 
 ### A. Per-frame storage I/O in teams panel
-- **File:** `crates/ragent-tui/src/layout_teams.rs:63-107`.
+- **File:** `crates/codemason-tui/src/layout_teams.rs:63-107`.
 - **Issue:** `refresh_team_member_session_ids()` is called every frame; `TeamStore::load_by_name` and `TaskStore::open`/`read` read SQLite/json from disk every render; `app.team_members.clone()` copies the whole member list.
 - **Requirement:** FR-009.
 - **Task:** T-006.
 
 ### B. Full-history serialisation before flush
-- **File:** `crates/ragent-tui/src/app/state.rs:1828-1860`.
+- **File:** `crates/codemason-tui/src/app/state.rs:1828-1860`.
 - **Issue:** `flush_history_if_due` converts the entire `input_history` vector to a string on every flush, then writes it in `spawn_blocking`. This is O(n) work on the UI thread.
 - **Requirement:** FR-011.
 - **Task:** T-011.
 
 ### C. Log panel drains unbounded records per frame
-- **File:** `crates/ragent-tui/src/lib.rs:619-629`.
+- **File:** `crates/codemason-tui/src/lib.rs:619-629`.
 - **Issue:** `while let Ok(record) = log_rx.try_recv()` can process hundreds of records in one frame, delaying input handling.
 - **Requirement:** FR-001.
 - **Task:** T-010.
 
 ### D. Message timeline rebuilt every frame
-- **File:** `crates/ragent-tui/src/layout.rs:4115-4178`.
+- **File:** `crates/codemason-tui/src/layout.rs:4115-4178`.
 - **Issue:** `messages_to_lines`, `build_wrapped_content_lines`, and `paragraph.line_count` run every redraw regardless of whether messages changed.
 - **Requirement:** FR-003, FR-006.
 - **Task:** T-004.
@@ -107,7 +107,7 @@ be addressed by later tasks.
 
 ## Build Status
 
-`cargo build -p ragent-tui` completed successfully at the start of the audit with
+`cargo build -p codemason-tui` completed successfully at the start of the audit with
 no warnings emitted.
 
 ## Conclusion

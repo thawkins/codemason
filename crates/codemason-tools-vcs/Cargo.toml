@@ -1,0 +1,39 @@
+[package]
+autotests = false
+name = "codemason-tools-vcs"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+authors = ["Tim Hawkins"]
+description = "GitHub and GitLab tools for codemason"
+repository = "https://github.com/thawkins/codemason"
+
+[dependencies]
+codemason-config = { path = "../codemason-config" }
+codemason-types = { path = "../codemason-types" }
+codemason-storage = { path = "../codemason-storage" }
+
+tokio = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+reqwest = { workspace = true }
+zip = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.14"
+wiremock = "0.6"
+
+[lints]
+workspace = true
+
+[[test]]
+name = "all"
+path = "tests/all.rs"

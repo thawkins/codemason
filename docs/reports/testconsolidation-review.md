@@ -1,7 +1,7 @@
 # Test-consolidation review and plan
 
 Status: all rollout steps are DONE (written at `ea7ac0da`, 2026-10-18;
-re-checked at `7e1d91e6`). Every crate under `crates/` and the root `ragent`
+re-checked at `7e1d91e6`). Every crate under `crates/` and the root `codemason`
 package set `autotests = false` and declare exactly one `[[test]]` target
 (`tests/all.rs`), so the workspace builds 20 integration-test binaries.
 Scope: reduce the number of discrete integration-test binaries from 904 to
@@ -20,12 +20,12 @@ test asserts.
 Per-crate top-level counts:
 
 ```
-ragent-agent       182   ragent-research     56   ragent-config       47
-ragent-tui         187   ragent-storage      45   ragent-codeindex    49
-ragent-tools-ext      82  ragent-types        39   ragent-plugins      36
-ragent-tools-core    32  ragent-tools-vcs    30   ragent-llm          28
-ragent-telemetry     23  ragent-connectors   20   ragent-specs        18
-ragent-server        14  ragent-bench         8   ragent-surface       8
+codemason-agent       182   codemason-research     56   codemason-config       47
+codemason-tui         187   codemason-storage      45   codemason-codeindex    49
+codemason-tools-ext      82  codemason-types        39   codemason-plugins      36
+codemason-tools-core    32  codemason-tools-vcs    30   codemason-llm          28
+codemason-telemetry     23  codemason-connectors   20   codemason-specs        18
+codemason-server        14  codemason-bench         8   codemason-surface       8
 ```
 
 Each top-level file is a separate crate root, so each is a separate link step
@@ -70,10 +70,10 @@ the nested constructs the workspace relies on keep working unchanged:
 Verified in a standalone probe covering all of the above, plus two files
 declaring the same helper name (no collision - each file is a module).
 
-## 3. Pilot result (ragent-types, 39 files)
+## 3. Pilot result (codemason-types, 39 files)
 
 ```
-cargo test -p ragent-types --no-run        (39 top-level test files)
+cargo test -p codemason-types --no-run        (39 top-level test files)
 
 before: 39 test binaries, 628.1 MB total (avg 16.1 MB)
 after :  1 test binary,    30.2 MB
@@ -99,7 +99,7 @@ consolidation and passes in isolation. Cause:
   the same global registry. Once they share a binary they race.
 
 Fix (2 lines, and it matches the existing pattern in `test_resource.rs`):
-`serial_test` is already a dev-dependency of `ragent-types`, so tag the mutating
+`serial_test` is already a dev-dependency of `codemason-types`, so tag the mutating
 tests `#[serial]`.
 
 **This is the whole risk class for the rollout:** the 904-binary model currently
@@ -108,18 +108,18 @@ each other. Consolidation merges them. Measured exposure:
 
 | Crate | globals: env-var mutation | cwd mutation | `#[serial]` in use | binary count |
 | --- | --- | --- | --- | --- |
-| ragent-tui | 16 | 24 | 0 | 187 |
-| ragent-agent | 6 | 0 | 5 | 182 |
-| ragent-tools-extended | 2 | 1 | 0 | 82 |
-| ragent-config | 14 | 10 | 13 | 47 |
-| ragent-tools-vcs | 5 | 0 | 0 | 30 |
-| ragent-llm | 4 | 0 | 0 | 28 |
-| ragent-plugins | 4 | 0 | 0 | 36 |
-| ragent-connectors | 1 | 1 | 0 | 20 |
-| ragent-tools-core | 1 | 0 | 0 | 32 |
+| codemason-tui | 16 | 24 | 0 | 187 |
+| codemason-agent | 6 | 0 | 5 | 182 |
+| codemason-tools-extended | 2 | 1 | 0 | 82 |
+| codemason-config | 14 | 10 | 13 | 47 |
+| codemason-tools-vcs | 5 | 0 | 0 | 30 |
+| codemason-llm | 4 | 0 | 0 | 28 |
+| codemason-plugins | 4 | 0 | 0 | 36 |
+| codemason-connectors | 1 | 1 | 0 | 20 |
+| codemason-tools-core | 1 | 0 | 0 | 32 |
 | (remaining 9 crates) | 0 | 0 | 1 | 296 |
 
-`ragent-tui` is the high-risk crate: 18 files carry `#![cfg(feature = ...)]`, 17
+`codemason-tui` is the high-risk crate: 18 files carry `#![cfg(feature = ...)]`, 17
 carry `#![allow(unsafe_code)]`, and 40 files mutate env/cwd **with zero
 serialisation**. Feature gates also mean a `--features` build changes the binary
 content, so a single `all.rs` per crate is the only configuration that keeps one
@@ -137,15 +137,15 @@ it). Projected end state:
 
 Ordered by risk, and each step independently verifiable:
 
-1. **Low-risk crates first** (no env/cwd/global mutation): `ragent-codeindex`,
-   `ragent-research`, `ragent-storage`, `ragent-specs`, `ragent-server`,
-   `ragent-surface`, `ragent-bench`, `ragent-telemetry` (+12 `cfg(feature)`
+1. **Low-risk crates first** (no env/cwd/global mutation): `codemason-codeindex`,
+   `codemason-research`, `codemason-storage`, `codemason-specs`, `codemason-server`,
+   `codemason-surface`, `codemason-bench`, `codemason-telemetry` (+12 `cfg(feature)`
    files). 221 binaries -> 8. **DONE - see section 7.**
-2. **Medium**: `ragent-types` (apply the `#[serial]` fix from 3.1),
-   `ragent-tools-core`, `ragent-tools-extended`, `ragent-tools-vcs`,
-   `ragent-llm`, `ragent-plugins`, `ragent-connectors`, `ragent-config`
+2. **Medium**: `codemason-types` (apply the `#[serial]` fix from 3.1),
+   `codemason-tools-core`, `codemason-tools-extended`, `codemason-tools-vcs`,
+   `codemason-llm`, `codemason-plugins`, `codemason-connectors`, `codemason-config`
    (`#[serial]` already in use in 13 files).
-3. **High**: `ragent-agent` (182), `ragent-tui` (187) - add `#[serial]` to every
+3. **High**: `codemason-agent` (182), `codemason-tui` (187) - add `#[serial]` to every
    env/cwd-mutating test, or keep 2-3 binaries grouped by feature gate.
 
 Per crate the mechanical steps are:
@@ -160,7 +160,7 @@ Per crate the mechanical steps are:
 
 * **Not the big disk win.** The 581 GB `target/` bloat was 412 GB of incremental
   caches and 141 GB of stale `CARGO_TARGET_DIR` override dirs - both already
-  pruned. Consolidation's disk saving is modest (~0.6 GB per ragent-types-scale
+  pruned. Consolidation's disk saving is modest (~0.6 GB per codemason-types-scale
   crate, more for the big two), plus it removes 904 link steps.
 * **Build time is roughly neutral.** Measured: `src/lib.rs` touch -> 1838 ms
   consolidated vs 1774 ms baseline; touch-all-test-sources -> 1835 ms vs
@@ -202,14 +202,14 @@ were consolidated to one `tests/all.rs` target each:
 
 | Crate | top-level files before | binaries after |
 | --- | --- | --- |
-| ragent-codeindex | 49 | 1 |
-| ragent-research | 56 | 1 |
-| ragent-storage | 45 | 1 |
-| ragent-specs | 18 | 1 |
-| ragent-server | 14 | 1 |
-| ragent-surface | 8 | 1 |
-| ragent-bench | 8 | 1 |
-| ragent-telemetry | 23 | 1 |
+| codemason-codeindex | 49 | 1 |
+| codemason-research | 56 | 1 |
+| codemason-storage | 45 | 1 |
+| codemason-specs | 18 | 1 |
+| codemason-server | 14 | 1 |
+| codemason-surface | 8 | 1 |
+| codemason-bench | 8 | 1 |
+| codemason-telemetry | 23 | 1 |
 | **total** | **221** | **8** |
 
 Verification method: `cargo test -p <crate> -- --list` was captured before the
@@ -221,18 +221,18 @@ unchanged). A full `cargo test` over all 8 crates passes: 0 failures.
 
 Two mechanical issues surfaced (both fixed, neither is a behaviour change):
 
-1. **`crate::<x>` shims.** `tests/test_session_fallback.rs` (ragent-research)
+1. **`crate::<x>` shims.** `tests/test_session_fallback.rs` (codemason-research)
    `#[path]`-includes `src/session/fallback.rs`, which refers to
    `crate::document` / `crate::source`. Those shims worked because the file was
    a binary root; as a child module they must sit at the consolidated binary
-   root, so they moved to `crates/ragent-research/tests/all_prelude.rs`
+   root, so they moved to `crates/codemason-research/tests/all_prelude.rs`
    (inlined at the top of `all.rs`).
-2. **`use crate::TelemetryError`.** `tests/test_subsystem.rs` (ragent-telemetry)
+2. **`use crate::TelemetryError`.** `tests/test_subsystem.rs` (codemason-telemetry)
    used a `crate::`-relative import that only resolved as a binary root; changed
-   to the explicit `ragent_telemetry::TelemetryError` crate path (the crate
+   to the explicit `codemason_telemetry::TelemetryError` crate path (the crate
    re-exports it).
-3. **`clippy::duplicate_mod`.** `ragent-codeindex` (16 children declare
-   `#[path = "support/mod.rs"] mod support;`) and `ragent-research`
+3. **`clippy::duplicate_mod`.** `codemason-codeindex` (16 children declare
+   `#[path = "support/mod.rs"] mod support;`) and `codemason-research`
    (a shared `scoreboard_fixture.rs`) load one helper file as a module of several
    children. `clippy -D warnings` rejects that, so those two `tests/all.rs` carry
    a narrow `#![allow(clippy::duplicate_mod)]` with the reason inline; the other
@@ -245,45 +245,45 @@ re-run three times to shake out ordering-dependent races - none found);
 `cargo fmt --check` is clean; the nine `scripts/check-*.sh` guards all pass.
 
 One pre-existing, unrelated warning is not a regression: under
-`RUSTFLAGS='-D unreachable_pub ...'` `crates/ragent-codeindex/tests/support/mod.rs`
+`RUSTFLAGS='-D unreachable_pub ...'` `crates/codemason-codeindex/tests/support/mod.rs`
 has a `pub fn` that is unreachable *in every one of its former 16 binaries too*
 (confirmed by re-running the check with the change stashed). CI's dead-code job
 only runs `cargo check --workspace --lib --all-features`, which does not compile
 test targets, so this never fired in CI; it is left as-is (surgical-change rule).
 
 CI: the three `--test <name>` invocations that named crate-local test files were
-updated to the filter form (`cargo test -p ragent-research --test all
-test_search_retry_clamp::`, likewise ragent-specs / ragent-telemetry); the
-`ragent-types` and `ragent-tools-vcs` / `ragent-config` / `ragent-plugins` /
-`ragent-tools-extended` invocations are untouched because those crates are
+updated to the filter form (`cargo test -p codemason-research --test all
+test_search_retry_clamp::`, likewise codemason-specs / codemason-telemetry); the
+`codemason-types` and `codemason-tools-vcs` / `codemason-config` / `codemason-plugins` /
+`codemason-tools-extended` invocations are untouched because those crates are
 scheduled for steps 2-3.
 
 ## 8. Steps 2 and 3 executed - every crate, plus the root crate
 
-The rollout is complete. All 19 targets (18 crates + the root `ragent` package)
+The rollout is complete. All 19 targets (18 crates + the root `codemason` package)
 now build **one** integration-test binary each:
 
 | Crate | top-level test files | integration binaries |
 | --- | --- | --- |
-| ragent-agent | 182 | 1 |
-| ragent-tui | 187 | 1 |
-| ragent-tools-extended | 82 | 1 |
-| ragent-research | 56 | 1 |
-| ragent-codeindex | 49 | 1 |
-| ragent-config | 47 | 1 |
-| ragent-storage | 45 | 1 |
-| ragent-types | 39 | 1 |
-| ragent-plugins | 36 | 1 |
-| ragent-tools-core | 32 | 1 |
-| ragent-tools-vcs | 30 | 1 |
-| ragent-llm | 28 | 1 |
-| ragent-telemetry | 23 | 1 |
-| ragent-connectors | 20 | 1 |
-| ragent-specs | 18 | 1 |
-| ragent-server | 15 | 1 |
-| ragent-bench | 8 | 1 |
-| ragent-surface | 8 | 1 |
-| root `ragent` | 6 | 1 |
+| codemason-agent | 182 | 1 |
+| codemason-tui | 187 | 1 |
+| codemason-tools-extended | 82 | 1 |
+| codemason-research | 56 | 1 |
+| codemason-codeindex | 49 | 1 |
+| codemason-config | 47 | 1 |
+| codemason-storage | 45 | 1 |
+| codemason-types | 39 | 1 |
+| codemason-plugins | 36 | 1 |
+| codemason-tools-core | 32 | 1 |
+| codemason-tools-vcs | 30 | 1 |
+| codemason-llm | 28 | 1 |
+| codemason-telemetry | 23 | 1 |
+| codemason-connectors | 20 | 1 |
+| codemason-specs | 18 | 1 |
+| codemason-server | 15 | 1 |
+| codemason-bench | 8 | 1 |
+| codemason-surface | 8 | 1 |
+| root `codemason` | 6 | 1 |
 | **total** | **911** | **19** |
 
 (`cargo test -p <crate> --no-run` reports 2 executables per crate: the test
@@ -299,16 +299,16 @@ this way and fixed at the test, never by weakening an assertion.
 
 | Failure class | Crates | Fix |
 | --- | --- | --- |
-| `crate::` in a `#[path]`-included `src/*.rs` module resolved at the child, not the binary root | ragent-agent, ragent-tools-core, ragent-research, ragent-telemetry | re-export the crate paths used by the shimmed source from `tests/all.rs` (agent: `llm`, `event`, `permission`, `session::loop_state`, `tool`; tools-core: `event`/`resource`/`sanitize`/`askpass`/`CanonicalPathCache`/`jsonl_log`) |
-| file-local `mod shim` became unreachable from the binary root | ragent-tools-core (`test_bash_wrapper_quoting`) | make the stub module `pub` and re-export only its `Tool`/`ToolContext`/`ToolOutput` for the child's own `super::` imports |
-| process-global secret registry raced | ragent-types | `#[serial]` on the four registry-touching files |
-| process-global `XDG_CONFIG_HOME` raced (marketplace add/remove) | ragent-plugins | shared lock + shared marketplace-document registry lock |
-| process-global `PATH` (recording `git` shim) leaked into every other git test | ragent-tools-vcs | shared lock in both directions |
-| process-global SSRF test bypass leaked into the validation tests | ragent-tools-extended | fetch tests hold the lock; validation tests run under a `without_ssrf_bypass` guard |
-| `OPENROUTER_API_KEY` / `OLLAMA_API_KEY` / `AWS_*` raced | ragent-llm | shared lock (the async-mutex variants became the same std lock) |
-| ~24 cwd-mutating files in one binary | ragent-tui | all file-local cwd/env mutexes now delegate to `crate::global_env_mutex()` |
-| tests inherited the real process cwd / real `~/.config` | ragent-tui, root | pin `app.cwd`/`app.cwd_path` (plugin-store browser) and take the lock where the value must be stable (`/prompt`, `/osinfo`) |
-| a manual diagnostic permanently `chdir`ed into the workspace | ragent-tools-extended (`test_mf_orchestrator_diag`) | dropped the `set_current_dir` |
+| `crate::` in a `#[path]`-included `src/*.rs` module resolved at the child, not the binary root | codemason-agent, codemason-tools-core, codemason-research, codemason-telemetry | re-export the crate paths used by the shimmed source from `tests/all.rs` (agent: `llm`, `event`, `permission`, `session::loop_state`, `tool`; tools-core: `event`/`resource`/`sanitize`/`askpass`/`CanonicalPathCache`/`jsonl_log`) |
+| file-local `mod shim` became unreachable from the binary root | codemason-tools-core (`test_bash_wrapper_quoting`) | make the stub module `pub` and re-export only its `Tool`/`ToolContext`/`ToolOutput` for the child's own `super::` imports |
+| process-global secret registry raced | codemason-types | `#[serial]` on the four registry-touching files |
+| process-global `XDG_CONFIG_HOME` raced (marketplace add/remove) | codemason-plugins | shared lock + shared marketplace-document registry lock |
+| process-global `PATH` (recording `git` shim) leaked into every other git test | codemason-tools-vcs | shared lock in both directions |
+| process-global SSRF test bypass leaked into the validation tests | codemason-tools-extended | fetch tests hold the lock; validation tests run under a `without_ssrf_bypass` guard |
+| `OPENROUTER_API_KEY` / `OLLAMA_API_KEY` / `AWS_*` raced | codemason-llm | shared lock (the async-mutex variants became the same std lock) |
+| ~24 cwd-mutating files in one binary | codemason-tui | all file-local cwd/env mutexes now delegate to `crate::global_env_mutex()` |
+| tests inherited the real process cwd / real `~/.config` | codemason-tui, root | pin `app.cwd`/`app.cwd_path` (plugin-store browser) and take the lock where the value must be stable (`/prompt`, `/osinfo`) |
+| a manual diagnostic permanently `chdir`ed into the workspace | codemason-tools-extended (`test_mf_orchestrator_diag`) | dropped the `set_current_dir` |
 
 ### 8.2 clippy under one binary
 
@@ -320,14 +320,14 @@ allow:
   editing every child.
 * `clippy::await_holding_lock` — the shared lock is a *std* mutex held across
   `await` deliberately (serialisation, not parallelism). Allowed per file on the
-  tests that need it (`ragent-tui` osinfo, `ragent-tools-extended` fetch/supplement,
-  `ragent-llm` openrouter/offline coverage, `ragent-tools-vcs` git suites).
+  tests that need it (`codemason-tui` osinfo, `codemason-tools-extended` fetch/supplement,
+  `codemason-llm` openrouter/offline coverage, `codemason-tools-vcs` git suites).
 * `dead_code` on stub/shim modules that only mirror a signature.
 
 ### 8.3 Verification
 
-* `cargo test` over all 19 targets: **0 failures** (ragent-tui re-run twice to
-  shake out ordering races; ragent-plugins and ragent-tools-vcs re-run twice).
+* `cargo test` over all 19 targets: **0 failures** (codemason-tui re-run twice to
+  shake out ordering races; codemason-plugins and codemason-tools-vcs re-run twice).
   Counts: types 394, config 384, connectors 361, llm 195 (+2 ignored), plugins 492,
   tools-core 394, tools-vcs 397, tools-extended 1806 (+11 ignored), agent 1605
   (+1 ignored), tui 2719, bench 98, codeindex 447 (+2), research 471, server 192,
@@ -341,7 +341,7 @@ allow:
 
 ### 8.4 Known pre-existing issues left alone
 
-* *(resolved)* `CI` invoked `--test test_channels` for `ragent-tools-extended`,
+* *(resolved)* `CI` invoked `--test test_channels` for `codemason-tools-extended`,
   a file that has not existed since 1.0.130. The consolidation converted it to
   the filter form `test(test_channels::)`, which selects 0 tests and so makes
   `cargo nextest` exit 4 (`error: no tests to run`) - a build failure, not the
@@ -349,6 +349,6 @@ allow:
   that actually exists: `test_mf_security::`, `test_legacy_web_ssrf::` and
   `test_mf_supplement::` (the last needs `--features test-ssrf-bypass` for its
   loopback servers).
-* `crates/ragent-codeindex/tests/support/mod.rs` still trips
+* `crates/codemason-codeindex/tests/support/mod.rs` still trips
   `-D unreachable_pub` under an explicit `RUSTFLAGS`; it did so in all 16 of its
   former binaries too.

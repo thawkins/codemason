@@ -13,7 +13,7 @@ The encoding applies only to the model-facing copy of a tool result. TUI
 rendering, the activity log, memory extraction, PostToolUse hooks, compaction
 serialisers, and the persisted session history all keep seeing the raw JSON;
 only the observation handed to the LLM is re-encoded (the FR-005 routing map
-in `crates/ragent-agent/src/session/history.rs` `tool_result_content_for_llm`).
+in `crates/codemason-agent/src/session/history.rs` `tool_result_content_for_llm`).
 
 While GCF is on, the agent system prompt also gains a short
 `## GCF Encoding Primer` section teaching the model how to read the blocks.
@@ -21,7 +21,7 @@ While GCF is on, the agent system prompt also gains a short
 The encoding itself is provided by the published `gcf` crate (v3.0.1,
 generic profile: `encode_generic` / `decode_generic`). The block wrapper and
 eligibility rules live in the `tool_result_content_for_llm` hook in
-`crates/ragent-agent/src/session/history.rs`.
+`crates/codemason-agent/src/session/history.rs`.
 
 ## Eligibility rules
 
@@ -58,7 +58,7 @@ print the usage text.
 
 | Form | Description |
 | ---- | ----------- |
-| `on` | Enable GCF encoding via `ragent_config::gcf::persist_gcf(true)`, then invalidate the session processor's config cache so the next turn picks up the saved file (FR-002). |
+| `on` | Enable GCF encoding via `codemason_config::gcf::persist_gcf(true)`, then invalidate the session processor's config cache so the next turn picks up the saved file (FR-002). |
 | `off` | Disable GCF encoding the same way. |
 | `show` | Report the effective runtime flag and where the state came from (see Output). |
 | `help` | Print the help table (bare `/gcf` does the same). |
@@ -66,7 +66,7 @@ print the usage text.
 If persisting fails (config file not writable), the in-memory flag still
 applies for the live session and the status line shows `gcf: on (unsaved)`.
 The state persists across restarts via the `gcf.enabled` key in
-`ragent.json`; the key is omitted from the config file while the feature is
+`codemason.json`; the key is omitted from the config file while the feature is
 at its default-off state.
 
 ## Examples

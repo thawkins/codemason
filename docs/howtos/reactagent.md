@@ -1,7 +1,7 @@
 # The ReACT Agent Loop (Per-Turn Reason + Act + Observe)
 
 > **Scope.** This document describes the **core ReACT agent loop** — the per-turn
-> loop that runs every time you send a message to ragent. It is *not* the
+> loop that runs every time you send a message to codemason. It is *not* the
 > goal-driven `/loop` feature (see `TUI-QUICKSTART.md`, section 5, for `/loop`).
 > Where the two interact, the interaction is called out explicitly.
 
@@ -24,12 +24,12 @@ unrecoverable error).
 
 | Element | Location |
 |---|---|
-| Orchestrator struct | `SessionProcessor` — `crates/ragent-agent/src/session/processor.rs` |
+| Orchestrator struct | `SessionProcessor` — `crates/codemason-agent/src/session/processor.rs` |
 | Public entry (plain text prompt) | `process_message` — `processor.rs` |
 | Public entry (pre-built `Message`, multipart/images) | `process_user_message` — `processor.rs` |
 | **The core loop** | inline `loop { ... }` inside `process_user_message` (`processor.rs`) |
-| Per-step helpers | `crates/ragent-agent/src/session/loop_steps.rs` — `prepare_client`, `build_turn_system_prompt`, `build_turn_chat_messages`, `call_llm_step`, `finalize_assistant_message` |
-| Loop-run state machine | `LoopSpec` / `LoopTracker` / `StopCondition` — `crates/ragent-agent/src/session/loop_state.rs` |
+| Per-step helpers | `crates/codemason-agent/src/session/loop_steps.rs` — `prepare_client`, `build_turn_system_prompt`, `build_turn_chat_messages`, `call_llm_step`, `finalize_assistant_message` |
+| Loop-run state machine | `LoopSpec` / `LoopTracker` / `StopCondition` — `crates/codemason-agent/src/session/loop_state.rs` |
 
 `SessionProcessor` orchestrates the loop: it accepts a user message, streams an
 LLM response, executes any requested tool calls, and iterates until the model
@@ -207,7 +207,7 @@ Tool-call arguments arrive incrementally; assembly is managed through
 Tool execution is gated by the multi-layered permission system:
 
 - `PermissionChecker` consults global rules (`permission` array in
-  `ragent.json`) and per-agent rules (`agent.<name>.permission`).
+  `codemason.json`) and per-agent rules (`agent.<name>.permission`).
 - Allow/Deny verdicts are honoured; an Allow that would auto-approve can still
   be forced into an interactive prompt when a `/loop` spec with
   `checkpoints: true` is active (destructive tools are checkpointed).
@@ -264,15 +264,15 @@ failures that still have steps remaining (they become the next observation).
 
 ## 8. Configuration options
 
-ragent reads configuration from `ragent.json` (or `ragent.jsonc`) with the
+codemason reads configuration from `codemason.json` (or `codemason.jsonc`) with the
 following precedence, each later layer merged over the previous:
 
 1. Compiled defaults
-2. Global file: `~/.config/ragent/ragent.json`
-3. Project file: `./.ragent/ragent.json` (created with defaults if neither
+2. Global file: `~/.config/codemason/codemason.json`
+3. Project file: `./.codemason/codemason.json` (created with defaults if neither
    file exists)
-4. `RAGENT_CONFIG` env var -> file path overlay
-5. `RAGENT_CONFIG_CONTENT` env var -> inline JSON overlay
+4. `CODEMASON_CONFIG` env var -> file path overlay
+5. `CODEMASON_CONFIG_CONTENT` env var -> inline JSON overlay
 
 Per-provider blocks and per-model entries are deep-merged, so partial
 overrides preserve lower layers. Resolved config is cached keyed on the
@@ -372,9 +372,9 @@ loop at its safe points. It does not change how a plain per-turn turn runs.
 | `--maxsteps <N>` | Cap agentic loop steps (CLI help text says 500, but with no agent override the effective ceiling is the agent preset's `max_steps` — default 1024). |
 | `--no-git-context` / `--no-readme-context` | Disable git/README context injection into the system prompt. |
 | `--dry-run` | Readiness check only; never invokes model or tool. |
-| `ragent run <PROMPT>` | One-shot agent execution of a single prompt. |
-| `ragent serve [--addr <ADDR>]` | Start the HTTP server (default `127.0.0.1:3000`). |
-| `ragent session resume <ID>` | Resume a session into a live loop. |
+| `codemason run <PROMPT>` | One-shot agent execution of a single prompt. |
+| `codemason serve [--addr <ADDR>]` | Start the HTTP server (default `127.0.0.1:3000`). |
+| `codemason session resume <ID>` | Resume a session into a live loop. |
 
 ### TUI slash commands
 
@@ -420,7 +420,7 @@ loop at its safe points. It does not change how a plain per-turn turn runs.
 
 ```bash
 export ANTHROPIC_API_KEY="sk-..."
-ragent run --agent coder "Refactor src/main.rs to split the CLI wiring"
+codemason run --agent coder "Refactor src/main.rs to split the CLI wiring"
 ```
 
 ### Driving the loop over HTTP
@@ -428,18 +428,18 @@ ragent run --agent coder "Refactor src/main.rs to split the CLI wiring"
 ```bash
 # create a session
 SID=$(curl -s -X POST http://127.0.0.1:3000/sessions \
-  -H "Authorization: Bearer $RAGENT_TOKEN" \
+  -H "Authorization: Bearer $CODEMASON_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"directory": "."}' | jq -r .id)
 
 # drive the loop
 curl -s -X POST http://localhost:3000/sessions/$SID/messages \
-  -H "Authorization: Bearer $RAGENT_TOKEN" \
+  -H "Authorization: Bearer $CODEMASON_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"content": "List the files in crates/ and summarise each crate"}'
 
 # watch events
-curl -N http://localhost:3000/events -H "Authorization: Bearer $RAGENT_TOKEN"
+curl -N http://localhost:3000/events -H "Authorization: Bearer $CODEMASON_TOKEN"
 ```
 
 ### Autopilot continuation

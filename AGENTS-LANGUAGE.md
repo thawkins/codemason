@@ -63,12 +63,12 @@ The configuration lives in `.config/nextest.toml`.
 All tests **MUST** be located in the `tests/` directory inside each crate. If a test is at the workspace root, it should be placed in the root `tests/` folder, not inline in source files.
 
 - Use `#[test]` for sync tests and `#[tokio::test]` for async tests.
-- Import from the relevant public crate for the crate under test rather than assuming a single `ragent` crate path.
+- Import from the relevant public crate for the crate under test rather than assuming a single `codemason` crate path.
 - Organize related tests together.
 - Follow the naming convention: `test_<component>_<scenario>` (e.g. `test_bash_reset_removes_existing_state_file`).
 - For each project crate, migrate related tests into suitable subfolders within that crate's `tests/` directory. Review both inline and external tests for migration candidates, and relocate inline tests from `.rs` files into separate files under the appropriate `tests/` subfolder where practical.
 - **Migration strategies** (see `docs/reports/testconsolidation-review.md` for the migration review and plan):
-  - **Public-API tests**: use `use ragent_<crate>::module::Item;` — no source changes needed.
+  - **Public-API tests**: use `use codemason_<crate>::module::Item;` — no source changes needed.
   - **Private-item tests**: widen the tested items to `pub(crate)` where necessary and re-import the source module via `#[path = "../src/<module>.rs"] mod <module>;`. Provide shims for `super::` and `crate::` references at the test file root.
   - **Complex cases** (`//!` doc comments + `crate::` cross-module deps): use `#[cfg(test)] #[path = "../../tests/test_<module>.rs"] mod test_<module>;` in the source file to compile the external test within the crate's module tree.
 - **Do not add new inline `#[cfg(test)]` modules** to library source files. All new tests go in `tests/`.
@@ -149,9 +149,9 @@ Rules for this model:
   the test must also *force* a value (`HOME`, the SSRF bypass, an API-key
   variable) while it runs. Two tests that each hold a *different* private mutex
   — or one `#[serial]` and one file-local mutex — do not exclude each other; that
-  is how a `set_var("RAGENT_CONFIG", …)` in one child file came to be observed by
+  is how a `set_var("CODEMASON_CONFIG", …)` in one child file came to be observed by
   a `Config::load()` in another (roughly one failure per 40 unsharded
-  `ragent-config` runs). `scripts/check-test-env-isolation.sh` enforces the rule:
+  `codemason-config` runs). `scripts/check-test-env-isolation.sh` enforces the rule:
   a test that calls `set_var` / `remove_var` / `set_current_dir` must carry
   `#[serial]`, take a `MutexGuard` (preferably `crate::global_env_lock()`), or —
   when a shared helper already holds the lock for it — say so with a
@@ -184,10 +184,10 @@ Rules for this model:
   A test file that does `#[path = "../src/<module>.rs"] mod <module>;` and whose
   module body refers to `crate::<x>` worked when the file was a binary root, but
   as a child module of `all` those paths resolve against `all`'s root, not the
-  crate under test. Provide the shim (`pub use ragent_<crate>::<x>;`) at the top
+  crate under test. Provide the shim (`pub use codemason_<crate>::<x>;`) at the top
   of `all.rs` — a `tests/all_prelude.rs` inlined there is the convention — or
-  rewrite the reference to the crate-absolute path (`ragent_<crate>::<x>`). See the
-  shims at the top of `crates/ragent-agent/tests/all.rs`; do not add a second copy
+  rewrite the reference to the crate-absolute path (`codemason_<crate>::<x>`). See the
+  shims at the top of `crates/codemason-agent/tests/all.rs`; do not add a second copy
   of the module inside the child.
 - **Expect a narrow `#[allow(clippy::duplicate_mod)]` on `all.rs`.** When two
   child files each declare the same `#[path = "support/mod.rs"] mod support;`,
@@ -210,9 +210,9 @@ Use the `Bash` tool to run the following cargo commands:
 ## Workspace Layout
 
 - Keep all crates under the `crates/` directory.
-- Place each crate in its own subfolder under `crates/`, named after the crate (e.g. `crates/ragent-core`).
+- Place each crate in its own subfolder under `crates/`, named after the crate (e.g. `crates/codemason-core`).
 - Keep the root `Cargo.toml` configured as a workspace manifest. It may also
-  host the primary `ragent` binary package (`[package] name = "ragent"`,
+  host the primary `codemason` binary package (`[package] name = "codemason"`,
   `[dependencies]`, `[[bin]]`, `[features]`, `[profile.release]`) alongside the
   `[workspace]` block — a standard single-binary monorepo pattern. Do not
   declare package metadata or dependencies in the root `Cargo.toml` *for
@@ -233,7 +233,7 @@ Use the `Bash` tool to run the following cargo commands:
 - **Imports**: Group std, external crates, then local modules.
 - **Error Handling**: Use `Result<T, E>` with `?`, `anyhow::Result` for main, and `thiserror` for custom errors.
 - **Types**: Prefer explicit types, and use type aliases for complex types.
-- **Logging**: Use the `tracing` crate with structured logging; avoid `println!` or `eprintln!` in application code. For performance profiling, use `debug!()` for non-hot paths and `trace!()` for debug scenarios. **Documented exception:** the root `ragent` binary's *CLI presentation surface* is allowed to use `println!`/`eprintln!` for user-facing command output (help text, tables, JSON reports, and the interactive TUI's stdout) and for panic/abort diagnostics that must be emitted before the tracing subscriber is installed (`src/panic_hook.rs`, `src/stderr_spool.rs`, the crash-marker warnings, and the `--log-level` parse fallback in `src/main.rs`). The CLI presentation surface comprises `src/main.rs`, `src/cli.rs`, `src/cli_surface.rs`, and the slash-command parity surfaces `src/connectors.rs`, `src/plugins.rs` and `src/acp_server.rs` (their `[err]`/usage/table output is the CLI contract, not a diagnostic). Any diagnostic emitted *after* tracing is initialised must use `tracing` instead (ANTIPAT M2.16 R-05).
+- **Logging**: Use the `tracing` crate with structured logging; avoid `println!` or `eprintln!` in application code. For performance profiling, use `debug!()` for non-hot paths and `trace!()` for debug scenarios. **Documented exception:** the root `codemason` binary's *CLI presentation surface* is allowed to use `println!`/`eprintln!` for user-facing command output (help text, tables, JSON reports, and the interactive TUI's stdout) and for panic/abort diagnostics that must be emitted before the tracing subscriber is installed (`src/panic_hook.rs`, `src/stderr_spool.rs`, the crash-marker warnings, and the `--log-level` parse fallback in `src/main.rs`). The CLI presentation surface comprises `src/main.rs`, `src/cli.rs`, `src/cli_surface.rs`, and the slash-command parity surfaces `src/connectors.rs`, `src/plugins.rs` and `src/acp_server.rs` (their `[err]`/usage/table output is the CLI contract, not a diagnostic). Any diagnostic emitted *after* tracing is initialised must use `tracing` instead (ANTIPAT M2.16 R-05).
 - **Logging Cleanliness**: After an issue has been resolved, remove temporary `debug!()` and `tracing::debug!()` calls in the relevant code.
 - **Documentation**: Use `//!` for crate/module docs, `///` for public APIs, and `//` for internal comments.
 - **Linting**: No wildcard imports in production code. This rule does not apply
@@ -245,7 +245,7 @@ Use the `Bash` tool to run the following cargo commands:
 ### Core Code Rules
 
 * **No `unsafe` Blocks:** Never use `unsafe` unless explicitly approved or required by FFI bounds; document all safety invariants clearly when used.
-  Every crate root (`crates/*/src/lib.rs`) and the `ragent` binary root (`src/main.rs`)
+  Every crate root (`crates/*/src/lib.rs`) and the `codemason` binary root (`src/main.rs`)
   carries a crate-level `#![deny(unsafe_code)]`, so a new `unsafe` block fails to
   compile until it is explicitly re-enabled. The approved production sites are
   gated with a scoped `#[allow(unsafe_code)]` plus a `// SAFETY:` comment stating
@@ -253,9 +253,9 @@ Use the `Bash` tool to run the following cargo commands:
 
   | Site | Why |
   | --- | --- |
-  | `crates/ragent-tools-core/src/bash.rs` (`kill_process_group`) | `libc::killpg` - bash-timeout process-group kill |
-  | `crates/ragent-agent/src/team/manager.rs` (`kill_hook_process_group`) | `libc::killpg`/`kill` - hook timeout teardown |
-  | `crates/ragent-agent/src/mcp/mod.rs` (`kill_stdio_child`) | `libc::kill`/`killpg` - MCP stdio child teardown (3 blocks) |
+  | `crates/codemason-tools-core/src/bash.rs` (`kill_process_group`) | `libc::killpg` - bash-timeout process-group kill |
+  | `crates/codemason-agent/src/team/manager.rs` (`kill_hook_process_group`) | `libc::killpg`/`kill` - hook timeout teardown |
+  | `crates/codemason-agent/src/mcp/mod.rs` (`kill_stdio_child`) | `libc::kill`/`killpg` - MCP stdio child teardown (3 blocks) |
   | `src/stderr_spool.rs` (`install`) | `libc::pipe`/`dup`/`dup2`/`close` and `File::from_raw_fd` - stderr spool capture (7 blocks) |
   | `src/crash_dump.rs` (`process_alive`) | `libc::kill` signal 0 liveness probe, `OpenProcess`/`GetExitCodeProcess`/`CloseHandle` on Windows (2 blocks) |
 

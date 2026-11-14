@@ -11,9 +11,9 @@ audit:
 
 ## Context
 
-ragent stores its global configuration at `~/.config/ragent/ragent.json` (the
+codemason stores its global configuration at `~/.config/codemason/codemason.json` (the
 exact path depends on `dirs::config_dir()` for the host platform: `~/Library/
-Application Support/ragent/ragent.json` on macOS, `%APPDATA%\ragent\ragent.json`
+Application Support/codemason/codemason.json` on macOS, `%APPDATA%\codemason\codemason.json`
 on Windows). Users editing this file — adding providers, adjusting permission
 rules, tuning compaction or memory settings — currently have no built-in safety
 net: a bad edit or an accidental overwrite means the working configuration is
@@ -26,7 +26,7 @@ exists, but does not help users who already have a config they wish to
 preserve before making changes.
 
 This specification defines two new subcommands that complete the configuration
-lifecycle: `/config save` snapshots the current global `ragent.json` into a
+lifecycle: `/config save` snapshots the current global `codemason.json` into a
 timestamped backup file, and `/config list` presents an interactive picker of
 all saved backups with the ability to restore any one over the active global
 config.
@@ -34,7 +34,7 @@ config.
 The implementation builds on established patterns already in the codebase:
 
 - **Slash command dispatch** — `execute_slash_command_inner` in
-  `crates/ragent-tui/src/app/slash.rs` already handles `"config"` with a
+  `crates/codemason-tui/src/app/slash.rs` already handles `"config"` with a
   subcommand `match` arm (currently `show` and a catch-all usage string).
   `save` and `list` will be added as new subcommand arms in that same match.
 
@@ -43,7 +43,7 @@ The implementation builds on established patterns already in the codebase:
   will be extended to include `"save"` and `"list"`.
 
 - **Interactive picker overlay** — the `HistoryPickerState` struct
-  (`crates/ragent-tui/src/app/state.rs:840`) plus its key handler
+  (`crates/codemason-tui/src/app/state.rs:840`) plus its key handler
   (`handle_history_picker_key` in `input_handler.rs:24`) and renderer
   (`render_history_picker` in `layout.rs:4708`) provide a proven template for a
   keyboard-navigable, popup list with Up/Down/Enter/Esc semantics. A new
@@ -52,23 +52,23 @@ The implementation builds on established patterns already in the codebase:
 
 - **Global config path resolution** — `/config show`, `/init config`, and the
   `telemetry_config_source_path` helper all resolve the global config via
-  `dirs::config_dir().map(|d| d.join("ragent").join("ragent.json"))`. The new
+  `dirs::config_dir().map(|d| d.join("codemason").join("codemason.json"))`. The new
   subcommands will reuse that resolution for both the source file and the
-  backup directory (the `saves/` subfolder lives alongside `ragent.json`).
+  backup directory (the `saves/` subfolder lives alongside `codemason.json`).
 
 - **Atomic file writes** — `atomic_config_update` in `state.rs:47` and
   `Config::write_config_if_changed` in `config.rs:1246` demonstrate the
   project's lock-then-rename discipline for config mutations. The restore
   operation will follow the same pattern to avoid writing a partial
-  `ragent.json`.
+  `codemason.json`.
 
 ## Requirements
 
 ### Ubiquitous requirements
 
 FR-001: The configuration backup subsystem **shall** always resolve the global
-`ragent.json` path via the same platform-aware logic used by `/config show` and
-`/init config` (`dirs::config_dir().join("ragent").join("ragent.json")`).
+`codemason.json` path via the same platform-aware logic used by `/config show` and
+`/init config` (`dirs::config_dir().join("codemason").join("codemason.json")`).
 
 FR-002: The `/config` slash command **shall** accept `save` and `list` as valid
 subcommands in addition to the existing `show` subcommand.
@@ -76,17 +76,17 @@ subcommands in addition to the existing `show` subcommand.
 ### Event-driven requirements
 
 FR-003: When the user invokes `/config save`, the system **shall** copy the
-current contents of the global `ragent.json` file into a new file named
-`ragent.json.[date].[time]` inside a `saves/` subdirectory located in the same
-directory as `ragent.json`, creating the `saves/` directory if it does not
+current contents of the global `codemason.json` file into a new file named
+`codemason.json.[date].[time]` inside a `saves/` subdirectory located in the same
+directory as `codemason.json`, creating the `saves/` directory if it does not
 already exist.
 
 FR-004: When the user invokes `/config list`, the system **shall** display an
 interactive picker listing every file in the `saves/` subdirectory whose name
-matches the `ragent.json.*` backup pattern.
+matches the `codemason.json.*` backup pattern.
 
 FR-005: When the user presses `Enter` on a highlighted entry in the config-save
-picker, the system **shall** overwrite the active global `ragent.json` with the
+picker, the system **shall** overwrite the active global `codemason.json` with the
 contents of the selected backup file using an atomic write (write-to-temp,
 fsync, rename), then close the picker and emit a confirmation log entry.
 
@@ -121,7 +121,7 @@ FR-011: The system **shall not** delete or overwrite any existing backup file as
 a side-effect of `/config save`; each save produces a new uniquely named file.
 
 FR-012: The system **shall not** restore a backup without first confirming the
-overwrite target path is the resolved global `ragent.json`; restore must never
+overwrite target path is the resolved global `codemason.json`; restore must never
 write to an arbitrary or attacker-controlled path.
 
 FR-013: The system **shall not** persist the picker state across TUI restarts;
@@ -130,12 +130,12 @@ if the picker is open when the application exits, it is discarded.
 ## Glossary
 
 - **Global config directory** — the directory returned by
-  `dirs::config_dir().join("ragent")`, e.g. `~/.config/ragent` on Linux.
-- **Global `ragent.json`** — the primary global configuration file at
-  `<global config directory>/ragent.json`.
+  `dirs::config_dir().join("codemason")`, e.g. `~/.config/codemason` on Linux.
+- **Global `codemason.json`** — the primary global configuration file at
+  `<global config directory>/codemason.json`.
 - **`saves/` subdirectory** — a subfolder of the global config directory
   (`<global config directory>/saves/`) that holds timestamped backup copies.
-- **Backup file** — a file named `ragent.json.[date].[time]` where `[date]` is
+- **Backup file** — a file named `codemason.json.[date].[time]` where `[date]` is
   `YYYY-MM-DD` and `[time]` is `HH-MM-SS` (using hyphens to avoid colons which
   are illegal in Windows file names).
 - **Config-save picker** — the interactive TUI overlay, analogous to the
@@ -143,13 +143,13 @@ if the picker is open when the application exits, it is discarded.
 
 ## References
 
-- `crates/ragent-tui/src/app/slash.rs` — `/config show` handler (line ~858),
+- `crates/codemason-tui/src/app/slash.rs` — `/config show` handler (line ~858),
   autocomplete suggestions (line ~127).
-- `crates/ragent-tui/src/app/state.rs` — `HistoryPickerState` struct (line ~840).
-- `crates/ragent-tui/src/app/input_handler.rs` — `handle_history_picker_key`
+- `crates/codemason-tui/src/app/state.rs` — `HistoryPickerState` struct (line ~840).
+- `crates/codemason-tui/src/app/input_handler.rs` — `handle_history_picker_key`
   (line ~24), key-dispatch guard (line ~663).
-- `crates/ragent-tui/src/layout.rs` — `render_history_picker` (line ~4708),
+- `crates/codemason-tui/src/layout.rs` — `render_history_picker` (line ~4708),
   overlay render hook (line ~73).
-- `crates/ragent-config/src/config.rs` — `Config::load` (line ~1030),
+- `crates/codemason-config/src/config.rs` — `Config::load` (line ~1030),
   `Config::save` (line ~1179), global path resolution (line ~1036).
-- `crates/ragent-tui/src/app/state.rs` — `atomic_config_update` (line ~47).
+- `crates/codemason-tui/src/app/state.rs` — `atomic_config_update` (line ~47).

@@ -6,8 +6,8 @@ status: draft
 
 ## Prerequisites
 
-1. A working ragent build on the branch that includes the context panel work.
-2. A valid `ragent.json` (or environment key) selecting a model whose context
+1. A working codemason build on the branch that includes the context panel work.
+2. A valid `codemason.json` (or environment key) selecting a model whose context
    window is known, for example `anthropic/claude-sonnet-4` (200 K tokens) or
    an OpenAI GPT-4o model (128 K tokens).
 3. A project directory with an `AGENTS.md` file present so the project-guideline
@@ -22,7 +22,7 @@ status: draft
 **Title:** Toggle the context panel with Alt-C.
 
 **Preconditions:**
-- ragent TUI is running and showing the main chat screen.
+- codemason TUI is running and showing the main chat screen.
 - The agent is idle and the input box is visible at the bottom.
 
 **Steps:**

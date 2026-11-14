@@ -12,7 +12,7 @@ audit:
 ## Overview
 
 The `/spec` slash command family provides a set of subcommands for managing
-specifications within ragent. Users can create specs (`/spec create`), add
+specifications within codemason. Users can create specs (`/spec create`), add
 incremental requirements (`/spec add`), validate (`/spec validate`), list,
 search, manage status, manage tasks, implement, and perform JTBD analysis.
 
@@ -35,7 +35,7 @@ freely and then regenerate the plan and test plan to incorporate the changes.
 **In scope:**
 
 - A new `Update` variant in the `SpecCommand` enum in
-  `crates/ragent-specs/src/commands.rs`.
+  `crates/codemason-specs/src/commands.rs`.
 - Parsing of `/spec update <spec-id>` from the slash command argument string.
 - Validation that the spec directory and `SPEC.md` file exist.
 - Guard against updating archived specs.
@@ -45,7 +45,7 @@ freely and then regenerate the plan and test plan to incorporate the changes.
   with existing subcommands (`/spec create`, `/spec add`, `/spec jtbd`).
 - Inclusion of the `update` subcommand in the `/spec help` reference table.
 - Inclusion of `update` in the `is_usage_error()` guard list.
-- TUI dispatch handling in `crates/ragent-tui/src/app/slash.rs`.
+- TUI dispatch handling in `crates/codemason-tui/src/app/slash.rs`.
 
 **Out of scope:**
 
@@ -73,7 +73,7 @@ freely and then regenerate the plan and test plan to incorporate the changes.
 
 `The spec command parser shall recognise "update" as a valid subcommand and parse the spec ID from the remaining argument string.`
 
-The `SpecCommand::parse` method in `crates/ragent-specs/src/commands.rs` shall
+The `SpecCommand::parse` method in `crates/codemason-specs/src/commands.rs` shall
 match `"update"` in its `match` block and produce an `Update { spec_id }`
 variant. The spec ID is the first whitespace-delimited token after `"update"`.
 If the spec ID is empty, the parser shall return `Unknown("update")` so the
@@ -84,7 +84,7 @@ caller can surface a usage error.
 `The SpecCommand enum shall include an Update variant carrying the spec identifier.`
 
 A new `Update { spec_id: String }` variant shall be added to the `SpecCommand`
-enum in `crates/ragent-specs/src/commands.rs`.
+enum in `crates/codemason-specs/src/commands.rs`.
 
 ### FR-003 — Usage error detection for update (state-driven)
 
@@ -161,7 +161,7 @@ The prompt shall:
 
 `When the TUI receives a SpecCommand::Update variant from the slash command dispatcher, it shall execute the validation, agent selection, prompt building, and LLM spawning sequence.`
 
-The handler in `crates/ragent-tui/src/app/slash.rs` shall:
+The handler in `crates/codemason-tui/src/app/slash.rs` shall:
 1. Display the update message via `append_assistant_text`.
 2. Push the log entry via `push_log_no_agent`.
 3. Resolve the working directory and specs root.
@@ -210,13 +210,13 @@ conventions, and TUI dispatch structure as `/spec add` and `/spec jtbd`.
 ### NFR-002 — No new external dependencies
 
 The implementation shall not introduce new crate dependencies. It reuses the
-existing `ragent-specs` and `ragent-tui` infrastructure.
+existing `codemason-specs` and `codemason-tui` infrastructure.
 
 ### NFR-003 — Testability
 
 The parser, usage error detection, and helper functions shall be unit-testable
 without requiring a running LLM, following the pattern in
-`crates/ragent-specs/tests/test_slash_spec.rs`.
+`crates/codemason-specs/tests/test_slash_spec.rs`.
 
 ### NFR-004 — Documentation
 

@@ -139,4 +139,4 @@ it as a keystroke.
 - `/provider` - change or show provider configuration
 - `/provider_reset` - reset the current provider and stored credentials
 - `/router` - manage the model-router cluster
-- `ragent models` - CLI equivalent that lists available models
+- `codemason models` - CLI equivalent that lists available models

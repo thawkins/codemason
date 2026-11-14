@@ -1,6 +1,6 @@
 # /name
 
-> "Set a human-readable display name for the session: /name <display-name> | /name help" (SlashCommandDef, crates/ragent-tui/src/app/state.rs).
+> "Set a human-readable display name for the session: /name <display-name> | /name help" (SlashCommandDef, crates/codemason-tui/src/app/state.rs).
 
 ## Overview
 
@@ -8,9 +8,9 @@
 persisted in session metadata through the storage layer, so it appears in
 session lists and survives restarts and resume operations. Calling `/name`
 with no argument clears the existing name. Use it to label long-running work
-sessions so they are easy to find later with the `ragent session list` CLI command.
+sessions so they are easy to find later with the `codemason session list` CLI command.
 
-The handler is the `name` arm in `crates/ragent-tui/src/app/slash.rs`
+The handler is the `name` arm in `crates/codemason-tui/src/app/slash.rs`
 (lines 5855-5913).
 
 ## Syntax
@@ -100,6 +100,6 @@ empty name argument is the clear path and passes an empty string.
 
 ## Related
 
-- `ragent session list` (CLI) - see named sessions in the list
-- `ragent session resume <id>` (CLI) - resume a named session by id
+- `codemason session list` (CLI) - see named sessions in the list
+- `codemason session resume <id>` (CLI) - resume a named session by id
 - `/quit` - leave the session (the name persists for next time)

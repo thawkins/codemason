@@ -7,7 +7,7 @@ encoder fold) and T-019 (the alias table) - both landed before this task.
 ## 1. What FR-015 asks for, and which clause this task owns
 
 > Where `tools.aliases` is configured (or the built-in default table is enabled),
-> the system **shall** resolve an inbound tool name to its ragent tool before the
+> the system **shall** resolve an inbound tool name to its codemason tool before the
 > unknown-tool check, using a case-sensitive table of exact spellings. Where
 > `tools.expose_alias_names` is `true`, the outbound tool list **shall** advertise
 > each alias alongside the canonical name. Where neither is enabled, behaviour
@@ -98,7 +98,7 @@ appended in table order (FR-030's "the enumerations are ordered" property).
 
 ## 3. Tests
 
-`crates/ragent-agent/tests/test_tool_alias_exposure.rs` - **new**, 12 unit cases:
+`crates/codemason-agent/tests/test_tool_alias_exposure.rs` - **new**, 12 unit cases:
 
 - **off is unchanged (2)** - the built-in table with the switch off advertises the
   registry's names in the registry's order; an empty table with the switch on
@@ -117,7 +117,7 @@ appended in table order (FR-030's "the enumerations are ordered" property).
   outbound half); and every canonical entry survives with its own description and
   schema, so advertising adds entries and changes none.
 
-`crates/ragent-agent/tests/test_tool_alias_resolution.rs` - **2 added** end-to-end
+`crates/codemason-agent/tests/test_tool_alias_resolution.rs` - **2 added** end-to-end
 cases through `SessionProcessor::process_message` with a scripted provider:
 
 - `test_the_wire_and_the_prompt_advertise_the_alias_spelling` - with
@@ -155,19 +155,19 @@ by the shared projection, and the wire branch is covered by a test.
 
 - `cargo fmt --all -- --check` - clean.
 - `cargo check --workspace --all-targets` - clean.
-- `cargo clippy -p ragent-agent --all-targets` - no finding in any touched file.
+- `cargo clippy -p codemason-agent --all-targets` - no finding in any touched file.
   The remaining noise is pre-existing and elsewhere: 57 `pub(crate) function
-  inside private module` (mostly `ragent-research`), 19 `unnecessary structure
-  name repetition` (`ragent-llm` `tool_cache.rs`), 9 more of the same
+  inside private module` (mostly `codemason-research`), 19 `unnecessary structure
+  name repetition` (`codemason-llm` `tool_cache.rs`), 9 more of the same
   private-module family, and one `returning the result of a let binding` at
-  `crates/ragent-storage/src/storage.rs:1709`.
-- `cargo nextest run -p ragent-agent --no-fail-fast` - **2117 passed, 1 skipped,
+  `crates/codemason-storage/src/storage.rs:1709`.
+- `cargo nextest run -p codemason-agent --no-fail-fast` - **2117 passed, 1 skipped,
   0 failed** (was 2103 before this task: +12 exposure cases, +2 end-to-end).
-- `cargo nextest run -p ragent-config -p ragent-llm -p ragent-tui --no-fail-fast`
+- `cargo nextest run -p codemason-config -p codemason-llm -p codemason-tui --no-fail-fast`
   - 4852 passed, 2 failed, 2 skipped. Both failures are **pre-existing and owned
-  by other tasks**: `ragent-llm::test_wire_decode::test_no_module_invents_a_tool_call_id_or_recovers_a_name_from_one`
+  by other tasks**: `codemason-llm::test_wire_decode::test_no_module_invents_a_tool_call_id_or_recovers_a_name_from_one`
   (T-010, `ollama_cloud.rs` still mints `_tc_{`) and
-  `ragent-tui::test_slash_arms_deep::tools_visibility_save_failure_is_reported`.
+  `codemason-tui::test_slash_arms_deep::tools_visibility_save_failure_is_reported`.
 - Guard scripts: **11 of 12 PASS**. `check-bench-regression` exits 2 with "no
   criterion results directory found at target/criterion", which is a missing bench
   baseline rather than a code finding.

@@ -11,12 +11,12 @@ audit:
 
 ## Introduction
 
-`mf_search` currently runs a keyless multi-engine search pipeline using DuckDuckGo and Brave HTML scraping. This specification adds **LangSearch** (`https://api.langsearch.com/v1/web-search`) as an optional, API-key-powered backend. Users who supply a `langsearch_api_key` in `ragent.json` get higher-quality, AI-optimised web results merged into the existing consensus ranking.
+`mf_search` currently runs a keyless multi-engine search pipeline using DuckDuckGo and Brave HTML scraping. This specification adds **LangSearch** (`https://api.langsearch.com/v1/web-search`) as an optional, API-key-powered backend. Users who supply a `langsearch_api_key` in `codemason.json` get higher-quality, AI-optimised web results merged into the existing consensus ranking.
 
 ## Goals
 
 1. Provide a `LangSearchEngine` backend that plugs into the existing `SearchEngine` trait and `SearchOrchestrator`.
-2. Allow the API key to be stored in `ragent.json` (project or global) with the same precedence rules as other config values.
+2. Allow the API key to be stored in `codemason.json` (project or global) with the same precedence rules as other config values.
 3. Map LangSearch request/response semantics (`query`, `freshness`, `count`, `summary`) onto existing `mf_search` parameters without changing the public tool schema.
 4. Keep the tool keyless-by-default: when no key is configured, LangSearch is simply skipped and the existing backends continue to work.
 
@@ -24,7 +24,7 @@ audit:
 
 ### Ubiquitous requirements
 
-**FR-001** — The system shall add a `LangSearchEngine` struct in `crates/ragent-tools-extended/src/masterfetch/search/langsearch.rs` that implements the existing `SearchEngine` trait.
+**FR-001** — The system shall add a `LangSearchEngine` struct in `crates/codemason-tools-extended/src/masterfetch/search/langsearch.rs` that implements the existing `SearchEngine` trait.
 
 **FR-002** — The `LangSearchEngine` shall send an authenticated `POST` request to `https://api.langsearch.com/v1/web-search` with `Content-Type: application/json` and `Authorization: Bearer {key}`.
 
@@ -44,7 +44,7 @@ audit:
 
 ### Optional requirements
 
-**FR-008** — The system may, when serialising the config, write `langsearch_api_key` back to `ragent.json` if it was explicitly loaded from that file.
+**FR-008** — The system may, when serialising the config, write `langsearch_api_key` back to `codemason.json` if it was explicitly loaded from that file.
 
 **FR-009** — The `mf_search` tool description may be updated to mention that an optional LangSearch API key improves result quality, but the tool remains usable without a key.
 
@@ -64,7 +64,7 @@ The top-level `Config` struct gains a new optional string field:
 }
 ```
 
-- `langsearch_api_key` is loaded from global config, project config, `RAGENT_CONFIG`, and `RAGENT_CONFIG_CONTENT` with normal precedence.
+- `langsearch_api_key` is loaded from global config, project config, `CODEMASON_CONFIG`, and `CODEMASON_CONFIG_CONTENT` with normal precedence.
 - It is merged like `tavily_api_key`: an overlay value overrides the base value.
 - It is serialised only when explicitly present in the loaded source file (default config generation omits the key).
 

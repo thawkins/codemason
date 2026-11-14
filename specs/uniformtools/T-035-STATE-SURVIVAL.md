@@ -28,12 +28,12 @@ and is the only new production code.
 
 ## What was built
 
-### Duty 2 - the load-time report (`crates/ragent-agent/src/hooks/mod.rs`)
+### Duty 2 - the load-time report (`crates/codemason-agent/src/hooks/mod.rs`)
 
 - **`HookConfig::retired_matcher_spellings()`** - the stale part of a matcher, as
   `(retired spelling, adopted spelling)` pairs in matcher order. It splits exactly as
   `matches_tool` splits (`|` and `,`), takes the bare tool name before any
-  `Name(pattern)` guard, and looks the name up in `ragent_types::tool_rename::TOOL_RENAMES`
+  `Name(pattern)` guard, and looks the name up in `codemason_types::tool_rename::TOOL_RENAMES`
   by exact, **case-sensitive** equality, so both columns are the table's own
   `&'static str` and no allocation happens on the reporting path. A matcher naming the
   *adopted* spelling is silent: that is the correct spelling, and warning about it would
@@ -70,8 +70,8 @@ created:
 
 | Site | Why |
 |---|---|
-| `crates/ragent-tui/src/app/init.rs`, immediately after `Config::load()` | the interactive surface's load: the warning is in the log panel before any turn runs, which is what TC-023 step 4 asks for |
-| `crates/ragent-agent/src/session/loop_steps.rs`, where `parsed_hook_configs` is derived per turn | the headless surfaces (`ragent run`, the server, ACP) have no separate load step, so the point where the turn's hooks are built is their load |
+| `crates/codemason-tui/src/app/init.rs`, immediately after `Config::load()` | the interactive surface's load: the warning is in the log panel before any turn runs, which is what TC-023 step 4 asks for |
+| `crates/codemason-agent/src/session/loop_steps.rs`, where `parsed_hook_configs` is derived per turn | the headless surfaces (`codemason run`, the server, ACP) have no separate load step, so the point where the turn's hooks are built is their load |
 
 The ledger makes the second site free once the first has reported. Neither site rewrites
 the matcher: the file belongs to its author, and a load-time rewrite would leave the
@@ -98,7 +98,7 @@ site, which is exactly how this class of duty breaks.
 
 ## Tests
 
-`crates/ragent-agent/tests/test_fr028_state_survival.rs` - 9 cases, registered in
+`crates/codemason-agent/tests/test_fr028_state_survival.rs` - 9 cases, registered in
 `tests/all.rs` as `test_fr028_state_survival`.
 
 | # | Case | Clause |
@@ -203,14 +203,14 @@ different line, which is the property that matters.
 
 ## Verification
 
-`cargo fmt --check`; `cargo clippy -p ragent-agent -p ragent-tui -p ragent-tools-core
+`cargo fmt --check`; `cargo clippy -p codemason-agent -p codemason-tui -p codemason-tools-core
 --all-targets` (only pre-existing warnings: `pub(crate)`-inside-private-module across
-`ragent-agent`, `unnecessary structure name repetition`, and one `manual_assert_eq` in
-`crates/ragent-tui/tests/test_text_selection.rs` - none in a file this task touched);
-`cargo check -p ragent-agent -p ragent-tui -p ragent-tools-core --all-targets`;
-`cargo test -p ragent-agent --test all` 1703 passed / 1 ignored (including the 9 new
-cases); `cargo test -p ragent-tools-core --test all` 394 passed;
-`cargo test -p ragent-tui --test all` 3647 passed / 3 **pre-existing** failures
+`codemason-agent`, `unnecessary structure name repetition`, and one `manual_assert_eq` in
+`crates/codemason-tui/tests/test_text_selection.rs` - none in a file this task touched);
+`cargo check -p codemason-agent -p codemason-tui -p codemason-tools-core --all-targets`;
+`cargo test -p codemason-agent --test all` 1703 passed / 1 ignored (including the 9 new
+cases); `cargo test -p codemason-tools-core --test all` 394 passed;
+`cargo test -p codemason-tui --test all` 3647 passed / 3 **pre-existing** failures
 (`test_input_more::alt_toggle_keys_map_to_actions`,
 `test_input_queue_menu_binding::test_other_alt_keys_are_unaffected`,
 `test_memory_panel::test_toggle_memory_mutually_excludes_tasks_panel` - all three are the
@@ -220,7 +220,7 @@ cases); `cargo test -p ragent-tools-core --test all` 394 passed;
 `check-poison-locks`, `check-test-env-isolation`, `check-file-tool-containment`,
 `check-shared-guards`, `check-tool-rename`) pass.
 
-Four `ragent-agent` doctests fail (`agent::read_git_status`, `session::archive::
+Four `codemason-agent` doctests fail (`agent::read_git_status`, `session::archive::
 export_session_archive`, `session::archive::import_session_archive`, `tool::ToolContext`).
 They are **pre-existing and unrelated**: they fail because the examples predate
 `ToolContext`'s `allowed_roots`/`canonical_cache` fields and a missing `use

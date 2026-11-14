@@ -7,7 +7,7 @@
 `/new` scaffolds a new project in the current directory, which must be
 empty. The scaffold consists of:
 
-- The ragent workspace: `.ragent/`, `specs/`, `log/`, `.gitignore`,
+- The codemason workspace: `.codemason/`, `specs/`, `log/`, `.gitignore`,
   `AGENTS.md`
 - A runnable hello-world artifact set for 26 application languages
   (`rust`, `python`, `go`, `typescript`, `shell`, ...) with `library`,

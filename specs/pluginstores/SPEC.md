@@ -29,9 +29,9 @@ Browse and search never execute plugin JavaScript (carrying forward FR-023 of sp
 
 ### Why this exists
 
-Spec `plugins` gives ragent a way to install a plugin when the user already knows its
+Spec `plugins` gives codemason a way to install a plugin when the user already knows its
 path or URL. It gives no way to *find* one. Codex and Claude Code/Desktop each maintain
-a public plugin catalogue; today a ragent user must leave the terminal, browse the
+a public plugin catalogue; today a codemason user must leave the terminal, browse the
 catalogue in a web browser, copy a URL, and paste it into `/plugins add`. A store browser
 turns that into: type the command, type a few letters, press `ENTER`.
 
@@ -85,13 +85,13 @@ panel shows each source at a glance (FR-048).
   once when it opens and filters it in memory while the user types. It does not issue a
   request per keystroke. A `--refresh` flag (FR-016) forces a re-fetch.
 - **A4 - Install reuses the existing pipeline.** `ENTER` maps a result's `source` to a
-  call to the existing `ragent_plugins::add` entry point with the same
+  call to the existing `codemason_plugins::add` entry point with the same
   traversal/size/HTTPS guards. No new archive or download code is introduced.
 - **A5 - Installed state is derived, not stored twice.** A result is "installed" when
-  its plugin id is present in the current store scan (`ragent_plugins::store::scan`).
+  its plugin id is present in the current store scan (`codemason_plugins::store::scan`).
   The browser keeps no separate install registry.
 - **A6 - Network is optional and fallible.** If the store endpoint is unreachable the
-  panel opens and reports the failure inline; ragent never blocks the event loop on the
+  panel opens and reports the failure inline; codemason never blocks the event loop on the
   fetch and never panics on a network error (FR-021).
 - **A7 - Ambiguity in "installed plugins shown with a block cursor in a different
   colour".** This is read as: the highlighted row always carries a block cursor; when
@@ -113,30 +113,30 @@ panel shows each source at a glance (FR-048).
 
 ## Background - existing machinery to reuse
 
-- **`/plugins` family.** `crates/ragent-tui/src/app/plugin.rs`
+- **`/plugins` family.** `crates/codemason-tui/src/app/plugin.rs`
   (`handle_plugins_command`) parses the subcommand and dispatches through
-  `ragent_plugins::run_plugin_subcommand` (`crates/ragent-plugins/src/surface.rs`).
+  `codemason_plugins::run_plugin_subcommand` (`crates/codemason-plugins/src/surface.rs`).
   The browser subcommands are added to this ladder for the *launch* step, then hand off
   to a new modal state machine.
-- **Install pipeline.** `ragent_plugins::add(dir, workdir, source, force) ->
-  Result<AddOutcome, AddError>` (`crates/ragent-plugins/src/add.rs`) already handles
+- **Install pipeline.** `codemason_plugins::add(dir, workdir, source, force) ->
+  Result<AddOutcome, AddError>` (`crates/codemason-plugins/src/add.rs`) already handles
   local dirs, local archives and HTTPS URLs with traversal and size guards. The browser
   calls it; it does not reimplement it.
-- **Store scan.** `ragent_plugins::store` resolves the store directories and `scan`
+- **Store scan.** `codemason_plugins::store` resolves the store directories and `scan`
   returns the installed descriptors; this is the source of the installed set (A5).
 - **Modal state precedent.** `queue_show_open` / `queue_show_selected` /
-  `queue_show_area` in `crates/ragent-tui/src/app/state.rs`, rendered by
-  `render_queue_show_panel` in `crates/ragent-tui/src/layout.rs`, and the key routing in
-  `crates/ragent-tui/src/input.rs`, are the working precedent for a modal list with a
+  `queue_show_area` in `crates/codemason-tui/src/app/state.rs`, rendered by
+  `render_queue_show_panel` in `crates/codemason-tui/src/layout.rs`, and the key routing in
+  `crates/codemason-tui/src/input.rs`, are the working precedent for a modal list with a
   block cursor, `Up`/`Down` movement, `Enter` action and `Esc` dismissal. The ratatui
   `List::highlight_style` block-cursor technique from that panel is reused verbatim
   (a per-item pre-styled span does not paint a full-row background).
-- **Async fetch.** `reqwest` (already a dependency of `ragent-plugins`, blocking
+- **Async fetch.** `reqwest` (already a dependency of `codemason-plugins`, blocking
   feature enabled) and the existing tokio runtime provide the fetch; the TUI's
   background-task pattern (spawn, poll, deliver a message on completion) keeps the
   event loop responsive (FR-014).
 - **Slash registry.** `SLASH_COMMANDS` and the autocomplete table in
-  `crates/ragent-tui/src/app/slash.rs` and `crates/ragent-tui/src/app/state.rs`.
+  `crates/codemason-tui/src/app/slash.rs` and `crates/codemason-tui/src/app/state.rs`.
 
 ## Requirements
 
@@ -278,7 +278,7 @@ re-derive the panel area so the modal stays centred and fully visible.
 
 ### Optional requirements
 
-**FR-019** - Where `plugins.stores.<name>.url` is configured in `ragent.json`, the
+**FR-019** - Where `plugins.stores.<name>.url` is configured in `codemason.json`, the
 system shall use that endpoint for the store instead of the compiled default, and where
 it is absent the system shall use the compiled default.
 
@@ -303,7 +303,7 @@ plugin, and then only after the normal enable step.
 pass any source to the install pipeline that the existing pipeline would reject for
 traversal, size, or scheme reasons; store-supplied sources receive no elevated trust.
 
-**FR-025** - The system shall never panic or terminate the ragent process because of a
+**FR-025** - The system shall never panic or terminate the codemason process because of a
 store-index fetch, a malformed index entry, an oversized index, or a failed install;
 every such failure shall be contained and reported in the panel or the message window.
 
@@ -377,7 +377,7 @@ modal browse/search panel with block cursor and installed colouring; `ENTER` ins
 the existing pipeline; `ESC` dismissal; configuration of store endpoints; and the manual
 test plan for all of the above.
 
-**Out of scope:** publishing or uploading to a store; a ragent store; authentication or
+**Out of scope:** publishing or uploading to a store; a codemason store; authentication or
 paid store access; per-vendor catalogue adapters; plugin updates/upgrades; a remote
 rating or download-count metric; and any change to the install pipeline's own security
 guards.
@@ -416,7 +416,7 @@ guards.
    the cursor is separate, or (b) the cursor itself changes colour when it sits on an
    installed row. A7 selects (a) with a one-column `*` installed-lane marker. Confirm.
 2. **Default endpoints.** This spec assumes the store endpoints are configured or
-   supplied by the build. If ragent should ship a compiled default per store, that URL
+   supplied by the build. If codemason should ship a compiled default per store, that URL
    must be fixed before T-002.
 3. **Index caching.** FR-021 mentions a cache and the schema exposes `cache_ttl_secs`.
    Confirm a disk cache is wanted now rather than a per-session in-memory cache only.
@@ -474,7 +474,7 @@ marketplace document>` (`.agents/plugins/marketplace.json` for Codex,
 `.claude-plugin/marketplace.json` for Claude); any other `https://` URL is used verbatim;
 a local directory is recorded with its manifest `name` and no fetch URL. `add` records
 the marketplace under `plugins.stores.marketplaces` in the **user-global** config
-(`~/.config/ragent/ragent.json`), refusing a duplicate name without `--force`; `remove`
+(`~/.config/codemason/codemason.json`), refusing a duplicate name without `--force`; `remove`
 drops an entry by name; both render an `[ok]`/`[err]` report. The `/plugins codex` and
 `/plugins claude` browse panels shall fetch every marketplace configured for the store
 (the base endpoint first, then each added marketplace) and merge their entries into the
@@ -620,7 +620,7 @@ navigator row `1`, directly after the `ALL` sentinel and before any derived stor
 category, in both the Codex and the Claude browse panels. The row shall not be derived
 from an entry's `category` field: selecting it shall filter the result list to the loaded
 entries whose id is present in the store scan
-([`PluginStoreBrowser::installed`](../../crates/ragent-tui/src/app/state.rs)), so a plugin that
+([`PluginStoreBrowser::installed`](../../crates/codemason-tui/src/app/state.rs)), so a plugin that
 declares no category at all is still listed under it. The row shall be present in every
 state, including a still-loading browser and an index that declares no category, and its
 counted label (`Installed (<N>)`) shall count the loaded entries the scan matches. The row
@@ -666,7 +666,7 @@ sourced from the compiled default.
 ## Non-Functional Requirements
 
 **NFR-001** - The compiled default store-index URLs shall be declared once as named
-constants in the store registry module (`ragent_plugins::store_index`) and shall be the
+constants in the store registry module (`codemason_plugins::store_index`) and shall be the
 only location in the codebase where a default endpoint literal appears.
 
 **NFR-002** - The effective endpoint for each store shall be resolved at runtime each
@@ -700,14 +700,14 @@ the suite performs no live network access and installs nothing from the real cat
 Set `StoreEntry::marketplace` (a `serde(default)` field never carried by a marketplace
 document) to the display name of the marketplace each entry was fetched from: the added
 marketplace's `name`, or the store label for the base endpoint (`marketplace_name_for`,
-exported from `ragent_plugins::store_index`). Render it as a per-row column in the
+exported from `codemason_plugins::store_index`). Render it as a per-row column in the
 plugin-store browse panel and widen the panel from a 100- to a 140-column ceiling
-(`crates/ragent-tui/src/layout.rs`), splitting the flexible remainder between the
+(`crates/codemason-tui/src/layout.rs`), splitting the flexible remainder between the
 marketplace and description columns (`plugin_store_flex_widths`) so the fixed id/version
 columns are never pushed off the row; the description is the row's last column and takes
-whatever the marketplace leaves (FR-004, FR-048). Covered by `crates/ragent-plugins/tests/test_store_index.rs`
-(`marketplace_name_for`), `crates/ragent-tui/tests/test_plugin_store_marketplaces.rs`
-(fetch attribution) and `crates/ragent-tui/tests/test_plugin_store_panel.rs` (render).
+whatever the marketplace leaves (FR-004, FR-048). Covered by `crates/codemason-plugins/tests/test_store_index.rs`
+(`marketplace_name_for`), `crates/codemason-tui/tests/test_plugin_store_marketplaces.rs`
+(fetch attribution) and `crates/codemason-tui/tests/test_plugin_store_panel.rs` (render).
 
 ### T-032 - Split left navigator and add marketplace filter
 
@@ -719,19 +719,19 @@ cursor/scroll/viewport and move/select/clear/confirm methods (FR-052). A single
 `matching_indices` helper folds the query, category, and marketplace predicates into one
 result set so the three filters compose; `rebuild_marketplaces` derives the
 marketplace rows on load and drops a marketplace the new index no longer declares.
-`crates/ragent-tui/src/layout.rs` splits the left column vertically into
+`crates/codemason-tui/src/layout.rs` splits the left column vertically into
 `render_plugin_store_navigator` (top) and `render_plugin_store_marketplace_navigator`
 (bottom), caches `plugin_store_marketplace_area`, paints each pane's cursor with the
 focused colour independently, and appends `-- marketplace <label>` to the title;
 `handle_plugin_store_mouse` routes a click/wheel over the marketplace pane (FR-004,
-FR-015). Covered by `crates/ragent-tui/tests/test_plugin_store_category_filter.rs`
+FR-015). Covered by `crates/codemason-tui/tests/test_plugin_store_category_filter.rs`
 (marketplace filter model), `test_plugin_store_category_nav.rs` (three-pane focus),
 `test_plugin_store_category_mouse.rs` (marketplace click + wheel), and
 `test_plugin_store_panel.rs` (focused cursor + footer).
 
 ### T-026 - `/plugins marketplace show` marketplace listing
 
-Add `ragent_plugins::commands::render_marketplace_show_report` and dispatch
+Add `codemason_plugins::commands::render_marketplace_show_report` and dispatch
 `marketplace show` through the shared `run_plugin_subcommand` ladder (TUI and CLI),
 guarded by `marketplace_show_requested` so a bare `/plugins marketplace` (or an
 unknown sub-subcommand) falls back to the usage block (FR-014). The report renders one
@@ -739,13 +739,13 @@ unknown sub-subcommand) falls back to the usage block (FR-014). The report rende
 row resolved through `effective_endpoint_with_source`, and makes no network request,
 store scan, or session (FR-047). `marketplace` joins `PLUGIN_SUBCOMMANDS`, the usage
 block, the autocomplete suggestion list, and the `SLASH_COMMANDS` description. Covered
-by offline tests in `crates/ragent-plugins/tests/test_marketplace_show.rs` (renderer +
-dispatch), `crates/ragent-tui/tests/test_plugins_command.rs` (TUI surface), and
+by offline tests in `crates/codemason-plugins/tests/test_marketplace_show.rs` (renderer +
+dispatch), `crates/codemason-tui/tests/test_plugins_command.rs` (TUI surface), and
 `tests/test_plugins_cli_command.rs` (CLI parity).
 
 ### T-027 - Additional marketplaces (`marketplace <store> add|remove|list`)
 
-Add `crates/ragent-plugins/src/marketplace_ops.rs`: `resolve_source(store, source, cwd)`
+Add `crates/codemason-plugins/src/marketplace_ops.rs`: `resolve_source(store, source, cwd)`
 turns `owner/repo`, `git@github.com:owner/repo.git`, an `https://` URL, or a local
 directory into a `(name, url)` pair (the store-specific raw marketplace document for a
 GitHub slug), and `add_marketplace`/`remove_marketplace` edit the **user-global**
@@ -753,7 +753,7 @@ GitHub slug), and `add_marketplace`/`remove_marketplace` edit the **user-global*
 crate's load cache). `commands::parse_marketplace_command` / `run_marketplace_command`
 add the `show`/`list`/`add`/`remove` dispatch ladder (FR-048); `plugins.stores.marketplaces`
 and `MarketplaceEntry` extend the config schema and `EndpointSource::Added` tags the new
-sources. Covered by `crates/ragent-plugins/tests/test_marketplace_ops.rs` (resolver +
+sources. Covered by `crates/codemason-plugins/tests/test_marketplace_ops.rs` (resolver +
 ledger) and `test_marketplace_add.rs` (dispatch).
 
 ### T-028 - Merge every configured marketplace into the browse panel
@@ -764,19 +764,19 @@ change `App::spawn_plugin_store_fetch_with_stores` to fetch each in turn off-loo
 merging the entries into one `StoreIndex` and de-duplicating by entry id, so the one
 panel lists the union (FR-048). A refused base endpoint is reported as the panel's
 inline error; a refused added URL is skipped. Covered by
-`crates/ragent-tui/tests/test_plugin_store_marketplaces.rs`.
+`crates/codemason-tui/tests/test_plugin_store_marketplaces.rs`.
 
 ### T-022 - `/plugins stores --check` availability probe
 
 Extend the `/plugins stores` report with an opt-in `--check` flag: on both the TUI
-(`/plugins stores --check`) and the CLI (`ragent plugins stores --check`) surface, resolve
+(`/plugins stores --check`) and the CLI (`codemason plugins stores --check`) surface, resolve
 each store's effective endpoint through the existing precedence (FR-027, FR-028), fetch
 it once through the injectable `StoreIndexFetcher` seam, and append `[ok] available, N
 plugins` or `[err] unavailable: <reason>` to each line. The plain report (no `--check`)
 stays a pure configuration read with no network request (FR-040); the TUI probe runs
 off-loop and is polled on a later frame (FR-042). Covered by offline tests in
-`crates/ragent-plugins/tests/test_stores_check.rs` (probe + rendering),
-`crates/ragent-tui/tests/test_plugin_store_probe.rs` (off-loop TUI path) and a CLI usage
+`crates/codemason-plugins/tests/test_stores_check.rs` (probe + rendering),
+`crates/codemason-tui/tests/test_plugin_store_probe.rs` (off-loop TUI path) and a CLI usage
 case in `tests/test_plugins_cli_command.rs` (FR-039..FR-042).
 
 ## Plan Tasks (store providers)
@@ -787,17 +787,17 @@ case in `tests/test_plugins_cli_command.rs` (FR-039..FR-042).
 
 ### T-023 - `StoreProvider` trait and vendor transforms
 
-Add `crates/ragent-plugins/src/store_provider.rs`: a `StoreProvider` trait (`kind`,
+Add `crates/codemason-plugins/src/store_provider.rs`: a `StoreProvider` trait (`kind`,
 `parse_index(bytes, origin)`), a `CodexStoreProvider` and `ClaudeStoreProvider`, and a
 `provider_for(StoreKind)` selector. Each provider normalises its store's real marketplace
 shape: `name` supplies the id, `version` is optional, `description`/`homepage`/`keywords`
 are mapped, and `source` may be a repo-relative string or a `local`/`url`/`git-subdir`
 object. Repo-relative sources resolve against the marketplace repository root (derived
 from the endpoint) into `https` directory URLs; git sources become
-`git+<https-url>#<ref>[:<path>]`. A native ragent index (any entry with an `id`) is
+`git+<https-url>#<ref>[:<path>]`. A native codemason index (any entry with an `id`) is
 delegated to the strict parser, so existing fixtures are unaffected. Unresolvable entries
 are counted as skipped, never fatal (FR-013, FR-025). Covered by
-`crates/ragent-plugins/tests/test_store_provider.rs` using inline vendor-schema documents
+`crates/codemason-plugins/tests/test_store_provider.rs` using inline vendor-schema documents
 (NFR-005).
 
 ### T-024 - Store-aware fetch seam
@@ -811,10 +811,10 @@ the existing offline seam tests are updated to the new signature.
 
 ### T-025 - `git+` install source
 
-Extend `ragent-plugins::add` with a `git+<https-url>#<ref>[:<subpath>]` source form:
+Extend `codemason-plugins::add` with a `git+<https-url>#<ref>[:<subpath>]` source form:
 shallow-clone with `--sparse` and, when a subpath is present, `git sparse-checkout set
 <subpath>` before committing the resulting directory into the store. The ref defaults to
 the remote default branch when absent or `HEAD`. A non-`https` remote is refused before
 any clone (FR-024), git never prompts for credentials, and every failure is a contained
-`AddError`. Covered by `crates/ragent-plugins/tests/test_store_git_source.rs`, which
+`AddError`. Covered by `crates/codemason-plugins/tests/test_store_git_source.rs`, which
 clones from a local `file://` repository offline (NFR-005).

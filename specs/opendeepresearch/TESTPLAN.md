@@ -1,7 +1,7 @@
 ---
 status: draft
 ---
-# TESTPLAN: Open Deep Research feature-gap integration into ragent
+# TESTPLAN: Open Deep Research feature-gap integration into codemason
 
 ## Scope
 
@@ -9,7 +9,7 @@ This manual test plan verifies the requirements defined in `specs/opendeepresear
 
 ## Test Environment
 
-- A local ragent build running in a project directory with an LLM provider configured (e.g., Ollama for local runs or an API key for cloud providers).
+- A local codemason build running in a project directory with an LLM provider configured (e.g., Ollama for local runs or an API key for cloud providers).
 - Network access so web search and fetch tools can retrieve live sources.
 - A clean working directory where generated `RESEARCH.md` files will be written.
 
@@ -28,7 +28,7 @@ This manual test plan verifies the requirements defined in `specs/opendeepresear
 **Requirements covered:** FR-005, FR-017.
 
 **Preconditions:**
-- ragent TUI or CLI is running and connected to a provider.
+- codemason TUI or CLI is running and connected to a provider.
 - No previous `/research` run is active in the same session.
 
 **Steps:**
@@ -67,7 +67,7 @@ This manual test plan verifies the requirements defined in `specs/opendeepresear
 - The system delegates multiple sub-topics (e.g., Tokio, async-std, smol, embassy) in parallel up to the configured concurrency limit.
 - Each researcher returns compressed notes visible in the step log.
 - The final `RESEARCH.md` contains a single coherent report that combines the sub-researcher findings.
-- The report cites sources using the existing ragent citation format.
+- The report cites sources using the existing codemason citation format.
 
 ---
 
@@ -206,7 +206,7 @@ This manual test plan verifies the requirements defined in `specs/opendeepresear
 
 **Preconditions:**
 - T-018 is implemented.
-- The ragent HTTP server is running and authenticated.
+- The codemason HTTP server is running and authenticated.
 - `curl` or an equivalent HTTP client is available.
 
 **Steps:**

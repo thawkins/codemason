@@ -4,16 +4,16 @@
 
 ## Approach
 
-Introduce one new crate, `crates/ragent-plugins`, that owns the descriptor model, the
+Introduce one new crate, `crates/codemason-plugins`, that owns the descriptor model, the
 plugin store, the embedded JavaScript runtime wrapper, the host-API bridge, and the
 plugin lifecycle (discovery, validation, load, unload, error containment). Surface it
 through three integration points:
 
-1. **`ragent-plugins` crate** — `descriptor` (manifest dialect recognition and
-   normalisation), `store` (install/remove/scan at `.ragent/plugins/` and
-   `~/.config/ragent/plugins/` with path-traversal-safe archive extraction), `runtime`
+1. **`codemason-plugins` crate** — `descriptor` (manifest dialect recognition and
+   normalisation), `store` (install/remove/scan at `.codemason/plugins/` and
+   `~/.config/codemason/plugins/` with path-traversal-safe archive extraction), `runtime`
    (script-context pool, memory ceiling, deadline interruption), `host_api`
-   (`ragent` object v1: `register_tool`, `register_command`, `config.get`,
+   (`codemason` object v1: `register_tool`, `register_command`, `config.get`,
    `message.*`, `log`, `plugin.read_text_file`), `lifecycle` (enable/disable/load/
    unload, error states, telemetry counters), and `harness` (the `/plugins test`
    isolated loader with a stubbed tool context and captured message sink).
@@ -24,10 +24,10 @@ through three integration points:
    Slash commands contributed by plugins register through a `PluginCommandAdapter` in
    the TUI command layer.
 3. **Command surface** — a `/plugins` slash-command family in
-   `crates/ragent-tui/src/app/slash.rs` (parser and dispatch alongside the `/spec`
-   family), registered in `SLASH_COMMANDS` in `crates/ragent-tui/src/app/state.rs` and
-   documented in `/plugins help`; optional `ragent plugins` CLI parity in
-   `src/cli.rs` (FR-021). Configuration gains a `plugins` block in `ragent-config`.
+   `crates/codemason-tui/src/app/slash.rs` (parser and dispatch alongside the `/spec`
+   family), registered in `SLASH_COMMANDS` in `crates/codemason-tui/src/app/state.rs` and
+   documented in `/plugins help`; optional `codemason plugins` CLI parity in
+   `src/cli.rs` (FR-021). Configuration gains a `plugins` block in `codemason-config`.
 
 Sandboxing is in-process: no ambient filesystem, network, or process APIs reach the
 script context; time and memory budgets are enforced with the engine's interrupt
@@ -93,14 +93,14 @@ API directly; swapping engines later touches only that module.
 
 | ID | Title | Requirement | Effort | Priority | Status | Dependencies |
 |----|-------|-------------|--------|----------|--------|--------------|
-| T-001 | Add `plugins` configuration block to `ragent-config` | Config schema | S | High | completed | — |
+| T-001 | Add `plugins` configuration block to `codemason-config` | Config schema | S | High | completed | — |
 | T-002 | Define `PluginDescriptor` model and dialect recognition rules | FR-002, FR-025 | M | Critical | completed | — |
 | T-003 | Implement manifest parsing, normalisation, and host-API version check | FR-002, FR-019, FR-025 | M | Critical | completed | T-002 |
 | T-004 | Spike engine choice (rquickjs vs Boa): interruption + memory ceiling | FR-003, FR-017 | M | Critical | completed | — |
 | T-005 | Implement plugin store paths, discovery scan, and state ledger (no code execution) | FR-001, FR-023 | M | Critical | completed | T-003 |
 | T-006 | Implement `/plugins add` source handling: local dir, zip/tar.gz, https URL with traversal protection and size cap | FR-007, FR-010, FR-023 | L | High | completed | T-005 |
 | T-007 | Build runtime module: context pool, memory limit, deadline interruption, exception containment | FR-003, FR-015, FR-017, FR-018, FR-026 | L | Critical | completed | T-004 |
-| T-008 | Build host API v1 bridge (`ragent` object) with permission-gated capabilities | FR-004, FR-018, FR-020, FR-027 | L | Critical | completed | T-007 |
+| T-008 | Build host API v1 bridge (`codemason` object) with permission-gated capabilities | FR-004, FR-018, FR-020, FR-027 | L | Critical | completed | T-007 |
 | T-009 | Implement lifecycle: enable, disable, load, unload, error states, auto-unload threshold | FR-008, FR-011, FR-012, FR-016, FR-019 | L | Critical | completed | T-005, T-008 |
 | T-010 | Implement `PluginToolAdapter` (Tool trait) with collision rejection and JSON marshalling | FR-005, FR-015, FR-024, FR-026 | L | Critical | completed | T-008 |
 | T-011 | Wire `/plugins add` and `/plugins remove` store operations | FR-007, FR-010 | M | High | completed | T-006 |
@@ -109,7 +109,7 @@ API directly; swapping engines later touches only that module.
 | T-014 | Register `/plugins help` and usage text; register the family in `SLASH_COMMANDS` and autocomplete | FR-006, FR-014 | S | High | completed | T-013 |
 | T-015 | Build `/plugins test` isolated harness: stubbed tool context, captured messages, per-tool sample invocation, `[ ok ]`/`[fail]` report | FR-013, FR-026 | L | High | completed | T-010, T-012 |
 | T-016 | Session-start integration: discover, load enabled plugins, record telemetry, deregister on shutdown | FR-008, FR-022 | M | High | completed | T-009 |
-| T-017 | Add `ragent plugins` CLI parity subcommands | FR-021 | M | Medium | completed | T-011, T-013, T-015 |
+| T-017 | Add `codemason plugins` CLI parity subcommands | FR-021 | M | Medium | completed | T-011, T-013, T-015 |
 | T-018 | Fixture plugins, acceptance walk, fmt/clippy/test, and NFR timing checks | Acceptance criteria, Performance | L | High | completed | T-013, T-014, T-015, T-016 |
 | T-019 | Support non-JS (skill-only / MCP-only) plugin manifests: optional entry point | FR-002, FR-028 | M | High | completed | T-018 |
 | T-020 | Prune the whole staging directory after a failed git-subdir install | FR-010 | S | Medium | completed | T-018 |
@@ -122,7 +122,7 @@ API directly; swapping engines later touches only that module.
 
 ## Task Details
 
-### T-001 — Add `plugins` configuration block to `ragent-config`
+### T-001 — Add `plugins` configuration block to `codemason-config`
 
 - Add `pub plugins: Option<PluginsConfig>` to `Config` with fields matching the SPEC
   schema (`enabled`, `max_execution_ms`, `max_entry_ms`, `max_memory_mb`, `store_dir`,
@@ -134,7 +134,7 @@ API directly; swapping engines later touches only that module.
 
 ### T-002 — Define `PluginDescriptor` model and dialect recognition rules
 
-- New crate skeleton `crates/ragent-plugins/` with module layout:
+- New crate skeleton `crates/codemason-plugins/` with module layout:
   `descriptor.rs`, `store.rs`, `runtime.rs`, `host_api.rs`, `lifecycle.rs`,
   `harness.rs`, `tool_adapter.rs`, `command_adapter.rs`, `error.rs`, `lib.rs` re-exports.
 - `PluginDescriptor { id, name, version, dialect: Codex|Claude, entry: PathBuf,
@@ -151,7 +151,7 @@ API directly; swapping engines later touches only that module.
 - Parse each dialect's manifest shape into `PluginDescriptor`; tolerate unknown fields;
   extract declared tools/commands arrays when present.
 - Record unfulfillable sections (Claude MCP-server transport blocks, Desktop extension
-  keys with no ragent equivalent) into `unsupported_capabilities`.
+  keys with no codemason equivalent) into `unsupported_capabilities`.
 - Implement `check_api_version(declared, host) -> Result<(), VersionMismatch>` refusing
   `declared > host` (FR-019); equal or lower accepted.
 - Pure functions with fixture manifests; no I/O outside the plugin directory.
@@ -168,8 +168,8 @@ API directly; swapping engines later touches only that module.
 
 ### T-005 — Plugin store paths, discovery scan, state ledger
 
-- `store::store_dirs()` returns project `.ragent/plugins/` then user-global
-  `~/.config/ragent/plugins/`, closest-wins on plugin id collision.
+- `store::store_dirs()` returns project `.codemason/plugins/` then user-global
+  `~/.config/codemason/plugins/`, closest-wins on plugin id collision.
 - `store::scan()` walks both directories, recognises dialects via T-003 parsing, and
   returns `Vec<ScannedPlugin { descriptor_or_error, enabled }>`. Manifest bytes are
   parsed; no JavaScript executes here (FR-023).
@@ -205,7 +205,7 @@ API directly; swapping engines later touches only that module.
 
 ### T-008 — Host API v1 bridge
 
-- `host_api::install(ctx, plugin_state, permission_gate)` installs the `ragent` object:
+- `host_api::install(ctx, plugin_state, permission_gate)` installs the `codemason` object:
   `api_version`, `plugin_id`, `register_tool`, `register_command`, `config.get`,
   `message.info/warn/error`, `log`, `plugin.read_text_file`.
 - `register_tool`/`register_command` push definitions into the plugin's pending
@@ -214,7 +214,7 @@ API directly; swapping engines later touches only that module.
 - Permission gate: capabilities keyed by `plugin:<pluginid>` consult the rule engine;
   ungranted capabilities are simply absent from the injected object (FR-020).
 - Logging posture: host-level traces at `debug`/`trace` only; the only `info`-level
-  plugin output is what the plugin itself emits through `ragent.log`/`ragent.message.*`
+  plugin output is what the plugin itself emits through `codemason.log`/`codemason.message.*`
   (FR-027).
 
 ### T-009 — Lifecycle
@@ -292,10 +292,10 @@ API directly; swapping engines later touches only that module.
 - On session end, unload all loaded plugins cleanly.
 - Record telemetry counters into the state ledger (FR-022).
 
-### T-017 — `ragent plugins` CLI parity
+### T-017 — `codemason plugins` CLI parity
 
 - Mirror `list`, `add`, `remove`, `enable`, `disable`, `test`, `help` as
-  `ragent plugins <subcommand>` in `src/cli.rs`, sharing the parser with the TUI
+  `codemason plugins <subcommand>` in `src/cli.rs`, sharing the parser with the TUI
   surface (FR-021).
 - Non-TUI output is plain text rows and `[ ok ]`/`[fail]` lines.
 
@@ -314,12 +314,12 @@ API directly; swapping engines later touches only that module.
 `codex-weather` (Codex, manifest-declared `get_weather`), `claude-todo` (Claude,
 manifest-declared `add_todo` + `todo-add` command with runtime handlers),
 `loop-forever` (`while (true) {}`), `escape-attempt`
-(`ragent.plugin.read_text_file("../../outside.txt")`), `future-api`
+(`codemason.plugin.read_text_file("../../outside.txt")`), `future-api`
 (`api_version: 99`), `claude-mcp` (`mcp_servers` unsupported section), `collider`
 (duplicate `bash` tool name to force a registry collision), and `bad-manifest`
 (truncated JSON).
 
-Automated acceptance coverage is `crates/ragent-plugins/tests/test_fixtures.rs`
+Automated acceptance coverage is `crates/codemason-plugins/tests/test_fixtures.rs`
 (14 tests) plus new master-switch cases in `test_control`, `test_commands`, the
 TUI `test_plugins_command`, and the CLI `test_plugins_cli_command`. The walk
 surfaced one real gap: `plugins.enabled: false` was only honoured by `test`, so
@@ -327,7 +327,7 @@ surfaced one real gap: `plugins.enabled: false` was only honoured by `test`, so
 disabled-subsystem `[err]` report and perform no discovery (acceptance criterion
 8, SPEC configuration schema).
 
-NFR timings (debug build, developer workstation, `ragent plugins` CLI):
+NFR timings (debug build, developer workstation, `codemason plugins` CLI):
 discovery + list over 50 installed plugins - 0.01-0.02 s (budget 2 s); `/plugins
 test` on a 10-tool plugin - 0.01 s (budget 15 s); infinite-loop entry contained
 within 0.815 s at an 800 ms entry budget. The harness itself asserts both budgets
@@ -388,7 +388,7 @@ so none of the 310 marketplace plugins could install.
   the `entry execution` step as a pass with detail `no entry point (non-JS plugin)`.
 - The `skills` and `mcpServers` manifest sections are accepted; consuming them is T-021.
 
-Verify: `cargo test -p ragent-plugins`; `tests/test_non_js_plugin.rs` covers install,
+Verify: `cargo test -p codemason-plugins`; `tests/test_non_js_plugin.rs` covers install,
 load, and harness; `tests/test_manifest.rs` covers the `entry = None` parse cases.
 
 ### T-020 — Prune the whole staging directory after a failed git-subdir install (FR-010)
@@ -418,7 +418,7 @@ installable but inert; T-021 consumes the two sections.
   the contributions of every **enabled** plugin in the project and global stores, with the
   server id prefixed `<plugin-id>.<server>` and external `mcp.json` files read relative to
   the plugin root behind a lexical path-traversal guard.
-- `ragent-agent` depends on `ragent-plugins`: `skill::effective_skill_dirs` appends plugin
+- `codemason-agent` depends on `codemason-plugins`: `skill::effective_skill_dirs` appends plugin
   skill dirs to the discovery roots, and `SessionProcessor::skill_registry` keys its mtime
   cache on the effective list; `plugin::plugin_mcp_servers` merges plugin servers with the
   configured `mcp` map (configured wins on id collision).
@@ -430,7 +430,7 @@ existing manifest/harness/fixture suites.
 ### T-022 — Surface plugin-contributed slash commands (FR-004, FR-031)
 
 The Claude marketplace (e.g. `commit-commands`) ships slash commands as `commands/*.md`
-prompt files, and a manifest `commands[]` array may also name prompt files. ragent only
+prompt files, and a manifest `commands[]` array may also name prompt files. codemason only
 parsed inline `commands[]` objects, so these commands never appeared and — unlike skills
 and MCP — the command bridge was never wired to the session surface.
 
@@ -443,7 +443,7 @@ and MCP — the command bridge was never wired to the session surface.
   ignored). Both dialects' parsers populate `ParsedManifest::commands`; the Claude parser
   merges the manifest array with the directory list.
 - `bridge::scanned_plugin_commands` resolves every **enabled** plugin's commands (prompt
-  bodies read from disk), and `ragent_agent::plugin::plugin_commands` maps them onto the
+  bodies read from disk), and `codemason_agent::plugin::plugin_commands` maps them onto the
   session surface: a free name registers bare, a colliding name registers under
   `plugin:<plugin-id>:<name>` so a plugin can never shadow a built-in, a skill, or another
   plugin.
@@ -476,23 +476,23 @@ and the two surfaces carry real value for a catalogue that is largely non-JS.
 - `bridge` gains `scanned_plugin_agent_files` / `plugin_agent_files` (resolve declared names,
   a bare name becoming `agents/<name>.md`, and refuse `..`/absolute escapes) and
   `scanned_plugin_hooks` (every enabled plugin's hooks, sorted).
-- `ragent-agent` custom-agent loading (`agent::custom::load_custom_agents`) appends the
-  plugin-contributed profile files as extra **sources** scanned after the `.ragent/agents/`
+- `codemason-agent` custom-agent loading (`agent::custom::load_custom_agents`) appends the
+  plugin-contributed profile files as extra **sources** scanned after the `.codemason/agents/`
   directories (so a project agent wins a name clash); each source may be a directory or a
   single file. The loader's frontmatter parser now tries JSON first and **falls back to
   YAML**, so Claude-dialect `agents/*.md` profiles load unchanged. The mtime cache key and its
   fast-path now cover the plugin files (and compare source-set length, so an empty cache entry
   cannot mask a later non-empty source set).
-- `ragent-agent` hooks (`hooks::merge_hook_configs` / `plugin_hook_configs` /
-  `HookTrigger::parse`) map plugin triggers (accepting ragent snake_case and Claude PascalCase)
+- `codemason-agent` hooks (`hooks::merge_hook_configs` / `plugin_hook_configs` /
+  `HookTrigger::parse`) map plugin triggers (accepting codemason snake_case and Claude PascalCase)
   onto the session hook engine and merge them after the configured hooks, so a user hook fires
   first. `loop_steps::prepare_client` merges the configured hooks with the enabled plugins'
   hooks when the turn's hook configs are built.
 - `/plugins list` shows agent paths and hook triggers in its contributions block; `/plugins
   test` reports the agent/hook counts in its manifest-validation detail.
 
-Verify: `crates/ragent-plugins/tests/test_manifest.rs` (agents dir/declaration merge, hook
-shapes), `test_bridge.rs` (agent/hook bridge, disabled inert), `crates/ragent-agent/tests/
+Verify: `crates/codemason-plugins/tests/test_manifest.rs` (agents dir/declaration merge, hook
+shapes), `test_bridge.rs` (agent/hook bridge, disabled inert), `crates/codemason-agent/tests/
 test_plugin_bridge.rs::plugin_agent_profile_loads_with_yaml_frontmatter`, and
 `test_plugin_hooks.rs` (trigger parsing + merge precedence).
 
@@ -513,11 +513,11 @@ downloaded but failed to install with `no plugin manifest found`.
   `parse_manifest` -> `parse_codex_manifest`, so the Codex `name`/`version` shape
   and the `skills` / `mcpServers` / `agents` / `hooks` bridges all apply.
 
-Verify: `crates/ragent-plugins/tests/test_descriptor.rs`
+Verify: `crates/codemason-plugins/tests/test_descriptor.rs`
 (`recognises_nested_codex_plugin_manifest`,
 `nested_codex_marker_without_manifest_file_is_not_a_plugin`) and
 `test_add.rs::add_nested_codex_manifest_directory_installs`; live
-`ragent plugins add 'git+https://github.com/openai/plugins#main:plugins/linear'`
+`codemason plugins add 'git+https://github.com/openai/plugins#main:plugins/linear'`
 then `enable`/`test`.
 
 ### T-025 — Resolve the multi-target nested manifest pair to Claude (FR-002)
@@ -537,7 +537,7 @@ install.
   **and** the Claude match is exactly `.claude-plugin/plugin.json`, it returns the
   Claude match. Claude is chosen because its manifest supports every bridged
   contribution surface (skills, MCP servers, commands, agents, hooks), whereas the
-  Codex sibling carries no extra ragent-relevant sections for these trees.
+  Codex sibling carries no extra codemason-relevant sections for these trees.
 - Every **other** both-match is unchanged and still refused:
   `codex-plugin.json` beside `claude-plugin.json`, a `plugin.json` with a top-level
   `"codex"` marker beside a Claude manifest, or a nested Codex manifest beside a
@@ -547,13 +547,13 @@ install.
   exactly as a Claude-store plugin always has, and the nested Codex manifest is
   simply left inert beside it in the installed tree.
 
-Verify: `crates/ragent-plugins/tests/test_descriptor.rs`
+Verify: `crates/codemason-plugins/tests/test_descriptor.rs`
 (`multi_target_nested_manifest_pair_resolves_to_claude`,
 `nested_codex_manifest_plus_top_level_claude_manifest_is_ambiguous`,
 `detect_dialect_resolves_multi_target_nested_pair_on_disk`), with the existing
 `ambiguous_directory_is_rejected` / `detect_dialect_reports_ambiguity_on_disk`
 still asserting the non-multi-target refusals; live
-`ragent plugins add 'git+https://github.com/mongodb/agent-skills#main:plugins/mongodb'`
+`codemason plugins add 'git+https://github.com/mongodb/agent-skills#main:plugins/mongodb'`
 then `list`/`test`.
 
 ### T-026 — Honour the full Claude hook declaration surface (FR-033)
@@ -571,7 +571,7 @@ findings through `hookSpecificOutput.additionalContext` / a blocking `exit 2` �
 none of which the bridge honoured.
 
 - `manifest`: new `HOOKS_FILE = "hooks.json"` and
-  `read_plugin_hooks_file` (`crates/ragent-plugins/src/manifest.rs`), which reads the root
+  `read_plugin_hooks_file` (`crates/codemason-plugins/src/manifest.rs`), which reads the root
   and `hooks/` locations, unwraps the top-level `hooks` envelope, and returns each
   `(trigger, entries)` pair. Both dialect parsers merge it with the inline section.
   `extract_hooks` now takes the plugin root, unwraps the group shape (inheriting a
@@ -579,7 +579,7 @@ none of which the bridge honoured.
   `if` fields, and **skips any entry whose `type` is not `command`**. `PluginHook`
   gains `plugin_root` (the absolute root for `CLAUDE_PLUGIN_ROOT`) and
   `matcher: Option<String>`.
-- `ragent-agent` hooks: `HookConfig` gains the same two fields and a
+- `codemason-agent` hooks: `HookConfig` gains the same two fields and a
   `matches_tool(tool_name, tool_input)` that treats a `|`/`,`-separated matcher as
   a tool-name list, with `Name(pattern)` guards (`Bash(git commit:*)` = prefix
   match, any other `*` a glob over the tool-input strings).
@@ -587,7 +587,7 @@ none of which the bridge honoured.
 - Claude protocol: `claude_event_payload` writes the event JSON
   (`hook_event_name`, `cwd`, `session_id`, `tool_name`, `tool_input`,
   `tool_response`, `tool_success`) to the hook's stdin — only for a
-  plugin-contributed hook (a `ragent.json` hook keeps the env-only contract) — and
+  plugin-contributed hook (a `codemason.json` hook keeps the env-only contract) — and
   `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PROJECT_DIR` join the environment.
 - Guidance delivery: a `PostToolUse` hook's `hookSpecificOutput.additionalContext`
   is collected into `PostToolUseResult::Ok::additional_context` and folded into the
@@ -624,21 +624,21 @@ just been fetched. The `/plugins claude` browser's
 `git+https://github.com/mongodb/agent-skills#main:plugins/mongodb` entry was the
 reported case.
 
-- The checkout is now `git checkout FETCH_HEAD`. `FETCH_HEAD` is a name ragent writes
+- The checkout is now `git checkout FETCH_HEAD`. `FETCH_HEAD` is a name codemason writes
   itself and the ref that filled it already passed [`git_ref`] (no leading `-`,
   `[A-Za-z0-9._/-]` charset only), so it cannot be read as an option. A
   `-`-prefixed ref still falls back to the default branch at parse time, which is
   what `add_refuses_an_option_like_ref_without_running_it` asserts.
 - The `git fetch --depth 1 -- origin <ref>` keeps its separator: both operands are
-  positionals and must not be mistaken for options, so the SEC-ragent-plugins-001
+  positionals and must not be mistaken for options, so the SEC-codemason-plugins-001
   defence is unchanged there.
 
 Verify: new `add_checks_out_a_non_default_ref` in
-`crates/ragent-plugins/tests/test_store_git_source.rs` builds an offline `file://`
+`crates/codemason-plugins/tests/test_store_git_source.rs` builds an offline `file://`
 remote whose `main` and `alt` branches carry different plugin ids and asserts the
 `#alt` install yields the `alt` id - a silently-dropped ref would install `main`'s
 id and fail. The existing `add_installs_a_plugin_from_a_git_subdirectory_source` /
 `add_installs_a_plugin_from_a_whole_repo_git_source` / TC-019 / TC-024 cases stay
 green; live
-`ragent plugins add 'git+https://github.com/mongodb/agent-skills#main:plugins/mongodb'`
+`codemason plugins add 'git+https://github.com/mongodb/agent-skills#main:plugins/mongodb'`
 then `list`/`test`.

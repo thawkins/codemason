@@ -45,13 +45,13 @@ The goal of this migration is to:
 In scope:
 
 - New `tavily` module under
-  `crates/ragent-tools-extended/src/masterfetch/search/`.
+  `crates/codemason-tools-extended/src/masterfetch/search/`.
 - Updates to `MfSearchTool::build_orchestrator` to add the Tavily
   backend when a Tavily API key is configured.
 - Refactoring of `WebSearchTool` to delegate through
   `MfSearchTool` / `SearchOrchestrator` while keeping the same public
   tool name, schema, and output shape.
-- Update `ragent-agent/src/research_adapter.rs` to build the research
+- Update `codemason-agent/src/research_adapter.rs` to build the research
   `WebGatherer` with a `mf_search`-backed search tool.
 - Tests and documentation updates.
 
@@ -130,7 +130,7 @@ scenario in CI benchmarks.
 
 NFR-002 — All new code shall follow the existing module documentation,
 error-handling, and test-visibility conventions in
-`ragent-tools-extended`.
+`codemason-tools-extended`.
 
 NFR-003 — The `TavilyEngine` and `WebSearchTool` changes shall be unit
 and integration-testable without making live Tavily API calls.
@@ -140,11 +140,11 @@ that Tavily is an optional parallel backend when a key is configured.
 
 ## References
 
-- `crates/ragent-tools-extended/src/websearch.rs`
-- `crates/ragent-tools-extended/src/masterfetch/tools/search_tool.rs`
-- `crates/ragent-tools-extended/src/masterfetch/search/engine.rs`
-- `crates/ragent-tools-extended/src/masterfetch/search/langsearch.rs`
-- `crates/ragent-tools-extended/src/masterfetch/search/mod.rs`
-- `crates/ragent-agent/src/research_adapter.rs`
-- `crates/ragent-research/src/web_gatherer.rs`
-- `crates/ragent-config/src/config.rs`
+- `crates/codemason-tools-extended/src/websearch.rs`
+- `crates/codemason-tools-extended/src/masterfetch/tools/search_tool.rs`
+- `crates/codemason-tools-extended/src/masterfetch/search/engine.rs`
+- `crates/codemason-tools-extended/src/masterfetch/search/langsearch.rs`
+- `crates/codemason-tools-extended/src/masterfetch/search/mod.rs`
+- `crates/codemason-agent/src/research_adapter.rs`
+- `crates/codemason-research/src/web_gatherer.rs`
+- `crates/codemason-config/src/config.rs`

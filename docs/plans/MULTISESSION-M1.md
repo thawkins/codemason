@@ -12,7 +12,7 @@ at the end).
 
 ## T1.1 `App` field classification
 
-Source: `pub struct App` in `crates/ragent-tui/src/app/state.rs`
+Source: `pub struct App` in `crates/codemason-tui/src/app/state.rs`
 (lines 3040-4292). **350 public fields**, every one classified below, with no
 duplicates or omissions (checked by script against the struct).
 
@@ -70,7 +70,7 @@ then the plan/rollback/autopilot/spec continuations.
 
 ### GF: global, already keyed by session (23)
 
-`active_tasks` (`TaskEntry.parent_session_id`, `ragent-agent/src/task/mod.rs:375`),
+`active_tasks` (`TaskEntry.parent_session_id`, `codemason-agent/src/task/mod.rs:375`),
 `agents_history`, `agents_history_cap`, `bg_tasks`, `subagent_launches`,
 `subagent_launch_results`, `subagent_launch_cap`, `next_subagent_launch_id`,
 `active_tasks_reconcile_result`, `active_tasks_reconcile_last`,
@@ -138,9 +138,9 @@ There are 50 production `current_dir()` call sites.
 
 - The agent loop resolves `working_dir` from `sessions.directory`, and uses
   the process cwd only when the session row is missing:
-  `ragent-agent/src/session/loop_steps.rs:314`,
+  `codemason-agent/src/session/loop_steps.rs:314`,
   `session/processor.rs:4250` (`announce_instruction_files`).
-- Tools receive `ToolContext.working_dir` (`ragent-tools-core/src/lib.rs:155`).
+- Tools receive `ToolContext.working_dir` (`codemason-tools-core/src/lib.rs:155`).
   Path containment (`check_path_within_allowed_roots_cached`, `lib.rs:425`)
   is checked against that working dir plus `allowed_roots`. File tools
   therefore already follow the session's directory.
@@ -151,15 +151,15 @@ There are 50 production `current_dir()` call sites.
 
 | # | Site | Problem | Fix |
 | --- | --- | --- | --- |
-| 1 | `ragent-config/src/config.rs:1827` (`Config::load` cache) | Project config is resolved from the **process** cwd, so every session uses the launch project's config | Add `Config::load_for(dir)`; give `SessionProcessor::load_config_cached` a directory argument. Callers: `loop_steps.rs:170`, `task/mod.rs:939`, `task/mod.rs:1636`, `acp_dispatch.rs:107`, `agent/mod.rs:2782`, `plugin.rs:117`, `skill/mod.rs:540` |
-| 2 | `ragent-agent/src/session/permissions.rs:809` | The `file:read` auto-grant inside the cwd uses the process cwd, so reads in another project's session would prompt every time | Pass the session working dir into the permission check |
+| 1 | `codemason-config/src/config.rs:1827` (`Config::load` cache) | Project config is resolved from the **process** cwd, so every session uses the launch project's config | Add `Config::load_for(dir)`; give `SessionProcessor::load_config_cached` a directory argument. Callers: `loop_steps.rs:170`, `task/mod.rs:939`, `task/mod.rs:1636`, `acp_dispatch.rs:107`, `agent/mod.rs:2782`, `plugin.rs:117`, `skill/mod.rs:540` |
+| 2 | `codemason-agent/src/session/permissions.rs:809` | The `file:read` auto-grant inside the cwd uses the process cwd, so reads in another project's session would prompt every time | Pass the session working dir into the permission check |
 | 3 | TUI, about 25 sites: `app/helpers.rs:503` (`current_working_dir`), `app/event_handler.rs:1355,1672,2875`, `app/input_handler.rs:1340,1394`, `app/models.rs:1093,1718,2168`, `app/slash.rs:5074`, `app/session_ops.rs:4287`, `app/backend_panel.rs:313`, `app/bench.rs:479`, `app/init.rs:75`, `layout_teams.rs:371,430`, `layout.rs`, `clipboard.rs:219` | Read the launch directory instead of the focused session's | Replace with the focused session's project root |
 
 ### Low priority / leave as is
 
 - `team/manager.rs:1978,1983`: these use the process cwd only when the lead
   session lookup fails.
-- `ragent-tools-core/src/bash.rs:191` (`bash_scratch_dir`): scratch location
+- `codemason-tools-core/src/bash.rs:191` (`bash_scratch_dir`): scratch location
   only.
 - `session/archive.rs:469`: import containment. It should use the focused
   project root once imports run from the TUI against a non-launch project.
@@ -197,7 +197,7 @@ New command set: `/session new [path]`, `/session switch <id|prefix>`,
 
 ## T1.4 Server and ACP
 
-- **HTTP server** (`crates/ragent-server/src/routes/mod.rs:167-175`): already
+- **HTTP server** (`crates/codemason-server/src/routes/mod.rs:167-175`): already
   addressed by session (`/sessions`, `/sessions/{id}`,
   `/sessions/{id}/abort`, `/sessions/{id}/permission/{req_id}`,
   `/sessions/{id}/tasks`). There is no global "current session". **No change.**

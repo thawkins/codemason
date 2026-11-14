@@ -5,7 +5,7 @@
 
 `/browse_refresh` rebuilds the in-memory project-file index that the `@`
 file picker uses for autocomplete suggestions. Use it when files have been
-created, renamed, or deleted outside ragent and the picker is showing a stale
+created, renamed, or deleted outside codemason and the picker is showing a stale
 list. The cache is also refreshed automatically in the background, so this
 command is only needed for an immediate refresh.
 

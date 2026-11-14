@@ -1,13 +1,13 @@
-# ragent Repository Reverse-Engineering Manual
+# codemason Repository Reverse-Engineering Manual
 
-This guide explains how to use ragent's `/spec reverse` command to reverse-engineer
+This guide explains how to use codemason's `/spec reverse` command to reverse-engineer
 the purpose, architecture, and function of public GitHub repositories. The
 command fetches a repository's metadata, root file tree, and README via the
 GitHub API, then asks the currently selected LLM model to generate a synthetic
 "creation prompt" — a detailed prompt that, if fed to a coding agent, would
 reproduce the repository from scratch.
 
-There is no `ragent reverse` CLI subcommand; the feature is TUI-only (see
+There is no `codemason reverse` CLI subcommand; the feature is TUI-only (see
 [Section 9](#9-cli-equivalents)).
 
 > **Scope:** `/spec reverse` slash commands, the `/new` scaffold flags
@@ -75,7 +75,7 @@ guessing at the architecture, `/spec reverse` automates the entire process:
 
 ## 2. Quick start
 
-Open ragent and run:
+Open codemason and run:
 
 ```text
 /spec reverse thrivethrough/omitme
@@ -221,7 +221,7 @@ instructed to produce a prompt that:
 5. **Highlights key design decisions** — notable architectural choices,
    patterns, and trade-offs visible from the file tree and README.
 
-The generated prompt is designed to be fed to a coding agent (like ragent
+The generated prompt is designed to be fed to a coding agent (like codemason
 itself) to reproduce the repository's functionality from scratch.
 
 ### Example generated prompt structure
@@ -326,15 +326,15 @@ Target a Rust TUI app on the ratatui stack:
 With the scaffold flags present, `--folder <path>` does more than steer the
 prompt: it scaffolds a real project in `<path>` using the same engine `/new`
 and `/spec govcreate` use. The engine is shared, so the result is byte-for-byte
-what `/new` would produce for those flags — workspace artifacts (`.ragent/`,
+what `/new` would produce for those flags — workspace artifacts (`.codemason/`,
 `specs/`, `log/`, `.gitignore`, `AGENTS.md`), the language layout and
 hello-world starter, `README.md` / `QUICKSTART.md` / `STATS.md` / `docs/`, a
 `git init` with an initial commit, and, with `--github` / `--gitlab`, a private
 remote set as `origin` plus a push.
 
 `<path>` is created if it does not exist. When `--folder` is omitted, the
-current directory is scaffolded in place (mirroring `ragent new`). The target
-must be empty apart from `.ragent/`, `log/`, and `target/` — the same guard
+current directory is scaffolded in place (mirroring `codemason new`). The target
+must be empty apart from `.codemason/`, `log/`, and `target/` — the same guard
 `/new` runs.
 
 The scaffold step runs **before** prompt synthesis, so a refusal is reported
@@ -428,7 +428,7 @@ implement the spec (see `docs/howtos/spec.md` for details).
 A GitHub token is a **prerequisite**: `/spec reverse` refuses to run without one
 and reports "No GitHub token configured. Run `/github login` to
 authenticate, then re-run `/spec reverse`." The token is resolved via
-`/github login` (OAuth device flow, stored in `~/.ragent/github_token`) or
+`/github login` (OAuth device flow, stored in `~/.codemason/github_token`) or
 the `GITHUB_TOKEN` environment variable. Unauthenticated GitHub API access
 allows only 60 requests per hour per IP; an authenticated token raises this
 to 5,000 requests per hour.
@@ -446,7 +446,7 @@ GitLab API calls require a personal access token. The token is resolved in
 priority order:
 
 1. `GITLAB_TOKEN` environment variable
-2. `ragent.json` configuration
+2. `codemason.json` configuration
 3. Encrypted credential database (configured via `/gitlab setup`)
 
 For self-hosted GitLab instances, the host is resolved in priority order:
@@ -478,7 +478,7 @@ avoid hitting the rate limit.
 | `network error` | Connection issue | Check network connectivity and retry |
 | `gitlab token missing` | No GitLab token configured | Set `GITLAB_TOKEN` env var or run `/gitlab setup` |
 | `invalid depth` | `--depth` value out of range | Use a value between 1 and 10 |
-| `target folder is not empty` | `--folder` target has entries other than `.ragent/`, `log/`, `target/` | Empty the folder or choose another `--folder`; the prompt is still generated |
+| `target folder is not empty` | `--folder` target has entries other than `.codemason/`, `log/`, `target/` | Empty the folder or choose another `--folder`; the prompt is still generated |
 | `--folder requires --language and --type` | `--folder`/`--github`/`--gitlab` used without scaffold flags | Add `--language <lang> --type <type>` |
 | no GitHub/GitLab token for `--github`/`--gitlab` | Hosting requested without credentials | Run `/github login` or `/gitlab setup`; the local scaffold remains intact |
 
@@ -495,8 +495,8 @@ avoid hitting the rate limit.
 ## 9. CLI equivalents
 
 `/spec reverse` is available only inside the TUI. The clap CLI registers no
-`ragent reverse` subcommand, and `ragent spec` exposes only `govcreate`, so
-there is no command-line equivalent today. Run `ragent --help` for the
+`codemason reverse` subcommand, and `codemason spec` exposes only `govcreate`, so
+there is no command-line equivalent today. Run `codemason --help` for the
 subcommands that do exist.
 
 ---
@@ -703,7 +703,7 @@ approach using the specified testing tools.
 
 ## 14. Workflow integration
 
-The `/spec reverse` command integrates with ragent's spec management system to
+The `/spec reverse` command integrates with codemason's spec management system to
 provide a complete reverse-engineering-to-implementation pipeline:
 
 ```

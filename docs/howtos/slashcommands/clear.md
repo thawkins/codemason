@@ -62,4 +62,4 @@ messages cleared
 
 - `/compact`  -  summarise long history into a compact form instead of clearing
 - `/history`  -  browse previous inputs and re-insert one
-- `ragent session` (CLI)  -  manage stored sessions (`list`, `resume`, `export-archive`, `import`)
+- `codemason session` (CLI)  -  manage stored sessions (`list`, `resume`, `export-archive`, `import`)

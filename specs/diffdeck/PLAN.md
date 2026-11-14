@@ -13,17 +13,17 @@ writes `DECK-<YYYY-MM-DD>.md` through `ResearchIo::atomic_write`. Both the TUI
 slash command and the CLI sub-command call the same orchestration function so the
 two surfaces cannot drift (ANTIPAT M3.10).
 
-Placement: a new module `crates/ragent-research/src/deck.rs`, re-exported from
-`crates/ragent-research/src/lib.rs`; the verb is added to
-`ResearchCliCommand` in `crates/ragent-research/src/cli.rs`; the TUI arm goes in
-`crates/ragent-tui/src/app/research.rs`; the catalogue entry for `/research`
-sub-commands goes in `crates/ragent-agent/src/tool/command_catalog.rs`.
+Placement: a new module `crates/codemason-research/src/deck.rs`, re-exported from
+`crates/codemason-research/src/lib.rs`; the verb is added to
+`ResearchCliCommand` in `crates/codemason-research/src/cli.rs`; the TUI arm goes in
+`crates/codemason-tui/src/app/research.rs`; the catalogue entry for `/research`
+sub-commands goes in `crates/codemason-agent/src/tool/command_catalog.rs`.
 
 ## Tasks
 
 | ID | Title | Requirement | Effort | Priority | Status | Dependencies |
 |----|-------|-------------|--------|----------|--------|--------------|
-| T-001 | Add `crates/ragent-research/src/deck.rs` with the element model: a `DeckElement` enum of the six section kinds, its `label()` and the FR-003 precedence ordering, and the `parse_report(text) -> ParsedReport` splitter that walks `## ` headings and collects each section's item units, recording a warning for unknown sections and refusing when no recognised top-level section exists | FR-003, FR-009, FR-019 | M | Critical | completed | — |
+| T-001 | Add `crates/codemason-research/src/deck.rs` with the element model: a `DeckElement` enum of the six section kinds, its `label()` and the FR-003 precedence ordering, and the `parse_report(text) -> ParsedReport` splitter that walks `## ` headings and collects each section's item units, recording a warning for unknown sections and refusing when no recognised top-level section exists | FR-003, FR-009, FR-019 | M | Critical | completed | — |
 | T-002 | Implement per-section item extraction matching the element-to-unit mapping table: paragraph units for Executive Summary, numbered items for Top Implications, bullet items for Open Questions and In-Project Cross-References, `### **Finding N** -` blocks for Findings, and `[#N]` entries for References Index, reusing the headline extraction logic already in `document.rs` | FR-009 | M | Critical | completed | T-001 |
 | T-003 | Implement `normalize_identity(item) -> String` (strip `[#N]` citations, Markdown emphasis, backticks, collapse whitespace, lowercase; findings keyed by extracted headline, references keyed by normalised URL) and the section-scoped `HashMap` index used to match items between reports | FR-009, NFR-001 | S | Critical | completed | T-002 |
 | T-004 | Implement `condense_bullet(item) -> String`: first sentence of the item text, whitespace-collapsed, Markdown-significant characters (`\ | `, backtick, leading `#`) escaped, capped at 200 characters with a trailing ellipsis | M | Medium | completed | Pending |
@@ -32,10 +32,10 @@ sub-commands goes in `crates/ragent-agent/src/tool/command_catalog.rs`.
 | T-007 | Implement report selection: enumerate `research/<name>/`, classify dated versus legacy names via the existing `io::is_dated_research_file_name`, order lexicographically descending, and pick the default newest pair, the `--from` / `--to` pair with adjacent-report pairing, `RESEARCH.md` as oldest baseline, and the FR-011 / FR-012 / FR-020 refusals | FR-006, FR-007, FR-011, FR-012, FR-020 | M | Critical | completed | — |
 | T-008 | Implement the orchestration entry point `ResearchManager::deck(&self, name, options) -> Result<DeckOutcome>`: item existence check, report selection, read both reports (UTF-8 + parse validity), diff, element filter, `--include-old` handling, `--force` guard, `--out` path resolution with parent creation, and `ResearchIo::atomic_write` to the resolved output path | FR-002, FR-011, FR-014, FR-015, FR-016, FR-017, FR-018, FR-019, FR-021 | M | Critical | completed | T-006, T-007 |
 | T-009 | Add `Deck { name, from, to, elements, include_old, out, force }` to `ResearchCliCommand` with hand-written parsing in `cli.rs`, including `--elements` validation against the six element names and `--from` / `--to` `YYYY-MM-DD` stamp validation | FR-001, FR-014, FR-015, FR-016, FR-017, FR-020 | S | High | completed | T-001 |
-| T-010 | Wire the `ResearchCliCommand::Deck` arm in `crates/ragent-tui/src/app/research.rs`: spawn the orchestration on the tokio handle, publish a `TextDelta` reporting `From: /research deck` with the written path and per-status counts, and publish an `AgentNotice` on success and on refusal | FR-001, FR-010 | S | High | completed | T-008, T-009 |
-| T-011 | Wire the `ragent research deck` CLI sub-command in `src/cli.rs` to the same orchestration function, emitting the existing `ragent-research:` JSON event line plus a human summary, and keep both surfaces on one function | FR-001, FR-021 | S | High | completed | T-008, T-009 |
+| T-010 | Wire the `ResearchCliCommand::Deck` arm in `crates/codemason-tui/src/app/research.rs`: spawn the orchestration on the tokio handle, publish a `TextDelta` reporting `From: /research deck` with the written path and per-status counts, and publish an `AgentNotice` on success and on refusal | FR-001, FR-010 | S | High | completed | T-008, T-009 |
+| T-011 | Wire the `codemason research deck` CLI sub-command in `src/cli.rs` to the same orchestration function, emitting the existing `codemason-research:` JSON event line plus a human summary, and keep both surfaces on one function | FR-001, FR-021 | S | High | completed | T-008, T-009 |
 | T-012 | Extend the slash-command catalogue: add `deck` to `RESEARCH_SUBS` and the deck flags to `RESEARCH_FLAGS` in `command_catalog.rs`, and add the verb to the `/research help` text so completion and help agree with the parser | FR-001, FR-014, FR-015, FR-016, FR-017 | S | Medium | completed | T-009 |
-| T-013 | Add tests under `crates/ragent-research/tests/` (one `test_deck_*.rs` file per concern, registered in `tests/all.rs`): status assignment for each of the four tags, slide precedence and completeness (changed plus `OLD` items), empty-diff rendering, bullet escaping and 200-character cap, default pair selection, legacy baseline handling, and every refusal path | FR-004, FR-006, FR-008, FR-011, FR-012, FR-013, FR-014, FR-017, FR-018, FR-019, FR-020, FR-022 | M | High | completed | T-005, T-006, T-007, T-008 |
+| T-013 | Add tests under `crates/codemason-research/tests/` (one `test_deck_*.rs` file per concern, registered in `tests/all.rs`): status assignment for each of the four tags, slide precedence and completeness (changed plus `OLD` items), empty-diff rendering, bullet escaping and 200-character cap, default pair selection, legacy baseline handling, and every refusal path | FR-004, FR-006, FR-008, FR-011, FR-012, FR-013, FR-014, FR-017, FR-018, FR-019, FR-020, FR-022 | M | High | completed | T-005, T-006, T-007, T-008 |
 | T-014 | Add a determinism and budget assertion: the same two input reports render byte-identically across two invocations (and across a provider-configured versus provider-free environment), and a diff over 2000 items completes inside the NFR-001 budget | FR-021, NFR-001, NFR-002 | S | Medium | completed | T-008, T-013 |
 | T-015 | Confirm the no-`unsafe` / no-`unwrap`-on-production-path rule on every new code path and add the deck module's `//!` docblock naming its dependencies, with `diff_reports` / `render_deck` exposed as pure functions over in-memory strings | NFR-003, NFR-004 | S | Medium | completed | T-008 |
 | T-016 | Update documentation: the `/research` section of `docs/howtos/research.md` and root `SPEC.md` (deck verb, status tag definitions, file naming, coverage window), plus a `CHANGELOG.md` entry | FR-001, FR-002, FR-004, FR-005 | S | Low | completed | T-011, T-012 |
@@ -69,7 +69,7 @@ sub-commands goes in `crates/ragent-agent/src/tool/command_catalog.rs`.
 
 - Do not add a new inline `#[cfg(test)]` module; every test file is registered
   via one `#[path = "test_x.rs"] mod test_x;` line in
-  `crates/ragent-research/tests/all.rs`.
+  `crates/codemason-research/tests/all.rs`.
 - Do not weaken the atomic-write guarantee to gain a faster path: one
   `ResearchIo::atomic_write` call, as every other research artifact uses.
 - Element matching must be keyed by a hash map, never a nested linear scan

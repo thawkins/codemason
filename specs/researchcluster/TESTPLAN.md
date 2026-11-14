@@ -6,16 +6,16 @@ status: draft
 
 ## Overview
 
-This document describes manual test procedures for the `/research cluster` slash command. All tests assume a working ragent build and a configured LLM provider.
+This document describes manual test procedures for the `/research cluster` slash command. All tests assume a working codemason build and a configured LLM provider.
 
 ## Prerequisites
 
-1. A local ragent binary exists at `./target/release/ragent` (or equivalent).
+1. A local codemason binary exists at `./target/release/cdmn` (or equivalent).
 2. An LLM provider is configured with a valid API key (e.g., `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or a local Ollama endpoint).
 3. A completed research run with downloaded web sources exists under `research/<run_name>/sources/`.
    - If none exists, create one with a command such as:
      ```bash
-     ./target/release/ragent run --no-tui "research the Rust programming language to docs/research/rust-history"
+     ./target/release/cdmn run --no-tui "research the Rust programming language to docs/research/rust-history"
      ```
 4. The `sources/` folder for that run contains at least two non-empty source documents.
 
@@ -36,7 +36,7 @@ This document describes manual test procedures for the `/research cluster` slash
 - `research/rust-history/CONCEPTS.md` does not already exist.
 
 **Steps:**
-1. Launch the TUI by running `./target/release/ragent`.
+1. Launch the TUI by running `./target/release/cdmn`.
 2. Wait for the main chat interface to render.
 3. Press the input-focus key (default `i` or click the input bar) and type `/research cluster rust-history`.
 4. Press `Enter`.
@@ -60,7 +60,7 @@ This document describes manual test procedures for the `/research cluster` slash
 - No folder named `research/nonexistent-run` exists.
 
 **Steps:**
-1. Launch the TUI by running `./target/release/ragent`.
+1. Launch the TUI by running `./target/release/cdmn`.
 2. Wait for the main chat interface to render.
 3. Focus the input bar and type `/research cluster nonexistent-run`.
 4. Press `Enter`.
@@ -84,7 +84,7 @@ This document describes manual test procedures for the `/research cluster` slash
 - `research/empty-run/` exists but contains no `sources/` sub-folder.
 
 **Steps:**
-1. Launch the TUI by running `./target/release/ragent`.
+1. Launch the TUI by running `./target/release/cdmn`.
 2. Wait for the main chat interface to render.
 3. Focus the input bar and type `/research cluster empty-run`.
 4. Press `Enter`.
@@ -108,7 +108,7 @@ This document describes manual test procedures for the `/research cluster` slash
 - `research/no-sources-run/sources/` exists but contains no files.
 
 **Steps:**
-1. Launch the TUI by running `./target/release/ragent`.
+1. Launch the TUI by running `./target/release/cdmn`.
 2. Wait for the main chat interface to render.
 3. Focus the input bar and type `/research cluster no-sources-run`.
 4. Press `Enter`.
@@ -133,7 +133,7 @@ This document describes manual test procedures for the `/research cluster` slash
 - Note the current modification time and first line of the existing file.
 
 **Steps:**
-1. Launch the TUI by running `./target/release/ragent`.
+1. Launch the TUI by running `./target/release/cdmn`.
 2. Wait for the main chat interface to render.
 3. Focus the input bar and type `/research cluster rust-history`.
 4. Press `Enter`.
@@ -160,7 +160,7 @@ This document describes manual test procedures for the `/research cluster` slash
 - Note the current modification time of the existing file.
 
 **Steps:**
-1. Launch the TUI by running `./target/release/ragent`.
+1. Launch the TUI by running `./target/release/cdmn`.
 2. Wait for the main chat interface to render.
 3. Focus the input bar and type `/research cluster rust-history --force`.
 4. Press `Enter`.
@@ -188,7 +188,7 @@ This document describes manual test procedures for the `/research cluster` slash
 1. Open a terminal in the project root.
 2. Run the command:
    ```bash
-   ./target/release/ragent run --no-tui "research cluster rust-history"
+   ./target/release/cdmn run --no-tui "research cluster rust-history"
    ```
 
 **Test data to enter:**

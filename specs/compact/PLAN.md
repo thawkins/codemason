@@ -1,6 +1,6 @@
 # Implementation Plan: OpenCode-Derived Context Compaction
 
-This plan migrates ragent from the `headroom-core`-based compression pipeline
+This plan migrates codemason from the `headroom-core`-based compression pipeline
 to a Rust port of OpenCode's summarisation-based compaction. Each task maps to
 one or more requirements in [`SPEC.md`](SPEC.md).
 
@@ -10,7 +10,7 @@ one or more requirements in [`SPEC.md`](SPEC.md).
 |------|-------|
 | Spec ID | `compact` |
 | Default status after migration | `auto: true` |
-| Core new crate module | `ragent-agent::session::compaction` |
+| Core new crate module | `codemason-agent::session::compaction` |
 | Config schema | replace `CompressionConfig` with `CompactionConfig` |
 | Removed dependency | `headroom-core` |
 | Removed concepts | CCR markers, `headroom_retrieve`, content-type compressors |
@@ -20,7 +20,7 @@ one or more requirements in [`SPEC.md`](SPEC.md).
 | ID | Title | Requirement | Effort | Priority | Status | Dependencies |
 |----|-------|-------------|--------|----------|--------|--------------|
 | T-001 | Audit and document current Headroom usage | FR-012, FR-013 | S | High | completed | — |
-| T-002 | Design `CompactionConfig` in `ragent-config` | FR-008, FR-011 | S | High | completed | T-001 |
+| T-002 | Design `CompactionConfig` in `codemason-config` | FR-008, FR-011 | S | High | completed | T-001 |
 | T-003 | Add `compaction` message type to storage and events | FR-005, FR-007 | M | High | completed | T-001 |
 | T-004 | Implement conversation serialiser for compaction prompts | FR-014 | M | High | completed | T-001 |
 | T-005 | Implement token estimator and compaction trigger | FR-002, FR-003 | M | High | completed | T-002 |
@@ -31,7 +31,7 @@ one or more requirements in [`SPEC.md`](SPEC.md).
 | T-010 | Replace `/compress` slash command with `/compact` | FR-009 | M | Medium | completed | T-007 |
 | T-011 | Remove Headroom dependency, CCR store, and pipeline | FR-012, FR-013 | L | High | completed | T-007, T-008, T-009 |
 | T-012 | Write unit and integration tests for compaction flow | All FR | L | High | pending | T-004–T-009 |
-| T-013 | Update user documentation and `ragent.json` schema examples | FR-011 | S | Medium | completed | T-002, T-010 |
+| T-013 | Update user documentation and `codemason.json` schema examples | FR-011 | S | Medium | completed | T-002, T-010 |
 ## Task details
 
 ### T-001 — Audit and document current Headroom usage
@@ -42,7 +42,7 @@ one or more requirements in [`SPEC.md`](SPEC.md).
 - Produce an internal markdown map of files, symbols, and removal order.
 - Identify tests and benchmarks that will be deleted or rewritten.
 
-### T-002 — Design `CompactionConfig` in `ragent-config`
+### T-002 — Design `CompactionConfig` in `codemason-config`
 
 Replace `CompressionConfig` (and its sub-types) with a minimal schema matching
 OpenCode's `ConfigCompaction.Info`:
@@ -65,7 +65,7 @@ OpenCode's `ConfigCompaction.Info`:
 
 ### T-003 ��� Add `compaction` message type to storage and events
 
-- Add `Compaction` variant to `ragent_types::event::Event` carrying
+- Add `Compaction` variant to `codemason_types::event::Event` carrying
   `session_id`, `original_tokens`, `compressed_tokens`, `compression_ratio`,
   `did_compress`, `reason` (auto / overflow / manual).
 - Add `Role::Compaction` or a `type` discriminator on `Message` so SQLite can
@@ -105,7 +105,7 @@ Port `SessionCompaction.serialize` from OpenCode:
 
 ### T-007 — Implement compaction runner and message replacement
 
-- New module `ragent_agent::session::compaction` with a `CompactionService`
+- New module `codemason_agent::session::compaction` with a `CompactionService`
   or free functions:
   - `compact_if_needed(...)` for pre-send path.
   - `compact_after_overflow(...)` for emergency path.
@@ -118,7 +118,7 @@ Port `SessionCompaction.serialize` from OpenCode:
 
 ### T-008 — Integrate compaction into agent loop pre-send path
 
-- Modify `crates/ragent-agent/src/session/processor.rs` and/or
+- Modify `crates/codemason-agent/src/session/processor.rs` and/or
   `loop_steps.rs` to call `compact_if_needed` before the LLM request when
   `compaction.auto` is true.
 - After compaction, rebuild `chat_messages` from the latest compaction plus
@@ -137,9 +137,9 @@ Port `SessionCompaction.serialize` from OpenCode:
 
 ### T-010 — Replace `/compress` slash command with `/compact`
 
-- In `crates/ragent-tui/src/app/slash.rs`, rename the command entry and
+- In `crates/codemason-tui/src/app/slash.rs`, rename the command entry and
   update help text.
-- In `crates/ragent-tui/src/app/compress.rs`, implement
+- In `crates/codemason-tui/src/app/compress.rs`, implement
   `handle_compact_command` using the new compaction service instead of the
   Headroom pipeline.
 - Update `compress.rs` filename or module name to `compact.rs`.
@@ -148,9 +148,9 @@ Port `SessionCompaction.serialize` from OpenCode:
 
 ### T-011 — Remove Headroom dependency, CCR store, and pipeline
 
-- Delete `crates/ragent-agent/src/compression/` module tree.
-- Remove `headroom-core` from `crates/ragent-agent/Cargo.toml`.
-- Delete `ragent-config/src/compression.rs` or replace it with the new
+- Delete `crates/codemason-agent/src/compression/` module tree.
+- Remove `headroom-core` from `crates/codemason-agent/Cargo.toml`.
+- Delete `codemason-config/src/compression.rs` or replace it with the new
   `compaction.rs`.
 - Remove CCR marker parsing, `headroom_retrieve` tool registration, and
   `CompressionMode`.
@@ -173,7 +173,7 @@ Port `SessionCompaction.serialize` from OpenCode:
 
 - Update `SPEC.md` root, `QUICKSTART.md`, and any `docs/` references to
   `compression` with new `compaction` settings.
-- Add example `ragent.json` snippets for `compaction`.
+- Add example `codemason.json` snippets for `compaction`.
 - Document `/compact` slash command and removed `/compress` modes.
 
 ## Migration notes
@@ -196,5 +196,5 @@ Port `SessionCompaction.serialize` from OpenCode:
 - No references to `headroom-core`, `headroom_core`, `<<ccr:`, or
   `headroom_retrieve` remain in the source tree.
 - New compaction path is covered by at least one integration test.
-- `ragent.json` schema supports the new `compaction` section.
+- `codemason.json` schema supports the new `compaction` section.
 - `/compact` slash command works in the TUI and reports token savings.

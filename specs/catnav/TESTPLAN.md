@@ -21,7 +21,7 @@ category list`.
 ## Prerequisites
 
 1. **Build the binary.** Run `cargo build` (debug is sufficient; allow up to 1000
-   seconds). Confirm `./target/debug/ragent --version` runs and reports the version.
+   seconds). Confirm `./target/debug/cdmn --version` runs and reports the version.
 2. **Configure a model.** Some read-only cases need only the TUI, but the "agent turn
    stays undisturbed" checks need an in-progress turn, so configure a provider (or a
    local Ollama model) and confirm a short prompt responds.
@@ -30,7 +30,7 @@ category list`.
    reporting is deliberately not required.
 4. **Prepare a scratch root.** Create `~/scratch/catnav-tests/` and run every TUI session
    from inside it, so the project plugin store is
-   `~/scratch/catnav-tests/.ragent/plugins/`.
+   `~/scratch/catnav-tests/.codemason/plugins/`.
 5. **Stage the fixture plugins** (used as install targets): copy the repository fixtures
    under `~/scratch/catnav-tests/fixtures-src/` - `codex-weather/` (valid Codex dialect),
    `codex-db/` (valid Codex dialect), `claude-todo/` (valid Claude dialect).
@@ -45,7 +45,7 @@ category list`.
    endpoint, for example `python3 -m http.server --directory
    ~/scratch/catnav-tests/store 8443` behind a TLS terminator, or any reachable HTTPS
    host. Record the two URLs as `<CODEX_URL>` and `<CLAUDE_URL>`.
-7. **Point the stores at the fixtures.** In `~/scratch/catnav-tests/.ragent/ragent.json`
+7. **Point the stores at the fixtures.** In `~/scratch/catnav-tests/.codemason/codemason.json`
    add:
    ```jsonc
    {
@@ -61,7 +61,7 @@ category list`.
 8. **Install one fixture first**, so the installed-colour path inside a category has
    data: run the TUI and `/plugins add ~/scratch/catnav-tests/fixtures-src/codex-weather`,
    then `/plugins list` to confirm `codex-weather` is present.
-9. **Preserve config.** Back up `~/scratch/catnav-tests/.ragent/ragent.json` before
+9. **Preserve config.** Back up `~/scratch/catnav-tests/.codemason/codemason.json` before
    editing so any temporary change can be reverted in Cleanup.
 
 ### Test data for the fixture store index
@@ -455,7 +455,7 @@ reporting disabled); `/plugins codex` panel open with `index-codex.json` loaded.
 
 ## Cleanup
 
-1. Restore `~/scratch/catnav-tests/.ragent/ragent.json` from the backup made in
+1. Restore `~/scratch/catnav-tests/.codemason/codemason.json` from the backup made in
    Prerequisite 9, so no test `stores` block is left behind.
 2. Remove the installed fixture `codex-weather` from the scratch plugin store:
    `/plugins remove codex-weather`, then `/plugins list` to confirm it is gone. Repeat

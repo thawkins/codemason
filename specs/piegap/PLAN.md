@@ -36,7 +36,7 @@ preserve the numbering of the remaining tasks.
 | T-018 | Browser-based web UI — loopback HTTP server + SSE + browser-served HTML/JS              | FR-013                         | L      | Low      | completed | pending      |
 | T-019 | `/undo` slash command — remove last user/assistant turn pair                          | FR-014                         | S      | Medium   | completed | pending      |
 | T-020 | Session naming —`/name` slash command + persisted display name                        | FR-015                         | S      | Low      | completed | pending      |
-| T-021 | Feature-gate configuration blocks in`ragent.json` for all gap features                 | FR-016, FR-018                 | M      | High     | completed | pending      |
+| T-021 | Feature-gate configuration blocks in`codemason.json` for all gap features                 | FR-016, FR-018                 | M      | High     | completed | pending      |
 | T-022 | Integration tests — verify standalone compilation with each feature disabled            | FR-001, FR-016, FR-017, FR-019 | M      | High     | completed | pending      |
 
 ## Requirement Coverage
@@ -69,24 +69,24 @@ preserve the numbering of the remaining tasks.
 
 | Feature                    | Target crate(s)                                                                                  |
 | -------------------------- | ------------------------------------------------------------------------------------------------ |
-| Trigger envelope + runtime | `ragent-types` (types), `ragent-agent` (runtime)                                             |
-| Dynamic triggers           | `ragent-agent` (logic), `ragent-tui` (slash commands)                                        |
-| MCP notification hooks     | `ragent-agent` (hook abstraction), `ragent-tools-extended` (MCP adapter)                     |
-| Stateful loops + inbox     | `ragent-agent` (loop logic), `ragent-storage` (inbox JSONL), `ragent-tui` (slash commands) |
-| Lifecycle hooks            | `ragent-agent` (hook runner), `ragent-config` (config types), `ragent-tui` (wiring)        |
-| Session archive            | `ragent-agent` (archive logic), `ragent-storage` (sidecar read/write)                        |
-| Bug report                 | `ragent-tui` (slash command), `ragent-agent` (diagnostic data)                               |
-| Prompt templates           | `ragent-agent` (loader), `ragent-tui` (slash command)                                        |
-| Goal stop hook             | `ragent-agent` (evaluator + hook), `ragent-tui` (slash commands)                             |
-| OpenAI Responses provider  | `ragent-llm` (new provider)                                                                    |
-| Web UI                     | `ragent-tui` (web module) or new `ragent-web` crate                                          |
-| `/undo`                  | `ragent-agent` (session history), `ragent-tui` (slash command)                               |
-| Session naming             | `ragent-storage` (metadata), `ragent-tui` (slash command)                                    |
+| Trigger envelope + runtime | `codemason-types` (types), `codemason-agent` (runtime)                                             |
+| Dynamic triggers           | `codemason-agent` (logic), `codemason-tui` (slash commands)                                        |
+| MCP notification hooks     | `codemason-agent` (hook abstraction), `codemason-tools-extended` (MCP adapter)                     |
+| Stateful loops + inbox     | `codemason-agent` (loop logic), `codemason-storage` (inbox JSONL), `codemason-tui` (slash commands) |
+| Lifecycle hooks            | `codemason-agent` (hook runner), `codemason-config` (config types), `codemason-tui` (wiring)        |
+| Session archive            | `codemason-agent` (archive logic), `codemason-storage` (sidecar read/write)                        |
+| Bug report                 | `codemason-tui` (slash command), `codemason-agent` (diagnostic data)                               |
+| Prompt templates           | `codemason-agent` (loader), `codemason-tui` (slash command)                                        |
+| Goal stop hook             | `codemason-agent` (evaluator + hook), `codemason-tui` (slash commands)                             |
+| OpenAI Responses provider  | `codemason-llm` (new provider)                                                                    |
+| Web UI                     | `codemason-tui` (web module) or new `codemason-web` crate                                          |
+| `/undo`                  | `codemason-agent` (session history), `codemason-tui` (slash command)                               |
+| Session naming             | `codemason-storage` (metadata), `codemason-tui` (slash command)                                    |
 
 ### Feature-Gate Strategy
 
 Each gap feature shall be gated behind a `serde(default)` boolean in `Config`
-so it can be independently enabled/disabled in `ragent.json`. Features that
+so it can be independently enabled/disabled in `codemason.json`. Features that
 require background tasks (triggers, hooks) shall no-op cleanly when disabled.
 The existing `yolo` toggle pattern shall be followed.
 

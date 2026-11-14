@@ -1,0 +1,205 @@
+//! Tests for default config creation when no config exists.
+//!
+//! These tests mutate process-global state (env vars, current dir) and must
+//! run serially to avoid cross-test contamination. `std::env::set_var` /
+//! `remove_var` are `unsafe` in Rust 2024; the workspace denies `unsafe_code`,
+//! so this test target opts back in explicitly (env mutation is contained to
+//! the test binary).
+
+#![allow(unsafe_code)]
+
+/// Sets `XDG_CONFIG_HOME` to a temp directory and returns the old value (if any).
+fn with_temp_config_home(temp: &tempfile::TempDir) -> Option<String> {
+    let original = std::env::var("XDG_CONFIG_HOME").ok();
+    let fake = temp.path().join("fake_config");
+    unsafe {
+        std::env::set_var("XDG_CONFIG_HOME", &fake);
+    }
+    original
+}
+
+fn restore_config_home(original: Option<String>) {
+    unsafe {
+        if let Some(v) = original {
+            std::env::set_var("XDG_CONFIG_HOME", v);
+        } else {
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+    }
+}
+
+/// When no global or project config exists, `Config::load` should create a
+/// default `codemason.json` at the project level (`.codemason/codemason.json`).
+#[test]
+#[serial_test::serial]
+fn test_creates_default_project_config_when_none_exists() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let codemason_dir = temp.path().join(".codemason");
+    let project_config = codemason_dir.join("codemason.json");
+
+    assert!(!project_config.exists(), "config should not exist pre-test");
+
+    let original_cwd = std::env::current_dir().expect("cwd");
+    let original_codemason_config = std::env::var("CODEMASON_CONFIG").ok();
+    let original_codemason_content = std::env::var("CODEMASON_CONFIG_CONTENT").ok();
+    let original_xdg = with_temp_config_home(&temp);
+
+    std::env::set_current_dir(temp.path()).expect("chdir");
+    unsafe {
+        std::env::remove_var("CODEMASON_CONFIG");
+        std::env::remove_var("CODEMASON_CONFIG_CONTENT");
+    }
+
+    let config = codemason_config::Config::load().expect("config load should succeed");
+
+    assert!(
+        project_config.exists(),
+        "default project config should have been created at {}",
+        project_config.display()
+    );
+
+    let found = config.config_paths.iter().any(|p| {
+        p.file_name().is_some_and(|f| f == "codemason.json")
+            && p.parent()
+                .is_some_and(|parent| parent.file_name().is_some_and(|f| f == ".codemason"))
+    });
+    assert!(
+        found,
+        "config_paths should contain the project-level codemason.json"
+    );
+
+    let content = std::fs::read_to_string(&project_config).expect("read created config");
+    let roundtrip: codemason_config::Config =
+        serde_json::from_str(&content).expect("created config should be valid JSON");
+    // ANTIPAT M-7: `Config::default()` now matches the serde defaults, so
+    // `default_agent` is "general" (not the derived-Default empty string) and
+    // the generated default config carries that value.
+    assert_eq!(
+        roundtrip.default_agent, "general",
+        "default_agent from Config::default() is the serde default"
+    );
+    assert!(
+        roundtrip.provider.is_empty(),
+        "default provider map should be empty"
+    );
+    assert!(
+        roundtrip.permission.is_empty(),
+        "default permission list should be empty"
+    );
+
+    // Restore environment.
+    std::env::set_current_dir(original_cwd).expect("restore cwd");
+    unsafe {
+        if let Some(v) = original_codemason_config {
+            std::env::set_var("CODEMASON_CONFIG", v);
+        }
+        if let Some(v) = original_codemason_content {
+            std::env::set_var("CODEMASON_CONFIG_CONTENT", v);
+        }
+    }
+    restore_config_home(original_xdg);
+}
+
+/// When a project config already exists, `Config::load` should NOT overwrite it
+/// with a fresh default.
+#[test]
+#[serial_test::serial]
+fn test_does_not_overwrite_existing_project_config() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let codemason_dir = temp.path().join(".codemason");
+    let project_config = codemason_dir.join("codemason.json");
+
+    std::fs::create_dir_all(&codemason_dir).expect("mkdir");
+    std::fs::write(&project_config, r#"{"default_agent":"architect"}"#)
+        .expect("write pre-existing config");
+
+    let original_cwd = std::env::current_dir().expect("cwd");
+    let original_codemason_config = std::env::var("CODEMASON_CONFIG").ok();
+    let original_codemason_content = std::env::var("CODEMASON_CONFIG_CONTENT").ok();
+    let original_xdg = with_temp_config_home(&temp);
+
+    std::env::set_current_dir(temp.path()).expect("chdir");
+    unsafe {
+        std::env::remove_var("CODEMASON_CONFIG");
+        std::env::remove_var("CODEMASON_CONFIG_CONTENT");
+    }
+
+    let config = codemason_config::Config::load().expect("config load should succeed");
+
+    assert_eq!(
+        config.default_agent, "architect",
+        "existing config should not be overwritten"
+    );
+
+    let content = std::fs::read_to_string(&project_config).expect("read existing config");
+    assert!(
+        content.contains("architect"),
+        "original config file content should be preserved"
+    );
+
+    // Restore environment.
+    std::env::set_current_dir(original_cwd).expect("restore cwd");
+    unsafe {
+        if let Some(v) = original_codemason_config {
+            std::env::set_var("CODEMASON_CONFIG", v);
+        }
+        if let Some(v) = original_codemason_content {
+            std::env::set_var("CODEMASON_CONFIG_CONTENT", v);
+        }
+    }
+    restore_config_home(original_xdg);
+}
+
+/// When a global config exists but no project config exists,
+/// `Config::load` should NOT create a default project config.
+#[test]
+#[serial_test::serial]
+fn test_does_not_create_default_when_global_config_exists() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let fake_config = temp.path().join("fake_config");
+    let global_dir = fake_config.join("codemason");
+    let global_config = global_dir.join("codemason.json");
+
+    // Pre-create a global config inside our fake XDG_CONFIG_HOME.
+    std::fs::create_dir_all(&global_dir).expect("mkdir global");
+    std::fs::write(&global_config, r#"{"default_agent":"coder"}"#).expect("write global config");
+
+    let project_dir = temp.path().join("project");
+    let project_config = project_dir.join(".codemason").join("codemason.json");
+    std::fs::create_dir_all(project_dir.join(".codemason")).expect("mkdir project .codemason");
+
+    let original_xdg = with_temp_config_home(&temp);
+    let original_cwd = std::env::current_dir().expect("cwd");
+    let original_codemason_config = std::env::var("CODEMASON_CONFIG").ok();
+    let original_codemason_content = std::env::var("CODEMASON_CONFIG_CONTENT").ok();
+
+    std::env::set_current_dir(&project_dir).expect("chdir");
+    unsafe {
+        std::env::remove_var("CODEMASON_CONFIG");
+        std::env::remove_var("CODEMASON_CONFIG_CONTENT");
+    }
+
+    let config = codemason_config::Config::load().expect("config load should succeed");
+
+    assert_eq!(
+        config.default_agent, "coder",
+        "global config should be loaded"
+    );
+
+    assert!(
+        !project_config.exists(),
+        "default project config should NOT be created when global config exists"
+    );
+
+    // Restore environment.
+    std::env::set_current_dir(original_cwd).expect("restore cwd");
+    unsafe {
+        if let Some(v) = original_codemason_config {
+            std::env::set_var("CODEMASON_CONFIG", v);
+        }
+        if let Some(v) = original_codemason_content {
+            std::env::set_var("CODEMASON_CONFIG_CONTENT", v);
+        }
+    }
+    restore_config_home(original_xdg);
+}

@@ -1,0 +1,643 @@
+//! Persistent source vault for Hyperresearch-style deep research (FR-002, FR-003).
+//!
+//! A [`SourceVault`] is a per-run store at `.codemason/research_vault/<run_tag>/`.
+//! It keeps an embedded SQLite index plus raw content files so that future
+//! research runs can reuse gathered sources before issuing new web searches
+//! (FR-009) and so that every citation can be traced back to the captured
+//! source text (FR-014).
+//!
+//! The SQLite schema records provenance metadata required by FR-003:
+//! URL, title, fetch timestamp, search engine, media type, and the on-disk
+//! path of the raw content. Searches run case-insensitively across URL,
+//! title, and body text.
+
+use chrono::{DateTime, Utc};
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use thiserror::Error;
+use uuid::Uuid;
+
+/// Errors emitted by the vault layer.
+#[derive(Debug, Error)]
+pub enum SourceVaultError {
+    /// A filesystem operation failed.
+    #[error("vault I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    /// The SQLite index returned an error.
+    #[error("vault database error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+    /// The supplied run tag is not safe to use as a directory name.
+    #[error("invalid run tag: {0}")]
+    InvalidRunTag(String),
+    /// A requested source id was not found in the index.
+    #[error("vault source '{0}' not found")]
+    SourceNotFound(String),
+    /// A blocking-pool task for a vault operation panicked or was cancelled.
+    #[error("vault task panicked: {0}")]
+    TaskPanic(String),
+    /// The connection mutex was poisoned by a panicking holder.
+    #[error("vault connection lock poisoned: {0}")]
+    LockPoisoned(String),
+}
+
+/// Result alias for vault operations.
+pub type Result<T> = std::result::Result<T, SourceVaultError>;
+
+/// Metadata stored in the vault for one captured web source (FR-003).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VaultSource {
+    /// SQLite row id.
+    pub id: i64,
+    /// Stable uuid used as the raw-content filename.
+    pub source_id: String,
+    /// Run tag that owns this source.
+    pub run_tag: String,
+    /// Full source URL.
+    pub url: String,
+    /// Page or article title (may be empty).
+    pub title: String,
+    /// UTC timestamp at which the source was captured.
+    pub fetch_timestamp: DateTime<Utc>,
+    /// Name of the search tool that discovered the source (e.g. `mf_search`).
+    pub search_tool: String,
+    /// Comma-separated list of search engines that returned the URL.
+    pub search_engine: String,
+    /// Media classifier (`page`, `pdf`, `youtube`, etc.).
+    pub media_type: String,
+    /// Absolute path to the raw content file.
+    pub content_path: PathBuf,
+    /// Hex blake3 hash of the stored body text.
+    pub content_hash: String,
+    /// Full text body stored for FTS search.
+    pub body_text: String,
+    /// Optional LLM-generated summary of the body (T-013, FR-003, FR-018).
+    /// Stored alongside the original `body_text` so downstream agents can
+    /// reuse a concise form while still citing the original URL.
+    pub summary_text: Option<String>,
+}
+
+/// Input used to store a new source in the vault.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewVaultSource {
+    /// Full source URL.
+    pub url: String,
+    /// Page or article title (may be empty).
+    pub title: String,
+    /// Optional explicit fetch timestamp; defaults to now.
+    pub fetch_timestamp: Option<DateTime<Utc>>,
+    /// Name of the search tool that discovered the source.
+    pub search_tool: String,
+    /// Comma-separated list of search engines that returned the URL.
+    pub search_engine: String,
+    /// Media classifier.
+    pub media_type: String,
+    /// Optional HTTP `Content-Type` reported by the fetcher.
+    pub content_type: Option<String>,
+    /// Full text body to store and index.
+    pub body_text: String,
+    /// Optional LLM-generated summary of the body (T-013, FR-003, FR-018).
+    /// When present, the vault records both the original full body and the
+    /// summarized form, so future agents can choose which to use while
+    /// keeping the original URL and timestamp for attribution.
+    pub summary_text: Option<String>,
+}
+
+impl NewVaultSource {
+    /// Resolve the effective fetch timestamp.
+    #[must_use]
+    pub fn fetch_timestamp(&self) -> DateTime<Utc> {
+        self.fetch_timestamp.unwrap_or_else(Utc::now)
+    }
+}
+
+/// Persistent, searchable source vault for a single research run.
+///
+/// The store methods are synchronous and take a blocking `std::sync::Mutex`
+/// around the SQLite connection plus blocking filesystem I/O. Async callers
+/// must not call them directly on a tokio worker - use the `*_async` wrappers,
+/// which move the work to the blocking pool (FUNC-017).
+#[derive(Clone)]
+pub struct SourceVault {
+    vault_root: PathBuf,
+    run_tag: String,
+    conn: Arc<Mutex<Connection>>,
+}
+
+impl fmt::Debug for SourceVault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SourceVault")
+            .field("vault_root", &self.vault_root)
+            .field("run_tag", &self.run_tag)
+            .field("db_path", &self.db_path())
+            .finish_non_exhaustive()
+    }
+}
+
+impl SourceVault {
+    /// Lock the shared SQLite connection, surfacing poison as an error.
+    ///
+    /// The connection mutex guards only the `rusqlite::Connection`; a panic
+    /// while holding it is reported as a dedicated
+    /// [`SourceVaultError::LockPoisoned`] rather than a bare `PoisonError` at
+    /// every call site, keeping the *run-tag* variant for its documented domain
+    /// (invalid run-tag inputs).
+    fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
+        self.conn
+            .lock()
+            .map_err(|e| SourceVaultError::LockPoisoned(e.to_string()))
+    }
+
+    /// Open (or create) a vault rooted at `project_root/.codemason/research_vault/<run_tag>/`.
+    ///
+    /// `run_tag` must be a single path component with no traversal sequences.
+    pub fn open(project_root: &Path, run_tag: &str) -> Result<Self> {
+        let vault_root = project_root.join(".codemason").join("research_vault");
+        Self::open_with_root(&vault_root, run_tag)
+    }
+
+    /// Open (or create) a vault with an explicit root directory.
+    ///
+    /// Mostly useful for tests that want to place the vault inside a temp dir.
+    pub fn open_with_root(vault_root: &Path, run_tag: &str) -> Result<Self> {
+        validate_run_tag(run_tag)?;
+        fs::create_dir_all(vault_root.join(run_tag).join("raw"))?;
+
+        let db_path = vault_root.join(run_tag).join("vault.db");
+        let conn = Connection::open(&db_path)?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "busy_timeout", 5000)?;
+
+        let vault = Self {
+            vault_root: vault_root.to_path_buf(),
+            run_tag: run_tag.to_string(),
+            conn: Arc::new(Mutex::new(conn)),
+        };
+        vault.migrate()?;
+        Ok(vault)
+    }
+
+    /// Path to the vault database file.
+    #[must_use]
+    pub fn db_path(&self) -> PathBuf {
+        self.run_dir().join("vault.db")
+    }
+
+    /// Path to the run directory (`<vault_root>/<run_tag>/`).
+    #[must_use]
+    pub fn run_dir(&self) -> PathBuf {
+        self.vault_root.join(&self.run_tag)
+    }
+
+    /// Path to the raw-content subdirectory.
+    #[must_use]
+    pub fn raw_dir(&self) -> PathBuf {
+        self.run_dir().join("raw")
+    }
+
+    /// Absolute path of the raw content file for a stored source id.
+    #[must_use]
+    pub fn content_path(&self, source_id: &str, media_type: &str) -> PathBuf {
+        let ext = media_extension(media_type);
+        self.raw_dir().join(format!("{source_id}.{ext}"))
+    }
+
+    /// Read the raw content file for a stored source id back into a string.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceVaultError::SourceNotFound`] when the source id does not
+    /// exist in the index, or [`SourceVaultError::Io`] when the file is missing.
+    pub fn read_content(&self, source_id: &str) -> Result<String> {
+        let content_path: Option<String> = self
+            .lock_conn()?
+            .query_row(
+                "SELECT content_path FROM vault_sources
+                 WHERE run_tag = ?1 AND source_id = ?2",
+                params![self.run_tag, source_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(path) = content_path else {
+            return Err(SourceVaultError::SourceNotFound(source_id.to_string()));
+        };
+        Ok(fs::read_to_string(PathBuf::from(path))?)
+    }
+
+    /// Read the optional summary text for a stored source id back into a string.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceVaultError::SourceNotFound`] when the source id does not
+    /// exist in the index.
+    pub fn read_summary(&self, source_id: &str) -> Result<Option<String>> {
+        let summary: Option<String> = self
+            .lock_conn()?
+            .query_row(
+                "SELECT summary_text FROM vault_sources
+                   WHERE run_tag = ?1 AND source_id = ?2",
+                params![self.run_tag, source_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(summary)
+    }
+
+    /// Store a new source in the vault, or return the existing record if the
+    /// same URL has already been captured for this run.
+    ///
+    /// The body text is written to a raw-content file and also indexed for
+    /// full-text search.
+    pub fn store(&self, source: &NewVaultSource) -> Result<VaultSource> {
+        // Hold the connection lock across the lookup and the insert so the
+        // URL-dedup check and the write are atomic: two concurrent `store`
+        // calls for the same URL would otherwise both pass the check (each
+        // `source_id` is a fresh UUID, so the `UNIQUE(source_id)` index does
+        // not catch a URL duplicate) and insert two rows for one URL.
+        let conn = self.lock_conn()?;
+
+        // Deduplicate within the run by URL.
+        if let Some(existing) = find_by_url_on(&conn, &self.run_tag, &source.url)? {
+            return Ok(existing);
+        }
+
+        let source_id = Uuid::new_v4().to_string();
+        let fetch_timestamp = source.fetch_timestamp();
+        let content_hash = blake3::hash(source.body_text.as_bytes())
+            .to_hex()
+            .to_string();
+        let content_path = self.content_path(&source_id, &source.media_type);
+
+        atomic_write_file(&content_path, source.body_text.as_bytes())?;
+
+        conn.execute(
+            "INSERT INTO vault_sources
+               (source_id, run_tag, url, title, fetch_timestamp, search_tool, search_engine,
+                media_type, content_path, content_hash, body_text, summary_text)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                source_id,
+                self.run_tag,
+                source.url,
+                source.title,
+                fetch_timestamp.to_rfc3339(),
+                source.search_tool,
+                source.search_engine,
+                source.media_type,
+                content_path.to_string_lossy().as_ref(),
+                content_hash,
+                source.body_text,
+                source.summary_text,
+            ],
+        )?;
+
+        let id = conn.last_insert_rowid();
+        drop(conn);
+
+        Ok(VaultSource {
+            id,
+            source_id,
+            run_tag: self.run_tag.clone(),
+            url: source.url.clone(),
+            title: source.title.clone(),
+            fetch_timestamp,
+            search_tool: source.search_tool.clone(),
+            search_engine: source.search_engine.clone(),
+            media_type: source.media_type.clone(),
+            content_path,
+            content_hash,
+            body_text: source.body_text.clone(),
+            summary_text: source.summary_text.clone(),
+        })
+    }
+
+    /// Look up a source by exact URL within this run.
+    pub fn find_by_url(&self, url: &str) -> Result<Option<VaultSource>> {
+        let conn = self.lock_conn()?;
+        find_by_url_on(&conn, &self.run_tag, url)
+    }
+
+    /// Search the vault by URL, title, or body text.
+    ///
+    /// The query is tokenised into plain alphanumeric words; each token must
+    /// appear somewhere in the source (case-insensitive) for the source to
+    /// match. An empty query lists every source.
+    pub fn search(&self, query: &str, limit: usize) -> Result<Vec<VaultSource>> {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return self.list(limit);
+        }
+
+        let tokens = sanitize_search_tokens(trimmed);
+        if tokens.is_empty() {
+            return self.list(limit);
+        }
+
+        let mut sql = String::from(
+            "SELECT id, source_id, run_tag, url, title, fetch_timestamp, search_tool,
+                    search_engine, media_type, content_path, content_hash, body_text, summary_text
+             FROM vault_sources
+             WHERE run_tag = ?1",
+        );
+        for (i, _) in tokens.iter().enumerate() {
+            sql.push_str(&format!(
+                " AND (lower(url) LIKE ?{i} OR lower(title) LIKE ?{i} OR lower(body_text) LIKE ?{i})",
+                i = i + 2
+            ));
+        }
+        sql.push_str(&format!(
+            " ORDER BY fetch_timestamp DESC LIMIT ?{}",
+            tokens.len() + 2
+        ));
+
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare(&sql)?;
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(tokens.len() + 2);
+        params.push(&self.run_tag);
+        let patterns: Vec<String> = tokens.iter().map(|t| format!("%{t}%")).collect();
+        for p in &patterns {
+            params.push(p);
+        }
+        let limit_i64 = limit as i64;
+        params.push(&limit_i64);
+
+        let mut rows = stmt.query(params.as_slice())?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            out.push(row_to_source(row)?);
+        }
+        Ok(out)
+    }
+
+    /// List every source in this run, newest first.
+    pub fn list(&self, limit: usize) -> Result<Vec<VaultSource>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, source_id, run_tag, url, title, fetch_timestamp, search_tool,
+                      search_engine, media_type, content_path, content_hash, body_text, summary_text
+               FROM vault_sources
+               WHERE run_tag = ?1
+               ORDER BY fetch_timestamp DESC
+               LIMIT ?2",
+        )?;
+        let mut rows = stmt.query(params![self.run_tag, limit as i64])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            out.push(row_to_source(row)?);
+        }
+        Ok(out)
+    }
+
+    /// Total number of sources stored for this run.
+    pub fn count(&self) -> Result<usize> {
+        let conn = self.lock_conn()?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM vault_sources WHERE run_tag = ?1",
+            params![self.run_tag],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    fn migrate(&self) -> Result<()> {
+        let conn = self.lock_conn()?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS vault_sources (
+                id INTEGER PRIMARY KEY,
+                source_id TEXT NOT NULL UNIQUE,
+                run_tag TEXT NOT NULL,
+                url TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                fetch_timestamp TEXT NOT NULL,
+                search_tool TEXT NOT NULL DEFAULT '',
+                search_engine TEXT NOT NULL DEFAULT '',
+                media_type TEXT NOT NULL DEFAULT 'page',
+                content_path TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                body_text TEXT NOT NULL DEFAULT '',
+                summary_text TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_vault_sources_run_tag_url
+                ON vault_sources(run_tag, url);
+            CREATE INDEX IF NOT EXISTS idx_vault_sources_run_tag_fetch_ts
+                ON vault_sources(run_tag, fetch_timestamp DESC);
+            ",
+        )?;
+        // T-013 migration: older vaults created before `summary_text` existed
+        // need the column added. SQLite does not support `ADD COLUMN IF NOT
+        // EXISTS`, so we ignore the error when the column already exists.
+        let _ = conn.execute("ALTER TABLE vault_sources ADD COLUMN summary_text TEXT", []); // INTENTIONAL: column may already exist (migration)
+        Ok(())
+    }
+
+    // -- Async wrappers (FUNC-017) ---------------------------------------
+    //
+    // The synchronous methods above take a blocking `std::sync::Mutex` and do
+    // blocking SQLite + filesystem I/O. Calling them from an async task parks a
+    // tokio worker (and can deadlock the executor under contention). These
+    // wrappers move the work to the blocking pool; each call runs its own query
+    // against the shared connection, so concurrency is bounded only by SQLite's
+    // own locking, not by a runtime worker.
+
+    /// Run a blocking vault closure on the blocking pool.
+    ///
+    /// Clones the shared vault handle into the task and maps a join failure
+    /// (panic or cancellation) to [`SourceVaultError::TaskPanic`] annotated
+    /// with the operation name so a panic message identifies which vault op
+    /// failed.
+    async fn run_blocking<T, F>(&self, op: &'static str, f: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(Self) -> Result<T> + Send + 'static,
+    {
+        let vault = self.clone();
+        tokio::task::spawn_blocking(move || f(vault))
+            .await
+            .map_err(|e| SourceVaultError::TaskPanic(format!("{op}: {e}")))?
+    }
+
+    /// Async [`Self::search`]: off-loads the blocking vault query to the
+    /// blocking pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the blocking task panics or the vault query fails.
+    pub async fn search_async(&self, query: &str, limit: usize) -> Result<Vec<VaultSource>> {
+        let query = query.to_string();
+        self.run_blocking("vault search", move |v| v.search(&query, limit))
+            .await
+    }
+
+    /// Async [`Self::find_by_url`]: off-loads the blocking vault query.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the blocking task panics or the vault query fails.
+    pub async fn find_by_url_async(&self, url: &str) -> Result<Option<VaultSource>> {
+        let url = url.to_string();
+        self.run_blocking("vault find_by_url", move |v| v.find_by_url(&url))
+            .await
+    }
+
+    /// Async [`Self::store`]: off-loads the blocking write + file I/O.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the blocking task panics or the vault write fails.
+    pub async fn store_async(&self, source: &NewVaultSource) -> Result<VaultSource> {
+        let source = source.clone();
+        self.run_blocking("vault store", move |v| v.store(&source))
+            .await
+    }
+
+    /// Async [`Self::read_content`]: off-loads the blocking read.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the blocking task panics or the read fails.
+    pub async fn read_content_async(&self, source_id: &str) -> Result<String> {
+        let source_id = source_id.to_string();
+        self.run_blocking("vault read_content", move |v| v.read_content(&source_id))
+            .await
+    }
+
+    /// Async [`Self::list`]: off-loads the blocking vault query.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the blocking task panics or the vault query fails.
+    pub async fn list_async(&self, limit: usize) -> Result<Vec<VaultSource>> {
+        self.run_blocking("vault list", move |v| v.list(limit))
+            .await
+    }
+
+    /// Async [`Self::count`]: off-loads the blocking vault query.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the blocking task panics or the vault query fails.
+    pub async fn count_async(&self) -> Result<usize> {
+        self.run_blocking("vault count", |v| v.count()).await
+    }
+}
+
+/// Look up a source by exact URL on an already-locked connection.
+///
+/// Shared by [`SourceVault::store`] (which holds the connection lock across the
+/// lookup and the insert to make the URL-dedup check atomic) and
+/// [`SourceVault::find_by_url`] (which locks the connection first).
+fn find_by_url_on(conn: &Connection, run_tag: &str, url: &str) -> Result<Option<VaultSource>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, source_id, run_tag, url, title, fetch_timestamp, search_tool,
+                  search_engine, media_type, content_path, content_hash, body_text, summary_text
+           FROM vault_sources
+           WHERE run_tag = ?1 AND url = ?2",
+    )?;
+    let mut rows = stmt.query(params![run_tag, url])?;
+    if let Some(row) = rows.next()? {
+        return Ok(Some(row_to_source(row)?));
+    }
+    Ok(None)
+}
+
+fn row_to_source(row: &rusqlite::Row<'_>) -> Result<VaultSource> {
+    let fetch_timestamp: String = row.get(5)?;
+    let content_path: String = row.get(9)?;
+    let summary_text: Option<String> = row.get(12).ok();
+    Ok(VaultSource {
+        id: row.get(0)?,
+        source_id: row.get(1)?,
+        run_tag: row.get(2)?,
+        url: row.get(3)?,
+        title: row.get(4)?,
+        fetch_timestamp: DateTime::parse_from_rfc3339(&fetch_timestamp)
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|e| {
+                // A corrupt stored timestamp must not be silently reported as
+                // "just captured": surface it so the bad row is visible, then
+                // fall back to now (the column is NOT NULL, so it cannot be
+                // repaired to a better value here).
+                tracing::warn!(
+                    error = %e,
+                    raw = %fetch_timestamp,
+                    "vault: unparseable fetch_timestamp; falling back to now"
+                );
+                Utc::now()
+            }),
+        search_tool: row.get(6)?,
+        search_engine: row.get(7)?,
+        media_type: row.get(8)?,
+        content_path: PathBuf::from(content_path),
+        content_hash: row.get(10)?,
+        body_text: row.get(11)?,
+        summary_text,
+    })
+}
+
+/// Reject run tags that are empty or would escape the intended directory.
+fn validate_run_tag(run_tag: &str) -> Result<()> {
+    if run_tag.is_empty() {
+        return Err(SourceVaultError::InvalidRunTag("empty".into()));
+    }
+    for component in Path::new(run_tag).components() {
+        match component {
+            std::path::Component::Normal(_) => {}
+            other => {
+                return Err(SourceVaultError::InvalidRunTag(format!(
+                    "traversal or separator component: {}",
+                    other.as_os_str().display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Map a media-type classifier to a file extension for raw-content files.
+fn media_extension(media_type: &str) -> String {
+    if media_type.eq_ignore_ascii_case("pdf") {
+        "pdf".to_string()
+    } else {
+        "md".to_string()
+    }
+}
+
+/// Write `content` to `path` atomically (temp file + rename).
+///
+/// FUNC-052: a failed rename now logs the temp-file cleanup result rather than
+/// silently discarding it, so a leaked `.tmp` file (e.g. a permission error) is
+/// visible in the logs instead of accumulating unnoticed.
+fn atomic_write_file(path: &Path, content: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, content)?;
+    match fs::rename(&tmp, path) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            if let Err(cleanup_err) = fs::remove_file(&tmp) {
+                tracing::warn!(
+                    tmp = %tmp.display(),
+                    error = %cleanup_err,
+                    "research vault: failed to clean up temp file after rename failure"
+                );
+            }
+            Err(e.into())
+        }
+    }
+}
+
+/// Sanitise a raw user query into lowercase alphanumeric tokens suitable for
+/// SQL `LIKE` clauses. Punctuation, quotes, and FTS5-special characters are
+/// dropped, so arbitrary input cannot break the query.
+pub(crate) fn sanitize_search_tokens(query: &str) -> Vec<String> {
+    query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase())
+        .collect()
+}

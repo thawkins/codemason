@@ -1,6 +1,6 @@
 # Slash Command Howtos
 
-Per-command reference documents for the ragent TUI slash commands. Each document describes the command, every subcommand and option the dispatcher implements, and worked examples. Typing `/` in the TUI opens the autocomplete menu, and `/<command> help` prints per-command help where the handler supports it.
+Per-command reference documents for the codemason TUI slash commands. Each document describes the command, every subcommand and option the dispatcher implements, and worked examples. Typing `/` in the TUI opens the autocomplete menu, and `/<command> help` prints per-command help where the handler supports it.
 
 ## Commands
 
@@ -34,7 +34,7 @@ Per-command reference documents for the ragent TUI slash commands. Each document
 | `/provider` | [provider](provider.md) | Change provider, show config, or configure model router: /provider [show\|router\|help] |
 | `/provider_reset` | [provider_reset](provider_reset.md) | Reset the current provider and remove stored credentials |
 | `/queue` | [queue](queue.md) | Inspect the message input queue: /queue [list\|clear\|next\|help] |
-| `/quit` | [quit](quit.md) | Exit ragent |
+| `/quit` | [quit](quit.md) | Exit codemason |
 | `/reload` | [reload](reload.md) | Reload customizations (/reload [all\|config\|mcp\|skills\|agents]) |
 | `/resume` | [resume](resume.md) | Resume the agent from where it was halted (/resume help) |
 | `/system` | [system](system.md) | Override the agent system prompt (/system <prompt> \| /system help) |

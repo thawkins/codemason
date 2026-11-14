@@ -36,11 +36,11 @@ pub fn install() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         // A panic raised inside a deliberate contained-panic container
-        // (ragent_types::panic_guard) is about to be caught by the caller and
+        // (codemason_types::panic_guard) is about to be caught by the caller and
         // degraded gracefully - do not write a panic report or chain to the
         // default hook (which prints "thread panicked" noise and, in the TUI,
         // tears down the terminal even though the app keeps running).
-        if ragent_types::panic_guard::is_active() {
+        if codemason_types::panic_guard::is_active() {
             return;
         }
         // Always write the log file first, then chain to the default hook.
@@ -108,11 +108,11 @@ fn write_panic_log(info: &std::panic::PanicHookInfo<'_>) {
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "<unknown>".to_string());
 
-    // ANTIPAT A-02: argv can carry a credential (`ragent auth openai sk-...`,
+    // ANTIPAT A-02: argv can carry a credential (`codemason auth openai sk-...`,
     // `--model ...sk-...`) and this report is written to disk. Route every
     // argument through the shared redactor before it is embedded.
     let args: Vec<String> = std::env::args()
-        .map(|a| ragent_types::sanitize::redact_secrets(&a))
+        .map(|a| codemason_types::sanitize::redact_secrets(&a))
         .collect();
 
     let rust_backtrace =
@@ -122,7 +122,7 @@ fn write_panic_log(info: &std::panic::PanicHookInfo<'_>) {
 
     let mut content = String::new();
     content.push_str("===============================================================\n");
-    content.push_str(" ragent panic report\n");
+    content.push_str(" codemason panic report\n");
     content.push_str("===============================================================\n\n");
 
     content.push_str(&format!("Timestamp (UTC): {timestamp}\n"));
@@ -160,13 +160,13 @@ fn write_panic_log(info: &std::panic::PanicHookInfo<'_>) {
     {
         Ok(()) => {
             eprintln!(
-                "ragent: panic captured - full report written to {}",
+                "codemason: panic captured - full report written to {}",
                 path.display()
             );
         }
         Err(e) => {
             eprintln!(
-                "ragent: panic captured but failed to write log to {}: {e}",
+                "codemason: panic captured but failed to write log to {}: {e}",
                 path.display()
             );
         }

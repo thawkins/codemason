@@ -1,28 +1,28 @@
-//! `ragent connectors` CLI parity surface (spec `connectors` T-014; FR-004,
+//! `codemason connectors` CLI parity surface (spec `connectors` T-014; FR-004,
 //! FR-006).
 //!
 //! Mirrors the TUI `/connectors` slash family so the connector store can be
 //! managed from a shell without launching the TUI:
-//! `ragent connectors <sub> [args...]` for the twelve core subcommands (`list`,
+//! `codemason connectors <sub> [args...]` for the twelve core subcommands (`list`,
 //! `claude`, `add`, `remove`, `enable`, `disable`, `connect`, `disconnect`,
 //! `auth`, `test`, `stores`, `help`) plus the `marketplace` sub-subcommand
 //! family (`show`, `claude list|add|remove`). The parse-and-run logic lives entirely in
-//! the `ragent-connectors` crate ([`ragent_connectors::run_connector_subcommand`]
+//! the `codemason-connectors` crate ([`codemason_connectors::run_connector_subcommand`]
 //! for the session-free subcommands and
-//! [`ragent_connectors::run_connector_subcommand_env`] for the management
+//! [`codemason_connectors::run_connector_subcommand_env`] for the management
 //! subcommands); this module supplies only the CLI-side glue:
 //!
 //! - the argument vector is joined and split into a subcommand token and the
 //!   remaining text exactly as the TUI dispatch arm does;
 //! - the management subcommands drive an ephemeral
-//!   [`ragent_connectors::ConnectorSession`] through a [`CliConnectorEnv`], and
+//!   [`codemason_connectors::ConnectorSession`] through a [`CliConnectorEnv`], and
 //!   `test` drives an isolated probe, so the CLI never borrows a live session
 //!   (a one-shot invocation has none);
 //! - reports print to stdout, with the `From: /connectors ...` TUI attribution
-//!   header replaced by a plain `ragent connectors ...` line, the
-//!   `## /connectors` usage title rewritten to `## ragent connectors`, and the
+//!   header replaced by a plain `codemason connectors ...` line, the
+//!   `## /connectors` usage title rewritten to `## codemason connectors`, and the
 //!   usage-table rows swapping the `/connectors` trigger for
-//!   `ragent connectors` (FR-004: one wording, two surfaces).
+//!   `codemason connectors` (FR-004: one wording, two surfaces).
 //!
 //! No MCP client is connected for a one-shot CLI invocation, so a connector's
 //! live tool counts stay `?` (unknown, not zero): the count is only known from a
@@ -31,8 +31,8 @@
 use anyhow::Result;
 
 use async_trait::async_trait;
-use ragent_config::{ConnectorsConfig, McpServerConfig};
-use ragent_connectors::{
+use codemason_config::{ConnectorsConfig, McpServerConfig};
+use codemason_connectors::{
     AlwaysEnabled, AuthOutcome, AuthOutcomeError, AuthState, CONNECTOR_SUBCOMMANDS, ConnectReport,
     ConnectorCommandEnv, ConnectorDescriptor, ConnectorSession, ConnectorStatus, DisableReport,
     LifecycleError, McpConnect, McpProbe, NullCredentialStore, ProbeTool, ProcessEnv, StoreDirs,
@@ -43,7 +43,7 @@ use ragent_connectors::{
 
 use crate::cli_out::cliprintln;
 
-/// Entry point for `ragent connectors <args...>`, invoked from the CLI dispatcher.
+/// Entry point for `codemason connectors <args...>`, invoked from the CLI dispatcher.
 ///
 /// `args` is everything after the `connectors` verb (may be empty). Prints the
 /// report for the requested subcommand to stdout and returns `Ok(())`; refusal
@@ -57,7 +57,7 @@ pub async fn run_cli(args: &[String]) -> Result<()> {
     let joined = args.join(" ");
     let text = joined.trim();
 
-    // A bare `ragent connectors` renders usage (FR-004, FR-017 parity).
+    // A bare `codemason connectors` renders usage (FR-004, FR-017 parity).
     if text.is_empty() {
         cliprintln!("{}", cli_usage());
         return Ok(());
@@ -67,7 +67,7 @@ pub async fn run_cli(args: &[String]) -> Result<()> {
     // Strip the typed prefix rather than slicing by `sub.len()`: the two agree
     // today, but a byte slice indexed by `sub` would panic if they ever
     // diverged. Mirrors the TUI dispatch arm in
-    // `crates/ragent-tui/src/app/connector.rs`.
+    // `crates/codemason-tui/src/app/connector.rs`.
     let rest = text.strip_prefix(sub).map(str::trim_start).unwrap_or("");
 
     // `claude` opens the interactive catalogue browser, which owns the screen
@@ -139,10 +139,10 @@ pub async fn run_cli(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Render the `ragent connectors` help block from the shared
-/// [`ragent_connectors::render_help`] body.
+/// Render the `codemason connectors` help block from the shared
+/// [`codemason_connectors::render_help`] body.
 ///
-/// Delegates to the `ragent-connectors` crate rather than hand-copying the usage
+/// Delegates to the `codemason-connectors` crate rather than hand-copying the usage
 /// table (see `ANTIPAT.md` M3.10), then rewrites the TUI attribution/heading for
 /// the non-TUI surface.
 #[must_use]
@@ -150,7 +150,7 @@ fn cli_usage() -> String {
     cli_body(&render_help("help"))
 }
 
-/// The `ragent connectors claude` pointer block.
+/// The `codemason connectors claude` pointer block.
 ///
 /// The interactive Claude connector-catalogue browser lives on the TUI surface
 /// (`/connectors claude`); a one-shot CLI invocation has no terminal to hand it,
@@ -160,18 +160,18 @@ fn cli_usage() -> String {
 fn catalogue_browser_pointer() -> String {
     "From: /connectors claude\n\n\
      The Claude connector-catalogue browser is an interactive TUI panel: run \
-     `/connectors claude [query] [--category <name>] [--refresh]` inside ragent to \
+     `/connectors claude [query] [--category <name>] [--refresh]` inside codemason to \
      filter the catalogue by query and category, browse it with Up/Down, and \
      install a connector with Enter.\n\n\
      From a shell, use the non-interactive equivalent:\n\
-     - `ragent connectors add <id>` - install a connector from the catalogue."
+     - `codemason connectors add <id>` - install a connector from the catalogue."
         .to_string()
 }
 
 /// Rewrite a shared `/connectors` report for the CLI surface (FR-006): the TUI
-/// `From: /connectors ...` attribution becomes `ragent connectors ...`, the
-/// `## /connectors` usage heading becomes `## ragent connectors`, and the
-/// usage-table rows swap the `/connectors` trigger for `ragent connectors`. The
+/// `From: /connectors ...` attribution becomes `codemason connectors ...`, the
+/// `## /connectors` usage heading becomes `## codemason connectors`, and the
+/// usage-table rows swap the `/connectors` trigger for `codemason connectors`. The
 /// body is otherwise printed verbatim so both surfaces stay in step.
 #[must_use]
 fn cli_body(report: &str) -> String {
@@ -205,7 +205,7 @@ impl CliConnectorEnv {
     /// Find one installed connector's descriptor in the configured stores
     /// (FR-001).
     fn descriptor(&self, id: &str) -> Option<ConnectorDescriptor> {
-        ragent_connectors::descriptor_by_id(&self.dirs, id)
+        codemason_connectors::descriptor_by_id(&self.dirs, id)
     }
 }
 
@@ -255,9 +255,9 @@ impl ConnectorCommandEnv for CliConnectorEnv {
         let descriptor = self
             .descriptor(id)
             .ok_or_else(|| AuthOutcomeError::UnknownConnector(id.to_string()))?;
-        let requirement = ragent_connectors::AuthRequirement::for_descriptor(&descriptor);
+        let requirement = codemason_connectors::AuthRequirement::for_descriptor(&descriptor);
         let state = match requirement.shape {
-            ragent_connectors::ConnectorAuthShape::None => AuthState::NotRequired,
+            codemason_connectors::ConnectorAuthShape::None => AuthState::NotRequired,
             _ => AuthState::NeedsAuth,
         };
         Ok(AuthOutcome {
@@ -271,8 +271,8 @@ impl ConnectorCommandEnv for CliConnectorEnv {
 
 /// Build a [`ConnectorEnv`] over `connect` with this surface's null credentials,
 /// process environment, and always-enabled server ledger (FR-008, FR-018).
-fn connector_env(connect: &mut CliMcpConnect) -> ragent_connectors::ConnectorEnv<'_> {
-    ragent_connectors::ConnectorEnv {
+fn connector_env(connect: &mut CliMcpConnect) -> codemason_connectors::ConnectorEnv<'_> {
+    codemason_connectors::ConnectorEnv {
         connect,
         credentials: &NullCredentialStore,
         env: &ProcessEnv,
@@ -320,7 +320,7 @@ impl McpProbe for CliMcpProbe {
         config: McpServerConfig,
     ) -> Result<Vec<ProbeTool>, String> {
         // Shared isolated connect-and-list helper (T-309).
-        let tools = ragent_agent::mcp::probe::connect_and_list(server_id, config).await?;
+        let tools = codemason_agent::mcp::probe::connect_and_list(server_id, config).await?;
         Ok(tools
             .into_iter()
             .map(|(name, parameters)| ProbeTool { name, parameters })

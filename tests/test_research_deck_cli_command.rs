@@ -1,13 +1,13 @@
-//! Integration tests for the `ragent research deck` CLI arm (spec `diffdeck`
+//! Integration tests for the `codemason research deck` CLI arm (spec `diffdeck`
 //! T-011: FR-001, FR-010, FR-013, FR-014, FR-017, FR-021).
 //!
-//! Each test spawns the built `ragent` binary inside a fresh temp working
+//! Each test spawns the built `codemason` binary inside a fresh temp working
 //! directory with an isolated `XDG_CONFIG_HOME`/`HOME`, writes two dated
 //! reports into `research/<name>/`, and asserts the two-part output the CLI
-//! contract promises: the machine-readable `ragent-research: {...}` line and
+//! contract promises: the machine-readable `codemason-research: {...}` line and
 //! the human summary beneath it.
 //!
-//! The orchestration itself is covered by `ragent-research`'s
+//! The orchestration itself is covered by `codemason-research`'s
 //! `test_deck_orchestrate` suite; these tests assert the CLI *wires* to it -
 //! that the deck lands on disk, that the counts in both output forms are the
 //! written deck's own, and that a refusal fails the process rather than
@@ -44,18 +44,18 @@ impl Fixture {
         self.temp.path()
     }
 
-    /// Run `ragent` with `args` against this fixture's isolated environment.
-    fn ragent(&self, args: &[&str]) -> Output {
+    /// Run `codemason` with `args` against this fixture's isolated environment.
+    fn codemason(&self, args: &[&str]) -> Output {
         let config = self.temp.path().join("config");
         let home = self.temp.path().join("home");
         std::fs::create_dir_all(&config).expect("config dir");
         std::fs::create_dir_all(&home).expect("home dir");
-        Command::new(env!("CARGO_BIN_EXE_ragent"))
+        Command::new(env!("CARGO_BIN_EXE_cdmn"))
             .args(args)
             .env("XDG_CONFIG_HOME", &config)
             .env("HOME", &home)
             .output()
-            .expect("spawn ragent")
+            .expect("spawn codemason")
     }
 
     /// Write one dated report for `name`, using the stamp as its date.
@@ -92,7 +92,7 @@ A stable summary paragraph.
 Body of finding one.
 
 ## In-Project Cross-References
-- ragent-research: deck.rs
+- codemason-research: deck.rs
 ";
         let newer = "\
 # Title: Test Deck Item
@@ -115,7 +115,7 @@ A stable summary paragraph.
 Body of finding one.
 
 ## In-Project Cross-References
-- ragent-research: deck.rs
+- codemason-research: deck.rs
 ";
         self.write_report("deckitem", "2025-01-10", older);
         self.write_report("deckitem", "2025-02-14", newer)
@@ -136,7 +136,7 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
-/// The single `ragent-research: {...}` JSON line in `text`, parsed.
+/// The single `codemason-research: {...}` JSON line in `text`, parsed.
 ///
 /// Fails when there is not exactly one such line, which is the contract: a deck
 /// run reports itself once, so a consumer can read the outcome without
@@ -144,11 +144,11 @@ fn stderr(out: &Output) -> String {
 fn deck_event(text: &str) -> serde_json::Value {
     let lines: Vec<&str> = text
         .lines()
-        .filter(|line| line.starts_with("ragent-research: {"))
+        .filter(|line| line.starts_with("codemason-research: {"))
         .collect();
     let parsed: Vec<serde_json::Value> = lines
         .iter()
-        .filter_map(|line| line.strip_prefix("ragent-research: "))
+        .filter_map(|line| line.strip_prefix("codemason-research: "))
         .filter_map(|json| serde_json::from_str(json).ok())
         .collect();
     let decks: Vec<&serde_json::Value> = parsed
@@ -167,7 +167,7 @@ fn deck_event(text: &str) -> serde_json::Value {
 fn test_research_deck_cli_writes_deck_and_prints_event_and_summary() {
     let fx = Fixture::new();
     fx.fixture();
-    let out = fx.ragent(&[
+    let out = fx.codemason(&[
         "research",
         "deck",
         "deckitem",
@@ -227,7 +227,7 @@ fn test_research_deck_cli_writes_deck_and_prints_event_and_summary() {
 
     // The human summary repeats the same totals in the non-TUI spelling.
     assert!(
-        text.contains("ragent-research: wrote `"),
+        text.contains("codemason-research: wrote `"),
         "summary must carry the CLI attribution: {text}"
     );
     assert!(
@@ -248,7 +248,7 @@ fn test_research_deck_cli_writes_deck_and_prints_event_and_summary() {
 fn test_research_deck_cli_elements_filter_narrows_the_deck() {
     let fx = Fixture::new();
     fx.fixture();
-    let out = fx.ragent(&[
+    let out = fx.codemason(&[
         "research",
         "deck",
         "deckitem",
@@ -297,7 +297,7 @@ Unchanged body.
 ";
     fx.write_report("stable", "2025-01-10", body);
     fx.write_report("stable", "2025-02-14", body);
-    let out = fx.ragent(&["research", "deck", "stable"]);
+    let out = fx.codemason(&["research", "deck", "stable"]);
     assert!(
         out.status.success(),
         "deck must succeed: stdout={} stderr={}",
@@ -327,7 +327,7 @@ Unchanged body.
 fn test_research_deck_cli_refuses_a_missing_item_without_writing() {
     let fx = Fixture::new();
     fx.fixture();
-    let out = fx.ragent(&["research", "deck", "no-such-item"]);
+    let out = fx.codemason(&["research", "deck", "no-such-item"]);
     assert!(
         !out.status.success(),
         "a missing item must fail the process: stdout={}",
@@ -347,7 +347,7 @@ fn test_research_deck_cli_refuses_a_missing_item_without_writing() {
         "FR-018: a refused run must create no directory"
     );
     assert!(
-        !combined.contains("ragent-research: wrote `"),
+        !combined.contains("codemason-research: wrote `"),
         "a refused run must not print a success summary: {combined}"
     );
 }
@@ -359,7 +359,7 @@ fn test_research_deck_cli_refuses_an_existing_deck_without_force() {
     let out_path = fx.path().join("existing.md");
     std::fs::write(&out_path, "sentinel\n").expect("sentinel");
 
-    let refused = fx.ragent(&[
+    let refused = fx.codemason(&[
         "research",
         "deck",
         "deckitem",
@@ -387,7 +387,7 @@ fn test_research_deck_cli_refuses_an_existing_deck_without_force() {
     );
 
     // With --force the same invocation overwrites it.
-    let forced = fx.ragent(&[
+    let forced = fx.codemason(&[
         "research",
         "deck",
         "deckitem",
@@ -412,7 +412,7 @@ fn test_research_deck_cli_refuses_an_existing_deck_without_force() {
 fn test_research_deck_cli_rejects_an_unknown_element_name() {
     let fx = Fixture::new();
     fx.fixture();
-    let out = fx.ragent(&[
+    let out = fx.codemason(&[
         "research",
         "deck",
         "deckitem",
@@ -444,7 +444,7 @@ fn test_research_deck_cli_rejects_an_unknown_element_name() {
 fn test_research_deck_cli_twice_in_a_day_is_byte_identical() {
     let fx = Fixture::new();
     fx.fixture();
-    let first = fx.ragent(&["research", "deck", "deckitem"]);
+    let first = fx.codemason(&["research", "deck", "deckitem"]);
     assert!(first.status.success(), "first run must succeed");
     let deck = std::fs::read_dir(fx.item_dir("deckitem"))
         .expect("item dir")
@@ -459,7 +459,7 @@ fn test_research_deck_cli_twice_in_a_day_is_byte_identical() {
     let before = std::fs::read_to_string(&deck).expect("deck readable");
 
     // FR-021: a second run in the same day writes the same bytes under --force.
-    let second = fx.ragent(&["research", "deck", "deckitem", "--force"]);
+    let second = fx.codemason(&["research", "deck", "deckitem", "--force"]);
     assert!(
         second.status.success(),
         "second run must succeed: stderr={}",
@@ -475,7 +475,7 @@ fn test_research_deck_cli_twice_in_a_day_is_byte_identical() {
 ///
 /// The CLI is a presentation surface, so a run that spends real time reports
 /// itself rather than going quiet. The reports must go to **stderr** for exactly
-/// this reason: `stdout` carries the machine-readable `ragent-research: {...}`
+/// this reason: `stdout` carries the machine-readable `codemason-research: {...}`
 /// line, and a progress line mixed into it would make a piped consumer parse a
 /// record it did not ask for. Every stage of a model-free run still reports - the
 /// enrichment stages as skipped - so a reader never has to infer "no provider"
@@ -484,7 +484,7 @@ fn test_research_deck_cli_twice_in_a_day_is_byte_identical() {
 fn test_deck_run_reports_stage_progress_on_stderr() {
     let fixture = Fixture::new();
     fixture.fixture();
-    let out = fixture.ragent(&["research", "deck", "deckitem"]);
+    let out = fixture.codemason(&["research", "deck", "deckitem"]);
     assert!(
         out.status.success(),
         "the fixture pair produces a deck: {}",
@@ -494,11 +494,11 @@ fn test_deck_run_reports_stage_progress_on_stderr() {
     let err = stderr(&out);
     for stage in ["select", "read", "diff", "destination", "render"] {
         assert!(
-            err.contains(&format!("ragent-research: deck {stage} ...")),
+            err.contains(&format!("codemason-research: deck {stage} ...")),
             "stage `{stage}` must announce itself on stderr; stderr was:\n{err}"
         );
         assert!(
-            err.contains(&format!("ragent-research: deck {stage} done")),
+            err.contains(&format!("codemason-research: deck {stage} done")),
             "stage `{stage}` must report completion; stderr was:\n{err}"
         );
     }
@@ -518,7 +518,7 @@ fn test_deck_run_reports_stage_progress_on_stderr() {
     // The progress lines must not leak into stdout.
     let out_text = stdout(&out);
     assert!(
-        !out_text.contains("ragent-research: deck "),
+        !out_text.contains("codemason-research: deck "),
         "progress belongs on stderr, not stdout; stdout was:\n{out_text}"
     );
     // stdout still carries exactly one parseable deck record.

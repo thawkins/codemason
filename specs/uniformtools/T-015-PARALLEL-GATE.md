@@ -30,10 +30,10 @@ dispatch path.
 
 | # | State | Where |
 |---|---|---|
-| 1 | `supports_parallel` was declared (T-002), set on all six family `const`s (T-003) and printed by the wire matrix (T-022), but **no consumer read it**. `profile_for` had exactly one caller in the whole tree: the matrix renderer. | `ragent-llm/src/providers/wire/profile_table.rs` |
-| 2 | The per-step flag was `let parallel_tool_calls = turn.session_config.experimental.parallel_tool_calls;` - the config's value and nothing else. | `ragent-agent/src/session/processor.rs` |
-| 3 | A source-shaped guard already existed at `crates/ragent-agent/tests/test_parallel_gate.rs` (added in `d6abcd4a`), asserting the strings the gate would contain. It was **not included** in `tests/all.rs`, so it never ran: the file was dead. Its assertion `source.contains("parallel_tool_calls = false")` was also satisfied by no such line while the "ordered" assertion around it happened to compare positions in a way the missing line could not fail, and its `tracing::info!` check counted the loop's unrelated alias-resolution log. | `crates/ragent-agent/tests/test_parallel_gate.rs` |
-| 4 | Every declared **family** sets `supports_parallel: true`, and `PROVIDER_WIRE` is many-to-one onto those families, so no registered id currently resolves to a `false` profile. The gate's `false` row is therefore a declared contract with no provider behind it yet. | `ragent-llm/src/providers/wire/profile_table.rs` |
+| 1 | `supports_parallel` was declared (T-002), set on all six family `const`s (T-003) and printed by the wire matrix (T-022), but **no consumer read it**. `profile_for` had exactly one caller in the whole tree: the matrix renderer. | `codemason-llm/src/providers/wire/profile_table.rs` |
+| 2 | The per-step flag was `let parallel_tool_calls = turn.session_config.experimental.parallel_tool_calls;` - the config's value and nothing else. | `codemason-agent/src/session/processor.rs` |
+| 3 | A source-shaped guard already existed at `crates/codemason-agent/tests/test_parallel_gate.rs` (added in `d6abcd4a`), asserting the strings the gate would contain. It was **not included** in `tests/all.rs`, so it never ran: the file was dead. Its assertion `source.contains("parallel_tool_calls = false")` was also satisfied by no such line while the "ordered" assertion around it happened to compare positions in a way the missing line could not fail, and its `tracing::info!` check counted the loop's unrelated alias-resolution log. | `crates/codemason-agent/tests/test_parallel_gate.rs` |
+| 4 | Every declared **family** sets `supports_parallel: true`, and `PROVIDER_WIRE` is many-to-one onto those families, so no registered id currently resolves to a `false` profile. The gate's `false` row is therefore a declared contract with no provider behind it yet. | `codemason-llm/src/providers/wire/profile_table.rs` |
 
 ## 3. What landed
 
@@ -90,7 +90,7 @@ other) and that the router's downstream family is not resolved.
 
 ## 4. The cases
 
-`crates/ragent-agent/tests/test_parallel_gate.rs` was rewritten (it existed as a
+`crates/codemason-agent/tests/test_parallel_gate.rs` was rewritten (it existed as a
 dead, never-included source guard - see 2.3) and added to `tests/all.rs`. Five
 cases:
 
@@ -156,12 +156,12 @@ would make the case assert on its own edit. Recorded, not papered over.
 
 - `cargo fmt --all -- --check` - clean
 - `cargo check --workspace --all-targets` - clean (1m 16s)
-- `cargo clippy -p ragent-agent --all-targets` - no diagnostic names a file this
+- `cargo clippy -p codemason-agent --all-targets` - no diagnostic names a file this
   task touched. The probe's turn future is boxed (`run_probe` ->
   `run_probe_inner` plus `Box::pin` at the call site) rather than carrying four
   `large_futures` warnings; the remaining diagnostics are the pre-existing
   `redundant_pub_crate` group in the library
-- `cargo nextest run -p ragent-agent` - **2126 passed**, 0 failed, 1 skipped
+- `cargo nextest run -p codemason-agent` - **2126 passed**, 0 failed, 1 skipped
   (2121 before this task; the five new cases are
   `test_parallel_gate::*`)
 - the thirteen `scripts/check-*.sh` guards - twelve pass;

@@ -7,7 +7,7 @@ spec_id: reqeng
 ## Overview
 
 This plan back-fills the missing Spec-Driven Development (SDD) capabilities
-from GitHub's `spec-kit/spec-driven.md` into ragent's `/spec` feature. The
+from GitHub's `spec-kit/spec-driven.md` into codemason's `/spec` feature. The
 work is organized into six milestones, each closing a cluster of related
 gaps. All new capabilities are opt-in and backward-compatible with existing
 spec directories.
@@ -15,7 +15,7 @@ spec directories.
 ### Current State Summary
 
 The updated gap analysis in the SPEC.md clarifies that several SDD
-capabilities are already partially present in ragent, albeit implemented
+capabilities are already partially present in codemason, albeit implemented
 differently:
 
 - **Plan generation** — `/spec update` and `/spec add` already regenerate
@@ -105,7 +105,7 @@ scoping below.
 | T-010 | Extend `SpecTemplate::generate` with optional quality-checklist section | FR-006 | S | High | completed | — |
 | T-011 | Extend `PlanTemplate::generate` with optional quality-checklist section | FR-006 | S | High | completed | — |
 | T-012 | Add template-generation tests for checklist embedding | FR-006, NFR-004 | S | Medium | completed | T-010, T-011 |
-| T-013 | Define `Constitution` struct and parser in ragent-specs | FR-007 | M | High | completed | — |
+| T-013 | Define `Constitution` struct and parser in codemason-specs | FR-007 | M | High | completed | — |
 | T-014 | Add `CONSTITUTION.md` default template generation | FR-007 | S | High | completed | T-013 |
 | T-015 | Implement Phase -1 gate checkbox parsing in PLAN.md (plan_parser.rs) | FR-008 | M | High | completed | T-013 |
 | T-016 | Add Phase -1 gate validation to `validate_plan` | FR-008 | M | High | completed | T-015 |
@@ -127,7 +127,7 @@ scoping below.
 | T-032 | Add `/spec feedback <spec-id> <note>` command to append feedback notes | FR-017 | S | Low | completed | T-031 |
 | T-033 | Surface feedback notes during `/spec plan` regeneration | FR-017 | S | Low | completed | T-032, T-004 |
 | T-034 | Verify backward compatibility: existing specs validate without new artifacts | FR-018 | S | Critical | completed | T-002, T-004, T-006, T-013, T-016 |
-| T-035 | Add configuration flags for opt-in SDD capabilities in ragent.json | FR-019 | M | High | completed | — |
+| T-035 | Add configuration flags for opt-in SDD capabilities in codemason.json | FR-019 | M | High | completed | — |
 | T-036 | Wire configuration flags to gate new artifact generation and validation | FR-019 | M | High | completed | T-035 |
 | T-037 | Document gap status and resolution in this PLAN.md | FR-020 | S | Low | completed | — |
 | T-038 | Update QUICKSTART.md with new `/spec` subcommands | FR-020 | S | Medium | completed | T-002, T-004, T-006 |
@@ -215,8 +215,8 @@ table above. See the Tasks table for dependency ordering.
 4. All new capabilities are opt-in via configuration flags
 5. Unit tests cover all new parsing, validation, and generation logic
 6. QUICKSTART.md, SPEC.md, and CHANGELOG.md are updated
-7. `cargo test -p ragent-specs` passes with no regressions
-8. `cargo clippy -p ragent-specs` produces no new warnings
+7. `cargo test -p codemason-specs` passes with no regressions
+8. `cargo clippy -p codemason-specs` produces no new warnings
 
 ---
 

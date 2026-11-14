@@ -18,7 +18,7 @@ extract the underlying "jobs" the feature is hired to do.
   understand the product's value proposition through the JTBD lens without
   manually re-reading and interpreting every requirement.
 - **Job type:** Functional
-- **Performer:** A developer or product analyst using ragent who authors or
+- **Performer:** A developer or product analyst using codemason who authors or
   reviews specifications.
 - **Related requirements:** FR-002, FR-006, FR-007, FR-013
 - **Success signals:** A `JTBD.md` file appears in the target spec folder
@@ -71,7 +71,7 @@ extract the underlying "jobs" the feature is hired to do.
   the help text and argument hints to mention `jtbd`, so I can discover and
   use the sub-command without reading external documentation.
 - **Job type:** Functional
-- **Performer:** A new or returning ragent user browsing available slash
+- **Performer:** A new or returning codemason user browsing available slash
   commands.
 - **Related requirements:** FR-010, NFR-003
 - **Success signals:** `/spec help` lists a row for
@@ -114,7 +114,7 @@ extract the underlying "jobs" the feature is hired to do.
   validation to be fast and free of unexpected side effects, so I can trust
   the system won't block the UI or make network calls I didn't authorise.
 - **Job type:** Functional
-- **Performer:** Any ragent user invoking the slash command.
+- **Performer:** Any codemason user invoking the slash command.
 - **Related requirements:** FR-001, FR-012, NFR-001, NFR-004
 - **Success signals:** The parse–validate–prompt path completes within
   50 ms on a warmed cache; no network I/O occurs outside the spawned agent
@@ -128,7 +128,7 @@ extract the underlying "jobs" the feature is hired to do.
 - **Automatic regeneration on spec change** — keeping `JTBD.md` in sync
   when `SPEC.md` changes without an explicit re-run is deferred (Out of
   scope, line 215).
-- **Server/CLI equivalent (`ragent spec jtbd`)** — a follow-up spec may add
+- **Server/CLI equivalent (`codemason spec jtbd`)** — a follow-up spec may add
   this; not covered here (Out of scope, line 217).
 - **Multi-spec batch analysis (`/spec jtbd --all`)** — batch processing of
   multiple specs at once is deferred (Out of scope, line 218).

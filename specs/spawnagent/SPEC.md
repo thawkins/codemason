@@ -86,15 +86,15 @@ Pre-existing behaviour (before this spec):
 - The async launch lands in a shared slot (`App::spawn_result`), surfaced by
   a `poll_spawn_result` pass on the event loop so the wrapper's
   `[wait]` status convention is honoured.
-- Tests: `cargo test -p ragent-tui --test test_slash_commands spawn` covering
+- Tests: `cargo test -p codemason-tui --test test_slash_commands spawn` covering
   help, usage errors, unknown-agent rejection, and the launch path;
-  `cargo test -p ragent-agent` covering `spawn_background` (unmodified),
+  `cargo test -p codemason-agent` covering `spawn_background` (unmodified),
   exclusion of detached tasks from `list`/`wait`, and
   `new_agent.detached` forwarding.
 
 ### Out of scope
 
-- A CLI (`ragent run` / `ragent serve`) equivalent for `/spawn` — the
+- A CLI (`codemason run` / `codemason serve`) equivalent for `/spawn` — the
   capability is TUI-only for now; the underlying `new_agent.detached`
   parameter is available to any caller that drives the tool surface.
 - Team-member spawning changes (the team runtime is untouched).
@@ -178,20 +178,20 @@ Pre-existing behaviour (before this spec):
 ## Acceptance Criteria
 
 1. Building the workspace succeeds: `cargo check --workspace --all-targets`.
-2. `cargo test -p ragent-agent` passes, including a regression that a
+2. `cargo test -p codemason-agent` passes, including a regression that a
    `spawn_background` (non-detached) task is listed, awaited and injected
    exactly as before.
-3. `cargo test -p ragent-agent` passes a test where a `spawn_detached` task:
+3. `cargo test -p codemason-agent` passes a test where a `spawn_detached` task:
    (a) does not appear in `list_agents`, (b) cannot be collected by
    `wait_agents` with or without `task_ids`, (c) does not inject completion
    text into the parent session, and (d) writes its full output to
    `log/subagents/<task-id>.md` so the file is the durable recovery path.
-4. `cargo test -p ragent-tui --test test_slash_commands spawn` covers
+4. `cargo test -p codemason-tui --test test_slash_commands spawn` covers
    `/spawn help` (both bare and `help`), `/spawn <agent>` without a prompt
    (usage error), an unknown agent (warning + no pending slot), and the
    `/spawn general ...` happy path (slot registered, status transitions).
-5. `cargo fmt --all -- --check` is clean; `cargo clippy -p ragent-agent
-   -p ragent-tui --all-targets` introduces no NEW warnings beyond the
+5. `cargo fmt --all -- --check` is clean; `cargo clippy -p codemason-agent
+   -p codemason-tui --all-targets` introduces no NEW warnings beyond the
    pre-existing `pub(crate) function inside private module` sites.
 6. Manual: from the TUI with a real provider, `/spawn general Summarise the
    README for me` runs to completion, appears under the Agents panel while
@@ -210,13 +210,13 @@ Pre-existing behaviour (before this spec):
 
 ## References
 
-- `crates/ragent-agent/src/task/mod.rs` — `TaskEntry`, `AgentManager`,
+- `crates/codemason-agent/src/task/mod.rs` — `TaskEntry`, `AgentManager`,
   `spawn_background`, `drain_completed`.
-- `crates/ragent-agent/src/tool/new_agent.rs` — tool surface and parameter
+- `crates/codemason-agent/src/tool/new_agent.rs` — tool surface and parameter
   schema.
-- `crates/ragent-tui/src/app/slash.rs` — slash-command ladder; `swarm` +
+- `crates/codemason-tui/src/app/slash.rs` — slash-command ladder; `swarm` +
   `bench` patterns for async launches.
-- `crates/ragent-tui/src/app/spawn.rs` — `/spawn` handler and
+- `crates/codemason-tui/src/app/spawn.rs` — `/spawn` handler and
   `poll_spawn_result`.
-- `crates/ragent-tui/src/app/prompt.rs` — `resolve_agent` roster resolution
+- `crates/codemason-tui/src/app/prompt.rs` — `resolve_agent` roster resolution
   reused for agent-name validation.

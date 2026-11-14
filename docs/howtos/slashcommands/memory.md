@@ -132,4 +132,4 @@ Usage: /memory show | /memory clear | /memory help
 - `memory_store` / `memory_recall` / `memory_forget` - the actual memory tools
 - `Alt+M` - keyboard shortcut for the same panel toggle
 - `/reload` - refresh configuration and skills after editing memory config
-- Structured memory store (SQLite) configured under `memory` in `ragent.json`
+- Structured memory store (SQLite) configured under `memory` in `codemason.json`

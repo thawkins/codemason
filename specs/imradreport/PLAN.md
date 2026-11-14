@@ -6,7 +6,7 @@
 ## Overview
 
 This plan implements the IMRaD output format specified in
-`specs/imradreport/SPEC.md`. The work is confined to the `ragent-research`
+`specs/imradreport/SPEC.md`. The work is confined to the `codemason-research`
 crate, primarily `src/run_config.rs`, `src/analysis.rs`, and `src/document.rs`,
 plus a new integration test file under `tests/`.
 
@@ -53,13 +53,13 @@ SynthesisPromptBuilder         assemble_document()
 | T-005 | Add `OutputFormat::Imrad` support to `render_skeleton` | FR-011 | S | Medium | completed | T-003, T-004 |
 | T-006 | Write unit tests for `assemble_imrad` section ordering and placeholder handling | NFR-001 | M | High | completed | T-003 |
 | T-007 | Write integration test verifying IMRaD output from a full `/research create` path | FR-002, NFR-001 | M | High | completed | T-004, T-005 |
-| T-008 | Run `cargo test -p ragent-research`, `cargo clippy -p ragent-research`, and `cargo fmt --check -p ragent-research` | NFR-003 | S | Critical | completed | T-006, T-007 |
+| T-008 | Run `cargo test -p codemason-research`, `cargo clippy -p codemason-research`, and `cargo fmt --check -p codemason-research` | NFR-003 | S | Critical | completed | T-006, T-007 |
 | T-009 | Update crate docs and existing report format research note | NFR-002 | S | Low | completed | T-008 |
 ## Task detail
 
 ### T-001 — Add `OutputFormat::Imrad`
 
-In `crates/ragent-research/src/run_config.rs`:
+In `crates/codemason-research/src/run_config.rs`:
 
 - Add `Imrad` to the `OutputFormat` enum.
 - Extend `OutputFormat::parse` to accept `imrad`, `im-rad`, and `scientific`.
@@ -68,7 +68,7 @@ In `crates/ragent-research/src/run_config.rs`:
 
 ### T-002 — Update synthesis prompt
 
-In `crates/ragent-research/src/analysis.rs`, inside `render_output_template`:
+In `crates/codemason-research/src/analysis.rs`, inside `render_output_template`:
 
 - Add an explicit `Some(OutputFormat::Imrad)` branch before the fallthrough
   `_` branch.
@@ -80,7 +80,7 @@ In `crates/ragent-research/src/analysis.rs`, inside `render_output_template`:
 
 ### T-003 — Implement `assemble_imrad`
 
-In `crates/ragent-research/src/document.rs`, add a new private helper:
+In `crates/codemason-research/src/document.rs`, add a new private helper:
 
 ```rust
 fn assemble_imrad(doc: &ResearchDocument) -> String
@@ -117,7 +117,7 @@ and `session.rs` accordingly.
 
 ### T-006 — Unit tests
 
-Add `crates/ragent-research/tests/test_assemble_imrad.rs`:
+Add `crates/codemason-research/tests/test_assemble_imrad.rs`:
 
 - Construct `ResearchDocument` with known fields.
 - Assert `AssembledDocument::body` contains `## Abstract`, `## Introduction`,
@@ -130,7 +130,7 @@ Add `crates/ragent-research/tests/test_assemble_imrad.rs`:
 
 ### T-007 — Integration test
 
-Extend or mirror `crates/ragent-research/tests/test_research_create_synthesis.rs`:
+Extend or mirror `crates/codemason-research/tests/test_research_create_synthesis.rs`:
 
 - Create a research session with `OutputFormat::Imrad`.
 - Use a mock `AnalysisEngine` returning a well-formed result.
@@ -142,9 +142,9 @@ Run the standard validation commands and fix any new warnings or test
 failures:
 
 ```bash
-cargo test -p ragent-research -- --nocapture
-cargo clippy -p ragent-research
-cargo fmt --check -p ragent-research
+cargo test -p codemason-research -- --nocapture
+cargo clippy -p codemason-research
+cargo fmt --check -p codemason-research
 ```
 
 ### T-009 — Documentation

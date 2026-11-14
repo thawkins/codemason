@@ -7,7 +7,7 @@
 
 This plan implements the findings relationship diagram specified in
 `specs/rsearchdiag/SPEC.md`. The work is confined to the
-`ragent-research` crate, primarily `src/document.rs` and a new `src/diagram.rs`
+`codemason-research` crate, primarily `src/document.rs` and a new `src/diagram.rs`
 module, with a new test file under `tests/`.
 
 The implementation reuses the existing `Finding N` dependency parsing logic
@@ -57,12 +57,12 @@ render_findings_diagram(&findings) ──► diagram.rs (NEW)
 | T-012 | Write unit tests for `render_findings_diagram` (multi-finding, edges, linkStyle, classDef, escaping, self-loops, out-of-range) | FR-004, FR-006, FR-007, FR-008, FR-009, FR-010, FR-015 | M | High | completed | T-001, T-002, T-003, T-004, T-005 |
 | T-013 | Write integration test verifying `## Findings Relationship Diagram` section appears in assembled `RESEARCH.md` | FR-001, FR-002, FR-012 | S | High | completed | T-008 |
 | T-014 | Write integration test for skeleton document containing the diagram section placeholder | FR-013 | S | Medium | completed | T-009 |
-| T-015 | Run `cargo test -p ragent-research` and `cargo clippy -p ragent-research` to confirm no regressions | NFR-001, NFR-002 | S | Critical | completed | T-012, T-013, T-014 |
+| T-015 | Run `cargo test -p codemason-research` and `cargo clippy -p codemason-research` to confirm no regressions | NFR-001, NFR-002 | S | Critical | completed | T-012, T-013, T-014 |
 ## Task detail
 
 ### T-001 — Create `diagram.rs` module
 
-Create `crates/ragent-research/src/diagram.rs`. The module exposes one public
+Create `crates/codemason-research/src/diagram.rs`. The module exposes one public
 function:
 
 ```rust
@@ -182,12 +182,12 @@ each `OutputFormat` variant and asserts the section is present.
 
 ### T-011 — Module registration
 
-Add `mod diagram;` to `crates/ragent-research/src/lib.rs` (alphabetically
+Add `mod diagram;` to `crates/codemason-research/src/lib.rs` (alphabetically
 between `cli` and `document`).
 
 ### T-012–T-014 — Tests
 
-All tests go in `crates/ragent-research/tests/` per project convention:
+All tests go in `crates/codemason-research/tests/` per project convention:
 
 - `test_diagram.rs` — unit tests for `render_findings_diagram`.
 - Extend `test_research_create_synthesis.rs` or a new
@@ -199,9 +199,9 @@ All tests go in `crates/ragent-research/tests/` per project convention:
 Run:
 
 ```bash
-cargo test -p ragent-research -- --nocapture
-cargo clippy -p ragent-research
-cargo fmt --check -p ragent-research
+cargo test -p codemason-research -- --nocapture
+cargo clippy -p codemason-research
+cargo fmt --check -p codemason-research
 ```
 
 ## Risks

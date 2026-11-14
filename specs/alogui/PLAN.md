@@ -42,12 +42,12 @@ Spec: `specs/alogui/SPEC.md`
 | T-034 | Manual test pass against `TESTPLAN.md` | FR-001–FR-025, NFR-001–NFR-004 | S | Medium | completed | T-004, T-006, T-007, T-008, T-012, T-013, T-014, T-015, T-016, T-017, T-018, T-019, T-022, T-023, T-024, T-025, T-026, T-027, T-028, T-029, T-030 |
 ## Notes
 
-- All work lives in `crates/ragent-tui/src/app/slash.rs` (dispatch + handler
-  functions) and `crates/ragent-tui/src/app/state.rs` (`SLASH_COMMANDS` table).
-- `ragent-tui` already depends on `ragent-storage`, so `ActivityLog::open`
-  and the `ragent_types::activity` types are available without new crate deps.
+- All work lives in `crates/codemason-tui/src/app/slash.rs` (dispatch + handler
+  functions) and `crates/codemason-tui/src/app/state.rs` (`SLASH_COMMANDS` table).
+- `codemason-tui` already depends on `codemason-storage`, so `ActivityLog::open`
+  and the `codemason_types::activity` types are available without new crate deps.
 - The activity-log database path follows the same convention as the main
-  database: `dirs::data_dir().join("ragent").join(<activity-log file>)`. The
+  database: `dirs::data_dir().join("codemason").join(<activity-log file>)`. The
   exact filename used by the running system should be confirmed during
   T-005; if the main process does not yet open an `ActivityLog` at startup,
   T-005 documents the agreed path so `/alog` can open a read-only view of the

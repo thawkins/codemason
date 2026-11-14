@@ -1,12 +1,12 @@
 # Tools — Utility
 
-Introspection of the running ragent binary, the active LLM connection, and the
+Introspection of the running codemason binary, the active LLM connection, and the
 host environment.
 
 | Tool | Description |
 |------|-------------|
 | `model_info` | Report the active provider/model, capabilities, context window, and cost tier. |
-| `ragent_info` | Report the running ragent version, build time, git commit, compiler, and execution details (pid, uptime, working directory, user, memory, threads). |
+| `codemason_info` | Report the running codemason version, build time, git commit, compiler, and execution details (pid, uptime, working directory, user, memory, threads). |
 | `os_info` | Report read-only host OS and hardware introspection (also `/osinfo show`). |
 | `tool_info` | Dump the whole tool registry as JSON (name, description, schema, permission category, source). |
 | `commands_info` | Dump the slash-command catalog as JSON (built-in TUI commands plus plugin-contributed ones). |
@@ -35,9 +35,9 @@ model_info format="json"
 
 ---
 
-## ragent_info
+## codemason_info
 
-Report build and version information about the running ragent binary - the ragent
+Report build and version information about the running codemason binary - the codemason
 version, the build timestamp, the git commit it was built from (best-effort), and
 the compiler version - together with runtime execution details of the current
 instance: process id and parent process id, wall-clock start time, uptime,
@@ -57,8 +57,8 @@ host does not expose it.
 
 **Example:**
 ```text
-ragent_info
-ragent_info format="json"
+codemason_info
+codemason_info format="json"
 ```
 
 ---
@@ -68,7 +68,7 @@ ragent_info format="json"
 Report read-only information about the host operating system and hardware: OS
 identity and Linux distribution, CPU, graphics adapters and graphics-API
 versions, physical hardware (system/chassis/motherboard/BIOS identity, storage
-devices, network interfaces), memory, uptime, and the ragent process
+devices, network interfaces), memory, uptime, and the codemason process
 environment. It always succeeds, reporting `unknown`/`0` placeholders for any
 value the host cannot supply, and never reads serial numbers, UUIDs, or asset
 tags. Also available as the `/osinfo show` slash command.

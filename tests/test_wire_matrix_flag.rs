@@ -3,16 +3,16 @@
 //!
 //! FR-016 requires the flag to print one aligned table row per registered
 //! provider and exit **without contacting any provider and without executing any
-//! tool**. Each test therefore spawns the built `ragent` binary inside a fresh
-//! empty tempdir, exactly like the other `ragent <flag>` CLI tests, so the crash
+//! tool**. Each test therefore spawns the built `codemason` binary inside a fresh
+//! empty tempdir, exactly like the other `codemason <flag>` CLI tests, so the crash
 //! marker and any stray write land in the sandbox rather than the repository.
 //!
 //! The offline guarantee is asserted two ways: the run must finish in well under
 //! any network timeout (it is a pure table print), and it must not create a
 //! session, a database or a config file. The row count is compared against the
-//! provider list the same binary prints for `ragent --help`'s provider selector -
+//! provider list the same binary prints for `codemason --help`'s provider selector -
 //! the TC-002 step 3 comparison - by reading the `PROVIDER` column and requiring
-//! every provider id `ragent models` names to appear as a row.
+//! every provider id `codemason models` names to appear as a row.
 //!
 //! Env isolation: these tests spawn a child process with its own `HOME` and
 //! `XDG_CONFIG_HOME` and never mutate the test process's own globals - the child
@@ -23,19 +23,19 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
-/// Run `ragent` with `args` inside a fresh empty tempdir with an isolated user
+/// Run `codemason` with `args` inside a fresh empty tempdir with an isolated user
 /// config root, returning the tempdir path and the captured output.
-fn ragent_in_empty_cwd(args: &[&str]) -> (PathBuf, Output) {
+fn codemason_in_empty_cwd(args: &[&str]) -> (PathBuf, Output) {
     let temp = tempfile::tempdir().expect("tempdir");
     let config = temp.path().join("config");
-    let output = Command::new(env!("CARGO_BIN_EXE_ragent"))
+    let output = Command::new(env!("CARGO_BIN_EXE_cdmn"))
         .args(args)
         .current_dir(temp.path())
         .env("XDG_CONFIG_HOME", &config)
         .env("HOME", temp.path())
-        .env("RAGENT_GITHUB_NO_GH_CLI", "1")
+        .env("CODEMASON_GITHUB_NO_GH_CLI", "1")
         .output()
-        .expect("spawn ragent");
+        .expect("spawn codemason");
     let dir = temp.path().to_path_buf();
     std::mem::forget(temp);
     (dir, output)
@@ -61,7 +61,7 @@ fn matrix_providers(table: &str) -> Vec<String> {
 
 #[test]
 fn test_wire_matrix_flag_prints_one_row_per_provider() {
-    let (_dir, out) = ragent_in_empty_cwd(&["--wire-matrix"]);
+    let (_dir, out) = codemason_in_empty_cwd(&["--wire-matrix"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let table = stdout(&out);
 
@@ -89,7 +89,7 @@ fn test_wire_matrix_flag_prints_one_row_per_provider() {
     assert_eq!(providers, sorted, "rows must be sorted and unique");
 
     // Every provider the model listing knows must have a row (TC-002 step 3).
-    let (_models_dir, models) = ragent_in_empty_cwd(&["models"]);
+    let (_models_dir, models) = codemason_in_empty_cwd(&["models"]);
     if models.status.success() {
         let listed: Vec<String> = stdout(&models)
             .lines()
@@ -109,7 +109,7 @@ fn test_wire_matrix_flag_prints_one_row_per_provider() {
 
 #[test]
 fn test_wire_matrix_flag_populates_every_column() {
-    let (_dir, out) = ragent_in_empty_cwd(&["--wire-matrix"]);
+    let (_dir, out) = codemason_in_empty_cwd(&["--wire-matrix"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let table = stdout(&out);
 
@@ -146,7 +146,7 @@ fn test_wire_matrix_flag_populates_every_column() {
 #[test]
 fn test_wire_matrix_flag_exits_without_network_or_session_side_effects() {
     let started = Instant::now();
-    let (dir, out) = ragent_in_empty_cwd(&["--wire-matrix"]);
+    let (dir, out) = codemason_in_empty_cwd(&["--wire-matrix"]);
     let elapsed = started.elapsed();
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
 
@@ -160,7 +160,7 @@ fn test_wire_matrix_flag_exits_without_network_or_session_side_effects() {
 
     // No session, database or config is created by the report itself. The lone
     // file a command writes is the crash marker, which is written by every run.
-    for entry in ["sessions.db", "ragent.db", ".ragent", "log/sessions"] {
+    for entry in ["sessions.db", "codemason.db", ".codemason", "log/sessions"] {
         assert!(
             !dir.join(entry).exists(),
             "the wire matrix created {entry}, so it ran more than an offline report"
@@ -170,7 +170,7 @@ fn test_wire_matrix_flag_exits_without_network_or_session_side_effects() {
 
 #[test]
 fn test_wire_matrix_flag_is_documented_in_help() {
-    let (_dir, out) = ragent_in_empty_cwd(&["--help"]);
+    let (_dir, out) = codemason_in_empty_cwd(&["--help"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let help = stdout(&out);
     assert!(

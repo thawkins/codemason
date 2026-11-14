@@ -1,6 +1,6 @@
-# How-To: ragent Configuration (`ragent.json`)
+# How-To: codemason Configuration (`codemason.json`)
 
-ragent is configured through a single JSON file called `ragent.json`. This
+codemason is configured through a single JSON file called `codemason.json`. This
 document is the complete reference for every section of that file: what it
 controls, the schema, the defaults, and worked examples.
 
@@ -73,7 +73,7 @@ the project root `README.md` and the **Tutorial** in
 
 ## 1. Overview
 
-All ragent runtime behaviour is driven by a single layered JSON configuration:
+All codemason runtime behaviour is driven by a single layered JSON configuration:
 
 - **Provider connections** (API keys, base URLs, thinking settings, model
   catalogues)
@@ -84,7 +84,7 @@ All ragent runtime behaviour is driven by a single layered JSON configuration:
 - **External integrations** (GitLab)
 - **Feature flags** (experimental, SDD, pie-gap, triggers, research)
 
-The config is loaded once at startup by `ragent-config::Config::load`, merged
+The config is loaded once at startup by `codemason-config::Config::load`, merged
 across layers, and then held in memory for the lifetime of the process.
 Several subsystems (YOLO mode, edit logging, bash/directory lists) also read
 runtime atomic flags that are synced from the config at startup.
@@ -109,10 +109,10 @@ ones for explicitly-set fields.
 
 ```
 compiled defaults
-  -> global file:   <config_dir>/ragent/ragent.json
-  -> project file:  ./.ragent/ragent.json
-  -> env file:      $RAGENT_CONFIG  (path to a JSON file)
-  -> env inline:    $RAGENT_CONFIG_CONTENT  (raw JSON string)
+  -> global file:   <config_dir>/codemason/codemason.json
+  -> project file:  ./.codemason/codemason.json
+  -> env file:      $CODEMASON_CONFIG  (path to a JSON file)
+  -> env inline:    $CODEMASON_CONFIG_CONTENT  (raw JSON string)
 ```
 
 ### Platform config directory
@@ -121,22 +121,22 @@ The global config directory is resolved by the `dirs` crate:
 
 | Platform | Path |
 | -------- | ---- |
-| Linux    | `$XDG_CONFIG_HOME/ragent/ragent.json` (default `~/.config/ragent/ragent.json`) |
-| macOS    | `~/Library/Application Support/ragent/ragent.json` |
-| Windows  | `%APPDATA%\ragent\ragent.json` |
+| Linux    | `$XDG_CONFIG_HOME/codemason/codemason.json` (default `~/.config/codemason/codemason.json`) |
+| macOS    | `~/Library/Application Support/codemason/codemason.json` |
+| Windows  | `%APPDATA%\codemason\codemason.json` |
 
-The helper `Config::global_config_dir()` returns `<config_dir>/ragent` and
-`Config::global_config_path()` returns the full `ragent.json` path.
+The helper `Config::global_config_dir()` returns `<config_dir>/codemason` and
+`Config::global_config_path()` returns the full `codemason.json` path.
 
 ### Project config
 
-The project config lives at `./.ragent/ragent.json` relative to the current
+The project config lives at `./.codemason/codemason.json` relative to the current
 working directory. This is the file created automatically on first run when
 neither a global nor project config exists.
 
 ### JSONC note
 
-The crate-level documentation mentions `ragent.jsonc` as a supported filename,
+The crate-level documentation mentions `codemason.jsonc` as a supported filename,
 and JSONC-style comments appear in documentation examples (`//` line comments).
 However, the parser uses `serde_json::from_str`, which is strict JSON. Inline
 `//` comments are **not** supported in the actual config file. Use a `.json`
@@ -146,7 +146,7 @@ illustration only.
 ### Auto-creation
 
 If no config file is found at either the global or project path, `Config::load`
-creates a `.ragent/` directory and writes a default `ragent.json` there so the
+creates a `.codemason/` directory and writes a default `codemason.json` there so the
 user has a starting point.
 
 ### Load cache and save invalidation
@@ -157,7 +157,7 @@ of every candidate config file that existed at load time. Two rules keep the
 cache coherent (the M-025 discipline):
 
 - The mtime snapshot is taken **after** `load_uncached()` runs, so a
-  first-time load that auto-creates `.ragent/ragent.json` includes the new
+  first-time load that auto-creates `.codemason/codemason.json` includes the new
   file in the cache key.
 - Every successful write through `Config::save()` or
   `Config::save_to_source()` calls `Config::invalidate_load_cache()`, so the
@@ -177,14 +177,14 @@ CI).
 different merge strategies:
 
 **Project overlays are untrusted (SEC-001/SEC-002/SEC-005).** The project file
-(`./.ragent/ragent.json`) is repository content, so `Config::merge_project`
+(`./.codemason/codemason.json`) is repository content, so `Config::merge_project`
 strips the privileged keys before the merge and logs each rejected key at
 `warn!`. A project file may **not** set: `yolo`, permission allow-rules, the
 `bash`/`dirs` lists, `telemetry`, `hooks`, `openai`, `mcp` (a stdio server
 spawns a subprocess with no permission prompt), `acp` (an ACP agent spawns
 verbatim, and the section controls the editor-facing server), or any provider's
 `api` block (which redirects the provider credential and prompt stream). Put
-those in the user-global `~/.config/ragent/ragent.json`. The rest of a project
+those in the user-global `~/.config/codemason/codemason.json`. The rest of a project
 provider entry (`thinking`, `env`, `models`) still merges.
 
 | Section | Strategy |
@@ -219,7 +219,7 @@ merged config, in load order.
 ### `--config <PATH>` CLI flag
 
 ```
-ragent --config /path/to/my-config.json run "hello"
+codemason --config /path/to/my-config.json run "hello"
 ```
 
 When `--config` is supplied, the file at that path is loaded directly and
@@ -230,8 +230,8 @@ file path, line, column, the problematic source line, and a caret marker.
 
 | Variable | Purpose |
 | -------- | ------- |
-| `RAGENT_CONFIG` | Path to a JSON config file, merged on top of project config. |
-| `RAGENT_CONFIG_CONTENT` | Raw JSON string, merged last (highest precedence). Parse errors show the inline content. |
+| `CODEMASON_CONFIG` | Path to a JSON config file, merged on top of project config. |
+| `CODEMASON_CONFIG_CONTENT` | Raw JSON string, merged last (highest precedence). Parse errors show the inline content. |
 | Provider API keys | See [section 7.3](#73-provider). Env vars always take precedence over config-file values. |
 | `TAVILY_API_KEY` | Overrides `tavily_api_key`. |
 | `OPENALEX_EMAIL` | Overrides `openalex_email`. |
@@ -251,10 +251,10 @@ file path, line, column, the problematic source line, and a caret marker.
 
 ## 5. Config Error Reporting
 
-When a config file fails to parse, ragent produces an actionable diagnostic:
+When a config file fails to parse, codemason produces an actionable diagnostic:
 
 ```
-Failed to parse config file '.ragent/ragent.json':
+Failed to parse config file '.codemason/codemason.json':
 Error at line 12, column 8:
 ──────────────────────────────────────────────────────────────────��─────────────
 Problematic line:
@@ -265,31 +265,31 @@ Parse error: expected `:` at line 12 column 8
 
 This includes:
 
-- The file path (or `RAGENT_CONFIG_CONTENT` for the inline env var).
+- The file path (or `CODEMASON_CONFIG_CONTENT` for the inline env var).
 - The line and column from the serde error.
 - A separator line.
 - The exact source line that caused the failure.
 - A caret (`^`) positioned under the error column.
 - The underlying serde message.
 
-The same format is used for `--config`, `RAGENT_CONFIG`, and
-`RAGENT_CONFIG_CONTENT` errors.
+The same format is used for `--config`, `CODEMASON_CONFIG`, and
+`CODEMASON_CONFIG_CONTENT` errors.
 
 ---
 
 ## 6. Backup and Restore
 
-`Config::backup_global_config()` snapshots the current global `ragent.json`
-into a timestamped file inside `<config_dir>/ragent/saves/`. The backup name
+`Config::backup_global_config()` snapshots the current global `codemason.json`
+into a timestamped file inside `<config_dir>/codemason/saves/`. The backup name
 uses `YYYY-MM-DD.HH-MM-SS` (hyphens in the time portion for Windows NTFS
 compatibility). If multiple saves happen in the same second, a counter is
 appended. The write is atomic (temp-file-then-rename).
 
 `Config::restore_global_config()` restores a backup over the global
-`ragent.json`. It validates that:
+`codemason.json`. It validates that:
 
 - The backup file exists and is a regular file.
-- The resolved destination is exactly `<config_dir>/ragent.json`.
+- The resolved destination is exactly `<config_dir>/codemason.json`.
 - The backup content is valid JSON.
 
 The restore is also atomic.
@@ -357,7 +357,7 @@ keyed by provider id, where each entry configures one LLM provider.
 
 | Field | Type | Default | Description |
 | ----- | ---- | ------- | ----------- |
-| `env` | `Vec<String>` | `[]` | Environment variable names required by this provider. ragent checks these are set before model discovery. |
+| `env` | `Vec<String>` | `[]` | Environment variable names required by this provider. codemason checks these are set before model discovery. |
 | `api` | `Option<ApiConfig>` | `None` | Optional API endpoint and header overrides. |
 | `thinking` | `Option<ThinkingConfig>` | `None` | Default thinking/reasoning config for all models under this provider. Overridden by per-model `thinking`. |
 | `models` | `HashMap<String, ModelConfig>` | `{}` | Model definitions keyed by model id. |
@@ -398,7 +398,7 @@ keyed by provider id, where each entry configures one LLM provider.
 
 #### `ThinkingConfig` schema
 
-Defined in `ragent-types`, this is shared across providers.
+Defined in `codemason-types`, this is shared across providers.
 
 | Field | Type | Default | Description |
 | ----- | ---- | ------- | ----------- |
@@ -418,7 +418,7 @@ Defined in `ragent-types`, this is shared across providers.
 
 #### Supported provider ids
 
-Each provider is implemented in `crates/ragent-llm/src/providers/`. The
+Each provider is implemented in `crates/codemason-llm/src/providers/`. The
 provider id (from `fn id() -> &'static str`) is the key in the `provider` map.
 
 | Provider id | Env var(s) | Notes |
@@ -1019,7 +1019,7 @@ Runtime behaviour:
 ### 7.18 `gitlab`
 
 GitLab integration configuration. Values set here override those stored in
-the ragent database (set via `/gitlab setup`). Environment variables take the
+the codemason database (set via `/gitlab setup`). Environment variables take the
 highest priority.
 
 ```json
@@ -1064,7 +1064,7 @@ and its inputs completely, or for local development/debugging.
 
 The `Alt+Y` keybinding and `/yolo` slash command toggle this at runtime and
 persist the change to the **user-global** config
-(`~/.config/ragent/ragent.json`); a project-local `yolo` value is ignored
+(`~/.config/codemason/codemason.json`); a project-local `yolo` value is ignored
 (untrusted repository content, SECTASKS T-011). See
 [`docs/howtos/permissions.md`](permissions.md).
 
@@ -1134,9 +1134,9 @@ OpenTelemetry metrics export configuration.
       "protocol": "http",
       "export_interval_seconds": 30,
       "export_timeout_seconds": 10,
-      "service_name": "ragent",
+      "service_name": "codemason",
       "resource_attributes": { "deployment.environment": "production" },
-      "metrics": { "ragent.tool.call_count": false },
+      "metrics": { "codemason.tool.call_count": false },
       "internal_port": null,
       "cardinality_limit": 1000,
       "logs": { "enabled": false, "level": "info" }
@@ -1154,20 +1154,20 @@ Wraps `OtelConfig` as `telemetry.otel`.
 | Field | Type | Default | Description |
 | ----- | ---- | ------- | ----------- |
 | `enabled` | `bool` | `false` | Master on/off switch. |
-| `endpoint` | `String` | `"http://localhost:4318"` | OTLP endpoint base URL. Must be `http://` or `https://`. ragent appends the OTLP/HTTP signal path (`/v1/metrics`) to a base URL, so `http://localhost:4318` exports to `http://localhost:4318/v1/metrics`; a base path (`https://gw.example.com/otel`) is kept. An endpoint that already names a signal path (`.../v1/metrics`) is used exactly as written. |
+| `endpoint` | `String` | `"http://localhost:4318"` | OTLP endpoint base URL. Must be `http://` or `https://`. codemason appends the OTLP/HTTP signal path (`/v1/metrics`) to a base URL, so `http://localhost:4318` exports to `http://localhost:4318/v1/metrics`; a base path (`https://gw.example.com/otel`) is kept. An endpoint that already names a signal path (`.../v1/metrics`) is used exactly as written. |
 | `protocol` | `OtelProtocol` | `http` | Transport: `http` or `grpc`. |
 | `export_interval_seconds` | `u64` | `30` | Batch export interval. Must be > 0 when enabled. |
 | `export_timeout_seconds` | `u64` | `10` | Per-export request timeout. Must be > 0 when enabled. |
-| `service_name` | `String` | `"ragent"` | `service.name` resource attribute. Must not be empty. |
+| `service_name` | `String` | `"codemason"` | `service.name` resource attribute. Must not be empty. |
 | `resource_attributes` | `HashMap<String, String>` | `{}` | Custom resource attributes appended to every metric. |
 | `metrics` | `HashMap<String, bool>` | `{}` | Per-metric enable/disable toggles. Absent = enabled by default. |
 | `internal_port` | `Option<u16>` | `None` | Optional in-process Prometheus text endpoint port. |
 | `cardinality_limit` | `usize` | `1000` | Max distinct attribute combinations per metric before overflow into `unknown` bucket. |
-| `logs` | `OtelLogsConfig` | `{ enabled: false, level: "info" }` | OTLP log-signal export of ragent's `tracing` events (see below). |
+| `logs` | `OtelLogsConfig` | `{ enabled: false, level: "info" }` | OTLP log-signal export of codemason's `tracing` events (see below). |
 
 #### `OtelLogsConfig` schema (`telemetry.otel.logs`)
 
-Ragent logs through `tracing` to a local sink: the TUI log panel in a terminal
+Codemason logs through `tracing` to a local sink: the TUI log panel in a terminal
 session, or stderr in a headless/server run. When telemetry is on, a **second**
 destination - the same OTLP collector that receives the metrics - is fed from
 this block, without redirecting the local sink. There is no separate logs
@@ -1213,8 +1213,8 @@ checked only when the field is non-empty). `/telemetry on` refuses to persist a
 block that fails validation, rather than writing a configuration the next start
 would reject.
 
-Settings are written to the **user-global** `ragent.json`
-(`$XDG_CONFIG_HOME/ragent/ragent.json`); a project `.ragent/ragent.json` cannot
+Settings are written to the **user-global** `codemason.json`
+(`$XDG_CONFIG_HOME/codemason/codemason.json`); a project `.codemason/codemason.json` cannot
 hold them, because the repo-content guard discards a project overlay's whole
 `telemetry` block so a repository can neither redirect nor enable the export.
 A save creates the user-global config directory when it does not exist yet -
@@ -1423,7 +1423,7 @@ Research subsystem configuration.
 | `max_findings` | `usize` | `20` | Maximum number of findings rendered in the report's `## Findings` block (spec `researchmax` FR-008). A per-run `--max-findings` takes precedence; `0` means unbounded. |
 | `evaluate` | `ResearchEvaluateConfig` | `{"enabled": false}` | Self-evaluation scorecard settings (FR-015 of specs/opendeepresearch). When `enabled`, the research pipeline appends a deterministic quality scorecard (quality, relevance, groundedness, completeness, structure) to the report. |
 
-As of v1.0.77, `evaluate` can be configured in `ragent.json` and is omitted from
+As of v1.0.77, `evaluate` can be configured in `codemason.json` and is omitted from
 serialized output when at its default value (`enabled: false`).
 
 As of v1.0.100, the default web-phase timeout is 180 seconds and can be overridden
@@ -1525,12 +1525,12 @@ the sandbox budgets, the store location, and per-plugin permission grants.
 | `max_execution_ms` | `u64` | `5000` | Per-plugin-tool wall-clock execution budget in milliseconds. |
 | `max_entry_ms` | `u64` | `10000` | Wall-clock budget for executing a plugin's entry point in milliseconds. |
 | `max_memory_mb` | `u64` | `64` | Per-JavaScript-context memory ceiling in mebibytes. |
-| `store_dir` | `string?` | `null` | Optional override of the plugin store directory. When `null`, the store is discovered at `.ragent/plugins/` (project), falling back to `~/.config/ragent/plugins/` (user-global). |
+| `store_dir` | `string?` | `null` | Optional override of the plugin store directory. When `null`, the store is discovered at `.codemason/plugins/` (project), falling back to `~/.config/codemason/plugins/` (user-global). |
 | `permissions` | `map<string, string[]>` | `{}` | Per-plugin permission grants keyed by plugin id. |
 
 The section merges with overlay-wins precedence (project config overrides
 user-global). Manage plugins with `/plugins list|add|remove|enable|disable|test|help`
-in the TUI or `ragent plugins <sub>` from the CLI. See
+in the TUI or `codemason plugins <sub>` from the CLI. See
 [`docs/howtos/slashcommands/plugins.md`](slashcommands/plugins.md).
 
 ### 7.32 `input_queue_capacity`
@@ -1582,7 +1582,7 @@ and the non-secret credential-name mapping.
 | Field | Type | Default | Description |
 | ----- | ---- | ------- | ----------- |
 | `enabled` | `bool` | `true` | Master switch. When `false`, the connector subsystem performs no discovery, no catalogue fetch, and no connection, and `/connectors` subcommands other than `help` report that the system is disabled. |
-| `store_dir` | `string?` | `null` | Optional override of the connector store directory. When `null`, the store is discovered at `.ragent/connectors/` (project), falling back to `~/.config/ragent/connectors/` (user-global). |
+| `store_dir` | `string?` | `null` | Optional override of the connector store directory. When `null`, the store is discovered at `.codemason/connectors/` (project), falling back to `~/.config/codemason/connectors/` (user-global). |
 | `stores` | `object?` | `null` | Catalogue endpoints and shared fetch budgets. When `null`, the compiled default endpoints and budgets apply. |
 | `stores.<name>` | `object` | `{}` | One named catalogue endpoint, for example `claude` or `community`. |
 | `stores.<name>.url` | `string?` | `null` | Catalogue-index `https://` URL. A `null`, empty, or whitespace-only value falls back to the compiled default endpoint for that catalogue; a non-`https` or host-less value is refused when the catalogue is fetched. |
@@ -1594,17 +1594,17 @@ and the non-secret credential-name mapping.
 
 The section merges with overlay-wins precedence (project config overrides
 user-global). Manage connectors with `/connectors list|claude|add|remove|enable|disable|connect|disconnect|auth|test|stores|marketplace|help`
-in the TUI or `ragent connectors <sub>` from the CLI.
+in the TUI or `codemason connectors <sub>` from the CLI.
 
 ---
 
 ### 7.34 `execution_backend` and `backends`
 
 Select **where** a session's tool invocations run (spec `openhands` FR-001,
-FR-026). When unset, ragent executes tools on the host exactly as before
+FR-026). When unset, codemason executes tools on the host exactly as before
 (`local`, FR-019). A `docker` or `podman` selection runs the shell, file, and
 search tools inside a container instead. A `remote` selection relays the whole
-turn to a second ragent server over its REST+SSE API and mirrors that server's
+turn to a second codemason server over its REST+SSE API and mirrors that server's
 event stream into the local TUI (FR-021).
 
 ```jsonc
@@ -1614,7 +1614,7 @@ event stream into the local TUI (FR-021).
   // Registry form: declare backends and select one by id (or by kind label).
   "backends": [
     { "id": "box", "name": "Podman sandbox", "kind": "podman",
-      "image": "ghcr.io/yourorg/ragent-sandbox:latest", "workspace": "/projects" },
+      "image": "ghcr.io/yourorg/codemason-sandbox:latest", "workspace": "/projects" },
     { "id": "build-farm", "name": "Remote build host", "kind": "remote",
       "url": "http://10.0.0.5:9100", "api_key": "..." }
   ]
@@ -1654,7 +1654,7 @@ store (the same store `/auth` writes to) **at spawn time** and injected as a
 container environment variable (`-e NAME=VALUE`); a remote descriptor's first
 named credential is used as its bearer key. A name the store does not hold is a
 provisioning failure - the sandbox is never started without a required
-credential. The value is never written into `ragent.json`, the container image,
+credential. The value is never written into `codemason.json`, the container image,
 or the workspace (FR-035). A literal `api_key` on a remote descriptor still
 works and takes precedence, so existing configs are unchanged.
 
@@ -1664,7 +1664,7 @@ the project identity, so it survives replacement of the container. Changing the
 re-mounting the same volume, so the conversation's files are preserved.
 
 **Remote backend.** A `remote` descriptor needs a `url` (the base URL of a
-second ragent server, for example `ragent serve --port 9100`) and an `api_key`
+second codemason server, for example `codemason serve --port 9100`) and an `api_key`
 (the server's bearer token). While the remote backend is active, the session
 processor does **not** run tools locally: it opens (or reuses) a session on the
 remote server, posts the prompt to `POST /sessions/{id}/messages`, and mirrors
@@ -1678,7 +1678,7 @@ provisioning rather than falling back to host execution.
 **Backend registry (FR-004, FR-030).** Every configured backend is exposed as a
 durable registry entry carrying a stable `id`, a display name, a kind, a
 secret-free connection descriptor, and a health state. The config file is the
-durable record; `crates/ragent-agent/src/backend/registry.rs` rebuilds the read
+durable record; `crates/codemason-agent/src/backend/registry.rs` rebuilds the read
 model from it. The built-in `local` entry is always present and healthy
 (FR-019); a `docker`/`podman` entry is `ok` when its runtime is on `PATH`, else
 `unavailable`; a `remote` entry is `ok` when a `url` and a key are configured
@@ -1692,16 +1692,16 @@ registered backend's health, and a switcher.
 Agent Client Protocol configuration (spec `openhands` FR-015, FR-022, FR-028,
 FR-036). Two roles:
 
-**ACP client** (`agents`, `default_agent`). When `agents` is present, ragent can
+**ACP client** (`agents`, `default_agent`). When `agents` is present, codemason can
 drive an external coding agent (Claude Code, Codex, Gemini CLI, or a custom ACP
 server) as a subprocess over JSON-RPC on stdio. Absent by default, which leaves
 the client subsystem inert.
 
 **ACP server** (`server_enabled`, `server_agent`). When `server_enabled` is
-`true`, ragent **serves** ACP-capable editors (Zed, VS Code, JetBrains) over
+`true`, codemason **serves** ACP-capable editors (Zed, VS Code, JetBrains) over
 JSON-RPC on its own stdio. Disabled by default. Serving additionally requires a
 binary built with the `acp-server` Cargo feature, and the endpoint is reachable
-only through the `ragent acp-server` subcommand (not via the TUI or `run`):
+only through the `codemason acp-server` subcommand (not via the TUI or `run`):
 
 ```json
 {
@@ -1716,19 +1716,19 @@ only through the `ragent acp-server` subcommand (not via the TUI or `run`):
 ```
 
 - `server_enabled` (bool, default `false`) - master switch for the server
-  endpoint. When `false` (or the feature is not compiled in), `ragent acp-server`
+  endpoint. When `false` (or the feature is not compiled in), `codemason acp-server`
   exits with a usage error (exit code 2) and serves nothing.
-- `server_agent` (string, optional) - the local ragent agent the server drives.
+- `server_agent` (string, optional) - the local codemason agent the server drives.
   Resolves `server_agent` -> `default_agent` -> the top-level `defaultAgent`.
 
 Build and run:
 
 ```bash
 cargo build --features acp-server
-ragent acp-server            # editor attaches over stdin/stdout
+codemason acp-server            # editor attaches over stdin/stdout
 ```
 
-Point an editor at the binary with `ragent acp-server` as the agent command.
+Point an editor at the binary with `codemason acp-server` as the agent command.
 
 See [`docs/howtos/acp.md`](acp.md) for the full guide: the client turn lifecycle,
 how an agent binds to an ACP entry, worked examples for Claude Code, Codex, and
@@ -1766,7 +1766,7 @@ refuse-to-start gate.
 {
   "openai": {
     "enabled": true,
-    "token": "sk-ragent-local"
+    "token": "sk-codemason-local"
   }
 }
 ```
@@ -1774,14 +1774,14 @@ refuse-to-start gate.
 | Field | Type | Default | Description |
 | ----- | ---- | ------- | ----------- |
 | `enabled` | `bool` | `false` | Whether the OpenAI-compatible surface is an explicitly enabled capability. Enabling it arms the FR-032 token gate. |
-| `token` | `Option<String>` | `None` | Bearer token required for every request to the surface (FR-024). Redacted in diagnostics. Falls back to the ambient `RAGENT_TOKEN`. |
+| `token` | `Option<String>` | `None` | Bearer token required for every request to the surface (FR-024). Redacted in diagnostics. Falls back to the ambient `CODEMASON_TOKEN`. |
 
 **Refuse to start without a token (FR-032).** The surface is never served
-unauthenticated: when `enabled: true` but no `token` (or `RAGENT_TOKEN`) is
-available, `ragent serve` exits with an error and starts no server. A configured
-token is the server's single bearer token (FR-024) - ragent does not run a second
+unauthenticated: when `enabled: true` but no `token` (or `CODEMASON_TOKEN`) is
+available, `codemason serve` exits with an error and starts no server. A configured
+token is the server's single bearer token (FR-024) - codemason does not run a second
 credential for `/v1`. Only the top-level (trusted) config may set the token; a
-project-local `.ragent/ragent.json` overlay has its `openai` section dropped by
+project-local `.codemason/codemason.json` overlay has its `openai` section dropped by
 `merge_project`, so repository content cannot choose the credential that guards
 the whole API.
 
@@ -1864,7 +1864,7 @@ Tool-name alias resolution, alias advertisement and the provider payload trace
 (spec `uniformtools` FR-015, FR-017). Every switch is off by default and the
 whole section is omitted from a serialised config while it is at those
 defaults, so a build that has never seen the section writes a byte-identical
-`ragent.json` and resolves every inbound tool name against the registry alone.
+`codemason.json` and resolves every inbound tool name against the registry alone.
 
 ```jsonc
 {
@@ -1878,8 +1878,8 @@ defaults, so a build that has never seen the section writes a byte-identical
 
 | Field | Type | Default | Description |
 | ----- | ---- | ------- | ----------- |
-| `aliases` | `bool` or `object` | absent (off) | Provider tool spellings resolved onto ragent tool names before the unknown-tool check (FR-015). `true` requests the built-in table of provider spellings; an object adds explicit `"<provider spelling>": "<ragent tool>"` entries. Both may be in force at once after a merge. |
-| `expose_alias_names` | `bool` | `false` | Additionally advertise each alias spelling in the outbound tool list, so a model that only knows the provider spelling can still see it (FR-015). Never advertises a retired ragent spelling (FR-031). |
+| `aliases` | `bool` or `object` | absent (off) | Provider tool spellings resolved onto codemason tool names before the unknown-tool check (FR-015). `true` requests the built-in table of provider spellings; an object adds explicit `"<provider spelling>": "<codemason tool>"` entries. Both may be in force at once after a merge. |
+| `expose_alias_names` | `bool` | `false` | Additionally advertise each alias spelling in the outbound tool list, so a model that only knows the provider spelling can still see it (FR-015). Never advertises a retired codemason spelling (FR-031). |
 | `wire_trace` | `bool` | `false` | Write each step's request body, redacted through the existing sanitizer, to `target/temp/wire-trace/<session>-<step>.json` (FR-017). Inert while absent or `false`, and it never touches a provider or a tool. |
 
 **Four values, four meanings for `aliases`.** The key is deliberately not a
@@ -1897,7 +1897,7 @@ empty) each say something different:
 winning a collision, so a project file can add or re-point one spelling without
 discarding the user-global table. The two opt-in booleans use OR semantics: a
 layer that enables one cannot have it silently turned off by a layer that leaves
-it at the default. A project-local `.ragent/ragent.json` may contribute the
+it at the default. A project-local `.codemason/codemason.json` may contribute the
 section like any other non-privileged key, because it resolves *names*, not
 capabilities - the permission layer, the loop restriction and the 7-layer bash
 validation still run on the resolved call.
@@ -1923,7 +1923,7 @@ See [section 3](#3-merge-semantics) for the merge-strategy table, and
 
 Sub-agent panel and launch configuration (spec `agentssetup` FR-021, FR-036,
 NFR-004). Both keys are omitted from a serialised config while they are at their
-defaults, so a `ragent.json` that has never set them round-trips byte-identically.
+defaults, so a `codemason.json` that has never set them round-trips byte-identically.
 
 ```json
 {
@@ -1960,7 +1960,7 @@ see. An out-of-range value is clamped to the nearest bound.
 
 Session-message retention. **Opt-in**: with no `storage` section no message is
 ever expired, and the section is omitted from a saved file while at its default,
-so an untouched `ragent.json` round-trips byte-identically.
+so an untouched `codemason.json` round-trips byte-identically.
 
 ```json
 {
@@ -1972,12 +1972,12 @@ so an untouched `ragent.json` round-trips byte-identically.
 
 | Field | Type | Default | Description |
 | ----- | ---- | ------- | ----------- |
-| `retention.enabled` | `bool` | `false` | Run age-based message expiry at startup and permit `/db prune` / `ragent db prune`. |
+| `retention.enabled` | `bool` | `false` | Run age-based message expiry at startup and permit `/db prune` / `codemason db prune`. |
 | `retention.message_days` | `u32` | `14` | Days a message is kept. Must be `>= 1`; a zero-day window is rejected because it would empty the store on every start. |
 
 **Sessions are kept.** The prune deletes from `messages_fts`,
 `message_fts_keys` and `messages` in one transaction and never touches
-`sessions`, so an expired conversation stays listed by `ragent session list`
+`sessions`, so an expired conversation stays listed by `codemason session list`
 and can be resumed - it just reads back empty.
 
 **The cutoff is fallible.** `chrono::Duration::checked_sub_signed` (SEC-049)
@@ -1986,12 +1986,12 @@ path, and `Storage::count_messages_older_than` applies the same predicate for
 `--dry-run`, so a report and the prune that follows it cannot disagree.
 
 **The file does not shrink.** `DELETE` returns pages to SQLite's freelist;
-`ragent.db` keeps its size until a `VACUUM`, which needs exclusive access - stop
-every other ragent process first. See `docs/sqlite.md` for the storage-level
+`codemason.db` keeps its size until a `VACUUM`, which needs exclusive access - stop
+every other codemason process first. See `docs/sqlite.md` for the storage-level
 detail.
 
 Surfaces: the startup pass (on a blocking thread, so it never stalls startup),
-`ragent db prune [--days N] [--dry-run]`, and the TUI `/db prune [--days N]
+`codemason db prune [--days N] [--dry-run]`, and the TUI `/db prune [--days N]
 [--dry-run]` (confirmed, with `No` preselected).
 
 ---
@@ -2191,7 +2191,7 @@ need all of these — every section has defaults, so an empty `{}` is valid.
       "protocol": "http",
       "export_interval_seconds": 30,
       "export_timeout_seconds": 10,
-      "service_name": "ragent",
+      "service_name": "codemason",
       "cardinality_limit": 1000,
       "logs": { "enabled": false, "level": "info" }
     }
@@ -2322,7 +2322,7 @@ be in the config file.
 }
 ```
 
-ragent resolves to the first available local/self-hosted provider when no
+codemason resolves to the first available local/self-hosted provider when no
 model is explicitly configured.
 
 ### Custom OpenAI-compatible endpoint
@@ -2369,7 +2369,7 @@ The base URL can also be set via `GENERIC_OPENAI_API_BASE` env var.
       "endpoint": "http://otel-collector:4318",
       "protocol": "http",
       "export_interval_seconds": 15,
-      "service_name": "ragent-prod",
+      "service_name": "codemason-prod",
       "resource_attributes": {
         "deployment.environment": "production",
         "host.name": "build-server-01"
@@ -2426,7 +2426,7 @@ The base URL can also be set via `GENERIC_OPENAI_API_BASE` env var.
   "execution_backend": "podman",
   "backends": [
     { "id": "sandbox", "kind": "podman",
-      "image": "ghcr.io/yourorg/ragent-sandbox:latest" }
+      "image": "ghcr.io/yourorg/codemason-sandbox:latest" }
   ]
 }
 ```
@@ -2452,7 +2452,7 @@ run on the host (FR-031).
 ### Inline config via environment variable
 
 ```bash
-RAGENT_CONFIG_CONTENT='{"defaultAgent":"ask","yolo":true}' ragent run "hello"
+CODEMASON_CONFIG_CONTENT='{"defaultAgent":"ask","yolo":true}' codemason run "hello"
 ```
 
 This is merged last, with the highest precedence.

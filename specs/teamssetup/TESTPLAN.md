@@ -8,7 +8,7 @@ audit:
 ## Purpose
 
 This is a **manual** test plan. A human operator follows each case by hand in a
-running `ragent` TUI session, reading the `Teams` popup, the message window, and
+running `codemason` TUI session, reading the `Teams` popup, the message window, and
 the on-disk team directory to decide whether the case passes. No case requires
 writing test code.
 
@@ -22,11 +22,11 @@ Complete these once before running any case.
 ### P-1. Build the binary
 
 ```
-cd /home/thawkins/Projects/ragent
+cd /home/thawkins/Projects/codemason
 cargo build
 ```
 
-Confirm `target/debug/ragent` exists.
+Confirm `target/debug/cdmn` exists.
 
 ### P-2. Isolated sandbox directory
 
@@ -38,14 +38,14 @@ mkdir -p target/temp/teamtest
 cd target/temp/teamtest
 ```
 
-Run `ragent` from inside `target/temp/teamtest` for every case below.
+Run `codemason` from inside `target/temp/teamtest` for every case below.
 
 ### P-3. Provider configuration
 
 The team runtime spawns real agent loops, so at least one provider must work.
 
 1. `export ANTHROPIC_API_KEY="<your key>"` (or `OPENAI_API_KEY`).
-2. Launch `ragent`.
+2. Launch `codemason`.
 3. Press `Ctrl+P` to open the provider selector, choose the provider you
    configured, press `Enter`.
 4. Press `Ctrl+M`, choose a small, fast model (e.g. a Haiku-class model), press
@@ -56,7 +56,7 @@ the case take minutes instead of seconds.
 
 ### P-4. A blueprint that always yields two teammates
 
-Create `target/temp/teamtest/.ragent/blueprints/teams/manual/blueprint.json`:
+Create `target/temp/teamtest/.codemason/blueprints/teams/manual/blueprint.json`:
 
 ```json
 {
@@ -91,7 +91,7 @@ Run `chmod +x target/temp/teamtest/hook-fail.sh`.
 
 ### P-6. The hook-event spelling for fixture edits
 
-`HookEvent` (`crates/ragent-agent/src/team/config.rs:212`) has **no**
+`HookEvent` (`crates/codemason-agent/src/team/config.rs:212`) has **no**
 `rename_all` attribute, so its wire form is the Rust variant name, not
 snake_case:
 
@@ -107,7 +107,7 @@ the whole `config.json` load fails, which looks like an unrelated defect. Every
 
 ### P-7. A hook command that fails validation
 
-`validate_hook_command` (`crates/ragent-agent/src/team/manager.rs:414`) refuses
+`validate_hook_command` (`crates/codemason-agent/src/team/manager.rs:414`) refuses
 an empty command, a command over 4096 bytes, any control character, and any of
 the substrings `; | & \` $( > < * ? ~ \`. A command containing `>` is therefore
 rejected before it is spawned. The literal string `echo > out.txt` is used in
@@ -118,7 +118,7 @@ TC-012 for that reason; no file is needed, the string is written into
 
 Several cases need one specific tool call rather than a natural-language
 request, because the point of the case is that a *particular* code path is
-exercised. `ragent` has no `/tool` slash command, so a tool is invoked by
+exercised. `codemason` has no `/tool` slash command, so a tool is invoked by
 asking the lead's own agent loop, which keeps the call deterministic if the
 instruction is literal. Type, for example:
 
@@ -140,7 +140,7 @@ the session in a mode that already allows the `team:*` categories.
 Every case inspects or edits on-disk state. The team directory is:
 
 ```
-target/temp/teamtest/.ragent/teams/<team-name>/
+target/temp/teamtest/.codemason/teams/<team-name>/
 ```
 
 containing `config.json`, `tasks.json`, `mailboxes/`, and (after M5)
@@ -191,7 +191,7 @@ dialog, which is why resume is a single keypress.
 
 **Steps:**
 
-1. Launch `ragent` from `target/temp/teamtest`.
+1. Launch `codemason` from `target/temp/teamtest`.
 2. Type `/team create manual tcompletion` and press `Enter`.
 3. Wait until the message window shows both `alpha` and `beta` spawned. In the
    `Teams` popup (`Alt+T`) confirm two rows with a `working` status.
@@ -205,7 +205,7 @@ dialog, which is why resume is a single keypress.
    press `Enter`.
 7. In the second terminal run
    `jq '.tasks[] | select(.id=="task-001") | {status,assigned_to}' \
-   .ragent/teams/tcompletion/tasks.json`.
+   .codemason/teams/tcompletion/tasks.json`.
    Expected: `{"status": "in_progress", "assigned_to": "tm-002"}`.
 8. Instruct alpha to complete beta's task: type
    `as alpha, call team_task_complete(team_name: "tcompletion", task_id: "task-001")`
@@ -243,7 +243,7 @@ Team `tcompletion` is still active and focused.
    `call team_task_complete(team_name: "tcompletion", task_id: "task-001")`
    and press `Enter`. The lead issues this call, so the caller is `lead`.
 2. In the second terminal run
-   `jq '.tasks[] | select(.id=="task-001")' .ragent/teams/tcompletion/tasks.json`.
+   `jq '.tasks[] | select(.id=="task-001")' .codemason/teams/tcompletion/tasks.json`.
 
 **Test data:** team `tcompletion`, task `task-001`.
 
@@ -272,7 +272,7 @@ Team `tcompletion` is still active and focused.
    `call team_task_cancel(team_name: "tcancel", task_id: "task-002", reason: "not needed")`
    and press `Enter`.
 4. Verify on disk:
-   `jq '.tasks[] | {id,status}' .ragent/teams/tcancel/tasks.json`.
+   `jq '.tasks[] | {id,status}' .codemason/teams/tcancel/tasks.json`.
 5. Now try to claim it explicitly: type
    `call team_task_claim(team_name: "tcancel", task_id: "task-002")` and press
    `Enter`.
@@ -306,7 +306,7 @@ Team `tcompletion` is still active and focused.
 **Steps:**
 
 1. In the second terminal capture the current file:
-   `cp .ragent/teams/tcancel/tasks.json target-004-before.json`
+   `cp .codemason/teams/tcancel/tasks.json target-004-before.json`
    (run from `target/temp/teamtest`, writing the copy to `target/temp/`).
 2. Attempt `Completed -> InProgress` by releasing the completed task from
    TC-002: type
@@ -326,7 +326,7 @@ task `task-002` (cancelled).
 - Every step refuses, and the refusal names all three of: the task id, its
   current status, and the requested status. Expected shape: "task 'task-002'
   cannot move from cancelled to completed".
-- `diff target/temp/tcancel-before.json .ragent/teams/tcancel/tasks.json`
+- `diff target/temp/tcancel-before.json .codemason/teams/tcancel/tasks.json`
   (adjusted for the path you copied to) reports no differences.
 
 ---
@@ -352,7 +352,7 @@ running the `sleep 400` prompt, so it is `working`.
 5. After 6 minutes, reopen `Alt+T` and read alpha's row.
 6. In the second terminal run
    `jq '.members[] | {name,status,last_spawn_error}' \
-   .ragent/teams/tsuspend/config.json`.
+   .codemason/teams/tsuspend/config.json`.
 
 **Test data:** team `tsuspend`; teammate `alpha`; wait duration 6 minutes
 (the watchdog timeout is 5 minutes).
@@ -383,8 +383,8 @@ is `/swarm`.
    (suspend). Confirm both rows read `suspended`.
 3. In the second terminal force `beta` to `blocked`:
    `jq '(.members[] | select(.name=="beta") | .status) = "blocked"' \
-   .ragent/teams/tblock/config.json > c.json && mv c.json \
-   .ragent/teams/tblock/config.json`
+   .codemason/teams/tblock/config.json > c.json && mv c.json \
+   .codemason/teams/tblock/config.json`
 4. Back in the TUI, run `/team cleanup` and press `Enter`.
 5. Reopen `Alt+T`. Select the `beta` row and press `Del`. This arms the
    shutdown dialog; it is **not** the resume path, so record what the dialog
@@ -441,12 +441,12 @@ is `/swarm`.
   status. The text must not differ between the slash command and the tool.
 - Step 4: with `alpha` still working, `/team delete` requires a confirmation
   step; pressing `Esc` leaves the team directory on disk. Verify with
-  `ls .ragent/teams/tguard` in the second terminal.
+  `ls .codemason/teams/tguard` in the second terminal.
 - Step 6: cleanup **succeeds**. `Suspended` is parked, not `is_live()`, so the
   single shared guard of FR-022 must let it through - which is exactly what the
   pre-fix TUI guard already did and the pre-fix tool guard did **not**, so this
   step is the one that proves the three surfaces now agree. Confirm the message
-  window reports the team cleaned up and `ls .ragent/teams/tguard` reports
+  window reports the team cleaned up and `ls .codemason/teams/tguard` reports
   "No such file or directory".
 
 ---
@@ -460,7 +460,7 @@ is `/swarm`.
 
 **Steps:**
 
-1. Create `target/temp/teamtest/.ragent/blueprints/teams/tiny/blueprint.json`:
+1. Create `target/temp/teamtest/.codemason/blueprints/teams/tiny/blueprint.json`:
 
 ```json
 {
@@ -482,7 +482,7 @@ is `/swarm`.
 6. Stop `solo`: type
    `call team_shutdown_teammate(team_name: "tcap", teammate: "solo")`, have `solo`
    type `call team_shutdown_ack`, then confirm with
-   `jq '.members[] | select(.name=="solo") | .status' .ragent/teams/tcap/config.json`
+   `jq '.members[] | select(.name=="solo") | .status' .codemason/teams/tcap/config.json`
    printing `"stopped"`.
 7. Revive the now-terminal name: type
    `call team_spawn(team_name: "tcap", teammate_name: "solo", agent_type: "general", prompt: "call team_idle immediately")`.
@@ -501,7 +501,7 @@ is `/swarm`.
   case's point: a terminal member occupies no active slot, so reviving it adds
   one and must respect the cap. The pre-fix build allows step 7 through because
   the limit check is skipped for every existing name.
-- `jq '.members | length' .ragent/teams/tcap/config.json` prints `1` throughout:
+- `jq '.members | length' .codemason/teams/tcap/config.json` prints `1` throughout:
   every spawn reuses the one record rather than appending.
 
 ---
@@ -515,7 +515,7 @@ is `/swarm`.
 
 **Steps:**
 
-1. Create `target/temp/teamtest/.ragent/blueprints/teams/gated/blueprint.json`:
+1. Create `target/temp/teamtest/.codemason/blueprints/teams/gated/blueprint.json`:
 
 ```json
 {
@@ -532,12 +532,12 @@ is `/swarm`.
 3. Wait for the teammate `writer` to attempt its work. Watch the message window
    and the `Teams` popup.
 4. In the second terminal run
-   `ls target/temp/teamtest/report.md` and `cat .ragent/teams/tgate/config.json | jq '.members[0] | {name,status,plan_status}'`.
+   `ls target/temp/teamtest/report.md` and `cat .codemason/teams/tgate/config.json | jq '.members[0] | {name,status,plan_status}'`.
 5. Now approve a plan so the gate opens. The approve step requires the member to
    be `PlanPending` with a recorded `plan_request_id`, which the writer's own
    `team_submit_plan` call sets. Ask the writer to submit one: type
    `ask writer to call team_submit_plan with a one-line plan` and press `Enter`.
-   Confirm `jq '.members[0] | {status,plan_status}' .ragent/teams/tgate/config.json`
+   Confirm `jq '.members[0] | {status,plan_status}' .codemason/teams/tgate/config.json`
    prints `{"status": "plan_pending", "plan_status": "pending"}`. Then approve:
    `call team_approve_plan(team_name: "tgate", teammate: "writer", approved: true)`
    and press `Enter`. Confirm `plan_status` is `approved` and the status is
@@ -567,7 +567,7 @@ content `hello`.
 
 **Steps:**
 
-1. Create `target/temp/teamtest/.ragent/blueprints/teams/manual-claim/blueprint.json`
+1. Create `target/temp/teamtest/.codemason/blueprints/teams/manual-claim/blueprint.json`
    identical to P-4 but with `"auto_claim_tasks": false`.
 2. Rename the blueprint directory to `manualclaim` and its `"name"` field to
    `manualclaim`.
@@ -607,9 +607,9 @@ content `hello`.
 1. Type `/team create manual thook` and press `Enter`.
 2. Register a `TaskCompleted` hook by editing the team config in the second
    terminal:
-   `jq '.settings.hooks = [{"event":"TaskCompleted","command":"/home/thawkins/Projects/ragent/target/temp/teamtest/hook-fail.sh"}]' \
-   .ragent/teams/thook/config.json > h.json && mv h.json \
-   .ragent/teams/thook/config.json`
+   `jq '.settings.hooks = [{"event":"TaskCompleted","command":"/home/thawkins/Projects/codemason/target/temp/teamtest/hook-fail.sh"}]' \
+   .codemason/teams/thook/config.json > h.json && mv h.json \
+   .codemason/teams/thook/config.json`
 3. Back in the TUI create a task: type `create task "hook probe"` and press
    `Enter`.
 4. **Complete it through the runtime, not the tool.** Suspend both teammates
@@ -618,7 +618,7 @@ content `hello`.
 5. Read the step's output.
 
 **Test data:** team `thook`; hook command
-`/home/thawkins/Projects/ragent/target/temp/teamtest/hook-fail.sh`; task
+`/home/thawkins/Projects/codemason/target/temp/teamtest/hook-fail.sh`; task
 `task-001` "hook probe".
 
 **Expected results:**
@@ -650,13 +650,13 @@ content `hello`.
 
 1. Replace the hook with one that fails validation (contains `>`):
    `jq '.settings.hooks = [{"event":"TaskCompleted","command":"echo > out.txt"}]' \
-   .ragent/teams/thook/config.json > h.json && mv h.json \
-   .ragent/teams/thook/config.json`
+   .codemason/teams/thook/config.json > h.json && mv h.json \
+   .codemason/teams/thook/config.json`
 2. Create and complete a task so the hook fires: type
    `create task "ledger probe"` then
    `call team_task_complete(team_name: "thook", task_id: "task-002")`.
 3. Inspect the ledger:
-   `cat .ragent/teams/thook/hook-failures.jsonl`.
+   `cat .codemason/teams/thook/hook-failures.jsonl`.
 4. Run `/team show thook` and read the hook section.
 5. Run `call team_status(team_name: "thook")` and read the hook section.
 
@@ -682,7 +682,7 @@ content `hello`.
   live file, so the ledger is bounded to roughly 2 MiB on disk and no existing
   record is ever rewritten.
 
-**Automated coverage:** `crates/ragent-agent/tests/test_hook_failure_ledger.rs`
+**Automated coverage:** `crates/codemason-agent/tests/test_hook_failure_ledger.rs`
 (17 tests) drives all three failure kinds plus the rotation, the append-only
 guarantee, a truncated final line, and the `team_status` surface.
 
@@ -697,20 +697,20 @@ guarantee, a truncated final line, and the `team_status` surface.
 
 **Steps:**
 
-1. Terminal 1: launch `ragent`, type `/team create manual towner` and press
+1. Terminal 1: launch `codemason`, type `/team create manual towner` and press
    `Enter`. Leave it running.
 2. Terminal 1: note the lead session id:
-   `jq -r '.lead_session_id' .ragent/teams/towner/config.json`.
+   `jq -r '.lead_session_id' .codemason/teams/towner/config.json`.
 3. Terminal 1: create a task and assign it to the lead so it is `in_progress`
    under the lead's id.
-4. Terminal 2: launch a **second** `ragent` in the same directory and run
+4. Terminal 2: launch a **second** `codemason` in the same directory and run
    `/team show towner`.
 5. Terminal 2: make it active and act on it - the manager for `towner` is
    constructed by any of `/team show towner`, `/team tasks`, or the first team
    tool call in that session. Use `/team show towner` first, then
    `call team_status(team_name: "towner")`.
 6. Terminal 2: confirm whether the foreign team was left alone by comparing
-   `md5sum .ragent/teams/towner/config.json` against the value you recorded in
+   `md5sum .codemason/teams/towner/config.json` against the value you recorded in
    step 2's terminal.
 7. Terminal 2: retry with explicit consent. No `adopt` argument exists yet, so
    on the pre-fix build there is nothing to type; after T-029 the surface this
@@ -754,7 +754,7 @@ now `stopped`.
 5. Force the adoption path. Adoption fires whenever a manager is constructed
    by a **different** lead session id than the one in `config.json`
    (`manager.rs:662`). `/team close` alone does not change the lead session id,
-   so instead: run `/team close`, restart `ragent` from the same directory (a
+   so instead: run `/team close`, restart `codemason` from the same directory (a
    restart creates a new session id), then `/team show torphan` to construct the
    manager.
 6. Verify again with the same `jq` command.
@@ -783,12 +783,12 @@ now `stopped`.
 
 1. Type `/team create manual tparse` and press `Enter`.
 2. Create a task: `create task "parse probe"`.
-3. Copy the good file: `cp .ragent/teams/tparse/tasks.json good.json`.
+3. Copy the good file: `cp .codemason/teams/tparse/tasks.json good.json`.
 4. Break it in the second terminal by removing a closing brace:
-   `sed -i 's/]}/]/' .ragent/teams/tparse/tasks.json`
+   `sed -i 's/]}/]/' .codemason/teams/tparse/tasks.json`
 5. In the TUI run `/team tasks` and press `Enter`.
 6. Run `call team_task_list(team_name: "tparse")`.
-7. Restore: `cp good.json .ragent/teams/tparse/tasks.json`.
+7. Restore: `cp good.json .codemason/teams/tparse/tasks.json`.
 8. Run `/team tasks` again.
 
 **Test data:** team `tparse`; task `task-001`.
@@ -818,7 +818,7 @@ now `stopped`.
    `call team_task_create(team_name: "tdep", title: "blocked forever", depends_on: ["task-999"])`
    and press `Enter`.
 3. Read the step output.
-4. Confirm nothing was written: `cat .ragent/teams/tdep/tasks.json`. Save a
+4. Confirm nothing was written: `cat .codemason/teams/tdep/tasks.json`. Save a
    copy as `before.json` (with `md5sum before.json`) for the later comparison.
 5. Create a legal pair: `create task "first"` (`task-001`) and
    `create task "second"` with `depends_on: ["task-001"]` (`task-002`). Both
@@ -826,8 +826,8 @@ now `stopped`.
    dependencies.
 6. Close a cycle behind the runtime's back, so the next write has to validate a
    list it did not build itself. In the second terminal:
-   `jq '.tasks[0].depends_on = ["task-002"]' .ragent/teams/tdep/tasks.json > broken.json`
-   then `cp broken.json .ragent/teams/tdep/tasks.json`. `task-001` now depends
+   `jq '.tasks[0].depends_on = ["task-002"]' .codemason/teams/tdep/tasks.json > broken.json`
+   then `cp broken.json .codemason/teams/tdep/tasks.json`. `task-001` now depends
    on `task-002`, which depends on `task-001`.
 7. Perform any write so the loaded list is validated: `create task "third"`.
 
@@ -870,7 +870,7 @@ now `stopped`.
    `call team_message(team_name: "tmail", to: "tm-002", content: "<the 300000 x characters>")`.
 4. Read the step output.
 5. Verify the mailbox file:
-   `ls -l .ragent/teams/tmail/mailboxes/`.
+   `ls -l .codemason/teams/tmail/mailboxes/`.
 
 **Test data:** 300,000 `x` characters (the limit is 262,144 bytes).
 
@@ -909,7 +909,7 @@ now `stopped`.
 **Expected results:**
 
 - Step 4: succeeds (or warns), and the message stays `read: false` on disk -
-  verify with `jq '.messages[] | {from,to,read}' .ragent/teams/tundel/mailboxes/*.json`.
+  verify with `jq '.messages[] | {from,to,read}' .codemason/teams/tundel/mailboxes/*.json`.
 - Steps 5 and 6: both name the undelivered message and its recipient, so the
   lead knows the message will never be read instead of assuming it was
   delivered.
@@ -949,7 +949,7 @@ idle. Suspend `beta` so it is parked.
 
 **Preconditions:** TC-009 has been run, so the `gated` blueprint
 (`require_plan_approval: true`) exists at
-`.ragent/blueprints/teams/gated/blueprint.json`. Team `tpopup` will hold one
+`.codemason/blueprints/teams/gated/blueprint.json`. Team `tpopup` will hold one
 `blocked` member (injected as in TC-006 step 3) and one `plan_pending` member.
 
 **Steps:**
@@ -1032,7 +1032,7 @@ this case.
    `forcecleanup`, `focus`.
 3. Run `/team show tshow` and read the settings block.
 4. Compare against the file:
-   `jq '.settings' .ragent/teams/tshow/config.json`.
+   `jq '.settings' .codemason/teams/tshow/config.json`.
 5. Confirm `forcecleanup` is discoverable: it must appear in the step 2 table
    with its guard, not only in `/team cleanup`'s refusal text.
 
@@ -1092,7 +1092,7 @@ this case.
    `/team create manual tcompat`, `create task "compat probe"`, and complete
    half of it (leave one `pending`, one `completed`).
 2. Note the checksums:
-   `md5sum .ragent/teams/tcompat/config.json .ragent/teams/tcompat/tasks.json`.
+   `md5sum .codemason/teams/tcompat/config.json .codemason/teams/tcompat/tasks.json`.
 3. Stop the old binary. Build and launch the new binary from the same directory.
 4. Run `/team show tcompat` and `/team tasks`.
 5. Read both files' contents with `jq`.
@@ -1123,7 +1123,7 @@ this case.
 3. Leave the TUI idle for **6 minutes** to cross the watchdog timeout.
 4. Run `call team_status(team_name: "twd")`.
 5. In the second terminal, check for failure records:
-   `rg -c "watchdog: no progress" .ragent/teams/twd/config.json log/ 2>/dev/null`.
+   `rg -c "watchdog: no progress" .codemason/teams/twd/config.json log/ 2>/dev/null`.
 
 **Test data:** team `twd`; wait 6 minutes.
 
@@ -1148,8 +1148,8 @@ this case.
 1. Type `/team create manual tsettings` and press `Enter`.
 2. Set a custom watchdog timeout by editing config in the second terminal:
    `jq '.settings.watchdog_timeout_secs = 900' \
-   .ragent/teams/tsettings/config.json > s.json && mv s.json \
-   .ragent/teams/tsettings/config.json`
+   .codemason/teams/tsettings/config.json > s.json && mv s.json \
+   .codemason/teams/tsettings/config.json`
 3. Run `/team show tsettings` and read the settings block.
 4. Confirm the setting has an effect: with alpha working, wait 6 minutes (under
    the new 900-second timeout) and confirm alpha is **not** failed.
@@ -1177,9 +1177,9 @@ this case.
 2. Run `/team delete tdelete` and press `Enter`. Read the confirmation.
 3. Press `Esc`.
 4. In the second terminal confirm the directory still exists:
-   `ls .ragent/teams/tdelete`.
+   `ls .codemason/teams/tdelete`.
 5. Run `/team delete tdelete` again and press `Enter`, then confirm.
-6. Confirm the directory is gone: `ls .ragent/teams/tdelete`.
+6. Confirm the directory is gone: `ls .codemason/teams/tdelete`.
 7. Repeat steps 1-6 against a team with **no** live members and confirm the
    confirmation step is still required (a destructive action is never one
    keystroke away).
@@ -1187,7 +1187,7 @@ this case.
    `/team create manual tdelete2`, then `/team close` so it is **not** the
    session's active team, then `/team delete tdelete2` and press `Enter`
    **once**.
-9. Confirm the directory still exists: `ls .ragent/teams/tdelete2`.
+9. Confirm the directory still exists: `ls .codemason/teams/tdelete2`.
 
 **Test data:** team `tdelete`.
 
@@ -1206,13 +1206,13 @@ this case.
 
 Run these after the final case to leave the machine as it was found.
 
-1. Stop any running `ragent` instance: press `Ctrl+C` in each terminal, or
-   `Esc` then close the window. Confirm no `ragent` process remains:
-   `pgrep -fl ragent`.
+1. Stop any running `codemason` instance: press `Ctrl+C` in each terminal, or
+   `Esc` then close the window. Confirm no `codemason` process remains:
+   `pgrep -fl codemason`.
 2. Delete the sandbox tree:
-   `rm -rf /home/thawkins/Projects/ragent/target/temp/teamtest`.
+   `rm -rf /home/thawkins/Projects/codemason/target/temp/teamtest`.
 3. Confirm the repository tree is unchanged:
-   `cd /home/thawkins/Projects/ragent && git status --porcelain`.
+   `cd /home/thawkins/Projects/codemason && git status --porcelain`.
    Expected: only the three `specs/teamssetup/` files appear (plus any
    pre-existing untracked files). If a case leaked a team directory, log,
    `INDEX.md`, or a generated document into the repository, that is a defect in

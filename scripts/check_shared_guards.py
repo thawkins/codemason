@@ -6,16 +6,16 @@ fails when a crate re-derives a guard the workspace already owns:
 
   * a local `fn reject_option_like`, `fn contained_join`,
     `fn validate_identifier`, `fn validate_relative_component`
-    outside `crates/ragent-types/src/guard.rs`;
+    outside `crates/codemason-types/src/guard.rs`;
   * a second secret registry (`static SECRET_REGISTRY`) outside
-    `crates/ragent-types/src/sanitize.rs`;
+    `crates/codemason-types/src/sanitize.rs`;
   * a re-derived truncation helper (`fn truncate_chars`, `fn truncate_bytes`)
-    outside `crates/ragent-types/src/strutil.rs` - use the shared helpers, or
+    outside `crates/codemason-types/src/strutil.rs` - use the shared helpers, or
     add a genuinely different variant to `strutil` so the variants stay
     co-located;
   * a re-derived marketplace-ledger writer (`fn marketplaces_array_mut`,
     `fn read_or_empty_object`) outside
-    `crates/ragent-surface/src/marketplace_ledger.rs` - the `/plugins` and
+    `crates/codemason-surface/src/marketplace_ledger.rs` - the `/plugins` and
     `/connectors` ledgers share one implementation parameterised by the JSON
     root key.
 
@@ -40,61 +40,61 @@ import sys
 SCAN_ROOT = pathlib.Path("crates")
 
 # The one file allowed to define each guard, plus the documented adapter sites.
-GUARD_HOME = "crates/ragent-types/src/guard.rs"
-SANITIZE_HOME = "crates/ragent-types/src/sanitize.rs"
-STRUTIL_HOME = "crates/ragent-types/src/strutil.rs"
-LEDGER_HOME = "crates/ragent-surface/src/marketplace_ledger.rs"
+GUARD_HOME = "crates/codemason-types/src/guard.rs"
+SANITIZE_HOME = "crates/codemason-types/src/sanitize.rs"
+STRUTIL_HOME = "crates/codemason-types/src/strutil.rs"
+LEDGER_HOME = "crates/codemason-surface/src/marketplace_ledger.rs"
 
 # Call-site preserving adapters. These keep a crate-local name for existing
 # callers but delegate to the shared implementation in the same function body,
 # so the rule itself still has one home.
 ADAPTER_SITES: dict[str, str] = {
-    "crates/ragent-bench/src/data.rs": "contained_join",
-    "crates/ragent-tools-vcs/src/git/mod.rs": "reject_option_like",
-    "crates/ragent-tui/src/app/helpers.rs": "truncate_chars",
+    "crates/codemason-bench/src/data.rs": "contained_join",
+    "crates/codemason-tools-vcs/src/git/mod.rs": "reject_option_like",
+    "crates/codemason-tui/src/app/helpers.rs": "truncate_chars",
 }
 
 # (regex, human description)
 DUPLICATE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(r"\bfn\s+reject_option_like\s*\("),
-        "reject_option_like (use ragent_types::guard::reject_option_like)",
+        "reject_option_like (use codemason_types::guard::reject_option_like)",
     ),
     (
         re.compile(r"\bfn\s+contained_join\s*\("),
-        "contained_join (use ragent_types::guard::contained_join)",
+        "contained_join (use codemason_types::guard::contained_join)",
     ),
     (
         re.compile(r"\bfn\s+validate_identifier\s*\("),
-        "validate_identifier (use ragent_types::guard::validate_identifier)",
+        "validate_identifier (use codemason_types::guard::validate_identifier)",
     ),
     (
         re.compile(r"\bfn\s+validate_relative_component\s*\("),
-        "validate_relative_component (use ragent_types::guard::validate_relative_component)",
+        "validate_relative_component (use codemason_types::guard::validate_relative_component)",
     ),
     (
         re.compile(r"\bstatic\s+SECRET_REGISTRY\b"),
-        "a second secret registry (use ragent_types::sanitize)",
+        "a second secret registry (use codemason_types::sanitize)",
     ),
     (
         re.compile(r"\bfn\s+truncate_chars\s*\("),
         "a local truncate_chars "
-        "(use ragent_types::strutil::truncate_chars / truncate_chars_no_ellipsis)",
+        "(use codemason_types::strutil::truncate_chars / truncate_chars_no_ellipsis)",
     ),
     (
         re.compile(r"\bfn\s+truncate_bytes\s*\("),
         "a local truncate_bytes "
-        "(use ragent_types::strutil::truncate_bytes / truncate_bytes_no_ellipsis)",
+        "(use codemason_types::strutil::truncate_bytes / truncate_bytes_no_ellipsis)",
     ),
     (
         re.compile(r"\bfn\s+marketplaces_array_mut\s*\("),
         "a second marketplace ledger writer "
-        "(use ragent_surface::marketplace_ledger)",
+        "(use codemason_surface::marketplace_ledger)",
     ),
     (
         re.compile(r"\bfn\s+read_or_empty_object\s*\("),
         "a second marketplace ledger reader "
-        "(use ragent_surface::marketplace_ledger)",
+        "(use codemason_surface::marketplace_ledger)",
     ),
 )
 
@@ -173,7 +173,7 @@ def scan() -> list[str]:
 
 def self_test() -> int:
     """Seed a duplicate guard inside the scan root and confirm it is flagged."""
-    seed = SCAN_ROOT / "ragent-types" / "src" / "__shared_guard_selftest.rs"
+    seed = SCAN_ROOT / "codemason-types" / "src" / "__shared_guard_selftest.rs"
     seed.write_text(
         "pub fn validate_identifier(value: &str) -> bool { !value.is_empty() }\n",
         encoding="utf-8",
@@ -209,8 +209,8 @@ def main() -> int:
             file=sys.stderr,
         )
         print(
-            "Each guard has one implementation: ragent_types::guard for the "
-            "path/operand/identifier/retry/cap helpers and ragent_types::sanitize "
+            "Each guard has one implementation: codemason_types::guard for the "
+            "path/operand/identifier/retry/cap helpers and codemason_types::sanitize "
             "for the secret registry.",
             file=sys.stderr,
         )

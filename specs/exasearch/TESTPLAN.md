@@ -9,7 +9,7 @@ spec_id: exasearch
 
 1. **Exa API key** — obtain one from
    [https://dashboard.exa.ai/api-keys](https://dashboard.exa.ai/api-keys).
-2. **ragent.json** — add the key to the project or global config:
+2. **codemason.json** — add the key to the project or global config:
 
    ```jsonc
    {
@@ -23,7 +23,7 @@ spec_id: exasearch
    export EXA_API_KEY="your-exa-api-key-here"
    ```
 
-3. **Build ragent** — run `cargo build` from the project root.
+3. **Build codemason** — run `cargo build` from the project root.
 4. **Terminal** — open a terminal in the project root directory.
 
 ## Test Cases
@@ -31,13 +31,13 @@ spec_id: exasearch
 ### TC-001: Exa backend appears in engine status when API key is configured
 
 **Preconditions:**
-- `exa_api_key` is set in `ragent.json` or `EXA_API_KEY` is in the environment.
-- ragent is built and the TUI is not yet running.
+- `exa_api_key` is set in `codemason.json` or `EXA_API_KEY` is in the environment.
+- codemason is built and the TUI is not yet running.
 
 **Steps:**
-1. Launch ragent in TUI mode:
+1. Launch codemason in TUI mode:
    ```
-   ./target/debug/ragent
+   ./target/debug/cdmn
    ```
 2. Type the following slash command and press Enter:
    ```
@@ -56,14 +56,14 @@ spec_id: exasearch
 ### TC-002: Exa backend marked as failed when API key is missing
 
 **Preconditions:**
-- No `exa_api_key` in `ragent.json` and `EXA_API_KEY` is **not** set in the
+- No `exa_api_key` in `codemason.json` and `EXA_API_KEY` is **not** set in the
   environment.
-- ragent is built.
+- codemason is built.
 
 **Steps:**
-1. Launch ragent in TUI mode:
+1. Launch codemason in TUI mode:
    ```
-   ./target/debug/ragent
+   ./target/debug/cdmn
    ```
 2. Type the following slash command and press Enter:
    ```
@@ -82,13 +82,13 @@ spec_id: exasearch
 ### TC-003: Search using the `exa` engine restriction returns results
 
 **Preconditions:**
-- `exa_api_key` is set in `ragent.json` or `EXA_API_KEY` is in the environment.
-- ragent is built and the TUI is running.
+- `exa_api_key` is set in `codemason.json` or `EXA_API_KEY` is in the environment.
+- codemason is built and the TUI is running.
 
 **Steps:**
-1. Launch ragent in TUI mode:
+1. Launch codemason in TUI mode:
    ```
-   ./target/debug/ragent
+   ./target/debug/cdmn
    ```
 2. Type the following message and press Enter:
    ```
@@ -111,13 +111,13 @@ spec_id: exasearch
 ### TC-004: Default parallel search includes Exa when configured
 
 **Preconditions:**
-- `exa_api_key` is set in `ragent.json` or `EXA_API_KEY` is in the environment.
-- ragent is built and the TUI is running.
+- `exa_api_key` is set in `codemason.json` or `EXA_API_KEY` is in the environment.
+- codemason is built and the TUI is running.
 
 **Steps:**
-1. Launch ragent in TUI mode:
+1. Launch codemason in TUI mode:
    ```
-   ./target/debug/ragent
+   ./target/debug/cdmn
    ```
 2. Type the following message and press Enter:
    ```
@@ -137,15 +137,15 @@ spec_id: exasearch
 
 **Preconditions:**
 - `exa_api_key` is set to a known value (e.g. `abcdef12-3456-7890-abcd-ef1234567890`).
-- ragent is built with log level set to `debug`:
+- codemason is built with log level set to `debug`:
   ```
-  ./target/debug/ragent --log-level debug
+  ./target/debug/cdmn --log-level debug
   ```
 
 **Steps:**
-1. Launch ragent with debug logging:
+1. Launch codemason with debug logging:
    ```
-   ./target/debug/ragent --log-level debug
+   ./target/debug/cdmn --log-level debug
    ```
 2. Type the following message and press Enter:
    ```
@@ -165,16 +165,16 @@ spec_id: exasearch
 
 **Preconditions:**
 - `EXA_API_KEY` is set to an obviously invalid value (e.g. `invalid-key-123`).
-- ragent is built.
+- codemason is built.
 
 **Steps:**
 1. Set the invalid key:
    ```bash
    export EXA_API_KEY="invalid-key-123"
    ```
-2. Launch ragent in TUI mode:
+2. Launch codemason in TUI mode:
    ```
-   ./target/debug/ragent
+   ./target/debug/cdmn
    ```
 3. Type the following message and press Enter:
    ```
@@ -193,13 +193,13 @@ spec_id: exasearch
 ### TC-007: Engine enum in tool schema accepts "exa"
 
 **Preconditions:**
-- ragent is built.
+- codemason is built.
 - `exa_api_key` is set.
 
 **Steps:**
-1. Launch ragent in TUI mode:
+1. Launch codemason in TUI mode:
    ```
-   ./target/debug/ragent
+   ./target/debug/cdmn
    ```
 2. Type the following message and press Enter:
    ```
@@ -218,12 +218,12 @@ spec_id: exasearch
 
 **Preconditions:**
 - `exa_api_key` is set.
-- ragent is built.
+- codemason is built.
 
 **Steps:**
-1. Launch ragent in TUI mode:
+1. Launch codemason in TUI mode:
    ```
-   ./target/debug/ragent
+   ./target/debug/cdmn
    ```
 2. Type the following message and press Enter:
    ```
@@ -238,10 +238,10 @@ spec_id: exasearch
 
 ## Cleanup
 
-1. Remove the test `exa_api_key` from `ragent.json` if one was added for
+1. Remove the test `exa_api_key` from `codemason.json` if one was added for
    testing.
 2. Unset the environment variable:
    ```bash
    unset EXA_API_KEY
    ```
-3. Exit ragent (press `Ctrl+C` or type `/quit`).
+3. Exit codemason (press `Ctrl+C` or type `/quit`).

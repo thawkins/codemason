@@ -24,7 +24,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-TOOLS_DIR="crates/ragent-tools-core/src"
+TOOLS_DIR="crates/codemason-tools-core/src"
 
 # Tool `name()` values that read or write a caller-supplied filesystem path.
 #

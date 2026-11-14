@@ -1,0 +1,577 @@
+//! Team store: discovery, creation, loading, and saving of team configs.
+//!
+//! Teams are stored in:
+//! - `~/.codemason/teams/{name}/` - user-global (lower priority)
+//! - `[PROJECT]/.codemason/teams/{name}/` - project-local (higher priority)
+//!
+//! `config.json` writes are serialised using a companion `config.json.lock`
+//! file and an atomic rename so concurrent saves cannot clobber each other
+//! (Milestone 1).
+
+use std::fs::{self, OpenOptions};
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, anyhow};
+use chrono::Utc;
+use fs2::FileExt as _;
+
+use crate::team::config::{TeamConfig, TeamMember};
+use crate::team::mailbox::Mailbox;
+use crate::team::manager::HookOutcome;
+use crate::team::task::{Task, TaskList, TaskStore};
+
+// -- Directory discovery -------------------------------------------------------
+
+/// Return the user-global teams base directory: `~/.config/codemason/teams/`.
+#[must_use]
+pub fn global_teams_dir() -> Option<PathBuf> {
+    codemason_config::user_dirs::global_teams_dir()
+}
+
+/// Validate a team name before it is used as a filesystem path component.
+///
+/// A team name reaches `base.join(name)`, `create_dir_all`, `is_dir`, and - via
+/// `team_cleanup` - `remove_dir_all`. Taken straight from tool input or a slash
+/// command it is therefore an arbitrary-path write/delete primitive: a name of
+/// `../../../../tmp/pwned` escapes `.codemason/teams/`, `..` resolves to the
+/// project root, and `/etc` replaces the base entirely because `Path::join`
+/// discards the base for an absolute argument (SEC-codemason-team-002,
+/// SEC-codemason-agent-007, SEC-codemason-tui-004).
+///
+/// The accepted shape is a single ordinary path component: lowercase
+/// alphanumerics and `-`, starting with an alphanumeric, at most 64 characters
+///   `^[a-z0-9][a-z0-9-]{0,63}$`. `TeamConfig::new` slugifies the name it is
+/// given (uppercase and `_`/`.` become `-`), so every previously usable name
+/// still validates. Callers that also accept an id derived from another name
+/// (a blueprint) must slugify before calling.
+///
+/// # Errors
+///
+/// Returns an error naming the offending value and the accepted shape.
+pub fn validate_team_name(name: &str) -> Result<()> {
+    let mut chars = name.chars();
+    let starts_ok = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    let rest_ok = name
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if starts_ok && rest_ok && name.len() <= 64 {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "invalid team name {name:?}: a team name must match ^[a-z0-9][a-z0-9-]{{0,63}}$ \
+         (lowercase alphanumerics and hyphens only, starting with an alphanumeric, \
+         at most 64 characters)"
+    ))
+}
+
+/// Turn an arbitrary string into a valid team name.
+///
+/// Used where the name is derived rather than user-supplied (a team named after
+/// a blueprint), so generation can never produce a value that
+/// [`validate_team_name`] would reject.
+#[must_use]
+pub fn slugify_team_name(raw: &str) -> String {
+    let mut slug: String = raw
+        .trim()
+        .chars()
+        .map(|c| {
+            let lower = c.to_ascii_lowercase();
+            if lower.is_ascii_lowercase() || lower.is_ascii_digit() {
+                lower
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    slug.truncate(64);
+    match slug.chars().next() {
+        // A leading hyphen (or an empty slug) is not a valid start.
+        Some(c) if c.is_ascii_alphanumeric() => slug,
+        Some(_) => {
+            slug.remove(0);
+            let trimmed = slug.trim_start_matches('-').to_string();
+            if trimmed.is_empty() {
+                "team".to_string()
+            } else {
+                trimmed
+            }
+        }
+        None => "team".to_string(),
+    }
+}
+
+/// Walk up from `working_dir` to find the nearest project `.codemason/` directory,
+/// returning `[PROJECT]/.codemason/teams/`.
+#[must_use]
+pub fn find_project_teams_dir(working_dir: &Path) -> Option<PathBuf> {
+    let mut current = working_dir;
+    loop {
+        let candidate = current.join(".codemason");
+        if candidate.is_dir() {
+            return Some(candidate.join("teams"));
+        }
+        current = current.parent()?;
+    }
+}
+
+/// Locate the on-disk directory for a named team, caching the result on the
+/// supplied [`ToolContext`] (PERF-019) so repeated tool calls within the
+/// same agent step skip the directory walk.
+///
+/// `find_team_dir` walks up the directory tree calling `candidate.is_dir()`
+/// (a `stat()` syscall per level) on every parent. This is called from
+/// nearly every team tool's `execute()` method, often multiple times per
+/// call. PERF-019 caches the resolved `PathBuf` on the
+/// [`ToolContext::cached_team_dir`] field so the walk runs at most once per
+/// `process_user_message` turn.
+#[must_use]
+pub fn find_team_dir_cached(ctx: &crate::tool::ToolContext, name: &str) -> Option<PathBuf> {
+    // SEC-codemason-team-002: never serve a cached entry for an invalid name.
+    if validate_team_name(name).is_err() {
+        return None;
+    }
+    {
+        let guard = ctx.cached_team_dir.lock().ok()?;
+        if let Some((ref cached_name, ref dir)) = *guard {
+            if cached_name.as_str() == name {
+                return Some(dir.clone());
+            }
+        }
+    }
+    let dir = find_team_dir(&ctx.working_dir, name)?;
+    if let Ok(mut guard) = ctx.cached_team_dir.lock() {
+        *guard = Some((name.to_string(), dir.clone()));
+    }
+    Some(dir)
+}
+
+/// Locate the on-disk directory for a named team.
+///
+/// Searches project-local first (higher priority), then user-global.
+/// Returns `None` if the team does not exist in either location.
+///
+/// For the hot path inside tool `execute()` methods prefer
+/// [`find_team_dir_cached`] which caches the resolved path on the
+/// [`ToolContext`](crate::tool::ToolContext) (PERF-019).
+#[must_use]
+pub fn find_team_dir(working_dir: &Path, name: &str) -> Option<PathBuf> {
+    // SEC-codemason-team-002: a name that is not a single safe path component can
+    // never name a team, and must not reach `join` (which would resolve `..`
+    // or replace the base for an absolute name).
+    if validate_team_name(name).is_err() {
+        return None;
+    }
+    // Project-local wins.
+    if let Some(proj_teams) = find_project_teams_dir(working_dir) {
+        let candidate = proj_teams.join(name);
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+    }
+    // Fall back to global.
+    if let Some(global_teams) = global_teams_dir() {
+        let candidate = global_teams.join(name);
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+// -- TeamStore -----------------------------------------------------------------
+
+/// Manages the on-disk representation of one team.
+pub struct TeamStore {
+    /// Absolute path to the team directory (e.g. `~/.codemason/teams/my-team/`).
+    pub dir: PathBuf,
+    /// Loaded team configuration.
+    pub config: TeamConfig,
+}
+
+impl TeamStore {
+    // -- Lifecycle ----------------------------------------------------------
+
+    /// Create a brand-new team directory and write the initial `config.json`.
+    ///
+    /// If `project_local` is `true`, the team is created under
+    /// `[PROJECT]/.codemason/teams/`; otherwise under `~/.codemason/teams/`.
+    pub fn create(
+        name: &str,
+        lead_session_id: &str,
+        working_dir: &Path,
+        project_local: bool,
+    ) -> Result<Self> {
+        // SEC-codemason-team-002: validate before any join/create_dir_all.
+        validate_team_name(name)?;
+        let base = if project_local {
+            find_project_teams_dir(working_dir).ok_or_else(|| {
+                anyhow!(
+                    "no .codemason/ directory found in or above {}",
+                    working_dir.display()
+                )
+            })?
+        } else {
+            global_teams_dir().ok_or_else(|| anyhow!("cannot determine home directory"))?
+        };
+
+        let team_dir = base.join(name);
+        if team_dir.exists() {
+            return Err(anyhow!(
+                "team '{}' already exists at {}",
+                name,
+                team_dir.display()
+            ));
+        }
+
+        fs::create_dir_all(&team_dir)
+            .with_context(|| format!("create team directory {}", team_dir.display()))?;
+        fs::create_dir_all(team_dir.join("mailbox"))
+            .with_context(|| "create mailbox subdirectory")?;
+
+        let config = TeamConfig::new(name, lead_session_id);
+        let store = Self {
+            dir: team_dir,
+            config,
+        };
+        store.save()?;
+        Ok(store)
+    }
+
+    /// Initialize an existing team directory that does not yet contain `config.json`.
+    ///
+    /// This is used to recover from partially-created team directories.
+    pub fn initialize_existing_without_config(
+        name: &str,
+        lead_session_id: &str,
+        working_dir: &Path,
+    ) -> Result<Self> {
+        let team_dir =
+            find_team_dir(working_dir, name).ok_or_else(|| anyhow!("team '{name}' not found"))?;
+        let config_path = team_dir.join("config.json");
+        if config_path.exists() {
+            return Err(anyhow!(
+                "team '{}' already has config at {}",
+                name,
+                config_path.display()
+            ));
+        }
+
+        fs::create_dir_all(team_dir.join("mailbox"))
+            .with_context(|| "create mailbox subdirectory")?;
+
+        let config = TeamConfig::new(name, lead_session_id);
+        let store = Self {
+            dir: team_dir,
+            config,
+        };
+        store.save()?;
+        Ok(store)
+    }
+
+    /// Return the companion lock-file path for `config.json`.
+    fn lock_path(config_path: &Path) -> PathBuf {
+        let mut name = config_path.as_os_str().to_os_string();
+        name.push(".lock");
+        PathBuf::from(name)
+    }
+
+    /// Acquire an advisory `flock` on the companion lock file for `config.json`.
+    fn acquire_lock(config_path: &Path, exclusive: bool) -> Result<std::fs::File> {
+        let lock = Self::lock_path(config_path);
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock)
+            .with_context(|| format!("open lock file {}", lock.display()))?;
+        if exclusive {
+            file.lock_exclusive()
+                .with_context(|| format!("acquire exclusive lock on {}", lock.display()))?;
+        } else {
+            file.lock_shared()
+                .with_context(|| format!("acquire shared lock on {}", lock.display()))?;
+        }
+        Ok(file)
+    }
+
+    /// Load an existing team from `team_dir` (acquires a shared lock on the
+    /// companion lock file).
+    ///
+    /// M5-T2: migrates the loaded config to the current schema version before
+    /// returning it.
+    pub fn load(team_dir: &Path) -> Result<Self> {
+        let config_path = team_dir.join("config.json");
+        let lock = Self::acquire_lock(&config_path, false)?;
+        let raw = fs::read_to_string(&config_path)
+            .with_context(|| format!("read {}", config_path.display()))?;
+        drop(lock);
+        let mut config: TeamConfig = serde_json::from_str(&raw)
+            .with_context(|| format!("parse {}", config_path.display()))?;
+        config.migrate();
+        Ok(Self {
+            dir: team_dir.to_path_buf(),
+            config,
+        })
+    }
+
+    /// Load a team by name from the standard discovery directories.
+    pub fn load_by_name(name: &str, working_dir: &Path) -> Result<Self> {
+        let team_dir =
+            find_team_dir(working_dir, name).ok_or_else(|| anyhow!("team '{name}' not found"))?;
+        Self::load(&team_dir)
+    }
+
+    /// Persist the current config to `config.json` (acquires an exclusive lock
+    /// on the companion lock file and uses an atomic rename).
+    ///
+    /// Stamps `schema_version` and `updated_at` on every write (M5-T2/T5).
+    pub fn save(&self) -> Result<()> {
+        let config_path = self.dir.join("config.json");
+        let lock = Self::acquire_lock(&config_path, true)?;
+        let result = Self::write_config(&self.dir, &self.config);
+        drop(lock);
+        result
+    }
+
+    /// Atomically read, change and write a team's `config.json` under one
+    /// exclusive lock.
+    ///
+    /// [`Self::load`] followed by [`Self::save`] is not atomic: the shared
+    /// read lock is released before the exclusive write lock is taken, so two
+    /// concurrent writers can both read the same snapshot and the later save
+    /// silently discards the earlier one (a lost member-status update). Every
+    /// read-modify-write of the roster goes through this function instead.
+    ///
+    /// The file is rewritten only when `mutate` changed the config, so a
+    /// closure that inspects and declines (or fails) leaves it untouched.
+    ///
+    /// # Arguments
+    /// * `team_dir` - the team directory holding `config.json`.
+    /// * `mutate` - applied to the freshly read config while the lock is held.
+    ///
+    /// # Returns
+    /// Whatever `mutate` returns.
+    ///
+    /// # Errors
+    /// Returns an error if the lock cannot be taken, the config cannot be read
+    /// or parsed, `mutate` fails (nothing is written), or the write fails.
+    pub fn update<T>(
+        team_dir: &Path,
+        mutate: impl FnOnce(&mut TeamConfig) -> Result<T>,
+    ) -> Result<T> {
+        let config_path = team_dir.join("config.json");
+        let lock = Self::acquire_lock(&config_path, true)?;
+        let raw = fs::read_to_string(&config_path)
+            .with_context(|| format!("read {}", config_path.display()))?;
+        let mut config: TeamConfig = serde_json::from_str(&raw)
+            .with_context(|| format!("parse {}", config_path.display()))?;
+        config.migrate();
+        let before = serde_json::to_value(&config)?;
+        let out = mutate(&mut config)?;
+        if serde_json::to_value(&config)? != before {
+            Self::write_config(team_dir, &config)?;
+        }
+        drop(lock);
+        Ok(out)
+    }
+
+    /// Write `config` to `team_dir/config.json` via a synced temp file and an
+    /// atomic rename. The caller must hold the exclusive lock.
+    fn write_config(team_dir: &Path, config: &TeamConfig) -> Result<()> {
+        let config_path = team_dir.join("config.json");
+
+        // M5-T2/T5: stamp schema_version and updated_at on every write.
+        let mut config = config.clone();
+        if config.schema_version == 0 {
+            config.schema_version = crate::team::config::TEAM_CONFIG_SCHEMA_VERSION;
+        }
+        config.updated_at = Some(chrono::Utc::now());
+
+        let json = serde_json::to_string_pretty(&config)?;
+        let file_name = config_path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "config.json".to_string());
+        let tmp_path = team_dir.join(format!(".{file_name}.{}", uuid::Uuid::new_v4()));
+        fs::write(&tmp_path, json).with_context(|| format!("write {}", tmp_path.display()))?;
+        let result: Result<()> = (|| {
+            let temp = OpenOptions::new().read(true).open(&tmp_path)?;
+            temp.sync_all()
+                .with_context(|| format!("sync temp file {}", tmp_path.display()))?;
+            fs::rename(&tmp_path, &config_path).with_context(|| {
+                format!("rename {} -> {}", tmp_path.display(), config_path.display())
+            })?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&tmp_path);
+        }
+        result.with_context(|| {
+            format!(
+                "atomic write {} -> {}",
+                tmp_path.display(),
+                config_path.display()
+            )
+        })
+    }
+
+    // -- Discovery ---------------------------------------------------------
+
+    /// List all teams visible from `working_dir`.
+    ///
+    /// Returns `(name, dir, is_project_local)` tuples, deduplicating by name
+    /// (project-local wins over global).
+    #[must_use]
+    pub fn list_teams(working_dir: &Path) -> Vec<(String, PathBuf, bool)> {
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut results: Vec<(String, PathBuf, bool)> = Vec::new();
+
+        // Project-local first (higher priority).
+        if let Some(proj_dir) = find_project_teams_dir(working_dir)
+            && let Ok(entries) = fs::read_dir(&proj_dir)
+        {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() && path.join("config.json").exists() {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    seen.insert(name.clone());
+                    results.push((name, path, true));
+                }
+            }
+        }
+
+        // Global (lower priority; skip if already seen).
+        if let Some(global_dir) = global_teams_dir()
+            && let Ok(entries) = fs::read_dir(&global_dir)
+        {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() && path.join("config.json").exists() {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if !seen.contains(&name) {
+                        results.push((name, path, false));
+                    }
+                }
+            }
+        }
+
+        results.sort_by(|a, b| a.0.cmp(&b.0));
+        results
+    }
+
+    // -- Convenience helpers ------------------------------------------------
+
+    /// Return the `TaskStore` for this team.
+    pub fn task_store(&self) -> Result<TaskStore> {
+        TaskStore::open(&self.dir)
+    }
+
+    /// Return the `Mailbox` for a given agent ID.
+    pub fn mailbox(&self, agent_id: &str) -> Result<Mailbox> {
+        Mailbox::open(&self.dir, agent_id)
+    }
+
+    /// Add a member to the config and persist.
+    pub fn add_member(&mut self, member: TeamMember) -> Result<()> {
+        self.config.members.push(member);
+        self.save()
+    }
+
+    /// Add a task to the task store and create an empty `TaskList` file if needed.
+    ///
+    /// Returns the `TaskCreated` hook's outcome: the hook fires from
+    /// [`TaskStore::add_task`], so every route that adds a task - the
+    /// `team_task_create` tool and the `team_create` seed path alike - runs the
+    /// same gate (spec `teamssetup` FR-017).
+    pub async fn add_task(&self, task: Task) -> Result<HookOutcome> {
+        self.initialised_task_store()?.add_task(task).await
+    }
+
+    /// Add a task whose `task-NNN` id is allocated under the task-store lock,
+    /// so concurrent creators never compute the same id. See
+    /// [`TaskStore::add_task_with_next_id`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `tasks.json` cannot be initialised, locked, read
+    /// or written, or the `TaskCreated` hook errors.
+    pub async fn add_task_with_next_id(
+        &self,
+        build: impl FnOnce(String) -> Task,
+    ) -> Result<(Task, HookOutcome)> {
+        self.initialised_task_store()?
+            .add_task_with_next_id(build)
+            .await
+    }
+
+    /// The team's [`TaskStore`], creating an empty `tasks.json` first when the
+    /// team has none yet.
+    fn initialised_task_store(&self) -> Result<TaskStore> {
+        let task_path = self.dir.join("tasks.json");
+        if !task_path.exists() {
+            let initial = TaskList::new(&self.config.name);
+            fs::write(&task_path, serde_json::to_string_pretty(&initial)?)
+                .with_context(|| format!("initialise {}", task_path.display()))?;
+        }
+        self.task_store()
+    }
+
+    /// Generate the next available task ID in the form `task-NNN`.
+    ///
+    /// Only a snapshot: a concurrent creator can take the same id before it
+    /// is used. Creators allocate through [`TeamStore::add_task_with_next_id`].
+    pub fn next_task_id(&self) -> Result<String> {
+        let store = self.task_store()?;
+        let list = store.read()?;
+        Ok(crate::team::task::next_task_id_in(&list))
+    }
+
+    /// Generate the next available agent ID in the form `tm-NNN`.
+    #[must_use]
+    pub fn next_agent_id(&self) -> String {
+        self.config.next_agent_id()
+    }
+
+    /// Stamp the config with a UTC creation time (used internally by `create`).
+    pub fn timestamp(&mut self) {
+        self.config.created_at = Utc::now();
+    }
+
+    // -- PERF-016: async `spawn_blocking` wrappers ------------------------------
+    //
+    // `TeamStore::load` / `save` perform synchronous `fs::read_to_string` /
+    // `fs::write` + `serde_json` (de)serialisation under a `flock`. On the
+    // async path these stall the tokio worker thread. The helpers below move
+    // the I/O onto a blocking-pool thread so the async executor stays free
+    // during concurrent teammate activity. `TeamStore` is cheap to
+    // reconstruct (`load` is a single file read), so we pass the `team_dir`
+    // into the closure and reopen there.
+
+    /// PERF-016: `spawn_blocking` wrapper around [`TeamStore::load`].
+    pub async fn load_blocking(team_dir: PathBuf) -> Result<Self> {
+        tokio::task::spawn_blocking(move || Self::load(&team_dir)).await?
+    }
+
+    /// PERF-016: `spawn_blocking` wrapper around [`TeamStore::load_by_name`].
+    pub async fn load_by_name_blocking(name: String, working_dir: PathBuf) -> Result<Self> {
+        tokio::task::spawn_blocking(move || Self::load_by_name(&name, &working_dir)).await?
+    }
+
+    /// PERF-016: `spawn_blocking` wrapper around [`TeamStore::save`].
+    ///
+    /// Consumes `self` (matching `save`'s `&self` receiver via a clone) so
+    /// the blocking closure can take ownership without borrowing across an
+    /// await boundary.
+    pub async fn save_blocking(self) -> Result<()> {
+        let dir = self.dir.clone();
+        let config = self.config.clone();
+        tokio::task::spawn_blocking(move || {
+            let store = Self { dir, config };
+            store.save()
+        })
+        .await?
+    }
+}

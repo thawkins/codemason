@@ -12,10 +12,10 @@ No scheduling, spawning or execution code is added: every action delegates to
 `TeamManager::suspend_teammate` / `resume_teammate` / `shutdown_teammate` or
 `BackgroundTaskService::cancel` (Constraint 1, FR-067, FR-068).
 
-All work is confined to `crates/ragent-tui` (Constraint 2). The change splits into
+All work is confined to `crates/codemason-tui` (Constraint 2). The change splits into
 five layers:
 
-1. **Frame and chrome (`crates/ragent-tui/src/layout.rs`)** — the two mutually
+1. **Frame and chrome (`crates/codemason-tui/src/layout.rs`)** — the two mutually
    exclusive centred modals (`render_agents_window_overlay`,
    `render_teams_window_overlay`), their `Clear` underlay, borders, titles, footer key
    legends and content areas; the input-side button column (`draw_input_side_buttons`);
@@ -23,15 +23,15 @@ five layers:
    single-row teammate strip (`render_teammate_strip`) (FR-001..FR-008, FR-017..FR-019,
    FR-027, FR-066, FR-077, NFR-010).
 
-2. **Table bodies (`crates/ragent-tui/src/layout_active_agents.rs`,
-   `crates/ragent-tui/src/layout_teams.rs`)** — header rows, the primary/lead rows,
+2. **Table bodies (`crates/codemason-tui/src/layout_active_agents.rs`,
+   `crates/codemason-tui/src/layout_teams.rs`)** — header rows, the primary/lead rows,
    the ancestor-indented sub-agent tree, the background shell section, the teammate
    rows with status/model/counter columns, the empty state, and the full-width block
    cursor painted over the selected row. Every structural and
    status glyph is declared once per renderer module (FR-009..FR-016, FR-020..FR-026,
    FR-062, NFR-003).
 
-3. **Cursor state (`crates/ragent-tui/src/app/state.rs`)** — the cursor ordinals
+3. **Cursor state (`crates/codemason-tui/src/app/state.rs`)** — the cursor ordinals
    (`agents_cursor_subagent`, `teams_cursor_teammate`), the row-identifier vectors the
    renderers publish each frame (`agents_subagent_task_ids`, `teams_teammate_agent_ids`
    and the aligned row maps), the area rects, the scroll offsets and maxima, and the
@@ -39,9 +39,9 @@ five layers:
    every frame, the cursor is scroll-invariant by construction (A3, A4, FR-056,
    NFR-011).
 
-4. **Input routing (`crates/ragent-tui/src/app/windows.rs`,
-   `crates/ragent-tui/src/app/input_handler.rs`,
-   `crates/ragent-tui/src/input.rs`)** — the cursor helpers (`move_*_cursor`,
+4. **Input routing (`crates/codemason-tui/src/app/windows.rs`,
+   `crates/codemason-tui/src/app/input_handler.rs`,
+   `crates/codemason-tui/src/input.rs`)** — the cursor helpers (`move_*_cursor`,
    `page_*_cursor`, the `*_cursor_*` actions) driven by the
    `Up`/`Down`/`PgUp`/`PgDn`/`Space`/`Del`/`Enter`/`Esc` window arms with their precedence
    over the input editor, `Alt+Up` / `Alt+Down`
@@ -50,13 +50,13 @@ five layers:
    popup), and the destructive-action
    confirmation modal (FR-028..FR-046, FR-055..FR-059, FR-067..FR-071, FR-076..FR-078).
 
-5. **Event plumbing and reconciliation (`crates/ragent-tui/src/app/event_handler.rs`,
-   `crates/ragent-tui/src/app/state.rs`)** — the sub-agent, teammate, counter and
+5. **Event plumbing and reconciliation (`crates/codemason-tui/src/app/event_handler.rs`,
+   `crates/codemason-tui/src/app/state.rs`)** — the sub-agent, teammate, counter and
    cleanup arms, the de-duplicating spawn handlers, and the 1500 ms registry
    reconciliation with its lag-triggered immediate pass (FR-047..FR-054, FR-060,
    FR-072, NFR-007, NFR-008).
 
-6. **Window chrome (`crates/ragent-tui/src/layout.rs`, shared frame)** — `window_frame`
+6. **Window chrome (`crates/codemason-tui/src/layout.rs`, shared frame)** — `window_frame`
    derives the modal rect, the content area and the one-row footer band
    (`WINDOW_LEGEND_ROWS`) for both popups and the output overlay;
    `render_window_key_legend` paints the FR-077 legend into that band, which ends with
@@ -322,7 +322,7 @@ Two gaps were closed:
    TC-022/TC-023 require the graceful path; changed to `graceful = true`. That
    exposed a real blocker in `TeamManager::shutdown_teammate`: the lead-authored
    `ShutdownRequest` mailbox message was built without `.with_sender_session(..)`,
-   so `Mailbox::push` validation (SEC-ragent-team-003) rejected every graceful
+   so `Mailbox::push` validation (SEC-codemason-team-003) rejected every graceful
    shutdown with "claims to be from 'lead' but carries no authenticated sender
    session id" - the unified graceful path could never succeed. The manager now
    stamps `self.lead_session_id` on the request (the same boundary fix T-012
@@ -418,7 +418,7 @@ input border ` -> <name> (focused) ` in bold yellow, and `SendMessage` routes to
 focused teammate's mailbox through `send_teammate_message`. One real defect was fixed:
 `send_teammate_message` and the `/team message` slash arm built the lead-origin
 `MailboxMessage` without `.with_sender_session(..)`, so `Mailbox::push` validation
-(SEC-ragent-team-003) rejected every lead-authored message with `claims to be from
+(SEC-codemason-team-003) rejected every lead-authored message with `claims to be from
 'lead' but carries no authenticated sender session id` - the focused-route path could
 never succeed. Both sites now attach the lead session id at the TUI boundary, and the
 two tests that pinned the rejection (`enter_with_a_focused_teammate_routes_the_message_to_its_mailbox`,
@@ -432,9 +432,9 @@ border title text + bold yellow style, single-member `Alt+Down` clears past the 
 routed send reports the teammate) and the keyboard-driven
 `alt_down_and_alt_up_cycle_teammate_focus` / `alt_down_without_members_clears_the_focus`
 in `test_event_swarm_research_deep.rs`; the focused-strip pill highlight is covered by
-`test_teammate_strip.rs` (14 tests). Full consolidated ragent-tui suite 3525 passed /
+`test_teammate_strip.rs` (14 tests). Full consolidated codemason-tui suite 3525 passed /
 0 failed (`target/temp/t012_full2.log`), `cargo fmt --check` clean, `cargo check -p
-ragent-tui --lib` clean, clippy reports no finding in the touched lines (remaining
+codemason-tui --lib` clean, clippy reports no finding in the touched lines (remaining
 warnings are the pre-existing pub(crate)-in-private-module set).
 
 ### T-013 - Sub-agent event plumbing
@@ -477,7 +477,7 @@ handlers with the `lead` exclusion in both the `TeammateMessage` and
 (FR-053: team, members, counters, focus, strip flag, Teams popup window, matching
 swarm state). FR-072's update-in-place is the dedupe guard plus hydration refresh.
 
-Three real gaps were closed in `crates/ragent-tui/src/app/event_handler.rs`:
+Three real gaps were closed in `crates/codemason-tui/src/app/event_handler.rs`:
 
 1. **FR-050 activation.** The spawn handler never set `active_team`, and the
    strip's visibility rule (`teammate_strip::is_visible`) requires it, so a
@@ -504,9 +504,9 @@ result activates the team and the strip, spawn binds the manager to the
 spawned team's store, suspend/resume update the row and log, the four status
 events exercise `record_progress` against a real `TeamManager` without
 erroring, cleanup empties the strip) and the rewritten suspend/resume test in
-`tests/test_event_handler_more.rs`; full consolidated ragent-tui suite
+`tests/test_event_handler_more.rs`; full consolidated codemason-tui suite
 3520 passed / 0 failed (`target/temp/t014_full2.log`), `cargo fmt --check`
-clean, `cargo check -p ragent-tui --lib` clean, clippy reports no finding in
+clean, `cargo check -p codemason-tui --lib` clean, clippy reports no finding in
 the touched code (remaining warnings are the pre-existing
 pub(crate)-in-private-module set).
 
@@ -522,7 +522,7 @@ early and leaves the painted rows until an event arrives.
 
 **Status (spec `agentui`):** Completed. The poll already implemented every T-015
 mechanic on the tree this task starts from (`poll_active_tasks_reconcile` and
-`apply_registry_reconciliation` in `crates/ragent-tui/src/app/state.rs`): the
+`apply_registry_reconciliation` in `crates/codemason-tui/src/app/state.rs`): the
 lag-triggered immediate pass plus the `AGENTS_RECONCILE_INTERVAL` (1500 ms) periodic
 safety net, the two-phase snapshot fetch spawned on the tokio runtime so the render
 thread never awaits the registry (`tasks_snapshot` off-loop, in-flight latch, the
@@ -544,8 +544,8 @@ Verified by `tests/test_active_tasks_reconcile.rs` (12 tests: the 8 pre-existing
 lag/periodic/end-to-end/merge tests plus suspended-row keep, per-task attribution on
 both removal and re-add, silent idempotent pass, and no-log no-row for never-painted
 finished entries) and the two poll-state tests in `test_session_models_state_deep.rs`;
-full consolidated ragent-tui suite 3514 passed / 0 failed
-(`target/temp/t015_full.log`), `cargo fmt --check` clean, `cargo check -p ragent-tui
+full consolidated codemason-tui suite 3514 passed / 0 failed
+(`target/temp/t015_full.log`), `cargo fmt --check` clean, `cargo check -p codemason-tui
 --lib` clean, clippy reports no finding in the touched code (remaining warnings are
 the pre-existing pub(crate)-in-private-module set).
 
@@ -614,7 +614,7 @@ change sets the redraw flag (NFR-005).
 
 **Status (spec `agentui`):** Completed. FR-063 was the only code gap: the window
 never dropped its flag when its subject emptied. Added
-`App::close_agents_window_when_empty` (`crates/ragent-tui/src/app/windows.rs`,
+`App::close_agents_window_when_empty` (`crates/codemason-tui/src/app/windows.rs`,
 `#[doc(hidden)] pub` so the integration suite can pin the helper) and wired it
 into every row-removal path: the `SubagentComplete`, `SubagentCancelled` and
 `SubagentKilled` event arms in `event_handler.rs`, the `BackgroundTaskCompleted`
@@ -645,12 +645,12 @@ open, the reconciliation merge closes it, the closed/occupied no-op corners,
 mid-turn toggle + cursor `Space` dispatch + `Esc` (TC-029), mid-turn keyboard
 suspend, mid-turn Teams toggle + row focus, the Alt-focus transition and
 focus-cleared notices. Verify:
-`cargo test -p ragent-tui --test all test_window_lifecycle::` = 12 pass; full
-`cargo test -p ragent-tui --test all` = 3573 pass 0 fail
+`cargo test -p codemason-tui --test all test_window_lifecycle::` = 12 pass; full
+`cargo test -p codemason-tui --test all` = 3573 pass 0 fail
 (target/temp/t018_full.log); `cargo fmt --check` clean; `cargo clippy -p
-ragent-tui --all-targets` no findings in the touched files (the remaining
+codemason-tui --all-targets` no findings in the touched files (the remaining
 `pub(crate)`-in-private-module warnings pre-date this task);
-`cargo check -p ragent-tui --lib` clean.
+`cargo check -p codemason-tui --lib` clean.
 
 ### T-019 - Offline deterministic test suite
 
@@ -662,10 +662,10 @@ repository working tree — in-memory state and the ignored build scratch direct
 (NFR-012).
 
 **Status (spec `agentui`):** Completed. The suite extends
-`crates/ragent-tui/tests/test_agentui_t019_offline.rs` (registered as one more
+`crates/codemason-tui/tests/test_agentui_t019_offline.rs` (registered as one more
 `#[path]` module in `tests/all.rs`). Determinism is asserted the strongest practical
 way: two independent constructions of the same synthetic state render through the
-real `ragent_tui::layout::render` entry point and their painted rows must agree
+real `codemason_tui::layout::render` entry point and their painted rows must agree
 byte-for-byte outside the per-second elapsed clocks (NFR-001). The Agents-window case
 populates every row variant in one frame - primary, sub-agent tree with `[C]` and
 `[T]` badges, suspended (resume glyph, no `[stop]`), terminating suffix, completed,
@@ -679,13 +679,13 @@ under `target/temp/agentui-t019` with the cwd pinned under
 `crate::global_env_lock()` and restored: one member and four members both render
 from the single store read, the claimed counter paints the store-derived zero, the
 lead row paints the short session id and elapsed from the single session lookup.
-The NFR-012 case byte-totals `log/`, `specs/` and `.ragent/teams/` before and after
+The NFR-012 case byte-totals `log/`, `specs/` and `.codemason/teams/` before and after
 rendering both windows plus a full strip-bearing frame and asserts nothing changed.
 Two pre-existing `unnecessary_get_then_check` clippy warnings in
-`test_widgets_and_events_extra.rs` were fixed so `cargo clippy -p ragent-tui
+`test_widgets_and_events_extra.rs` were fixed so `cargo clippy -p codemason-tui
 --all-targets` stays clean of test-file findings. Verify:
-`cargo test -p ragent-tui --test all test_agentui_t019_offline::` = 4 pass;
-full `cargo test -p ragent-tui --test all` = 3540 pass 0 fail
+`cargo test -p codemason-tui --test all test_agentui_t019_offline::` = 4 pass;
+full `cargo test -p codemason-tui --test all` = 3540 pass 0 fail
 (target/temp/t019_full.log); `cargo fmt --check` clean; clippy no findings in the
 touched files.
 
@@ -698,7 +698,7 @@ background shell task and a two-teammate team, then run `cargo fmt`, `cargo clip
 **Status (spec `agentui`):** Completed. The acceptance walk was executed as an
 automated offline replay of the manual test plan: every TC-001..TC-037 scenario was
 mapped to its consolidated-test counterpart and the corresponding filter re-run green
-after T-017/T-018/T-019 landed, then the full `cargo test -p ragent-tui --test all`
+after T-017/T-018/T-019 landed, then the full `cargo test -p codemason-tui --test all`
 suite was re-run end to end. Mapping summary: TC-001 button render/counts/dimming ->
 `test_button_counts` (12 tests, incl. both-buttons-dimmed and the counted label); TC-002/TC-014
 toggle and mutual exclusion -> `test_window_routing` (opening one window closes the
@@ -753,11 +753,11 @@ override colour), 13 (focus routing and cycling), 14 (Teams Space/Del), 15 (stri
 cursor viewport-follow + legend), 20 (no render-loop blocking, no stale panics,
 primary/lead protected), 21 (non-chrome popup clicks consumed). Quality gates: `cargo fmt --check` clean workspace-wide;
 `cargo check --workspace` finishes with zero errors and zero warnings
-(target/temp/t020_check.log); `cargo clippy -p ragent-tui --all-targets` reports only
+(target/temp/t020_check.log); `cargo clippy -p codemason-tui --all-targets` reports only
 the 57 pre-existing `pub(crate)`-in-private-module warnings (50 fns + 5 consts + 2
 structs, unchanged since before this spec) plus the unchanged 50 pre-existing
-`ragent-research` and 5 `ragent-tools-vcs` lib warnings - zero findings in any
-agentui-touched file; full `cargo test -p ragent-tui --test all` = 3573 passed /
+`codemason-research` and 5 `codemason-tools-vcs` lib warnings - zero findings in any
+agentui-touched file; full `cargo test -p codemason-tui --test all` = 3573 passed /
 0 failed (target/temp/t020_full.log, plus the earlier t018_full.log run agreeing).
 The live-session prerequisites (a real sub-agent spawn, a background shell task and a
 two-teammate team in a working terminal) are exercised on the code paths the
@@ -794,7 +794,7 @@ inner row, footer names `Esc close` and no ` Close ` label paints, `Esc` and ide
 dismissal, body-click consume, wheel-over-overlay scrolls while Agents is open, popup
 beneath untouched, popup wheel regression) plus the re-derived `test_agents_window_table` (14)
 and the `test_hit_rect_lifecycle` shift test run green; full
-`cargo test -p ragent-tui --test all` = 3582 passed / 0 failed
+`cargo test -p codemason-tui --test all` = 3582 passed / 0 failed
 (target/temp/tui_agentsmargin_full.log); `cargo fmt` clean; `cargo check --workspace`
 clean; clippy shows only the pre-existing pub(crate)-in-private-module warnings
 (zero in the touched files).
@@ -854,7 +854,7 @@ the T-021 footer legend. Focused runs green: `test_agents_teams_cursor::` 14/14,
 `test_row_action_dispatch::` 8/8,
 `test_output_view_footer::` 8/8, `test_hit_rect_lifecycle::` 10/10,
 `test_agents_window_table::` 14/14, `test_teams_window_table::` 16/16;
-`cargo check -p ragent-tui` clean; `cargo fmt --check` clean; clippy shows only the
+`cargo check -p codemason-tui` clean; `cargo fmt --check` clean; clippy shows only the
 pre-existing pub(crate)-in-private-module noise.
 
 ## Risks

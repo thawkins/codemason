@@ -27,7 +27,7 @@ module docs, and two prior tasks had already extended `SPEC.md`:
 | Document | State found |
 |---|---|
 | `SPEC.md` | Already carried "Parallel Tool Dispatch Gate", "Unresolved Approvals Block the Result", "Completion and Suggestion Surfaces" and "Tool Surface Agreement". Nothing described the profile *type*, the encoder chain, the dispatch pipeline, the argument decoder, the id rules or `--wire-matrix`. |
-| `crates/ragent-llm/DOCS.md` | Already carried a `wire` bullet listing every submodule and its symbols. It did not say what the chain *does* end to end, and it did not record that the router row is nominal. |
+| `crates/codemason-llm/DOCS.md` | Already carried a `wire` bullet listing every submodule and its symbols. It did not say what the chain *does* end to end, and it did not record that the router row is nominal. |
 | `CHANGELOG.md` | `[Unreleased]` had a `Renamed` table and entries for FR-013, FR-010, FR-022, the nextest migration and FR-020. Nothing in `[Unreleased]` covered FR-002..FR-004, FR-007, FR-012, FR-019, FR-021 or the wire matrix. |
 
 So the gap was not "no documentation" but "no statement of the tool path as a
@@ -49,7 +49,7 @@ one of those providers declares. It states:
 - the six families and the `PROVIDER_WIRE` id-to-family table, `profile_for` as
   the one lookup the encoders, the accumulator, the gate and the matrix share;
 - that there is **no catch-all row**, with the coverage assertion in
-  `crates/ragent-llm/tests/test_wire_profile_table.rs` named as the mechanism;
+  `crates/codemason-llm/tests/test_wire_profile_table.rs` named as the mechanism;
 - the `--wire-matrix` output shape (ten columns, one row per id, sorted, no blank
   or `-` cell) and its two guarantees: no provider contacted, no tool executed,
   and a registered id with no row reported by name with a non-zero exit.
@@ -68,7 +68,7 @@ spec exists to close:
    through `ToolCallAccumulator`), the synthetic-id rule
    (`<provider>_<counter>_<name>`, deterministic because a call id is replayed),
    the duplicate-id reconciliation, and the one argument decoder
-   (`ragent_types::tool_args::decode_tool_arguments`, three accepted shapes, at
+   (`codemason_types::tool_args::decode_tool_arguments`, three accepted shapes, at
    most once per call per step, never in the provider layer) with its single
    refusal value `ToolInputError`.
 2. **One ordered dispatch pipeline serves both execution modes** - the slot list
@@ -82,7 +82,7 @@ spec exists to close:
    the native flag or the `ERROR: ` prefix, appendable only after a resolved
    verdict, and a tool-use finish with no complete call treated as truncation.
 
-### 3.3 `crates/ragent-llm/DOCS.md` - the chain, and the nominal router row
+### 3.3 `crates/codemason-llm/DOCS.md` - the chain, and the nominal router row
 
 Two additions to the provider submodule list:
 
@@ -98,7 +98,7 @@ Two additions to the provider submodule list:
   `encode_tools` (cached per `(ToolFormat, fingerprint)`, a hit equals a miss) ->
   `encode_message` (`error_marked` when `supports_is_error` is false) ->
   `ToolCallAccumulator`, with arguments decoded only by
-  `ragent_types::tool_args::decode_tool_arguments` in the harness, and with
+  `codemason_types::tool_args::decode_tool_arguments` in the harness, and with
   `--wire-matrix` as the printable view.
 
 ### 3.4 `CHANGELOG.md` - one `[Unreleased]` / `Added` entry
@@ -106,7 +106,7 @@ Two additions to the provider submodule list:
 Placed at the head of `[Unreleased]`'s `Added` section (above the T-011 FR-020
 entry), because it is the entry that tells an upgrader the tool path changed
 shape rather than a single behaviour. It names the requirement ids the path
-satisfies, the two `SPEC.md` sections by title, the `ragent-llm` `DOCS.md`
+satisfies, the two `SPEC.md` sections by title, the `codemason-llm` `DOCS.md`
 addition, and the two facts a reader needs to trust it: **documentation only, no
 behaviour changed**, and **every string introduced is ASCII (NFR-005)**.
 
@@ -141,13 +141,13 @@ before it was written:
 | `ToolCallAccumulator`, `StreamKey`, `from_frame` | `wire/decode.rs` |
 | `matrix::HEADINGS` (ten columns), `render`, `MissingProfile` | `wire/matrix.rs` |
 | `PROVIDER_WIRE`, `FAMILIES`, `profile_for` | `wire/profile_table.rs` |
-| `decode_tool_arguments`, `ToolArgDecodeError` | `ragent-types/src/tool_args.rs` |
+| `decode_tool_arguments`, `ToolArgDecodeError` | `codemason-types/src/tool_args.rs` |
 | `ToolInputError` | `session/tool_input_error.rs` |
 | the pipeline and its three terminal constructors | `session/dispatch.rs` |
 | `suggest_tool_name` (one ranking) | `session/tool_suggestion.rs`, re-exported by `session/dispatch` |
 | `PendingVerdicts`, `result_is_appendable` | `session/pending.rs` |
 | `finish_was_tool_use_without_a_call` | `session/loop_steps.rs` |
-| the coverage assertion | `crates/ragent-llm/tests/test_wire_profile_table.rs` |
+| the coverage assertion | `crates/codemason-llm/tests/test_wire_profile_table.rs` |
 
 Two claims were narrowed during that pass. The id-field row originally read "a
 JSON key, or `synthesised`", which is true and unusable; it now names
@@ -158,7 +158,7 @@ three shapes FR-007 actually names; it now lists them.
 ## 6. Verification
 
 - **ASCII (NFR-005).** Every added line in `SPEC.md`, `CHANGELOG.md` and
-  `crates/ragent-llm/DOCS.md` is checked for non-ASCII bytes; the section
+  `crates/codemason-llm/DOCS.md` is checked for non-ASCII bytes; the section
   headings, table separators and arrows are plain ASCII (`->`, `-`).
 - **No code change to verify.** `git status --porcelain` for this task lists one
   new file (`specs/uniformtools/T-028-DOCS.md`) and three modified documents;
@@ -177,7 +177,7 @@ are still `pending` and that the new prose depends on being true:
 - **T-027** ("prove no provider builds its own tool JSON") is the guard for the
   sentence "No provider module builds tool JSON of its own (FR-003)". The
   sentence is true of the tree today by inspection; the guard is what keeps it
-  true, and the `ragent-llm` `DOCS.md` bullet deliberately states the claim
+  true, and the `codemason-llm` `DOCS.md` bullet deliberately states the claim
   without a guard reference it cannot yet cite.
 - **T-026** (recorded-frame replay fixtures) is NFR-004's evidence, and the new
   `SPEC.md` section asserts behaviour per family. A reader who wants the proof

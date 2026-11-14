@@ -21,7 +21,7 @@ cd "$ROOT"
 if [ "${1:-}" = "--self-test" ]; then
     # Seed a violation in a temp file inside the scan root and confirm the
     # scanner flags it (proves the guard actually fails on a seeded breach).
-    seed="crates/ragent-types/src/__poison_guard_selftest.rs"
+    seed="crates/codemason-types/src/__poison_guard_selftest.rs"
     printf 'fn f() { let l = std::sync::Mutex::new(0); let _ = l.lock().unwrap(); }\n' > "$seed"
     set +e
     python3 "$ROOT/scripts/check_poison_locks.py" >/dev/null 2>&1

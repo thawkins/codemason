@@ -28,20 +28,20 @@ Spec: `specs/prompts/SPEC.md`
 ## Notes
 
 - All dispatch/UI work follows the `/toolchain` precedent exactly:
-  registry entry in `crates/ragent-tui/src/app/state.rs` (`SLASH_COMMANDS`,
+  registry entry in `crates/codemason-tui/src/app/state.rs` (`SLASH_COMMANDS`,
   ~line 694, alphabetical position), suggestions arm in
   `get_command_suggestions` (`slash.rs:141-337`), dispatch arm in the
   `match cmd` at `slash.rs:1821`, handler as `impl App` methods mirroring
   `handle_toolchain_command` (`slash.rs:1194-1300`).
 - The rendering engine lives in a new focused module
-  `crates/ragent-tui/src/app/prompt.rs` (registered in `app.rs` alongside
+  `crates/codemason-tui/src/app/prompt.rs` (registered in `app.rs` alongside
   `pub mod toolchain;`) so assembly, filtering, and rendering are testable
   independently of the TUI.
-- `ragent-tui` already depends on `ragent-agent` (it calls
-  `ragent_agent::Config::load()` and drives the session processor), so
+- `codemason-tui` already depends on `codemason-agent` (it calls
+  `codemason_agent::Config::load()` and drives the session processor), so
   `build_system_prompt_with_storage_and_memory_and_config`, `builtin_agents()`,
   and the tool-filter helpers are available without a new crate edge. The only
-  `ragent-agent` change is the T-001 visibility widening of
+  `codemason-agent` change is the T-001 visibility widening of
   `build_tool_reference_from_defs` (`pub(crate)` → `pub`).
 - Subagent-mode fidelity requires forcing the mode gate exactly like a spawned
   run: the resolved `AgentInfo` passed to the assembler must carry
@@ -64,5 +64,5 @@ Spec: `specs/prompts/SPEC.md`
   persisted into the session message store, so `/cost` and token usage are
   unaffected.
 - No HTTP/CLI surface in this spec; the module boundary (pure resolve/filter/
-  render functions taking plain inputs) keeps a later `ragent prompt` CLI or
+  render functions taking plain inputs) keeps a later `codemason prompt` CLI or
   REST endpoint cheap to add.

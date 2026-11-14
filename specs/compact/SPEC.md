@@ -7,7 +7,7 @@ audit:
 
 ## Context
 
-ragent currently manages context-window pressure through a **content-aware
+codemason currently manages context-window pressure through a **content-aware
 compression pipeline** built on the external `headroom-core` crate. The pipeline
 applies per-content-type compressors (JSON, diff, log, search, code, prose),
 stashes originals behind `<<ccr:HASH>>` markers, and relies on an in-memory
@@ -26,7 +26,7 @@ system updates remain visible.
 
 This specification defines the plan to **remove the Headroom-based compression
 scheme** and **replace it with a Rust port of OpenCode's summarisation-based
-compaction**, integrated into ragent's existing session storage and event model.
+compaction**, integrated into codemason's existing session storage and event model.
 
 ## Requirements
 
@@ -112,7 +112,7 @@ summary context.
 - `~/Projects/opencode/packages/core/src/session/compaction.ts`
 - `~/Projects/opencode/packages/core/src/session/runner/llm.ts`
 - `~/Projects/opencode/packages/core/src/config/compaction.ts`
-- `crates/ragent-agent/src/compression/pipeline.rs` (current Headroom wrapper)
-- `crates/ragent-config/src/compression.rs` (current config schema)
-- `crates/ragent-types/src/event/mod.rs` (event definitions)
-- `crates/ragent-storage/src/storage.rs` (message persistence)
+- `crates/codemason-agent/src/compression/pipeline.rs` (current Headroom wrapper)
+- `crates/codemason-config/src/compression.rs` (current config schema)
+- `crates/codemason-types/src/event/mod.rs` (event definitions)
+- `crates/codemason-storage/src/storage.rs` (message persistence)

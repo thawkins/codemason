@@ -11,8 +11,8 @@ audit:
 
 ## Overview
 
-The `/spec` slash-command family (parsed in `ragent-specs/src/commands.rs` and
-dispatched in `crates/ragent-tui/src/app/slash.rs`) currently supports
+The `/spec` slash-command family (parsed in `codemason-specs/src/commands.rs` and
+dispatched in `crates/codemason-tui/src/app/slash.rs`) currently supports
 `create`, `list`, `search`, `validate`, `status`, `task`, and `help`. This
 specification adds a new sub-command:
 
@@ -45,18 +45,18 @@ discovery, and prompt construction deterministically in Rust.
 
 ### Existing `/spec` infrastructure
 
-- `crates/ragent-specs/src/commands.rs` defines the `SpecCommand` enum with a
+- `crates/codemason-specs/src/commands.rs` defines the `SpecCommand` enum with a
   `parse(args: &str) -> Self` method and builder helpers such as
   `build_create_prompt`, `build_create_message`, `build_create_status`, and
   `build_help_message`.
-- `crates/ragent-tui/src/app/slash.rs` handles the `"spec"` arm (two sites:
+- `crates/codemason-tui/src/app/slash.rs` handles the `"spec"` arm (two sites:
   argument-hint generation around line 107 and execution around line 4767).
   Execution resolves the spec root as `<working_dir>/specs`, constructs a
   `SpecManager`, and either performs the work inline (validate/status/list) or
   spawns the explore/coder agent with a constructed prompt (create).
-- `crates/ragent-specs/src/manager.rs` and `io.rs` provide `SpecManager`,
+- `crates/codemason-specs/src/manager.rs` and `io.rs` provide `SpecManager`,
   `SpecId` validation, spec discovery, and template helpers.
-- `crates/ragent-specs/src/validate.rs` already parses requirements out of a
+- `crates/codemason-specs/src/validate.rs` already parses requirements out of a
   `SPEC.md` (`parse_requirements`), producing IDs, titles, and EARS kinds.
 
 ### JTBD framework
@@ -145,7 +145,7 @@ write a `JTBD.md`.
 
 `SpecCommand::build_help_message` **shall** include a row documenting
 `/spec jtbd [specname] [--force] [--agent <name>]`, and the argument-hint
-table in `crates/ragent-tui/src/app/session_ops.rs` **shall** advertise the
+table in `crates/codemason-tui/src/app/session_ops.rs` **shall** advertise the
 `jtbd` sub-command.
 
 ### FR-011 — Status and logging parity with `/spec create` (event-driven)
@@ -187,7 +187,7 @@ key-press on a warmed cache; spec discovery is a single directory read.
 
 The parsing behaviour in `SpecCommand::parse` (FR-001, FR-003, FR-004, FR-005,
 FR-008) **shall** be unit-testable without a running TUI; the dispatch path
-**shall** be covered by an integration test in `crates/ragent-tui/tests/`
+**shall** be covered by an integration test in `crates/codemason-tui/tests/`
 following the existing `test_slash_spec_validate_all` pattern.
 
 ### NFR-003 — Documentation
@@ -206,10 +206,10 @@ no existing variant signature **shall** change.
 
 ### In scope
 
-- New `SpecCommand::Jtbd` variant and parser changes in `ragent-specs`.
-- TUI dispatch in `crates/ragent-tui/src/app/slash.rs` (mirroring `Create`).
-- Prompt builder (`build_jtbd_prompt`), status/message/log builders, and help-text update in `ragent-specs/src/commands.rs`.
-- Argument-hint update in `crates/ragent-tui/src/app/session_ops.rs`.
+- New `SpecCommand::Jtbd` variant and parser changes in `codemason-specs`.
+- TUI dispatch in `crates/codemason-tui/src/app/slash.rs` (mirroring `Create`).
+- Prompt builder (`build_jtbd_prompt`), status/message/log builders, and help-text update in `codemason-specs/src/commands.rs`.
+- Argument-hint update in `crates/codemason-tui/src/app/session_ops.rs`.
 - Unit tests for parsing; integration test for dispatch and error handling.
 - `JTBD.md` output written into the target spec folder.
 
@@ -217,8 +217,8 @@ no existing variant signature **shall** change.
 
 - JTBD analysis of `PLAN.md` or any file other than `SPEC.md`.
 - Automatic regeneration of `JTBD.md` when `SPEC.md` changes (no watcher).
-- Server/CLI (`ragent run`) equivalents of the sub-command (a follow-up spec
-  may add `ragent spec jtbd <name>`).
+- Server/CLI (`codemason run`) equivalents of the sub-command (a follow-up spec
+  may add `codemason spec jtbd <name>`).
 - Multi-spec batch JTBD (`/spec jtbd --all`).
 
 ## Risks and Assumptions

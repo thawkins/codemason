@@ -4,7 +4,7 @@ This plan implements the requirements in `SPEC.md` for spec `researchnoacc`.
 The overall strategy is:
 
 1. Add a reusable academic-engine vocabulary and an orchestrator exclusion
-   primitive in `ragent-tools-extended`.
+   primitive in `codemason-tools-extended`.
 2. Expose `exclude_engines` on the `mf_search` tool.
 3. Plumb an exclusion parameter through the research `WebSearchTool` trait and
    the gatherer, driven by `--no-papers` / config.

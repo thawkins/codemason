@@ -31,7 +31,7 @@ This plan implements the requirements in `SPEC.md` for spec
 ### T-001 — Create `TavilyEngine`
 
 - Add
-  `crates/ragent-tools-extended/src/masterfetch/search/tavily.rs`.
+  `crates/codemason-tools-extended/src/masterfetch/search/tavily.rs`.
 - Implement `SearchEngine` for `TavilyEngine` with `name() ->
   "tavily"`.
 - Read API key from constructor argument (the orchestrator builder
@@ -45,7 +45,7 @@ This plan implements the requirements in `SPEC.md` for spec
 
 ### T-002 — Tavily request / parser tests
 
-- Add `crates/ragent-tools-extended/tests/test_mf_tavily.rs`.
+- Add `crates/codemason-tools-extended/tests/test_mf_tavily.rs`.
 - Test request body maps `query`, `max_results`, and default
   `search_depth` / `include_answer` correctly.
 - Test parser extracts `title`, `url`, and `content`/`snippet`.
@@ -63,7 +63,7 @@ This plan implements the requirements in `SPEC.md` for spec
 
 ### T-004 — Orchestrator backend tests
 
-- Extend `crates/ragent-tools-extended/tests/test_mf_search_tool.rs`
+- Extend `crates/codemason-tools-extended/tests/test_mf_search_tool.rs`
   with tests asserting that a Tavily key adds the `"tavily"` engine,
   an empty key omits it, and a missing key omits it.
 - Add an integration test with mocked engines to verify that a
@@ -93,7 +93,7 @@ This plan implements the requirements in `SPEC.md` for spec
 ### T-007 — `websearch` integration tests
 
 - Add / extend tests in
-  `crates/ragent-tools-extended/tests/test_websearch.rs` (or similar)
+  `crates/codemason-tools-extended/tests/test_websearch.rs` (or similar)
   to verify:
   - empty / missing query still errors;
   - output text contains result titles and URLs;
@@ -102,7 +102,7 @@ This plan implements the requirements in `SPEC.md` for spec
 
 ### T-008 — Research adapter migration
 
-- In `crates/ragent-agent/src/research_adapter.rs`:
+- In `crates/codemason-agent/src/research_adapter.rs`:
   - Introduce a new `AgentMfSearchTool` implementing the
     `WebSearchTool` trait, or adapt `AgentWebSearchTool` to call
     `mf_search`.
@@ -123,14 +123,14 @@ This plan implements the requirements in `SPEC.md` for spec
 ### T-010 — Documentation updates
 
 - Update `mf_search` description in
-  `crates/ragent-tools-extended/src/masterfetch/tools/search_tool.rs`.
+  `crates/codemason-tools-extended/src/masterfetch/tools/search_tool.rs`.
 - Update `README.md` feature list if it currently says Tavily is only
   for `websearch`.
 
 ### T-011 — Verification
 
-- Run `cargo test -p ragent-tools-extended`,
-  `cargo test -p ragent-agent`, and `cargo test -p ragent-research`.
+- Run `cargo test -p codemason-tools-extended`,
+  `cargo test -p codemason-agent`, and `cargo test -p codemason-research`.
 - Run `cargo clippy --workspace` and `cargo fmt --check`.
 - Ensure no new compiler warnings.
 

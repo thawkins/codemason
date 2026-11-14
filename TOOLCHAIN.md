@@ -1,7 +1,7 @@
 # Rust Toolchain Configuration Review
 
 Review date: 2026-09-06
-Scope: dev/debug rebuild times for the ragent workspace (every crate in
+Scope: dev/debug rebuild times for the codemason workspace (every crate in
 `Cargo.lock` and every workspace crate under `crates/`; target dir 482 GB at the
 review date).
 
@@ -18,11 +18,11 @@ review date).
 
 ## Required cargo plugins
 
-The ragent build, test, doc and release flows depend on these cargo plugins
+The codemason build, test, doc and release flows depend on these cargo plugins
 (installed with `cargo install <name> --locked`). Clippy, fmt, add, toolchain
 ship inside the rustup toolchain and are listed for completeness.
 
-| Plugin | Purpose in ragent |
+| Plugin | Purpose in codemason |
 | --- | --- |
 | `cargo-llvm-cov` | Coverage measurement (`/rust-hygiene` and the STATS.md coverage table) |
 | `cargo-nextest` | **The test runner.** `cargo test` is replaced by `cargo nextest run` for every test run; only `cargo test --doc` remains (nextest does not run doc tests) |
@@ -35,8 +35,8 @@ ship inside the rustup toolchain and are listed for completeness.
 | `cargo-bloat` | Binary size breakdown |
 | `cargo-cache` | Inspect / clean the cargo caches |
 | `cargo-sweep` | Reap stale target-dir artifacts (target-dir housekeeping, item 4) |
-| `cargo-deb` | Build Debian packages for ragent releases |
-| `cargo-generate-rpm` | Build RPM packages for ragent releases |
+| `cargo-deb` | Build Debian packages for codemason releases |
+| `cargo-generate-rpm` | Build RPM packages for codemason releases |
 | `cargo-release` | Release/version flow automation |
 | `cargo-set-version` | Bump workspace versions in lockstep |
 | `cargo-install-update` | Keep installed plugins up to date |
@@ -72,8 +72,8 @@ Command forms (the full list is in `AGENTS-LANGUAGE.md`, "Test Commands"):
 
 ```bash
 cargo nextest run                                      # whole workspace
-cargo nextest run -p ragent-agent                      # one crate
-cargo nextest run -p ragent-agent -E 'test(test_unified_dispatch::)'   # one module
+cargo nextest run -p codemason-agent                      # one crate
+cargo nextest run -p codemason-agent -E 'test(test_unified_dispatch::)'   # one module
 cargo nextest run --workspace --no-fail-fast           # every failure in one pass
 cargo nextest list                                     # what would run
 cargo test --workspace --doc                           # doc tests only
@@ -127,7 +127,7 @@ nightly updating daily, that is potentially a full rebuild storm every day.
 - **Important**: `RUSTUP_TOOLCHAIN` (if still exported in the shell
   environment) **overrides** `rust-toolchain.toml`. Remove the env var for the
   pin to take effect.
-- Note: the `ragent-prompt_opt` crate has since been removed from the workspace.
+- Note: the `codemason-prompt_opt` crate has since been removed from the workspace.
 
 ### 2. Move `[profile.dev]` from `~/.cargo/config.toml` into the workspace `Cargo.toml`
 

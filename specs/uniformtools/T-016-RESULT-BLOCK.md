@@ -23,16 +23,16 @@ lives.
 
 | # | State | Where |
 |---|---|---|
-| 1 | The permission layer already *awaits* before dispatching: `dispatch_tool_with_permissions` calls `check_permission_with_prompt` and only a `PermissionAction::Allow` reaches `dispatch_tool_leaf`, so on the normal path no output exists while a prompt is open. A timeout is a `Deny`, and a surviving `Ask` is mapped to an error. | `ragent-agent/src/session/processor.rs` |
+| 1 | The permission layer already *awaits* before dispatching: `dispatch_tool_with_permissions` calls `check_permission_with_prompt` and only a `PermissionAction::Allow` reaches `dispatch_tool_leaf`, so on the normal path no output exists while a prompt is open. A timeout is a `Deny`, and a surviving `Ask` is mapped to an error. | `codemason-agent/src/session/processor.rs` |
 | 2 | Nothing *tracked* the interval. There was no state anywhere saying "this call is at a prompt", so no code outside the permission layer could answer "is this call's verdict unresolved?" - the pipeline's own stages and the tool phase's append path had no shared fact to consult. | - |
 | 3 | The tool phase appended a result for **every** outcome it was handed (`handle_tool_execution_result`), unconditionally: `assistant_parts.push(MessagePart::ToolCall { .. })` and `tool_result_parts.push(ContentPart::ToolResult { .. })`. | `processor.rs`, tool phase |
-| 4 | `crates/ragent-agent/tests/test_approval_blocks_result.rs` existed (from an earlier pass at FR-013) but was **not listed** in `tests/all.rs`, so with `autotests = false` it never compiled and never ran - the orphan-file symptom this spec has hit several times. Two of its four cases were source guards whose needles had gone stale against the current comments. | `tests/test_approval_blocks_result.rs`, `tests/all.rs` |
+| 4 | `crates/codemason-agent/tests/test_approval_blocks_result.rs` existed (from an earlier pass at FR-013) but was **not listed** in `tests/all.rs`, so with `autotests = false` it never compiled and never ran - the orphan-file symptom this spec has hit several times. Two of its four cases were source guards whose needles had gone stale against the current comments. | `tests/test_approval_blocks_result.rs`, `tests/all.rs` |
 
 ## 3. What landed
 
 ### 3.1 The tracker
 
-A new module, `crates/ragent-agent/src/session/pending.rs`, holding
+A new module, `crates/codemason-agent/src/session/pending.rs`, holding
 `PendingVerdicts`: per session, the set of call ids currently at a prompt.
 
 ```rust
@@ -65,7 +65,7 @@ Three design points, each of which a simpler shape would have got wrong:
 ### 3.2 The mark and the settle
 
 In the pipeline's stage 12
-(`crates/ragent-agent/src/session/dispatch.rs`):
+(`crates/codemason-agent/src/session/dispatch.rs`):
 
 ```rust
 ctx.pending_verdicts.begin(session_id, &tc.id);
@@ -110,7 +110,7 @@ awaited and settled.
 
 ## 4. Tests
 
-`crates/ragent-agent/tests/test_approval_blocks_result.rs` is now registered in
+`crates/codemason-agent/tests/test_approval_blocks_result.rs` is now registered in
 `tests/all.rs` and holds nine cases:
 
 | Case | What it pins |
@@ -173,11 +173,11 @@ records this rather than claiming the arm is covered.
 
 * `cargo fmt --all -- --check` - clean.
 * `cargo check --workspace --all-targets` - clean (1m 14s).
-* `cargo clippy -p ragent-agent --all-targets` - no warning names a file this task
+* `cargo clippy -p codemason-agent --all-targets` - no warning names a file this task
   touched (`pending.rs`, `session/dispatch.rs`, `session/processor.rs`,
   `tests/test_approval_blocks_result.rs`); the pre-existing
   `redundant_pub_crate` group elsewhere is unchanged.
-* `cargo nextest run -p ragent-agent` - 2135 passed, 1 skipped, 0 failed.
+* `cargo nextest run -p codemason-agent` - 2135 passed, 1 skipped, 0 failed.
 * Guard scripts: 12 of 13 pass; `check-bench-regression.sh` exits 2 on a missing
   `target/criterion` directory, which is not code-caused.
 

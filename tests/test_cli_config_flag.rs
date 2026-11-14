@@ -1,6 +1,6 @@
-//! Integration tests for `ragent --config <file>` reaching CLI handlers (#57).
+//! Integration tests for `codemason --config <file>` reaching CLI handlers (#57).
 //!
-//! `main` parses the `--config` file and never loads the default `ragent.json`
+//! `main` parses the `--config` file and never loads the default `codemason.json`
 //! chain. These tests spawn the built binary with a `--config` file whose
 //! values differ from the defaults, inside an isolated `HOME` /
 //! `XDG_CONFIG_HOME`, and assert the handler output carries the file's values
@@ -22,16 +22,16 @@ fn scratch() -> tempfile::TempDir {
         .expect("scratch dir")
 }
 
-/// Write `json` as the `--config` file and run `ragent --config <file> <args>`
+/// Write `json` as the `--config` file and run `codemason --config <file> <args>`
 /// from `root` with an isolated home and config directory.
-fn ragent_with_config(root: &Path, json: &str, args: &[&str]) -> Output {
+fn codemason_with_config(root: &Path, json: &str, args: &[&str]) -> Output {
     let config_file = root.join("custom.json");
     std::fs::write(&config_file, json).expect("config file");
     let xdg = root.join("xdg");
     let home = root.join("home");
     std::fs::create_dir_all(&xdg).expect("xdg dir");
     std::fs::create_dir_all(&home).expect("home dir");
-    Command::new(env!("CARGO_BIN_EXE_ragent"))
+    Command::new(env!("CARGO_BIN_EXE_cdmn"))
         .arg("--config")
         .arg(&config_file)
         .args(args)
@@ -39,7 +39,7 @@ fn ragent_with_config(root: &Path, json: &str, args: &[&str]) -> Output {
         .env("XDG_CONFIG_HOME", &xdg)
         .env("HOME", &home)
         .output()
-        .expect("spawn ragent")
+        .expect("spawn codemason")
 }
 
 #[test]
@@ -49,7 +49,7 @@ fn test_cli_config_flag_automation_run_reads_config_file() {
     // service in the `--config` file must instead hit the service-disabled
     // refusal, which only the startup config can produce.
     let dir = scratch();
-    let out = ragent_with_config(
+    let out = codemason_with_config(
         dir.path(),
         r#"{ "automation": { "enabled": false, "automations": [
             { "id": "in-file", "prompt": "p", "trigger": { "kind": "webhook" } }
@@ -67,7 +67,7 @@ fn test_cli_config_flag_automation_run_reads_config_file() {
 #[test]
 fn test_cli_config_flag_automation_list_reads_config_file() {
     let dir = scratch();
-    let out = ragent_with_config(
+    let out = codemason_with_config(
         dir.path(),
         r#"{ "automation": { "enabled": true, "automations": [
             { "id": "from-config-file", "prompt": "p", "trigger": { "kind": "webhook" } }

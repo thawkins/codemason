@@ -7,11 +7,11 @@ Status: **completed**. Dependency: T-029 (the derivation).
 
 ## 1. What the task asks for
 
-> Add `crates/ragent-agent/src/tool/rename.rs`: the checked-in table (one
+> Add `crates/codemason-agent/src/tool/rename.rs`: the checked-in table (one
 > `(before, after)` slice, ascending by `after`) and its invariant test - every
 > `before` registered, every `after` unregistered and a valid identifier, both
 > columns unique. The test must not open the workbook:
-> `crates/ragent-tools-core/src/xlsx.rs` is a writer only and adding a reader
+> `crates/codemason-tools-core/src/xlsx.rs` is a writer only and adding a reader
 > would breach NFR-002.
 
 FR-023 adds the "one module every migration site reads" clause and the
@@ -20,31 +20,31 @@ re-derived here.
 
 ## 2. Where the table lives, and why not where the task says
 
-The task names `crates/ragent-agent/src/tool/rename.rs`. The table is there - as
+The task names `crates/codemason-agent/src/tool/rename.rs`. The table is there - as
 a **re-export**:
 
 ```rust
-pub use ragent_types::tool_rename::{Rename, TOOL_RENAMES};
+pub use codemason_types::tool_rename::{Rename, TOOL_RENAMES};
 ```
 
-The table's body is `crates/ragent-types/src/tool_rename.rs` (170 lines: the
+The table's body is `crates/codemason-types/src/tool_rename.rs` (170 lines: the
 `Rename` struct, `TOOL_RENAMES: [Rename; 13]`, and four lookups - `after_of`,
 `before_of`, `is_retired`, `is_rename_spelling`).
 
 The move is forced by the dependency graph, not by taste. FR-031 (task T-042)
 requires the **config loader** to refuse a `tools.aliases` entry that names a
-retired spelling, so `ragent-config` must read the table. `ragent-config` sits
-*below* `ragent-agent`, which depends on it, so a table in `ragent-agent` could
+retired spelling, so `codemason-config` must read the table. `codemason-config` sits
+*below* `codemason-agent`, which depends on it, so a table in `codemason-agent` could
 not be read from the loader without a dependency cycle. It therefore sits in
-`ragent-types`, the leaf crate both already depend on.
+`codemason-types`, the leaf crate both already depend on.
 
 FR-023's "one module that every migration site reads" is satisfied: every path in
-the tree still spells `ragent_agent::tool::rename::{Rename, TOOL_RENAMES}`, so the
+the tree still spells `codemason_agent::tool::rename::{Rename, TOOL_RENAMES}`, so the
 move changed no call site. The re-export is what keeps that true, and it is why
 this task's file is 21 lines instead of 170.
 
-`crates/ragent-types/src/lib.rs` gained `pub mod tool_rename;` and
-`crates/ragent-agent/src/tool/mod.rs` gained `pub mod rename;`. Both were required
+`crates/codemason-types/src/lib.rs` gained `pub mod tool_rename;` and
+`crates/codemason-agent/src/tool/mod.rs` gained `pub mod rename;`. Both were required
 for the task to exist at all - see section 4.
 
 ## 3. The table
@@ -76,17 +76,17 @@ type, so a reader cannot mistake it for an open set and `TOOL_RENAMES.len()` is 
 All three are the same class - source committed by `d6abcd4a` that never compiled
 or never ran.
 
-1. **`pub mod tool_rename;` was missing from `crates/ragent-types/src/lib.rs`.**
+1. **`pub mod tool_rename;` was missing from `crates/codemason-types/src/lib.rs`.**
    The 170-line module landed with the module body, but nothing declared it, so
-   `cargo check` never built it. `ragent_agent::tool::rename`'s `pub use` would
+   `cargo check` never built it. `codemason_agent::tool::rename`'s `pub use` would
    have been the only thing to name it, and it did not compile either.
-2. **`pub mod rename;` was missing from `crates/ragent-agent/src/tool/mod.rs`.**
-   Same defect one level up: `crates/ragent-agent/src/tool/rename.rs` existed at
+2. **`pub mod rename;` was missing from `crates/codemason-agent/src/tool/mod.rs`.**
+   Same defect one level up: `crates/codemason-agent/src/tool/rename.rs` existed at
    `HEAD` with no declaration, so the re-export path
-   `ragent_agent::tool::rename` did not resolve and every test that reads
+   `codemason_agent::tool::rename` did not resolve and every test that reads
    `TOOL_RENAMES` could not name it.
 3. **`test_tool_rename_table.rs` was registered nowhere.**
-   `git show HEAD:crates/ragent-agent/tests/all.rs | grep rename` is empty, so the
+   `git show HEAD:crates/codemason-agent/tests/all.rs | grep rename` is empty, so the
    file's 8 cases had never run. Its assertions were the *post-rename* ones
    (`every_before_is_retired`, `every_after_is_registered`) - which describe a
    tree T-031 has not produced yet, so registering it unmodified would have failed
@@ -100,8 +100,8 @@ not"), which is what the requirement actually says.
 
 ## 5. The invariant test - 9 cases
 
-`crates/ragent-agent/tests/test_tool_rename_table.rs`, registered in
-`crates/ragent-agent/tests/all.rs` as `test_tool_rename_table`.
+`crates/codemason-agent/tests/test_tool_rename_table.rs`, registered in
+`crates/codemason-agent/tests/all.rs` as `test_tool_rename_table`.
 
 | # | Case | Clause |
 |---|---|---|
@@ -127,16 +127,16 @@ linear scans over the same array: nothing else forces them to agree with it.
 FR-023's last sentence is a *negative* requirement on a test file, which is the
 easiest kind to lose - the natural next step for a reader of the table is "check
 it against `tools.xlsx`", and the only way to do that is an XLSX **reader**.
-`crates/ragent-tools-core/src/xlsx.rs` is a writer (`write_xlsx`, backed by
+`crates/codemason-tools-core/src/xlsx.rs` is a writer (`write_xlsx`, backed by
 `rust_xlsxwriter`; there is no `read_xlsx`), so a reader means a new external
 crate and NFR-002 says no. Case 9 therefore asserts both halves independently, so
 neither can rot alone:
 
-1. `crates/ragent-agent/Cargo.toml` names no XLSX reader (`calamine`,
+1. `crates/codemason-agent/Cargo.toml` names no XLSX reader (`calamine`,
    `umya-spreadsheet`, `simple_excel_writer`) - the *capability*, whether or not
    anything calls it yet;
 2. no `src/` or `tests/` file in this crate, and not
-   `crates/ragent-types/src/tool_rename.rs`, names a workbook opener
+   `crates/codemason-types/src/tool_rename.rs`, names a workbook opener
    (`write_xlsx(`, `read_xlsx(`, `Workbook::open`, `calamine::`).
 
 `tools.xlsx` in prose is deliberately allowed: both module docs say *why* they do
@@ -167,9 +167,9 @@ still fails), the filtered suite run, and the file restored from a `cp -p` backu
 and verified by `md5sum`:
 
 ```
-57397a2b1fcea242b450550474e99fc2  crates/ragent-types/src/tool_rename.rs
-351cdeb5ff039ec941c9a10f8ae725b3  crates/ragent-agent/src/tool/rename.rs
-5080eee3e1c82f7c5a4b9c2636efeb2b  crates/ragent-agent/Cargo.toml
+57397a2b1fcea242b450550474e99fc2  crates/codemason-types/src/tool_rename.rs
+351cdeb5ff039ec941c9a10f8ae725b3  crates/codemason-agent/src/tool/rename.rs
+5080eee3e1c82f7c5a4b9c2636efeb2b  crates/codemason-agent/Cargo.toml
 ```
 
 | # | Break | Failed cases |
@@ -180,7 +180,7 @@ and verified by `md5sum`:
 | 4 | `grep`'s `before` -> `grep_all` (unregistered) | 1 - case 3, naming the spelling and the reason |
 | 5 | `glob`'s `before` -> `grep` (a duplicate column) | 2 - case 7 "the `before` column repeats"; case 8 `left: Some("Glob") right: Some("Grep")` |
 | 6 | `const _PROBE: &str = "read_xlsx(";` appended to `tool/rename.rs` | 1 - case 9, naming the file and the opener |
-| 7 | a `calamine` line appended to `crates/ragent-agent/Cargo.toml` | 1 - case 9, naming the reader and NFR-002 |
+| 7 | a `calamine` line appended to `crates/codemason-agent/Cargo.toml` | 1 - case 9, naming the reader and NFR-002 |
 
 Proof 7 is worth its own note: the first attempt added `calamine = "0.26"` as a
 real dev-dependency, which failed to *compile* (the version does not build against
@@ -190,7 +190,7 @@ still trips the string check, which is what the case actually asserts.
 
 ## 7. Gotchas
 
-1. **`grep rename crates/ragent-agent/tests/all.rs` was the whole task.** The
+1. **`grep rename crates/codemason-agent/tests/all.rs` was the whole task.** The
    table and its test both existed at `HEAD`; nothing ran. `scripts/check-inline-tests.sh`
    and the `tests/all.rs` registration convention are what stop this recurring, but
    neither catches a *source* module with no `pub mod` line - see section 4.
@@ -201,8 +201,8 @@ still trips the string check, which is what the case actually asserts.
    `test_nfr006_rename_cost.rs` are still unregistered** (`HEAD` and this tree
    alike). They belong to T-034, T-046 and T-040, which record their own
    registration; this task registered only its own file.
-4. **The table is `ragent-types`', not `ragent-agent`'s.** Editing the re-export
-   shim edits nothing; the pairs are in `crates/ragent-types/src/tool_rename.rs`.
+4. **The table is `codemason-types`', not `codemason-agent`'s.** Editing the re-export
+   shim edits nothing; the pairs are in `crates/codemason-types/src/tool_rename.rs`.
 5. **Do not "helpfully" sort at read time.** The array is ascending by `after` and
    case 2 pins it, so a migration site can binary-search or scan without sorting
    first - and a reader that sorted would hide a table edit that broke the order.
@@ -210,10 +210,10 @@ still trips the string check, which is what the case actually asserts.
 ## 8. Docs updated
 
 - `specs/uniformtools/PLAN.md` - T-030 row marked completed with what landed.
-- `crates/ragent-types/DOCS.md` - `tool_rename` module bullet.
-- `crates/ragent-agent/DOCS.md` - the `tool` module bullet already names `rename`
+- `crates/codemason-types/DOCS.md` - `tool_rename` module bullet.
+- `crates/codemason-agent/DOCS.md` - the `tool` module bullet already names `rename`
   as a data-module rather than a tool; it was corrected to say the table is
-  re-exported from `ragent_types::tool_rename`.
+  re-exported from `codemason_types::tool_rename`.
 - `CHANGELOG.md` - `[Unreleased]` entry.
 - This record.
 
@@ -222,11 +222,11 @@ still trips the string check, which is what the case actually asserts.
 | Check | Result |
 |---|---|
 | `cargo fmt --check` | clean |
-| `cargo check -p ragent-agent -p ragent-types -p ragent-config --all-targets` | clean |
-| `cargo test -p ragent-agent --test all test_tool_rename_table::` | 9 passed, 0 failed |
-| `cargo test -p ragent-agent --test all` | 1670 passed, 1 ignored, 0 failed |
-| `cargo test -p ragent-types -p ragent-config --test all` | 418 passed, 0 failed |
-| `cargo clippy -p ragent-types -p ragent-agent --all-targets` | no new warning (only the pre-existing `pub(crate)`-in-private-module set) |
+| `cargo check -p codemason-agent -p codemason-types -p codemason-config --all-targets` | clean |
+| `cargo test -p codemason-agent --test all test_tool_rename_table::` | 9 passed, 0 failed |
+| `cargo test -p codemason-agent --test all` | 1670 passed, 1 ignored, 0 failed |
+| `cargo test -p codemason-types -p codemason-config --test all` | 418 passed, 0 failed |
+| `cargo clippy -p codemason-types -p codemason-agent --all-targets` | no new warning (only the pre-existing `pub(crate)`-in-private-module set) |
 | `scripts/check-inline-tests.sh` | PASS |
 | `scripts/check-dead-code-reasons.sh` | PASS |
 | `scripts/check-shared-guards.sh` | PASS |
@@ -238,7 +238,7 @@ still trips the string check, which is what the case actually asserts.
 | `scripts/check-connector-endpoint-literal.sh` | PASS |
 | `scripts/check-team-duplication.sh` | PASS |
 | `scripts/check-vcs-duplication.sh` | PASS |
-| `scripts/check-tool-rename.sh` | FAIL - pre-existing, T-033's 44 unmigrated `before` literals in `crates/ragent-tui/src/widgets/message_widget.rs`; unrelated to this table |
+| `scripts/check-tool-rename.sh` | FAIL - pre-existing, T-033's 44 unmigrated `before` literals in `crates/codemason-tui/src/widgets/message_widget.rs`; unrelated to this table |
 | `scripts/check-bench-regression.sh` | FAIL - pre-existing, needs `cargo bench` first (`target/criterion` absent) |
 
 No test writes into the repository; case 9 reads manifests and sources only.

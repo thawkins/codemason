@@ -16,7 +16,7 @@ audit:
 
 ## Overview
 
-This specification defines a first-class **OpenRouter** LLM provider for ragent,
+This specification defines a first-class **OpenRouter** LLM provider for codemason,
 patterned after the existing `ollama_cloud` provider. OpenRouter
 (<https://openrouter.ai>) is an OpenAI-compatible model aggregator that fronts
 hundreds of models (Anthropic, OpenAI, Google, Meta, DeepSeek, xAI, Mistral,
@@ -30,8 +30,8 @@ The provider delivers three user-visible capabilities on par with
 1. **Model discovery** — enumerate every model OpenRouter can serve, enriched
    with context window, pricing, vision/reasoning capability flags, and
    thinking/reasoning levels.
-2. **Secure token storage** — the OpenRouter API key is stored in ragent's
-   encrypted credential store via `ragent auth openrouter <key>` (with an
+2. **Secure token storage** — the OpenRouter API key is stored in codemason's
+   encrypted credential store via `codemason auth openrouter <key>` (with an
    `OPENROUTER_API_KEY` environment-variable fallback), never written to
    plain configuration files or logs.
 3. **Thinking / reasoning levels** — reasoning models accept the full
@@ -44,7 +44,7 @@ The provider delivers three user-visible capabilities on par with
 
 OpenRouter collapses multi-provider access into one contract: a single Bearer
 token, an OpenAI-style chat-completions schema, and a server-side router that
-selects healthy upstreams. For ragent users this means one key unlocks models
+selects healthy upstreams. For codemason users this means one key unlocks models
 that would otherwise require separate Anthropic, OpenAI, Gemini, and Bedrock
 credentials — attractive for cost routing, model comparison, and
 redundancy/failover workflows.
@@ -52,7 +52,7 @@ redundancy/failover workflows.
 ### Pattern source: the Ollama Cloud provider
 
 OpenRouter is intentionally modeled on
-`crates/ragent-llm/src/providers/ollama_cloud.rs`, which already demonstrates
+`crates/codemason-llm/src/providers/ollama_cloud.rs`, which already demonstrates
 the shapes this spec reuses:
 
 | Concern | Ollama Cloud precedent | OpenRouter equivalent |
@@ -99,11 +99,11 @@ the shapes this spec reuses:
 
 - **Interactive TUI users** — pick `openrouter` from the provider cycle,
   discover models with `/models`, chat with streaming and tool calls.
-- **CLI / one-shot users** — `ragent run --model openrouter/anthropic/claude-4.5-sonnet "..."`
-  and `ragent models openrouter`.
-- **HTTP-server clients** — REST/SSE sessions driven through `ragent serve`.
+- **CLI / one-shot users** — `codemason run --model openrouter/anthropic/claude-4.5-sonnet "..."`
+  and `codemason models openrouter`.
+- **HTTP-server clients** — REST/SSE sessions driven through `codemason serve`.
 - **Operators** — configure defaults, base URL, and per-model thinking
-  overrides in `ragent.json`.
+  overrides in `codemason.json`.
 
 ## Requirements
 
@@ -116,16 +116,16 @@ Requirements use EARS notation. All five templates are covered: ubiquitous
 
 The system shall expose an `openrouter` LLM provider with the identifier
 `openrouter` and display name `OpenRouter` registered in the provider
-registry, re-exported from `ragent-llm`, listed in the TUI provider cycle,
+registry, re-exported from `codemason-llm`, listed in the TUI provider cycle,
 and present in the environment-variable alias tables so tool/Bang-command
 error hints and router classification can resolve `OPENROUTER_API_KEY`.
 
-**Acceptance:** `ragent models` and the TUI provider switch both list
+**Acceptance:** `codemason models` and the TUI provider switch both list
 `openrouter`; `provider_registry.get("openrouter")` succeeds.
 
 ### FR-002 — base URL default and override *[ubiquitous]*
 The system shall default the OpenRouter API base to `https://openrouter.ai`
-and shall honor `provider.openrouter.api.base_url` from `ragent.json`,
+and shall honor `provider.openrouter.api.base_url` from `codemason.json`,
 trailing-slash-trimmed, for both discovery and chat.
 
 **Acceptance:** with `base_url = "http://127.0.0.1:8999/"` all requests hit
@@ -134,7 +134,7 @@ trailing-slash-trimmed, for both discovery and chat.
 ### FR-003 — secure default base URL *[ubiquitous]*
 The system shall use HTTPS for the default base URL and shall refuse to use
 an `http:` base URL for chat or discovery unless an explicit override is
-present in `ragent.json`.
+present in `codemason.json`.
 
 **Acceptance:** `http://openrouter.ai` as a `base_url` value is honored in
 config (operator override) but is never the default.
@@ -155,18 +155,18 @@ the key only as a masked fingerprint (e.g. `sk-or-…abcd`).
 
 **Acceptance:** `grep`-ing log output for the literal key finds nothing.
 
-### FR-006 — token storage via `ragent auth` *[event-driven]*
-When the user runs `ragent auth openrouter <key>`, the system shall store the
+### FR-006 — token storage via `codemason auth` *[event-driven]*
+When the user runs `codemason auth openrouter <key>`, the system shall store the
 key in the encrypted credential store under provider id `openrouter` using
 `Storage::set_provider_auth` and shall emit an info-level confirmation
 without echoing the key.
 
-**Acceptance:** `ragent models openrouter` subsequently connects without
+**Acceptance:** `codemason models openrouter` subsequently connects without
 `OPENROUTER_API_KEY` set.
 
 ### FR-007 — model discovery request *[event-driven]*
 When the user triggers model discovery (TUI `/models`, CLI
-`ragent models openrouter`, or startup-time enrichment), the system shall
+`codemason models openrouter`, or startup-time enrichment), the system shall
 issue a single `GET {base}/api/v1/models` request (Bearer header attached
 only when a key is available) with a 10-second timeout, parse the
 `{"data": [...]}` response, and map every entry to `ModelInfo`.
@@ -189,7 +189,7 @@ empty API key, the system shall reject the request with an explicit error
 call.
 
 **Acceptance:** error message names the provider and remediation
-(`ragent auth openrouter <key>` / `OPENROUTER_API_KEY`).
+(`codemason auth openrouter <key>` / `OPENROUTER_API_KEY`).
 
 ### FR-010 — model metadata enrichment *[optional]*
 Where OpenRouter supplies model metadata, the system may propagate it into
@@ -319,7 +319,7 @@ final usage object reports nonzero `usage.prompt_tokens` /
 OpenRouter-reported token counts.
 
 ### FR-021 — config-driven model overrides *[event-driven]*
-When `ragent.json` declares `provider.openrouter.models.<id>`, the system
+When `codemason.json` declares `provider.openrouter.models.<id>`, the system
 shall merge those user-declared `ModelDefinition` entries into the
 discovered catalog (and honor `thinking` overrides at the model level
 before provider-level `thinking` defaults), letting operators pin context
@@ -336,7 +336,7 @@ system shall log a `warn!` with context and surface a human-readable message
 ("Could not connect to OpenRouter: {e}") rather than panic, leaving the
 previous model cache (if any) untouched.
 
-**Acceptance:** with the network down, `ragent models openrouter` prints the
+**Acceptance:** with the network down, `codemason models openrouter` prints the
 connect failure and exits 0 (CLI listing path) without corrupting state.
 
 ### FR-023 — TUI provider in the cycle *[event-driven]*
@@ -371,20 +371,20 @@ The system shall NOT:
 POST path has no retry wrapper.
 
 ### FR-026 — models listing output *[state-driven]*
-When `ragent models openrouter` runs, the system shall print one line per
+When `codemason models openrouter` runs, the system shall print one line per
 model in the shared `provider/model` display format (`  openrouter/<id padded>
 <display name>` sorted by id), the total count, and — when no key is
 configured — the remediation hint
-`Run 'ragent auth openrouter <key>' or set OPENROUTER_API_KEY.`
+`Run 'codemason auth openrouter <key>' or set OPENROUTER_API_KEY.`
 
 **Acceptance:** output format matches the `ollama_cloud` listing block.
 
 ## Constraints
 
 1. **Crate layout** — implementation lives in
-   `crates/ragent-llm/src/providers/openrouter.rs` (provider + client +
+   `crates/codemason-llm/src/providers/openrouter.rs` (provider + client +
    discovery), with integration tests in
-   `crates/ragent-llm/tests/test_openrouter_*.rs`.
+   `crates/codemason-llm/tests/test_openrouter_*.rs`.
 2. **No unsafe** — pure safe Rust; HTTP via the existing `reqwest` helper
    factories.
 3. **Workspace style** — edition 2024, `cargo fmt`, clippy `-D warnings`,
@@ -400,8 +400,8 @@ configured — the remediation hint
 ## Dependencies
 
 - Upstream schema stability of `openrouter.ai/api/v1` (discovery + chat).
-- Workspace crates: `ragent-llm`, `ragent-config`, `ragent-storage`,
-  `ragent-agent` (session wiring / env alias table), `ragent-tui`
+- Workspace crates: `codemason-llm`, `codemason-config`, `codemason-storage`,
+  `codemason-agent` (session wiring / env alias table), `codemason-tui`
   (provider widget + `/model` autocomplete).
 
 ## Risks
@@ -417,8 +417,8 @@ configured — the remediation hint
 ## Success Criteria
 
 1. All 26 requirements are implemented and verified by the plan tasks below.
-2. Existing test suite remains green (no regressions in `ragent-llm`,
-   `ragent-tui`, `ragent-config`, or `ragent-agent`).
+2. Existing test suite remains green (no regressions in `codemason-llm`,
+   `codemason-tui`, `codemason-config`, or `codemason-agent`).
 3. A user with only an OpenRouter key can install, run
-   `ragent auth openrouter <key>`, select `openrouter/<model>` in the TUI,
+   `codemason auth openrouter <key>`, select `openrouter/<model>` in the TUI,
    and complete a streaming chat with tool use end to end.

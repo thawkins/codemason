@@ -21,7 +21,7 @@ history.
 
 ## Definitions
 
-Automations are declared under the `automation` block in `.ragent/ragent.json`:
+Automations are declared under the `automation` block in `.codemason/codemason.json`:
 
 ```jsonc
 {
@@ -81,10 +81,10 @@ A target with no `url` is inert.
 ## CLI parity
 
 ```
-ragent automation list
-ragent automation runs <id>
-ragent automation run <id>
-ragent automation help
+codemason automation list
+codemason automation runs <id>
+codemason automation run <id>
+codemason automation help
 ```
 
 ## Examples

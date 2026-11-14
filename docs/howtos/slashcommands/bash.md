@@ -10,8 +10,8 @@ that bypass the built-in banned-command check, so a single command such as
 `curl` can be re-enabled without turning on YOLO mode. Denylist entries are
 substring patterns that always reject a command, no matter what other rules
 say. Every change is persisted immediately and takes effect at once: project
-scope writes `.ragent/ragent.json`, global scope writes
-`~/.config/ragent/ragent.json`.
+scope writes `.codemason/codemason.json`, global scope writes
+`~/.config/codemason/codemason.json`.
 
 ## Syntax
 
@@ -28,8 +28,8 @@ Notes:
 
 - `--help` and `-h` also print the help page.
 - The `--global` flag may trail the entry; it is trimmed off the entry text and
-  redirects the write from the project config (`.ragent/ragent.json`) to the
-  user config (`~/.config/ragent/ragent.json`).
+  redirects the write from the project config (`.codemason/codemason.json`) to the
+  user config (`~/.config/codemason/codemason.json`).
 - An empty `<entry>` prints the usage line instead of storing an empty record.
 
 ## Options / Subcommands
@@ -115,5 +115,5 @@ Message formats:
 - Permission rules and YOLO mode: `docs/howtos/permissions.md`.
 - The Bash tool's 7-layer security model: safe-command whitelist, banned
   commands, denied patterns, and the user allow/deny layers above.
-- Config files written: `.ragent/ragent.json` (project),
-  `~/.config/ragent/ragent.json` (global).
+- Config files written: `.codemason/codemason.json` (project),
+  `~/.config/codemason/codemason.json` (global).

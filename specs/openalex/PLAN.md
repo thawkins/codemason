@@ -19,7 +19,7 @@ The strategy mirrors the existing Tavily and LangSearch backends:
 | T-003 | Implement `parse_response` — parse `results[]` into `RawResult` rows with scholarly metadata | FR-001, FR-010, FR-011, NFR-002 | M | High | completed | T-001 |
 | T-004 | Handle non-2xx / 429 / parse errors as `engine_blocked` reports | FR-006, FR-009 | S | High | completed | T-001 |
 | T-005 | Resolve optional `mailto` from `OPENALEX_EMAIL` env / `openalex_email` config field | FR-007, NFR-003 | S | Medium | completed | T-001 |
-| T-006 | Add `openalex_email: Option<String>` config field to `ragent-config` | FR-007, NFR-003 | S | Medium | completed | T-005 |
+| T-006 | Add `openalex_email: Option<String>` config field to `codemason-config` | FR-007, NFR-003 | S | Medium | completed | T-005 |
 | T-007 | Wire `OpenAlexEngine` into `MfSearchTool::build_orchestrator` as always-on keyless backend | FR-003 | S | Critical | completed | T-001, T-005 |
 | T-008 | Update `MfSearchTool::engine_status` to report `openalex` as always-enabled | FR-003 | S | Medium | completed | T-007 |
 | T-009 | Add unit tests for `build_request` and `parse_response` (pure functions, no network) | NFR-002 | M | High | completed | T-002, T-003 |
@@ -31,7 +31,7 @@ The strategy mirrors the existing Tavily and LangSearch backends:
 
 ### T-001 — Create `OpenAlexEngine`
 
-- Add `crates/ragent-tools-extended/src/masterfetch/search/openalex.rs`.
+- Add `crates/codemason-tools-extended/src/masterfetch/search/openalex.rs`.
 - Implement `SearchEngine` for `OpenAlexEngine` with `name() -> "openalex"`.
 - Store optional `mailto` email; no API key required (keyless backend).
 - Use the shared masterfetch HTTP client from `crate::masterfetch::http`.
@@ -81,7 +81,7 @@ The strategy mirrors the existing Tavily and LangSearch backends:
 
 ### T-006 — Config field
 
-- Add `openalex_email: Option<String>` to `ragent_config::Config` with
+- Add `openalex_email: Option<String>` to `codemason_config::Config` with
   `#[serde(default, skip_serializing_if = "Option::is_none")]`.
 - Document precedence: env var > config field.
 

@@ -24,7 +24,7 @@ encoder half (T-018).
 
 ## 2. What is in the tree
 
-Both additions are present in `crates/ragent-types/src/llm.rs` (landed with the
+Both additions are present in `crates/codemason-types/src/llm.rs` (landed with the
 rename commit, `d6abcd4a`), and this task's work was to verify they say what the
 requirement needs and to pin them with tests, because until now nothing in the
 crate tested the `Reasoning` variant at all.
@@ -56,7 +56,7 @@ set of five is part of the contract rather than an implementation detail.
 ## 3. What this task did not touch
 
 The flag's *derivation* already exists at the record sites and belongs to FR-014's
-other half: `crates/ragent-agent/src/session/history.rs:245`,
+other half: `crates/codemason-agent/src/session/history.rs:245`,
 `session/processor.rs:2932` and `compaction/convert.rs:189` all set
 `is_error: state.status.is_error()`, and `ToolCallStatus::is_error` is the one
 derivation (never `content` parsing, never `!success`). That is T-017's subject and
@@ -69,8 +69,8 @@ provides the destination those two tasks write into.
 
 ## 4. Proof
 
-New `crates/ragent-types/tests/test_canonical_tool_parts.rs`, six cases, registered
-in `crates/ragent-types/tests/all.rs`:
+New `crates/codemason-types/tests/test_canonical_tool_parts.rs`, six cases, registered
+in `crates/codemason-types/tests/all.rs`:
 
 | Case | Asserts |
 |---|---|
@@ -105,10 +105,10 @@ which is why the omission rule is worth pinning as its own case.
 All green on the tree as it stands:
 
 - `cargo fmt --check`
-- `cargo clippy -p ragent-types --all-targets` - no warning, no error
-- `cargo test -p ragent-types --test all` - **401 passed**, 0 failed
-- `cargo test -p ragent-types --lib` - 2 passed
-- `cargo test -p ragent-types --doc` - 38 passed, 2 ignored
+- `cargo clippy -p codemason-types --all-targets` - no warning, no error
+- `cargo test -p codemason-types --test all` - **401 passed**, 0 failed
+- `cargo test -p codemason-types --lib` - 2 passed
+- `cargo test -p codemason-types --doc` - 38 passed, 2 ignored
 
 ## 6. Note for the downstream tasks
 

@@ -10,7 +10,7 @@ matching file operations before the user permission prompt is shown; denylist
 patterns always reject them, and deny overrides allow. `roots` entries extend
 the set of directories treated as valid roots by the path-escape check.
 Changes are persisted immediately: project scope writes
-`.ragent/ragent.json`, global scope writes `~/.config/ragent/ragent.json`.
+`.codemason/codemason.json`, global scope writes `~/.config/codemason/codemason.json`.
 
 ## Syntax
 
@@ -29,7 +29,7 @@ Notes:
 
 - `--help`, `-h`, and the empty form also print the help page.
 - `--global` may trail the pattern; it is trimmed off the pattern text and
-  redirects the write to `~/.config/ragent/ragent.json`.
+  redirects the write to `~/.config/codemason/codemason.json`.
 - Pattern matching uses glob syntax: `*` matches any characters except `/`,
   `**` matches any characters including `/`, `?` matches a single character,
   and `[abc]` matches one character from the set.
@@ -121,5 +121,5 @@ suppresses the prompt and a denylist match short-circuits it.
   scoping).
 - Permission rules, allow/deny/ask ordering, and YOLO mode:
   `docs/howtos/permissions.md`.
-- Config files written: `.ragent/ragent.json` (project),
-  `~/.config/ragent/ragent.json` (global).
+- Config files written: `.codemason/codemason.json` (project),
+  `~/.config/codemason/codemason.json` (global).

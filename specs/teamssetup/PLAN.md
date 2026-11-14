@@ -147,7 +147,7 @@ both delegate. The legal table:
 The foundation milestone changes no observable behaviour: it moves every direct
 write onto one function so M3, M6, and M8 can each change a rule in one place.
 
-- **T-001** adds to `crates/ragent-agent/src/team/config.rs`:
+- **T-001** adds to `crates/codemason-agent/src/team/config.rs`:
   three predicates and `can_transition_to`. `can_transition_to` encodes
   `Spawning -> Working | Failed`, `Working -> Idle | PlanPending | Blocked |
   Suspended | ShuttingDown | Failed`, `Idle -> Working | Blocked | Suspended |
@@ -155,8 +155,8 @@ write onto one function so M3, M6, and M8 can each change a rule in one place.
   `Blocked -> Idle | Suspended | ShuttingDown | Failed`, `Suspended -> Idle |
   ShuttingDown | Failed`, `ShuttingDown -> Stopped | Failed`, and no exit from
   `Stopped` or `Failed` except a respawn (`Failed -> Spawning`).
-- **T-005** touches `crates/ragent-tui/src/app/event_handler.rs:1816` and
-  `crates/ragent-tui/src/app/swarm.rs:159`. The TUI must reach the manager
+- **T-005** touches `crates/codemason-tui/src/app/event_handler.rs:1816` and
+  `crates/codemason-tui/src/app/swarm.rs:159`. The TUI must reach the manager
   rather than writing `config.json` itself; where the TUI has no manager handle,
   the write is replaced by a manager method called over the existing interface.
 
@@ -165,7 +165,7 @@ spawn/suspend/resume/shutdown sequence.
 
 **T-002 as built.** FR-035 is served by one new type and one new event:
 
-- `TransitionCause` (`config.rs`, re-exported from `ragent_agent::team`) - the
+- `TransitionCause` (`config.rs`, re-exported from `codemason_agent::team`) - the
   closed vocabulary of reasons a writer moves a member: `Spawned`, `SpawnFailed`,
   `TaskClaimed`, `TaskCompleted`, `ReportedIdle`, `PlanSubmitted`,
   `PlanApproved`, `PlanRejected`, `DependencyBlocked`, `DependencySatisfied`,
@@ -182,17 +182,17 @@ spawn/suspend/resume/shutdown sequence.
   `Spawning -> Failed` is `SpawnFailed`, every other `-> Failed` is
   `WatchdogTimeout`.
 - `Event::TeammateStatusChanged { session_id, team_name, agent_id, from, to,
-  cause }` (`ragent-types`) - the complete record. The status and cause fields
+  cause }` (`codemason-types`) - the complete record. The status and cause fields
   are the canonical tokens as `String`, not the typed enums: `MemberStatus` and
-  `TransitionCause` live in `ragent-agent`, which depends on `ragent-types`, so
+  `TransitionCause` live in `codemason-agent`, which depends on `codemason-types`, so
   carrying them would invert the dependency. The SSE surface maps it to
   `teammate_status_changed`.
 
-Covered by `crates/ragent-agent/tests/test_team_status_changed_event.rs` (8
+Covered by `crates/codemason-agent/tests/test_team_status_changed_event.rs` (8
 tests: token uniqueness and `snake_case` shape, serde round trip, every legal
 edge derives a cause, the intuitive cause for the twelve common edges, the wire
 variant name, the full payload round trip, and `session_id()` routing) and
-`crates/ragent-server/tests/test_sse_event_variants.rs::test_teammate_status_changed`.
+`crates/codemason-server/tests/test_sse_event_variants.rs::test_teammate_status_changed`.
 The coarse events (`TeammateIdle`, `TeammateFailed`, `TeammateSuspended`,
 `TeammateResumed`) are left in place: existing consumers still read them, and
 T-003 adds the single new event alongside them.
@@ -225,7 +225,7 @@ plus one narrow companion for the fields that ride alongside a status change:
   `Stopped` clears `shutdown_request_id` (same, for the shutdown request). The
   write also drops the PERF-027 `is_plan_pending` cache entry, because a status
   move can change that answer and the cache must not outlive it by a TTL.
-- `StatusTransition { from, to, cause }` (re-exported from `ragent_agent::team`)
+- `StatusTransition { from, to, cause }` (re-exported from `codemason_agent::team`)
   is the record the event carries, returned so a caller can log or assert on
   what moved without subscribing to the bus.
 - `TeamManager::update_member(agent_id, |&mut TeamMember|)` is the escape hatch
@@ -242,7 +242,7 @@ plus one narrow companion for the fields that ride alongside a status change:
   T-024 moves the spawn/stop pair here; emitting them from the writer before
   then would double-publish.
 
-Covered by `crates/ragent-agent/tests/test_set_member_status.rs` (14 tests):
+Covered by `crates/codemason-agent/tests/test_set_member_status.rs` (14 tests):
 illegal transition refused naming member and both statuses; unknown agent ID is
 an error; terminal status has no exit but a respawn; legal transition persists;
 leaving `Working` / `PlanPending` / reaching `Stopped` clear their respective
@@ -316,7 +316,7 @@ Two supporting changes make the routing possible:
   naming the constructor rather than spawning a teammate whose status could
   never be recorded.
 
-Covered by `crates/ragent-agent/tests/test_member_status_write_sites.rs`
+Covered by `crates/codemason-agent/tests/test_member_status_write_sites.rs`
 (9 tests): suspend, resume, both shutdown paths, and plan approval each record
 their move through the writer (persisted status **and** exactly one
 `TeammateStatusChanged` with the full record); a second graceful shutdown is not
@@ -339,7 +339,7 @@ the T-003 and T-004 suites assert fixture state rather than behaviour.
 The highest-value milestone: it closes F-01, F-02, F-03, F-04, F-05, and F-18.
 
 - **T-006 as built** - `TaskStatus::can_transition_to` lives in
-  `crates/ragent-agent/src/team/task.rs` beside `as_str`, with a supporting
+  `crates/codemason-agent/src/team/task.rs` beside `as_str`, with a supporting
   `TaskStatus::is_terminal` (`Completed`/`Cancelled`). The table is D3 verbatim:
   `Pending -> {InProgress, Cancelled}`, `InProgress -> {Completed, Pending,
   Cancelled}`, and no outgoing edge from either terminal status. Self-transitions
@@ -350,13 +350,13 @@ The highest-value milestone: it closes F-01, F-02, F-03, F-04, F-05, and F-18.
   release is owner-or-lead, cancelling an `InProgress` task is lead-only) are
   actor checks the caller applies on top of the table, since the table answers
   only "is this state pair legal". Coverage is
-  `crates/ragent-agent/tests/test_task_status_transitions.rs` - a transcribed
+  `crates/codemason-agent/tests/test_task_status_transitions.rs` - a transcribed
   16-row table with a completeness check, plus self-transition, terminal-sink,
   exit-exists, `is_terminal`, and the three named F-18 regression pairs.
 - **T-007 as built** - `transition_task(list: &mut TaskList, task_id: &str,
   to: TaskStatus, actor: &str) -> Result<Option<TaskTransition>>` lives in
-  `crates/ragent-agent/src/team/task.rs` next to the status table, re-exported
-  from `ragent_agent::team` with its `TaskTransition { task_id, from, to,
+  `crates/codemason-agent/src/team/task.rs` next to the status table, re-exported
+  from `codemason_agent::team` with its `TaskTransition { task_id, from, to,
   actor }` record. It mutates the caller's already-loaded list in memory and
   never touches disk, so FR-004's "`tasks.json` byte-identical" holds
   structurally: a refused transition returns before the caller can reach
@@ -372,7 +372,7 @@ The highest-value milestone: it closes F-01, F-02, F-03, F-04, F-05, and F-18.
   <from> to <to>; allowed from <from>: <row>` where `<row>` is the D3 row for
   the current status, so the operator sees the task, both statuses, and why the
   move is forbidden (`completed -> nothing: completed is terminal`). Coverage is
-  `crates/ragent-agent/tests/test_transition_task.rs`: the 16-row D3 table
+  `crates/codemason-agent/tests/test_transition_task.rs`: the 16-row D3 table
   driven through the helper, legal-move record contents, actor capture, the
   naming refusal for a table-forbidden pair and for both terminal rows,
   re-assert-is-`None` for all four statuses, unknown-id, and a source ratchet
@@ -421,7 +421,7 @@ The highest-value milestone: it closes F-01, F-02, F-03, F-04, F-05, and F-18.
   agree. One pre-existing assertion had to change: it required the cancelled
   refusal to mention "pending", which is exactly the wording FR-006 replaces; it
   now asserts "terminal" and the *absence* of "pending".
-- **T-012 as built** - `crates/ragent-agent/src/tool/team_task_cancel.rs` is the
+- **T-012 as built** - `crates/codemason-agent/src/tool/team_task_cancel.rs` is the
   lead's cancellation verb, and F-05 is closed: `TaskStatus::Cancelled` had no
   producer at all before T-011, and no *surface* before T-012, so a lead could
   only abandon work by editing `tasks.json` by hand.
@@ -469,7 +469,7 @@ The highest-value milestone: it closes F-01, F-02, F-03, F-04, F-05, and F-18.
   deleted afterwards. `README.md` records 150 tools across 21 categories and
   names `team_task_cancel` in the Teams group (now 20).
 
-  Coverage is `crates/ragent-agent/tests/test_team_task_cancel_tool.rs`
+  Coverage is `crates/codemason-agent/tests/test_team_task_cancel_tool.rs`
   (7 tests): a `pending` task is cancelled, kept in the list, and reports
   `pending -> cancelled` with nobody notified; an `in_progress` task is
   cancelled, retains its owner and delivers the `TaskCancelled` mailbox notice
@@ -501,7 +501,7 @@ The highest-value milestone: it closes F-01, F-02, F-03, F-04, F-05, and F-18.
   notification is sent *after* the write (a mailbox failure cannot roll back a
   committed cancellation; it is returned as an error naming the task and the
   owner), and carries the lead session id the mailbox write boundary validates
-  (SEC-ragent-team-003). `TeamManager::cancel_task` additionally enforces the
+  (SEC-codemason-team-003). `TeamManager::cancel_task` additionally enforces the
   FR-005 actor rule - only `lead` may cancel - before the task list is loaded.
   Cancellation leaves `assigned_to` and `claimed_at` intact so the lead can still
   see who was working on the abandoned task. Coverage:
@@ -538,7 +538,7 @@ Verify: suspend a teammate, wait past the timeout, confirm the status is still
   `left: Failed, right: Suspended`.
 
 - **T-015 as built** - the watchdog's eligibility decision in
-  `TeamManager::start_watchdog` (`crates/ragent-agent/src/team/manager.rs`) is now
+  `TeamManager::start_watchdog` (`crates/codemason-agent/src/team/manager.rs`) is now
   a single `match` over every `MemberStatus` variant, so no status reaches the
   failure verdict by fall-through and the `is_some_and(|s| s.is_live())` +
   `unwrap_or(false)` shape is gone (FR-012, F-08). The three arms are the D2
@@ -561,7 +561,7 @@ Verify: suspend a teammate, wait past the timeout, confirm the status is still
   `m.status` directly, so it publishes exactly one `TeammateStatusChanged`
   alongside the coarse `TeammateFailed` and drops the caches the move
   invalidates; `last_spawn_error` still lands in its own `update_member` write.
-  Coverage is `crates/ragent-agent/tests/test_watchdog_status_branches.rs`: all
+  Coverage is `crates/codemason-agent/tests/test_watchdog_status_branches.rs`: all
   nine statuses stale in one manager with both live controls (`Working`,
   `ShuttingDown`) required to be failed before the parked and terminal members
   are asserted unchanged and event-free; a `Blocked` member surviving dozens of
@@ -572,10 +572,10 @@ Verify: suspend a teammate, wait past the timeout, confirm the status is still
   implicit `unwrap_or(false)` default) fails three of the four; restored.
 
 - **T-016 as built** - `TeamManager::resume_teammate`
-  (`crates/ragent-agent/src/team/manager.rs`) is now the operator's single
+  (`crates/codemason-agent/src/team/manager.rs`) is now the operator's single
   resume verb for both parked statuses that need one (FR-010, F-06, F-25).
   The pre-fix guard was `is_suspended`, a boolean test on exactly one status,
-  so a `Blocked` member had no in-product escape: nothing in `ragent-agent`
+  so a `Blocked` member had no in-product escape: nothing in `codemason-agent`
   unblocked it and `team_cleanup` refuses a live member (F-22), which wedged
   the team for good. The guard is now
   `matches!(current, Suspended | Blocked)` over the status read from the store,
@@ -597,10 +597,10 @@ Verify: suspend a teammate, wait past the timeout, confirm the status is still
   does **not** re-block a member whose dependencies are still unmet - FR-010 is
   the operator override, and re-parking belongs to the dependency rule
   (FR-011, T-017). The TUI's `Space` toggle
-  (`crates/ragent-tui/src/app/windows.rs::teams_cursor_toggle_stop_resume`) was
+  (`crates/codemason-tui/src/app/windows.rs::teams_cursor_toggle_stop_resume`) was
   widened the same way, so a `Blocked` row offers resume; the `Del` shutdown
   path and its confirmation are T-035's. Coverage is
-  `crates/ragent-agent/tests/test_resume_teammate_blocked.rs` (7 tests): a
+  `crates/codemason-agent/tests/test_resume_teammate_blocked.rs` (7 tests): a
   blocked member resumed to `Idle` with one `blocked -> idle`/`resumed`
   transition, exactly one `TeammateResumed`, and its held task released; the
   suspended path unchanged; both parked statuses reaching the same destination;
@@ -680,7 +680,7 @@ Four decisions:
   bash-class calls *are refused* until approval, because a prompt that only says
   "submit a plan" invites the model to retry a refused tool forever.
 
-Coverage: `crates/ragent-agent/tests/test_plan_approval_gate.rs` (16 tests) - the
+Coverage: `crates/codemason-agent/tests/test_plan_approval_gate.rs` (16 tests) - the
 setting axis (`off` is inert; `None`/`Pending`/`Rejected` gate; `Approved` clears,
 through a warm cache; unknown member and unreadable team are inert), the tool axis
 (every `LOOP_WRITE_TOOLS` member and every `LOOP_BASH_TOOLS` member refused;
@@ -746,7 +746,7 @@ share, so the tools no longer call `run_team_hook` at all:
 | `InProgress -> Completed` | `TaskCompleted` | `TaskStore::complete`, `TeamManager::complete_task`, a swarm auto-complete |
 
 - `fire_task_hook(team_dir, transition: Option<&TaskTransition>, task, actor)`
-  in `crates/ragent-agent/src/team/task.rs` is the one trigger point. It
+  in `crates/codemason-agent/src/team/task.rs` is the one trigger point. It
   **derives** the event from the transition rather than taking it as a
   parameter, so a caller cannot forget or mis-name it: `to == InProgress` is
   `TaskClaimed`, `to == Completed` is `TaskCompleted`, and a `None` transition
@@ -787,7 +787,7 @@ share, so the tools no longer call `run_team_hook` at all:
   call. `read_blocking`, `update_task_blocking` and `cancel_blocking` remain,
   and `pre_assign_task_blocking` joins them.
 
-Coverage is `crates/ragent-agent/tests/test_task_hook_runtime.rs` (12 tests).
+Coverage is `crates/codemason-agent/tests/test_task_hook_runtime.rs` (12 tests).
 Each test installs a hook that appends its own name to a marker log and then
 drives one entry point, asserting on the log rather than on a tool's output -
 which is what makes it a test of the runtime: a tool that still fired the hook
@@ -805,21 +805,21 @@ Two supporting changes fell out of the "the hook needs a team" requirement: the
 task-store fixtures in `test_team_task_store`, `test_team_claim_single`,
 `test_team_cancel` and `test_concurrent_store_writes` now open a **real** team
 directory (`team_support::setup_team_with_task_store`) rather than a bare
-`.ragent/teams` path, because a hook lookup needs a readable `config.json`; and
+`.codemason/teams` path, because a hook lookup needs a readable `config.json`; and
 the TUI's swarm paths (`execute_swarm_decomposition`, `poll_pending_swarm`,
 `poll_swarm_completion`) became `async` because they seed and complete tasks
-through the now-async store. `cargo nextest run -p ragent-agent`: 2362 tests,
-2362 pass. Note that the `ragent-tui` integration binary does not compile for
+through the now-async store. `cargo nextest run -p codemason-agent`: 2362 tests,
+2362 pass. Note that the `codemason-tui` integration binary does not compile for
 reasons unrelated to this task: `test_teams_tui.rs` asserts on
 `App::team_delete_confirmed`, which T-028/T-043 have not yet added to
-`app/slash.rs`; the `ragent-tui` **lib** target's 142 tests pass.
+`app/slash.rs`; the `codemason-tui` **lib** target's 142 tests pass.
 
 **T-025 as built.** FR-018 needed one new route and one behaviour change, not a
 new completion implementation:
 
 - `TeamManagerInterface::complete_task_in(team_dir, task_id, agent_id) ->
   Result<(task_id, title, completed_at, feedback: Option<String>)>`
-  (`crates/ragent-agent/src/tool/mod.rs`) is the tool-facing arm. Its default
+  (`crates/codemason-agent/src/tool/mod.rs`) is the tool-facing arm. Its default
   implementation bails ("the runtime has no completion path"), following
   `set_member_status_in` / `cancel_task`; `TeamManager` overrides it by
   delegating to the inherent `complete_task` - the one path that already runs
@@ -847,14 +847,14 @@ new completion implementation:
   report rather than a retryable failure (FR-042's wording task, T-040, had left
   the verdict undocumented).
 
-Coverage is `crates/ragent-agent/tests/test_hook_feedback_delivery.rs` (9
+Coverage is `crates/codemason-agent/tests/test_hook_feedback_delivery.rs` (9
 tests): the runtime path delivers the hook's stdout into the tool result and
 into `metadata.feedback`; the vetoed task stays `Completed`; an allowing hook
 produces no veto; the store fallback delivers the same verdict; a lead-side
 completion gets it too; a foreign manager is refused and leaves that team's
 `tasks.json` at `InProgress`; the description states the contract; the trait's
 default arm refuses; and the completing member's `current_task_id` is still
-cleared. `cargo nextest run -p ragent-agent`: 2404 tests, 2402 pass (the two
+cleared. `cargo nextest run -p codemason-agent`: 2404 tests, 2402 pass (the two
 pre-existing failures
 `test_m3_lifecycle::test_team_idle_publishes_teammate_idle_event` and
 `test_task_tools_cache_more::adopt_orphaned_tasks_leaves_tasks_owned_by_others_untouched`
@@ -863,7 +863,7 @@ are unchanged by this task).
 **T-026 as built.** FR-019/NFR-004 close F-14 with one new module and one
 signature change; no verdict changed.
 
-- `crates/ragent-agent/src/team/hook_ledger.rs` owns the ledger:
+- `crates/codemason-agent/src/team/hook_ledger.rs` owns the ledger:
   `HookFailure { timestamp, event, hook, reason, detail }` is one line of
   `hook-failures.jsonl`, `HookFailureReason` is `invalid` / `spawn_failed` /
   `timeout`, and `try_record_hook_failure` is the append. `record_hook_failure`
@@ -889,7 +889,7 @@ signature change; no verdict changed.
   `/team status` in the TUI. Both call `render_hook_failures`, which returns an
   empty string when nothing failed, so a healthy team adds no noise.
 
-Coverage is `crates/ragent-agent/tests/test_hook_failure_ledger.rs` (17 tests):
+Coverage is `crates/codemason-agent/tests/test_hook_failure_ledger.rs` (17 tests):
 the refused command, the spawn failure and the timeout each record exactly one
 line and keep `HookOutcome::Allow`; a hook that runs records nothing and creates
 no file; a task completion and `run_team_hook` reach the ledger on the runtime
@@ -899,13 +899,13 @@ the existing bytes untouched; a truncated final line does not hide the rest; the
 render names the count, each failure, both filenames and the team; and
 `team_status` reports the count in both its prose and its metadata. Suppressing
 the record in `run_hook` fails 5 of them, so the ledger is regression-proof
-rather than merely present. `cargo nextest run -p ragent-agent`: 2421 tests,
+rather than merely present. `cargo nextest run -p codemason-agent`: 2421 tests,
 2419 pass - the two pre-existing failures
 `test_m3_lifecycle::test_team_idle_publishes_teammate_idle_event` and
 `test_task_tools_cache_more::adopt_orphaned_tasks_leaves_tasks_owned_by_others_untouched`
-are unchanged by this task. The `ragent-tui` integration binary still fails to
+are unchanged by this task. The `codemason-tui` integration binary still fails to
 compile on the pre-existing `App::team_delete_confirmed` gap (T-028/T-043); the
-`ragent-tui` lib target builds clean.
+`codemason-tui` lib target builds clean.
 
 ### M6 - Lifecycle guards (T-027..T-029)
 
@@ -913,9 +913,9 @@ Closes F-22, F-23, F-20, F-21. T-027 collapses three guards into one predicate
 expression; the shared refusal text is a single function so the three surfaces
 cannot drift again.
 
-**T-027 as built.** The rule lives in `crates/ragent-agent/src/team/mod.rs`
+**T-027 as built.** The rule lives in `crates/codemason-agent/src/team/mod.rs`
 beside `plan_gate_denial`, because the TUI and the tool both depend on
-`ragent-agent` and neither can own a rule the other must share:
+`codemason-agent` and neither can own a rule the other must share:
 
 - `blocks_teardown(status)` - the one predicate: `status.is_live()` or
   `ShuttingDown` (the sets coincide today; both terms are spelled out so the
@@ -928,14 +928,14 @@ beside `plan_gate_denial`, because the TUI and the tool both depend on
 `cleanup_refusal`, and the two TUI surfaces derive their status-line count from
 `blocks_teardown` so the number and the text cannot disagree. `force: true`
 remains a tool-only override. Covered by
-`crates/ragent-agent/tests/test_team_cleanup_guard.rs` (14 tests); restoring
+`crates/codemason-agent/tests/test_team_cleanup_guard.rs` (14 tests); restoring
 either the tool or a TUI surface to its pre-fix rule fails the behavioural
 tests, so the guard is regression-proof rather than merely present.
 
 **T-028 as built.** T-027 gave `/team delete` the shared teardown refusal, but a
 single well-formed command still removed a team directory for good, which is
 F-28. The destructive direction is now a second action, and the rule lives
-beside the other team policies in `crates/ragent-agent/src/team/mod.rs` so the
+beside the other team policies in `crates/codemason-agent/src/team/mod.rs` so the
 text is shared rather than reworded per surface:
 
 - `delete_confirmation(team_name, members, exclude)` - the confirmation text, or
@@ -955,9 +955,9 @@ text is shared rather than reworded per surface:
   its **persisted** roster rather than the empty in-memory one, which is what
   made F-28's "no confirmation at all" branch possible.
 
-Covered by 3 tests in `crates/ragent-agent/tests/test_team_cleanup_guard.rs`
+Covered by 3 tests in `crates/codemason-agent/tests/test_team_cleanup_guard.rs`
 (the helper: quiet roster, every refused status, exclusion) and 7 in
-`crates/ragent-tui/tests/test_teams_tui.rs` (the surface: persisted-roster
+`crates/codemason-tui/tests/test_teams_tui.rs` (the surface: persisted-roster
 refusal, the two-step force, parked rosters needing no ceremony, and the active
 path). Neutralising the `!confirmed` gate makes both two-step tests fail at the
 first `--force`, so the confirmation is regression-proof rather than merely
@@ -990,10 +990,10 @@ whether this command is the confirmed second action.
 - `/team help` states the two-step shape and the `cancel` escape in the
   `/team delete` row.
 
-Coverage: 3 helper tests in `crates/ragent-agent/tests/test_team_cleanup_guard.rs`
+Coverage: 3 helper tests in `crates/codemason-agent/tests/test_team_cleanup_guard.rs`
 (a quiet roster and an empty roster are confirmed, every status is confirmed
 with its blocking member named, exclusion wins even for a quiet roster) and the
-surface tests in `crates/ragent-tui/tests/test_teams_tui.rs` (a parked named team
+surface tests in `crates/codemason-tui/tests/test_teams_tui.rs` (a parked named team
 needs the second action, `cancel` disarms the confirmation and the next
 `--force` starts a fresh cycle, an arming does not carry to another team, plus
 the two pre-existing delete tests updated to the two-step shape and the
@@ -1039,7 +1039,7 @@ is *reporting* it. Three pieces:
   for the caller's own inbox. `/team show <name>` and `/team status` both render
   the same block in the TUI.
 
-Coverage is `crates/ragent-agent/tests/test_undelivered_messages.rs` (12 tests):
+Coverage is `crates/codemason-agent/tests/test_undelivered_messages.rs` (12 tests):
 the message survives unread on disk; a stopped and a failed recipient both
 report; an already-read message is not reported; none of the seven live/parked
 statuses report; the rendered block names recipient, status, sender, type and
@@ -1060,7 +1060,7 @@ already refuses a body over `MAX_MESSAGE_BYTES` at the write boundary
 limit, so no production change was needed. The task therefore pins what is
 there:
 
-- `crates/ragent-agent/tests/test_team_message_size_limit.rs` (3 tests) - the
+- `crates/codemason-agent/tests/test_team_message_size_limit.rs` (3 tests) - the
   boundary (`>`, not `>=`, so exactly `MAX_MESSAGE_BYTES` is accepted and
   stored complete), that the refusal text contains the actual size, the limit,
   and the offending `message_id`, and that a refused message writes nothing (the
@@ -1103,7 +1103,7 @@ one call site.
   is **not** created, with the recovery (check `team_task_list`, create the
   dependency first, drop the edge that closes a loop).
 
-Coverage is `crates/ragent-agent/tests/test_task_list_write_validation.rs` (15
+Coverage is `crates/codemason-agent/tests/test_task_list_write_validation.rs` (15
 tests): the predicate layer (a legal chain and a diamond both validate; an empty
 list validates; a dangling edge names the dependent, the missing id, the
 "forever" consequence and the existing ids; a 2-cycle and a 3-cycle both report
@@ -1172,7 +1172,7 @@ T-040 owns the two behaviour-change entries described in `SPEC.md`.
   enforces (FR-042), and the CHANGELOG carries the required behaviour-change
   entries with their operator migrations.
 
-  `team_task_complete` (`crates/ragent-agent/src/tool/team_task_complete.rs`)
+  `team_task_complete` (`crates/codemason-agent/src/tool/team_task_complete.rs`)
   previously said only that the task "must be currently assigned to the caller",
   which reads as *become* the assignee - the exact silent re-assignment FR-001
   removed. The description now spells out an `OWNERSHIP RULE (enforced)` block:
@@ -1183,7 +1183,7 @@ T-040 owns the two behaviour-change entries described in `SPEC.md`.
   reports `rejection_reason` (`not_owner`, `not_claimed`, `already_completed`)
   with the task's `owner` in the result metadata.
 
-  `team_cleanup` (`crates/ragent-agent/src/tool/team_cleanup.rs`) already listed
+  `team_cleanup` (`crates/codemason-agent/src/tool/team_cleanup.rs`) already listed
   the blocking statuses. It now also states that the refusal names every blocking
   member with its status, that `force: true` is the only way past the guard, that
   a `blocked` member is *parked, not live*, so it never blocks a teardown, and
@@ -1191,7 +1191,7 @@ T-040 owns the two behaviour-change entries described in `SPEC.md`.
   the three surfaces refuse the same rosters with the same words.
 
   Coverage is two new tests in
-  `crates/ragent-agent/tests/test_task_tool_family_prompts.rs`:
+  `crates/codemason-agent/tests/test_task_tool_family_prompts.rs`:
   `test_team_task_complete_description_states_the_ownership_rule` asserts the
   description contains `ownership rule`, `assigned agent`, `lead`,
   `not re-assigned`, both verbs, `pending`, `no-op success`, all three refusal
@@ -1211,7 +1211,7 @@ T-040 owns the two behaviour-change entries described in `SPEC.md`.
   `adopt: true` for the second session). The completion entry names all three
   observation surfaces the refusal now reaches: the
   `TeamTaskCompletionRejected` event (`team_task_completion_rejected` on SSE),
-  the tool metadata, and the `warn` line under `ragent_agent::task` with
+  the tool metadata, and the `warn` line under `codemason_agent::task` with
   `event = "TaskCompletionRejected"` that makes `rg 'TaskCompletionRejected'
   log/` find it. The adoption entry names `TeamManager::new` (refuses) versus
   `TeamManager::try_new` + `AdoptTeam::Adopt` (proceeds) and the
@@ -1224,8 +1224,8 @@ T-040 owns the two behaviour-change entries described in `SPEC.md`.
   three status enums still serialise through
   `#[serde(rename_all = "lowercase")]` and no new required field was added.
 
-  `cargo fmt --check` and `cargo clippy -p ragent-agent --all-targets` are both
-  clean. Two `ragent-agent` tests fail for reasons unrelated to this task and
+  `cargo fmt --check` and `cargo clippy -p codemason-agent --all-targets` are both
+  clean. Two `codemason-agent` tests fail for reasons unrelated to this task and
   were already failing: `test_m3_lifecycle::test_team_idle_publishes_teammate_idle_event`
   (the `team_idle` harness has no manager attached, from in-flight work on
   `team_idle.rs`) and

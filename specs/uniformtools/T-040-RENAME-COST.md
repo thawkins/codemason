@@ -26,7 +26,7 @@ the test rather than a slow path in the binary.
 
 ## What was built
 
-No production code changed. `crates/ragent-agent/tests/test_nfr006_rename_cost.rs`
+No production code changed. `crates/codemason-agent/tests/test_nfr006_rename_cost.rs`
 (registered in `tests/all.rs` as `test_nfr006_rename_cost`) - 6 cases:
 
 | # | Case | Clause |
@@ -41,7 +41,7 @@ No production code changed. `crates/ragent-agent/tests/test_nfr006_rename_cost.r
 ### The scan is function-granular, and why that is not pedantry
 
 A file-level exemption would make clause 2 meaningless.
-`crates/ragent-agent/src/tool/alias_table.rs` holds **two** functions the
+`crates/codemason-agent/src/tool/alias_table.rs` holds **two** functions the
 dispatch path touches and exactly **one** that reads the table: `from_aliases`
 (once per turn, building the alias table from the config) is legitimate;
 `resolve_inbound_tool_name` (once per tool call) is the dispatch path. Exempting
@@ -56,8 +56,8 @@ a dispatch path, and a guard that demanded an exemption for prose explaining
 itself would train the next reader to add one.
 
 The list holds **14** entries (10 functions and 4 module-scope items) in four
-crates: the table and its four lookups (`ragent-types`), its `lib.rs` declaration,
-the `ragent-agent` re-export, `AliasTable::from_aliases`, the hook matcher's
+crates: the table and its four lookups (`codemason-types`), its `lib.rs` declaration,
+the `codemason-agent` re-export, `AliasTable::from_aliases`, the hook matcher's
 `retired_matcher_spellings`, `ToolsConfig::validate_alias_spellings` and its
 `after_spelling_of` helper, `tool_bridge::check_dynamic_bridge` (FR-032), and the
 TUI's `canonical_tool_name` (which paints a *stored* pre-rename record that FR-028
@@ -78,8 +78,8 @@ same lesson was already recorded for `alias_table.rs` in the original draft.)
 
 ### 1. The test file was never registered, so none of the 6 cases had ever run
 
-`crates/ragent-agent/tests/test_nfr006_rename_cost.rs` was committed with the
-rename (`d6abcd4a`) but had no `#[path]` line in `crates/ragent-agent/tests/all.rs`.
+`crates/codemason-agent/tests/test_nfr006_rename_cost.rs` was committed with the
+rename (`d6abcd4a`) but had no `#[path]` line in `crates/codemason-agent/tests/all.rs`.
 It had therefore never compiled and never run - the **fourth** instance of this
 class in this spec (see T-012's `tool_args.rs`, T-013's `tool_input_error.rs`,
 T-019's `alias_table.rs`, T-036's `allowed_tools.rs`, and T-034's own
@@ -91,10 +91,10 @@ T-019's `alias_table.rs`, T-036's `allowed_tools.rs`, and T-034's own
 The pre-written record claimed case 4 asserted "the folded fallback answers with
 the registered spelling" via `registry.resolve(...)`. There is no such method on
 any `ToolRegistry` in this tree. Every `registry.resolve(...)` call site lives in
-`crates/ragent-agent/src/session/dispatch.rs` (lines 734, 761, 815), and that
+`crates/codemason-agent/src/session/dispatch.rs` (lines 734, 761, 815), and that
 module is **tracked and committed but never declared**: `session/mod.rs` has no
 `mod dispatch;` and no build dependency file lists it, so it has never compiled.
-It additionally calls `ragent_tools_core::schema::fold_argument_keys`, which is
+It additionally calls `codemason_tools_core::schema::fold_argument_keys`, which is
 also absent from `schema.rs`.
 
 That dispatch pipeline is T-014's deliverable and T-014 is still `pending`. Case 4
@@ -119,7 +119,7 @@ after every restore).
 
 1. `Rename::after_of(name)` inside `resolve_inbound_tool_name` (the per-call
    resolver) - cases 1 **and** 2 failed naming
-   `crates/ragent-agent/src/tool/alias_table.rs:308: (resolve_inbound_tool_name)`.
+   `crates/codemason-agent/src/tool/alias_table.rs:308: (resolve_inbound_tool_name)`.
    This is the exact change NFR-006 exists to prevent, and both the dispatch-tree
    check and the exemption check see it.
 2. `Rename::after_of` in `tool_call_key` (the repeat guard's hash) - cases 1, 2
@@ -132,12 +132,12 @@ after every restore).
 4. Never serving the sorted-definition `Arc` - case 5 failed with "the
    sorted-definition cache is reused while the registry is unchanged".
 5. A helper `owned_after_of(&str) -> Option<String>` added beside the re-export -
-   cases 1 and 2 failed at `crates/ragent-agent/src/tool/rename.rs:24`. The scan
+   cases 1 and 2 failed at `crates/codemason-agent/src/tool/rename.rs:24`. The scan
    measures *reads of the table*, not just reads on the dispatch path, so a
    convenience allocator added anywhere is reported.
-6. `Rename::after_of` changed to `Option<String>` - `cargo check -p ragent-config`
+6. `Rename::after_of` changed to `Option<String>` - `cargo check -p codemason-config`
    failed with `error[E0308]: mismatched types ... expected &str, found String` at
-   `crates/ragent-config/src/tools.rs:171` and `:183`, which is the same
+   `crates/codemason-config/src/tools.rs:171` and `:183`, which is the same
    compile-time property case 3 pins from the test side.
 
 Proofs 1-5 were run against the whole `--test all` binary filtered to
@@ -146,7 +146,7 @@ Proofs 1-5 were run against the whole `--test all` binary filtered to
 ## Gotchas
 
 - **`Arc::ptr_eq` is not assertable across a consolidated test binary.** The
-  `definitions()` cache is per registry and safe, but `ragent_llm`'s serialised
+  `definitions()` cache is per registry and safe, but `codemason_llm`'s serialised
   cache is a process-global `OnceLock`, and other child files call
   `invalidate_tool_cache()`. The cache assertion is therefore byte equality and
   not pointer identity.
@@ -172,10 +172,10 @@ Proofs 1-5 were run against the whole `--test all` binary filtered to
 ## Verification
 
 - `cargo fmt --check` clean.
-- `cargo test -p ragent-agent --test all test_nfr006_rename_cost::` - 6 passed.
-- `cargo test -p ragent-agent --test all` - **1719 passed, 0 failed, 1 ignored**
+- `cargo test -p codemason-agent --test all test_nfr006_rename_cost::` - 6 passed.
+- `cargo test -p codemason-agent --test all` - **1719 passed, 0 failed, 1 ignored**
   (1714 filtered before the registration, now 1719 with the 6 new cases).
-- `cargo clippy -p ragent-agent --all-targets` - no finding in the new file.
+- `cargo clippy -p codemason-agent --all-targets` - no finding in the new file.
 - Guard scripts: `check-tool-rename`, `check-file-tool-containment` (17 files),
   `check-inline-tests`, `check-shared-guards`, `check-silent-errors`,
   `check-security-unwraps`, `check-poison-locks`, `check-dead-code-reasons`,

@@ -27,7 +27,7 @@ elsewhere.
 
 ## 2. What was built
 
-### `crates/ragent-llm/src/providers/wire/matrix.rs` (new, 187 lines)
+### `crates/codemason-llm/src/providers/wire/matrix.rs` (new, 187 lines)
 
 - `HEADINGS: [&str; 10]` - the printed column list, `PROVIDER` plus the nine
   profile fields. One entry per printed column, so a column added to the renderer
@@ -77,7 +77,7 @@ loads config and opens storage takes.
 
 ## 3. Tests
 
-### `crates/ragent-llm/tests/test_wire_matrix.rs` (new, 249 lines, 8 cases)
+### `crates/codemason-llm/tests/test_wire_matrix.rs` (new, 249 lines, 8 cases)
 
 | Case | Property |
 |---|---|
@@ -98,7 +98,7 @@ is needed - the child's environment is not this process's):
 
 | Case | Property |
 |---|---|
-| `..._prints_one_row_per_provider` | exit 0, heading and rule present, >= 15 rows, sorted and unique, and every provider `ragent models` names has a row (the TC-002 step 3 comparison) |
+| `..._prints_one_row_per_provider` | exit 0, heading and rule present, >= 15 rows, sorted and unique, and every provider `codemason models` names has a row (the TC-002 step 3 comparison) |
 | `..._populates_every_column` | ten non-blank, non-dash cells per row; ASCII; no trailing whitespace; the three families a reader checks are present |
 | `..._exits_without_network_or_session_side_effects` | finishes in < 10 s (a connect attempt is seconds), and creates no database, session store or config root |
 | `..._is_documented_in_help` | `--help` lists the flag |
@@ -139,7 +139,7 @@ mtime-fresh can look green (here, falsely red) for the wrong reason.
   be a second contract to keep in step, and no requirement asks for it. The
   renderer returns a `String`, so adding one later is a formatting decision, not a
   plumbing change.
-- **The router row is printed as its declared family.** `ragent --wire-matrix`
+- **The router row is printed as its declared family.** `codemason --wire-matrix`
   reports `router` as `openai_function`, which is the nominal row the profile table
   documents: the router forwards the canonical request to a downstream provider
   whose own profile does the encoding. Resolving the per-request downstream family
@@ -152,13 +152,13 @@ mtime-fresh can look green (here, falsely red) for the wrong reason.
 ## 7. Verification
 
 - `cargo fmt --all -- --check` - clean.
-- `cargo clippy -p ragent-llm -p ragent --all-targets` - no new warnings (the
+- `cargo clippy -p codemason-llm -p codemason --all-targets` - no new warnings (the
   `needless_collect` nursery lint in the new test was fixed; the pre-existing
   `pub(crate)`-in-private-module noise is untouched).
-- `cargo test -p ragent-llm --test all` - 245 passed, 2 ignored.
-- `cargo test -p ragent-llm --lib` - 321 passed.
-- `cargo test -p ragent-llm --doc` - 29 passed.
-- `cargo test -p ragent --test all` - 48 passed.
+- `cargo test -p codemason-llm --test all` - 245 passed, 2 ignored.
+- `cargo test -p codemason-llm --lib` - 321 passed.
+- `cargo test -p codemason-llm --doc` - 29 passed.
+- `cargo test -p codemason --test all` - 48 passed.
 - Guards: `check-inline-tests`, `check-test-env-isolation`, `check-silent-errors`,
   `check-security-unwraps`, `check-poison-locks`, `check-shared-guards`,
   `check-dead-code-reasons` - all PASS. `check-security-unwraps` initially flagged
@@ -171,7 +171,7 @@ mtime-fresh can look green (here, falsely red) for the wrong reason.
 ### 8.1 State found
 
 The feature was **already in the tree** at `d6abcd4a` and complete. `git status`
-shows `matrix.rs`, `crates/ragent-llm/tests/test_wire_matrix.rs` and
+shows `matrix.rs`, `crates/codemason-llm/tests/test_wire_matrix.rs` and
 `tests/test_wire_matrix_flag.rs` as tracked and unmodified; only `src/cli.rs`,
 `src/main.rs` and `tests/all.rs` differ from `HEAD`, and all three carry this
 task's work. So, as with T-004 and T-008 in this spec, this task's delta was
@@ -185,7 +185,7 @@ were measured, not taken from the sections above.
 | Renderer tests | 8 cases in 249 lines, all green |
 | Binary tests | 4 cases in 180 lines, all green |
 | Rows printed | 14 registered providers, sorted |
-| `--wire-matrix` wall clock | 9-10 ms (`target/debug/ragent`, measured with `time`) |
+| `--wire-matrix` wall clock | 9-10 ms (`target/debug/cdmn`, measured with `time`) |
 | `cargo build --release`-equivalent full start | ~2 s (config load + `Storage::open` + MCP connect loop, all skipped) |
 
 The printed table, verbatim columns, is:
@@ -237,22 +237,22 @@ both files, and both suites are green again afterwards (8/8 and 4/4).
 - `cargo fmt --all -- --check` - clean.
 - `cargo check --workspace --all-targets` - finished with no error and no new
   warning line.
-- `cargo clippy -p ragent-llm -p ragent --all-targets` - **no** finding in
+- `cargo clippy -p codemason-llm -p codemason --all-targets` - **no** finding in
   `matrix.rs`, `src/cli.rs`, `src/main.rs` or either test file. The 19
   `unnecessary structure name repetition` warnings are pre-existing in
   `tool_cache.rs`, and the `pub(crate) ... inside private module` noise is
-  pre-existing across `ragent-llm`; neither is touched here.
-- `cargo test -p ragent-llm --test all` - **294 passed / 4 failed / 2 ignored**.
+  pre-existing across `codemason-llm`; neither is touched here.
+- `cargo test -p codemason-llm --test all` - **294 passed / 4 failed / 2 ignored**.
   The 4 are the pre-existing guard cases still owned by pending tasks
   (`test_wire_decode::test_no_module_invents_a_tool_call_id_or_recovers_a_name_from_one`
   for T-010, `test_wire_encode_message::test_no_provider_module_writes_a_result_carrier_literal`
   for T-006, and `test_wire_trace::test_agent_loop_sets_the_switch_from_config`
   plus `..._every_provider_records_its_body` for T-023). None is in a file this
   task touched.
-- `cargo test -p ragent-llm --lib` - 323 passed.
-- `cargo test -p ragent-llm --doc` - 30 passed (including `matrix::render`'s
+- `cargo test -p codemason-llm --lib` - 323 passed.
+- `cargo test -p codemason-llm --doc` - 30 passed (including `matrix::render`'s
   doctest).
-- `cargo test -p ragent --test all` - **48 passed, 0 failed**.
+- `cargo test -p codemason --test all` - **48 passed, 0 failed**.
 - All twelve `scripts/check-*.sh` guards PASS.
 
 ### 8.4 Documentation updated for this landing
@@ -260,5 +260,5 @@ both files, and both suites are green again afterwards (8/8 and 4/4).
 `PLAN.md`'s T-022 row was rewritten from one line to the full delivery record and
 flipped to `completed`; `TESTPLAN.md`'s TC-002 gained an "Automated half (T-022)"
 paragraph mapping each manual expectation to a named case; `CHANGELOG.md`'s
-`Unreleased` `Added` section gained this feature's entry; `crates/ragent-llm/DOCS.md`
+`Unreleased` `Added` section gained this feature's entry; `crates/codemason-llm/DOCS.md`
 already described the `matrix` submodule and needed no change.

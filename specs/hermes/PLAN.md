@@ -6,15 +6,15 @@
 ## Overview
 
 This plan implements the Hermes specification (`specs/hermes/SPEC.md`): the
-integration of 12 Hound dependency-security tools into ragent as native Rust
-tools in the `crates/ragent-tools-extended` crate. The work involves:
+integration of 12 Hound dependency-security tools into codemason as native Rust
+tools in the `crates/codemason-tools-extended` crate. The work involves:
 
 1. A shared API client layer (`depsdev`, `osv`) with retry/backoff.
 2. A lockfile parser module covering 11+ formats.
 3. Licence classification and ecosystem mapping constants.
 4. 12 tool structs implementing the `Tool` trait.
 5. Registration in `create_extended_registry()`.
-6. A `hermes` tool-visibility switch in `ragent-config`.
+6. A `hermes` tool-visibility switch in `codemason-config`.
 7. Unit and integration tests.
 
 No MCP server, Node.js, or external subprocess is involved.
@@ -22,7 +22,7 @@ No MCP server, Node.js, or external subprocess is involved.
 ## Architecture
 
 ```
-crates/ragent-tools-extended/src/
+crates/codemason-tools-extended/src/
 ├── hermes/
 │   ├── mod.rs              # Module root, re-exports, shared types
 │   ├── depsdev.rs          # deps.dev API client (GET endpoints)
@@ -50,7 +50,7 @@ crates/ragent-tools-extended/src/
 │       └── popular.rs       # hound_popular
 └── lib.rs                  # + hermes module, + registration in create_extended_registry()
 
-crates/ragent-config/src/config.rs  # + hermes visibility switch
+crates/codemason-config/src/config.rs  # + hermes visibility switch
 ```
 
 ### Data flow
@@ -108,13 +108,13 @@ Formatted text report → ToolOutput { content, metadata }
 | T-032 | Write integration test verifying all 12 `hound_*` tools are registered in `create_extended_registry()` | FR-019, NFR-003 | S | Critical | T-023 |
 | T-033 | Write integration test verifying `hermes` visibility switch hides/shows all 12 tools via `effective_hidden_tools()` | FR-020, NFR-003 | S | High | T-024 |
 | T-034 | Write integration test verifying each Hermes tool returns `network:fetch` from `permission_category()` | FR-021, NFR-003 | S | High | T-023 |
-| T-035 | Run `cargo test -p ragent-tools-extended`, `cargo test -p ragent-config`, `cargo clippy`, and `cargo fmt --check` to confirm no regressions | NFR-001, NFR-002 | S | Critical | T-025–T-034 |
+| T-035 | Run `cargo test -p codemason-tools-extended`, `cargo test -p codemason-config`, `cargo clippy`, and `cargo fmt --check` to confirm no regressions | NFR-001, NFR-002 | S | Critical | T-025–T-034 |
 
 ## Task detail
 
 ### T-001 — Module structure and shared types
 
-Create `crates/ragent-tools-extended/src/hermes/mod.rs`. Define the shared
+Create `crates/codemason-tools-extended/src/hermes/mod.rs`. Define the shared
 types that mirror Hound's `src/types/index.ts`:
 
 ```rust
@@ -146,7 +146,7 @@ pub struct HoundScore {
 }
 ```
 
-Add `pub mod hermes;` to `crates/ragent-tools-extended/src/lib.rs`.
+Add `pub mod hermes;` to `crates/codemason-tools-extended/src/lib.rs`.
 
 ### T-002 — Ecosystem module
 
@@ -157,7 +157,7 @@ RubyGems). Provides `Ecosystem::from_str()` for parsing the tool input and
 
 ### T-003 — HTTP helper
 
-`hermes/http.rs` builds a shared `reqwest::Client` with the ragent
+`hermes/http.rs` builds a shared `reqwest::Client` with the codemason
 `User-Agent` and 30s timeout. Exposes `get_with_retry(url)` and
 `post_with_retry(url, body)` that retry on 429/503 with delays `[100ms,
 400ms]`, honouring `Retry-After` (capped at 5s). All Hermes API calls go

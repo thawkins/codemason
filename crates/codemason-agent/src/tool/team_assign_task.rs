@@ -1,0 +1,165 @@
+//! `team_assign_task` - Lead assigns a specific task to a specific teammate.
+
+use anyhow::Result;
+use serde_json::{Value, json};
+
+use super::{Tool, ToolContext, ToolOutput};
+use crate::team::{Mailbox, MailboxMessage, MessageType, TaskStore, TeamStore, find_team_dir};
+
+/// Assigns a pending task directly to a specific teammate (lead-only).
+///
+/// M4-T2: after updating `tasks.json`, the tool pushes a `MailboxMessage`
+/// to the assigned teammate's mailbox so they are notified immediately
+/// instead of having to poll `team_task_list` / `team_task_claim`.
+pub struct TeamAssignTaskTool;
+
+#[async_trait::async_trait]
+impl Tool for TeamAssignTaskTool {
+    fn name(&self) -> &'static str {
+        "team_assign_task"
+    }
+
+    fn description(&self) -> &'static str {
+        "Assign a specific pending task directly to a named teammate. Lead-only. \
+             The task is marked InProgress and assigned to the specified agent, who is \
+             notified via a mailbox message. REQUIRED parameters: 'team_name' (string), \
+             'task_id' (string, e.g. 'task-001'), and 'to' (string, teammate name or agent \
+             ID). Common gotcha: the task must already exist in the team's shared task list; \
+             use team_task_create first if it does not."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "team_name": {
+                    "type": "string",
+                    "description": "Name of the team (required)"
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "ID of the task to assign, e.g. 'task-001' (required)"
+                },
+                "to": {
+                    "type": "string",
+                    "description": "Teammate name or agent ID to assign the task to (required)"
+                }
+            },
+            "required": ["team_name", "task_id", "to"],
+            "additionalProperties": false
+        })
+    }
+    fn permission_category(&self) -> &'static str {
+        "team:manage"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let team_name = input
+            .get("team_name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing required parameter: team_name"))?;
+
+        let task_id = input
+            .get("task_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing required parameter: task_id"))?;
+
+        let to = input
+            .get("to")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing required parameter: to"))?;
+
+        let team_dir = find_team_dir(&ctx.working_dir, team_name)
+            .ok_or_else(|| anyhow::anyhow!("Team '{team_name}' not found"))?;
+        super::team_caller::require_lead(ctx, team_name, &team_dir, self.name())?;
+
+        // Resolve name -> agent ID.
+        let agent_id = super::team_message::resolve_agent_id(&team_dir, to)?;
+
+        // Verify the agent exists in the team config and is not dead. Both
+        // refusals name the entity, its state, and one next action (FR-032): a
+        // caller that mis-typed a name is told which names exist, and one that
+        // picked a finished teammate is told how to revive it.
+        let config_store = TeamStore::load(&team_dir)?;
+        if agent_id != "lead" && config_store.config.member_by_id(&agent_id).is_none() {
+            let known: Vec<&str> = config_store
+                .config
+                .members
+                .iter()
+                .map(|m| m.name.as_str())
+                .collect();
+            return Err(anyhow::anyhow!(
+                "cannot assign task '{task_id}': teammate '{to}' (id: {agent_id}) is not a \
+                 member of team '{team_name}'. Known teammates: [{}] - check the name with \
+                 `team_status`",
+                if known.is_empty() {
+                    "none".to_string()
+                } else {
+                    known.join(", ")
+                }
+            ));
+        }
+        if let Some(member) = config_store.config.member_by_id(&agent_id)
+            && member.status.is_terminal()
+        {
+            return Err(anyhow::anyhow!(
+                "{} and cannot take an assignment: a {} teammate has no live session. \
+                 Respawn it with `team_spawn` first, or assign task '{task_id}' to another \
+                 member",
+                crate::team::member_status_clause(&member.name, &member.agent_id, member.status),
+                member.status.display_label()
+            ));
+        }
+
+        let task_store = TaskStore::open(&team_dir)?;
+        // FR-003/FR-017: the assignment is a claim, so it moves the status
+        // through the shared transition and fires the claim hook from there.
+        let task = task_store.assign(task_id, &agent_id).await?;
+
+        // M4-T2: notify the assigned teammate via their mailbox so they pick
+        // up the task without having to poll. This is a best-effort delivery:
+        // a failure here does not roll back the assignment (the task is
+        // already InProgress on disk) - we record the notification outcome
+        // in the tool output so the lead has visibility.
+        let notification = match Mailbox::open(&team_dir, &agent_id) {
+            Ok(mailbox) => {
+                let content = format!(
+                    "Task '{}' has been assigned to you by the lead.\nTitle: {}\n\
+                     Call `team_task_claim` is not needed - the task is already InProgress and \
+                     assigned to you. Use `team_task_complete` when done.",
+                    task.id, task.title
+                );
+                // SEC-codemason-team-003 (SECTASKS T-018): authenticated lead
+                // session id on every lead-authored assignment.
+                match mailbox.push(
+                    MailboxMessage::new(
+                        "lead".to_string(),
+                        agent_id.clone(),
+                        MessageType::Message,
+                        content,
+                    )
+                    .with_sender_session(&ctx.session_id),
+                ) {
+                    Ok(()) => "delivered".to_string(),
+                    Err(e) => format!("failed: {e}"),
+                }
+            }
+            Err(e) => format!("failed to open mailbox: {e}"),
+        };
+
+        Ok(ToolOutput {
+            content: format!(
+                "Task '{}' assigned to '{}' in team '{}'.\nTitle: {}\n\
+                 Notification: {notification}.",
+                task.id, to, team_name, task.title
+            ),
+            metadata: Some(json!({
+                "team_name": team_name,
+                "task_id": task.id,
+                "assigned_to": agent_id,
+                "assignee_name": to,
+                "notification": notification
+            })),
+        })
+    }
+}

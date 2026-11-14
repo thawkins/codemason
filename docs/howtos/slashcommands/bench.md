@@ -4,8 +4,8 @@
 
 ## Overview
 
-The `/bench` command drives the ragent benchmark harness (`ragent-bench` crate). The
-TUI arm parses its arguments with `ragent_bench::parse_bench_command` and dispatches
+The `/bench` command drives the codemason benchmark harness (`codemason-bench` crate). The
+TUI arm parses its arguments with `codemason_bench::parse_bench_command` and dispatches
 the parsed command to the bench runtime; everything below the `/bench` prefix is
 handled by the bench crate, not the TUI itself.
 
@@ -42,4 +42,4 @@ workflows and troubleshooting) is [docs/userdocs/bench.md](../../userdocs/bench.
 
 - `/model`  -  verify the provider and model a bench run will target
 - `/telemetry`  -  runtime metric counters recorded during runs
-- `cargo bench -p ragent-tui` and friends for criterion micro-benchmarks
+- `cargo bench -p codemason-tui` and friends for criterion micro-benchmarks

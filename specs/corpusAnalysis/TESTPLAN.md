@@ -12,8 +12,8 @@ bar, fallbacks, and placement, in both report and IMRaD layouts.
 
 ## Prerequisites
 
-- ragent built from this workspace (`cargo build`); binary at
-  `target/debug/ragent`.
+- codemason built from this workspace (`cargo build`); binary at
+  `target/debug/cdmn`.
 - At least one configured and reachable LLM provider (e.g.
   `export ANTHROPIC_API_KEY=sk-...` or a running local Ollama), because every
   test case runs a real research build.
@@ -32,7 +32,7 @@ bar, fallbacks, and placement, in both report and IMRaD layouts.
 
 Steps:
 
-1. In the scratch project folder, run `ragent --no-tui research create --name
+1. In the scratch project folder, run `codemason --no-tui research create --name
    scoreboard-report --topic "rust testing practices"`.
 2. Wait for the run to complete (CLI prints the completion summary).
 3. Open `research/scoreboard-report/RESEARCH.md` in a text editor.
@@ -63,7 +63,7 @@ Expected results:
 
 Steps:
 
-1. Run `ragent --no-tui research create --name scoreboard-imrad --topic "rust
+1. Run `codemason --no-tui research create --name scoreboard-imrad --topic "rust
    testing practices" --format imrad`.
 2. Open `research/scoreboard-imrad/RESEARCH.md`.
 
@@ -100,7 +100,7 @@ Expected results:
 Steps:
 
 1. Run a research create with a topic of a single very short local file, e.g.
-   `ragent --no-tui research create --name scoreboard-nograde --topic "quick
+   `codemason --no-tui research create --name scoreboard-nograde --topic "quick
    note"`. If the run still produces a synthesis audit, use a topic that fails
    early instead (e.g. point `--sources-dir` at an empty folder and use from
    local-only mode) so that neither critic nor audit is produced.
@@ -121,7 +121,7 @@ Expected results:
 
 Steps:
 
-1. Run `ragent --no-tui research create --name scoreboard-brief --topic "rust
+1. Run `codemason --no-tui research create --name scoreboard-brief --topic "rust
    testing practices" --format executive-summary`.
 2. Open `research/scoreboard-brief/RESEARCH.md`.
 
@@ -140,7 +140,7 @@ Expected results:
 Steps:
 
 1. Complete the TC-001 run so `research/scoreboard-report/RESEARCH.md` exists.
-2. Launch `ragent` (TUI).
+2. Launch `codemason` (TUI).
 3. Type `/research open scoreboard-report` and press Enter.
 4. In the overlay, scroll to the top and inspect the scoreboard block.
 

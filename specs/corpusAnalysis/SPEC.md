@@ -7,7 +7,7 @@ audit:
 
 ## 1. Summary
 
-When ragent produces a research document (`research/<name>/RESEARCH.md`), a reader
+When codemason produces a research document (`research/<name>/RESEARCH.md`), a reader
 currently has to hunt through the document — the Data Quality Summary sits after
 "Top 10 Implications" in the report layout — to learn whether the sources behind
 the findings are trustworthy. This spec defines a **simple, deterministic,
@@ -22,7 +22,7 @@ no non-ASCII glyphs.
 ## 2. Survey of Available Corpus-Quality Indicators
 
 Before choosing the display mechanism, the following indicators already exist
-in `crates/ragent-research` and can be consumed directly:
+in `crates/codemason-research` and can be consumed directly:
 
 | Indicator | Symbol | Type / Range | Source |
 |---|---|---|---|

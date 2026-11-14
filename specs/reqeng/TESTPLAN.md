@@ -6,16 +6,16 @@ spec_id: reqeng
 # Manual Test Plan: Back-fill SDD Capabilities
 
 This is a manual test plan for verifying the SDD back-fill features added
-to ragent's `/spec` command family. All tests are performed by a human
-operator in the ragent TUI or CLI; no automated test code is included.
+to codemason's `/spec` command family. All tests are performed by a human
+operator in the codemason TUI or CLI; no automated test code is included.
 
 ## Prerequisites
 
-1. **Build ragent** from source in the working directory:
+1. **Build codemason** from source in the working directory:
    ```bash
    cargo build
    ```
-   The binary is at `target/debug/ragent`.
+   The binary is at `target/debug/cdmn`.
 
 2. **Configure a provider** — set at least one LLM API key:
    ```bash
@@ -23,8 +23,8 @@ operator in the ragent TUI or CLI; no automated test code is included.
    ```
    (Alternatively use `OPENAI_API_KEY` or any supported provider.)
 
-3. **Enable SDD capabilities** — create or edit `.ragent/ragent.json` (or
-   `~/.config/ragent/config.json`) and add:
+3. **Enable SDD capabilities** — create or edit `.codemason/codemason.json` (or
+   `~/.config/codemason/config.json`) and add:
    ```json
    {
      "spec": {
@@ -43,7 +43,7 @@ operator in the ragent TUI or CLI; no automated test code is included.
    <https://github.com/github/spec-kit/blob/main/spec-driven.md>
 
 6. **Familiarity with existing commands** — the tester should be aware that
-   ragent already has `/spec create`, `/spec update`, `/spec add`, and
+   codemason already has `/spec create`, `/spec update`, `/spec add`, and
    `/spec impl` commands. The new `/spec specify`, `/spec plan`, and
    `/spec tasks` commands are additional entry points that coexist with
    the existing ones.
@@ -56,12 +56,12 @@ operator in the ragent TUI or CLI; no automated test code is included.
 generating a PLAN.md, and that `[NEEDS CLARIFICATION]` markers are detected.
 
 **Preconditions:**
-- ragent TUI is running
+- codemason TUI is running
 - No existing `specs/testspec-sdd/` directory
 
 **Steps:**
 
-1. Launch the ragent TUI: `ragent`
+1. Launch the codemason TUI: `codemason`
 2. Type the following command in the chat input and press Enter:
    ```
    /spec specify testspec-sdd A real-time notification system for user mentions
@@ -95,7 +95,7 @@ markers as warnings.
 
 **Steps:**
 
-1. In the ragent TUI, type:
+1. In the codemason TUI, type:
    ```
    /spec validate testspec-sdd
    ```
@@ -121,7 +121,7 @@ cannot be transitioned to `approved`.
 
 **Steps:**
 
-1. In the ragent TUI, type:
+1. In the codemason TUI, type:
    ```
    /spec status testspec-sdd approved
    ```
@@ -153,7 +153,7 @@ edited SPEC.md without a technology-context argument.
 1. Open `specs/testspec-sdd/SPEC.md` in an editor and remove all
    `[NEEDS CLARIFICATION: ...]` markers by replacing them with concrete
    requirement text. Save the file.
-2. In the ragent TUI, type:
+2. In the codemason TUI, type:
    ```
    /spec plan testspec-sdd WebSocket transport, Redis pub/sub, PostgreSQL for persistence
    ```
@@ -188,7 +188,7 @@ that both produce a PLAN.md.
 
 1. Open `specs/testspec-sdd/SPEC.md` and add a new requirement FR-006
    (e.g., `The system shall support message search.`). Save the file.
-2. In the ragent TUI, type:
+2. In the codemason TUI, type:
    ```
    /spec update testspec-sdd
    ```
@@ -220,7 +220,7 @@ does not replace the task table in PLAN.md.
 
 **Steps:**
 
-1. In the ragent TUI, type:
+1. In the codemason TUI, type:
    ```
    /spec tasks testspec-sdd
    ```
@@ -252,7 +252,7 @@ Phase -1 gates in the PLAN.md are validated before transitioning to
 
 **Steps:**
 
-1. In the ragent TUI, type:
+1. In the codemason TUI, type:
    ```
    /spec constitution
    ```
@@ -314,7 +314,7 @@ named after the spec identifier.
 
 **Steps:**
 
-1. In the ragent TUI, type:
+1. In the codemason TUI, type:
    ```
    /spec specify branchspec A CSV import tool with column mapping
    ```
@@ -344,7 +344,7 @@ contracts.
 
 **Steps:**
 
-1. In the ragent TUI, type:
+1. In the codemason TUI, type:
    ```
    /spec plan branchspec REST API with CSV upload endpoint, ImportRecord data model
    ```
@@ -382,7 +382,7 @@ ambiguity, contradictions, and gaps beyond EARS syntax checks.
    - A contradiction: FR-001 says "The system shall use email/password auth" and FR-002 says "The system shall use OAuth-only auth"
    - A requirement without acceptance criteria: FR-003 "The system shall log events."
 3. Save the file.
-4. In the ragent TUI, type:
+4. In the codemason TUI, type:
    ```
    /spec validate consisttest
    ```
@@ -413,7 +413,7 @@ surfaced during plan regeneration.
 
 **Steps:**
 
-1. In the ragent TUI, type:
+1. In the codemason TUI, type:
    ```
    /spec feedback testspec-sdd Production latency spike at 5000 concurrent users — consider connection pooling
    ```
@@ -446,7 +446,7 @@ artifacts) continue to validate, list, and search without errors.
 
 **Steps:**
 
-1. In the ragent TUI, type:
+1. In the codemason TUI, type:
    ```
    /spec validate compact
    ```
@@ -487,7 +487,7 @@ include quality checklists.
 
 **Steps:**
 
-1. In the ragent TUI, type:
+1. In the codemason TUI, type:
    ```
    /spec specify checklisttest A feature with quality gates
    ```
@@ -528,7 +528,7 @@ and a `## Related Research` section. This builds on the existing
 
 **Steps:**
 
-1. In the ragent TUI, type:
+1. In the codemason TUI, type:
    ```
    /spec specify researchtest A web search aggregation tool --from-research websearch
    ```
@@ -567,7 +567,7 @@ implementation runner warns when tasks violate it.
    - Source files last
 3. Manually reorder a task so that a source-file task appears before a
    contract task (e.g., move T-001 above the contracts task). Save the file.
-4. In the ragent TUI, run the implementation:
+4. In the codemason TUI, run the implementation:
    ```
    /spec impl testspec-sdd --dry-run
    ```
@@ -603,5 +603,5 @@ reset the git state:
    ```bash
    rm -f specs/CONSTITUTION.md
    ```
-4. Optionally revert the SDD configuration changes in `.ragent/ragent.json` if they were only for testing.
+4. Optionally revert the SDD configuration changes in `.codemason/codemason.json` if they were only for testing.
 5. Verify the workspace is clean: `git status`

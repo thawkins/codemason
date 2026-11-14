@@ -7,9 +7,9 @@ Spec: `specs/osinfo/SPEC.md`
 
 ## Prerequisites
 
-- A build of ragent that includes the `os_info` tool and the `/osinfo` slash
+- A build of codemason that includes the `os_info` tool and the `/osinfo` slash
   command: `cargo build` from the workspace root (binary at
-  `target/debug/ragent`).
+  `target/debug/cdmn`).
 - A configured LLM provider (any working provider with an API key or local
   model) so the agent loop can invoke the `os_info` tool. The `/osinfo` slash
   command tests do not require a provider call.
@@ -23,7 +23,7 @@ Spec: `specs/osinfo/SPEC.md`
 ### TC-001 — `os_info` appears in the tool catalogue
 
 **Preconditions:**
-- ragent TUI is open with an active session.
+- codemason TUI is open with an active session.
 
 **Steps:**
 1. Press `/` to open the slash menu.
@@ -31,7 +31,7 @@ Spec: `specs/osinfo/SPEC.md`
 3. Scroll the rendered tool list to the `U`/utility section.
 
 **Expected results:**
-- `os_info` is listed exactly once, adjacent to `ragent_info`.
+- `os_info` is listed exactly once, adjacent to `codemason_info`.
 - Its description states it reports operating system type and configuration
   and that it is read-only.
 - No config change, restart, or feature flag is required for it to appear.
@@ -41,7 +41,7 @@ Spec: `specs/osinfo/SPEC.md`
 ### TC-002 — LLM invocation returns the full markdown report
 
 **Preconditions:**
-- ragent TUI is open; a working provider is configured.
+- codemason TUI is open; a working provider is configured.
 
 **Steps:**
 1. In the message input, type:
@@ -67,7 +67,7 @@ Spec: `specs/osinfo/SPEC.md`
   Graphics]`, `integrated`, driver `i915`).
 - `Memory` shows total/available memory and swap in bytes plus GiB values
   to 2 decimal places, plus uptime in human-readable d/h/m form.
-- `Process` shows the ragent pid, the current working directory, the shell
+- `Process` shows the codemason pid, the current working directory, the shell
   path (e.g. `/bin/bash`), and the username.
 - The agent summarises the result coherently (e.g. "You are on Fedora Linux,
   x86_64, 16 cores, 62 GiB RAM").
@@ -132,7 +132,7 @@ Spec: `specs/osinfo/SPEC.md`
 ### TC-005 — Read-only guarantee
 
 **Preconditions:**
-- ragent TUI is open in a writable project directory.
+- codemason TUI is open in a writable project directory.
 
 **Steps:**
 1. Note the current time.
@@ -155,10 +155,10 @@ Spec: `specs/osinfo/SPEC.md`
 ### TC-006 — Cross-platform behaviour (non-Linux host, tool)
 
 **Preconditions:**
-- Access to a macOS or Windows machine with the same ragent build installed.
+- Access to a macOS or Windows machine with the same codemason build installed.
 
 **Steps:**
-1. On the non-Linux host, open the ragent TUI.
+1. On the non-Linux host, open the codemason TUI.
 2. Type: `Use os_info to tell me what platform this is.`
 3. Press `Enter`.
 
@@ -178,7 +178,7 @@ Spec: `specs/osinfo/SPEC.md`
 ### TC-007 — Log-panel presentation
 
 **Preconditions:**
-- ragent TUI is open; the log panel is visible.
+- codemason TUI is open; the log panel is visible.
 
 **Steps:**
 1. Trigger an `os_info` call as in TC-002.
@@ -196,7 +196,7 @@ Spec: `specs/osinfo/SPEC.md`
 ### TC-008 — `/osinfo` appears in the slash menu and help index
 
 **Preconditions:**
-- ragent TUI is open with an active session.
+- codemason TUI is open with an active session.
 
 **Steps:**
 1. Press `/` to open the slash menu.
@@ -215,7 +215,7 @@ Spec: `specs/osinfo/SPEC.md`
 ### TC-009 — `/osinfo` with no subcommand shows help
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 
 **Steps:**
 1. Type `/osinfo` in the input line (no trailing subcommand).
@@ -235,7 +235,7 @@ Spec: `specs/osinfo/SPEC.md`
 ### TC-010 — `/osinfo help` shows the help page
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 
 **Steps:**
 1. Type `/osinfo help`.
@@ -251,7 +251,7 @@ Spec: `specs/osinfo/SPEC.md`
 ### TC-011 — `/osinfo show` renders the OS report
 
 **Preconditions:**
-- ragent TUI is open (no provider call needed).
+- codemason TUI is open (no provider call needed).
 
 **Steps:**
 1. Type `/osinfo show`.
@@ -275,10 +275,10 @@ Spec: `specs/osinfo/SPEC.md`
 ### TC-012 — `/osinfo show` cross-platform behaviour (non-Linux host)
 
 **Preconditions:**
-- Access to a macOS or Windows machine with the same ragent build installed.
+- Access to a macOS or Windows machine with the same codemason build installed.
 
 **Steps:**
-1. On the non-Linux host, open the ragent TUI.
+1. On the non-Linux host, open the codemason TUI.
 2. Type `/osinfo show`.
 3. Press `Enter`.
 
@@ -293,7 +293,7 @@ Spec: `specs/osinfo/SPEC.md`
 ### TC-013 — Unknown `/osinfo` subcommand produces a correction
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 
 **Steps:**
 1. Type `/osinfo frobnicate`.
@@ -316,7 +316,7 @@ Spec: `specs/osinfo/SPEC.md`
 ### TC-014 — Slash-command read-only guarantee
 
 **Preconditions:**
-- ragent TUI is open in a writable project directory.
+- codemason TUI is open in a writable project directory.
 
 **Steps:**
 1. In a separate terminal, run `git status --short` in the project root and
@@ -335,7 +335,7 @@ Spec: `specs/osinfo/SPEC.md`
 ### TC-015 — Tool and slash command agree on content
 
 **Preconditions:**
-- ragent TUI is open with a working provider configured.
+- codemason TUI is open with a working provider configured.
 
 **Steps:**
 1. Type `/osinfo show` and press `Enter`; note the rendered values.
@@ -465,7 +465,7 @@ Spec: `specs/osinfo/SPEC.md`
     1. Type:
        `Call os_info with format json and show only the storage_devices array.`
     2. Press `Enter`.
-    3. Compare with `lsblk -d -o NAME,MODEL,ROTA,SIZE` run outside ragent.
+    3. Compare with `lsblk -d -o NAME,MODEL,ROTA,SIZE` run outside codemason.
 
 **Expected results:**
   - `storage_devices` is an array; each element carries `name`, `model`,
@@ -487,7 +487,7 @@ Spec: `specs/osinfo/SPEC.md`
     1. Type:
        `Call os_info with format json and show only the network_interfaces array.`
     2. Press `Enter`.
-    3. Compare with `ip -brief link` run outside ragent.
+    3. Compare with `ip -brief link` run outside codemason.
 
 **Expected results:**
   - `network_interfaces` is an array; each element carries `name`,
@@ -532,7 +532,7 @@ Spec: `specs/osinfo/SPEC.md`
 
 Host: Linux (Fedora Linux 44), x86_64, i7-1165G7, 8 logical cores.
 
-Every test case was executed against a ragent build carrying the `os_info`
+Every test case was executed against a codemason build carrying the `os_info`
 tool and the `/osinfo` slash command. The tool-side cases (TC-001..TC-007,
 TC-015 tool half) were exercised by invoking the registered `os_info` tool
 through the default registry with a throwaway capture harness (since no LLM
@@ -574,16 +574,16 @@ LLM call). Verified statically and dynamically on the Linux build host.
 
 **Static review**
 
-- `crates/ragent-agent/src/tool/os_info.rs` contains no `std::process::Command`,
+- `crates/codemason-agent/src/tool/os_info.rs` contains no `std::process::Command`,
   no `File`/`fs` write, and no network type/`reqwest`/socket use. The only
   `std::process` reference is `std::process::id()` (read-only PID, line 536).
 - `handle_osinfo_command`, `handle_osinfo_help` and `handle_osinfo_show`
-  (`crates/ragent-tui/src/app/slash.rs`) call only `append_assistant_text` and
-  the shared `ragent_agent::tool::os_info::{OsInfo::collect, render_text}`
+  (`crates/codemason-tui/src/app/slash.rs`) call only `append_assistant_text` and
+  the shared `codemason_agent::tool::os_info::{OsInfo::collect, render_text}`
   pair; they never touch `session_processor`, the provider registry, or the
   permission checker.
 - `os_info` is registered with `permission_category() == "none"`, so it can
-  never raise a permission prompt (`crates/ragent-agent/src/tool/mod.rs`).
+  never raise a permission prompt (`crates/codemason-agent/src/tool/mod.rs`).
 
 **Dynamic harness** (throwaway integration test, created then deleted)
 
@@ -621,7 +621,7 @@ calling the shared `os_info` collector/renderer directly and by driving
 `App::execute_slash_command` through a throwaway harness (created then
 deleted); the slash command itself issues no LLM call, so this is the same code
 path the TUI executes on `Enter`. The automated slash-command suite
-(`crates/ragent-tui/tests/test_osinfo_command.rs`, 5 tests) pins the same
+(`crates/codemason-tui/tests/test_osinfo_command.rs`, 5 tests) pins the same
 behaviour in CI.
 
 | Case | Result | Evidence |
@@ -640,7 +640,7 @@ behaviour in CI.
 | TC-012 | deferred | Requires a non-Linux host; not available. The `/osinfo show` body delegates to the same collector that the TC-006 placeholder path is unit-tested against, so no separate slash-command branch exists to vary by platform. |
 | TC-013 | pass | `/osinfo frobnicate` emitted `From: /osinfo` with the correction `Unknown subcommand. Usage: \`/osinfo show\|help\``, status `osinfo: usage`, and no report (`test_osinfo_unknown_subcommand_lists_valid_and_sets_usage`). The token itself is not echoed; FR-014 requires the valid-subcommand list, not the rejected token. |
 | TC-014 | pass | Re-confirmed: `permission_queue`/`question_queue` empty, `token_usage == (0, 0)`, `llm_request_stats` empty, `stream_in_bytes == 0`, `stream_out_bytes == 0`, agent/model unchanged, and `git status --short` byte-identical before and after driving `/osinfo show`, `/osinfo help`, `/osinfo`, `/osinfo --help`, `/osinfo -h`, `/osinfo bogus`. See also the read-only verification record above. |
-| TC-015 | pass | FR-018 confirmed: the `/osinfo show` body, after normalising markdown (`trim`, drop blanks, `-` -> `*` bullet fold) and ignoring only volatile lines (uptime, available memory, CPU frequency), is set-equal to `ragent_agent::tool::os_info::render_text(&OsInfo::collect())` (`test_osinfo_show_matches_tool_renderer`). Both render the same sections, fields, GiB formatting, and `unknown`/`n/a` placeholders. |
+| TC-015 | pass | FR-018 confirmed: the `/osinfo show` body, after normalising markdown (`trim`, drop blanks, `-` -> `*` bullet fold) and ignoring only volatile lines (uptime, available memory, CPU frequency), is set-equal to `codemason_agent::tool::os_info::render_text(&OsInfo::collect())` (`test_osinfo_show_matches_tool_renderer`). Both render the same sections, fields, GiB formatting, and `unknown`/`n/a` placeholders. |
 
 Summary: 13 pass, 2 deferred (TC-006, TC-012 - both require a non-Linux host and
 are covered by the platform-agnostic unit tests on the placeholder branch). No

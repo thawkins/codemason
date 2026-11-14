@@ -14,14 +14,14 @@ restore a retired spelling.
 
 This document is the audit the task asks for. It records what was inspected,
 what was found, what was exempted and why, and how each claim is now checked by
-`crates/ragent-agent/tests/test_escape_hatch_audit.rs` rather than by a sentence
+`crates/codemason-agent/tests/test_escape_hatch_audit.rs` rather than by a sentence
 in a changelog. **No key, variable or flag was added.**
 
 ## The fifth orphan-module defect in this spec
 
 `test_escape_hatch_audit.rs` (565 lines, 8 cases) landed with `d6abcd4a` - but
-`crates/ragent-agent/tests/all.rs` had **no `#[path]` line for it**, so none of the
-eight cases had ever run. `cargo test -p ragent-agent --test all
+`crates/codemason-agent/tests/all.rs` had **no `#[path]` line for it**, so none of the
+eight cases had ever run. `cargo test -p codemason-agent --test all
 test_escape_hatch_audit::` printed `running 0 tests`. The predicates were prose
 that looked executable: the file was in the tree, `cargo fmt` formatted it and
 `clippy` linted it, so nothing in CI said a word.
@@ -51,7 +51,7 @@ Every other candidate surface was inspected and none names a rename spelling.
 
 | # | Surface | Inspected | Naming a rename spelling | Checked by |
 |---|---|---|---|---|
-| 1 | `ragent.json` keys | 369 field declarations and serde `rename`/`alias` values (365 + 4) across the 24 sources of `crates/ragent-config` | 1, exempted with a written reason (below) | `test_no_config_field_name_is_a_rename_spelling` |
+| 1 | `codemason.json` keys | 369 field declarations and serde `rename`/`alias` values (365 + 4) across the 24 sources of `crates/codemason-config` | 1, exempted with a written reason (below) | `test_no_config_field_name_is_a_rename_spelling` |
 | 2 | environment variables | 67 reads over 35 distinct names in non-test production source | 0 | `test_no_environment_variable_is_named_a_rename_spelling` |
 | 3 | the resolution path itself | `tool/alias_table.rs` and `tool/rename.rs` | 0 - neither reads an environment nor loads a config | `test_tool_name_resolution_reads_no_environment_and_no_config_file` |
 | 4 | CLI flags, aliases and subcommands | 79 names in `src/main.rs` and `src/cli.rs` | 0 | `test_no_cli_flag_or_subcommand_is_a_rename_spelling` |
@@ -69,7 +69,7 @@ equally effective alias for `bash`.
 A substring rule would be wrong in both directions, and the tree contains both
 counter-examples:
 
-- `GIT_BASH` (`crates/ragent-tools-core/src/bash.rs:102`) contains `BASH`, but it
+- `GIT_BASH` (`crates/codemason-tools-core/src/bash.rs:102`) contains `BASH`, but it
   is the Windows Git Bash install path, not a switch. It reads a *path*, and the
   path is used to locate an executable.
 - `bash.allowlist` / `bash.denylist` and `edit_log` / `skill_dirs` contain a
@@ -82,11 +82,11 @@ would not be the compatibility switch FR-031 forbids.
 ## The one exemption, and why it is not an escape hatch
 
 ```text
-crates/ragent-config/src/config.rs:96    pub bash: BashConfig,
+crates/codemason-config/src/config.rs:96    pub bash: BashConfig,
 ```
 
 `bash` here is the **shell-command allowlist/denylist section** of
-`ragent.json` (`bash.allowlist`, `bash.denylist`), named for the `bash:execute`
+`codemason.json` (`bash.allowlist`, `bash.denylist`), named for the `bash:execute`
 permission family that FR-028 keeps unchanged across the rename. It configures
 which shell commands may run; it names no tool, registers no tool and resolves no
 tool name. Deleting or renaming it would be a breaking config change unrelated to
@@ -99,9 +99,9 @@ FR-023 table (stale), when a reason is blank, or when the file it names is gone.
 
 ## Surface-by-surface detail
 
-### 1. `ragent.json` keys
+### 1. `codemason.json` keys
 
-The scan covers every `struct`/`enum` **body** in `crates/ragent-config/src`, not
+The scan covers every `struct`/`enum` **body** in `crates/codemason-config/src`, not
 just `pub` fields and not every `name:` line. That distinction is load-bearing in
 both directions:
 
@@ -115,9 +115,9 @@ Three probes proved the scan rather than the prose:
 
 | Probe | Reported |
 |---|---|
-| a private `write: bool` on `ToolsConfig` | `crates/ragent-config/src/tools.rs:68 declares write` |
-| an `env::var_os("write")` added to `mcp/npx_cache.rs` | `crates/ragent-agent/src/mcp/npx_cache.rs:80 reads write` |
-| a private `Skill: Option<String>` on the private `CodexManifest` | `crates/ragent-plugins/src/manifest.rs:409 declares Skill` |
+| a private `write: bool` on `ToolsConfig` | `crates/codemason-config/src/tools.rs:68 declares write` |
+| an `env::var_os("write")` added to `mcp/npx_cache.rs` | `crates/codemason-agent/src/mcp/npx_cache.rs:80 reads write` |
+| a private `Skill: Option<String>` on the private `CodexManifest` | `crates/codemason-plugins/src/manifest.rs:409 declares Skill` |
 
 The third probe is why the config scan was widened from `pub` fields to struct
 and enum bodies: the first draft read only `pub` fields and let that private
@@ -142,18 +142,18 @@ spelling. The nearest neighbours and why they are not switches:
 | Variable | Why it is not an escape hatch |
 |---|---|
 | `GIT_BASH`, `LOCALAPPDATA`, `PATHEXT`, `PATH` | a filesystem location used to find an executable |
-| `RAGENT_TOOL_NAME`, `RAGENT_TOOL_INPUT`, `RAGENT_TOOL_OUTPUT`, `RAGENT_TOOL_SUCCESS` | **written** into a hook's child process (`hooks/mod.rs:621-622, 883-886`), never read by ragent |
-| `RAGENT_CONFIG`, `RAGENT_CONFIG_CONTENT`, `XDG_CONFIG_HOME`, `HOME` | config *file* locations and overrides, not tool names |
-| `RAGENT_TOKEN`, `RAGENT_GITHUB_CLIENT_ID`, `RAGENT_UPDATE_SHA256`, `RAGENT_MCP_CONNECT_TIMEOUT_SECS` | a server token, a client id, an update digest and a timeout |
+| `CODEMASON_TOOL_NAME`, `CODEMASON_TOOL_INPUT`, `CODEMASON_TOOL_OUTPUT`, `CODEMASON_TOOL_SUCCESS` | **written** into a hook's child process (`hooks/mod.rs:621-622, 883-886`), never read by codemason |
+| `CODEMASON_CONFIG`, `CODEMASON_CONFIG_CONTENT`, `XDG_CONFIG_HOME`, `HOME` | config *file* locations and overrides, not tool names |
+| `CODEMASON_TOKEN`, `CODEMASON_GITHUB_CLIENT_ID`, `CODEMASON_UPDATE_SHA256`, `CODEMASON_MCP_CONNECT_TIMEOUT_SECS` | a server token, a client id, an update digest and a timeout |
 | `AWS_*`, `GITHUB_*`, `GITLAB_*`, `OLLAMA_*`, `OPENALEX_EMAIL`, `OPENROUTER_API_KEY`, `USER`, `USERNAME`, `HOSTNAME`, `RUST_BACKTRACE`, `npm_config_cache` | provider credentials, identity and transport settings |
 
 The predicate fails if the scan finds **zero** reads, so deleting the reads
 cannot satisfy it, and the reader-helper list is explicit so a new helper cannot
 route a read around the check.
 
-`RAGENT_TOOL_ALIAS` - the variable TC-029's step 11 uses to probe for a switch -
-is read nowhere. Empirically: `ragent --dry-run --json` is byte-identical with and
-without `RAGENT_TOOL_ALIAS=bash=Bash` set (identical SHA-256, with `--model`
+`CODEMASON_TOOL_ALIAS` - the variable TC-029's step 11 uses to probe for a switch -
+is read nowhere. Empirically: `codemason --dry-run --json` is byte-identical with and
+without `CODEMASON_TOOL_ALIAS=bash=Bash` set (identical SHA-256, with `--model`
 pinned so the run is deterministic).
 
 ### 3. The resolution path
@@ -185,7 +185,7 @@ error: unexpected argument '--tool-alias' found
 
   tip: to pass '--tool-alias' as a value, use '-- --tool-alias'
 
-Usage: ragent run [OPTIONS] <PROMPT>
+Usage: codemason run [OPTIONS] <PROMPT>
 ```
 
 The flag failing loudly and the variable being ignored are different results, and
@@ -210,7 +210,7 @@ are worth telling apart:
   default - proved by re-running the same probe with
   `#[serde(default)]` alone: the case passed. That is not a hole in FR-031,
   because the key that would matter is one *named* after a tool, and predicate 1
-  reports that field name directly (`crates/ragent-config/src/tools.rs:68
+  reports that field name directly (`crates/codemason-config/src/tools.rs:68
   declares write` for the same probe shape). Pinning the key set is the
   documentation half; predicate 1 is the enforcement half.
 
@@ -233,7 +233,7 @@ Three of these deserve a written reason, which they get in the test's module doc
 - **Source identifiers are namespaced.** A plugin id, connector id, MCP server id,
   backend id, ACP agent id or `agent.<name>` key names a *source*, and every tool
   such a source contributes is namespaced (`plugin_<id>_<tool>`,
-  `mcp_<server>_<tool>`), so no id can occupy a bare ragent name. That refusal is
+  `mcp_<server>_<tool>`), so no id can occupy a bare codemason name. That refusal is
   FR-032's, and it is checked there.
 - **`agent.options` and a provider `options` map are free-form, but read from a
   closed key set** - `acp` on an agent, and `model_id`, `auto_start`, `device`,
@@ -243,7 +243,7 @@ Three of these deserve a written reason, which they get in the test's module doc
 ### 7. The built-in alias table
 
 The one table a config can switch on without writing an entry
-(`tools.aliases: true`), so the one place ragent's own source could reintroduce a
+(`tools.aliases: true`), so the one place codemason's own source could reintroduce a
 retired spelling. All four rows target a registered tool and no row's spelling is
 a rename spelling; the test asserts every `before` resolves to `None` through the
 table on the default registry.
@@ -258,23 +258,23 @@ key, variable or flag" asks for.
 
 ## Verification
 
-- `cargo test -p ragent-agent --test all test_escape_hatch_audit::` - 8 passed.
+- `cargo test -p codemason-agent --test all test_escape_hatch_audit::` - 8 passed.
 - Every predicate was proved to fire, one violation at a time, and every edit was
   reverted and `md5sum`-checked byte-identical against a pre-probe copy:
 
   | Predicate | Probe | Reported |
   |---|---|---|
-  | 1 | a private `write: bool` on `ToolsConfig` (first field, and again last) | `crates/ragent-config/src/tools.rs:68 declares write` |
-  | 2 | `env::var_os("Bash")` in `npx_cache.rs` | `crates/ragent-agent/src/mcp/npx_cache.rs:80 reads Bash` |
-  | 3 | `std::env::var("RAGENT_ALIASES")` in `tool/rename.rs` | `crates/ragent-agent/src/tool/rename.rs contains std::env` |
+  | 1 | a private `write: bool` on `ToolsConfig` (first field, and again last) | `crates/codemason-config/src/tools.rs:68 declares write` |
+  | 2 | `env::var_os("Bash")` in `npx_cache.rs` | `crates/codemason-agent/src/mcp/npx_cache.rs:80 reads Bash` |
+  | 3 | `std::env::var("CODEMASON_ALIASES")` in `tool/rename.rs` | `crates/codemason-agent/src/tool/rename.rs contains std::env` |
   | 4 | `#[arg(long, global = true)] bash: bool` on `Cli` | `src/main.rs:99 derives the flag --bash` |
   | 5 | a fourth `tools` key (`legacy_aliases`, serialised) | `left: ["aliases", "expose_alias_names", "legacy_aliases", "wire_trace"]` |
-  | 6 | a private `Skill: Option<String>` on a private connector/manifest struct | `crates/ragent-plugins/src/manifest.rs:409 declares Skill` |
+  | 6 | a private `Skill: Option<String>` on a private connector/manifest struct | `crates/codemason-plugins/src/manifest.rs:409 declares Skill` |
   | 7 | a `bash -> Bash` row added to `BUILTIN_PROVIDER_ALIASES` | `the built-in alias table resolves the retired spelling bash onto a tool` |
 
 - Two further red proofs cover the guards' own guards:
   - emptying `EXEMPTIONS` made case 1 report the exempted site
-    (`crates/ragent-config/src/config.rs:96 declares bash`), proving the
+    (`crates/codemason-config/src/config.rs:96 declares bash`), proving the
     exemption is doing work rather than the scan being blind;
   - pointing case 1 at a nonexistent directory made it fail with
     `the configuration scan found only 0 key(s)`, proving the inspection floor
@@ -282,9 +282,9 @@ key, variable or flag" asks for.
 - The floor thresholds are set just below the measured counts (369 config / 67
   environment / 79 CLI / 387 dynamic), so ordinary growth never fails the build
   but a scan that stops reading its inputs does.
-- `cargo fmt --all -- --check` clean; `cargo clippy -p ragent-agent --all-targets`
+- `cargo fmt --all -- --check` clean; `cargo clippy -p codemason-agent --all-targets`
   reports only the crate's pre-existing `pub(crate) ... inside private module`
   warnings and no new warning from this file.
 - No test writes into the repository: every file the predicates read is opened
-  read-only, and the CLI probes (`--tool-alias`, the `RAGENT_TOOL_ALIAS` dry-run
+  read-only, and the CLI probes (`--tool-alias`, the `CODEMASON_TOOL_ALIAS` dry-run
   comparison) used `target/temp/` scratch space that was deleted afterwards.

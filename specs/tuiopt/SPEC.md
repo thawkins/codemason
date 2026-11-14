@@ -11,7 +11,7 @@ audit:
 
 ## Context
 
-The `ragent-tui` crate provides the full-screen ratatui interface for ragent. As
+The `codemason-tui` crate provides the full-screen ratatui interface for codemason. As
 sessions grow (long message histories, many active sub-agents, large teams, and
 streaming assistant output), several UI paths have become expensive on a
 per-frame basis. The current implementation performs redundant work, blocks the UI
@@ -20,7 +20,7 @@ nothing has changed. This specification defines a focused optimisation effort
 that improves responsiveness, reduces CPU/battery use, and keeps large sessions
 smooth.
 
-The scope is limited to the `crates/ragent-tui` crate and its existing
+The scope is limited to the `crates/codemason-tui` crate and its existing
 benchmarks. The goal is to make targeted, measurable improvements without
 rewriting the TUI architecture.
 
@@ -96,5 +96,5 @@ or the event bus.
 
 ## References
 
-- `crates/ragent-tui/performance_findings.md` — prior performance review.
-- `crates/ragent-tui/benches/` — existing Criterion benchmarks.
+- `crates/codemason-tui/performance_findings.md` — prior performance review.
+- `crates/codemason-tui/benches/` — existing Criterion benchmarks.

@@ -14,14 +14,14 @@
 # There is ONE implementation: scripts/check_tool_rename.py. This wrapper exists
 # so .github/workflows/ci.yml and pre-flight.sh can invoke the guard exactly like
 # every other check-* script, and the crate test
-# (crates/ragent-agent/tests/test_tool_rename_guard.rs) runs the same Python file
+# (crates/codemason-agent/tests/test_tool_rename_guard.rs) runs the same Python file
 # with --json and asserts the same verdict, the same hits and the same ASCII
 # wording. No predicate logic lives here, so the two forms cannot drift.
 #
 # What the one implementation does (one run, reporting every offending file and
 # line for EVERY predicate, each labelled with its letter):
 #   - reads the thirteen (before, after) pairs out of the FR-023 table
-#     (crates/ragent-types/src/tool_rename.rs) rather than repeating them, so the
+#     (crates/codemason-types/src/tool_rename.rs) rather than repeating them, so the
 #     guard cannot disagree with the table it enforces;
 #   - scans crates/*/src/**/*.rs and src/*.rs, skipping tests/ subtrees, for Rust
 #     double-quoted and backticked literals whose decoded value is exactly one of
@@ -32,7 +32,7 @@
 #     key or a target (predicate (a)) and a spelling mapped onto itself ((a2));
 #   - reads every resolver match arm and every hand-written `Rename::after_of(..)`
 #     lookup (predicate (b));
-#   - reads ragent-config's `default = ".."` serde attributes and every literal in
+#   - reads codemason-config's `default = ".."` serde attributes and every literal in
 #     a `fn default_*()` body (predicate (c));
 #   - reads every `fn name(&self)` body, because a tool's registry key is what it
 #     returns (predicate (d)), and counts them across the tree so two tool types

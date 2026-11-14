@@ -33,7 +33,7 @@ immediately above the input area. "Log panel" means the scrollback message pane.
 2. **Configure a model.** A working provider is required (a local Ollama model is
    sufficient, because no case depends on answer quality). Confirm by sending `hello`
    and receiving a reply before starting TC-001.
-3. **Pin the sub-agent limit.** Edit `~/.config/ragent/ragent.json` (or the profile
+3. **Pin the sub-agent limit.** Edit `~/.config/codemason/codemason.json` (or the profile
    in use) and set:
 
    ```json
@@ -211,7 +211,7 @@ and `the_descriptions_carry_the_parameters_tc_004_requires`.
 `create_default_registry`'s rustdoc listed `new_agent`, `cancel_agent` and
 `list_agents` but not `wait_agents`, so the one tool a caller needs to await a
 background task was absent from the registry's own documentation.
-`crates/ragent-agent/tests/test_default_registry_doc_lists_the_family.rs` reads the
+`crates/codemason-agent/tests/test_default_registry_doc_lists_the_family.rs` reads the
 doc block out of `src/tool/mod.rs` with `include_str!` (scanning upward from the
 `pub fn create_default_registry` signature, so an unrelated edit cannot move the
 target) and asserts every sub-agent family tool the registry actually registers is
@@ -632,7 +632,7 @@ made to fail.
   `status: "suspended"` and the summary does not call it "still running" (FR-015).
 
 **Automated coverage (FR-044):**
-`crates/ragent-agent/tests/test_wait_agents_detached_refusal.rs` pins the detached
+`crates/codemason-agent/tests/test_wait_agents_detached_refusal.rs` pins the detached
 refusal exercised here, seeding the registry with a detached entry (the state a
 `/spawn` leaves behind) because a detached report needs a live sub-agent run.
 `::awaiting_a_detached_task_is_refused_by_contract` asserts the refusal names the
@@ -671,7 +671,7 @@ the tool description (FR-016).
   distinction clear.
 - The result does not claim the task completed.
 
-**Automated coverage:** `crates/ragent-agent/tests/test_wait_agents_suspended.rs`
+**Automated coverage:** `crates/codemason-agent/tests/test_wait_agents_suspended.rs`
 (`test_wait_agents_reports_suspended_task_as_suspended`,
 `test_wait_agents_unsettled_entries_carry_the_suspended_status`,
 `test_wait_agents_keeps_a_running_task_out_of_the_suspended_set`,
@@ -893,7 +893,7 @@ its live row is gone - is pinned in `test_agents_window_refusals.rs`:
 - `::a_history_row_without_a_durable_copy_names_the_condition` and
   `::a_history_row_with_a_durable_copy_says_nothing` pin
   `CompletedTaskRow::durable_copy_absence` itself, including that the wording is
-  `ragent_agent::tool::wait_agents::IN_MEMORY_REPORT_NOTE` - the one constant
+  `codemason_agent::tool::wait_agents::IN_MEMORY_REPORT_NOTE` - the one constant
   `list_agents` and `wait_agents` print, so the panel and the tools cannot
   describe the condition two ways.
 - `::a_completed_task_is_snapshotted_before_its_live_row_is_removed` and

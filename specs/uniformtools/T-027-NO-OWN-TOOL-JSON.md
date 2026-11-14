@@ -6,7 +6,7 @@ and no provider module that constructs its own tool array.
 ## 1. What the task asks for
 
 > Prove no provider builds its own tool JSON: add a source guard scanning
-> `crates/ragent-llm/src/providers/` for hand-built envelope literals.
+> `crates/codemason-llm/src/providers/` for hand-built envelope literals.
 
 T-004 folded the five builders into `wire::encode::encode_tools` and added a scan,
 but that scan was scoped to the six modules the fold touched and to three keys. A
@@ -18,7 +18,7 @@ task owns the full-tree version: every `.rs` file under `providers/` (including
 
 | Site | State at the start of this task |
 |---|---|
-| `crates/ragent-llm/src/providers/wire/encode.rs` | `item_json` was, and is, the one definition of the five item shapes. No provider module built a definition object. |
+| `crates/codemason-llm/src/providers/wire/encode.rs` | `item_json` was, and is, the one definition of the five item shapes. No provider module built a definition object. |
 | `tests/test_wire_encode.rs` | `test_folded_provider_modules_no_longer_write_an_envelope_literal` scanned six named files for three keys (`"input_schema"`, `"toolSpec"`, `"functionDeclarations"`). It did not scan `azure_foundry.rs`, `azure_resource.rs`, `copilot.rs`, `ollama*.rs`, `openai.rs`, `openrouter.rs`, `router*.rs`, `xai.rs`, `sse.rs`, `thinking.rs` or `wire/`; it did not know the Bedrock `inputSchema`, the snake-case `function_declarations` spelling, or the two OpenAI `function` spellings. |
 | the six body assignments | Each provider opened the body key as a string literal: `body["tools"] = ...` in five modules and `body["toolConfig"] = ...` in `bedrock.rs`. Correct today, and unguarded: the literal is exactly what a hand-built list would also need, so a scan for the key could only be written by exempting the one place that writes it. |
 
@@ -29,7 +29,7 @@ true by inspection and held by nothing that walks the tree.
 
 ### 3.1 The body key is derived, not typed
 
-`crates/ragent-llm/src/providers/tool_cache.rs` gained two constants and one
+`crates/codemason-llm/src/providers/tool_cache.rs` gained two constants and one
 accessor:
 
 ```rust
@@ -53,7 +53,7 @@ This is what makes the key scannable: with the literals gone, the scan can refus
 `["tools"]` and `["toolConfig"]` everywhere outside the constants, so the only
 remaining way to name the key is to reintroduce the literal the guard rejects.
 
-### 3.2 Three cases in `crates/ragent-llm/tests/test_wire_encode.rs`
+### 3.2 Three cases in `crates/codemason-llm/tests/test_wire_encode.rs`
 
 Both scans are hermetic - they read the crate's own `src/` tree through
 `CARGO_MANIFEST_DIR`, contact nothing and build no session (NFR-004).
@@ -136,17 +136,17 @@ Two further attempts proved nothing and are recorded rather than claimed:
 
 - `cargo fmt --all -- --check` clean.
 - `cargo check --workspace --all-targets` clean (1m 18s).
-- `cargo clippy -p ragent-llm --all-targets` reports only the pre-existing 19
+- `cargo clippy -p codemason-llm --all-targets` reports only the pre-existing 19
   `unnecessary structure name repetition` in `tool_cache.rs` (none in a line this
   task added - the new constants and `body_key` are clean) and one pre-existing
-  `let`-binding warning in `ragent-storage`; the one trail- ing-comma warning the
+  `let`-binding warning in `codemason-storage`; the one trail- ing-comma warning the
   new test introduced was fixed.
-- `cargo nextest run -p ragent-llm` 639 run / 639 passed / 2 skipped.
-- `cargo test -p ragent-llm --doc` 30 passed.
-- `cargo nextest run -p ragent-agent --no-fail-fast` 2151 run / 2146 passed / 5
+- `cargo nextest run -p codemason-llm` 639 run / 639 passed / 2 skipped.
+- `cargo test -p codemason-llm --doc` 30 passed.
+- `cargo nextest run -p codemason-agent --no-fail-fast` 2151 run / 2146 passed / 5
   failed / 1 skipped. All five are `test_tool_rename_guard::` cases belonging to
   T-047 (the NFR-008 guard's predicate (g) reports a real wholesale forwarder at
-  `crates/ragent-agent/src/tool/aliases.rs:118`); none is in a file this task
+  `crates/codemason-agent/src/tool/aliases.rs:118`); none is in a file this task
   touched.
 - 13 guard scripts: 12 pass. `check-tool-rename.sh` exits 1 on the same T-047
   hit, and `check-bench-regression.sh` exits 2 for want of `target/criterion`.

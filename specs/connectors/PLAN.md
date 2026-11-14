@@ -4,12 +4,12 @@
 
 ## Approach
 
-Add one new crate, `crates/ragent-connectors`, that owns the connector descriptor model, the
+Add one new crate, `crates/codemason-connectors`, that owns the connector descriptor model, the
 connector store and ledger, the catalogue providers, and the session-start bridge into the
 existing MCP client. Surface it through three integration points, mirroring the plugin
 system's structure so the two subsystems read the same way:
 
-1. **`ragent-connectors` crate** - `descriptor` (the normalised connector model and its
+1. **`codemason-connectors` crate** - `descriptor` (the normalised connector model and its
    validation), `store` (paths, scan, `_state.json` ledger, install/remove with
    path-traversal-safe archive extraction), `catalogue` (HTTPS index fetch, byte cap,
    timeout, cache, the compiled default endpoint constant, and the endpoint resolver),
@@ -22,13 +22,13 @@ system's structure so the two subsystems read the same way:
    transport is written: every connector resolves to stdio, SSE, or HTTP exactly as a
    configured MCP server does.
 3. **Command surface** - a `/connectors` slash-command family in
-   `crates/ragent-tui/src/app/slash.rs` with a `crates/ragent-tui/src/app/connector.rs`
-   glue module, registered in `SLASH_COMMANDS` in `crates/ragent-tui/src/app/state.rs` and
-   documented in `/connectors help`; a `ragent connectors` CLI parity surface in
-   `src/cli.rs`. Configuration gains a `connectors` block in `ragent-config`.
+   `crates/codemason-tui/src/app/slash.rs` with a `crates/codemason-tui/src/app/connector.rs`
+   glue module, registered in `SLASH_COMMANDS` in `crates/codemason-tui/src/app/state.rs` and
+   documented in `/connectors help`; a `codemason connectors` CLI parity surface in
+   `src/cli.rs`. Configuration gains a `connectors` block in `codemason-config`.
 
 The store, ledger, provider, and fetch machinery deliberately reuse the shapes proven in
-`ragent-plugins` (`StoreDirs`, `StoreLedger`, `StoreProvider`, `store_fetch`,
+`codemason-plugins` (`StoreDirs`, `StoreLedger`, `StoreProvider`, `store_fetch`,
 `ScratchSurface`): where a helper is already public, the connector crate calls it rather
 than re-deriving it, so the two subsystems cannot drift. The compiled default Claude
 connector-catalogue endpoint and its resolver mirror the plugin store's
@@ -37,17 +37,17 @@ default-endpoint regimes read the same way.
 
 ### Reuse decisions
 
-- The durable enable ledger is the **existing** `ragent_agent::mcp::enable_state`
+- The durable enable ledger is the **existing** `codemason_agent::mcp::enable_state`
   (`mcp_state.json`); the connector crate adds no second enable file.
 - Catalogue indices parse through a `ConnectorProvider` trait shaped like
-  `ragent_plugins::store_provider::StoreProvider` (tolerant per-entry-skip, `skipped`
+  `codemason_plugins::store_provider::StoreProvider` (tolerant per-entry-skip, `skipped`
   counter) so the browser domain stays catalogue-agnostic.
 - Bridged server ids are `<connector-id>.<server>`, the same collision-avoidance shape the
   plugin MCP bridge uses (spec `plugins` FR-030).
 - Secrets live in the existing encrypted credential store; the connector manifest stores
   only the credential *name* (FR-005).
 - The compiled default Claude connector-catalogue endpoint and its provenance resolver
-  mirror `ragent_plugins::store_index` (`DEFAULT_CLAUDE_STORE_URL`,
+  mirror `codemason_plugins::store_index` (`DEFAULT_CLAUDE_STORE_URL`,
   `effective_endpoint_with_source`, `EndpointSource`) and reuse that crate's
   absolute-`https`-with-host guard, so a default endpoint is guarded exactly like a
   configured one (FR-037).
@@ -117,7 +117,7 @@ default-endpoint regimes read the same way.
 
 | ID | Title | Requirement | Effort | Priority | Status | Dependencies |
 |----|-------|-------------|--------|----------|--------|--------------|
-| T-001 | Add `connectors` configuration block to `ragent-config` | FR-007, FR-021, FR-024 | S | High | completed | — |
+| T-001 | Add `connectors` configuration block to `codemason-config` | FR-007, FR-021, FR-024 | S | High | completed | — |
 | T-002 | Define `ConnectorDescriptor` model and validation rules | FR-002, FR-025 | M | Critical | completed | — |
 | T-003 | Implement connector store paths, scan, and `_state.json` ledger | FR-001 | M | Critical | completed | T-002 |
 | T-004 | Implement connector manifest read/write and install staging | FR-002, FR-011, FR-027 | M | Critical | completed | T-002 |
@@ -130,7 +130,7 @@ default-endpoint regimes read the same way.
 | T-011 | Implement `list`, `enable`, `disable`, `connect`, `disconnect`, `auth` glue | FR-009, FR-012, FR-013, FR-014, FR-018, FR-019, FR-022, FR-025 | L | Critical | completed | T-010 |
 | T-012 | Implement `/connectors help` usage text and autocomplete metadata | FR-004, FR-017 | S | Medium | completed | T-010 |
 | T-013 | Implement `/connectors test` isolated connect-and-invoke harness | FR-015, FR-016 | M | High | completed | T-008 |
-| T-014 | Add `ragent connectors` CLI parity surface | FR-004, FR-006 | M | Medium | completed | T-011 |
+| T-014 | Add `codemason connectors` CLI parity surface | FR-004, FR-006 | M | Medium | completed | T-011 |
 | T-015 | Fixtures, acceptance walk, and quality gates | Acceptance criteria 1-10 | M | High | completed | T-001, T-002, T-003, T-004, T-005, T-006, T-007, T-008, T-009, T-010, T-011, T-012, T-013, T-014 |
 | T-016 | Add compiled default Claude connector-catalogue endpoint constant and resolver | FR-034, FR-035, FR-037, FR-038, NFR-002, NFR-003 | M | High | completed | T-001 |
 | T-017 | Wire default endpoint resolution into catalogue fetch and store commands | FR-035, FR-037, NFR-002 | S | High | completed | T-005, T-016 |
@@ -146,11 +146,11 @@ default-endpoint regimes read the same way.
 | T-027 | Sort every connector list alphabetically by id (shared comparator) | FR-046 | S | Medium | completed | T-002, T-011, T-020 |
 ## Task Details
 
-### T-001 - Add `connectors` configuration block to `ragent-config`
+### T-001 - Add `connectors` configuration block to `codemason-config`
 
 Add a `ConnectorsConfig` struct (master `enabled` defaulting true, optional `store_dir`,
 `stores` endpoints and shared budgets, `credentials` name map) beside the existing
-`PluginsConfig` in `crates/ragent-config/src/connectors.rs`, with `is_enabled()` and
+`PluginsConfig` in `crates/codemason-config/src/connectors.rs`, with `is_enabled()` and
 `stores_or_default()` helpers mirroring `PluginsConfig`. Add the optional field to the
 top-level `Config`. `connectors.enabled: false` makes the subsystem inert (FR-021).
 
@@ -172,11 +172,11 @@ validation with a named reason; an unexpressible capability is retained as a lab
 
 ### T-003 - Implement connector store paths, scan, and `_state.json` ledger
 
-Add store paths (`<workdir>/.ragent/connectors/`, global `~/.config/ragent/connectors/`),
+Add store paths (`<workdir>/.codemason/connectors/`, global `~/.config/codemason/connectors/`),
 a symlink-safe directory walk, and a per-store `_state.json` ledger holding per-connector
 `enabled` and telemetry counters. Project-local connectors win an id collision. Scanning
 reads manifests only and never connects (FR-001). Model the module on
-`ragent_plugins::store` so the two ledgers are recognisably the same shape.
+`codemason_plugins::store` so the two ledgers are recognisably the same shape.
 
 **Verify:** a connector placed only under the global store is discovered when no project
 copy exists; a project copy shadows the global one; a symlink escaping the store is skipped.
@@ -199,7 +199,7 @@ catalogue shape. A malformed document, an unrecognised shape, or an oversize bod
 fetch with a named reason and leaves the cache untouched (FR-031). An entry that cannot be
 normalised is skipped and counted, not fatal (FR-025). Per-catalogue endpoint overrides
 resolve before each fetch (FR-024). Reuse the tolerant discipline of
-`ragent_plugins::store_provider`.
+`codemason_plugins::store_provider`.
 
 **Verify:** a two-entry catalogue with one unexpressible entry returns one connector and a
 `skipped` count of one; an oversize body aborts without replacing the cache.
@@ -208,9 +208,9 @@ resolve before each fetch (FR-024). Reuse the tolerant discipline of
 
 Resolve each enabled connector's server definitions into `(bridged_server_id,
 McpServerConfig)` pairs with `bridged_server_id = <connector-id>.<server>` (FR-003, FR-026).
-Reject a bridged id that collides with an existing `ragent.json` `mcp` key or with another
+Reject a bridged id that collides with an existing `codemason.json` `mcp` key or with another
 connector's bridged id (FR-033). The bridge is pure over the store and ledger and performs
-no connection. Shape the module on `ragent_plugins::bridge::scanned_plugin_mcp_servers`.
+no connection. Shape the module on `codemason_plugins::bridge::scanned_plugin_mcp_servers`.
 
 **Verify:** a two-server connector yields two pairs with `<id>.` prefixes; a bridged id
 colliding with a configured `mcp` key is rejected.
@@ -219,7 +219,7 @@ colliding with a configured `mcp` key is rejected.
 
 Implement the five auth shapes (none, env, token, oauth, password). A secret value is
 written to the encrypted credential store under the configured name and never into a
-manifest or `ragent.json` (FR-005). Report the auth state without echoing the secret
+manifest or `codemason.json` (FR-005). Report the auth state without echoing the secret
 (FR-014). Surface a catalogue entry's declared credential requirement (FR-023). A connector
 with an auth shape and no valid credential reports `needs auth` and refuses to connect
 (FR-022); a rejected or expired credential records `auth failed` and does not retry in a
@@ -247,14 +247,14 @@ tools; a failing server on a two-server connector still reports the other as con
 
 - `src/main.rs` resolves the enabled connectors through the bridge and queues their
   bridged `(id, config)` pairs into the same background connect loop that starts the
-  configured `ragent.json` and plugin-contributed servers, so a connector's tools
+  configured `codemason.json` and plugin-contributed servers, so a connector's tools
   register as the ordinary `mcp_<server>_<tool>` tools (FR-020) without a second
   connection path. A bridged id colliding with a configured server is refused and
   warned, not overwritten (FR-033).
 - A [`ConnectorSession`] is started against the resolved plan and published on the
   session processor (`set_connector_session`), together with its live status snapshot
-  (`set_connector_statuses`). The processor stores both type-erased, so `ragent-agent`
-  still does not depend on `ragent-connectors`.
+  (`set_connector_statuses`). The processor stores both type-erased, so `codemason-agent`
+  still does not depend on `codemason-connectors`.
 - `/connectors` (TUI) now drives that published session for
   `enable`/`disable`/`connect`/`disconnect`, reconciling the MCP tool registry after
   the transition, and `/connectors list` takes its per-server tool counts from the live
@@ -296,7 +296,7 @@ removal of an enabled connector changes nothing and instructs the user to disabl
 ### T-010 - Add `/connectors` command parsing, dispatch, and registration
 
 Add the `connectors` trigger to `SLASH_COMMANDS`, the dispatch arm in `app/slash.rs`, and a
-`crates/ragent-tui/src/app/connector.rs` glue module that parses the subcommand and forwards
+`crates/codemason-tui/src/app/connector.rs` glue module that parses the subcommand and forwards
 to the shared entry points. Reports carry the `From: /connectors <sub>` attribution and are
 ASCII-only (FR-006). A bare `/connectors` and an unknown subcommand fall through to the
 usage block. A `connectors.enabled: false` subsystem reports as disabled (FR-021). The
@@ -325,7 +325,7 @@ argument renders an `[err]` row and changes no state.
 Add the usage block documenting every subcommand, its arguments, and the accepted `<source>`
 forms, plus the subcommand token list the autocomplete menu is seeded from. Rendering help
 is a pure string function with no store access and creates no files (FR-017). Model the
-module on `ragent_plugins::help`.
+module on `codemason_plugins::help`.
 
 **Verify:** `/connectors help`, a bare `/connectors`, and an unknown subcommand all print the
 same usage block and create no files.
@@ -336,20 +336,20 @@ Connect the connector's servers in isolation, invoke one advertised tool once wi
 schema-valid sample arguments generated from the tool's JSON schema, report per-step
 `[ ok ]`/`[fail]` results with wall-clock connect time, then disconnect without touching the
 live session (FR-015). A connect or tool failure is reported per-step and never panics
-(FR-016). Model the harness on `ragent_plugins::harness`.
+(FR-016). Model the harness on `codemason_plugins::harness`.
 
 **Verify:** a healthy connector reports `[ ok ]` connect and tool steps; a connector whose
 server fails to start reports `[fail]` on the connect step and the live session is unchanged.
 
-### T-014 - Add `ragent connectors` CLI parity surface
+### T-014 - Add `codemason connectors` CLI parity surface
 
-Add the `connectors` subcommand to the CLI dispatcher so `ragent connectors <sub>` prints
+Add the `connectors` subcommand to the CLI dispatcher so `codemason connectors <sub>` prints
 the same wording as the TUI family (FR-004, FR-006), reusing the shared parse-and-run glue
 from T-010/T-011 and honouring `--category` where the TUI does (FR-041). Model the parity on
-the `ragent plugins` CLI surface.
+the `codemason plugins` CLI surface.
 
-**Verify:** `ragent connectors help` and the TUI `/connectors help` print identical usage
-text; `ragent connectors list --category <name>` prints the same rows as the TUI.
+**Verify:** `codemason connectors help` and the TUI `/connectors help` print identical usage
+text; `codemason connectors list --category <name>` prints the same rows as the TUI.
 
 ### T-015 - Fixtures, acceptance walk, and quality gates
 
@@ -384,7 +384,7 @@ artifacts the manual TESTPLAN walk stages:
 | `archives/escape.zip` | one entry whose path escapes the store | - | - |
 
 The acceptance walk is automated in
-`crates/ragent-connectors/tests/test_connector_fixtures.rs` (18 tests: fixture inventory,
+`crates/codemason-connectors/tests/test_connector_fixtures.rs` (18 tests: fixture inventory,
 acceptance criteria 1-10, TC-003/TC-010/TC-011/TC-012, and the TC-024 `--category` case), so
 a regression in a fixture fails the same walk the manual plan describes. The manual walk
 follows TESTPLAN.md Prerequisites 4-12, which stage these fixtures under
@@ -399,7 +399,7 @@ whitespace-only override falls back to the compiled default as `default`, with n
 (FR-035). The chosen value is parsed through the same absolute-`https`-with-host guard the
 plugin store uses (`StoreEndpoint`), so both the default and configured paths are guarded
 (FR-037). Resolution is a pure offline function called once per launch (NFR-002, NFR-003).
-Model the module on `ragent_plugins::store_index` so the two default-endpoint disciplines
+Model the module on `codemason_plugins::store_index` so the two default-endpoint disciplines
 read the same way.
 
 **Verify:** with no `connectors` block the resolver reports the compiled default with
@@ -535,14 +535,14 @@ category resolution (`resolve_filter`/`CategoryError`) shared unchanged.
 
 Add a `ConnectorMarketplaceEntry` model and a `marketplaces: Vec<ConnectorMarketplaceEntry>`
 field on `ConnectorStoresConfig` (FR-043), mirroring
-`ragent_config::PluginStoresConfig::marketplaces`. Add
-`crates/ragent-connectors/src/marketplace_ops.rs`, ported from
-`ragent_plugins::marketplace_ops`: `resolve_source` accepts `owner/repo`,
+`codemason_config::PluginStoresConfig::marketplaces`. Add
+`crates/codemason-connectors/src/marketplace_ops.rs`, ported from
+`codemason_plugins::marketplace_ops`: `resolve_source` accepts `owner/repo`,
 `git@github.com:owner/repo.git`, an `https://` URL (used verbatim), or a local marketplace
 directory, resolving a GitHub slug or repo URL to
 `https://raw.githubusercontent.com/<owner>/<repo>/main/.claude-plugin/marketplace.json`
 (anchored to branch `main`); `add_marketplace`/`remove_marketplace` edit the
-**user-global** `connectors.stores.marketplaces` array in `~/.config/ragent/ragent.json`
+**user-global** `connectors.stores.marketplaces` array in `~/.config/codemason/codemason.json`
 with an atomic temp-file-plus-rename splice, refusing a duplicate name without `--force`,
 and drop the config crate's load cache after a write. No network access happens here.
 The config-splice helpers avoid `expect` entirely: every `as_object_mut` after an ensured
@@ -565,7 +565,7 @@ and `claude remove <name>` resolve and record through `marketplace_ops` and repo
 scan - and a missing `connectors.stores` block still lists the compiled default. They are
 dispatched *before* the `connectors.enabled` master switch in `run_connector_subcommand`, so
 a disabled subsystem still renders them rather than reporting the subsystem inert (FR-042).
-The CLI parity surface (`ragent connectors <sub>`) prints the same wording.
+The CLI parity surface (`codemason connectors <sub>`) prints the same wording.
 
 **Verify:** `marketplace show` with no stores block lists the compiled default tagged
 `default`; `add` then `list` shows the entry tagged `added`; `remove` drops it; a malformed
@@ -599,8 +599,8 @@ marketplace warns and leaves the rest of the set intact.
 
 ### T-026 - Catalogue description enrichment (off-loop, cached, injectable)
 
-Add `crates/ragent-connectors/src/catalogue_enrich.rs`, ported from
-`ragent_plugins::store_enrich` (FR-044): for each loaded entry whose `source` is a
+Add `crates/codemason-connectors/src/catalogue_enrich.rs`, ported from
+`codemason_plugins::store_enrich` (FR-044): for each loaded entry whose `source` is a
 `github.com` `git+` source, derive
 `https://raw.githubusercontent.com/<owner>/<repo>/<ref>/<subpath>/connector.json` (with
 `.claude-plugin/connector.json` tried after it) and fill only a blank `description` with
@@ -634,7 +634,7 @@ the existing browse/list/search tests updated for the sorted first row.
 
 ### T-028 - Bring the browse panel onto the plugin-store design language
 
-Rework `render_connector_catalogue_panel` (`crates/ragent-tui/src/layout.rs`) onto the exact
+Rework `render_connector_catalogue_panel` (`crates/codemason-tui/src/layout.rs`) onto the exact
 design language the plugin-store panels already ship (FR-047), sharing helpers rather than
 copying them:
 
@@ -658,7 +658,7 @@ copying them:
 - Move the footer up one row and paint it on the chrome band; add the bottom search box and
   cache the clear-button area.
 
-State (`crates/ragent-connectors/src/browse.rs`) gains the pieces the renderer needs: a
+State (`crates/codemason-connectors/src/browse.rs`) gains the pieces the renderer needs: a
 three-variant `CataloguePane` focus enum replacing the `nav_focused` boolean, an `Installed`
 pseudo-category row (`INSTALLED_CATEGORY`, `is_installed_row_label`) pinned after `ALL`, per-row
 entry counts (`category_entry_count`/`category_row_display`, mirrored for the marketplace
@@ -671,6 +671,6 @@ The TUI routes the new panes: `connector_store_marketplace_area`, `connector_sto
 and `connector_store_clear_area` hit rects, `Tab`/`BackTab` focus cycling, pane-scoped
 `Up`/`Down`/`Enter`/`c`, and marketplace click/wheel plus the clear-button click.
 
-**Verify:** `cargo test -p ragent-tui --test all test_connector_catalogue` and
-`cargo test -p ragent-connectors --test all` pass; `cargo fmt --check` and `cargo clippy` are
+**Verify:** `cargo test -p codemason-tui --test all test_connector_catalogue` and
+`cargo test -p codemason-connectors --test all` pass; `cargo fmt --check` and `cargo clippy` are
 clean.

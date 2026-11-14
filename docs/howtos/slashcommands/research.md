@@ -195,7 +195,7 @@ Continues a project with steering guidance.
 
 ## Related
 
-- `ragent research` CLI runs the same engine outside the TUI.
+- `codemason research` CLI runs the same engine outside the TUI.
 - `GET/POST/DELETE /research` HTTP endpoints mirror these operations.
 - `/research cluster` relies on the research clustering engine.
 - See docs/howtos/research.md for the research system internals.

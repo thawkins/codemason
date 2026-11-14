@@ -11,9 +11,9 @@ audit:
 
 ## Context
 
-When a user runs `/spec create <id> <feature>`, ragent delegates to an
+When a user runs `/spec create <id> <feature>`, codemason delegates to an
 explore agent using a prompt built by
-`SpecCommand::build_create_prompt` (`crates/ragent-specs/src/commands.rs`).
+`SpecCommand::build_create_prompt` (`crates/codemason-specs/src/commands.rs`).
 The prompt currently instructs the agent to write two files:
 
 1. `specs/<id>/SPEC.md` — an EARS-notation requirements specification.

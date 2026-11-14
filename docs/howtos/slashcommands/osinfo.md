@@ -4,7 +4,7 @@
 
 ## Overview
 
-`/osinfo` prints a read-only report about the host machine ragent is running
+`/osinfo` prints a read-only report about the host machine codemason is running
 on: OS identity (family, name, version, kernel, hostname, and the Linux
 distribution), CPU (architecture, physical/logical cores, vendor, brand,
 frequency), graphics adapters (integrated and discrete, with vendor, PCI ids,
@@ -12,7 +12,7 @@ driver, class, and VRAM where exposed) and the graphics-API versions the host
 supports (Direct3D, DirectX, Metal, OpenGL, OpenGL ES, Mesa, Vulkan, OptiX,
 CUDA, ROCm), physical hardware (system vendor/model/version and family, chassis
 type and vendor, motherboard, BIOS vendor/version/date, storage devices, and
-network interfaces), memory and swap, uptime and boot time, and the ragent
+network interfaces), memory and swap, uptime and boot time, and the codemason
 process environment (pid, working directory, shell, username).
 
 The report is produced by the `os_info` tool's own collector and text renderer,
@@ -88,5 +88,5 @@ Prints the same report without spawning any diagnostics process.
 ## Related
 
 - `os_info` - the tool that produces the same report for the agent
-- `/about` - ragent binary version and build information
+- `/about` - codemason binary version and build information
 - `/doctor` - provider, git, ripgrep, MCP, and memory diagnostics

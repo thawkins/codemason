@@ -1,6 +1,6 @@
 # Benchmarking Guide
 
-This guide explains how to use ragent's built-in benchmarking system from the TUI.
+This guide explains how to use codemason's built-in benchmarking system from the TUI.
 
 The benchmark runner lets you evaluate the **currently selected provider/model** against a set of
 supported coding benchmarks, write normalized Excel workbooks, and compare results across suites
@@ -89,7 +89,7 @@ benches/data/<suite>/<language>/
 
 Each suite has a default language. If you omit `--language`, both `/bench init` and `/bench run`
 use that default automatically. Each initialized language partition includes a manifest and
-normalized dataset fixtures used by `ragent-bench`.
+normalized dataset fixtures used by `codemason-bench`.
 
 ### 2.6 Result workbooks
 

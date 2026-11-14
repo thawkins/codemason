@@ -34,7 +34,7 @@ The strategy mirrors the existing OpenAlex backend:
 
 ### T-001 — Create `WikipediaEngine`
 
-- Add `crates/ragent-tools-extended/src/masterfetch/search/wikipedia.rs`.
+- Add `crates/codemason-tools-extended/src/masterfetch/search/wikipedia.rs`.
 - Register the module in `masterfetch/search/mod.rs`.
 - Implement `SearchEngine` for `WikipediaEngine` with `name() -> "wikipedia"`.
 - Store an injectable `reqwest::Client` (for testing); when `None`, use
@@ -89,7 +89,7 @@ The strategy mirrors the existing OpenAlex backend:
 
 ### T-007 — User-Agent and blocked handling
 
-- Set `User-Agent: ragent/<version> (https://github.com/thawkins/ragent)`
+- Set `User-Agent: codemason/<version> (https://github.com/thawkins/codemason)`
   on every request (FR-007).
 - HTTP 403 → `EngineReport::blocked("wikipedia", "blocked")`.
 - HTTP 429 → `EngineReport::blocked("wikipedia", "rate-limited")`

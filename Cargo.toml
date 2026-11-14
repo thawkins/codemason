@@ -13,11 +13,11 @@ edition = "2024"
 # and when added it understated the real floor).
 rust-version = "1.91"
 license = "MIT"
-repository = "https://github.com/thawkins/ragent"
+repository = "https://github.com/thawkins/codemason"
 authors = ["Tim Hawkins <tim.thawkins@gmail.com>"]
 
 [package]
-name = "ragent"
+name = "codemason"
 # One integration-test binary for the root crate (see AGENTS.md, "Test Layout").
 autotests = false
 description = "An AI coding agent for the terminal, built in Rust."
@@ -36,18 +36,18 @@ depends = "$auto"
 section = "utils"
 priority = "optional"
 assets = [
-    ["target/release/ragent", "usr/bin/", "755"],
-    ["README.md", "usr/share/doc/ragent/README.md", "644"],
-    ["LICENSE", "usr/share/doc/ragent/LICENSE", "644"],
-    ["CHANGELOG.md", "usr/share/doc/ragent/CHANGELOG.md", "644"],
+    ["target/release/cdmn", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/codemason/README.md", "644"],
+    ["LICENSE", "usr/share/doc/codemason/LICENSE", "644"],
+    ["CHANGELOG.md", "usr/share/doc/codemason/CHANGELOG.md", "644"],
 ]
 
 [package.metadata.generate-rpm]
 assets = [
-    { source = "target/release/ragent", dest = "/usr/bin/ragent", mode = "755" },
-    { source = "README.md", dest = "/usr/share/doc/ragent/README.md", mode = "644" },
-    { source = "LICENSE", dest = "/usr/share/doc/ragent/LICENSE", mode = "644" },
-    { source = "CHANGELOG.md", dest = "/usr/share/doc/ragent/CHANGELOG.md", mode = "644" },
+    { source = "target/release/cdmn", dest = "/usr/bin/cdmn", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/codemason/README.md", mode = "644" },
+    { source = "LICENSE", dest = "/usr/share/doc/codemason/LICENSE", mode = "644" },
+    { source = "CHANGELOG.md", dest = "/usr/share/doc/codemason/CHANGELOG.md", mode = "644" },
 ]
 
 [package.metadata.wix]
@@ -172,13 +172,13 @@ unsafe_code = "deny"
 
 [workspace.dependencies]
 # ── Internal crates ───────────────────────────────────────────────────────
-ragent-agent = { path = "crates/ragent-agent" }
-ragent-config = { path = "crates/ragent-config" }
-ragent-connectors = { path = "crates/ragent-connectors" }
-ragent-llm = { path = "crates/ragent-llm" }
-ragent-plugins = { path = "crates/ragent-plugins" }
-ragent-server = { path = "crates/ragent-server" }
-ragent-tui = { path = "crates/ragent-tui" }
+codemason-agent = { path = "crates/codemason-agent" }
+codemason-config = { path = "crates/codemason-config" }
+codemason-connectors = { path = "crates/codemason-connectors" }
+codemason-llm = { path = "crates/codemason-llm" }
+codemason-plugins = { path = "crates/codemason-plugins" }
+codemason-server = { path = "crates/codemason-server" }
+codemason-tui = { path = "crates/codemason-tui" }
 
 # ── Hashing / file-locking ───────────────────────────────────────────────
 num_cpus = "1.16"
@@ -264,7 +264,7 @@ rmcp = { version = "3.9", features = ["client", "transport-child-process", "tran
 sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 
 # ── Document format support ─────────────────────────────────────────────
-# calamine: used by ragent-bench to read back generated .xlsx workbooks.
+# calamine: used by codemason-bench to read back generated .xlsx workbooks.
 calamine = "0.38"
 rust_xlsxwriter = "0.101"
 # default-features = false: only deflate — avoids bzip2, zstd, lzma, aes.
@@ -293,14 +293,14 @@ rustc-hash = "2.0"
 hex = "0.4"
 # GCF (Graph Compact Format) — AI-native token-efficient encoding of JSON tool
 # results for the LLM view. Zero runtime deps beyond serde/serde_json. See
-# spec `gcf`; the encoding hook lives in ragent-agent (session/history.rs).
+# spec `gcf`; the encoding hook lives in codemason-agent (session/history.rs).
 gcf = "3.0.1"
 
-ragent-specs = { path = "crates/ragent-specs" }
-ragent-research = { path = "crates/ragent-research" }
-ragent-types = { path = "crates/ragent-types" }
-ragent-tools-core = { path = "crates/ragent-tools-core" }
-ragent-tools-extended = { path = "crates/ragent-tools-extended" }
+codemason-specs = { path = "crates/codemason-specs" }
+codemason-research = { path = "crates/codemason-research" }
+codemason-types = { path = "crates/codemason-types" }
+codemason-tools-core = { path = "crates/codemason-tools-core" }
+codemason-tools-extended = { path = "crates/codemason-tools-extended" }
 
 # ── Benchmarking ─────────────────────────────────────────────────────────
 criterion = { version = "0.8", features = ["html_reports"] }
@@ -319,7 +319,7 @@ pdf-extract = { path = "vendor/pdf-extract" }
 html2text = { path = "vendor/html2text" }
 
 [[bin]]
-name = "ragent"
+name = "cdmn"
 path = "src/main.rs"
 
 [[test]]
@@ -329,13 +329,13 @@ path = "tests/all.rs"
 [features]
 default = []
 # The `telemetry` feature is no longer required; telemetry is hardwired into the
-# binary by default via `ragent-telemetry`'s own default feature. Kept as an
+# binary by default via `codemason-telemetry`'s own default feature. Kept as an
 # alias for compatibility with any scripts still passing --features telemetry.
-telemetry = ["ragent-tui/telemetry"]
+telemetry = ["codemason-tui/telemetry"]
 # ACP server endpoint on stdio for ACP-capable editors (spec `openhands`
 # FR-022, FR-028). Off by default; also gated at runtime by the
 # `acp.server_enabled` config key. Enable with `--features acp-server`.
-acp-server = ["ragent-agent/acp-server"]
+acp-server = ["codemason-agent/acp-server"]
 
 [profile.release]
 lto = true
@@ -354,18 +354,18 @@ debug = "line-tables-only"
 incremental = false
 
 [dependencies]
-ragent-agent = { workspace = true }
-ragent-config = { workspace = true }
-ragent-connectors = { workspace = true }
-ragent-llm = { workspace = true }
-ragent-plugins = { workspace = true }
-ragent-server = { workspace = true }
-ragent-tui = { workspace = true }
-ragent-specs = { workspace = true }
-ragent-research = { workspace = true }
-ragent-types = { workspace = true }
-ragent-tools-core = { workspace = true }
-ragent-tools-extended = { workspace = true }
+codemason-agent = { workspace = true }
+codemason-config = { workspace = true }
+codemason-connectors = { workspace = true }
+codemason-llm = { workspace = true }
+codemason-plugins = { workspace = true }
+codemason-server = { workspace = true }
+codemason-tui = { workspace = true }
+codemason-specs = { workspace = true }
+codemason-research = { workspace = true }
+codemason-types = { workspace = true }
+codemason-tools-core = { workspace = true }
+codemason-tools-extended = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 clap = { workspace = true }

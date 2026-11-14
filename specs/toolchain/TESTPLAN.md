@@ -8,9 +8,9 @@ Spec: `specs/toolchain/SPEC.md`
 
 ## Prerequisites
 
-1. A working build of `ragent` with the `/toolchain` command implemented:
+1. A working build of `codemason` with the `/toolchain` command implemented:
    `cargo build` succeeds and the binary runs.
-2. A Linux workstation terminal that supports the ragent TUI (alternate
+2. A Linux workstation terminal that supports the codemason TUI (alternate
    screen). The test machine should ideally have at least two of the listed
    toolchains installed (e.g. `rust`/`cargo` and `python3`) and at least one
    application toolchain deliberately absent (e.g. `zig`, `dart`) so both
@@ -28,7 +28,7 @@ Spec: `specs/toolchain/SPEC.md`
 ### TC-001 — `/toolchain` with no subcommand shows help
 
 **Preconditions:**
-- ragent TUI is open with an active session.
+- codemason TUI is open with an active session.
 
 **Steps:**
 1. Type `/toolchain` in the input line (no trailing subcommand).
@@ -45,7 +45,7 @@ Spec: `specs/toolchain/SPEC.md`
 ### TC-002 — `/toolchain help` shows the help page
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 
 **Steps:**
 1. Type `/toolchain help`.
@@ -63,7 +63,7 @@ Spec: `specs/toolchain/SPEC.md`
 ### TC-003 — `/toolchain list` renders the full report
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - At least one application toolchain is installed (e.g. `cargo`) and at
   least one is absent (e.g. `dart`).
 
@@ -116,7 +116,7 @@ Spec: `specs/toolchain/SPEC.md`
 ### TC-005 — `/toolchain list <lang>` filters to one language
 
 **Preconditions:**
-- ragent TUI is open; `cargo` is installed.
+- codemason TUI is open; `cargo` is installed.
 
 **Steps:**
 1. Type `/toolchain list rust`.
@@ -133,7 +133,7 @@ Spec: `specs/toolchain/SPEC.md`
 ### TC-006 — Language filter is case-insensitive
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 
 **Steps:**
 1. Type `/toolchain list RUST`.
@@ -148,7 +148,7 @@ Spec: `specs/toolchain/SPEC.md`
 ### TC-007 — Unknown language id warns and lists valid ids
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 
 **Steps:**
 1. Type `/toolchain list nosuchlang`.
@@ -165,7 +165,7 @@ Spec: `specs/toolchain/SPEC.md`
 ### TC-008 — Unknown subcommand shows usage correction
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 
 **Steps:**
 1. Type `/toolchain frobnicate`.
@@ -182,7 +182,7 @@ Spec: `specs/toolchain/SPEC.md`
 ### TC-009 — `--json` output is valid JSON
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 
 **Steps:**
 1. Type `/toolchain list --json`.
@@ -204,7 +204,7 @@ Spec: `specs/toolchain/SPEC.md`
 ### TC-010 — `--json` with language filter
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 
 **Steps:**
 1. Type `/toolchain list rust --json`.
@@ -219,7 +219,7 @@ Spec: `specs/toolchain/SPEC.md`
 ### TC-011 — Missing runtime does not abort the report
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - At least three application toolchains are absent from `PATH` (e.g.
   `kotlinc`, `zig`, `swift` — verify with `command -v` first).
 
@@ -239,7 +239,7 @@ Spec: `specs/toolchain/SPEC.md`
 ### TC-012 — Version-probe failure is contained
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - A runtime is installed whose version probe is expected to be awkward
   (e.g. `java`, which prints its version on stderr via `-version`), OR the
   tool reports a non-zero exit for `--version`.
@@ -263,18 +263,18 @@ Spec: `specs/toolchain/SPEC.md`
 ### TC-013 — Read-only guarantee
 
 **Preconditions:**
-- ragent TUI is open.
-- Note the output of `git status --porcelain` and `ls -la .ragent/` in the
+- codemason TUI is open.
+- Note the output of `git status --porcelain` and `ls -la .codemason/` in the
   spare terminal before the test.
 
 **Steps:**
 1. Run `/toolchain list`, `/toolchain list rust`, and
    `/toolchain list --json` in sequence.
 2. In the spare terminal, run `git status --porcelain` and
-   `ls -la .ragent/` again and diff against the earlier capture.
+   `ls -la .codemason/` again and diff against the earlier capture.
 
 **Expected results:**
-- Identical git status and `.ragent/` contents before and after — no config
+- Identical git status and `.codemason/` contents before and after — no config
   files, index files, or working-tree files were created, modified, or
   deleted by `/toolchain`.
 
@@ -283,7 +283,7 @@ Spec: `specs/toolchain/SPEC.md`
 ### TC-014 — Autocomplete suggests subcommands
 
 **Preconditions:**
-- ragent TUI is open; the slash menu appears when typing `/`.
+- codemason TUI is open; the slash menu appears when typing `/`.
 
 **Steps:**
 1. Clear the input line.
@@ -302,7 +302,7 @@ Spec: `specs/toolchain/SPEC.md`
 ### TC-015 — `/toolchain help` lists `/toolchain` in the help index
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 
 **Steps:**
 1. Type `/help`.
@@ -318,6 +318,6 @@ Spec: `specs/toolchain/SPEC.md`
 1. Delete any temporary capture files created during TC-009
    (`target/temp/tc9.json`) — `target/temp/` is gitignored, so removal is
    optional but tidy.
-2. No ragent state (sessions, config, spec data, code index) is modified by
+2. No codemason state (sessions, config, spec data, code index) is modified by
    this test plan; no further teardown is required.
 3. Close the spare terminal used for cross-checking.

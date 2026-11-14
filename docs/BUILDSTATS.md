@@ -42,31 +42,31 @@ Method: `cargo llvm-cov --workspace --all-targets --no-fail-fast --json`, with
 `--ignore-filename-regex '(^|/)(tests|benches|examples)/|target/'`, so test,
 bench and example sources are excluded from both numerator and denominator.
 Per-crate figures are summed from `.data[0].files` by the `crates/<name>/` path
-prefix; everything else is the root binary, labelled `ragent(bin)`.
+prefix; everything else is the root binary, labelled `codemason(bin)`.
 
 | Crate | Lines covered | Lines total | Coverage |
 |-------|---------------|-------------|----------|
-| ragent(bin) | 840 | 2566 | 32.74% |
-| ragent-agent | 30610 | 35290 | 86.74% |
-| ragent-bench | 3683 | 4282 | 86.01% |
-| ragent-codeindex | 7646 | 8560 | 89.32% |
-| ragent-config | 2859 | 3137 | 91.14% |
-| ragent-connectors | 3852 | 4455 | 86.46% |
-| ragent-llm | 6605 | 7563 | 87.33% |
-| ragent-plugins | 4752 | 5260 | 90.34% |
-| ragent-research | 14973 | 17419 | 85.96% |
-| ragent-server | 2679 | 3023 | 88.62% |
-| ragent-specs | 3821 | 4237 | 90.18% |
-| ragent-storage | 3822 | 4154 | 92.01% |
-| ragent-surface | 516 | 571 | 90.37% |
-| ragent-telemetry | 1757 | 1983 | 88.6% |
-| ragent-tools-core | 4593 | 5274 | 87.09% |
-| ragent-tools-extended | 9151 | 10603 | 86.31% |
-| ragent-tools-vcs | 2991 | 3417 | 87.53% |
-| ragent-tui | 38919 | 44590 | 87.28% |
-| ragent-types | 1932 | 2008 | 96.22% |
+| codemason(bin) | 840 | 2566 | 32.74% |
+| codemason-agent | 30610 | 35290 | 86.74% |
+| codemason-bench | 3683 | 4282 | 86.01% |
+| codemason-codeindex | 7646 | 8560 | 89.32% |
+| codemason-config | 2859 | 3137 | 91.14% |
+| codemason-connectors | 3852 | 4455 | 86.46% |
+| codemason-llm | 6605 | 7563 | 87.33% |
+| codemason-plugins | 4752 | 5260 | 90.34% |
+| codemason-research | 14973 | 17419 | 85.96% |
+| codemason-server | 2679 | 3023 | 88.62% |
+| codemason-specs | 3821 | 4237 | 90.18% |
+| codemason-storage | 3822 | 4154 | 92.01% |
+| codemason-surface | 516 | 571 | 90.37% |
+| codemason-telemetry | 1757 | 1983 | 88.6% |
+| codemason-tools-core | 4593 | 5274 | 87.09% |
+| codemason-tools-extended | 9151 | 10603 | 86.31% |
+| codemason-tools-vcs | 2991 | 3417 | 87.53% |
+| codemason-tui | 38919 | 44590 | 87.28% |
+| codemason-types | 1932 | 2008 | 96.22% |
 
-The root `ragent(bin)` entry is low by construction: `src/main.rs` and its `cli*`
+The root `codemason(bin)` entry is low by construction: `src/main.rs` and its `cli*`
 siblings are the presentation surface, exercised through subprocess CLI tests
 that run the built binary rather than calling into the library, so llvm-cov sees
 little of their code as covered.
@@ -121,7 +121,7 @@ test result: ok. 427 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fi
 Summed over **all 40 test binaries**: **15,240 tests passed, 0 failed, 16 ignored**.
 
 `--all-targets` excludes doctests. CI does not run `cargo test --workspace`: it runs
-`cargo nextest run --workspace --features ragent-tools-extended/test-ssrf-bypass
+`cargo nextest run --workspace --features codemason-tools-extended/test-ssrf-bypass
 --profile ci --no-fail-fast` plus `cargo test --workspace --doc` for the doctests
 (nextest does not run them), so the CI pass count differs from this figure.
 
@@ -134,7 +134,7 @@ per test), which is why they had gone unnoticed.
 
 1. **`test_tool_rename_guard` (2 cases).** Most cases now scan a scratch copy of
    the tree, but `--self-test` plants a fixture inside
-   `crates/ragent-tools-core/src/`, and `test_the_guard_finishes_in_a_few_seconds`
+   `crates/codemason-tools-core/src/`, and `test_the_guard_finishes_in_a_few_seconds`
    scanned the checkout while it was there. Nextest's `tool-rename-guard` group
    orders these across processes; it does nothing inside one process, and the
    file's comment explicitly declined `#[serial]`. Added a file-local
@@ -151,9 +151,9 @@ per test), which is why they had gone unnoticed.
    unchanged.
 3. **`test_export_health::observed::test_observed_exporter_success_queues_no_notice`.**
    Three cases drive the process-global `export_health()`, clearing it and then
-   reading its counters; `ragent-telemetry` declared no crate-wide lock, so a
+   reading its counters; `codemason-telemetry` declared no crate-wide lock, so a
    sibling's failure interleaved. Added `global_env_mutex()` /
-   `global_env_lock()` to `crates/ragent-telemetry/tests/all.rs` and took it in
+   `global_env_lock()` to `crates/codemason-telemetry/tests/all.rs` and took it in
    all three cases.
 
 `cargo fmt --all --check` passes on the result.

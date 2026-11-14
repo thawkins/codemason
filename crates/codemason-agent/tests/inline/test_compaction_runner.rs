@@ -1,0 +1,546 @@
+//! External tests for the compaction runner (T-007).
+//!
+//! Compiled into the crate's module tree via the `#[path]` attribute in
+//! `runner.rs` so they can access crate-private items. Lives under
+//! `tests/inline/` so cargo does not also compile it as a standalone
+//! integration test.
+
+use std::sync::Arc;
+
+use codemason_config::{CompactionConfig, StreamConfig};
+use codemason_llm::llm::{ChatRequest, LlmClient, StreamEvent};
+use codemason_llm::providers::mock_llm_client::{MockLlmClient, MockScenario};
+use codemason_types::event::EventBus;
+use codemason_types::message::{Message, Role};
+use codemason_types::strutil::floor_char_boundary;
+
+use crate::compaction::runner::{
+    MAX_COMPACTION_PROMPT_CHARS, build_compaction_message, build_summary_request,
+    cap_head_transcript, compact, compaction_prompt_cap, resolve_compaction_model, select,
+    summarize_via_client,
+};
+
+fn user_msg(text: &str) -> Message {
+    Message::user_text("sess", text)
+}
+
+fn assistant_msg(text: &str) -> Message {
+    Message::assistant_text("sess", text)
+}
+
+#[test]
+fn test_select_keeps_recent_tail_within_budget() {
+    // keep.tokens default = 0.20; on a 100k window that is 20k tokens. Each
+    // short message is ~1-3 tokens, so all five messages fit in the recent tail.
+    // With the head-never-empty fix, the oldest message is forced into the
+    // head so compaction has something to summarise.
+    let messages = vec![
+        user_msg("aaaa"),
+        assistant_msg("bbbb"),
+        user_msg("cccc"),
+        assistant_msg("dddd"),
+        user_msg("eeee"),
+    ];
+    let config = CompactionConfig::default();
+    let split = select(messages.clone(), &config, 100_000);
+    // The oldest message is forced into the head.
+    assert_eq!(split.head_messages.len(), 1);
+    assert_eq!(split.head_messages[0].text_content(), "aaaa");
+    assert_eq!(split.recent_messages.len(), 4);
+    assert!(split.recent_tokens > 0);
+}
+
+#[test]
+fn test_select_splits_when_budget_exceeded() {
+    // A tiny keep fraction forces a split: only the last message fits.
+    let messages = vec![user_msg("aaaa"), assistant_msg("bbbb"), user_msg("cccc")];
+    let config = CompactionConfig {
+        keep: codemason_config::compaction::KeepConfig { tokens: Some(0.0) },
+        ..Default::default()
+    };
+    let split = select(messages.clone(), &config, 100_000);
+    // With a zero budget, only the last message is kept verbatim.
+    assert_eq!(split.recent_messages.len(), 1);
+    assert_eq!(split.recent_messages[0].text_content(), "cccc");
+    assert_eq!(split.head_messages.len(), 2);
+}
+
+#[test]
+fn test_select_drops_compaction_messages() {
+    let mut messages = vec![user_msg("aaaa"), assistant_msg("bbbb"), user_msg("cccc")];
+    // Insert a compaction message in the middle; select should ignore it.
+    messages.insert(1, build_compaction_message("sess", "old summary"));
+    let config = CompactionConfig::default();
+    let split = select(messages.clone(), &config, 100_000);
+    // The compaction message is dropped from both head and recent.
+    assert!(
+        split
+            .recent_messages
+            .iter()
+            .all(|m| m.role != Role::Compaction)
+    );
+    assert!(
+        split
+            .head_messages
+            .iter()
+            .all(|m| m.role != Role::Compaction)
+    );
+    // With 3 non-compaction messages, the oldest is forced into the head.
+    assert!(!split.head_messages.is_empty());
+    assert!(!split.recent_messages.is_empty());
+}
+
+#[test]
+fn test_select_empty_history() {
+    let config = CompactionConfig::default();
+    let split = select(Vec::new(), &config, 100_000);
+    assert!(split.head_messages.is_empty());
+    assert!(split.recent_messages.is_empty());
+    assert_eq!(split.recent_tokens, 0);
+}
+
+#[test]
+fn test_select_respects_fraction_on_small_window() {
+    // keep fraction 0.20 on a 1000-token window gives 200 tokens. With messages
+    // that sum to more than 200 tokens, only the last message should be kept.
+    let messages = vec![
+        user_msg("a".repeat(400).as_str()),
+        assistant_msg("b".repeat(400).as_str()),
+        user_msg("c".repeat(400).as_str()),
+    ];
+    let config = CompactionConfig::default();
+    let split = select(messages.clone(), &config, 1_000);
+    assert_eq!(split.recent_messages.len(), 1);
+    assert_eq!(split.head_messages.len(), 2);
+}
+
+#[test]
+fn test_build_compaction_message_has_compaction_role() {
+    let msg = build_compaction_message("sess", "## Objective\n- do thing");
+    assert_eq!(msg.role, Role::Compaction);
+    assert_eq!(msg.text_content(), "## Objective\n- do thing");
+    assert_eq!(msg.session_id, "sess");
+}
+
+#[test]
+fn test_build_summary_request_is_single_user_message_no_tools() {
+    let req = build_summary_request("claude-sonnet", "summarise this", 4096, Some(120), None);
+    assert_eq!(req.model, "claude-sonnet");
+    assert_eq!(req.messages.len(), 1);
+    assert_eq!(req.messages[0].role, "user");
+    assert!(req.tools.is_empty());
+    assert_eq!(req.max_tokens, Some(4096));
+    assert!(req.system.is_none());
+    assert_eq!(req.stream_timeout_secs, Some(120));
+}
+
+#[tokio::test]
+async fn test_summarize_via_client_collects_text_deltas() {
+    let client: Arc<dyn LlmClient> =
+        Arc::new(MockLlmClient::with_scenario(MockScenario::SimpleTextReply));
+    let request = build_summary_request("mock-model", "summarise", 4096, None, None);
+    let summary = summarize_via_client(
+        &client,
+        request,
+        &StreamConfig::default(),
+        &EventBus::new(8),
+        "sess",
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .await
+    .unwrap();
+    // SimpleTextReply emits "Hello, world from the mock LLM client. Bye!\n".
+    assert!(summary.contains("Hello, world from the mock LLM client"));
+}
+
+/// A mock LlmClient that emits an Error event, used to verify the error path.
+struct ErrorClient;
+#[async_trait::async_trait]
+impl LlmClient for ErrorClient {
+    async fn chat(
+        &self,
+        _request: ChatRequest,
+    ) -> anyhow::Result<std::pin::Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>>> {
+        let stream = tokio_stream::iter(vec![StreamEvent::Error {
+            message: "boom".to_string(),
+        }]);
+        Ok(Box::pin(stream))
+    }
+}
+
+#[tokio::test]
+async fn test_summarize_via_client_propagates_error_event() {
+    let client: Arc<dyn LlmClient> = Arc::new(ErrorClient);
+    let request = build_summary_request("mock", "x", 4096, Some(60), None);
+    let result = summarize_via_client(
+        &client,
+        request,
+        &StreamConfig::default(),
+        &EventBus::new(8),
+        "sess",
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("compaction summarisation failed")
+    );
+}
+
+#[tokio::test]
+async fn test_compact_replaces_history_with_summary_and_recent() {
+    // Build a history large enough to force a head/recent split when
+    // keep_tokens is small, so we exercise both the summarisation call and the
+    // verbatim-tail preservation.
+    let messages = vec![
+        user_msg("earliest user message about rust"),
+        assistant_msg("earliest assistant reply explaining ownership"),
+        user_msg("middle user question about lifetimes"),
+        assistant_msg("middle assistant reply with examples"),
+        user_msg("latest user asking to fix a bug"),
+    ];
+    let config = CompactionConfig {
+        keep: codemason_config::compaction::KeepConfig { tokens: Some(0.0) },
+        ..Default::default()
+    };
+    let client: Arc<dyn LlmClient> =
+        Arc::new(MockLlmClient::with_scenario(MockScenario::SimpleTextReply));
+    let bus = EventBus::new(64);
+
+    let outcome = compact(
+        "sess",
+        messages,
+        "mock-model",
+        100_000,
+        8_000,
+        &config,
+        None,
+        &client,
+        &bus,
+        "auto",
+        &StreamConfig::default(),
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .await
+    .expect("compact should succeed");
+
+    // The new message list starts with a compaction message.
+    assert_eq!(outcome.new_messages[0].role, Role::Compaction);
+    assert_eq!(outcome.compaction_message.role, Role::Compaction);
+    // The summary is the mock client's canned text (trimmed).
+    assert!(
+        outcome
+            .summary
+            .contains("Hello, world from the mock LLM client")
+    );
+    // The verbatim recent tail follows the compaction message.
+    assert!(outcome.new_messages.len() > 1);
+    assert!(
+        outcome
+            .new_messages
+            .iter()
+            .skip(1)
+            .any(|m| m.text_content().contains("latest user asking to fix a bug"))
+    );
+    // The earliest messages are no longer present verbatim (they were
+    // summarised into the compaction message).
+    assert!(outcome.new_messages.iter().skip(1).all(|m| {
+        !m.text_content()
+            .contains("earliest user message about rust")
+    }));
+}
+
+#[tokio::test]
+async fn test_compact_bails_when_nothing_to_summarise() {
+    // A single message: even with the head-never-empty fix, there is only one
+    // non-compaction message so `select` cannot split it into head + recent.
+    // The guard fires and bails (silently, without a user-visible notice).
+    let messages = vec![user_msg("only message")];
+    let config = CompactionConfig {
+        keep: codemason_config::compaction::KeepConfig { tokens: Some(0.0) },
+        ..Default::default()
+    };
+    let client: Arc<dyn LlmClient> =
+        Arc::new(MockLlmClient::with_scenario(MockScenario::SimpleTextReply));
+    let bus = EventBus::new(64);
+    let result = compact(
+        "sess",
+        messages,
+        "mock-model",
+        100_000,
+        8_000,
+        &config,
+        None,
+        &client,
+        &bus,
+        "auto",
+        &StreamConfig::default(),
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("nothing to summarise")
+    );
+}
+
+#[tokio::test]
+async fn test_compact_bails_on_empty_summary() {
+    // MockScenario::Empty emits no text deltas, just a Finish.
+    let messages = vec![
+        user_msg("first"),
+        assistant_msg("second"),
+        user_msg("third"),
+    ];
+    let config = CompactionConfig {
+        keep: codemason_config::compaction::KeepConfig { tokens: Some(0.0) },
+        ..Default::default()
+    };
+    let client: Arc<dyn LlmClient> = Arc::new(MockLlmClient::with_scenario(MockScenario::Empty));
+    let bus = EventBus::new(64);
+    let result = compact(
+        "sess",
+        messages,
+        "mock-model",
+        100_000,
+        8_000,
+        &config,
+        None,
+        &client,
+        &bus,
+        "auto",
+        &StreamConfig::default(),
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("empty summary"));
+}
+
+#[tokio::test]
+async fn test_compact_publishes_started_and_finished_events() {
+    let messages = vec![
+        user_msg("first message"),
+        assistant_msg("second message"),
+        user_msg("third message"),
+    ];
+    let config = CompactionConfig {
+        keep: codemason_config::compaction::KeepConfig { tokens: Some(0.0) },
+        ..Default::default()
+    };
+    let client: Arc<dyn LlmClient> =
+        Arc::new(MockLlmClient::with_scenario(MockScenario::SimpleTextReply));
+    let bus = EventBus::new(64);
+    let mut rx = bus.subscribe();
+
+    let _ = compact(
+        "sess",
+        messages,
+        "mock-model",
+        100_000,
+        8_000,
+        &config,
+        None,
+        &client,
+        &bus,
+        "auto",
+        &StreamConfig::default(),
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .await
+    .unwrap();
+
+    // Drain events and confirm both CompressionStarted and CompressionFinished
+    // were published.
+    let mut saw_started = false;
+    let mut saw_finished = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            codemason_types::event::Event::CompressionStarted { .. } => saw_started = true,
+            codemason_types::event::Event::CompressionFinished { .. } => saw_finished = true,
+            _ => {}
+        }
+    }
+    assert!(saw_started, "expected CompressionStarted event");
+    assert!(saw_finished, "expected CompressionFinished event");
+}
+
+#[test]
+fn test_cap_head_transcript_short_input_returned_unchanged() {
+    let text = "short transcript".to_string();
+    assert_eq!(cap_head_transcript(&text, 100_000), text);
+}
+
+#[test]
+fn test_cap_head_transcript_truncates_long_ascii_with_marker() {
+    // 2x the cap of ASCII content must be truncated with a marker prefix and
+    // still end at the newest content.
+    let text = "x".repeat(2 * MAX_COMPACTION_PROMPT_CHARS);
+    let out = cap_head_transcript(&text, 100_000);
+    assert!(out.starts_with("[Earlier conversation omitted due to length]\n\n"));
+    assert!(out.len() <= MAX_COMPACTION_PROMPT_CHARS);
+}
+
+#[test]
+fn test_cap_head_transcript_does_not_panic_on_multibyte_boundary() {
+    // Regression: the naive `len - keep_len` byte cut can land inside a
+    // multi-byte UTF-8 character (the box-drawing glyph used by the TUI is
+    // 3 bytes) and panic with "byte index is not a char boundary".
+    let unit = format!("{}\n", "\u{2500}".repeat(100)); // 100 x '-' + '\n'
+    let text = unit.repeat(MAX_COMPACTION_PROMPT_CHARS / unit.len() + 4);
+    assert!(text.len() > MAX_COMPACTION_PROMPT_CHARS);
+    let out = cap_head_transcript(&text, 100_000);
+    assert!(out.starts_with("[Earlier conversation omitted due to length]\n\n"));
+    // Result must still be valid UTF-8 (it is a String by construction) and
+    // must not lose the trailing content.
+    assert!(out.ends_with('\n'));
+}
+
+#[test]
+fn test_floor_char_boundary_snaps_back_to_char_start() {
+    // '-' is 3 bytes (E2 94 80). Indexes 1 and 2 inside it must snap to 0.
+    let s = "\u{2500}\u{2500}";
+    assert_eq!(floor_char_boundary(s, 0), 0);
+    assert_eq!(floor_char_boundary(s, 1), 0);
+    assert_eq!(floor_char_boundary(s, 2), 0);
+    assert_eq!(floor_char_boundary(s, 3), 3);
+    assert_eq!(floor_char_boundary(s, 4), 3);
+    assert_eq!(floor_char_boundary(s, 6), 6);
+    // Past-the-end indexes clamp to len.
+    assert_eq!(floor_char_boundary(s, 100), 6);
+}
+
+// ----------------------------------------------------------------------------
+// Performance-oriented additions (compaction speed-up pass)
+// ----------------------------------------------------------------------------
+
+#[test]
+fn test_resolve_compaction_model_returns_session_model_without_override() {
+    assert_eq!(resolve_compaction_model(None, "sess-model"), "sess-model");
+}
+
+#[test]
+fn test_resolve_compaction_model_prefers_override() {
+    let override_ref = codemason_config::CompactionModelRef {
+        provider_id: "ollama".to_string(),
+        model_id: "qwen2.5:1.5b".to_string(),
+    };
+    assert_eq!(
+        resolve_compaction_model(Some(&override_ref), "sess-model"),
+        "qwen2.5:1.5b"
+    );
+}
+
+#[test]
+fn test_compaction_prompt_cap_scales_with_context_window() {
+    // Large window keeps the full 60k-char cap.
+    assert_eq!(compaction_prompt_cap(200_000), MAX_COMPACTION_PROMPT_CHARS);
+    // 16k-token local model gets half the window in chars.
+    assert_eq!(compaction_prompt_cap(16_000), 32_000);
+    // Tiny window saturates near zero.
+    assert_eq!(compaction_prompt_cap(100), 200);
+}
+
+#[test]
+fn test_cap_head_transcript_uses_adaptive_cap() {
+    // With a tiny window the transcript must be cut even though it is far
+    // below the 60k absolute cap.
+    let text = "x".repeat(50_000);
+    let out = cap_head_transcript(&text, 10_000);
+    assert!(out.len() <= compaction_prompt_cap(10_000));
+    assert!(out.starts_with("[Earlier conversation omitted due to length]"));
+}
+
+#[test]
+fn test_build_summary_request_propagates_temperature() {
+    let req = build_summary_request("m", "p", 128, None, Some(0.2));
+    assert_eq!(req.temperature, Some(0.2));
+}
+
+#[tokio::test]
+async fn test_summarize_via_client_cancel_flag_aborts_before_first_chunk() {
+    let client: Arc<dyn LlmClient> =
+        Arc::new(MockLlmClient::with_scenario(MockScenario::SimpleTextReply));
+    let request = build_summary_request("mock-model", "summarise", 256, None, None);
+    let cancel = std::sync::atomic::AtomicBool::new(true);
+    let result = summarize_via_client(
+        &client,
+        request,
+        &StreamConfig::default(),
+        &EventBus::new(8),
+        "sess",
+        &cancel,
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("compaction cancelled")
+    );
+}
+
+#[tokio::test]
+async fn test_summarize_via_client_stall_timeout_fires() {
+    // A client that yields one delta then goes silent past the stall budget
+    // must fail fast rather than hang to the overall timeout.
+    struct StallClient;
+    #[async_trait::async_trait]
+    impl LlmClient for StallClient {
+        async fn chat(
+            &self,
+            _request: ChatRequest,
+        ) -> anyhow::Result<std::pin::Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>>>
+        {
+            // First delta immediately, then a 90s sleep (far beyond a 5s
+            // stall cap), then Finish.
+            use futures::StreamExt as _;
+            let first = futures::stream::once(async {
+                StreamEvent::TextDelta {
+                    text: "hi".to_string(),
+                }
+            });
+            let rest = futures::stream::once(async {
+                tokio::time::sleep(std::time::Duration::from_secs(90)).await;
+                StreamEvent::Finish {
+                    reason: codemason_types::llm::LlmFinishReason::Stop,
+                }
+            });
+            Ok(Box::pin(first.chain(rest)))
+        }
+    }
+    let client: Arc<dyn LlmClient> = Arc::new(StallClient);
+    let request = build_summary_request("mock-model", "summarise", 256, None, None);
+    let stream_config = StreamConfig {
+        timeout_secs: 5,
+        initial_response_timeout_secs: 5,
+        max_retries: 0,
+        retry_backoff_secs: 1,
+    };
+    let started = std::time::Instant::now();
+    let result = summarize_via_client(
+        &client,
+        request,
+        &stream_config,
+        &EventBus::new(8),
+        "sess",
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(
+        result.unwrap_err().to_string().contains("stalled"),
+        "expected a stall error"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(30),
+        "stall detection must fail fast, not wait for the overall timeout"
+    );
+}

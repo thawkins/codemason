@@ -1,6 +1,6 @@
 # PDF Tools
 
-This document describes ragent's **PDF document tools** -- the `pdf_read` and
+This document describes codemason's **PDF document tools** -- the `pdf_read` and
 `pdf_write` families. It covers formats, JSON input schemas, worked examples,
 permissions, checkpointing, and configuration options.
 
@@ -8,10 +8,10 @@ Both tools parse and write **in-process with pure-Rust crates**. There is no
 `soffice`/LibreOffice binary, no Microsoft Word, and no external converter to
 install. A workspace-wide grep for `soffice` returns zero matches.
 
-> **History:** earlier ragent releases also shipped MS Office (`office_*`) and
+> **History:** earlier codemason releases also shipped MS Office (`office_*`) and
 > LibreOffice/OpenDocument (`libre_*`) document tools. Those families have been
 > removed; only the PDF family remains. See [Section 3](#3-format-matrix) for
-> which document formats ragent still understands.
+> which document formats codemason still understands.
 
 ---
 
@@ -33,14 +33,14 @@ install. A workspace-wide grep for `soffice` returns zero matches.
 
 ## 1. Tool inventory
 
-Two tools are registered by `crates/ragent-tools-extended/src/lib.rs`:
+Two tools are registered by `crates/codemason-tools-extended/src/lib.rs`:
 
 | Tool name | Family | Purpose | Permission |
 |---|---|---|---|
 | `pdf_read` | PDF | Extract text or metadata from PDF files | `file:read` |
 | `pdf_write` | PDF | Create new PDF documents | `file:write` |
 
-Both are implemented in `crates/ragent-tools-extended/src/` (modules
+Both are implemented in `crates/codemason-tools-extended/src/` (modules
 `pdf_read.rs`, `pdf_write.rs`, plus the shared helper module `pdf_common.rs`).
 
 ---
@@ -60,7 +60,7 @@ registered tool is advertised to the model. `/tools list` shows them.
 
 `pdf_read` rejects files that are not PDFs, and `pdf_write` always emits a
 `.pdf`. Plain-text and markdown extraction (used by the research
-`--from-file` pre-step) is handled by `crates/ragent-tools-extended/src/document_extract.rs`,
+`--from-file` pre-step) is handled by `crates/codemason-tools-extended/src/document_extract.rs`,
 which reads `.pdf` through `pdf_read` and `.md`/`.markdown`/`.txt` verbatim.
 
 Legacy binary and OOXML/ODF document formats (`.doc`, `.xls`, `.ppt`, `.docx`,
@@ -128,7 +128,7 @@ resolved output path is confined to the workspace root.
   allow/deny/ask rule engine and the file-path guards -- the same surface as
   the plain `read`/`Write` tools. There are no PDF-specific permission rules.
 - **Goal-loop write detection.** `LOOP_WRITE_TOOLS` (in
-  `crates/ragent-agent/src/session/loop_state.rs`) includes `pdf_write`.
+  `crates/codemason-agent/src/session/loop_state.rs`) includes `pdf_write`.
   Inside a `/loop` run, any call to this tool counts as a destructive write: it
   arms the pre-loop snapshot/checkpoint machinery (forced checkpoints gated on
   `spec.checkpoints` and `checkpoint_timeout_secs`) and participates in the
@@ -146,7 +146,7 @@ resolved output path is confined to the workspace root.
 
 - All parsing and writing is pure Rust -- no LibreOffice/soffice subprocess, no
   Word installation, no headless converters.
-- Underlying crates (from `crates/ragent-tools-extended/Cargo.toml`):
+- Underlying crates (from `crates/codemason-tools-extended/Cargo.toml`):
   `printpdf` (PDF writing), `pdf-extract` (PDF reading, vendored at
   `vendor/pdf-extract`), and `lopdf` (PDF parsing and the per-page fast path).
 - `pdf-extract` is a workspace-patched dependency: the root `Cargo.toml`
@@ -213,7 +213,7 @@ report.pdf"); the model issues these calls itself.
 ### 8.6 Read a PDF and drive a document task
 
 ```bash
-ragent run --agent general "read assets/pdf/Profile.pdf and summarise the candidate's experience"
+codemason run --agent general "read assets/pdf/Profile.pdf and summarise the candidate's experience"
 ```
 
 Sample PDF files for manual testing live in `assets/pdf/` (`Profile.pdf`,
@@ -230,7 +230,7 @@ Sample PDF files for manual testing live in `assets/pdf/` (`Profile.pdf`,
 | `/tools` | Show the `/tools` help |
 | `/tools list` | List every registered tool with its source and description |
 
-### Configuration (`ragent.json`)
+### Configuration (`codemason.json`)
 
 There are no PDF-specific keys; all behaviour (formats, payloads, limits) is
 fixed by the tool implementations. The tools are registered and visible by
@@ -244,7 +244,7 @@ default.
 | `file:write` | `pdf_write` |
 
 Configure allow/deny/ask rules for these categories in the `permissions`
-array of `ragent.json`, exactly as for the plain file tools.
+array of `codemason.json`, exactly as for the plain file tools.
 
 ---
 
@@ -253,7 +253,7 @@ array of `ragent.json`, exactly as for the plain file tools.
 - Behavioural coverage for the PDF tools is indirect: the `/tools` listing
   includes the PDF tool names, the TUI slash-command test exercises `/tools`,
   and the step-log input summary for `pdf_read` is locked in by
-  `crates/ragent-tui/tests/test_tool_display.rs`.
+  `crates/codemason-tui/tests/test_tool_display.rs`.
 - Sample asset files (`assets/pdf/Profile.pdf`, `assets/pdf/vibeSDLC.pdf`) are
   informal manual fixtures; nothing in `tests/` references them, so they are not
   CI coverage.
@@ -271,6 +271,6 @@ array of `ragent.json`, exactly as for the plain file tools.
   participates in forced checkpoints.
 - `TUI-QUICKSTART.md` -- quick reference for slash commands including
   `/tools`.
-- `crates/ragent-tools-extended/DOCS.md` -- curated descriptions of the
+- `crates/codemason-tools-extended/DOCS.md` -- curated descriptions of the
   extended tool families.
 - `SPEC.md` -- full configuration schema.

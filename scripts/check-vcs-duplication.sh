@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # CI guard: the VCS tool layer must have one implementation of each shared
 # helper, across crates AND across the GitHub/GitLab split inside
-# `ragent-tools-vcs`.
+# `codemason-tools-vcs`.
 #
 # Checks:
 #
-# 1. `ragent-agent` must not re-introduce local copies of the GitHub/GitLab
-#    tool sources; they live canonically in `ragent-tools-vcs` and are
+# 1. `codemason-agent` must not re-introduce local copies of the GitHub/GitLab
+#    tool sources; they live canonically in `codemason-tools-vcs` and are
 #    registered via the `ExtractedVcsToolAdapter`.
 # 2. The git-argument guard (`reject_option_like`) must have a single shared
-#    implementation (`ragent_types::guard::reject_option_like`), and
-#    `ragent-plugins` must not re-derive the leading-dash check.
+#    implementation (`codemason_types::guard::reject_option_like`), and
+#    `codemason-plugins` must not re-derive the leading-dash check.
 # 3. Intra-crate (ANTIPAT M7.9): the per-provider client/detection helpers
 #    (`make_client`, `detect`, `detect_repo`, `detect_project`) must be
 #    defined only in `github/helpers.rs` / `gitlab/helpers.rs`, not
@@ -26,9 +26,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-TOOLS_DUP_DIR="crates/ragent-agent/src/tool"
-PLUGIN_ADD="crates/ragent-plugins/src/add.rs"
-VCS_SRC="crates/ragent-tools-vcs/src"
+TOOLS_DUP_DIR="crates/codemason-agent/src/tool"
+PLUGIN_ADD="crates/codemason-plugins/src/add.rs"
+VCS_SRC="crates/codemason-tools-vcs/src"
 
 # Helper functions that must have exactly one definition, in `helpers.rs`.
 SHARED_HELPERS_RE='^(pub )?(async )?fn (make_client|detect|detect_repo|detect_project)\b'
@@ -36,29 +36,29 @@ SHARED_HELPERS_RE='^(pub )?(async )?fn (make_client|detect|detect_repo|detect_pr
 run_checks() {
     local exit_code=0
 
-    # ── 1. Cross-crate copies in ragent-agent ───────────────────────────────
+    # ── 1. Cross-crate copies in codemason-agent ───────────────────────────────
     for f in "$TOOLS_DUP_DIR"/github_*.rs "$TOOLS_DUP_DIR"/gitlab_*.rs; do
         [ -e "$f" ] || continue
         echo "ERROR: duplicate VCS tool source file detected: $f"
-        echo "       GitHub/GitLab tools live canonically in crates/ragent-tools-vcs/src/"
-        echo "       and are registered into ragent-agent via the ExtractedVcsToolAdapter"
-        echo "       in crates/ragent-agent/src/tool/mod.rs. Remove the local copy."
+        echo "       GitHub/GitLab tools live canonically in crates/codemason-tools-vcs/src/"
+        echo "       and are registered into codemason-agent via the ExtractedVcsToolAdapter"
+        echo "       in crates/codemason-agent/src/tool/mod.rs. Remove the local copy."
         exit_code=1
     done
 
     # ── 2. Single git-argument guard ────────────────────────────────────────
     if [ -f "$PLUGIN_ADD" ] && grep -qF "value.starts_with('-')" "$PLUGIN_ADD"; then
         echo "ERROR: $PLUGIN_ADD re-implements the leading-dash git-argument check."
-        echo "       Delegate to ragent_types::guard::reject_option_like /"
-        echo "       is_safe_operand (via ragent_tools_core::guard) instead"
+        echo "       Delegate to codemason_types::guard::reject_option_like /"
+        echo "       is_safe_operand (via codemason_tools_core::guard) instead"
         echo "       (SECTASKS MS-05 T-068)."
         exit_code=1
     fi
 
-    if ! grep -q 'ragent_types::guard::reject_option_like' \
-        crates/ragent-tools-vcs/src/git/mod.rs; then
-        echo "ERROR: crates/ragent-tools-vcs/src/git/mod.rs no longer delegates to the"
-        echo "       shared ragent_types::guard::reject_option_like (SECTASKS MS-05 T-068)."
+    if ! grep -q 'codemason_types::guard::reject_option_like' \
+        crates/codemason-tools-vcs/src/git/mod.rs; then
+        echo "ERROR: crates/codemason-tools-vcs/src/git/mod.rs no longer delegates to the"
+        echo "       shared codemason_types::guard::reject_option_like (SECTASKS MS-05 T-068)."
         exit_code=1
     fi
 
@@ -107,9 +107,9 @@ if [ "${1:-}" = "--self-test" ]; then
         exit 1
     fi
 
-    # Second half: a re-introduced leading-dash check in ragent-plugins must be
+    # Second half: a re-introduced leading-dash check in codemason-plugins must be
     # caught. We seed it into a scratch copy the guard reads.
-    seed_plugin="crates/ragent-plugins/src/__selftest_add_dupe.rs"
+    seed_plugin="crates/codemason-plugins/src/__selftest_add_dupe.rs"
     printf "fn f(value: &str) -> bool { value.starts_with('-') }\n" > "$seed_plugin"
     set +e
     # Point the guard at the seeded file for this run only.

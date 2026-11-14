@@ -27,7 +27,7 @@ Three things have to be true for that sentence:
 
 | # | State | Where |
 |---|---|---|
-| 1 | `ContentPart::Reasoning { text, signature }` and `MessagePart::Reasoning { text, signature }` already existed with the omission rule on the signature key (T-001). | `ragent-types` |
+| 1 | `ContentPart::Reasoning { text, signature }` and `MessagePart::Reasoning { text, signature }` already existed with the omission rule on the signature key (T-001). | `codemason-types` |
 | 2 | `StreamEvent::ReasoningSignature` already existed and the three Anthropic-speaking parsers already emitted it from `signature_delta` (Anthropic, Azure Resource, Bedrock). | `providers/{anthropic,azure_resource,bedrock}.rs` |
 | 3 | **The loop collected the signature but nothing recorded it.** `LlmStepResult` had `reasoning_buffer` and no signature field; the saved `MessagePart::Reasoning` was built as `{ text }`, so every persisted block was unsigned. A red proof of this is section 5, proof 2. | `session/{loop_steps,processor}.rs` |
 | 4 | **Both history converters dropped the part entirely**: `MessagePart::Reasoning { .. } => { /* not forwarded */ }`. No reasoning block could reach any provider from history. | `session/history.rs` (two converters), `compaction/convert.rs` |
@@ -69,7 +69,7 @@ would have passed.
 `chat_messages_to_messages` push `ContentPart::Reasoning { text, signature }`
 instead of dropping the part. Neither converter consults `echo_reasoning`: the
 omission for a profile that does not echo is a property of the wire contract, so
-it stays in the encoder. `crates/ragent-agent/tests/test_tool_input_error.rs`
+it stays in the encoder. `crates/codemason-agent/tests/test_tool_input_error.rs`
 asserts that `history.rs` never names `echo_reasoning`, which is what stops a
 converter from re-implementing the decision.
 
@@ -141,7 +141,7 @@ Proof 3 shows the encoder arm is gated by the declaration and not by the shape.
 
 ## 6. Tests
 
-`crates/ragent-agent/tests/test_loop_steps_harness.rs`, 7 -> 9 cases. The harness
+`crates/codemason-agent/tests/test_loop_steps_harness.rs`, 7 -> 9 cases. The harness
 gained a `ScriptedReply::SignedReasoningThenToolCall` variant that streams
 `ReasoningStart`, `ReasoningDelta`, `ReasoningEnd`, `ReasoningSignature`, then a
 call and a `ToolUse` finish - the frame order the Anthropic parser produces.
@@ -166,17 +166,17 @@ Pre-existing cases that this task made green or that already covered it:
 ## 7. Verification
 
 - `cargo fmt --all -- --check` - clean.
-- `cargo nextest run -p ragent-llm -p ragent-agent --no-fail-fast` - nextest
+- `cargo nextest run -p codemason-llm -p codemason-agent --no-fail-fast` - nextest
   reports **2810 tests run: 2805 passed, 5 failed, 3 skipped**. All five failures are the pre-existing
   `test_tool_rename_guard::` group (the T-047 predicate-(g) hit at
-  `crates/ragent-agent/src/tool/aliases.rs:118`, plus predicate (e) on a guard
+  `crates/codemason-agent/src/tool/aliases.rs:118`, plus predicate (e) on a guard
   fixture), unrelated to this task and unchanged by it.
-- `cargo clippy -p ragent-agent -p ragent-llm --all-targets` - no warning
+- `cargo clippy -p codemason-agent -p codemason-llm --all-targets` - no warning
   originates in `processor.rs`, `loop_steps.rs`, `wire/encode.rs`,
   `profile_table.rs` or `test_loop_steps_harness.rs` (the surviving groups are the
   pre-existing `unnecessary structure name repetition` in `tool_cache.rs`, the
   `pub(crate) item inside private module` group and one `let`-binding in
-  `ragent-storage`).
+  `codemason-storage`).
 - Guard scripts: 11 of 13 pass. `check-bench-regression` exits 2 for a missing
   `target/criterion`; `check-tool-rename` exits 1 on the same pre-existing
   T-047 hit.

@@ -67,7 +67,7 @@ The right column is the existing result list, unchanged.
   distinct, non-empty categories present in the fetched index, plus the `ALL`
   sentinel, sorted case-insensitively. No category list is hard-coded and no new
   configuration key is introduced. This mirrors the connector-catalogue category filter
-  (`CategoryFilterState` in `ragent-connectors`).
+  (`CategoryFilterState` in `codemason-connectors`).
 - **A3 - Category and query compose.** A result is visible when it matches both the
   current category selection and the current free-text query. An empty query matches
   every plugin; the `ALL` category matches every plugin.
@@ -103,22 +103,22 @@ The right column is the existing result list, unchanged.
 
 ## Background - existing machinery to reuse
 
-- **`/plugins codex` and `/plugins claude` panels.** `crates/ragent-tui/src/layout.rs`
+- **`/plugins codex` and `/plugins claude` panels.** `crates/codemason-tui/src/layout.rs`
   (`render_plugin_store_panel`) draws the existing modal;
-  `crates/ragent-tui/src/app/state.rs` (`PluginStoreBrowser`) is its state; and
-  `crates/ragent-tui/src/input.rs` routes its keys. The navigator extends each of
+  `crates/codemason-tui/src/app/state.rs` (`PluginStoreBrowser`) is its state; and
+  `crates/codemason-tui/src/input.rs` routes its keys. The navigator extends each of
   these rather than adding a second panel.
-- **Store index model.** `crates/ragent-plugins/src/store_index.rs` (`StoreEntry`)
+- **Store index model.** `crates/codemason-plugins/src/store_index.rs` (`StoreEntry`)
   already carries optional `description`, `dialect`, `tags`, and `homepage`; the
   `category` field joins them.
-- **Filtering.** `crates/ragent-tui/src/app/state.rs` (`entry_matches`) is the existing
+- **Filtering.** `crates/codemason-tui/src/app/state.rs` (`entry_matches`) is the existing
   query predicate; the category predicate is applied alongside it.
-- **Prior art for a category list.** `crates/ragent-connectors/src/browse.rs`
+- **Prior art for a category list.** `crates/codemason-connectors/src/browse.rs`
   (`CategoryFilter`, `CategoryFilterState`, `ALL_CATEGORY`) implements a cycling
   category filter for the connector catalogue. The navigator reuses this shape - a
   sentinel plus a derived, sorted, case-insensitive distinct set - but exposes it as a
   selectable visible list rather than a single `c`-key cycle.
-- **Mouse routing.** `crates/ragent-tui/src/app/input_handler.rs` (`handle_mouse_event`)
+- **Mouse routing.** `crates/codemason-tui/src/app/input_handler.rs` (`handle_mouse_event`)
   is where panel hit-testing lives; the navigator adds a category-column hit test
   alongside the existing result-list handling.
 
@@ -244,7 +244,7 @@ result row.
 **FR-025** - The system shall not execute plugin JavaScript at any point while building,
 rendering, navigating, or filtering by category.
 
-**FR-026** - The system shall never panic or terminate the ragent process because a store
+**FR-026** - The system shall never panic or terminate the codemason process because a store
 index entry carries an unexpected, empty, or oversized category string; every such entry
 shall be handled by the ordinary skip-and-count path or by treating the category as
 uncategorised.

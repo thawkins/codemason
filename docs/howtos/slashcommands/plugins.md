@@ -5,14 +5,14 @@
 
 `/plugins` manages third-party plugins written for OpenAI Codex and Claude
 Code/Desktop. Plugin JavaScript runs on an embedded, budget-sandboxed engine
-(`rquickjs`) inside the ragent binary - no external Node.js, Deno, or Bun
+(`rquickjs`) inside the codemason binary - no external Node.js, Deno, or Bun
 installation is required. Enabled plugins contribute tools (registered as
-`plugin_<id>_<tool>`) and slash commands through a versioned `ragent` host API.
+`plugin_<id>_<tool>`) and slash commands through a versioned `codemason` host API.
 
 A bare `/plugins`, `/plugins help`, and any unrecognised subcommand all print the
 same usage block and create or modify no files.
 
-The same operations are available from a shell via the `ragent plugins <sub>`
+The same operations are available from a shell via the `codemason plugins <sub>`
 CLI parity surface; the two surfaces share one help text and one set of command
 handlers.
 
@@ -41,7 +41,7 @@ handlers.
 
 | Form | Description |
 | --- | --- |
-| `/plugins list [--verbose]` | Open the interactive plugin panel. The table is pinned at the top - a fixed column heading and separator above a scrollable block-cursor list - and the capability blocks (contributions, unsupported capabilities, errors, and a totals summary) are listed at the end of the same scrollable body. Each table row shows id, name, version, dialect, state (`disabled`/`enabled`/`loaded`/`errored`), contributed tool/command/skill/agent/hook counts, and the `MCP` server / `MCP Tools` tool counts. An enabled plugin's row is tinted yellow. `Up`/`Down` (or `k`/`j`) move the cursor, `Home`/`End` jump to the ends, `Space` toggles the highlighted plugin's enabled state (enable/disable) and shows the outcome on the panel's feedback line, and `Esc` closes the panel. `--verbose` (or `-v`) appends the per-plugin telemetry block. The panel shares one discovery path with the `ragent plugins list` CLI, so the two cannot disagree. |
+| `/plugins list [--verbose]` | Open the interactive plugin panel. The table is pinned at the top - a fixed column heading and separator above a scrollable block-cursor list - and the capability blocks (contributions, unsupported capabilities, errors, and a totals summary) are listed at the end of the same scrollable body. Each table row shows id, name, version, dialect, state (`disabled`/`enabled`/`loaded`/`errored`), contributed tool/command/skill/agent/hook counts, and the `MCP` server / `MCP Tools` tool counts. An enabled plugin's row is tinted yellow. `Up`/`Down` (or `k`/`j`) move the cursor, `Home`/`End` jump to the ends, `Space` toggles the highlighted plugin's enabled state (enable/disable) and shows the outcome on the panel's feedback line, and `Esc` closes the panel. `--verbose` (or `-v`) appends the per-plugin telemetry block. The panel shares one discovery path with the `codemason plugins list` CLI, so the two cannot disagree. |
 | `/plugins list --mcp` | Print the live MCP tool inventory: every connected MCP server (including those bridged from a plugin's `mcpServers` section) with its status, tool count, and each tool's registry name (`<tool> -> mcp_<server>_<tool>`). |
 | `/plugins add <source> [--force]` | Install a plugin and validate its manifest; reports the plugin id and dialect. The plugin is recorded enabled and loads at the next session start; turn it off with `/plugins disable`. Refuses a duplicate id unless `--force` is given. |
 | `/plugins remove <pluginid>` | Uninstall a plugin from the store. Refused while the plugin is enabled. |
@@ -147,12 +147,12 @@ and ends by confirming the harness was unloaded with the live session untouched.
 
 ## Configuration
 
-The `plugins` block in `ragent.json` controls the subsystem (`enabled`,
+The `plugins` block in `codemason.json` controls the subsystem (`enabled`,
 `max_execution_ms`, `max_entry_ms`, `max_memory_mb`, `store_dir`, and
 per-plugin `permissions`). With `plugins.enabled: false`, every subcommand
 other than `help` reports the subsystem is disabled and no plugin code executes.
-Plugins are discovered under `.ragent/plugins/` (project), falling back to
-`~/.config/ragent/plugins/` (user-global).
+Plugins are discovered under `.codemason/plugins/` (project), falling back to
+`~/.config/codemason/plugins/` (user-global).
 
 See [`docs/howtos/config.md`](../config.md) §7.35 and
 [`specs/plugins/SPEC.md`](../../../specs/plugins/SPEC.md).
@@ -162,5 +162,5 @@ See [`docs/howtos/config.md`](../config.md) §7.35 and
 - [`docs/howtos/plugins.md`](../plugins.md) - the full plugin-system manual
 - `/reload` - reload customizations after plugin files change
 - `/tools` - list every registered tool, plugin tools included
-- `ragent plugins <sub>` - CLI parity for the same subcommands
+- `codemason plugins <sub>` - CLI parity for the same subcommands
 - `specs/plugins/SPEC.md` - the full plugin-system specification

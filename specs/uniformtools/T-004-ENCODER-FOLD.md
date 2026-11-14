@@ -5,7 +5,7 @@ cache hit byte-identical to a miss) and NFR-001 (no per-step re-serialisation).
 
 ## 1. What was there
 
-At `1.0.149` (`d172b658`), `crates/ragent-llm/src/providers/tool_cache.rs` was 373
+At `1.0.149` (`d172b658`), `crates/codemason-llm/src/providers/tool_cache.rs` was 373
 lines: a byte cache plus, inside it, five near-identical builders.
 
 ```
@@ -30,7 +30,7 @@ were two independent statements of the same mapping.
 
 ## 2. What replaced it
 
-New `crates/ragent-llm/src/providers/wire/encode.rs` (1072 lines including the message
+New `crates/codemason-llm/src/providers/wire/encode.rs` (1072 lines including the message
 encoders T-006 adds), holding the one definition encoder and the one `CachedTools` type:
 
 - `encode_tools(profile, name_prefix, tools) -> CachedTools` - frames the list once,
@@ -120,7 +120,7 @@ the reply path is that module's.
 
 ## 4. Proof
 
-### 4.1 `crates/ragent-llm/tests/test_wire_encode.rs` - 13 cases
+### 4.1 `crates/codemason-llm/tests/test_wire_encode.rs` - 13 cases
 
 Twelve belong to this task, one was added by T-005 and is listed for completeness.
 
@@ -159,7 +159,7 @@ The Responses envelope was pinned here *before* T-005 routed `openai_responses.r
 through the encoder, so the shape is recorded as a contract rather than inferred from the
 module that task deletes.
 
-### 4.2 `crates/ragent-llm/tests/inline/tool_cache_tests.rs` - 8 cases
+### 4.2 `crates/codemason-llm/tests/inline/tool_cache_tests.rs` - 8 cases
 
 The cache's own behaviour. The file at `HEAD` had nine cases, each of which re-asserted
 one envelope's *shape* against the encoder - work `test_wire_encode.rs` already does with
@@ -248,14 +248,14 @@ Verification on this tree:
 
 ```
 cargo fmt --all -- --check                                clean
-cargo clippy -p ragent-llm --all-targets                  no finding in a file this task touched
+cargo clippy -p codemason-llm --all-targets                  no finding in a file this task touched
                                                           (19 pre-existing `unnecessary structure name
                                                           repetition` warnings in other modules)
-cargo test -p ragent-llm --lib                            323 passed
-cargo test -p ragent-llm --lib providers::tool_cache      8 passed (5 consecutive runs, and at /32 threads)
-cargo test -p ragent-llm --doc                            30 passed
-cargo test -p ragent-llm --test all                       293 passed, 2 ignored, 5 pre-existing failures
-cargo test -p ragent-llm --test all test_wire_encode::    13 passed
+cargo test -p codemason-llm --lib                            323 passed
+cargo test -p codemason-llm --lib providers::tool_cache      8 passed (5 consecutive runs, and at /32 threads)
+cargo test -p codemason-llm --doc                            30 passed
+cargo test -p codemason-llm --test all                       293 passed, 2 ignored, 5 pre-existing failures
+cargo test -p codemason-llm --test all test_wire_encode::    13 passed
 all twelve scripts/check-*.sh                            PASS
 ```
 

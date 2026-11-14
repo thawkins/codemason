@@ -11,7 +11,7 @@ audit:
 
 ## Executive Summary
 
-This specification defines ragent's **agentic loop mechanism**: a goal-driven
+This specification defines codemason's **agentic loop mechanism**: a goal-driven
 **plan-act-observe** execution cycle, exposed to users as a **`/loop` slash
 command** for selecting an agent and setting a goal, and bounded by **four
 stop conditions** — the goal is achieved, the agent hits an unrecoverable
@@ -292,8 +292,8 @@ per-iteration overhead; the setup dialog shall open in under 100 ms.
 ### NFR-002 — No new dependencies
 
 The mechanism shall be implemented in existing workspace crates
-(`ragent-agent`, `ragent-config`, `ragent-types`, `ragent-tui`,
-`ragent-server`, `ragent-storage`) without adding external dependencies.
+(`codemason-agent`, `codemason-config`, `codemason-types`, `codemason-tui`,
+`codemason-server`, `codemason-storage`) without adding external dependencies.
 
 ### NFR-003 — Testability
 
@@ -317,23 +317,23 @@ checkpoint tunables shall be documented in `QUICKSTART.md` (or
 - The permission system remains the sole enforcement point for tool
   execution; the loop adds checkpoint escalation and constraint denials as
   inputs to it, not a parallel authority.
-- Snapshot/undo machinery already exists (`ragent-storage` snapshots); the
+- Snapshot/undo machinery already exists (`codemason-storage` snapshots); the
   loop reuses it for pre-loop capture and rollback.
 
 ## Interfaces & Dependencies
 
-- `crates/ragent-tui/src/app/slash.rs` — `/loop` command, setup dialog.
-- `crates/ragent-agent/src/session/processor.rs` — `SessionProcessor` loop:
+- `crates/codemason-tui/src/app/slash.rs` — `/loop` command, setup dialog.
+- `crates/codemason-agent/src/session/processor.rs` — `SessionProcessor` loop:
   iteration contract, budget gates, verification gate, stop-condition
   dispatch, termination publication.
-- `crates/ragent-config/src/config.rs` — `AgentConfig::max_steps` (existing)
+- `crates/codemason-config/src/config.rs` — `AgentConfig::max_steps` (existing)
   and loop defaults (cost limit, retry allowance, checkpoint behaviour).
-- `crates/ragent-types/src/event/mod.rs` — loop lifecycle events (termination
+- `crates/codemason-types/src/event/mod.rs` — loop lifecycle events (termination
   status, change summary).
-- `crates/ragent-storage/` — pre-loop snapshot capture and rollback.
-- `crates/ragent-telemetry/` — `agent_loop_duration` / `agent_loop_iterations`
+- `crates/codemason-storage/` — pre-loop snapshot capture and rollback.
+- `crates/codemason-telemetry/` — `agent_loop_duration` / `agent_loop_iterations`
   instruments (existing).
-- `crates/ragent-server/` — `POST /loop` endpoint (FR-026).
+- `crates/codemason-server/` — `POST /loop` endpoint (FR-026).
 
 ## Glossary
 

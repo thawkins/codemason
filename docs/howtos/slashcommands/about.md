@@ -4,7 +4,7 @@
 
 ## Overview
 
-`/about` prints a short informational banner describing ragent: what it is, the
+`/about` prints a short informational banner describing codemason: what it is, the
 compiled version number (`CARGO_PKG_VERSION`), the build timestamp, the source
 repository URL, the license, and the author list. It takes no arguments and
 performs no configuration lookups  -  everything shown is baked in at compile
@@ -37,14 +37,14 @@ ignored.
 Display the banner:
 
 ```
-  ragent - AI Coding Agent
+  codemason - AI Coding Agent
 
   An interactive TUI-based AI coding agent
   supporting multiple LLM providers.
 
   Version:     1.0.95
   Built:       2026-09-11 08:14:02 UTC
-  Repository:  https://github.com/thawkins/ragent
+  Repository:  https://github.com/thawkins/codemason
   License:     MIT
 
   Authors:

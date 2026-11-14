@@ -14,7 +14,7 @@ queries:
   - "tokio vs async-std API differences"
   - "Rust async runtime comparison"
 open_access_recovery: true
-invocation: "./target/debug/ragent research create zz-engine-diag Comparison of Rust async runtimes tokio vs async-std --no-tui --yes --depth shallow"
+invocation: "./target/debug/cdmn research create zz-engine-diag Comparison of Rust async runtimes tokio vs async-std --no-tui --yes --depth shallow"
 ---
 
 # Title: Rust stabilized async/.await in version 1.39 but ships no async runtime in its…

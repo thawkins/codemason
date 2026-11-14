@@ -1,0 +1,1109 @@
+//! End-to-end integration tests for `codemason-research` (T-052).
+//!
+//! Exercises the full create -> list -> show -> search -> delete flow against a
+//! real on-disk `research/` directory, plus the FR-016 duplicate-create and
+//! FR-018 closest-match paths.
+
+use codemason_research::{ResearchItem, ResearchManager, ResearchName, ResearchStatus, Source};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use tempfile::TempDir;
+
+#[tokio::test]
+async fn full_create_list_show_delete_flow() {
+    let tmp = TempDir::new().unwrap();
+    let mgr = ResearchManager::new(tmp.path());
+
+    // Create
+    let item = mgr
+        .create("rust-async", "Rust Async", "async/await idioms")
+        .await
+        .unwrap();
+    assert_eq!(item.name, ResearchName::new("rust-async").unwrap());
+
+    // List
+    let list = mgr.list(false).await.unwrap();
+    assert_eq!(list.len(), 1);
+
+    // Show
+    let shown = mgr.show("rust-async").await.unwrap();
+    assert_eq!(shown.status, ResearchStatus::Draft);
+    assert_eq!(shown.title, "Rust Async");
+    assert!(shown.topic.contains("async/await"));
+
+    // INDEX.md exists.
+    let index_path = codemason_research::ResearchIo::index_path(tmp.path());
+    assert!(index_path.is_file());
+
+    // Delete
+    mgr.delete("rust-async").await.unwrap();
+    let list = mgr.list(true).await.unwrap();
+    assert_eq!(list, [] as [codemason_research::ResearchItem; 0]);
+}
+
+#[tokio::test]
+async fn create_rejects_duplicate_with_fr016_error() {
+    let tmp = TempDir::new().unwrap();
+    let mgr = ResearchManager::new(tmp.path());
+    mgr.create("rust-async", "Rust Async", "topic")
+        .await
+        .unwrap();
+    let err = mgr
+        .create("rust-async", "Other", "Other")
+        .await
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("already exists"));
+    assert!(msg.contains("/research open"));
+}
+
+#[tokio::test]
+async fn write_document_persists_supports_files_and_index() {
+    let tmp = TempDir::new().unwrap();
+    let mgr = ResearchManager::new(tmp.path());
+    mgr.create("rust-async", "Rust Async", "topic")
+        .await
+        .unwrap();
+    let mut item: ResearchItem = mgr.show("rust-async").await.unwrap();
+    item.add_source(Source::Web {
+        published_at: None,
+        url: "https://example.com".into(),
+        title: "Example".into(),
+        captured_at: chrono::Utc::now(),
+        body_path: PathBuf::from("sources/web-01.md"),
+        body: "page text".into(),
+        relevance: "User-supplied seed URL".into(),
+        search_tool: String::new(),
+        search_engine: String::new(),
+        content_type: None,
+        page_type: None,
+        media_type: "page".into(),
+        language: None,
+        oa_recovery: None,
+        author: None,
+    });
+    item.add_source(Source::Local {
+        path: "src/lib.rs".into(),
+        kind: codemason_research::LocalSourceKind::InProject,
+        captured_at: chrono::Utc::now(),
+        body_path: PathBuf::from("sources/local-01.md"),
+        relevance: "anchor file".into(),
+        body: "fn main() {}".into(),
+    });
+    let doc = codemason_research::ResearchDocument {
+        item,
+        summary: "Captured one web source and one local cross-reference.".into(),
+        findings: vec!["Finding 1".into()],
+        top_implications: Vec::new(),
+        cross_references: vec![codemason_research::CrossReference {
+            path: "src/lib.rs".into(),
+            relevance: "anchor file".into(),
+        }],
+        open_questions: vec!["What about errors?".into()],
+        concepts: None,
+        contradiction_graph: None,
+        loci: None,
+        depth_investigation: None,
+        evidence_digest: None,
+        triple_draft: None,
+        cross_locus_reconcile: None,
+        source_tensions: None,
+        synthesis_audit: None,
+        corpus_critic: None,
+        gap_fetch: None,
+        surgical_patch: None,
+        cite_check: None,
+        polish: None,
+        readability_audit: None,
+        template_body: None,
+        brief: None,
+        decomposed_queries: Vec::new(),
+        output_format: codemason_research::OutputFormat::Report,
+        comparison_table: None,
+        evaluation_scorecard: None,
+        provider_stats: None,
+    };
+    mgr.write_document(&doc).await.unwrap();
+
+    // The dated report on disk has the full body.
+    let item_name = ResearchName::new("rust-async").unwrap();
+    let report_path = codemason_research::ResearchIo::find_research_md(tmp.path(), &item_name)
+        .await
+        .unwrap();
+    let body = std::fs::read_to_string(&report_path).unwrap();
+    assert!(
+        report_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("RESEARCH-"),
+        "the report must be written under its dated name; got {}",
+        report_path.display()
+    );
+    assert!(body.contains("Captured one web source"));
+    assert!(body.contains("What about errors?"));
+    assert!(body.contains("src/lib.rs"));
+
+    // INDEX.md was refreshed.
+    let index =
+        std::fs::read_to_string(codemason_research::ResearchIo::index_path(tmp.path())).unwrap();
+    assert!(index.contains("rust-async"));
+}
+
+#[tokio::test]
+async fn archive_then_default_list_excludes_item() {
+    let tmp = TempDir::new().unwrap();
+    let mgr = ResearchManager::new(tmp.path());
+    mgr.create("rust-async", "Rust Async", "topic")
+        .await
+        .unwrap();
+    mgr.archive("rust-async").await.unwrap();
+    assert_eq!(
+        mgr.list(false).await.unwrap(),
+        [] as [codemason_research::ResearchItem; 0]
+    );
+    let all = mgr.list(true).await.unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].status, ResearchStatus::Archived);
+}
+
+#[tokio::test]
+async fn not_found_suggests_closest_match_per_fr018() {
+    let tmp = TempDir::new().unwrap();
+    let mgr = ResearchManager::new(tmp.path());
+    mgr.create("rust-async", "Rust Async", "topic")
+        .await
+        .unwrap();
+    mgr.create("tokio-runtime", "Tokio", "topic").await.unwrap();
+    let err = mgr.show("rust-asynx").await.unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("Closest matches"));
+    assert!(msg.contains("rust-async"));
+}
+
+#[tokio::test]
+async fn search_finds_text_across_research_items() {
+    let tmp = TempDir::new().unwrap();
+    let mgr = ResearchManager::new(tmp.path());
+    mgr.create("rust-async", "Rust Async", "topic")
+        .await
+        .unwrap();
+    mgr.create("serde-json", "Serde JSON", "topic")
+        .await
+        .unwrap();
+    let hits = mgr.search("Rust", 10).await.unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].name, "rust-async");
+}
+
+#[tokio::test]
+async fn session_uses_analysis_engine_to_synthesize_findings() {
+    use async_trait::async_trait;
+    use codemason_research::{
+        AnalysisEngine, AnalysisResult, CrossReference, InputConfig, LocalConfig, LocalGatherer,
+        LocalTool, NoopObserver, OutputConfig, ResearchManager, ResearchSession, SessionConfig,
+        WebConfig,
+    };
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+
+    struct MockEngine;
+    #[async_trait]
+    impl AnalysisEngine for MockEngine {
+        fn with_brief(&self, _brief: Option<String>) -> Arc<dyn AnalysisEngine> {
+            Arc::new(Self)
+        }
+
+        async fn analyze(
+            &self,
+            topic: &str,
+            sources: &[codemason_research::SourceBody],
+        ) -> anyhow::Result<AnalysisResult> {
+            assert_eq!(topic, "Rust async");
+            assert!(
+                !sources.is_empty(),
+                "sources should be passed to the engine"
+            );
+            Ok(AnalysisResult {
+                summary: "LLM-generated summary of Rust async.".into(),
+                findings: vec!["Finding A: async/await is useful.".into()],
+                top_implications: Vec::new(),
+                cross_references: vec![CrossReference {
+                    path: "src/lib.rs".into(),
+                    relevance: "core async code".into(),
+                }],
+                open_questions: vec!["What about cancellation safety?".into()],
+            })
+        }
+    }
+
+    struct FakeLocal {
+        files: HashMap<PathBuf, String>,
+    }
+
+    #[async_trait]
+    impl LocalTool for FakeLocal {
+        async fn glob(&self, _root: &Path, pattern: &str) -> anyhow::Result<Vec<PathBuf>> {
+            let ext = pattern.rsplit('.').next().unwrap_or("");
+            Ok(self
+                .files
+                .keys()
+                .filter(|p| p.extension().is_some_and(|e| e == ext))
+                .cloned()
+                .collect())
+        }
+        async fn grep(
+            &self,
+            path: &Path,
+            terms: &[String],
+        ) -> anyhow::Result<Vec<codemason_research::GrepMatch>> {
+            let body = self.files.get(path).cloned().unwrap_or_default();
+            let mut out = Vec::new();
+            for (i, line) in body.lines().enumerate() {
+                let l = line.to_lowercase();
+                if terms.iter().any(|t| l.contains(t)) {
+                    out.push(codemason_research::GrepMatch {
+                        line: i + 1,
+                        text: line.to_string(),
+                    });
+                }
+            }
+            Ok(out)
+        }
+        async fn read(&self, path: &Path) -> anyhow::Result<String> {
+            self.files
+                .get(path)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("missing"))
+        }
+        async fn list_specs(&self, _root: &Path) -> anyhow::Result<Vec<String>> {
+            Ok(Vec::new())
+        }
+        async fn spec_title(&self, _root: &Path, _id: &str) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let research_root = tmp.path().join("research");
+    tokio::fs::create_dir_all(&research_root).await.unwrap();
+    let f = tmp.path().join("notes.md");
+    tokio::fs::write(&f, "Rust async programming is great.")
+        .await
+        .unwrap();
+
+    let manager = ResearchManager::new(&research_root);
+    let local_tool = Arc::new(FakeLocal {
+        files: HashMap::from([(f.clone(), "Rust async programming is great.".into())]),
+    });
+    let local = LocalGatherer::new(local_tool);
+    let session = ResearchSession::new(manager, None, Some(local), Arc::new(MockEngine));
+
+    let config = SessionConfig {
+        input: InputConfig {
+            topic: "Rust async".into(),
+            ..InputConfig::default()
+        },
+        output: OutputConfig {
+            output_format: codemason_research::OutputFormat::Report,
+            ..OutputConfig::default()
+        },
+        web: WebConfig {
+            max_web_results: 5,
+            ..WebConfig::default()
+        },
+        local: LocalConfig {
+            max_local_sources: 5,
+            disable_local: false,
+            ..LocalConfig::default()
+        },
+        analysis: codemason_research::AnalysisConfig {
+            depth: Some(codemason_research::Depth::Shallow),
+            ..codemason_research::AnalysisConfig::default()
+        },
+        ..SessionConfig::default()
+    };
+    let config = SessionConfig {
+        clarify: false,
+        ..config
+    };
+    session
+        .run("rust-async", "Rust Async", &config, Arc::new(NoopObserver))
+        .await
+        .unwrap();
+
+    let body =
+        tokio::fs::read_to_string(crate::research_report_path(&research_root, "rust-async").await)
+            .await
+            .unwrap();
+    assert!(
+        body.contains("LLM-generated summary"),
+        "RESEARCH.md should contain the synthesized summary\n{body}"
+    );
+    assert!(
+        body.contains("Finding A: async/await is useful."),
+        "RESEARCH.md should contain the synthesized finding\n{body}"
+    );
+    assert!(
+        body.contains("What about cancellation safety?"),
+        "RESEARCH.md should contain the synthesized open question\n{body}"
+    );
+    assert!(
+        body.contains("src/lib.rs"),
+        "RESEARCH.md should contain the synthesized cross-reference\n{body}"
+    );
+
+    // Supporting file must contain the actual captured body, not the legacy
+    // "(see LocalGatherer for the captured excerpt)" placeholder.
+    let supporting =
+        tokio::fs::read_to_string(research_root.join("rust-async/sources/local-01.md"))
+            .await
+            .unwrap();
+    assert!(
+        supporting.contains("Rust async programming is great."),
+        "supporting file should contain captured body, got:\n{supporting}"
+    );
+    assert!(
+        !supporting.contains("(see LocalGatherer for the captured excerpt)"),
+        "supporting file must not contain the legacy placeholder"
+    );
+}
+
+#[tokio::test]
+async fn session_writes_supporting_files_with_actual_web_bodies() {
+    use async_trait::async_trait;
+    use codemason_research::{
+        AnalysisEngine, AnalysisResult, InputConfig, LocalConfig, LocalGatherer, LocalTool,
+        ResearchManager, ResearchSession, SessionConfig, SessionEvent, SessionObserver,
+        SynthesisEvent, WebConfig, WebFetchTool, WebFetchedPage, WebGatherer, WebSearchHit,
+        WebSearchTool,
+    };
+    use std::sync::Mutex;
+
+    struct FakeSearch;
+    #[async_trait]
+    impl WebSearchTool for FakeSearch {
+        async fn search(
+            &self,
+            query: &str,
+            _max_results: usize,
+        ) -> anyhow::Result<Vec<WebSearchHit>> {
+            Ok(vec![WebSearchHit {
+                url: "https://example.com/page".into(),
+                title: "Example Page".into(),
+                snippet: query.to_string(),
+                matched_query: "Rust lifetimes".into(),
+                search_tool: String::new(),
+                search_engine: String::new(),
+                author: None,
+            }])
+        }
+    }
+    struct FakeFetch;
+    #[async_trait]
+    impl WebFetchTool for FakeFetch {
+        async fn fetch(&self, url: &str) -> anyhow::Result<WebFetchedPage> {
+            Ok(WebFetchedPage {
+                published_at: None,
+                url: url.to_string(),
+                title: "Example Page".into(),
+                body: Arc::from("Real page body — talks about Rust lifetimes. ".repeat(10)),
+                content_type: None,
+                page_type: None,
+                language: Some("English".into()),
+                author: None,
+            })
+        }
+
+        async fn fetch_with_limit(
+            &self,
+            url: &str,
+            max_bytes: usize,
+        ) -> anyhow::Result<WebFetchedPage> {
+            let mut page = self.fetch(url).await?;
+            if page.body.len() > max_bytes {
+                let truncated =
+                    codemason_research::truncate_body_to_bytes(page.body.as_ref(), max_bytes);
+                page.body = std::sync::Arc::from(truncated);
+            }
+            Ok(page)
+        }
+    }
+    struct NoLocal;
+    #[async_trait]
+    impl LocalTool for NoLocal {
+        async fn glob(&self, _root: &Path, _pattern: &str) -> anyhow::Result<Vec<PathBuf>> {
+            Ok(Vec::new())
+        }
+        async fn grep(
+            &self,
+            _path: &Path,
+            _terms: &[String],
+        ) -> anyhow::Result<Vec<codemason_research::GrepMatch>> {
+            Ok(Vec::new())
+        }
+        async fn read(&self, _path: &Path) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+        async fn list_specs(&self, _root: &Path) -> anyhow::Result<Vec<String>> {
+            Ok(Vec::new())
+        }
+        async fn spec_title(&self, _root: &Path, _spec_id: &str) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+    }
+
+    #[derive(Default)]
+    struct CaptureObserver {
+        events: Mutex<Vec<SessionEvent>>,
+    }
+    impl SessionObserver for CaptureObserver {
+        fn on_event(&self, event: SessionEvent) {
+            self.events.lock().unwrap().push(event);
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let research_root = tmp.path().join("research");
+    tokio::fs::create_dir_all(&research_root).await.unwrap();
+    let manager = ResearchManager::new(&research_root);
+    let web = WebGatherer::new(Arc::new(FakeSearch), Arc::new(FakeFetch));
+    let local = LocalGatherer::new(Arc::new(NoLocal));
+    let session = ResearchSession::new(manager, Some(web), Some(local), Arc::new(EmptyAnalysis));
+
+    struct EmptyAnalysis;
+    #[async_trait]
+    impl AnalysisEngine for EmptyAnalysis {
+        fn with_brief(&self, _brief: Option<String>) -> Arc<dyn AnalysisEngine> {
+            Arc::new(Self)
+        }
+
+        async fn analyze(
+            &self,
+            _topic: &str,
+            _sources: &[codemason_research::SourceBody],
+        ) -> anyhow::Result<AnalysisResult> {
+            // Simulate an LLM that returned empty content - exercises the
+            // mechanical fallback path while still proving the supporting
+            // files contain real body content.
+            Ok(AnalysisResult::default())
+        }
+    }
+
+    let observer = Arc::new(CaptureObserver::default());
+    let cfg = SessionConfig {
+        input: InputConfig {
+            topic: "rust lifetimes".into(),
+            ..InputConfig::default()
+        },
+        web: WebConfig {
+            max_web_results: 5,
+            ..WebConfig::default()
+        },
+        local: LocalConfig {
+            max_local_sources: 5,
+            ..LocalConfig::default()
+        },
+        ..SessionConfig::default()
+    };
+    let cfg = SessionConfig {
+        clarify: false,
+        ..cfg
+    };
+    session
+        .run("lifetime-check", "Lifetime Check", &cfg, observer.clone())
+        .await
+        .unwrap();
+
+    // Supporting web file must contain the fetched body text.
+    let supporting =
+        tokio::fs::read_to_string(research_root.join("lifetime-check/sources/web-01.md"))
+            .await
+            .unwrap();
+    assert!(
+        supporting.contains("Real page body — talks about Rust lifetimes."),
+        "web supporting file should contain actual body, got:\n{supporting}"
+    );
+    assert!(
+        !supporting.contains("(see WebGatherer for the captured body)"),
+        "web supporting file must not contain the legacy placeholder"
+    );
+
+    // RESEARCH.md must contain a real summary that names the web title and
+    // either mentions the body excerpt (LLM path) or the title + a
+    // fallback note.
+    let research_md = tokio::fs::read_to_string(
+        crate::research_report_path(&research_root, "lifetime-check").await,
+    )
+    .await
+    .unwrap();
+    assert!(
+        research_md.contains("Example Page"),
+        "RESEARCH.md must reference the captured web title, got:\n{research_md}"
+    );
+
+    // The References Index must surface the detected language.
+    assert!(
+        research_md.contains("English"),
+        "RESEARCH.md References Index must show the detected language, got:\n{research_md}"
+    );
+    // The SynthesizeResult event must have fired.
+    let events = observer.events.lock().unwrap();
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            SessionEvent::Synthesis(SynthesisEvent::SynthesizeResult { .. })
+        )),
+        "session must emit a SynthesizeResult event"
+    );
+}
+
+#[tokio::test]
+async fn session_renders_synthesis_error_note_and_fallback_findings() {
+    use async_trait::async_trait;
+    use codemason_research::{
+        AnalysisEngine, AnalysisResult, InputConfig, LocalConfig, LocalGatherer, LocalTool,
+        ResearchManager, ResearchSession, SessionConfig, WebConfig,
+    };
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+
+    struct FailingEngine;
+    #[async_trait]
+    impl AnalysisEngine for FailingEngine {
+        fn with_brief(&self, _brief: Option<String>) -> Arc<dyn AnalysisEngine> {
+            Arc::new(Self)
+        }
+
+        async fn analyze(
+            &self,
+            _topic: &str,
+            _sources: &[codemason_research::SourceBody],
+        ) -> anyhow::Result<AnalysisResult> {
+            Err(anyhow::anyhow!("provider returned 502"))
+        }
+    }
+
+    struct FakeLocal {
+        files: HashMap<PathBuf, String>,
+    }
+
+    #[async_trait]
+    impl LocalTool for FakeLocal {
+        async fn glob(&self, _root: &Path, pattern: &str) -> anyhow::Result<Vec<PathBuf>> {
+            let ext = pattern.rsplit('.').next().unwrap_or("");
+            Ok(self
+                .files
+                .keys()
+                .filter(|p| p.extension().is_some_and(|e| e == ext))
+                .cloned()
+                .collect())
+        }
+        async fn grep(
+            &self,
+            path: &Path,
+            terms: &[String],
+        ) -> anyhow::Result<Vec<codemason_research::GrepMatch>> {
+            let body = self.files.get(path).cloned().unwrap_or_default();
+            let mut out = Vec::new();
+            for (i, line) in body.lines().enumerate() {
+                let l = line.to_lowercase();
+                if terms.iter().any(|t| l.contains(t)) {
+                    out.push(codemason_research::GrepMatch {
+                        line: i + 1,
+                        text: line.to_string(),
+                    });
+                }
+            }
+            Ok(out)
+        }
+        async fn read(&self, path: &Path) -> anyhow::Result<String> {
+            self.files
+                .get(path)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("missing"))
+        }
+        async fn list_specs(&self, _root: &Path) -> anyhow::Result<Vec<String>> {
+            Ok(Vec::new())
+        }
+        async fn spec_title(&self, _root: &Path, _id: &str) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let research_root = tmp.path().join("research");
+    tokio::fs::create_dir_all(&research_root).await.unwrap();
+    let f = tmp.path().join("notes.md");
+    tokio::fs::write(&f, "Rust async programming is great.")
+        .await
+        .unwrap();
+
+    let manager = ResearchManager::new(&research_root);
+    let local_tool = Arc::new(FakeLocal {
+        files: HashMap::from([(f.clone(), "Rust async programming is great.".into())]),
+    });
+    let local = LocalGatherer::new(local_tool);
+    let session = ResearchSession::new(manager, None, Some(local), Arc::new(FailingEngine));
+
+    let config = SessionConfig {
+        input: InputConfig {
+            topic: "Rust async".into(),
+            ..InputConfig::default()
+        },
+        web: WebConfig {
+            max_web_results: 5,
+            ..WebConfig::default()
+        },
+        local: LocalConfig {
+            max_local_sources: 5,
+            disable_local: false,
+            ..LocalConfig::default()
+        },
+        analysis: codemason_research::AnalysisConfig {
+            depth: Some(codemason_research::Depth::Shallow),
+            ..codemason_research::AnalysisConfig::default()
+        },
+        ..SessionConfig::default()
+    };
+    let config = SessionConfig {
+        clarify: false,
+        ..config
+    };
+    session
+        .run(
+            "rust-async",
+            "Rust Async",
+            &config,
+            Arc::new(codemason_research::NoopObserver),
+        )
+        .await
+        .unwrap();
+
+    let body =
+        tokio::fs::read_to_string(crate::research_report_path(&research_root, "rust-async").await)
+            .await
+            .unwrap();
+    assert!(
+        body.contains("Synthesis engine failed"),
+        "RESEARCH.md should surface the synthesis error note\n{body}"
+    );
+    assert!(
+        body.contains("provider returned 502"),
+        "RESEARCH.md should include the provider error detail\n{body}"
+    );
+    assert!(
+        body.contains("## Findings"),
+        "RESEARCH.md should still contain a Findings section from the fallback\n{body}"
+    );
+
+    // The CORPA.md companion must contain a synthesis audit that reflects the
+    // fallback narrative (not the pre-fallback empty analysis).
+    let corpa =
+        tokio::fs::read_to_string(crate::research_corpa_path(&research_root, "rust-async").await)
+            .await
+            .unwrap();
+    assert!(
+        corpa.contains("## Synthesis Audit"),
+        "CORPA.md should contain a synthesis audit section\n{corpa}"
+    );
+    assert!(
+        !corpa.contains("No findings were produced"),
+        "CORPA.md audit must not report zero findings when the fallback produced them\n{corpa}"
+    );
+}
+
+#[tokio::test]
+async fn session_persists_synthesize_result_to_run_log() {
+    use async_trait::async_trait;
+    use codemason_research::{
+        AnalysisEngine, AnalysisResult, InputConfig, LocalConfig, LocalGatherer, LocalTool,
+        ResearchManager, ResearchSession, SessionConfig, WebConfig,
+    };
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+
+    struct EmptyEngine;
+    #[async_trait]
+    impl AnalysisEngine for EmptyEngine {
+        fn with_brief(&self, _brief: Option<String>) -> Arc<dyn AnalysisEngine> {
+            Arc::new(Self)
+        }
+
+        async fn analyze(
+            &self,
+            _topic: &str,
+            _sources: &[codemason_research::SourceBody],
+        ) -> anyhow::Result<AnalysisResult> {
+            Ok(AnalysisResult::default())
+        }
+    }
+
+    struct NoLocal;
+    #[async_trait]
+    impl LocalTool for NoLocal {
+        async fn glob(&self, _root: &Path, _pattern: &str) -> anyhow::Result<Vec<PathBuf>> {
+            Ok(Vec::new())
+        }
+        async fn grep(
+            &self,
+            _path: &Path,
+            _terms: &[String],
+        ) -> anyhow::Result<Vec<codemason_research::GrepMatch>> {
+            Ok(Vec::new())
+        }
+        async fn read(&self, _path: &Path) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+        async fn list_specs(&self, _root: &Path) -> anyhow::Result<Vec<String>> {
+            Ok(Vec::new())
+        }
+        async fn spec_title(&self, _root: &Path, _id: &str) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let research_root = tmp.path().join("research");
+    let log_dir = tmp.path().join("log").join("research");
+    tokio::fs::create_dir_all(&research_root).await.unwrap();
+
+    let manager = ResearchManager::new(&research_root);
+    let local = LocalGatherer::new(Arc::new(NoLocal));
+    let log = codemason_research::gather_log::GatherLog::new(&log_dir, "log-run").unwrap();
+    let session = ResearchSession::new(manager, None, Some(local), Arc::new(EmptyEngine))
+        .with_gather_log(log);
+
+    let config = SessionConfig {
+        input: InputConfig {
+            topic: "Rust lifetimes".into(),
+            ..InputConfig::default()
+        },
+        web: WebConfig {
+            max_web_results: 5,
+            ..WebConfig::default()
+        },
+        local: LocalConfig {
+            max_local_sources: 5,
+            disable_local: false,
+            ..LocalConfig::default()
+        },
+        analysis: codemason_research::AnalysisConfig {
+            depth: Some(codemason_research::Depth::Shallow),
+            ..codemason_research::AnalysisConfig::default()
+        },
+        ..SessionConfig::default()
+    };
+    let config = SessionConfig {
+        clarify: false,
+        ..config
+    };
+    session
+        .run(
+            "log-run",
+            "Log Run",
+            &config,
+            Arc::new(codemason_research::NoopObserver),
+        )
+        .await
+        .unwrap();
+
+    let entries: Vec<String> = std::fs::read_dir(&log_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        .map(|p| std::fs::read_to_string(p).unwrap())
+        .collect();
+    assert!(
+        entries.iter().any(|e| e.contains("synthesize_result")),
+        "run log must contain a synthesize_result event"
+    );
+}
+
+#[tokio::test]
+async fn competitive_mode_produces_comparison_table_and_entity_profiles() {
+    use async_trait::async_trait;
+    use codemason_research::{
+        AnalysisEngine, AnalysisResult, InputConfig, LocalConfig, LocalGatherer, LocalTool,
+        OutputConfig, ResearchManager, ResearchMode, ResearchSession, SessionConfig, SessionEvent,
+        SessionObserver, SynthesisEvent, WebConfig, WebFetchTool, WebFetchedPage, WebGatherer,
+        WebSearchHit, WebSearchTool,
+    };
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    /// Deterministic search tool that returns one hit for each competitive
+    /// entity in the topic, so the supervisor can delegate one researcher per
+    /// entity (FR-006, FR-007).
+    struct CompetitiveSearch;
+
+    #[async_trait]
+    impl WebSearchTool for CompetitiveSearch {
+        async fn search(
+            &self,
+            query: &str,
+            _max_results: usize,
+        ) -> anyhow::Result<Vec<WebSearchHit>> {
+            // Return a hit whose URL embeds the query so the fetch tool can
+            // produce entity-specific bodies.
+            let title = format!("Overview of {query}");
+            Ok(vec![WebSearchHit {
+                url: format!("https://example.com/{query}"),
+                title,
+                snippet: format!("{query} offers pricing and speed information."),
+                matched_query: query.to_string(),
+                search_tool: "fake".to_string(),
+                search_engine: "fake".to_string(),
+                author: None,
+            }])
+        }
+    }
+
+    /// Deterministic fetch tool that returns bodies long enough to survive
+    /// post-fetch filtering and that mention the entity plus comparison
+    /// dimensions so the comparison-table heuristic can extract cells.
+    struct CompetitiveFetch;
+
+    #[async_trait]
+    impl WebFetchTool for CompetitiveFetch {
+        async fn fetch(&self, url: &str) -> anyhow::Result<WebFetchedPage> {
+            let entity = url
+                .strip_prefix("https://example.com/")
+                .unwrap_or(url)
+                .to_string();
+            let body = format!(
+                "Comprehensive article about {entity}. {entity} provides aggressive per-token \
+                 pricing and very low latency for large language model inference. The platform \
+                 emphasises throughput and batch pricing, with competitive speed benchmarks \
+                 against other inference providers. This text contains more than two hundred and \
+                 fifty six characters so that the minimum content length threshold used by the \
+                 web gatherer is comfortably satisfied and the source is not excluded during \
+                 post-fetch filtering.",
+            );
+            Ok(WebFetchedPage {
+                url: url.to_string(),
+                title: format!("{entity} inference platform"),
+                body: body.into(),
+                published_at: None,
+                content_type: None,
+                page_type: None,
+                language: Some("english".to_string()),
+                author: None,
+            })
+        }
+
+        async fn fetch_with_limit(
+            &self,
+            url: &str,
+            max_bytes: usize,
+        ) -> anyhow::Result<WebFetchedPage> {
+            let mut page = self.fetch(url).await?;
+            if page.body.len() > max_bytes {
+                let truncated =
+                    codemason_research::truncate_body_to_bytes(page.body.as_ref(), max_bytes);
+                page.body = std::sync::Arc::from(truncated);
+            }
+            Ok(page)
+        }
+    }
+
+    struct NoLocal;
+
+    #[async_trait]
+    impl LocalTool for NoLocal {
+        async fn glob(&self, _root: &Path, _pattern: &str) -> anyhow::Result<Vec<PathBuf>> {
+            Ok(Vec::new())
+        }
+        async fn grep(
+            &self,
+            _path: &Path,
+            _terms: &[String],
+        ) -> anyhow::Result<Vec<codemason_research::GrepMatch>> {
+            Ok(Vec::new())
+        }
+        async fn read(&self, _path: &Path) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+        async fn list_specs(&self, _root: &Path) -> anyhow::Result<Vec<String>> {
+            Ok(Vec::new())
+        }
+        async fn spec_title(&self, _root: &Path, _spec_id: &str) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+    }
+
+    /// Observer that records all events for post-run assertions.
+    #[derive(Default)]
+    struct CaptureObserver {
+        events: Mutex<Vec<SessionEvent>>,
+    }
+
+    impl SessionObserver for CaptureObserver {
+        fn on_event(&self, event: SessionEvent) {
+            self.events.lock().unwrap().push(event);
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let research_root = tmp.path().join("research");
+    tokio::fs::create_dir_all(&research_root).await.unwrap();
+
+    let manager = ResearchManager::new(&research_root);
+    let web = WebGatherer::new(Arc::new(CompetitiveSearch), Arc::new(CompetitiveFetch))
+        .with_keep_low_relevance(true);
+    let local = LocalGatherer::new(Arc::new(NoLocal));
+    let session = ResearchSession::new(manager, Some(web), Some(local), Arc::new(EmptyAnalysis));
+
+    struct EmptyAnalysis;
+
+    #[async_trait]
+    impl AnalysisEngine for EmptyAnalysis {
+        fn with_brief(&self, _brief: Option<String>) -> Arc<dyn AnalysisEngine> {
+            Arc::new(Self)
+        }
+
+        async fn analyze(
+            &self,
+            _topic: &str,
+            _sources: &[codemason_research::SourceBody],
+        ) -> anyhow::Result<AnalysisResult> {
+            // Simulate an empty LLM response so the deterministic mechanical
+            // fallback paths are exercised end-to-end.
+            Ok(AnalysisResult::default())
+        }
+    }
+
+    let observer = Arc::new(CaptureObserver::default());
+    let cfg = SessionConfig {
+        input: InputConfig {
+            topic: "Compare Fireworks AI, Together.ai, and Groq for LLM inference".into(),
+            ..InputConfig::default()
+        },
+        output: OutputConfig {
+            output_format: codemason_research::OutputFormat::ComparisonTable,
+            ..OutputConfig::default()
+        },
+        web: WebConfig {
+            max_web_results: 5,
+            ..WebConfig::default()
+        },
+        local: LocalConfig {
+            max_local_sources: 5,
+            ..LocalConfig::default()
+        },
+        engine: codemason_research::RunEngineConfig {
+            mode: ResearchMode::Competitive,
+            max_concurrent_research_units: 3,
+            ..codemason_research::RunEngineConfig::default()
+        },
+        ..SessionConfig::default()
+    };
+    let cfg = SessionConfig {
+        clarify: false,
+        ..cfg
+    };
+
+    session
+        .run(
+            "competitive-test",
+            "Competitive Test",
+            &cfg,
+            observer.clone(),
+        )
+        .await
+        .unwrap();
+
+    let research_md: String = {
+        let p = crate::research_report_path(&research_root, "competitive-test").await;
+        let s = tokio::fs::read_to_string(&p).await.unwrap();
+        let _ = std::fs::write(
+            "/home/thawkins/Projects/codemason/target/temp/head_research_md.md",
+            &s,
+        );
+        s
+    };
+
+    // FR-006 / FR-016: the report must contain a comparison table and profiles.
+    assert!(
+        research_md.contains("## Comparison Table"),
+        "competitive report must contain a comparison table:\n{research_md}"
+    );
+    assert!(
+        research_md.contains("## Entity Profiles"),
+        "competitive report must contain per-entity profiles:\n{research_md}"
+    );
+    assert!(
+        research_md.contains("## Comparison Criteria"),
+        "competitive report must list explicit comparison criteria:\n{research_md}"
+    );
+
+    // Verify the expected entities appear in the report.
+    for entity in ["Fireworks AI", "Together.ai", "Groq"] {
+        assert!(
+            research_md.contains(entity),
+            "competitive report missing entity {entity}:\n{research_md}"
+        );
+    }
+
+    // Verify the detected comparison dimension is rendered as a criteria
+    // bullet (structural, independent of fallback-source preview text - the
+    // entity-scoped findings no longer quote cross-entity "pricing" bodies).
+    assert!(
+        research_md.contains("- LLM inference"),
+        "competitive report missing detected comparison dimension 'LLM inference':\n{research_md}"
+    );
+
+    // The artifact must still cite sources in the comparison-table body or
+    // references index.
+    assert!(
+        research_md.contains("## References Index"),
+        "competitive report must include a references index:\n{research_md}"
+    );
+    assert!(
+        research_md.contains("example.com"),
+        "competitive report must reference the captured web URLs:\n{research_md}"
+    );
+
+    // Verify the competitive-analysis pipeline emitted the expected streaming
+    // events so callers (TUI/CLI/HTTP) can show per-entity progress.
+    let events = observer.events.lock().unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, SessionEvent::CompetitiveEntities { .. })),
+        "competitive run must emit CompetitiveEntities event"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, SessionEvent::ResearcherSpawned { .. })),
+        "competitive run must emit ResearcherSpawned events"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, SessionEvent::ResearcherCompleted { .. })),
+        "competitive run must emit ResearcherCompleted events"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, SessionEvent::SupervisorMerged { .. })),
+        "competitive run must emit SupervisorMerged event"
+    );
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            SessionEvent::Synthesis(SynthesisEvent::SynthesizeResult { .. })
+        )),
+        "competitive run must emit a SynthesizeResult event"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, SessionEvent::Done { .. })),
+        "competitive run must emit Done event"
+    );
+}

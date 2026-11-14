@@ -7,22 +7,22 @@ audit:
   - { time: 1794443738, from: "approved", to: "in_progress", actor: "cli" }
   - { time: 1794443738, from: "in_progress", to: "implemented", actor: "cli" }
 ---
-# Specification: OpenHands Parity - Closing the Major Feature Gaps Between ragent and OpenHands
+# Specification: OpenHands Parity - Closing the Major Feature Gaps Between codemason and OpenHands
 
 ## Overview
 
 OpenHands (the "Agent Canvas" control centre plus the OpenHands Agent Server / Software
 Agent SDK and the OpenHands CLI) is a self-hosted developer control centre for coding
-agents. ragent is a single-binary, terminal-first coding agent. Both drive an agent
+agents. codemason is a single-binary, terminal-first coding agent. Both drive an agent
 loop over a multi-provider LLM backend with a tool surface, an MCP client, a skills
 system, a permission system, and a REST/SSE server. The two overlap heavily, but a
-small set of **structural** capabilities exist in OpenHands that ragent does not have.
+small set of **structural** capabilities exist in OpenHands that codemason does not have.
 
 This specification records the **major feature differences** found by a deep inspection
 of the OpenHands repositories (`OpenHands/OpenHands`, `OpenHands/software-agent-sdk`,
 `OpenHands/OpenHands-CLI`, `OpenHands/automation`) and defines the **delta** - the
-features ragent must add to reach functional parity. It is deliberately scoped to
-capabilities that are architecturally distinct from what ragent already ships; it does
+features codemason must add to reach functional parity. It is deliberately scoped to
+capabilities that are architecturally distinct from what codemason already ships; it does
 not restate parity that already exists (teams, swarms, memory, compaction, MCP stdio,
 YAML skills, spec management, cron tools, multi-provider LLM support, TUI, REST/SSE).
 
@@ -30,21 +30,21 @@ The delta has six load-bearing themes:
 
 1. **Sandboxed / pluggable execution backends** - OpenHands can run the agent inside a
    Docker container, on a remote VM, or on cloud infrastructure, selected per
-   conversation; ragent always executes tools directly on the host.
+   conversation; codemason always executes tools directly on the host.
 2. **Multiple / remote agent backends** - OpenHands (Agent Canvas) connects to one or
-   more Agent Servers and switches between them from one UI; ragent has only an
+   more Agent Servers and switches between them from one UI; codemason has only an
    in-process orchestrator and no remote backend registry.
 3. **ACP external-agent integration** - OpenHands drives Claude Code, Codex, and Gemini
-   CLI as ACP subprocesses over JSON-RPC on stdio; ragent has no Agent Client Protocol
+   CLI as ACP subprocesses over JSON-RPC on stdio; codemason has no Agent Client Protocol
    support.
 4. **OpenAI-compatible inbound API** - the OpenHands Agent Server exposes a REST /
-   WebSocket API with OpenAI-compatible endpoints; ragent's server speaks only its own
+   WebSocket API with OpenAI-compatible endpoints; codemason's server speaks only its own
    bespoke REST+SSE dialect.
 5. **Automation service** - OpenHands pairs the Agent Server with an Automation Server
    that runs agents on a schedule or from webhooks, integrating Slack, GitHub, Linear,
-   and Notion, with run history; ragent has in-process cron tools only.
+   and Notion, with run history; codemason has in-process cron tools only.
 6. **AgentSkills directory convention and tooling** - OpenHands loads `.agents/skills/`
-   `SKILL.md` packs and a public skill marketplace; ragent ships its own YAML skill
+   `SKILL.md` packs and a public skill marketplace; codemason ships its own YAML skill
    packs and does not read the AgentSkills convention.
 
 Supporting gaps that travel with the six themes are also specified: LLM-based security
@@ -53,20 +53,20 @@ capability, an ACP server endpoint for IDE clients, HTTP MCP transport
 
 ### Why this exists
 
-ragent competes on being a fast, dependency-free, terminal-native agent. That advantage
+codemason competes on being a fast, dependency-free, terminal-native agent. That advantage
 is real, but it comes with a hard ceiling: the agent runs with the full privileges of
 the user on the machine it was launched from, it cannot be pointed at a remote or
 sandboxed execution host, and it cannot be driven by the OpenAI-compatible clients and
 IDE integrations that the wider ecosystem already speaks. A user who wants "run this
 against my repo, but in a throwaway container" or "drive the agent from my existing
 OpenAI tooling" or "run a nightly dependency-update job" cannot do any of those with
-ragent today. Closing these gaps keeps ragent's single-binary deployability while
+codemason today. Closing these gaps keeps codemason's single-binary deployability while
 letting it plug into the same execution, automation, and interoperability surfaces that
 OpenHands exposes.
 
-## Feature difference analysis (ragent vs OpenHands)
+## Feature difference analysis (codemason vs OpenHands)
 
-| #  | Capability                       | OpenHands                                                         | ragent today                                          | Verdict                          |
+| #  | Capability                       | OpenHands                                                         | codemason today                                          | Verdict                          |
 | -- | -------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------- | -------------------------------- |
 | 1  | Execution isolation              | Docker sandbox, remote runtime, cloud, per-conversation container | Direct host execution; 7-layer bash validation only   | **Missing - add**          |
 | 2  | Remote / multiple agent backends | Agent Canvas connects to many Agent Servers, switches per backend | In-process orchestrator only; no remote registry      | **Missing - add**          |
@@ -86,7 +86,7 @@ OpenHands exposes.
 | 16 | Sub-agents / teams / swarms      | Yes                                                               | Yes (extensive)                                       | Parity - no change               |
 | 17 | Skills (own format)              | Yes                                                               | Yes                                                   | Parity - no change               |
 | 18 | Permission / approval modes      | Yes (`--yolo`, `--llm-approve`)                               | Yes (`--yes`/YOLO; static rules)                    | Partial - see#7                  |
-| 19 | Headless one-shot mode           | `--headless -t`                                                 | `ragent run "<prompt>" --no-tui`                    | Parity - no change               |
+| 19 | Headless one-shot mode           | `--headless -t`                                                 | `codemason run "<prompt>" --no-tui`                    | Parity - no change               |
 | 20 | Session persistence / resume     | Yes (per-container state)                                         | Yes (SQLite)                                          | Parity - no change               |
 
 Capabilities 13-20 are listed to show they are **not** part of this spec; the plan does
@@ -107,7 +107,7 @@ not touch them.
 - **A4 - The native REST+SSE API stays canonical.** The OpenAI-compatible surface is an
   adapter over `SessionProcessor`; it does not replace or fork the native API, and it
   inherits the same bearer-token auth (FR-024, FR-038).
-- **A5 - ACP is a client and a server, not a dialect.** ragent acts as an ACP **client**
+- **A5 - ACP is a client and a server, not a dialect.** codemason acts as an ACP **client**
   (driving Claude Code / Codex / Gemini) and optionally as an ACP **server** (serving
   IDE clients). This is distinct from the existing Codex/Claude plugin-dialect support.
 - **A6 - Automations reuse cron and orchestrator primitives.** The automation service
@@ -134,7 +134,7 @@ not touch them.
 | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | **Execution backend**         | The environment a tool invocation runs in:`local`, `docker`, or `remote`.                                                    |
 | **Backend registry**          | The durable list of configured execution backends and remote agent servers, each with id, kind, connection descriptor, and health. |
-| **Remote backend**            | A ragent server (usually on another host) addressed over its REST+SSE API.                                                         |
+| **Remote backend**            | A codemason server (usually on another host) addressed over its REST+SSE API.                                                         |
 | **ACP**                       | Agent Client Protocol: JSON-RPC over stdio used to drive an external coding agent.                                                 |
 | **ACP agent**                 | An external agent (Claude Code, Codex, Gemini CLI, or a custom ACP server) driven over ACP.                                        |
 | **Automation**                | A named, schedulable or webhook-triggered agent run with a stored definition and run history.                                      |
@@ -143,31 +143,31 @@ not touch them.
 | **Security analyzer mode**    | A permission mode that evaluates each proposed tool action (allow / ask / deny) with an LLM or policy engine before execution.     |
 | **OpenAI-compatible surface** | The`POST /v1/chat/completions` and `GET /v1/models` endpoints that speak the OpenAI request/response dialect.                  |
 
-## Background - existing ragent machinery to reuse
+## Background - existing codemason machinery to reuse
 
-- **Tool execution** - `crates/ragent-tools-core` (`bash.rs` 7-layer validation,
-  file tools) and `crates/ragent-tools-extended`; the new backend trait wraps the leaf
+- **Tool execution** - `crates/codemason-tools-core` (`bash.rs` 7-layer validation,
+  file tools) and `crates/codemason-tools-extended`; the new backend trait wraps the leaf
   dispatch of these tools.
-- **Session loop** - `crates/ragent-agent/src/session/` (`processor.rs`,
+- **Session loop** - `crates/codemason-agent/src/session/` (`processor.rs`,
   `loop_capture.rs`, `history.rs`) is the turn engine the OpenAI-compatible surface and
   the ACP client both bridge to.
-- **HTTP server** - `crates/ragent-server/src/routes/mod.rs` (axum router, bearer-token
+- **HTTP server** - `crates/codemason-server/src/routes/mod.rs` (axum router, bearer-token
   `auth_middleware`, `AppState`, `/events` SSE stream, rate limiting, body/timeout
   limits) is where the OpenAI-compatible and OpenAPI surfaces attach.
-- **Agent registry / orchestrator** - `crates/ragent-agent/src/orchestrator/`
-  (`registry.rs`, `coordinator.rs`) and `crates/ragent-agent/src/background/` seed the
+- **Agent registry / orchestrator** - `crates/codemason-agent/src/orchestrator/`
+  (`registry.rs`, `coordinator.rs`) and `crates/codemason-agent/src/background/` seed the
   backend registry and the automation dispatcher.
-- **Cron / triggers** - `crates/ragent-agent/src/tool/cron.rs`,
-  `crates/ragent-agent/src/trigger/` (`dynamic.rs`, `mcp_notification.rs`, `runtime.rs`)
+- **Cron / triggers** - `crates/codemason-agent/src/tool/cron.rs`,
+  `crates/codemason-agent/src/trigger/` (`dynamic.rs`, `mcp_notification.rs`, `runtime.rs`)
   are the primitives the automation service extends.
-- **Skills** - `crates/ragent-agent/src/skill/` (`loader.rs`, `bundled.rs`,
+- **Skills** - `crates/codemason-agent/src/skill/` (`loader.rs`, `bundled.rs`,
   `invoke.rs`, `context.rs`) is where AgentSkills discovery is added.
-- **Permissions / hooks** - `crates/ragent-config/src/permission.rs` (`Permission`,
+- **Permissions / hooks** - `crates/codemason-config/src/permission.rs` (`Permission`,
   `PermissionAction`, `PermissionRule`, `PermissionChecker`) and `Config.hooks` are the
   hooks the security analyzer and `PreToolUse` semantics extend.
-- **Credentials** - `crates/ragent-storage` (encrypted credential store) is the source
+- **Credentials** - `crates/codemason-storage` (encrypted credential store) is the source
   for sandbox secret injection.
-- **Plugins / MCP** - `crates/ragent-plugins` and `crates/ragent-agent/src/mcp/` provide
+- **Plugins / MCP** - `crates/codemason-plugins` and `crates/codemason-agent/src/mcp/` provide
   the manifest and transport patterns that HTTP MCP transport follows.
 
 ## Requirements
@@ -260,7 +260,7 @@ agent through the remote server's REST+SSE API and shall mirror the remote event
 into the local TUI.
 
 **FR-022** - While an ACP agent is the active agent kind, the system shall render that
-session's streamed updates in the TUI and shall not route turns to a local ragent LLM
+session's streamed updates in the TUI and shall not route turns to a local codemason LLM
 provider.
 
 **FR-023** - While a container backend holds a conversation, the system shall persist that
@@ -354,7 +354,7 @@ OpenAI-compatible surface as well.
 
 ## Acceptance criteria
 
-1. `ragent` with no backend configured runs tools locally exactly as today, and the TUI
+1. `codemason` with no backend configured runs tools locally exactly as today, and the TUI
    shows `local` as the active backend.
 2. Selecting the `docker` or `podman` backend provisions a container, runs a shell tool inside it, and
    the host working directory is unchanged by that tool. The conytainer will have the worktree mapped as volume. 

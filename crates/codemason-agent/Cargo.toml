@@ -1,0 +1,134 @@
+[package]
+autotests = false
+name = "codemason-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+num_cpus = { workspace = true }
+# Shared store/ledger helpers (`quarantine_corrupt_ledger`, `read_ledger_bytes`).
+codemason-surface = { path = "../codemason-surface" }
+sha2 = { workspace = true }
+hex = { workspace = true }
+fs2 = { workspace = true }
+tokio = { workspace = true }
+# Unix kill support for MCP stdio child teardown (`kill_stdio_child`).
+libc = { workspace = true }
+process-wrap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+globset = { workspace = true }
+html2text = { workspace = true }
+similar = { workspace = true }
+tokio-stream = { workspace = true }
+futures = { workspace = true }
+dirs = { workspace = true }
+regex = { workspace = true }
+base64 = { workspace = true }
+gcf = { workspace = true }
+rmcp = { workspace = true }
+serde_norway = { workspace = true }
+url = { workspace = true }
+readability-rs = { workspace = true }
+ignore = { workspace = true }
+dashmap = { workspace = true }
+parking_lot = { workspace = true }
+# PERF-031: FxHash for non-cryptographic cache keys.
+rustc-hash = { workspace = true }
+# OS/CPU/memory/uptime introspection for the `os_info` tool (spec `osinfo`).
+sysinfo = { workspace = true }
+codemason-codeindex = { path = "../codemason-codeindex" }
+codemason-config = { path = "../codemason-config" }
+codemason-llm = { path = "../codemason-llm" }
+codemason-plugins = { path = "../codemason-plugins" }
+codemason-research = { path = "../codemason-research" }
+codemason-storage = { path = "../codemason-storage" }
+codemason-tools-core = { path = "../codemason-tools-core" }
+codemason-tools-extended = { path = "../codemason-tools-extended" }
+codemason-tools-vcs = { path = "../codemason-tools-vcs" }
+codemason-types = { path = "../codemason-types" }
+codemason-specs = { path = "../codemason-specs" }
+codemason-telemetry = { path = "../codemason-telemetry" }
+
+[features]
+default = []
+# ACP server endpoint on stdio for ACP-capable editors (spec `openhands`
+# FR-022, FR-028). Off by default; the endpoint is additionally gated at
+# runtime by the `acp.server_enabled` config key.
+acp-server = []
+
+[package.metadata.cargo-machete]
+# readability-rs is used via its lib name `readability` (research_adapter.rs);
+# cargo-machete matches on the package name and flags it as unused.
+ignored = ["readability-rs"]
+
+[dependencies.flate2]
+version = "1.0"
+
+[dependencies.tar]
+version = "0.4"
+
+[dependencies.walkdir]
+version = "2.3"
+
+[dependencies.tempfile]
+version = "3.5"
+
+[build-dependencies]
+chrono = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+tempfile = "3.5"
+# SERIALISES process-global-state tests (perf profiling atomics); the inline
+# perf tests mutate static atomics shared across every test thread.
+serial_test = "4"
+# Team runtime / coordination-tool integration tests (relocated from the
+# retired codemason-team crate in ANTIPAT M7.8) exercise BashTool/CommandCatalog.
+codemason-tools-core = { path = "../codemason-tools-core" }
+criterion = { workspace = true, features = ["async_tokio"] }
+axum = { workspace = true }
+# Local mock GitHub/GitLab API for the pull/merge request count service
+# (`tests/test_pull_request_counts.rs`); same version as codemason-tools-vcs.
+wiremock = "0.6"
+# Captures the FR-010 parallel-dispatch demotion notice from a scoped
+# subscriber (`tests/test_parallel_gate.rs`) instead of asserting on source text.
+tracing-subscriber = { workspace = true }
+# In-memory metric exporter for the profiler -> `codemason.profile.duration` test
+# (`tests/test_profiler.rs`). Same version and `testing` feature the telemetry
+# crate's dev-dependencies already enable.
+opentelemetry_sdk = { version = "0.33", features = ["metrics", "testing"] }
+# Forces a session insert to fail (`tests/test_session_worktree.rs`) so the
+# worktree rollback in `ProjectManager::create_session` can be exercised.
+rusqlite = { workspace = true }
+
+[[bench]]
+name = "agent_loop"
+harness = false
+
+[[bench]]
+name = "turn_loop"
+harness = false
+
+[[bench]]
+name = "m3_hot_paths"
+harness = false
+
+[[test]]
+name = "all"
+path = "tests/all.rs"

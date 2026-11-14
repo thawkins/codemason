@@ -45,7 +45,7 @@ additional LLM call is required.
 
 ### Current document structure
 
-`assemble_document` in `crates/ragent-research/src/document.rs` renders the
+`assemble_document` in `crates/codemason-research/src/document.rs` renders the
 following sections in order (FR-010):
 
 1. `# Title: <title>`
@@ -248,7 +248,7 @@ generation is a pure in-memory string operation with no I/O.
 ### NFR-002 — No new dependencies
 
 The implementation **shall not** add any new third-party crate dependencies
-to `ragent-research`. Mermaid rendering is textual; no Mermaid parser or
+to `codemason-research`. Mermaid rendering is textual; no Mermaid parser or
 rendering library is required.
 
 ### NFR-003 — Testability

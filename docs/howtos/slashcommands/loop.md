@@ -87,7 +87,7 @@ re-opens the dialog with the agent pre-selected.
 Opens the setup dialog.
 
 ```
-/loop coder Fix the failing unit tests in crates/ragent-storage
+/loop coder Fix the failing unit tests in crates/codemason-storage
 ```
 
 ```
@@ -131,4 +131,4 @@ Opens the setup dialog.
 - `/goal` -- set a goal condition evaluated after each turn
 - `/resume` -- continue a halted agent run
 - `/undo` -- snapshot rollback for file edits
-- `ragent.json` `loop` section -- loop defaults and checkpoint timeout
+- `codemason.json` `loop` section -- loop defaults and checkpoint timeout

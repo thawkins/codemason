@@ -1,8 +1,8 @@
-//! `ragent acp-server` - serve the ACP endpoint on stdio for IDE clients (spec
+//! `codemason acp-server` - serve the ACP endpoint on stdio for IDE clients (spec
 //! `openhands` T-008; FR-022, FR-028).
 //!
 //! This is the CLI entry point for the ACP **server**. It is the mirror of the
-//! `--no-tui` one-shot run: ragent owns the terminal's stdin/stdout for the
+//! `--no-tui` one-shot run: codemason owns the terminal's stdin/stdout for the
 //! process lifetime and speaks JSON-RPC 2.0 one frame per line to an
 //! ACP-capable editor (Zed, VS Code, JetBrains).
 //!
@@ -17,8 +17,8 @@
 
 use std::sync::Arc;
 
-use ragent_agent::event::EventBus;
-use ragent_agent::session::processor::SessionProcessor;
+use codemason_agent::event::EventBus;
+use codemason_agent::session::processor::SessionProcessor;
 
 use crate::Config;
 
@@ -32,7 +32,7 @@ const ACP_FEATURE_HELP: &str = "this build has no `acp-server` feature; rebuild 
 ///
 /// The `processor` and `event_bus` are the initialised runtime pieces `main`
 /// already builds for every mode; the agent the endpoint drives is resolved from
-/// [`Config::acp_server_agent`](ragent_config::Config::acp_server_agent).
+/// [`Config::acp_server_agent`](codemason_config::Config::acp_server_agent).
 ///
 /// # Errors
 ///
@@ -55,19 +55,19 @@ pub async fn run(
         // before this command is dispatched), not `eprintln!`.
         if cfg!(feature = "acp-server") {
             tracing::error!(
-                "ragent acp-server: the ACP server endpoint is disabled; enable it with \
+                "codemason acp-server: the ACP server endpoint is disabled; enable it with \
                  `acp.server_enabled: true` in the configuration"
             );
         } else {
-            tracing::error!("ragent acp-server: {ACP_FEATURE_HELP}");
+            tracing::error!("codemason acp-server: {ACP_FEATURE_HELP}");
         }
         return Err(crate::cli::CliExit::usage().into());
     }
 
     #[cfg(feature = "acp-server")]
     {
-        use ragent_agent::acp::serve_acp_stdio;
-        use ragent_agent::agent;
+        use codemason_agent::acp::serve_acp_stdio;
+        use codemason_agent::agent;
 
         let agent_name = config.acp_server_agent().to_string();
         let agent =
@@ -85,7 +85,7 @@ pub async fn run(
         // `acp-server` feature; the `if` above already handles the disabled case.
         // INTENTIONAL: parameters retained for the enabled-feature signature; unused here.
         let _ = (processor, event_bus, working_dir);
-        tracing::error!("ragent acp-server: {ACP_FEATURE_HELP}");
+        tracing::error!("codemason acp-server: {ACP_FEATURE_HELP}");
         Err(crate::cli::CliExit::usage().into())
     }
 }

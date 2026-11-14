@@ -95,7 +95,7 @@ fn govcreate_github_gitlab_conflict_is_rejected_by_clap() {
 fn govcreate_token_round_trip_through_shared_parser() {
     // FR-020: the rebuilt tokens must parse through the single shared
     // `SpecCommand::parse` into the same GovCreate variant fields.
-    use ragent_specs::SpecCommand;
+    use codemason_specs::SpecCommand;
     let cli = SpecCli::parse_from([
         "spec",
         "govcreate",
@@ -135,7 +135,7 @@ fn govcreate_token_round_trip_through_shared_parser() {
 
 #[test]
 fn govcreate_invalid_spec_id_surfaces_usage_variant_via_shared_parser() {
-    use ragent_specs::SpecCommand;
+    use codemason_specs::SpecCommand;
     let cli = SpecCli::parse_from([
         "spec",
         "govcreate",
@@ -165,9 +165,9 @@ fn govcreate_usage_message_drops_tui_header_and_rewrites_surface_name() {
         "CLI usage must not carry the TUI From header: {body}"
     );
     assert!(body.contains("Usage:"), "usage block kept: {body}");
-    let rewritten = body.replace("/spec govcreate", "ragent spec govcreate");
+    let rewritten = body.replace("/spec govcreate", "codemason spec govcreate");
     assert!(
-        rewritten.contains("ragent spec govcreate <specid>"),
+        rewritten.contains("codemason spec govcreate <specid>"),
         "surface name rewritten: {rewritten}"
     );
 }
@@ -175,7 +175,7 @@ fn govcreate_usage_message_drops_tui_header_and_rewrites_surface_name() {
 #[test]
 fn split_authored_sections_no_markers_treats_body_as_spec() {
     let (spec, plan, testplan) =
-        ragent_tools_extended::archdoc::split_authored_sections("# The spec body\n");
+        codemason_tools_extended::archdoc::split_authored_sections("# The spec body\n");
     assert_eq!(spec, "# The spec body\n");
     assert!(plan.contains("to be filled"));
     assert!(testplan.contains("to be filled"));
@@ -184,7 +184,7 @@ fn split_authored_sections_no_markers_treats_body_as_spec() {
 #[test]
 fn split_authored_sections_three_markers_assign_files() {
     let body = "1. `out/specs/x/SPEC.md`\nspec body\n2. `out/specs/x/PLAN.md`\nplan body\n3. `out/specs/x/TESTPLAN.md`\ntest body\n";
-    let (spec, plan, testplan) = ragent_tools_extended::archdoc::split_authored_sections(body);
+    let (spec, plan, testplan) = codemason_tools_extended::archdoc::split_authored_sections(body);
     assert!(spec.contains("spec body"), "spec section: {spec}");
     assert!(plan.contains("plan body"), "plan section: {plan}");
     assert!(testplan.contains("test body"), "testplan: {testplan}");
@@ -450,7 +450,7 @@ fn multi_word_topic_words_are_collected() {
     }
 }
 
-/// `ragent spec status <id> [<status>]` parses (#40).
+/// `codemason spec status <id> [<status>]` parses (#40).
 #[test]
 fn spec_status_parses_with_and_without_a_new_status() {
     let show = SpecCli::parse_from(["spec", "status", "001-auth"]);

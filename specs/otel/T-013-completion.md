@@ -11,32 +11,32 @@
 ## Summary
 
 Instrumented the tool execution path so that every tool invocation records the
-`ragent.tool.invocations` counter (FR-009) and the `ragent.tool.duration`
+`codemason.tool.invocations` counter (FR-009) and the `codemason.tool.duration`
 histogram (FR-015), both tagged with the `tool.name` attribute.
 
 ## Requirements
 
 ### FR-009
 
-> The system shall record `ragent.tool.invocations` and `ragent.tool.duration`
+> The system shall record `codemason.tool.invocations` and `codemason.tool.duration`
 > for every tool execution, tagged with `tool.name`.
 
 ### FR-015
 
 > When a tool invocation begins, the system shall start a timer and record
-> `ragent.tool.invocations`; when it completes, the system shall record
-> `ragent.tool.duration`.
+> `codemason.tool.invocations`; when it completes, the system shall record
+> `codemason.tool.duration`.
 
 ## Changes
 
-### `crates/ragent-telemetry/src/instruments.rs`
+### `crates/codemason-telemetry/src/instruments.rs`
 
 - Added `#[derive(Clone)]` to the feature-gated `InstrumentRegistry` struct.
   OTEL `Meter` and instrument handles (`Counter`, `Histogram`, `Gauge`, etc.)
   are all `Arc`-backed, so cloning is cheap. This allows `ToolRecorder` to be
   cloned into `tokio::spawn` closures for per-tool-call instrumentation.
 
-### `crates/ragent-telemetry/src/recorder.rs`
+### `crates/codemason-telemetry/src/recorder.rs`
 
 Created a new `ToolRecorder` type alongside the existing `LlmRecorder`:
 
@@ -49,10 +49,10 @@ Created a new `ToolRecorder` type alongside the existing `LlmRecorder`:
   - `disabled() -> Self` — holds `None`; all methods are no-ops.
   - `is_enabled() -> bool`
   - `record_invocation(tool_name: &str)` — increments the
-    `ragent.tool.invocations` counter tagged with the `tool.name` attribute
+    `codemason.tool.invocations` counter tagged with the `tool.name` attribute
     (FR-009).
   - `record_duration(tool_name: &str, duration_ms: f64)` — records to the
-    `ragent.tool.duration` histogram tagged with `tool.name` (FR-015).
+    `codemason.tool.duration` histogram tagged with `tool.name` (FR-015).
 
 - **Feature-off variant** (`#[cfg(not(feature = "telemetry"))]`,
   `#[derive(Clone, Copy)]`): Zero-sized no-op. All methods discard their
@@ -69,9 +69,9 @@ Created a new `ToolRecorder` type alongside the existing `LlmRecorder`:
     panic.
   - `test_tool_recorder_record_invocation_increments_counter` — records 3
     invocations across 2 tools, flushes the in-memory exporter, asserts the
-    `ragent.tool.invocations` counter sum is 3.
+    `codemason.tool.invocations` counter sum is 3.
   - `test_tool_recorder_record_duration_records_histogram` — records one
-    duration and asserts `ragent.tool.duration` appears in exported metrics.
+    duration and asserts `codemason.tool.duration` appears in exported metrics.
   - `test_tool_recorder_attributes_include_tool_name` — asserts the exported
     data point has a `tool.name` attribute with the correct value.
   - `test_tool_recorder_is_clone` — confirms the recorder can be cloned and
@@ -80,9 +80,9 @@ Created a new `ToolRecorder` type alongside the existing `LlmRecorder`:
 - **No-op test added** (feature-off test module):
   - `test_noop_tool_recorder` — calls all no-op methods without panic.
 
-### `crates/ragent-agent/src/session/processor.rs`
+### `crates/codemason-agent/src/session/processor.rs`
 
-- **New struct field**: `pub tool_recorder: ragent_telemetry::recorder::ToolRecorder`
+- **New struct field**: `pub tool_recorder: codemason_telemetry::recorder::ToolRecorder`
   added to `SessionProcessor`, with a docblock describing it as a zero-overhead
   no-op when telemetry is disabled, and noting it is cheap to clone for use in
   `tokio::spawn` closures.
@@ -108,7 +108,7 @@ Created a new `ToolRecorder` type alongside the existing `LlmRecorder`:
 
 ### `src/main.rs`
 
-- Added `tool_recorder: ragent_telemetry::recorder::ToolRecorder::disabled()`
+- Added `tool_recorder: codemason_telemetry::recorder::ToolRecorder::disabled()`
   to the `SessionProcessor` struct literal in `main()`. (Wired to a live
   subsystem in a future task when the telemetry subsystem is initialized at
   startup; for now it defaults to disabled.)
@@ -119,20 +119,20 @@ Created a new `ToolRecorder` type alongside the existing `LlmRecorder`:
 
 ```
 cargo check --workspace                          # pass (default features, no telemetry)
-cargo check -p ragent-agent --features telemetry # pass
-cargo check -p ragent-telemetry --features telemetry # pass
+cargo check -p codemason-agent --features telemetry # pass
+cargo check -p codemason-telemetry --features telemetry # pass
 ```
 
 ### Test results
 
 ```
-cargo test -p ragent-telemetry --features telemetry --lib recorder
+cargo test -p codemason-telemetry --features telemetry --lib recorder
 test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 29 filtered out
 
-cargo test -p ragent-telemetry --lib
+cargo test -p codemason-telemetry --lib
 test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
-cargo test -p ragent-agent --lib
+cargo test -p codemason-agent --lib
 test result: ok. 316 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 

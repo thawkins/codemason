@@ -29,16 +29,16 @@ Converted in PERF-080:
 
 | Crate | File | Site | Was | Now |
 | ----- | ---- | ---- | --- | --- |
-| `ragent-agent` | `trigger/runtime.rs` | `dedup_cache` (hash -> entry) | `HashMap` | `FxHashMap` |
-| `ragent-agent` | `reference/fuzzy.rs` | project-file cache | `HashMap` | `FxHashMap` (PERF-051) |
-| `ragent-research` | `search_budget.rs` | query cache (normalised query text) | `HashMap` | `FxHashMap` |
-| `ragent-research` | `manager.rs` | item cache, `disk_names`, `cache_names` | `HashMap`/`HashSet` | `FxHashMap`/`FxHashSet` |
-| `ragent-research` | `locus.rs` | term -> hits | `HashMap` | `FxHashMap` |
-| `ragent-research` | `contradiction.rs` | dimension claims, seen pairs, best-by-pair | `HashMap` | `FxHashMap` |
-| `ragent-research` | `corpus_critic.rs` | source-to-loci map | `HashMap` | `FxHashMap` |
-| `ragent-research` | `session.rs` | `build_web_index_map` | `HashMap` | `FxHashMap` |
-| `ragent-tools-extended` | `masterfetch/search/consensus.rs` | URL -> group entries | `HashMap` | `FxHashMap` |
-| `ragent-tools-extended` | `masterfetch/search/engine.rs` | seen-URL set | `HashSet` | `FxHashSet` |
+| `codemason-agent` | `trigger/runtime.rs` | `dedup_cache` (hash -> entry) | `HashMap` | `FxHashMap` |
+| `codemason-agent` | `reference/fuzzy.rs` | project-file cache | `HashMap` | `FxHashMap` (PERF-051) |
+| `codemason-research` | `search_budget.rs` | query cache (normalised query text) | `HashMap` | `FxHashMap` |
+| `codemason-research` | `manager.rs` | item cache, `disk_names`, `cache_names` | `HashMap`/`HashSet` | `FxHashMap`/`FxHashSet` |
+| `codemason-research` | `locus.rs` | term -> hits | `HashMap` | `FxHashMap` |
+| `codemason-research` | `contradiction.rs` | dimension claims, seen pairs, best-by-pair | `HashMap` | `FxHashMap` |
+| `codemason-research` | `corpus_critic.rs` | source-to-loci map | `HashMap` | `FxHashMap` |
+| `codemason-research` | `session.rs` | `build_web_index_map` | `HashMap` | `FxHashMap` |
+| `codemason-tools-extended` | `masterfetch/search/consensus.rs` | URL -> group entries | `HashMap` | `FxHashMap` |
+| `codemason-tools-extended` | `masterfetch/search/engine.rs` | seen-URL set | `HashSet` | `FxHashSet` |
 
 Sites intentionally left on the default hasher:
 
@@ -51,5 +51,5 @@ Sites intentionally left on the default hasher:
 
 Each converted site keeps its public signature byte-for-byte identical (same
 key and value types); only the alias changes, so no test updates are required.
-`cargo test -p ragent-research`, `cargo test -p ragent-tools-extended`, and
-`cargo test -p ragent-agent` verify behaviour is unchanged.
+`cargo test -p codemason-research`, `cargo test -p codemason-tools-extended`, and
+`cargo test -p codemason-agent` verify behaviour is unchanged.

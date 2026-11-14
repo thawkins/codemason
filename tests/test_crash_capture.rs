@@ -43,7 +43,7 @@ fn crash_marker_records_and_reports_unclean_exit() {
 
 /// The truncating spool is shared with the TUI and must hold the newest lines.
 mod stderr_spool {
-    use ragent_types::stderr_spool::{SPOOL_MAX_LINES, Spool};
+    use codemason_types::stderr_spool::{SPOOL_MAX_LINES, Spool};
 
     #[test]
     fn spool_holds_only_the_newest_lines() {

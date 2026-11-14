@@ -51,7 +51,7 @@ Two encoder defects were found while writing the fixtures, both in
 
 ## 3. What was built
 
-`crates/ragent-llm/tests/test_wire_replay.rs`, registered in `tests/all.rs` as
+`crates/codemason-llm/tests/test_wire_replay.rs`, registered in `tests/all.rs` as
 `test_wire_replay`, seven cases:
 
 | Case | Family | Recorded body | Asserts |
@@ -88,7 +88,7 @@ absent replay must fail loudly on the first line, not on a downstream field.
 
 ## 4. The one production change
 
-`ollama_native_message` (`crates/ragent-llm/src/providers/wire/encode.rs`) now
+`ollama_native_message` (`crates/codemason-llm/src/providers/wire/encode.rs`) now
 writes construct-bearing messages as the ordinary `{role, content}` entry
 followed by one entry per construct:
 
@@ -151,10 +151,10 @@ the behaviour the tree had before the task, and only a replay of a recorded
 ## 7. Verification
 
 - `cargo fmt --all --check` clean.
-- `cargo clippy -p ragent-llm --all-targets` names no line this task added.
-- `cargo nextest run -p ragent-llm`: **661 run, 661 passed, 2 skipped**, of
+- `cargo clippy -p codemason-llm --all-targets` names no line this task added.
+- `cargo nextest run -p codemason-llm`: **661 run, 661 passed, 2 skipped**, of
   which 7 are `test_wire_replay::`.
-- `cargo nextest run -p ragent-agent` (the crate that consumes the encoder):
+- `cargo nextest run -p codemason-agent` (the crate that consumes the encoder):
   2156 run, 2151 passed, 5 failed - all five the pre-existing
   `test_tool_rename_guard::` group (T-047), zero non-guard failures.
 - The file is listed in `tests/all.rs`; a replay file that is not listed never
@@ -164,9 +164,9 @@ the behaviour the tree had before the task, and only a replay of a recorded
 
 | File | Change |
 |---|---|
-| `crates/ragent-llm/tests/test_wire_replay.rs` | new, 7 cases, 1052 lines |
-| `crates/ragent-llm/tests/all.rs` | one `#[path]` / `mod` pair |
-| `crates/ragent-llm/src/providers/wire/encode.rs` | `ollama_native_message` writes text + constructs; `joined_text` |
+| `crates/codemason-llm/tests/test_wire_replay.rs` | new, 7 cases, 1052 lines |
+| `crates/codemason-llm/tests/all.rs` | one `#[path]` / `mod` pair |
+| `crates/codemason-llm/src/providers/wire/encode.rs` | `ollama_native_message` writes text + constructs; `joined_text` |
 | `specs/uniformtools/PLAN.md` | this task's row -> completed |
 | `specs/uniformtools/TESTPLAN.md` | TC-003's automated half recorded |
 | `CHANGELOG.md` | one `### Added` bullet |

@@ -92,7 +92,7 @@ def self_test() -> int:
 
     Covers both ``crates/*/src`` and the root ``src/`` tree (R-01): a guard
     that only scanned the crates would pass the old root-``src`` blind spot."""
-    seed_dirs = [pathlib.Path("crates/ragent-types/src"), pathlib.Path("src")]
+    seed_dirs = [pathlib.Path("crates/codemason-types/src"), pathlib.Path("src")]
     for seed_dir in seed_dirs:
         if not seed_dir.is_dir():
             print(

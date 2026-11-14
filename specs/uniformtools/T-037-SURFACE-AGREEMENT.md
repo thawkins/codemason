@@ -62,11 +62,11 @@ numbers still pin a count, and the canary is now the one `--dry-run` prints.
 ## Delivered as two test files, one per half of the surface
 
 The six enumerations do not live in one crate. Four are reachable from
-`ragent-agent`; `/tools list` and `/bug-report` are `ragent-tui` render paths that
-`ragent-agent` cannot reach. The guard is split beside the surfaces it pins, and
+`codemason-agent`; `/tools list` and `/bug-report` are `codemason-tui` render paths that
+`codemason-agent` cannot reach. The guard is split beside the surfaces it pins, and
 both halves are registered in their crate's `tests/all.rs`.
 
-### `crates/ragent-agent/tests/test_fr030_surface_agreement.rs` (7 cases)
+### `crates/codemason-agent/tests/test_fr030_surface_agreement.rs` (7 cases)
 
 | # | Case | Surface it pins |
 |---|---|---|
@@ -78,7 +78,7 @@ both halves are registered in their crate's `tests/all.rs`.
 | 6 | `test_commands_info_catalogue_is_intact_and_names_no_retired_tool` | `commands_info` |
 | 7 | `test_the_outbound_provider_tool_list_is_the_registry_surface` | the wire list sent to a provider |
 
-### `crates/ragent-tui/tests/test_fr030_surface_agreement.rs` (2 cases)
+### `crates/codemason-tui/tests/test_fr030_surface_agreement.rs` (2 cases)
 
 | # | Case | Surface it pins |
 |---|---|---|
@@ -116,7 +116,7 @@ the JSON form.
 
 Case 3 holds the crate-wide `global_env_lock()` for its whole body **and** is
 `#[serial]`: the report reads the ambient global config, the project config and
-both override variables, so a developer's real `~/.config/ragent/ragent.json`
+both override variables, so a developer's real `~/.config/codemason/codemason.json`
 would otherwise take part. The two locks are different mutexes and taking both is
 what excludes this test from every other env-mutating test in the binary - the
 rule `scripts/check-test-env-isolation.sh` enforces. The guard spans the
@@ -208,7 +208,7 @@ to build:
 
 ```text
 error[E0063]: missing field `hidden_tools` in initializer of `DryRunInputs`
-  --> crates/ragent-agent/tests/test_fr030_surface_agreement.rs:357:18
+  --> crates/codemason-agent/tests/test_fr030_surface_agreement.rs:357:18
 ```
 
 `DryRunInputs` gained the field when tool visibility landed (`src/main.rs` passes
@@ -237,7 +237,7 @@ spec: a previous session left `plan::PlanEnterTool` commented out of
 `create_default_registry()` with a `// RED PROOF` marker while it worked on
 another task, dropping `EnterPlanMode` and taking the surface to 147. That edit
 was not in the tree when this task ran - the registration is present at
-`crates/ragent-agent/src/tool/mod.rs:1623`, which is why case 1 passed at 148 on
+`crates/codemason-agent/src/tool/mod.rs:1623`, which is why case 1 passed at 148 on
 its first run here - so break 1 above is that state reproduced deliberately, to
 record what it looks like. Had the guard been registered at the time, it would
 have failed on the next build instead of letting a 147-tool surface sit in the
@@ -252,13 +252,13 @@ exactly the message T-041 §8.1 predicted.
 Run on this tree:
 
 - `cargo fmt --all -- --check` - clean.
-- `cargo clippy -p ragent-agent -p ragent-tui --all-targets` - no finding in either
+- `cargo clippy -p codemason-agent -p codemason-tui --all-targets` - no finding in either
   guard file; the remaining output is the pre-existing `pub(crate)`-inside-a-
   private-module set and other crates' lints.
 - `cargo check --workspace --all-targets` - no errors.
-- `cargo test -p ragent-agent --test all` - **1737 passed, 1 ignored, 0 failed**
+- `cargo test -p codemason-agent --test all` - **1737 passed, 1 ignored, 0 failed**
   (103 s).
-- `cargo test -p ragent-tui --test all` - **3654 passed, 3 failed**, the three
+- `cargo test -p codemason-tui --test all` - **3654 passed, 3 failed**, the three
   pre-existing `Alt+T` -> `ToggleTasksPanel` failures unrelated to this task:
   `test_input_more::alt_toggle_keys_map_to_actions`,
   `test_input_queue_menu_binding::test_other_alt_keys_are_unaffected`,
@@ -267,13 +267,13 @@ Run on this tree:
   one full run and not the next; it passes in isolation and under
   `--test-threads=1`, and is an env-race in that file's own harness, not a
   consequence of this change.
-- `cargo test -p ragent-agent --test all test_fr030_surface_agreement::` - 7 passed.
-- `cargo test -p ragent-tui --test all test_fr030_surface_agreement::` - 2 passed.
+- `cargo test -p codemason-agent --test all test_fr030_surface_agreement::` - 7 passed.
+- `cargo test -p codemason-tui --test all test_fr030_surface_agreement::` - 2 passed.
 - All nine guard scripts pass: `check-inline-tests`,
   `check-file-tool-containment`, `check-shared-guards`, `check-silent-errors`,
   `check-security-unwraps`, `check-poison-locks`, `check-dead-code-reasons`,
   `check-test-env-isolation`, `check-tool-rename`.
-- `ragent run --dry-run "hello"` on the built binary - `total: 148 visible tools`,
+- `codemason run --dry-run "hello"` on the built binary - `total: 148 visible tools`,
   21 family rows, `agent: 4 tools`, `team: 19 tools`, unchanged from the FR-030
   baseline.
 
@@ -294,11 +294,11 @@ Run on this tree:
 
 | File | Change |
 |---|---|
-| `crates/ragent-agent/tests/test_fr030_surface_agreement.rs` | `hidden_tools` supplied; canary corrected to 4/19; `commands_info` `/tools` row pinned to `TOOLS_SUBS`; module doc, failure message and two clippy allows corrected; registered |
-| `crates/ragent-tui/tests/test_fr030_surface_agreement.rs` | `/tools list` case rewritten around `n + m = 148` and both blocks; module doc records the two measured facts; registered |
-| `crates/ragent-tui/src/app/slash.rs` | `handle_bug_report` writes `Tools registered` from `registry.list().len()` |
-| `crates/ragent-agent/tests/all.rs`, `crates/ragent-tui/tests/all.rs` | one `#[path]` registration each |
-| `crates/ragent-agent/tests/test_fr028_state_survival.rs` | stale canary pair in a comment corrected |
+| `crates/codemason-agent/tests/test_fr030_surface_agreement.rs` | `hidden_tools` supplied; canary corrected to 4/19; `commands_info` `/tools` row pinned to `TOOLS_SUBS`; module doc, failure message and two clippy allows corrected; registered |
+| `crates/codemason-tui/tests/test_fr030_surface_agreement.rs` | `/tools list` case rewritten around `n + m = 148` and both blocks; module doc records the two measured facts; registered |
+| `crates/codemason-tui/src/app/slash.rs` | `handle_bug_report` writes `Tools registered` from `registry.list().len()` |
+| `crates/codemason-agent/tests/all.rs`, `crates/codemason-tui/tests/all.rs` | one `#[path]` registration each |
+| `crates/codemason-agent/tests/test_fr028_state_survival.rs` | stale canary pair in a comment corrected |
 | `SPEC.md` | new §3.2.3 "Tool Surface Agreement" |
 | `docs/howtos/slashcommands/bug-report.md` | `Tool Configuration` row describes the new line |
 | `CHANGELOG.md` | Unreleased entry |

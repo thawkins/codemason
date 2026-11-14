@@ -17,7 +17,7 @@ after discovery via the `/mcp discover` TUI command, or after `/mcp connect
 <id>` enables and connects a server live. Servers bridged from an enabled
 plugin's `mcpServers` section connect as `<plugin-id>.<server>` at startup.
 
-The `mcp_` namespace is what keeps a server out of the bare ragent namespace:
+The `mcp_` namespace is what keeps a server out of the bare codemason namespace:
 a server that offers a tool called `bash` gets `mcp_<server>_bash`, which is not
 the retired `bash` and cannot make it resolvable. A bridge whose surfaced name
 falls outside that namespace, or that equals a name this build retired, is
@@ -56,7 +56,7 @@ still registered, and names the command that re-enables it.
 ## Connection lifecycle
 
 Every `McpClient::connect` attempt runs under a bounded per-attempt timeout
-(default 30 s, overridable with `RAGENT_MCP_CONNECT_TIMEOUT_SECS`) and is
+(default 30 s, overridable with `CODEMASON_MCP_CONNECT_TIMEOUT_SECS`) and is
 retried once on timeout only. A launcher such as `npx`/`npm exec` that stalls
 resolving a package, or a server that accepts the connection and then never
 answers the handshake, fails within the bound with an actionable error instead

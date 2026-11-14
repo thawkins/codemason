@@ -10,18 +10,18 @@ test code.
 
 ## Prerequisites
 
-1. A working build of ragent (`cargo build`).
+1. A working build of codemason (`cargo build`).
 2. Internet access (the Wikipedia REST API is at
    `https://en.wikipedia.org/api/rest_v1/` and the MediaWiki Action API
    is at `https://en.wikipedia.org/w/api.php`).
 3. No Wikipedia API key is required — the backend is keyless. No
    environment variables or config fields are needed for the tests below.
-4. A shell with `curl` available, or the ragent TUI / CLI, to issue
+4. A shell with `curl` available, or the codemason TUI / CLI, to issue
    `mf_search` queries.
 5. (Optional) `jq` for inspecting JSON responses in the terminal.
 6. Confirm the build includes the `wikipedia` engine:
    ```
-   ./target/debug/ragent run "Run mf_search with engine=\"wikipedia\" query=\"Rust programming language\" max_results=2 and print the engines used and each result's title, URL, and snippet."
+   ./target/debug/cdmn run "Run mf_search with engine=\"wikipedia\" query=\"Rust programming language\" max_results=2 and print the engines used and each result's title, URL, and snippet."
    ```
    The output should mention `wikipedia` among the engines.
 
@@ -33,16 +33,16 @@ test code.
 configuration.
 
 **Preconditions:**
-- ragent is built.
+- codemason is built.
 - No `TAVILY_API_KEY`, `LANGSEARCH_API_KEY`, or `PERPLEXITY_API_KEY`
   environment variables are set.
-- No `ragent.json` config file is required.
+- No `codemason.json` config file is required.
 
 **Instructions:**
 1. Open a terminal in the project root.
-2. Run the ragent TUI:
+2. Run the codemason TUI:
    ```
-   ./target/debug/ragent
+   ./target/debug/cdmn
    ```
 3. At the prompt, type:
    ```
@@ -70,14 +70,14 @@ configuration.
 description, and canonical article URL.
 
 **Preconditions:**
-- ragent is built.
+- codemason is built.
 - Internet access is available.
 
 **Instructions:**
 1. Open a terminal in the project root.
 2. Run a one-shot prompt:
    ```
-   ./target/debug/ragent run "Use mf_search to search for 'photosynthesis' with max_results=3 and list each result's title, URL, and full snippet."
+   ./target/debug/cdmn run "Use mf_search to search for 'photosynthesis' with max_results=3 and list each result's title, URL, and full snippet."
    ```
 3. Alternatively, use `curl` against a running server:
    ```
@@ -108,14 +108,14 @@ description, and canonical article URL.
 Wikipedia results are returned.
 
 **Preconditions:**
-- ragent is built.
+- codemason is built.
 - Internet access is available.
 
 **Instructions:**
 1. Open a terminal in the project root.
 2. Run a one-shot prompt:
    ```
-   ./target/debug/ragent run "Run mf_search with engine=\"wikipedia\" query=\"quantum entanglement\" max_results=3 and print the source of each result."
+   ./target/debug/cdmn run "Run mf_search with engine=\"wikipedia\" query=\"quantum entanglement\" max_results=3 and print the source of each result."
    ```
 3. Observe the result sources.
 
@@ -139,14 +139,14 @@ Wikipedia results are returned.
 relevant Wikipedia page title via the Action API search step.
 
 **Preconditions:**
-- ragent is built.
+- codemason is built.
 - Internet access is available.
 
 **Instructions:**
 1. Open a terminal in the project root.
 2. Run a one-shot prompt:
    ```
-   ./target/debug/ragent run "Run mf_search with engine=\"wikipedia\" query=\"jaguar\" max_results=3 and print each result's title and URL."
+   ./target/debug/cdmn run "Run mf_search with engine=\"wikipedia\" query=\"jaguar\" max_results=3 and print each result's title and URL."
    ```
 3. Observe the result titles and URLs.
 
@@ -170,7 +170,7 @@ relevant Wikipedia page title via the Action API search step.
 the remaining `mf_search` backends still return results.
 
 **Preconditions:**
-- ragent is built.
+- codemason is built.
 - The Wikipedia host can be made unreachable (e.g. by disconnecting the
   network, adding a firewall rule, or pointing DNS to an invalid host in
   a test build).
@@ -181,7 +181,7 @@ the remaining `mf_search` backends still return results.
 2. Open a terminal in the project root.
 3. Run a one-shot prompt:
    ```
-   ./target/debug/ragent run "Run mf_search with query=\"artificial intelligence\" max_results=5 and print the engines used and any engine-blocked signals."
+   ./target/debug/cdmn run "Run mf_search with query=\"artificial intelligence\" max_results=5 and print the engines used and any engine-blocked signals."
    ```
 4. Observe the result metadata.
 5. Restore access to `en.wikipedia.org`.
@@ -205,7 +205,7 @@ the remaining `mf_search` backends still return results.
 header so requests are not rejected with HTTP 403.
 
 **Preconditions:**
-- ragent is built.
+- codemason is built.
 - Internet access is available.
 - (Optional) A network inspection tool (`tcpdump`, `mitmproxy`, or a
   logging proxy) to observe outbound headers.
@@ -216,7 +216,7 @@ header so requests are not rejected with HTTP 403.
 2. Open a terminal in the project root.
 3. Run a one-shot prompt:
    ```
-   ./target/debug/ragent run "Run mf_search with engine=\"wikipedia\" query=\"Rust programming language\" max_results=2."
+   ./target/debug/cdmn run "Run mf_search with engine=\"wikipedia\" query=\"Rust programming language\" max_results=2."
    ```
 4. Observe the result set and (if capturing) the outbound request
    headers.
@@ -232,7 +232,7 @@ header so requests are not rejected with HTTP 403.
 - No `blocked: 403` or `blocked: missing user-agent` signal appears in
   the engine metadata.
 - (If capturing) the outbound `User-Agent` header is a descriptive
-  string identifying ragent (e.g. `ragent/<version> (…)`), not a default
+  string identifying codemason (e.g. `codemason/<version> (…)`), not a default
   or empty value.
 
 ---
@@ -243,14 +243,14 @@ header so requests are not rejected with HTTP 403.
 returns at most that many Wikipedia results.
 
 **Preconditions:**
-- ragent is built.
+- codemason is built.
 - Internet access is available.
 
 **Instructions:**
 1. Open a terminal in the project root.
 2. Run a one-shot prompt:
    ```
-   ./target/debug/ragent run "Run mf_search with engine=\"wikipedia\" query=\"computer science\" max_results=4 and print the count of wikipedia results returned."
+   ./target/debug/cdmn run "Run mf_search with engine=\"wikipedia\" query=\"computer science\" max_results=4 and print the count of wikipedia results returned."
    ```
 3. Observe the number of Wikipedia results.
 
@@ -269,5 +269,5 @@ returns at most that many Wikipedia results.
 1. Restore network access to `en.wikipedia.org` if TC-005 blocked it.
 2. Stop any logging proxy / packet capture started for TC-006.
 3. Remove any temporary firewall rules added for the tests.
-4. No ragent configuration files were created or modified by these
+4. No codemason configuration files were created or modified by these
    tests; no further teardown is required.

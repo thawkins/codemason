@@ -2,19 +2,19 @@
 # CI guard (ANTIPAT M7.7): assert the team subsystem has exactly one home.
 #
 # History: the pre-M7 guard asserted that the team runtime lived in
-# `crates/ragent-team/src/team/` and was compiled into `ragent-agent` via
+# `crates/codemason-team/src/team/` and was compiled into `codemason-agent` via
 # `#[path]` includes. REMPLAN M3 moved the sources natively into
-# `crates/ragent-agent`, and ANTIPAT M7.8 deleted the `ragent-team` shim
+# `crates/codemason-agent`, and ANTIPAT M7.8 deleted the `codemason-team` shim
 # entirely, so that guard reported 28 false duplicates on the shipped layout
-# and contradicted `crates/ragent-types/tests/test_structure_types.rs`. It is
+# and contradicted `crates/codemason-types/tests/test_structure_types.rs`. It is
 # rewritten here around the CURRENT invariant:
 #
-#   1. The team runtime lives in `crates/ragent-agent/src/team/` and nowhere
+#   1. The team runtime lives in `crates/codemason-agent/src/team/` and nowhere
 #      else; every module is a plain `pub mod <name>;` declaration.
-#   2. The team coordination tools live in `crates/ragent-agent/src/tool/team_*.rs`
-#      and are declared as `pub mod team_*;` in `crates/ragent-agent/src/tool/mod.rs`.
-#   3. No `ragent-team` crate and no `#[path]` attribute referencing
-#      `ragent-team` may be re-introduced under `crates/ragent-agent/src/`.
+#   2. The team coordination tools live in `crates/codemason-agent/src/tool/team_*.rs`
+#      and are declared as `pub mod team_*;` in `crates/codemason-agent/src/tool/mod.rs`.
+#   3. No `codemason-team` crate and no `#[path]` attribute referencing
+#      `codemason-team` may be re-introduced under `crates/codemason-agent/src/`.
 #
 # Usage: bash scripts/check-team-duplication.sh [--self-test]
 # Exit code: 0 = clean, 1 = a duplicate/canonicality violation was found.
@@ -24,11 +24,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-TEAM_DIR="crates/ragent-agent/src/team"
-TOOL_DIR="crates/ragent-agent/src/tool"
+TEAM_DIR="crates/codemason-agent/src/team"
+TOOL_DIR="crates/codemason-agent/src/tool"
 TOOL_MOD="$TOOL_DIR/mod.rs"
-AGENT_SRC="crates/ragent-agent/src"
-SHIM_CRATE="crates/ragent-team"
+AGENT_SRC="crates/codemason-agent/src"
+SHIM_CRATE="crates/codemason-team"
 
 # Required team-runtime modules; each must exist as a file and be declared.
 #
@@ -47,8 +47,8 @@ run_checks() {
 
     # 1a. The retired shim crate must not come back.
     if [ -e "$SHIM_CRATE" ]; then
-        fail "the retired ragent-team crate is present at $SHIM_CRATE."
-        echo "       The team runtime has a single home in ragent-agent/src/team/"
+        fail "the retired codemason-team crate is present at $SHIM_CRATE."
+        echo "       The team runtime has a single home in codemason-agent/src/team/"
         echo "       (ANTIPAT M7.8); do not re-introduce the shim crate."
         exit_code=1
     fi
@@ -86,11 +86,11 @@ run_checks() {
         fi
     done
 
-    # 1c. No `#[path]` attribute may reference ragent-team anywhere in the
+    # 1c. No `#[path]` attribute may reference codemason-team anywhere in the
     #     agent sources (mirrors test_structure_types.rs:290).
-    if grep -rn "#\[path" "$AGENT_SRC" --include='*.rs' 2>/dev/null | grep -q "ragent-team"; then
-        fail "a #[path] attribute referencing ragent-team exists under $AGENT_SRC:"
-        grep -rn "#\[path" "$AGENT_SRC" --include='*.rs' 2>/dev/null | grep "ragent-team" | sed 's/^/       /'
+    if grep -rn "#\[path" "$AGENT_SRC" --include='*.rs' 2>/dev/null | grep -q "codemason-team"; then
+        fail "a #[path] attribute referencing codemason-team exists under $AGENT_SRC:"
+        grep -rn "#\[path" "$AGENT_SRC" --include='*.rs' 2>/dev/null | grep "codemason-team" | sed 's/^/       /'
         exit_code=1
     fi
 
@@ -134,7 +134,7 @@ if [ "${1:-}" = "--self-test" ]; then
         exit 1
     fi
 
-    # Second half: a re-introduced `ragent-team` shim crate must be caught.
+    # Second half: a re-introduced `codemason-team` shim crate must be caught.
     seed_crate="$SHIM_CRATE"
     mkdir -p "$seed_crate/src"
     printf '' > "$seed_crate/src/lib.rs"
@@ -144,7 +144,7 @@ if [ "${1:-}" = "--self-test" ]; then
     set -e
     rm -rf "$seed_crate"
     if [ "$rc" -eq 0 ]; then
-        echo "ERROR: self-test failed - a re-introduced ragent-team crate passed the guard."
+        echo "ERROR: self-test failed - a re-introduced codemason-team crate passed the guard."
         exit 1
     fi
 
@@ -153,7 +153,7 @@ if [ "${1:-}" = "--self-test" ]; then
 fi
 
 if run_checks; then
-    echo "OK: the team runtime and tools have a single home in ragent-agent (no ragent-team shim)."
+    echo "OK: the team runtime and tools have a single home in codemason-agent (no codemason-team shim)."
     exit 0
 fi
 exit 1

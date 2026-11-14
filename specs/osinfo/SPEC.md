@@ -11,9 +11,9 @@ audit:
 
 ## Overview
 
-ragent already ships `ragent_info` (build/version introspection about the
-ragent binary itself), but neither the LLM nor the user has a way to learn
-about the *host environment* ragent is running on: the operating system type,
+codemason already ships `codemason_info` (build/version introspection about the
+codemason binary itself), but neither the LLM nor the user has a way to learn
+about the *host environment* codemason is running on: the operating system type,
 kernel, distribution, architecture, CPU, graphics adapters, memory, or shell
 environment. Answering
 a question such as "are we on Linux or macOS, and how much RAM does this
@@ -23,7 +23,7 @@ lookup.
 
 This spec defines a new built-in tool, **`os_info`**, that reports extensive,
 read-only information about the operating system and hardware configuration of
-the machine running ragent, plus a companion **`/osinfo` slash command**
+the machine running codemason, plus a companion **`/osinfo` slash command**
 (`help`, `show`) for viewing the same information directly. The tool executes
 no external commands, writes nothing, and always succeeds; the slash command
 renders the tool's text report into the message window without an LLM call.
@@ -32,8 +32,8 @@ renders the tool's text report into the message window without an LLM call.
 
 In scope:
 
-- A new `os_info` tool in `crates/ragent-agent/src/tool/os_info.rs` registered
-  in the standard agent session registry, following the `ragent_info.rs`
+- A new `os_info` tool in `crates/codemason-agent/src/tool/os_info.rs` registered
+  in the standard agent session registry, following the `codemason_info.rs`
   pattern (static `Tool` impl, `format` parameter with `text` (default,
   human-readable markdown) or `json` output).
 - OS identity: `family`/`type` (`linux`, `macos`, `windows`, `freebsd`, …),
@@ -61,9 +61,9 @@ In scope:
 - Memory and swap: total and available physical memory, total and free swap,
   reported in bytes (exact) with human-readable renderings in the text format.
   Uptime and boot time.
-- Process environment: the ragent process id, the user shell (e.g. `$SHELL`
+- Process environment: the codemason process id, the user shell (e.g. `$SHELL`
   on Unix, `COMSPEC` on Windows), the current username, and the current
-  working directory of the ragent process.
+  working directory of the codemason process.
 - Tool description, JSON parameters schema, `none` permission category
   (read-only, always allowed), registration in `mod.rs`, and help/summary
   presentation so tool calls render compactly in the TUI log panel.
@@ -89,7 +89,7 @@ Out of scope:
 
 ## Background
 
-`ragent_info` (`crates/ragent-agent/src/tool/ragent_info.rs`) is the closest
+`codemason_info` (`crates/codemason-agent/src/tool/codemason_info.rs`) is the closest
 existing analogue: a zero-parameter (plus `format`) read-only introspection
 tool with `permission_category() == "none"`. `os_info` will mirror its
 structure one-for-one: module docblock, a `struct OsInfoTool`, an internal
@@ -119,7 +119,7 @@ call.
 ### FR-001 — Tool registration (Ubiquitous)
 
 The system SHALL register a tool named `os_info` in
-`crates/ragent-agent/src/tool/mod.rs` (a new `pub mod os_info;` and a
+`crates/codemason-agent/src/tool/mod.rs` (a new `pub mod os_info;` and a
 `registry.register(Arc::new(os_info::OsInfoTool));` line in the session
 registry builder), so that `os_info` appears in the tool catalogue for every
 agent session and in the `/tools` listing without further configuration.
@@ -168,10 +168,10 @@ as days/hours/minutes in the text format), and boot time as a UTC timestamp.
 
 ### FR-007 — Process environment report (Ubiquitous)
 
-The system SHALL report the ragent process id, the current working directory
-of the ragent process, the resolved user shell (`$SHELL` on Unix, `COMSPEC`
+The system SHALL report the codemason process id, the current working directory
+of the codemason process, the resolved user shell (`$SHELL` on Unix, `COMSPEC`
 on Windows, `unknown` when unset), and the username of the user running
-ragent (`unknown` when it cannot be determined).
+codemason (`unknown` when it cannot be determined).
 
 ### FR-008 — Sensitive-data exclusion (Unwanted)
 
@@ -213,7 +213,7 @@ report that individual field as `unknown` (or the documented placeholder), so
 The system SHALL display `os_info` tool calls in the TUI log panel with the
 tool name and, for `input_summary`, a compact note such as
 `format: text`/`format: json` (or `(no parameters)` when omitted), consistent
-with the existing `ragent_info` rendering tests.
+with the existing `codemason_info` rendering tests.
 
 ### FR-013 — `/osinfo` slash command registration (Ubiquitous)
 
@@ -415,7 +415,7 @@ tool description SHALL state the exclusion.
   and `/sys/class/net` on Linux, and graphics-API inference from
   read-only runtime file checks; none of these SHALL add a new crate dependency (the
   opt-in `probe` diagnostics use `std::process`). The `sysinfo` dependency is
-  added to `ragent-agent`'s `Cargo.toml` with pinned features (`system` only) to
+  added to `codemason-agent`'s `Cargo.toml` with pinned features (`system` only) to
   keep compile cost low.
 - **NFR-003 — Documentation:** the tool description SHALL enumerate the
   reported categories, state that the tool is read-only, makes no network or

@@ -30,14 +30,14 @@ instruments.
 
 ## Changes
 
-### `crates/ragent-config/src/telemetry.rs`
+### `crates/codemason-config/src/telemetry.rs`
 
 - **New field `cardinality_limit: usize`** on `OtelConfig` — the per-metric
   cardinality limit. Defaults to 1000 via `default_cardinality_limit()`.
   Serialised/deserialised as `cardinality_limit` in the `telemetry.otel`
   JSON block.
 
-### `crates/ragent-config/src/config.rs`
+### `crates/codemason-config/src/config.rs`
 
 - **New field `pub telemetry: TelemetryConfig`** on `Config` — the
   `TelemetryConfig` wrapper was defined but never embedded into the
@@ -50,7 +50,7 @@ instruments.
   so overlay-enabled telemetry config takes precedence and resource/metric
   maps are unioned (FR-002, T-019).
 
-### `crates/ragent-telemetry/src/cardinality.rs` (NEW)
+### `crates/codemason-telemetry/src/cardinality.rs` (NEW)
 
 - **`CardinalityCache`** — thread-safe (`RwLock<HashMap<String, HashSet>>>`)
   cache that tracks distinct attribute-value signatures per metric name.
@@ -65,7 +65,7 @@ instruments.
   - Feature-off no-op stub (`CardinalityCache` zero-sized struct).
   - 10 feature-on unit tests + 1 no-op test.
 
-### `crates/ragent-telemetry/src/instruments.rs`
+### `crates/codemason-telemetry/src/instruments.rs`
 
 - **New field `cardinality: Arc<CardinalityCache>`** on `InstrumentRegistry`.
   Shared across all clones so cardinality is tracked globally per metric.
@@ -75,13 +75,13 @@ instruments.
   delegates to the `CardinalityCache::resolve`. Called by all recorder
   methods before recording.
 
-### `crates/ragent-telemetry/src/subsystem.rs`
+### `crates/codemason-telemetry/src/subsystem.rs`
 
 - **`TelemetrySubsystem::instruments()`** — now calls
   `.with_cardinality_limit(self.config.cardinality_limit)` on the
   registry so the configured limit is propagated from config.
 
-### `crates/ragent-telemetry/src/recorder.rs`
+### `crates/codemason-telemetry/src/recorder.rs`
 
 - **All 12 tagged-attribute recorder methods updated** to call
   `reg.resolve_attrs(metric_name, &attrs)` before passing to the
@@ -109,7 +109,7 @@ instruments.
   - `CoordinatorRecorder::record_agent_spawn/complete`, `record_timeout`
   - `CompressionRecorder::record_compression`
 
-### `crates/ragent-telemetry/src/lib.rs`
+### `crates/codemason-telemetry/src/lib.rs`
 
 - Added `pub mod cardinality;` module declaration.
 
@@ -118,29 +118,29 @@ instruments.
 ### Build checks
 
 ```
-cargo check -p ragent-config                           # pass
-cargo check -p ragent-telemetry                        # pass (no feature)
-cargo check -p ragent-telemetry --features telemetry   # pass
-cargo check -p ragent-agent --features telemetry       # pass
+cargo check -p codemason-config                           # pass
+cargo check -p codemason-telemetry                        # pass (no feature)
+cargo check -p codemason-telemetry --features telemetry   # pass
+cargo check -p codemason-agent --features telemetry       # pass
 cargo check                                            # pass (full workspace)
 ```
 
 ### Test results
 
 ```
-cargo test -p ragent-telemetry --features telemetry --lib -- cardinality
+cargo test -p codemason-telemetry --features telemetry --lib -- cardinality
 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 62 filtered out
 
-cargo test -p ragent-telemetry --features telemetry --lib -- --skip test_flush_on_signal
+cargo test -p codemason-telemetry --features telemetry --lib -- --skip test_flush_on_signal
 test result: ok. 70 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out
 
-cargo test -p ragent-telemetry --lib  (no feature)
+cargo test -p codemason-telemetry --lib  (no feature)
 test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
-cargo test -p ragent-config  (all tests)
+cargo test -p codemason-config  (all tests)
 test result: ok. 16+6+9+2+3+6+4+3+6+7+14+6+6+5+6 passed across all test binaries
 
-cargo test -p ragent-agent --lib
+cargo test -p codemason-agent --lib
 test result: ok. 316 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 

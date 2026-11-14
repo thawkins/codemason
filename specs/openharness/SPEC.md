@@ -21,13 +21,13 @@ memory, context auto-compaction, multi-level permission modes with
 `PreToolUse`/`PostToolUse` hooks, subagent spawning with a team registry, a
 `--dry-run` readiness preview, and MCP HTTP transport.
 
-ragent already implements the majority of these capabilities (tools, skills,
+codemason already implements the majority of these capabilities (tools, skills,
 memory, compaction, teams, MCP). This specification defines the **delta** — the
 OpenHarness-inspired enhancements that close the remaining gaps and strengthen
-ragent's harness layer:
+codemason's harness layer:
 
 1. **Hook exit-code semantics** — `PreToolUse`/`PostToolUse` hooks that block on
-   exit code 2 and warn on exit code 1 (Finding 14), complementing ragent's
+   exit code 2 and warn on exit code 1 (Finding 14), complementing codemason's
    existing JSON-decision protocol.
 2. **Dry-run readiness mode** — a `--dry-run` CLI flag that previews resolved
    runtime settings, auth state, skills, tools, and MCP servers without
@@ -40,8 +40,8 @@ ragent's harness layer:
 5. **MCP HTTP transport** — support the `http` MCP transport type alongside the
    existing stdio transport (Finding 18).
 
-The spec is scoped to incremental improvements on existing ragent crates
-(`ragent-agent`, `ragent-config`, `ragent-tui`, `ragent-tools-extended`). No new
+The spec is scoped to incremental improvements on existing codemason crates
+(`codemason-agent`, `codemason-config`, `codemason-tui`, `codemason-tools-extended`). No new
 Python runtime, no Claude Code plugin compatibility, and no `ohmo` chat
 platform integration are in scope.
 
@@ -58,8 +58,8 @@ This spec was informed by the following research items:
 **In scope:**
 
 - `PreToolUse`/`PostToolUse` hook exit-code-based blocking semantics (exit 2 =
-  block, exit 1 = warn) layered on top of ragent's existing JSON-decision hooks.
-- A `--dry-run` CLI subcommand and `ragent config check` readiness flow that
+  block, exit 1 = warn) layered on top of codemason's existing JSON-decision hooks.
+- A `--dry-run` CLI subcommand and `codemason config check` readiness flow that
   validates auth, model resolution, tool visibility, skill discovery, and MCP
   server connectivity without invoking the model.
 - A skill catalog structure (`SkillCatalog`) that lists skill names, descriptions,
@@ -75,16 +75,16 @@ This spec was informed by the following research items:
 - A full Python OpenHarness port or compatibility shim.
 - Claude Code plugin format compatibility (`.claude/plugins`).
 - `ohmo` chat-platform integration (Feishu/Slack/Telegram/Discord).
-- Subprocess teammate headless worker mode (ragent already uses in-process
+- Subprocess teammate headless worker mode (codemason already uses in-process
   `tokio` tasks for teammates).
-- `MEMORY.md`/`CLAUDE.md` format changes (ragent's three-tier memory system is
+- `MEMORY.md`/`CLAUDE.md` format changes (codemason's three-tier memory system is
   unchanged).
 
 ### Objectives
 
 1. Give operators a deterministic, model-independent enforcement layer for
    security-critical tool policies via hook exit codes.
-2. Let operators validate a ragent deployment before invoking any model or tool
+2. Let operators validate a codemason deployment before invoking any model or tool
    via a single `--dry-run` command.
 3. Reduce session-startup context cost by deferring full skill body loading
    until invocation.
@@ -98,7 +98,7 @@ This spec was informed by the following research items:
 ### FR-001 — Hook registration unchanged (ubiquitous)
 
 The system **shall** continue to load hook configurations from the `hooks` array
-in `ragent.json` and dispatch them via the existing `HookTrigger` enum
+in `codemason.json` and dispatch them via the existing `HookTrigger` enum
 (`OnSessionStart`, `OnSessionEnd`, `OnError`, `OnPermissionDenied`,
 `PreToolUse`, `PostToolUse`). Existing JSON-decision parsing for `PreToolUse`
 (`{"decision":"allow"}`, `{"decision":"deny","reason":...}`,
@@ -152,11 +152,11 @@ publish `Event::HookWarning`.
 
 ### FR-005 — Dry-run subcommand (event-driven)
 
-When the user invokes `ragent --dry-run` (or `ragent config check`), the system
+When the user invokes `codemason --dry-run` (or `codemason config check`), the system
 **shall** execute a readiness check that, in order:
 
-1. Loads and merges all config layers (global, project, `RAGENT_CONFIG`,
-   `RAGENT_CONFIG_CONTENT`) and reports any JSON parse errors with file path,
+1. Loads and merges all config layers (global, project, `CODEMASON_CONFIG`,
+   `CODEMASON_CONFIG_CONTENT`) and reports any JSON parse errors with file path,
    line, column, and the offending source line.
 2. Resolves the active provider and model and reports whether the required
    environment variables / API keys are present, **without** making any network
@@ -244,7 +244,7 @@ per-1M-token input and output prices (USD). The table **shall** be
 populated for the built-in provider models (Anthropic, OpenAI, Gemini,
 Ollama) and **shall** default to `0.0` for unknown models so the cost
 summary is always computable. The price table **shall** be overridable via
-a `models.prices` array in `ragent.json`.
+a `models.prices` array in `codemason.json`.
 
 > *Ubiquitous requirement — every model has an entry, even if the price is
 > zero.*
@@ -286,7 +286,7 @@ server as `disconnected` and **shall** emit a `tracing::warn!`. The server
 ### FR-015 — Hook exit-code documentation (ubiquitous)
 
 The system **shall** document the exit-code convention (2 = block, 1 = warn,
-≥3 = error) in the `HookConfig` doc comment, the `ragent.json` schema
+≥3 = error) in the `HookConfig` doc comment, the `codemason.json` schema
 description, and the `docs/howtos/howto_hooks.md` file (creating it if
 absent). The JSON-decision protocol **shall** be documented as an
 alternative, mutually-complementary mechanism.
@@ -380,7 +380,7 @@ example. The `SPEC.md` harness section **shall** reference the new
 
 1. The implementation must compile and test cleanly with `cargo test`,
    `cargo clippy`, and `cargo fmt --check` on Rust edition 2024.
-2. Hook exit-code semantics must be additive — existing `ragent.json` hook
+2. Hook exit-code semantics must be additive — existing `codemason.json` hook
    configs that produce JSON decisions and exit 0 must behave exactly as
    before.
 3. The `SkillCatalog` must not change the on-disk skill file format
@@ -388,7 +388,7 @@ example. The `SPEC.md` harness section **shall** reference the new
 
 ### Assumptions
 
-1. ragent's existing `EventBus` can carry two new event variants
+1. codemason's existing `EventBus` can carry two new event variants
    (`HookWarning`, `ToolResultFlagged`, `RunCostSummary`) without breaking
    existing subscribers.
 2. The `reqwest::Client` shared across the tools layer is available for MCP
@@ -404,15 +404,15 @@ example. The `SPEC.md` harness section **shall** reference the new
 
 | Component | Interface | Purpose |
 |-----------|-----------|---------|
-| `ragent-agent::hooks` | `PreToolUseResult` gains `Blocked { reason }` variant; `run_pre_tool_use_hooks` returns it on exit 2 | Exit-code blocking |
-| `ragent-agent::hooks` | New `PostToolUseResult` enum (`Ok`, `Flagged { reason }`, `Warn { message }`) | PostToolUse exit codes |
-| `ragent-agent::skill` | `SkillRegistry::catalog() -> Vec<SkillCatalogEntry>` | Progressive disclosure |
-| `ragent-agent::skill` | `SkillCatalogEntry { name, description, trigger, scope }` | Catalog entry type |
-| `ragent-types::event` | `Event::HookWarning`, `Event::ToolResultFlagged`, `Event::RunCostSummary` | New event bus variants |
-| `ragent-agent::cost` | `RunCostSummary`, `compute_run_cost(usage, prices) -> RunCostSummary` | Cost tracking |
-| `ragent-config::config` | `models.prices: Vec<PriceEntry>` field | Price override |
+| `codemason-agent::hooks` | `PreToolUseResult` gains `Blocked { reason }` variant; `run_pre_tool_use_hooks` returns it on exit 2 | Exit-code blocking |
+| `codemason-agent::hooks` | New `PostToolUseResult` enum (`Ok`, `Flagged { reason }`, `Warn { message }`) | PostToolUse exit codes |
+| `codemason-agent::skill` | `SkillRegistry::catalog() -> Vec<SkillCatalogEntry>` | Progressive disclosure |
+| `codemason-agent::skill` | `SkillCatalogEntry { name, description, trigger, scope }` | Catalog entry type |
+| `codemason-types::event` | `Event::HookWarning`, `Event::ToolResultFlagged`, `Event::RunCostSummary` | New event bus variants |
+| `codemason-agent::cost` | `RunCostSummary`, `compute_run_cost(usage, prices) -> RunCostSummary` | Cost tracking |
+| `codemason-config::config` | `models.prices: Vec<PriceEntry>` field | Price override |
 | `src/cli.rs` | `--dry-run` flag + `config check` subcommand | Readiness flow |
-| `ragent-agent::mcp` | `HttpMcpClient` implementing the existing MCP client trait | HTTP transport |
+| `codemason-agent::mcp` | `HttpMcpClient` implementing the existing MCP client trait | HTTP transport |
 
 ### External Dependencies
 

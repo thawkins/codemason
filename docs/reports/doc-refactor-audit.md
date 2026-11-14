@@ -43,10 +43,10 @@ The largest root files:
 
 | File | Bytes | ~Tokens | Load path |
 |---|---|---|---|
-| AGENTS.md | 27,846 | 6,962 | ragent system prompt (`agent/mod.rs` `AGENT_FILE_NAMES`). Also Claude Code project instructions. |
+| AGENTS.md | 27,846 | 6,962 | codemason system prompt (`agent/mod.rs` `AGENT_FILE_NAMES`). Also Claude Code project instructions. |
 | AGENTS-LANGUAGE.md | 26,921 | 6,730 | Pulled in by the column-0 `@AGENTS-LANGUAGE.md` line (`expand_includes`) |
-| **Per session** | **54,767** | **~13,700** | ragent's first turn sends it twice: once as the system prompt and once in the init-ack request (`processor.rs`, `loop_steps.rs`) |
-| `.claude/skills/cargo-nextest/SKILL.md` | 8,167 | 2,042 when invoked | Its description loads every session (Claude Code and ragent `.claude` skill dir) |
+| **Per session** | **54,767** | **~13,700** | codemason's first turn sends it twice: once as the system prompt and once in the init-ack request (`processor.rs`, `loop_steps.rs`) |
+| `.claude/skills/cargo-nextest/SKILL.md` | 8,167 | 2,042 when invoked | Its description loads every session (Claude Code and codemason `.claude` skill dir) |
 | graphify `SKILL.md` + 8 references | 41,276 | 10,319 when invoked | Embedded with `include_str!`. `/codeindex skillgen` installs it **globally**, so its description is listed in every project. |
 
 ### 1.3 Check table at baseline
@@ -56,14 +56,14 @@ The largest root files:
 | Relative links + GitHub-slug anchors | 278 non-generated `.md`, 584 links | **33 broken** (SPEC TOC is 23 of them) |
 | Relative links | `specs/` + `research/` (1,667 files, 64 links) | 3 broken |
 | External links | 196 (main docs) / 4,490 (specs+research) | not fetched |
-| CLI subcommands/flags quoted in docs vs `target/debug/ragent … --help` | root + howtos | 9 false (ROOT-05, 07–11, HOWTO-09, 10, 23) |
+| CLI subcommands/flags quoted in docs vs `target/debug/cdmn … --help` | root + howtos | 9 false (ROOT-05, 07–11, HOWTO-09, 10, 23) |
 | Slash commands named in docs vs `SLASH_COMMANDS` + dispatcher arms | root + howtos (90 slash docs) | 6 false names; 3 commands undocumented or partial |
-| JSON config keys in docs vs `ragent-config` serde names | root + howtos | 7 false/ignored keys (ROOT-01, 22, 23, 24; HOWTO-08, 17; DOCS-28) |
+| JSON config keys in docs vs `codemason-config` serde names | root + howtos | 7 false/ignored keys (ROOT-01, 22, 23, 24; HOWTO-08, 17; DOCS-28) |
 | Tool names/args in `docs/howtos/tools` vs tool schemas | 23 files | 2 false, 6 incomplete |
 | Crate `DOCS.md` API/dependency claims vs `pub fn` + `Cargo.toml` | 15 files | 13 false |
 | Howto PDFs paired with `.md`, none older | 129 pairs | pass |
 | `research/INDEX.md` vs item directories | 16 items | pass |
-| `specs/otel/SPEC.md` metrics/keys vs `ragent-telemetry` | 35 metrics | pass |
+| `specs/otel/SPEC.md` metrics/keys vs `codemason-telemetry` | 35 metrics | pass |
 | Doc CI (lint/link/rustdoc) | `.github/workflows` | **none exists** |
 
 ---
@@ -77,25 +77,25 @@ These rank above every other category: a reader acts on them.
 | ID | Where | False claim | Check → truth |
 |---|---|---|---|
 | ROOT-01 | README "Configuration"; SPEC §5.2 sample | `"permissions": [ … ]` | `Config` field is `permission` with no alias, so the key is **silently ignored** |
-| ROOT-02 | README; SPEC §5.1 | `ragent.json` (or `ragent.jsonc`) | Only `ragent.json` is loaded |
-| ROOT-03 | SPEC §5.1 | `~/.config/ragent/config.json` | `global_config_path()` → `ragent.json`. The `RAGENT_CONFIG` and `RAGENT_CONFIG_CONTENT` layers are omitted. |
+| ROOT-02 | README; SPEC §5.1 | `codemason.json` (or `codemason.jsonc`) | Only `codemason.json` is loaded |
+| ROOT-03 | SPEC §5.1 | `~/.config/codemason/config.json` | `global_config_path()` → `codemason.json`. The `CODEMASON_CONFIG` and `CODEMASON_CONFIG_CONTENT` layers are omitted. |
 | ROOT-04 | README "Usage" | dry-run prints READY / NOT READY | `dry_run.rs`: READY / WARNING / BLOCKED |
-| ROOT-05 | README "Usage" | `memory` (export, import, list) | `ragent memory --help`: `list` only |
+| ROOT-05 | README "Usage" | `memory` (export, import, list) | `codemason memory --help`: `list` only |
 | ROOT-06 | README "Installation" | links 19 targets | `cargo metadata`: 20 test targets |
-| ROOT-07 | QUICKSTART §9 | `ragent session export <id>` | subcommands: list/resume/export-archive/import |
-| ROOT-08 | QUICKSTART §13; SPEC "Research Configuration" | CLI `--evaluate`, `--summarization-model` | not in `ragent research create --help` (TUI-only) |
+| ROOT-07 | QUICKSTART §9 | `codemason session export <id>` | subcommands: list/resume/export-archive/import |
+| ROOT-08 | QUICKSTART §13; SPEC "Research Configuration" | CLI `--evaluate`, `--summarization-model` | not in `codemason research create --help` (TUI-only) |
 | ROOT-09 | QUICKSTART CLI research block (8 lines) | flags after the topic take effect | `topic` is `trailing_var_arg` (src/cli.rs), so the flags become topic text. Proven with `--bogusflag`. |
 | ROOT-10 | QUICKSTART | `--from-url` | CLI flag is `--from-urls` |
 | ROOT-11 | QUICKSTART; SPEC §7.1 | `serve --port 9100 --host …` | only `--addr` (default `127.0.0.1:3000`) |
 | ROOT-12 | SPEC §7.2 | GET `/models`, `/agents`, `/sessions/{id}/events` | not in `routes/mod.rs`; SSE is `/events` |
-| ROOT-13 | QUICKSTART §11, Troubleshooting | `RUST_LOG=debug ragent run` | `RUST_LOG` is never read; use `--log-level debug` |
+| ROOT-13 | QUICKSTART §11, Troubleshooting | `RUST_LOG=debug codemason run` | `RUST_LOG` is never read; use `--log-level debug` |
 | ROOT-14 | SPEC §5.3; TUI-QUICKSTART | `AZURE_RESOURCE_API_KEY` | not in source; per-entry `api_key_env` |
-| ROOT-15 | SPEC §5.3 | `RAGENT_FOUNDRY_LOCAL_FORCE_WEB` | provider removed |
+| ROOT-15 | SPEC §5.3 | `CODEMASON_FOUNDRY_LOCAL_FORCE_WEB` | provider removed |
 | ROOT-16 | TUI-QUICKSTART "startup flags" | `--model ollamacloud/…` | provider id `ollama_cloud` |
 | ROOT-17 | TUI-QUICKSTART; SPEC §5.2 | agent `coder` | no built-in `coder` |
 | ROOT-18 | SPEC "Built-in Agents" | coder, go-coder, architect, debug, code-review, orchestrator | none exist. Regenerate from `create_builtin_agents`. |
 | ROOT-19 | SPEC §11.2 | flat agent JSON with `system_prompt`, `tools` | `OasfAgentRecord` requires `version`/`schema_version`. The example fails to load. |
-| ROOT-20 | SPEC §2.1 | 17 crates; `ragent-agent ~12,500` lines | 19 crates; ~175k lines |
+| ROOT-20 | SPEC §2.1 | 17 crates; `codemason-agent ~12,500` lines | 19 crates; ~175k lines |
 | ROOT-21 | SPEC §6.2 | `/q`, `/todo` | no such triggers |
 | ROOT-22 | QUICKSTART §8b | `maxBackgroundAgents`, `backgroundAgentTimeout` | snake_case fields, no rename, so ignored |
 | ROOT-23 | QUICKSTART; SPEC research config | `research.few_shot`, `analysis_persona`, `models.summarization_model` | not in `ResearchConfig` |
@@ -105,7 +105,7 @@ These rank above every other category: a reader acts on them.
 | ROOT-28 | STATS "Project-wide" | 3,272 Rust files | 2,000 with `crates/*/target` pruned (its own table says 1,999) |
 | ROOT-29 | BUILDSTATS | CI runs `cargo test --workspace` | CI runs `cargo nextest … --profile ci` plus `cargo test --doc` |
 | ROOT-30 | TOOLCHAIN | `cargo-rpm` | release uses `cargo-generate-rpm` |
-| ROOT-31 | ANTIPAT §4 | evidence at `target/temp/antipat/`; crate `ragent-team` | neither exists |
+| ROOT-31 | ANTIPAT §4 | evidence at `target/temp/antipat/`; crate `codemason-team` | neither exists |
 | ROOT-32 | README intro | statically linked, zero runtime deps | `ldd`: libc/libm/libgcc_s |
 
 ### 2.2 Agent-instruction files (executable markdown)
@@ -130,28 +130,28 @@ These rank above every other category: a reader acts on them.
 | HOWTO-01 | bash.md and permissions.md `SAFE_COMMANDS` block | git, gh, cargo, npm, python, docker-compose, find, sed, awk, xargs, chmod, jq, patch are auto-approved | `bash.rs` list is 26 commands, mostly read/navigation but including the file-modifying `mkdir`, `touch`, `cp` and `mv`, with no VCS/build/interpreter commands. A listed command skips only the permission prompt; `validate_shell_command` still runs. **This is a security-relevant misstatement.** |
 | HOWTO-06 | tools/gitlab.md; tools/planning.md | get_pipeline takes `id`; plan tools take no args | `pipeline_id`; EnterPlanMode `task`/`context`, ExitPlanMode `summary` |
 | HOWTO-08 | research.md POST body | `"from_file": "…"` | `from_files: Vec<String>`, no alias |
-| HOWTO-09 | research.md | `ragent research create … --from-file` | `--from-files` |
-| HOWTO-10 | reverse.md:10 and §9 | `ragent reverse` CLI subcommand | not registered (reverse.md:518 itself says so) |
+| HOWTO-09 | research.md | `codemason research create … --from-file` | `--from-files` |
+| HOWTO-10 | reverse.md:10 and §9 | `codemason reverse` CLI subcommand | not registered (reverse.md:518 itself says so) |
 | HOWTO-11, 12, 15 | reverse.md TOC; plugins.md; skills.md; reactagent.md; slashcommands/agents.md, prompt.md | anchors and paths | 3 bad anchors (`--flag` slugs to `---flag`); `../../../specs` escapes the repo; `../tools/`; `docs/performance/benchmark-guide.md` and `docs/custom-agents.md` missing |
 | HOWTO-20 | slashcommands/spec.md | bare `/spec` lists specs | `commands.rs`: `""` → Help |
 | HOWTO-22 | slashcommands/team.md | `/team open` | no `open` arm |
-| HOWTO-23 | clear, history, name, quit, undo, bench, reverse, bug-report | `/session …`, `/models`, `/debug` | not slash commands (`ragent session`, `/model`) |
+| HOWTO-23 | clear, history, name, quit, undo, bench, reverse, bug-report | `/session …`, `/models`, `/debug` | not slash commands (`codemason session`, `/model`) |
 | HOWTO-27 | 7 slash docs' blockquotes | "(SlashCommandDef, state.rs)" verbatim quote | text is paraphrased, not the source description |
 
 ### 2.4 Crate `DOCS.md`, `docs/`, `specs/`
 
 | ID | Where | False claim | Check → truth |
 |---|---|---|---|
-| CRATE-01/02 | ragent-storage/DOCS.md | `delete_session`, `add_message`, `store_memory`, `store_provider_auth`, `schema_version`, `read_events` … | none exist (`grep pub fn` = 0). Real names: `create_message`, `create_memory`, `set_provider_auth`, `read_run`, `last_seq` … |
-| CRATE-03, 08–12 | 12 of 15 DOCS.md dependency sections | listed deps (e.g. `ragent-team`, `axum`, `sha2`, "no workspace deps") | each checked against `[dependencies]`: absent or omitted |
+| CRATE-01/02 | codemason-storage/DOCS.md | `delete_session`, `add_message`, `store_memory`, `store_provider_auth`, `schema_version`, `read_events` … | none exist (`grep pub fn` = 0). Real names: `create_message`, `create_memory`, `set_provider_auth`, `read_run`, `last_seq` … |
+| CRATE-03, 08–12 | 12 of 15 DOCS.md dependency sections | listed deps (e.g. `codemason-team`, `axum`, `sha2`, "no workspace deps") | each checked against `[dependencies]`: absent or omitted |
 | CRATE-04, 06, 07, 15, 16 | tools-vcs, tools-core, tools-extended, agent, config DOCS.md | `Github*`/`Gitlab*` struct names, `set_hidden`, `BrowserTool`, `list_tasks`, `SemanticConfig`, `BrowserConfig` | casing is `GitHub*`/`GitLab*`; the rest do not exist |
 | DOCS-01/03/04/14 | agentorch §10; PERFPLAN status; sqlite.md status; testconsolidation status | "PERF-078 script shipped"; "Draft, awaiting approval"; "no code changed"; "steps 2–3 await go-ahead" | script never existed; M1–M6 complete; T-01/05/06/14 landed; all steps done |
 | DOCS-06 | JCODEPLAN gap matrix | apply_patch, bg, open, conversation_search … "Not present" | all present |
 | DOCS-09 | reports/code-audit.md High Priority | dry-run lacks `redact_secrets`, etc. | fixed at HEAD; the report has no per-finding status |
 | DOCS-16/22 | simplify-review.md; roocode_research.md | dated 2025 | commits/siblings are 2026 |
 | DOCS-24 | CODE_INDEX_SPEC "Applies to: function_analyzer" | analyzer implements the contract (effective LOC, `violates`) | emits `line_count`, `sloc` and `exceeds_threshold`; the verdict uses physical lines (`line_count`), not effective LOC, and the field names differ from the contract |
-| DOCS-25/27/28 | userdocs/introduction.md, TEAMS.md | presets `coder/architect/debug…`; MCP "in development"; `~/.ragent/teams`; `teams` config block in ragent.json; `team_task_update`; `/team create <name>` | none true. Teams live in `~/.config/ragent/teams/`, settings in the team's config.json, syntax `/team create <blueprint> [name]`. |
-| SPEC-03/04 | specs/otel, agentloop, compact | `ragent-types/src/event.rs`; `CompactionStarted`/`Finished` events | now `event/mod.rs`; events never existed |
+| DOCS-25/27/28 | userdocs/introduction.md, TEAMS.md | presets `coder/architect/debug…`; MCP "in development"; `~/.codemason/teams`; `teams` config block in codemason.json; `team_task_update`; `/team create <name>` | none true. Teams live in `~/.config/codemason/teams/`, settings in the team's config.json, syntax `/team create <blueprint> [name]`. |
+| SPEC-03/04 | specs/otel, agentloop, compact | `codemason-types/src/event.rs`; `CompactionStarted`/`Finished` events | now `event/mod.rs`; events never existed |
 | TOOL-01 | CHANGELOG, SPEC | gen-spec-pdf.sh "uses Pandoc" | it uses md-to-pdf |
 | LINK-09 | specs/agentopt/PLAN, openharness/SPEC, pluginstores/SPEC | 3 relative links | targets missing or wrong base |
 
@@ -180,8 +180,8 @@ These rank above every other category: a reader acts on them.
   - `docs/review.md`
   - `docs/reviews/*` (3 files)
   - `docs/thinking.md` (0 bytes)
-  - `reports/ragent-tui-security-findings.md` (superseded by security-audit.md)
-  - 7 crate-level review reports dated 2026-03-30 (CRATE-13), citing the removed `ragent-core`
+  - `reports/codemason-tui-security-findings.md` (superseded by security-audit.md)
+  - 7 crate-level review reports dated 2026-03-30 (CRATE-13), citing the removed `codemason-core`
 - **`docs/competitive/` (11 files, ~275 KB):**
   - These are point-in-time analyses with no inbound links.
   - Five overlap on Roo Code and three on Claude Code.
@@ -200,7 +200,7 @@ These rank above every other category: a reader acts on them.
   - 12 empty `###` headings.
   - Tags and sections mismatch both ways.
   - Normalising it must keep release.yml's extraction regex in sync (a pin).
-- **Leaked test artifact:** `crates/ragent-server/research/{INDEX.md,.index.json}` is a 124-row index with 0 item directories (RES-02). The leak itself is fixed.
+- **Leaked test artifact:** `crates/codemason-server/research/{INDEX.md,.index.json}` is a 124-row index with 0 item directories (RES-02). The leak itself is fixed.
 
 ## 4. Duplication map (category 3): one fact, one home
 
@@ -214,7 +214,7 @@ These rank above every other category: a reader acts on them.
 | `/bench` | userdocs/bench.md (accurate, full), slashcommands/bench.md | **userdocs/bench.md** | link |
 | Command/flag syntax | topic howtos vs slashcommands/*.md vs tools/*.md (research, spec/reverse, codeindex, teams) | **slashcommands/*.md** (slash syntax), **tools/*.md** (tool args) | topic howtos keep workflow and link |
 | Install / incremental-build paragraph | README and QUICKSTART | **BUILDSTATS.md** numbers; README prose | QUICKSTART links |
-| `ragent --help` block | README "Usage" (already drifting: missing `--wire-matrix`) | **`ragent --help`** | README keeps a short excerpt plus "run `ragent --help`" |
+| `codemason --help` block | README "Usage" (already drifting: missing `--wire-matrix`) | **`codemason --help`** | README keeps a short excerpt plus "run `codemason --help`" |
 | Competitive analyses | 11 files in docs/competitive | none current | delete the folder, or keep GAP_ANALYSIS with a "2026-04-01 snapshot" banner |
 | research/aisurvey snapshot | `assets/research/aisurvey/**` (44 md + pdf/pptx) vs `research/aisurvey` (pinned by a test) | **research/aisurvey** | delete the assets copy (owner confirms) |
 
@@ -225,13 +225,13 @@ These rank above every other category: a reader acts on them.
 | File(s) | Generator | Marker | Note |
 |---|---|---|---|
 | `docs/howtos/{,slashcommands/,tools/}pdf/*.md.pdf` (129) | docupdate skill: `pandoc … --pdf-engine=xelatex` | none | In sync today. **Every howto fix needs a regen in the same PR.** The command lives only as skill prose. |
-| `research/INDEX.md`, `.index.json` | ragent-research `io.rs` | "regenerated on every change" | in sync |
-| `docs/openapi/ragent-client.d.ts` | `ragent openapi --client`, enforced by a byte-equality test | header says `--client typescript` (**wrong**: the flag is a bool) | fix the header in source (section 9) |
+| `research/INDEX.md`, `.index.json` | codemason-research `io.rs` | "regenerated on every change" | in sync |
+| `docs/openapi/codemason-client.d.ts` | `codemason openapi --client`, enforced by a byte-equality test | header says `--client typescript` (**wrong**: the flag is a bool) | fix the header in source (section 9) |
 | `BUILDSTATS.md` | buildstats skill | none | add a marker |
 | STATS, SPEC, README, QUICKSTART, TUI-QUICKSTART, CHANGELOG | LLM-edited through the docupdate skill | STATS has an "Update prompt" line | hand-maintained in practice |
 | `SPEC.pdf` (untracked) | `scripts/gen-spec-pdf.sh` | none | broken: its 20 Mermaid blocks are not rendered; md-to-pdf/mmdc not installed; output not in `.gitignore` |
 | `vendor/**.md` | upstream crates via `[patch.crates-io]` | n/a | third-party, never edit |
-| `specs/*/SPEC.md` frontmatter | ragent-specs `manager.rs` | n/a | change status only through `/spec` |
+| `specs/*/SPEC.md` frontmatter | codemason-specs `manager.rs` | n/a | change status only through `/spec` |
 
 ## 6. Compression candidates (category 5)
 
@@ -240,7 +240,7 @@ These rank above every other category: a reader acts on them.
 | SPEC.md | 517,150 | >250,000 | 44 KB stale tail (ROOT-47), App. A/D/E/F, exec-summary highlights | every config key, env var, route, slash command in the live sections |
 | QUICKSTART.md | 175,381 | ~77,000 | "Version x" tail | n/a (history lives in CHANGELOG) |
 | TUI-QUICKSTART.md | 111,032 | ~70,000 | "Highlights (vX)" copies | n/a |
-| AGENTS.md + AGENTS-LANGUAGE.md | 54,767 (~13.7k tok/session) | ~17,000 (~4.2k tok/session) | INSTR-15 tool list duplicated by ragent's own prompt (1.6k tok); INSTR-16 test-layout duplicate (1.5k); INSTR-20 fmt shouting (0.6k); INSTR-21 CNC "Units" rules; INSTR-22 external URL; INSTR-23 duplicate semver/gitignore/priority rules | trigger phrases "push to remote", "push release to remote", "stop adhd mode"/"normal mode"; `Version: <x>` commit rule; every script name, nextest filter form, `global_env_lock`, `// env-isolation:`, `// no-panic-ok:`, `target/temp`, unsafe-site table |
+| AGENTS.md + AGENTS-LANGUAGE.md | 54,767 (~13.7k tok/session) | ~17,000 (~4.2k tok/session) | INSTR-15 tool list duplicated by codemason's own prompt (1.6k tok); INSTR-16 test-layout duplicate (1.5k); INSTR-20 fmt shouting (0.6k); INSTR-21 CNC "Units" rules; INSTR-22 external URL; INSTR-23 duplicate semver/gitignore/priority rules | trigger phrases "push to remote", "push release to remote", "stop adhd mode"/"normal mode"; `Version: <x>` commit rule; every script name, nextest filter form, `global_env_lock`, `// env-isolation:`, `// no-panic-ok:`, `target/temp`, unsafe-site table |
 | STATS.md | 37,592 | ~25,000 | per-release narrative | the metric table |
 | ANTIPAT.md | 80,546 | most of it | completed milestones | `M3.x` IDs cited from source comments (pin) |
 | CHANGELOG.md | 1,158,189 | none | Keep. Normalize headings only (ROOT-60). | release.yml regex formats |
@@ -249,7 +249,7 @@ These rank above every other category: a reader acts on them.
 
 | Count in docs | Where | True today | Deriving command |
 |---|---|---|---|
-| tools "149/150", "19/20 team tools", "~169-tool registry" | tools/INDEX.md, permissions.md, README, SPEC, TUI-QUICKSTART, agent DOCS.md | 150 default (151 with mf_screenshot); 21 `team_*` | `ragent --dry-run --json run x`, tools section |
+| tools "149/150", "19/20 team tools", "~169-tool registry" | tools/INDEX.md, permissions.md, README, SPEC, TUI-QUICKSTART, agent DOCS.md | 150 default (151 with mf_screenshot); 21 `team_*` | `codemason --dry-run --json run x`, tools section |
 | "~50 safe commands" | bash.md | 26 | `SAFE_COMMANDS` in `bash.rs` |
 | "39 VCS tools" | tools-vcs DOCS.md | 48 | `registry.rs` registrations |
 | "17/18 crates", "16 crates", line counts per crate | SPEC §2.1, ANTIPAT, TOOLCHAIN, README "18 crates above 85%" | 19 | `ls crates` |
@@ -277,34 +277,34 @@ Fix by removing the number, or by keeping it next to its command. Never by updat
 
 | ID | Defect | Where |
 |---|---|---|
-| CODE-01 | `ragent research create <id> <topic> --flag` turns the flag into topic text silently (`trailing_var_arg`). The usage text says `--from-file`; clap help says `--from-url`. | src/cli.rs |
-| CODE-02 | `ragent memory` about-text advertises export/import; only `list` exists | src/main.rs |
+| CODE-01 | `codemason research create <id> <topic> --flag` turns the flag into topic text silently (`trailing_var_arg`). The usage text says `--from-file`; clap help says `--from-url`. | src/cli.rs |
+| CODE-02 | `codemason memory` about-text advertises export/import; only `list` exists | src/main.rs |
 | CODE-03 | `/status` is registered in `SLASH_COMMANDS` but has no dispatch arm, so it answers "Unknown command" | state.rs, slash.rs |
 | CODE-04 | `/router help` and its description advertise `stats` and `tier …`; the dispatcher has no such arms | slash.rs, state.rs |
 | CODE-05 | `/team` description advertises `open`; there is no arm. (`/yolo help` is handled in the fallback arm, so it is not a defect.) | state.rs |
-| CODE-06 | Generated TS client header says `ragent openapi --client typescript`; the flag is a bool | crates/ragent-server/src/routes/openapi.rs |
+| CODE-06 | Generated TS client header says `codemason openapi --client typescript`; the flag is a bool | crates/codemason-server/src/routes/openapi.rs |
 | CODE-07 | Guard scripts and a Cargo.toml comment cite missing docs: `AGENTS-RUST.md`, `RMPLAN.md` (no `docs/` prefix), `DUPPLAN.md` | scripts/check_inline_tests.py, check-dead-code-reasons.sh, check-vcs-duplication.sh, Cargo.toml |
 | CODE-08 | release.yml note-extraction regex uses `\\Z` in a raw string, i.e. a literal `\Z` | .github/workflows/release.yml |
 | CODE-09 | `scripts/gen-spec-pdf.sh` requires `mmdc` but never calls it, so Mermaid blocks are not rendered; `SPEC.pdf` is not ignored | scripts/, .gitignore |
 | CODE-10 | `function_analyzer.py` does not implement the CODE_INDEX_SPEC contract (effective LOC, `violates`) | scripts/function_analyzer.py |
-| CODE-11 | `ragent-config` lib.rs doc comment mentions `ragent.jsonc`, which is never loaded | crates/ragent-config/src/lib.rs |
-| CODE-12 | graphify skill description ("any question about a codebase") is installed globally and claims every code question in every project | crates/ragent-tui/src/app/graphify_skill_data/SKILL.md (include_str!) |
+| CODE-11 | `codemason-config` lib.rs doc comment mentions `codemason.jsonc`, which is never loaded | crates/codemason-config/src/lib.rs |
+| CODE-12 | graphify skill description ("any question about a codebase") is installed globally and claims every code question in every project | crates/codemason-tui/src/app/graphify_skill_data/SKILL.md (include_str!) |
 | CODE-13 | No doc QA in CI: no link or anchor check, no `cargo doc -D warnings` | .github/workflows/ci.yml |
 | CODE-14 | AGENTS.md requires BUG/FEATURE/TASK/CHANGE issue templates; `.github/ISSUE_TEMPLATE` does not exist | .github/ |
 | CODE-15 | The init-ack round trip resends the full ~13.7k-token system prompt each session only to elicit an acknowledgement line | processor.rs, loop_steps.rs |
-| CODE-16 | `research.models.*`, `research.supervisor.max_concurrent_research_units` and `research.evaluate.enabled` are parsed but never applied: `build_session_config` reads only per-run request fields | crates/ragent-research/src/run_request.rs |
+| CODE-16 | `research.models.*`, `research.supervisor.max_concurrent_research_units` and `research.evaluate.enabled` are parsed but never applied: `build_session_config` reads only per-run request fields | crates/codemason-research/src/run_request.rs |
 
 ## 10. Pins: check before moving or renaming anything
 
 **Compile-time and test-time:**
 - `include_str!` of graphify `SKILL.md` + `references/*.md` (skillgen.rs)
-- `include_str!` of `crates/ragent-specs/tests/fixtures/testspec/*.md`
-- the byte-equality test on `docs/openapi/ragent-client.d.ts`
+- `include_str!` of `crates/codemason-specs/tests/fixtures/testspec/*.md`
+- the byte-equality test on `docs/openapi/codemason-client.d.ts`
 - test reads of `research/aisurvey/RESEARCH-2026-11-0{2,3}.md`
 - size and tree snapshots of `specs/` (test_agentui_t019_offline, test_slash_help, toolchain_tc_pass)
 
 **Runtime:**
-- `AGENTS.md` / `CLAUDE.md` / `.ragent.md` / `INSTRUCTIONS.md` discovery: a gitignore-aware tree walk; the root file wins.
+- `AGENTS.md` / `CLAUDE.md` / `.codemason.md` / `INSTRUCTIONS.md` discovery: a gitignore-aware tree walk; the root file wins.
   - Never create a doc with one of these names anywhere.
 - `@AGENTS-LANGUAGE.md` include, which must be at column 0. Renaming it silently drops the Rust rules.
 - `<cwd>/README.md` read as project context.
@@ -349,13 +349,13 @@ Statuses: `Proposed` → `Approved` → `In progress` → `Done`. Cars marked �
 | DOC-04 | Fix falsehoods: skills | INSTR-09–14, 27; TOOL-03 | in place | docupdate/buildstats path pins | nextest `--help` confirms flags and formats; `.config/nextest.toml` syntax pattern; descriptions keep every trigger phrase | – | Done (#16) |
 | DOC-05 | Fix falsehoods: crate DOCS.md | CRATE-01–12, 15–18 | in place, deps regenerated from Cargo.toml | none | every named `pub fn`/type grep-resolves; dependency lists equal `[dependencies]` | – | Done (#20) |
 | DOC-06 | Fix falsehoods: rest of `docs/` and `specs/` bodies | DOCS-01, 03, 04, 05b, 06, 09, 14, 16, 22, 24 (reword), 25–28; SPEC-03, 04; LINK-08, 09; TOOL-01 doc claim | in place | storage.rs → sqlite.md | link checker; named paths exist | – | Done (#18, follow-ups #21) |
-| DOC-07 ⚑ | Deletions | thinking.md, review.md, reviews/*, competitive/* (or keep GAP_ANALYSIS + banner), userdocs/{AGENT_TEAMS,SYSTEM_PROMPT,TEAMS}.md, research-web-relevance-plan, GHACTPLAN, ragent-tui-security-findings, CRATE-13 (7 crate review reports), RELEASE.md, SPEC stale tail, `crates/ragent-server/research/*`, `assets/research/aisurvey` | each deletion lists what still covers the topic | `/simplify` writes docs/review.md (regenerated on demand: OK); TEAMS.md inbound links repointed in the same PR | 0 inbound links to deleted paths (grep); link checker | DOC-01, 06 | Done (#23) |
+| DOC-07 ⚑ | Deletions | thinking.md, review.md, reviews/*, competitive/* (or keep GAP_ANALYSIS + banner), userdocs/{AGENT_TEAMS,SYSTEM_PROMPT,TEAMS}.md, research-web-relevance-plan, GHACTPLAN, codemason-tui-security-findings, CRATE-13 (7 crate review reports), RELEASE.md, SPEC stale tail, `crates/codemason-server/research/*`, `assets/research/aisurvey` | each deletion lists what still covers the topic | `/simplify` writes docs/review.md (regenerated on demand: OK); TEAMS.md inbound links repointed in the same PR | 0 inbound links to deleted paths (grep); link checker | DOC-01, 06 | Done (#23) |
 | DOC-08 | Deduplicate | section 4 map: release history out of QUICKSTART/TUI-QUICKSTART/SPEC; SAFE_COMMANDS → bash.md; JCODEPLAN → spec; teams/bench/syntax tables | per section 4 | docupdate skill (stops writing release prose into QUICKSTART/TUI-QUICKSTART/SPEC: skill edit in this car) | per-file operative-token diff attached; link checker | DOC-01, 02, 07 | Done (#44) |
 | DOC-09 ⚑ | Compress instruction files | INSTR-05, 15–23 (incl. rule conflicts INSTR-17, 18) | AGENTS-LANGUAGE.md for language rules; AGENTS.md for project rules | `@` include, trigger phrases | before/after bytes and tokens; diff showing every trigger phrase and script name survives; behavioral delta per removed rule | DOC-03 | Done (#22) |
 | DOC-10 | Bare counts → properties | section 7 | tools/INDEX.md for tool counts (with command) | none | grep shows no bare count without its command | DOC-01, 02, 05 | Done (#41) |
 | DOC-11 | Gaps | section 8 items 1–10 | named in section 8 | none | new docs have an owner line; link checker | DOC-02 | Done (#42; `/i18n help` mismatch filed as #43) |
 | DOC-12 ⚑ | Structural moves | TOOLCHAIN, ANTIPAT, BUILDSTATS → `docs/` (or add them to the AGENTS.md root allowlist); FASTFILE → docs/plans; CHANGELOG heading normalisation (ROOT-60) | `docs/` | ANTIPAT is cited by 8 source comments (**source edit → split out**); buildstats skill path; release.yml regex | pin grep is empty after the move; release.yml extraction dry-run on the new headings | all above | Done (#46) |
-| SPEC-01 | Spec statuses | 46 complete-but-draft specs | `/spec` status transition (tool, not hand edit) | ragent-specs manager | `/spec` list shows the transitions with an audit trail | – | Done - 48 specs moved to `implemented` via `ragent spec status` (Phase -1 gate off for the backfill); `reqeng` followed after the clarification false positive was fixed (#63) |
+| SPEC-01 | Spec statuses | 46 complete-but-draft specs | `/spec` status transition (tool, not hand edit) | codemason-specs manager | `/spec` list shows the transitions with an audit trail | – | Done - 48 specs moved to `implemented` via `codemason spec status` (Phase -1 gate off for the backfill); `reqeng` followed after the clarification false positive was fixed (#63) |
 | CODE-01…15 | Code defects | section 9 | separate tickets, not in this train | – | – | – | Filed: #24–#40 and #43 (CODE-01…17), outside this train |
 
 **Prevention decisions** (one per car):
@@ -370,7 +370,7 @@ Statuses: `Proposed` → `Approved` → `In progress` → `Done`. Cars marked �
 | HOWTO-17 | config.md §7.2 lists `defaultAgent` as canonical with `default_agent` as alias; serde has it the other way round (`config.rs` `alias = "defaultAgent"`) |
 | HOWTO-26 | slashcommands/yolo.md omits the `show` alias of `/yolo status` |
 | HOWTO-14 | Stale `file.rs:NNN` line references in reactagent.md, bash.md and quit.md; replace them with symbol names |
-| INSTR-05 | AGENTS.md "Hi I'm RAgent…" and AGENTS-LANGUAGE.md "Rust language instructions loaded." opening lines. They conflict with ADHD rules 1 and 10 (lead with the action, no preamble) and leak into generated artifacts (`docs/research-phase2-plan.md` starts with them). Behavioral delta of removal: outputs stop opening with boilerplate. Code already confirms loading (`[ok] LOADED` in discovery, init-ack). |
+| INSTR-05 | AGENTS.md "Hi I'm CodeMason…" and AGENTS-LANGUAGE.md "Rust language instructions loaded." opening lines. They conflict with ADHD rules 1 and 10 (lead with the action, no preamble) and leak into generated artifacts (`docs/research-phase2-plan.md` starts with them). Behavioral delta of removal: outputs stop opening with boilerplate. Code already confirms loading (`[ok] LOADED` in discovery, init-ack). |
 | INSTR-17 | AGENTS.md "no such thing as a pre-existing test failure… fix it" conflicts with "Touch only what you must / every changed line should trace to the request". Proposed: fix pre-existing failures in a separate commit and report them. Delta: predictable diff scope. |
 | INSTR-18 | AGENTS.md General Preferences "6. No unsafe code." contradicts the AGENTS-LANGUAGE approved-unsafe-sites table (which is accurate: 5 sites, all listed). Proposed: "No new unsafe; see the approved-sites table." Delta: removes a rule that cannot be satisfied. |
 | INSTR-19 | The ADHD block sits untitled under "4. Goal-Driven Execution" (heading "##### Persistence"), calls itself "this skill", and has two rule 4s and no rule 3. Proposed: give it a `##` title and fix the numbering; keep the "stop adhd mode"/"normal mode" toggles verbatim. Delta: rules become addressable. |
@@ -389,6 +389,6 @@ Statuses: `Proposed` → `Approved` → `In progress` → `Done`. Cars marked �
 1. The docupdate skill both *creates* and *maintains* much of the drift: it copies release prose into QUICKSTART, TUI-QUICKSTART and SPEC. Audit the generator, not just its output.
 2. The GitHub slug for `--flag` and for ` - ` keeps every hyphen, so the anchor must use `---`. Hand-written TOCs miss this.
 3. The `main` history starts at a squash import on 2026-09-27. "Last changed" dates older than that need `git log --all`.
-4. `ragent <cmd> --help` can run a handler; `plugins add --help` did. Prefer reading the clap definitions.
+4. `codemason <cmd> --help` can run a handler; `plugins add --help` did. Prefer reading the clap definitions.
 5. A docs-only PR can go red for reasons outside it: a new cargo-deny advisory (`rustix` 1.1.5, fixed in #45) and a flaky test landed mid-train. Fix those in their own PR, never in the doc PR, then rebase the doc PR.
 6. "Current-state" sections hold stale identifiers too. Checking every backticked identifier in SPEC 4.6a-g against the source found four names that no longer existed, one of them describing the opposite of the code. Verify identifiers mechanically, not only links.

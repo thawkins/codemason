@@ -142,7 +142,7 @@ user-facing equivalent.
 
 **Example:**
 ```text
-new_agent agent="explore" task="Summarise architecture in crates/ragent-agent/src/agent/" background=true
+new_agent agent="explore" task="Summarise architecture in crates/codemason-agent/src/agent/" background=true
 wait_agents
 ```
 

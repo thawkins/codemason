@@ -1,6 +1,6 @@
 # /quit
 
-> "Exit ragent" (SlashCommandDef, crates/ragent-tui/src/app/state.rs).
+> "Exit codemason" (SlashCommandDef, crates/codemason-tui/src/app/state.rs).
 
 ## Overview
 
@@ -15,7 +15,7 @@ active, because exiting must always be possible. They take no arguments, have
 no help form, and produce no message-window output.
 
 The handler is the single `quit`/`exit` arm in
-`crates/ragent-tui/src/app/slash.rs` (lines 3724-3726).
+`crates/codemason-tui/src/app/slash.rs` (lines 3724-3726).
 
 ## Syntax
 
@@ -72,6 +72,6 @@ this command's handler; it is documented in TUI-QUICKSTART instead.
 
 ## Related
 
-- `ragent session resume <id>` (CLI) - return to a stored session in a future run
+- `codemason session resume <id>` (CLI) - return to a stored session in a future run
 - `/name` - label the session before quitting so it is easy to find again
 - TUI-QUICKSTART.md - keyboard quit bindings and terminal handling

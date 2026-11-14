@@ -354,7 +354,7 @@ DEFAULT_EXTS = PYTHON_EXTS | JS_TS_EXTS
 
 # Directories always skipped when scanning
 SKIP_DIRS = {".git", "node_modules", "target", "dist", "build", ".venv", "venv",
-             "__pycache__", ".next", ".ragent", "vendor", "assets"}
+             "__pycache__", ".next", ".codemason", "vendor", "assets"}
 
 
 def collect_files_from_modules(modules_json: str, root: str) -> list[str]:

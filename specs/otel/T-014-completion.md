@@ -18,18 +18,18 @@ telemetry is enabled.
 
 ### FR-011
 
-> The system shall record `ragent.sessions.active` as an `UpDownCounter`
+> The system shall record `codemason.sessions.active` as an `UpDownCounter`
 > incremented on session start and decremented on session end.
 
 ### FR-010
 
-> The system shall record `ragent.agent_loop.duration` and
-> `ragent.agent_loop.iterations` from the `AgentLoopProfiler` data for each
+> The system shall record `codemason.agent_loop.duration` and
+> `codemason.agent_loop.iterations` from the `AgentLoopProfiler` data for each
 > completed session.
 
 ## Changes
 
-### `crates/ragent-telemetry/src/recorder.rs`
+### `crates/codemason-telemetry/src/recorder.rs`
 
 Created a new `SessionRecorder` type alongside the existing `LlmRecorder`
 and `ToolRecorder`:
@@ -42,14 +42,14 @@ and `ToolRecorder`:
     from the subsystem's instrument registry.
   - `disabled() -> Self` — holds `None`; all methods are no-ops.
   - `is_enabled() -> bool`
-  - `record_session_start()` — increments the `ragent.sessions.active`
-    up/down counter by 1 and the `ragent.sessions.total` counter by 1
+  - `record_session_start()` — increments the `codemason.sessions.active`
+    up/down counter by 1 and the `codemason.sessions.total` counter by 1
     (FR-011).
-  - `record_session_end()` — decrements the `ragent.sessions.active`
+  - `record_session_end()` — decrements the `codemason.sessions.active`
     up/down counter by 1 (FR-011).
   - `record_agent_loop(duration_ms: f64, iterations: u64)` — records to the
-    `ragent.agent_loop.duration` histogram and the
-    `ragent.agent_loop.iterations` histogram (FR-010).
+    `codemason.agent_loop.duration` histogram and the
+    `codemason.agent_loop.iterations` histogram (FR-010).
 
 - **Feature-off variant** (`#[cfg(not(feature = "telemetry"))]`,
   `#[derive(Clone, Copy)]`): Zero-sized no-op. All methods discard their
@@ -67,23 +67,23 @@ and `ToolRecorder`:
     no panic.
   - `test_session_recorder_record_session_start_increments_counters` —
     calls `record_session_start` twice, flushes the in-memory exporter,
-    asserts `ragent.sessions.active` sum is 2 and `ragent.sessions.total`
+    asserts `codemason.sessions.active` sum is 2 and `codemason.sessions.total`
     sum is 2.
   - `test_session_recorder_record_session_end_decrements_active` — calls
     `record_session_start` twice then `record_session_end` once, asserts
-    `ragent.sessions.active` sum is 1.
+    `codemason.sessions.active` sum is 1.
   - `test_session_recorder_record_agent_loop_records_histograms` — records
     one `record_agent_loop(12345.6, 5)` call, asserts both
-    `ragent.agent_loop.duration` and `ragent.agent_loop.iterations` appear
+    `codemason.agent_loop.duration` and `codemason.agent_loop.iterations` appear
     in exported metrics.
 
 - **No-op test added** (feature-off test module):
   - `test_noop_session_recorder` — calls all no-op methods without panic.
 
-### `crates/ragent-agent/src/session/processor.rs`
+### `crates/codemason-agent/src/session/processor.rs`
 
 - **New struct field**: `pub session_recorder:
-  ragent_telemetry::recorder::SessionRecorder` added to `SessionProcessor`,
+  codemason_telemetry::recorder::SessionRecorder` added to `SessionProcessor`,
   with a docblock describing it as a zero-overhead no-op when telemetry is
   disabled.
 
@@ -92,8 +92,8 @@ and `ToolRecorder`:
   - At the top of the method, after the session ID is set up and before
     storing the user message:
     ```rust
-    // FR-011: increment `ragent.sessions.active` and
-    // `ragent.sessions.total` on session start.
+    // FR-011: increment `codemason.sessions.active` and
+    // `codemason.sessions.total` on session start.
     self.session_recorder.record_session_start();
     ```
 
@@ -109,29 +109,29 @@ and `ToolRecorder`:
 
   - Before returning `Ok(saved_msg)`, after the `OnSessionEnd` hooks fire:
     ```rust
-    // FR-011: decrement `ragent.sessions.active` on session end.
+    // FR-011: decrement `codemason.sessions.active` on session end.
     self.session_recorder.record_session_end();
     ```
 
 ### `src/main.rs`
 
 - Added `session_recorder:
-  ragent_telemetry::recorder::SessionRecorder::disabled()` to the
+  codemason_telemetry::recorder::SessionRecorder::disabled()` to the
   `SessionProcessor` struct literal in `main()`. (Wired to a live subsystem
   in a future task when the telemetry subsystem is initialized at startup;
   for now it defaults to disabled.)
 
-### `crates/ragent-tui/src/app/tests.rs`
+### `crates/codemason-tui/src/app/tests.rs`
 
 - Added `session_recorder:
-  ragent_telemetry::recorder::SessionRecorder::disabled()` to the test
+  codemason_telemetry::recorder::SessionRecorder::disabled()` to the test
   `SessionProcessor` struct literal.
 - Also fixed a pre-existing corruption in the `read_timestamps` block that
   was exposed by the struct literal change.
 
-### `crates/ragent-tui/Cargo.toml`
+### `crates/codemason-tui/Cargo.toml`
 
-- Added `ragent-telemetry = { path = "../ragent-telemetry" }` dependency
+- Added `codemason-telemetry = { path = "../codemason-telemetry" }` dependency
   (needed for the `SessionRecorder::disabled()` call in tests).
 - Added `async-trait = { workspace = true }` dependency (was missing,
   causing a pre-existing test compilation failure that surfaced when the
@@ -144,22 +144,22 @@ and `ToolRecorder`:
 ```
 cargo check --workspace                          # pass (default features, no telemetry)
 cargo check --workspace --features telemetry     # pass
-cargo check -p ragent-telemetry --features telemetry # pass
+cargo check -p codemason-telemetry --features telemetry # pass
 ```
 
 ### Test results
 
 ```
-cargo test -p ragent-telemetry --features telemetry --lib recorder
+cargo test -p codemason-telemetry --features telemetry --lib recorder
 test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 29 filtered out
 
-cargo test -p ragent-telemetry --lib
+cargo test -p codemason-telemetry --lib
 test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
-cargo test -p ragent-agent --lib
+cargo test -p codemason-agent --lib
 test result: ok. 316 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
-cargo test -p ragent-tui --lib
+cargo test -p codemason-tui --lib
 test result: ok. 63 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 

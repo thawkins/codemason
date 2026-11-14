@@ -10,11 +10,11 @@ goal setting), the plan-act-observe iteration with feedback, the four stop
 conditions (goal achieved, unrecoverable error, budget exhausted, human
 intervention), verification gating, scope/constraint restrictions,
 destructive-action checkpoints, and snapshot/rollback. Each test case is
-executed by a human tester against a working ragent build.
+executed by a human tester against a working codemason build.
 
 ## Prerequisites
 
-- A debug build of ragent: `cargo build`.
+- A debug build of codemason: `cargo build`.
 - A configured LLM provider (any) with a working API key. Ollama (local) is
   acceptable and avoids provider spend.
 - A scratch working directory (e.g. `target/temp/agentloop-tests/`) so the
@@ -28,8 +28,8 @@ executed by a human tester against a working ragent build.
   printf 'assert 1 + 1 == 2\n' > check.py   # verification helper
   ```
 
-- A local `ragent.json` in that directory for loop defaults (edit per test
-  case as instructed), then restart ragent so the config is loaded:
+- A local `codemason.json` in that directory for loop defaults (edit per test
+  case as instructed), then restart codemason so the config is loaded:
 
   ```json
   {
@@ -44,8 +44,8 @@ executed by a human tester against a working ragent build.
   }
   ```
 
-- The ragent TUI launched in that directory: `ragent` (or
-  `ragent --agent coder`).
+- The codemason TUI launched in that directory: `codemason` (or
+  `codemason --agent coder`).
 - A second terminal in the same directory for file-system verification
   (`ls`, `git status`, `git diff --stat`).
 
@@ -56,7 +56,7 @@ executed by a human tester against a working ragent build.
 **Requirement:** FR-001, FR-002
 
 **Preconditions:**
-- ragent is running in the TUI in the scratch directory.
+- codemason is running in the TUI in the scratch directory.
 
 **Steps:**
 1. Press `/` and type `lo` — observe the autocomplete list.
@@ -105,7 +105,7 @@ executed by a human tester against a working ragent build.
 **Requirement:** FR-003
 
 **Preconditions:**
-- ragent is running in the scratch directory with default config.
+- codemason is running in the scratch directory with default config.
 
 **Steps:**
 1. Type `/loop coder List the files in this directory and stop.` and press
@@ -127,7 +127,7 @@ executed by a human tester against a working ragent build.
 **Requirement:** FR-005
 
 **Preconditions:**
-- ragent is running in the TUI.
+- codemason is running in the TUI.
 
 **Steps:**
 1. Open the dialog with `/loop`, leave the goal field empty, confirm the
@@ -150,7 +150,7 @@ executed by a human tester against a working ragent build.
 **Requirement:** FR-006
 
 **Preconditions:**
-- ragent is running with debug logging (`--log-level debug`).
+- codemason is running with debug logging (`--log-level debug`).
 
 **Steps:**
 1. Start a loop with: goal `Fix src.rs so check.py passes.`, verification
@@ -220,7 +220,7 @@ executed by a human tester against a working ragent build.
 **Requirement:** FR-013, FR-017
 
 **Preconditions:**
-- The scratch `ragent.json` sets `agent.max_steps: 2`; ragent restarted.
+- The scratch `codemason.json` sets `agent.max_steps: 2`; codemason restarted.
 
 **Steps:**
 1. Start the loop: goal `Create a.txt with 1, then b.txt with 2, then c.txt
@@ -243,7 +243,7 @@ executed by a human tester against a working ragent build.
 **Requirement:** FR-014, FR-017
 
 **Preconditions:**
-- The scratch `ragent.json` sets `loop.cost_limit: 1500`; ragent restarted.
+- The scratch `codemason.json` sets `loop.cost_limit: 1500`; codemason restarted.
 
 **Steps:**
 1. Start the loop: goal `Write a detailed 1000-word essay about the history
@@ -266,12 +266,12 @@ executed by a human tester against a working ragent build.
 **Requirement:** FR-011, FR-017
 
 **Preconditions:**
-- ragent is launched with an invalid provider key
+- codemason is launched with an invalid provider key
   (e.g. `ANTHROPIC_API_KEY=sk-invalid`) or a dead endpoint
   (`http://127.0.0.1:9`); budgets generous.
 
 **Steps:**
-1. Restart ragent with the broken auth in the scratch directory.
+1. Restart codemason with the broken auth in the scratch directory.
 2. Start the loop: goal `List the files in this directory.`
 3. Observe the outcome.
 
@@ -290,7 +290,7 @@ executed by a human tester against a working ragent build.
 **Requirement:** FR-012, FR-023
 
 **Preconditions:**
-- The scratch `ragent.json` sets `agent.error_retry_allowance: 2`; ragent
+- The scratch `codemason.json` sets `agent.error_retry_allowance: 2`; codemason
   restarted. `bash` permitted (no prompts).
 
 **Steps:**
@@ -395,8 +395,8 @@ executed by a human tester against a working ragent build.
 **Requirement:** FR-015, FR-024
 
 **Preconditions:**
-- Scratch `ragent.json` sets `file:write` action `allow` for the directory;
-  `loop.checkpoints: true`; ragent restarted.
+- Scratch `codemason.json` sets `file:write` action `allow` for the directory;
+  `loop.checkpoints: true`; codemason restarted.
 
 **Steps:**
 1. Start the loop: goal `Delete scratch_old.txt if it exists, then create
@@ -426,13 +426,13 @@ executed by a human tester against a working ragent build.
 **Requirement:** FR-016
 
 **Preconditions:**
-- ragent running with `bash` permitted (no prompts).
+- codemason running with `bash` permitted (no prompts).
 
 **Steps:**
 1. Start the loop: goal `Run 'sleep 30' then report the current date.`
 2. While the run is executing (during the sleep), press `Esc`.
-3. After the stop, inspect the session list (in ragent: `/sessions`, or CLI
-   `ragent session list` in another terminal).
+3. After the stop, inspect the session list (in codemason: `/sessions`, or CLI
+   `codemason session list` in another terminal).
 
 **Test data:** goal above; `Esc` during execution.
 
@@ -452,7 +452,7 @@ executed by a human tester against a working ragent build.
 **Preconditions:**
 - Scratch directory is a git repository on a clean tree
   (`git status` shows nothing to commit).
-- ragent running in the scratch directory.
+- codemason running in the scratch directory.
 
 **Steps:**
 1. Note the starting state: `git status` and `git log --oneline -1` in the
@@ -485,7 +485,7 @@ executed by a human tester against a working ragent build.
 **Requirement:** FR-017, FR-023
 
 **Preconditions:**
-- ragent running with the standard scratch config (`max_steps: 25`).
+- codemason running with the standard scratch config (`max_steps: 25`).
 
 **Steps:**
 1. Run the TC-005 loop to natural completion; count the LLM requests in the
@@ -509,10 +509,10 @@ executed by a human tester against a working ragent build.
 **Requirement:** FR-025, FR-019
 
 **Preconditions:**
-- ragent launched with debug logging.
+- codemason launched with debug logging.
 
 **Steps:**
-1. Launch ragent with debug logging enabled.
+1. Launch codemason with debug logging enabled.
 2. Run a completing loop (TC-005) and note the end banner.
 3. Run a step-limit loop (TC-007) and note the banner.
 4. Run an interrupt loop (TC-015) and note the banner.
@@ -534,7 +534,7 @@ executed by a human tester against a working ragent build.
 **Requirement:** FR-024
 
 **Preconditions:**
-- ragent launched with autopilot enabled (`/autopilot on` or `--yes`), with
+- codemason launched with autopilot enabled (`/autopilot on` or `--yes`), with
   `loop.checkpoints: true` in the scratch config.
 
 **Steps:**
@@ -552,16 +552,16 @@ executed by a human tester against a working ragent build.
 
 ## Cleanup
 
-1. Restore or remove the scratch `ragent.json`
-   (`target/temp/agentloop-tests/ragent.json`) so no budget/checkpoint
+1. Restore or remove the scratch `codemason.json`
+   (`target/temp/agentloop-tests/codemason.json`) so no budget/checkpoint
    overrides leak into other sessions.
 2. Delete the scratch directory contents created during testing
    (`a.txt`, `b.txt`, `result.txt`, `loopout.txt`, `scratch_old.txt`,
    generated `src.rs` variants, etc.) or remove the whole scratch directory.
 3. Restore the original provider API key environment and restart any
    terminal that had an invalid key exported.
-4. Close ragent; verify the real user config (`~/.config/ragent/config.json`
-   or project `.ragent/ragent.json`) was never modified.
+4. Close codemason; verify the real user config (`~/.config/codemason/config.json`
+   or project `.codemason/codemason.json`) was never modified.
 5. Confirm no stray git branches were left in the scratch repository
    (`git branch` shows only the initial branch).
 

@@ -9,8 +9,8 @@ mode for other languages are also supported.
 
 Quick start::
 
-    scripts/count_functions.py crates/ragent-config/src
-    scripts/count_functions.py crates/ragent-tui/src --json
+    scripts/count_functions.py crates/codemason-config/src
+    scripts/count_functions.py crates/codemason-tui/src --json
     scripts/count_functions.py src --lang rust --tests exclude --list
     scripts/count_functions.py . --lang generic --ext .go --ext .ts
 
@@ -854,8 +854,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
         epilog=(
             "Examples:\n"
-            "  scripts/count_functions.py crates/ragent-config/src\n"
-            "  scripts/count_functions.py crates/ragent-tui/src --json\n"
+            "  scripts/count_functions.py crates/codemason-config/src\n"
+            "  scripts/count_functions.py crates/codemason-tui/src --json\n"
             "  scripts/count_functions.py src --lang rust --tests exclude --list\n"
             "  scripts/count_functions.py . --lang generic --ext .go\n"
         ),

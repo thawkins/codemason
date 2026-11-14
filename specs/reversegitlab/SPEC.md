@@ -18,9 +18,9 @@ synthetic creation prompt. Today it only works with GitHub repositories:
 parses it into `(owner, repo)`, and `GitHubClient` fetches the three artifacts
 via the GitHub REST API.
 
-ragent already ships a full GitLab client (`ragent_tools_vcs::gitlab::client::GitLabClient`),
-GitLab auth (`ragent_tools_vcs::gitlab::auth`), a `/gitlab setup` TUI dialog,
-and a `GitLabIntegrationConfig` in `ragent-config`. However, the GitLab client
+codemason already ships a full GitLab client (`codemason_tools_vcs::gitlab::client::GitLabClient`),
+GitLab auth (`codemason_tools_vcs::gitlab::auth`), a `/gitlab setup` TUI dialog,
+and a `GitLabIntegrationConfig` in `codemason-config`. However, the GitLab client
 only has methods for merge requests, pipelines, jobs, and issues — it has no
 methods for fetching project metadata, the repository tree, or the README,
 and `/reverse` has no dispatch logic to route to it.
@@ -43,7 +43,7 @@ the prefix `gitlab:` routes to the GitLab API. (Ubiquitous)
 
 The system shall accept `gitlab:<namespace>/<project>` identifiers that
 resolve against the configured GitLab instance URL (loaded from `GITLAB_URL`
-env, `ragent.json`, or the encrypted database via `/gitlab setup`), defaulting
+env, `codemason.json`, or the encrypted database via `/gitlab setup`), defaulting
 to `https://gitlab.com` when no instance URL is configured. (State-driven)
 
 ### FR-003
@@ -76,7 +76,7 @@ the GitHub API, preserving backward compatibility. (Ubiquitous)
 
 When the repository identifier is prefixed `gitlab:` or resolves to a GitLab
 URL, the system shall authenticate using the GitLab Personal Access Token
-resolved from `GITLAB_TOKEN` env, `ragent.json`, or the encrypted database
+resolved from `GITLAB_TOKEN` env, `codemason.json`, or the encrypted database
 via `/gitlab setup`, and shall surface a clear error message directing the
 user to run `/gitlab setup` when no token is found. (Event-driven)
 
@@ -193,7 +193,7 @@ without modification to their parsing or behavior.
 
 ### FR-024
 
-The `parse_reverse_args` function in `crates/ragent-tui/src/app/reverse.rs`
+The `parse_reverse_args` function in `crates/codemason-tui/src/app/reverse.rs`
 shall pass the raw `repo_input` string to the new `parse_reverse_repo`
 function instead of calling `GitHubClient::validate_repo_input` directly, so
 that provider dispatch happens in one place. (Event-driven)

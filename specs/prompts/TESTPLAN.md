@@ -5,7 +5,7 @@ status: draft
 
 Spec: `specs/prompts/SPEC.md`
 
-All test cases are executed by hand in the ragent TUI. No automated test code
+All test cases are executed by hand in the codemason TUI. No automated test code
 is referenced here; the goal is to verify the rendered behaviour a human sees.
 
 ## Prerequisites
@@ -13,13 +13,13 @@ is referenced here; the goal is to verify the rendered behaviour a human sees.
 Before running the test cases:
 
 1. Build the debug binary and start the TUI from a project directory that
-   contains an `AGENTS.md` and a README (the ragent repository itself is
-   suitable — `~/Projects/ragent`):
+   contains an `AGENTS.md` and a README (the codemason repository itself is
+   suitable — `~/Projects/codemason`):
 
    ```bash
-   cd ~/Projects/ragent
+   cd ~/Projects/codemason
    cargo build
-   target/debug/ragent
+   target/debug/cdmn
    ```
 
 2. Confirm the TUI home screen shows the working directory and that a
@@ -31,11 +31,11 @@ Before running the test cases:
    background agent) is in progress while testing, so status-bar
    observations are unambiguous.
 4. Note the currently selected agent shown on the home screen / status bar
-   (default: `coder` preset family agent as configured in `ragent.json`).
+   (default: `coder` preset family agent as configured in `codemason.json`).
    Record it before starting so the `/prompt primary` header can be compared.
 5. Optional contrast cases: temporarily set `tool_visibility.teams` (or any
-   family) to `false` in `ragent.json` for TC-008, and have a project-local
-   custom agent in `.ragent/agents/` for TC-009. Restore the config afterwards
+   family) to `false` in `codemason.json` for TC-008, and have a project-local
+   custom agent in `.codemason/agents/` for TC-009. Restore the config afterwards
    (see Cleanup).
 
 ## Test Cases
@@ -140,8 +140,8 @@ Note: tool-free is defined by the assembler's own tool gate
 (`agent/mod.rs:2533-2536`): an agent with `max_steps <= 1` renders no tool
 sections. No built-in agent satisfies this today (all declare
 `max_steps: 1024`), so this test uses a tool-free custom agent — e.g. a
-`.ragent/agents/one-shot.md` profile with `"max_steps": 1` in the frontmatter
-(restart ragent or re-run `/agents reload` so the custom agent loads). The
+`.codemason/agents/one-shot.md` profile with `"max_steps": 1` in the frontmatter
+(restart codemason or re-run `/agents reload` so the custom agent loads). The
 built-in `ask` agent is NOT tool-free by this definition: production wires the
 full tool surface to it (`processor.rs:1719`), so `/prompt primary ask`
 truthfully reports a tool count.
@@ -203,17 +203,17 @@ Expected results:
 ### TC-008 — Effective tool surface honours `tool_visibility`
 
 Preconditions: TUI running, active session; a `tool_visibility` switch set to
-`false` in `ragent.json` (e.g. `"teams": false`); ragent restarted after the
+`false` in `codemason.json` (e.g. `"teams": false`); codemason restarted after the
 config change.
 
 Steps:
 1. Run `/prompt primary` and record the tool count and a couple of tool names
    from the hidden family (e.g. `team_create`).
-2. Flip the switch to `true` in `ragent.json`, restart ragent, re-establish a
+2. Flip the switch to `true` in `codemason.json`, restart codemason, re-establish a
    session, and run `/prompt primary` again.
 3. Compare the two outputs.
 
-Test data: `ragent.json` with `"tool_visibility": { "teams": false }` and then
+Test data: `codemason.json` with `"tool_visibility": { "teams": false }` and then
 `"teams": true`.
 
 Expected results:
@@ -225,7 +225,7 @@ Expected results:
 ### TC-009 — Custom agents appear in the roster and resolve
 
 Preconditions: TUI running; a project-local custom agent exists at
-`.ragent/agents/<name>.json` (or `.md`), ragent restarted.
+`.codemason/agents/<name>.json` (or `.md`), codemason restarted.
 
 Steps:
 1. Run `/prompt list` and confirm the custom agent appears with the `custom`
@@ -234,7 +234,7 @@ Steps:
 3. Optionally run `/prompt subagent <custom-agent-name>` if the custom agent
    declares subagent mode.
 
-Test data: one custom agent definition file in `.ragent/agents/`.
+Test data: one custom agent definition file in `.codemason/agents/`.
 
 Expected results:
 - The roster line for the custom agent shows source `custom`.
@@ -300,8 +300,8 @@ Expected results:
 
 ### TC-013 — Non-blocking execution under a large working tree
 
-Preconditions: TUI running, active session, ragent launched in a large
-repository (e.g. the ragent workspace itself).
+Preconditions: TUI running, active session, codemason launched in a large
+repository (e.g. the codemason workspace itself).
 
 Steps:
 1. Type `/prompt primary` and press `Enter`.
@@ -387,13 +387,13 @@ Expected results:
 
 ## Cleanup
 
-1. If TC-008 toggled `tool_visibility` switches, restore `ragent.json` to its
-   original state and restart ragent once to confirm restoration.
-2. If TC-009 added a custom agent file, remove it from `.ragent/agents/` and
-   restart ragent (or leave it if it is a permanent fixture of the project).
+1. If TC-008 toggled `tool_visibility` switches, restore `codemason.json` to its
+   original state and restart codemason once to confirm restoration.
+2. If TC-009 added a custom agent file, remove it from `.codemason/agents/` and
+   restart codemason (or leave it if it is a permanent fixture of the project).
 3. If TC-014 appended filler to `AGENTS.md`, remove the filler block and
    verify with `git diff AGENTS.md` that the file is byte-identical to HEAD.
-4. Close the TUI. Optional: run `/config list` or inspect `ragent.json` to
+4. Close the TUI. Optional: run `/config list` or inspect `codemason.json` to
    confirm no configuration was modified by any test step.
 5. No other teardown is required — `/prompt` performs no writes by design
    (FR-012).

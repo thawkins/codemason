@@ -47,7 +47,7 @@ last-opened guess then merged two blocks:
 
 ## 2. The fix
 
-`crates/ragent-llm/src/providers/bedrock.rs`, Converse path:
+`crates/codemason-llm/src/providers/bedrock.rs`, Converse path:
 
 - `contentBlockStart` -> `StreamKey::from_frame(parsed["contentBlockIndex"].as_u64(), Some(id))`,
   so the call is opened at its own index. `from_frame` already prefers an index
@@ -68,7 +68,7 @@ no index, no attribution, warn and skip. That is one rule for both Bedrock paths
 instead of "index when present, last-opened when not".
 
 `delta_last` and `end_last` are **deleted** from
-`crates/ragent-llm/src/providers/wire/decode.rs` - their only caller was this
+`crates/codemason-llm/src/providers/wire/decode.rs` - their only caller was this
 path, and leaving a last-opened helper in the shared accumulator is leaving the
 FR-005 failure one method call away. The module docs now say so, and explain why
 the guess is forbidden rather than merely unused.
@@ -109,7 +109,7 @@ unpinned, so the next edit could have taken it away silently.
 
 ## 5. What this task added
 
-1. `crates/ragent-llm/tests/inline/bedrock_tests.rs` - two new Converse cases
+1. `crates/codemason-llm/tests/inline/bedrock_tests.rs` - two new Converse cases
    driven through the real event-stream parser (`spawn_bedrock_stream` +
    `BedrockConverseClient::chat`), not through the accumulator:
    - `test_converse_chat_stream_keeps_two_parallel_tool_use_blocks_apart` - the
@@ -131,7 +131,7 @@ unpinned, so the next edit could have taken it away silently.
    why they were removed (`decode.rs` module docs, section 6 below) tripped the
    scan that documents it. The function-call form and the id name are what the
    scan is actually about, so the list is narrower and the note can exist.
-3. `crates/ragent-llm/src/providers/wire/decode.rs` - the deletion the task
+3. `crates/codemason-llm/src/providers/wire/decode.rs` - the deletion the task
    asks for is finished here: the module docs now carry the note the scan names,
    recording that the two helpers which once offered the last-opened guess are
    **deleted**, not merely left unused, with the reason (such a helper is the
@@ -141,7 +141,7 @@ unpinned, so the next edit could have taken it away silently.
    spelled the retired field name says "a single-slot `String`" instead, so the
    prose and the source scan cannot contradict each other. No code was left to
    remove: neither method existed in the tree when this task started.
-4. `crates/ragent-llm/src/providers/bedrock.rs` - the Converse
+4. `crates/codemason-llm/src/providers/bedrock.rs` - the Converse
    `contentBlockStart` comment now states the two-arm rule: the index is the
    key, and the `from_frame` fallback covers only a start that supplies an id and
    no index - such a block takes no fragment, because the delta and stop arms
@@ -182,17 +182,17 @@ the accumulator.
 
 - `cargo fmt --all -- --check` - clean
 - `cargo check --workspace --all-targets` - clean (1m 14s)
-- `cargo clippy -p ragent-llm --all-targets` - only the pre-existing 19
+- `cargo clippy -p codemason-llm --all-targets` - only the pre-existing 19
   `unnecessary structure name repetition` in `tool_cache.rs` and one
-  `returning the result of a let binding` in `ragent-storage/src/storage.rs:1709`;
+  `returning the result of a let binding` in `codemason-storage/src/storage.rs:1709`;
   nothing in a file this task touched
-- `cargo nextest run -p ragent-llm --no-fail-fast` - **632 run, 631 passed, 1
+- `cargo nextest run -p codemason-llm --no-fail-fast` - **632 run, 631 passed, 1
   failed, 2 skipped**. The one failure is T-010's
   `test_wire_decode::test_no_module_invents_a_tool_call_id_or_recovers_a_name_from_one`
   (`ollama_cloud.rs` still mints `_tc_`), red at HEAD and identical without this
   change.
-- `cargo nextest run -p ragent-llm --lib` - 328 passed
-- `cargo test -p ragent-llm --doc` - 30 passed
+- `cargo nextest run -p codemason-llm --lib` - 328 passed
+- `cargo test -p codemason-llm --doc` - 30 passed
 - guard scripts - 12 of 13 pass; `check-bench-regression` exits 2 on
   "no criterion results directory found at target/criterion" (no bench run, not a
   code finding)

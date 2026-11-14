@@ -7,12 +7,12 @@ status: draft
 
 Before running these manual tests, ensure the following environment is in place:
 
-1. A checkout of the ragent repository at the commit under test.
-2. Rust toolchain 1.85+ installed and the project builds with `cargo build -p ragent-tui`.
+1. A checkout of the codemason repository at the commit under test.
+2. Rust toolchain 1.85+ installed and the project builds with `cargo build -p codemason-tui`.
 3. A terminal with at least 120×40 characters and true-colour support preferred.
 4. A local Ollama instance running at `http://127.0.0.1:11434` with at least one small model pulled (for example, `qwen2.5:0.5b` or `phi3:mini`). This provides a slow-enough provider to observe UI responsiveness.
 5. An empty or disposable working directory so the generated sessions do not pollute an important project.
-6. The ragent binary built and available at `target/debug/ragent`.
+6. The codemason binary built and available at `target/debug/cdmn`.
 7. Optional: a stopwatch or the `time` command to time startup and recovery from model discovery.
 
 ## Test Cases
@@ -29,15 +29,15 @@ Before running these manual tests, ensure the following environment is in place:
 **Steps:**
 1. Start the TUI from a new session:
    - In the terminal, run `cd /tmp && rm -rf tuiopt-test && mkdir tuiopt-test && cd tuiopt-test`.
-   - Run `/home/thawkins/Projects/ragent/target/debug/ragent --no-tui --log-level debug 2>> /tmp/ragent-idle.log &` is **not** the correct path; instead run the TUI interactively:
+   - Run `/home/thawkins/Projects/codemason/target/debug/cdmn --no-tui --log-level debug 2>> /tmp/codemason-idle.log &` is **not** the correct path; instead run the TUI interactively:
      ```
-     /home/thawkins/Projects/ragent/target/debug/ragent
+     /home/thawkins/Projects/codemason/target/debug/cdmn
      ```
 2. Wait for the main chat screen to appear. Do not type anything.
 3. Leave the TUI idle for 60 seconds.
 4. In another terminal, observe CPU usage with:
    ```
-   top -p $(pgrep -f "target/debug/ragent") -n 10 -d 2
+   top -p $(pgrep -f "target/debug/cdmn") -n 10 -d 2
    ```
 5. Press `q` to exit the TUI.
 
@@ -45,7 +45,7 @@ Before running these manual tests, ensure the following environment is in place:
 - None.
 
 **Expected results:**
-- The `ragent` process should consume less than 5% CPU during the idle 60-second window.
+- The `codemason` process should consume less than 5% CPU during the idle 60-second window.
 - The log file should not contain a continuous stream of `render` or `poll` trace events.
 - The terminal should not flicker or redraw without cause.
 
@@ -56,7 +56,7 @@ Before running these manual tests, ensure the following environment is in place:
 **Title:** Verify that opening the model picker while discovery runs remains responsive.
 
 **Preconditions:**
-- The Ollama provider is enabled in `ragent.json` (or the local-first default resolves to Ollama).
+- The Ollama provider is enabled in `codemason.json` (or the local-first default resolves to Ollama).
 - The TUI is at the main chat screen.
 - A stopwatch is available.
 
@@ -120,7 +120,7 @@ Before running these manual tests, ensure the following environment is in place:
 
 **Preconditions:**
 - The TUI is at the main chat screen.
-- The active-agents panel is enabled in `ragent.json` (`tool_visibility.agents: true`).
+- The active-agents panel is enabled in `codemason.json` (`tool_visibility.agents: true`).
 - A way to spawn background sub-agents exists, such as the `/swarm` command or a prompt that calls `new_agent`.
 
 **Steps:**
@@ -150,7 +150,7 @@ Before running these manual tests, ensure the following environment is in place:
 **Title:** Verify the teams panel loads from cached state and remains responsive.
 
 **Preconditions:**
-- The teams feature is enabled in `ragent.json` (`tool_visibility.teams: true`).
+- The teams feature is enabled in `codemason.json` (`tool_visibility.teams: true`).
 - A team has been created previously, or one can be created during the test.
 - The TUI is at the main chat screen.
 
@@ -246,14 +246,14 @@ After completing the manual tests, perform the following teardown steps:
    ```
    rm -rf /tmp/tuiopt-test
    ```
-3. Delete any temporary session files created during the tests from the ragent data directory (default `~/.local/share/ragent/`). If you are unsure which sessions belong to this test, list them with the CLI:
+3. Delete any temporary session files created during the tests from the codemason data directory (default `~/.local/share/codemason/`). If you are unsure which sessions belong to this test, list them with the CLI:
    ```
-   /home/thawkins/Projects/ragent/target/debug/ragent session list
+   /home/thawkins/Projects/codemason/target/debug/cdmn session list
    ```
    Then delete the test sessions by name or id.
 4. Remove any temporary log files generated during the tests:
    ```
-   rm -f /tmp/ragent-idle.log
+   rm -f /tmp/codemason-idle.log
    ```
-5. If a test team was created, clean it up with the CLI or by deleting the team store under the ragent data directory.
-6. Restore the original `ragent.json` if any temporary provider overrides were used.
+5. If a test team was created, clean it up with the CLI or by deleting the team store under the codemason data directory.
+6. Restore the original `codemason.json` if any temporary provider overrides were used.

@@ -1,6 +1,6 @@
 # /init
 
-> "Analyse the project and write a summary, or create a default config: /init [config|help]" (SlashCommandDef, crates/ragent-tui/src/app/state.rs).
+> "Analyse the project and write a summary, or create a default config: /init [config|help]" (SlashCommandDef, crates/codemason-tui/src/app/state.rs).
 
 ## Overview
 
@@ -10,9 +10,9 @@ injects an analysis prompt as a user message, and runs it on the general agent.
 The resulting analysis - languages, frameworks, architecture, entry points,
 build/test system, conventions, and key files - is saved into structured memory
 via `memory_store` so later sessions recall it. `/init config` instead writes a
-fresh default `ragent.json` to disk when you want a starting point to edit.
+fresh default `codemason.json` to disk when you want a starting point to edit.
 
-The handler is the `init` arm in `crates/ragent-tui/src/app/slash.rs`
+The handler is the `init` arm in `crates/codemason-tui/src/app/slash.rs`
 (approximately lines 2655-2827).
 
 ## Syntax
@@ -28,7 +28,7 @@ The handler is the `init` arm in `crates/ragent-tui/src/app/slash.rs`
 | Form | Description |
 |---|---|
 | `/init` | Run the one-shot project analysis on the general agent and store the result as a project-analysis memory |
-| `/init config` | Write `Config::default()` as pretty JSON to `<config_dir>/ragent/ragent.json` |
+| `/init config` | Write `Config::default()` as pretty JSON to `<config_dir>/codemason/codemason.json` |
 | `/init help` | Show the subcommand summary |
 
 ## Examples
@@ -66,14 +66,14 @@ Output (file did not exist):
 
 ```
 From: /init config
-[ok] Wrote default configuration to /home/user/.config/ragent/ragent.json
+[ok] Wrote default configuration to /home/user/.config/codemason/codemason.json
 ```
 
 Output (file already exists):
 
 ```
 From: /init config
-[warn] Config file already exists, skipping: /home/user/.config/ragent/ragent.json
+[warn] Config file already exists, skipping: /home/user/.config/codemason/codemason.json
 ```
 
 Distinct `[err]` messages are emitted if the config directory is missing, or if
@@ -95,7 +95,7 @@ Output (subcommand summary).
   structured result lands in the memory store as a `fact` with confidence 0.8
   and tag `project-analysis`.
 - `/init config` writes pretty-printed JSON of `Config::default()` to
-  `<config_dir>/ragent/ragent.json` (on Linux, `~/.config/ragent/ragent.json`).
+  `<config_dir>/codemason/codemason.json` (on Linux, `~/.config/codemason/codemason.json`).
   It never overwrites an existing file - it skips with `[warn]`.
 - `/init help` prints the subcommand summary.
 

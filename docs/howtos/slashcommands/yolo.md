@@ -29,8 +29,8 @@ enable message lists; the full bypass surface is documented below.
 
 The flag is stored as a persistent runtime flag (`config.yolo`), so it
 persists across restarts. It is written to the **user-global** config
-(`~/.config/ragent/ragent.json`); a project-local `.ragent/ragent.json` cannot
-set it. When you launch with `ragent --config <file>`, that file is the only
+(`~/.config/codemason/codemason.json`); a project-local `.codemason/codemason.json` cannot
+set it. When you launch with `codemason --config <file>`, that file is the only
 config loaded, so the flag is written there instead.
 
 ## Bypass surface
@@ -84,4 +84,4 @@ Disables YOLO mode and restores normal permission gating.
 - `/autopilot` - autonomous runs with permission auto-approval for the run duration
 - `/bash` - the Bash tool whose security layers are relaxed by YOLO mode
 - `/mcp` - MCP server management, whose validation is skipped under YOLO
-- Permission rules in `ragent.json` - allow/deny rules are bypassed while YOLO is on
+- Permission rules in `codemason.json` - allow/deny rules are bypassed while YOLO is on

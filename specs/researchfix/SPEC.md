@@ -64,7 +64,7 @@ iteration.
 
 **FR-007 (Optional)**
 The user may set the per-run web-phase deadline via `--web-time <secs>` (alias of
-`--web-phase-timeout-secs`) on `ragent research create` and via the equivalent `/research
+`--web-phase-timeout-secs`) on `codemason research create` and via the equivalent `/research
 create` front-ends. Where a value of `0` is supplied, the system shall disable the
 deadline and allow the web phase to run to natural completion.
 

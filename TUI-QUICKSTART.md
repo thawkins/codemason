@@ -1,6 +1,6 @@
-# TUI Quick Start Guide for ragent
+# TUI Quick Start Guide for codemason
 
-A hands-on guide to using **ragent** through its full-screen terminal UI.
+A hands-on guide to using **codemason** through its full-screen terminal UI.
 
 ---
 
@@ -9,13 +9,13 @@ A hands-on guide to using **ragent** through its full-screen terminal UI.
 Open a terminal in the project you want to work on and run:
 
 ```bash
-ragent
+cdmn
 ```
 
-If `ragent` is not on your `PATH`, use the full path after building:
+If `codemason` is not on your `PATH`, use the full path after building:
 
 ```bash
-/path/to/ragent/target/release/ragent
+/path/to/codemason/target/release/cdmn
 ```
 
 The TUI opens with the input panel at the bottom, the message pane in the
@@ -35,7 +35,7 @@ middle, and status information at the top. You can start typing immediately.
 ### Example
 
 ```bash
-ragent --model ollama_cloud/kimi-k2.7-code --agent rust-coder
+cdmn --model ollama_cloud/kimi-k2.7-code --agent rust-coder
 ```
 
 You can also open the provider setup directly from the input box:
@@ -48,7 +48,7 @@ You can also open the provider setup directly from the input box:
 
 ## 2. Creating an `AGENTS.md` file for your project
 
-`AGENTS.md` is a project-level instruction file that ragent automatically
+`AGENTS.md` is a project-level instruction file that codemason automatically
 loads into its system prompt. It tells the agent how your codebase is
 organised, what conventions to follow, and what tools to prefer.
 
@@ -56,7 +56,7 @@ Create it at the root of your project workspace:
 
 ```bash
 # In the root of the project you are working on
-ragent run "Create a concise AGENTS.md for this Rust project"
+cdmn run "Create a concise AGENTS.md for this Rust project"
 ```
 
 Or create it manually:
@@ -99,7 +99,7 @@ touch AGENTS.md
 - Update `CHANGELOG.md` and `SPEC.md` when adding features
 ```
 
-Keep it factual and concise. ragent reads it on every launch, so overly long
+Keep it factual and concise. codemason reads it on every launch, so overly long
 files can consume context window.
 
 ---
@@ -108,7 +108,7 @@ files can consume context window.
 
 ### Provider setup dialog
 
-1. Start ragent.
+1. Start codemason.
 2. Type `/provider` in the input box.
 3. Select a provider from the list.
 4. The API-key field is pre-filled with any existing stored key, shown unmasked
@@ -164,7 +164,7 @@ required credentials differ.
 
 ### Available providers
 
-ragent supports these providers out of the box:
+codemason supports these providers out of the box:
 
 | Provider                | Typical credential           | Notes                                |
 | ----------------------- | ---------------------------- | ------------------------------------ |
@@ -190,11 +190,11 @@ settings, and `/provider router` (or `/router help`) to set up the Model Router.
 ## 3.1 Configuration snapshots
 
 The `/config` slash command family lets you inspect and back up your global
-`ragent.json` without leaving the TUI.
+`codemason.json` without leaving the TUI.
 
 ```text
 /config show          # show working dir, data/config dirs, storage, code index, memory, agents
-/config save          # snapshot the current global ragent.json under ~/.config/ragent/saves/
+/config save          # snapshot the current global codemason.json under ~/.config/codemason/saves/
 /config list          # browse saved snapshots and restore one with Enter
 ```
 
@@ -245,7 +245,7 @@ disabled; the indicator is bold because it changes how the agent loop runs.
 
 ## 3.4 Startup timings and run-cost banner
 
-After launch, ragent records how long each startup stage took. Run `/startup`
+After launch, codemason records how long each startup stage took. Run `/startup`
 at any time to see a breakdown such as config load, provider health check,
 code-index startup, and session creation.
 
@@ -257,7 +257,7 @@ being swallowed.
 
 ---
 
-## 4. Issuing prompts to ragent
+## 4. Issuing prompts to codemason
 
 Click in the **Input** panel at the bottom and type your prompt.
 
@@ -271,7 +271,7 @@ Press **`Enter`** to send.
 ### Example prompts
 
 ```text
-Explain the purpose of the ragent-types crate
+Explain the purpose of the codemason-types crate
 ```
 
 ```text
@@ -309,7 +309,7 @@ Add unit tests for the bash permission command-name extraction logic
 
 ### Permission prompts
 
-When ragent wants to run a shell command, write a file, or perform another
+When codemason wants to run a shell command, write a file, or perform another
 protected action, a permission dialog appears at the top of the screen. You
 have 120 seconds to:
 
@@ -395,7 +395,7 @@ prompt:
 
 ## 5. Goal-driven loops with `/loop`
 
-The **`/loop`** slash command runs a goal-driven agentic loop: ragent picks
+The **`/loop`** slash command runs a goal-driven agentic loop: codemason picks
 the agent you name, then iterates **plan → act → observe** — planning the
 next action, executing tool calls, feeding each observation back into the
 model's context — until a stop condition fires. Four stop conditions end the
@@ -416,7 +416,7 @@ loop, each rendered as a status-aware end banner with the iteration count:
 ```
 
 The one-shot form activates the documented defaults: step limit **512**
-(or `loop.max_steps` from `ragent.json`), config cost limit, checkpoints
+(or `loop.max_steps` from `codemason.json`), config cost limit, checkpoints
 **on**, no verification command, and no restrictions. Three flags override
 the run's budgets: `--max-steps N`, `--cost_limit N` (or `--cost-limit N`),
 and `--timeout N` (checkpoint-prompt seconds). An empty or
@@ -476,7 +476,7 @@ entered values for the next `/loop` in the same session.
 
 ### Rollback flow
 
-When a loop terminates, ragent renders the change summary as a diffstat line
+When a loop terminates, codemason renders the change summary as a diffstat line
 and offers a **one-key rollback**: `Enter` accepts and restores the pre-loop
 workspace snapshot; `Esc` (or any other key) declines and keeps the changes.
 Rollback is snapshot-only when the workspace is not inside a git repository —
@@ -493,7 +493,7 @@ cross-reference it with local files.
 /research Rust async runtime design patterns
 ```
 
-ragent will:
+codemason will:
 
 1. Search the web for relevant pages.
 2. Fetch key pages.
@@ -527,7 +527,7 @@ The `create` form supports a number of optional flags:
 - `--use-specs` — cross-reference existing `specs/`.
 - `--use-low-relevance` — keep low-relevance web sources instead of filtering
   them out.
-- `--depth shallow|standard|deep` — control how broadly ragent searches.
+- `--depth shallow|standard|deep` — control how broadly codemason searches.
 - `--format report|executive-summary|comparison-table|source-bibliography|imrad|newsletter`
   — choose the output artifact. `newsletter` emits only the reader-facing
   sections (topic, executive summary, top 10 implications, open questions,
@@ -543,7 +543,7 @@ assuming a file name. Quality-assurance detail (contradiction graph, loci
 analysis, depth investigation, reconcile, tensions, audits) is kept in the
 companion `CORPA-<YYYY-MM-DD>.md`; it includes a `Sources Reference` copy of the
 References Index so `[#N]` citations resolve in both documents. An item created
-by an older ragent keeps its undated `RESEARCH.md` / `CORPA.md`, which resolves
+by an older codemason keeps its undated `RESEARCH.md` / `CORPA.md`, which resolves
 the same way.
 
 While the run is gathering, the pinned **Research Progress** message in the
@@ -568,7 +568,7 @@ the log panel (not the message window) so individual fetch failures remain
 traceable.
 
 > Note: web research uses keyless search by default; a `TAVILY_API_KEY` or
-> `LANGSEARCH_API_KEY` can be configured in `ragent.json` for higher-quality
+> `LANGSEARCH_API_KEY` can be configured in `codemason.json` for higher-quality
 > results.
 
 ---
@@ -584,7 +584,7 @@ an implementation plan (`PLAN.md`) for a feature.
 /spec create add-user-authentication
 ```
 
-ragent asks a few clarifying questions if needed, then generates:
+codemason asks a few clarifying questions if needed, then generates:
 
 - `specs/add-user-authentication/SPEC.md` — requirements, scope, acceptance criteria
 - `specs/add-user-authentication/PLAN.md` — tasks, dependencies, effort estimates
@@ -611,7 +611,7 @@ cannot be updated.
 
 ### Track progress
 
-As you implement tasks, ragent can update the spec status automatically:
+As you implement tasks, codemason can update the spec status automatically:
 
 ```text
 /spec task add-user-authentication T-001 completed
@@ -626,8 +626,8 @@ to commit them.
 ## 7a. Scaffolding a new project with `/new`
 
 The **`/new`** slash command scaffolds a brand-new project in the current
-directory (it must be empty apart from ragent artifacts). The same surface is
-available as the `ragent new` CLI subcommand.
+directory (it must be empty apart from codemason artifacts). The same surface is
+available as the `codemason new` CLI subcommand.
 
 ### Scaffold a minimal project
 
@@ -639,7 +639,7 @@ The command streams each step into the message window as it completes
 (guard, file emission, git init, remote status), then prints a summary with
 the created files. Generated content:
 
-- the ragent workspace: `.ragent/`, `specs/`, `log/`, `.gitignore`, `AGENTS.md`
+- the codemason workspace: `.codemason/`, `specs/`, `log/`, `.gitignore`, `AGENTS.md`
 - a runnable hello-world artifact set for any of the 26 supported application
   languages (`rust`, `python`, `go`, `typescript`, `shell`, ...) in a
   `library`, `cmdline`, `tui`, or `gui` layout, or sample-document stubs for
@@ -676,7 +676,7 @@ values (derived from the scaffolder's registries, so they cannot drift).
 The **`/plugins`** slash command manages sandboxed Codex- and Claude
 Code/Desktop-dialect plugins from the TUI. Enabled plugins contribute tools
 (registered as `plugin_<id>_<tool>`) and slash commands. The same operations
-are available from a shell as `ragent plugins <sub>`.
+are available from a shell as `codemason plugins <sub>`.
 
 ```text
 /plugins list --verbose          # list plugins, state, contributions, telemetry
@@ -692,8 +692,8 @@ Reports render in the message window with a `From: /plugins <sub>` header.
 `/plugins test` prints one `[ ok ]`/`[fail]` line per harness step and confirms
 the harness was unloaded with the live session untouched. Any of `/plugins`
 with no arguments, `/plugins help`, or an unrecognised subcommand prints the
-usage block. Plugins are discovered under `.ragent/plugins/` (project) or
-`~/.config/ragent/plugins/` (user-global); set `plugins.enabled: false` to make
+usage block. Plugins are discovered under `.codemason/plugins/` (project) or
+`~/.config/codemason/plugins/` (user-global); set `plugins.enabled: false` to make
 the subsystem inert.
 
 An enabled plugin's non-tool contributions are bridged too: `commands/*.md`
@@ -709,7 +709,7 @@ See [`docs/howtos/slashcommands/plugins.md`](docs/howtos/slashcommands/plugins.m
 
 ## 8. Stopping the agent with the Escape key
 
-While ragent is actively streaming a response or running tools, press
+While codemason is actively streaming a response or running tools, press
 **`Escape`** to cancel the current operation.
 
 - The LLM stream stops immediately.
@@ -721,7 +721,7 @@ agent step.
 
 ---
 
-## 9. Quitting ragent
+## 9. Quitting codemason
 
 To exit the TUI safely:
 
@@ -852,7 +852,7 @@ You can also use the tool directly in a prompt:
 Create a task list for adding OAuth2 login support
 ```
 
-ragent will call `TaskCreate` to add the items, and the TASKS panel updates
+codemason will call `TaskCreate` to add the items, and the TASKS panel updates
 immediately.
 
 ### Interacting with the TASKS panel
@@ -871,9 +871,9 @@ Press **`Alt+M`** to toggle the **Memory panel** on the right side of the screen
 
 The Memory panel surfaces three sources of project and user memory:
 
-1. **Project Memory** — `.ragent/memory/MEMORY.md`
-2. **Project Analysis** — `.ragent/memory/PROJECT_ANALYSIS.md` (if it exists)
-3. **User Memory** — `~/.ragent/memory/MEMORY.md`
+1. **Project Memory** — `.codemason/memory/MEMORY.md`
+2. **Project Analysis** — `.codemason/memory/PROJECT_ANALYSIS.md` (if it exists)
+3. **User Memory** — `~/.codemason/memory/MEMORY.md`
 
 It also shows a summary line when the structured-memory SQLite store contains
 entries:
@@ -882,7 +882,7 @@ entries:
 Structured memories: 42
 ```
 
-Memory files are plain Markdown. ragent reads them automatically on startup
+Memory files are plain Markdown. codemason reads them automatically on startup
 and can update them with `memory_write` / `memory_replace` during a session.
 
 In addition, the `memory_store` tool writes **structured memories** to the
@@ -912,7 +912,7 @@ entries are never touched.
 /memory write project "Use tokio::sync::RwLock for shared state in this codebase"
 ```
 
-Or simply ask ragent:
+Or simply ask codemason:
 
 ```text
 Remember that we prefer tracing over println in this project
@@ -971,7 +971,7 @@ The Context panel is display-only: its contents are never sent to the model.
 
 ## Multiple sessions and the session sidebar
 
-ragent can hold several sessions at once, each in its own project
+codemason can hold several sessions at once, each in its own project
 directory. A session keeps running while you work in another one.
 
 The sidebar on the left (shown when the terminal is at least 100 columns
@@ -1026,8 +1026,8 @@ Keys:
 
 With the mouse, click a row to open it and drag the sidebar's right border
 to resize it. The same actions are available as `/session` commands
-(`/session help`); projects are managed with `/project` (`/project help`). ragent reopens your open sessions on the next start;
-use `ragent --new` to start fresh.
+(`/session help`); projects are managed with `/project` (`/project help`). codemason reopens your open sessions on the next start;
+use `codemason --new` to start fresh.
 
 ### Session menu
 
@@ -1097,7 +1097,7 @@ for permission unless your permission mode allows it. `/autofix status`
 shows what it last did; `/autofix off` turns it off; `/autofix unbind`
 removes the binding.
 
-GitHub Enterprise and settings go in your global `ragent.json` (not a
+GitHub Enterprise and settings go in your global `codemason.json` (not a
 project's), with the token in `GH_ENTERPRISE_TOKEN`:
 
 ```json
@@ -1139,7 +1139,7 @@ shortcut again to close the panel.
 | `Enter`                       | Send prompt                                 |
 | `Shift+Enter` / `Alt+Enter`   | New line in input                           |
 | `Escape`                      | Cancel current agent operation              |
-| `Ctrl+D`                      | Quit ragent                                 |
+| `Ctrl+D`                      | Quit codemason                                 |
 | `Ctrl+C`                      | Copy selection / arm quit                   |
 | `Alt+L`                       | Toggle Log panel                            |
 | `Alt+P`                       | Toggle Profile panel                        |
@@ -1166,4 +1166,4 @@ shortcut again to close the panel.
 - Browse the per-command howtos in `docs/howtos/slashcommands/` (INDEX.md lists every command).
 - See `docs/custom-agents.md` to create your own agent profiles.
 - See `docs/howtos/teams.md` to coordinate multi-agent teams.
-- Run `ragent --help` for a complete list of command-line options.
+- Run `codemason --help` for a complete list of command-line options.

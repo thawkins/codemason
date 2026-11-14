@@ -4,7 +4,7 @@
 
 ## Overview
 
-`/update` checks the ragent GitHub releases for a newer version and can
+`/update` checks the codemason GitHub releases for a newer version and can
 replace the running binary. The check runs asynchronously: a "Checking for
 updates..." line appears first, and the result arrives as an event-bus message
 afterwards. `install` downloads the release binary and replaces the current
@@ -12,7 +12,7 @@ executable in place; a restart picks it up.
 
 `install` verifies the downloaded artifact before replacing anything (SEC-043):
 it reads a SHA-256 digest from the release metadata (`digest: sha256:<hex>`, or
-the `RAGENT_UPDATE_SHA256` environment variable) and **refuses the download**
+the `CODEMASON_UPDATE_SHA256` environment variable) and **refuses the download**
 when no digest is available, rather than replacing the running binary with an
 unverified artifact.
 
@@ -48,13 +48,13 @@ Already up to date (v1.0.95).
 
 ```
 From: /update install
-Updated to v1.0.96! Please restart ragent
+Updated to v1.0.96! Please restart codemason
 ```
 
 ```
 From: /update install
 (no platform binary published for the release)
-A manual download is required; see github.com/thawkins/ragent/releases
+A manual download is required; see github.com/thawkins/codemason/releases
 ```
 
 ## Output
@@ -69,4 +69,4 @@ shown instead.
 ## Related
 
 - `/doctor`  -  flags an available update in its report
-- github.com/thawkins/ragent/releases  -  manual downloads
+- github.com/thawkins/codemason/releases  -  manual downloads

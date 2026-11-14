@@ -67,13 +67,13 @@ Command | Scope | Access | Description
   `disable_model_invocation` combine into one of `both`, `user-only`,
   `agent-only`, or `disabled`.
 - If no skills are registered, the output lists the discovery paths instead:
-  personal skills live in `~/.ragent/skills/` and project skills in
-  `.ragent/skills/`.
+  personal skills live in `~/.codemason/skills/` and project skills in
+  `.codemason/skills/`.
 - A footer line reports the registered count, e.g. `N skill(s) registered`.
 
 ## Related
 
 - `/reload skills` - rescan skill directories after edits
 - `Skill` - list/read/load/reload skills from chat
-- `~/.ragent/skills/` - personal (user-global) skill packs
-- `.ragent/skills/` - project-local skill packs (higher priority)
+- `~/.codemason/skills/` - personal (user-global) skill packs
+- `.codemason/skills/` - project-local skill packs (higher priority)

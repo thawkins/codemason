@@ -15,7 +15,7 @@ The `mf_search` tool already runs a multi-engine keyless search pipeline
 (DuckDuckGo + Brave + OpenAlex, plus optional LangSearch / Tavily /
 Perplexity API-backed backends) behind the `SearchEngine` trait. Each
 backend is implemented as a small adapter module under
-`crates/ragent-tools-extended/src/masterfetch/search/` and plugged into
+`crates/codemason-tools-extended/src/masterfetch/search/` and plugged into
 `SearchOrchestrator` by `MfSearchTool::build_orchestrator`.
 
 [Wikipedia](https://www.wikipedia.org) exposes a public REST API at
@@ -46,7 +46,7 @@ URL, a short description, and (when available) a thumbnail URL.
 In scope:
 
 - New `wikipedia` module under
-  `crates/ragent-tools-extended/src/masterfetch/search/`.
+  `crates/codemason-tools-extended/src/masterfetch/search/`.
 - A `WikipediaEngine` struct implementing the existing `SearchEngine`
   trait.
 - A two-step query flow: resolve query → candidate titles via the
@@ -106,7 +106,7 @@ remaining `mf_search` backends continue to return results.
 
 FR-007 (ubiquitous) — Every HTTP request issued by the
 `WikipediaEngine` shall carry a descriptive `User-Agent` header
-identifying the ragent application, so the backend does not receive
+identifying the codemason application, so the backend does not receive
 HTTP 403 from Wikipedia's robot policy.
 
 FR-008 (unwanted) — If the Wikipedia API returns HTTP 429 (rate

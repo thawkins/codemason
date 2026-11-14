@@ -24,12 +24,12 @@ had never run.**
 
 `scripts/check_tool_rename.py` (774 lines, 39 reviewed per-line exemptions) and
 `scripts/check-tool-rename.sh` landed with the rename commit `d6abcd4a`, and
-`crates/ragent-agent/tests/test_tool_rename_guard.rs` (2 cases) landed with them
-and was **tracked by git** - but `crates/ragent-agent/tests/all.rs` had no
+`crates/codemason-agent/tests/test_tool_rename_guard.rs` (2 cases) landed with them
+and was **tracked by git** - but `crates/codemason-agent/tests/all.rs` had no
 `#[path]` line for it, so neither case had ever compiled or run:
 
 ```text
-$ cargo test -p ragent-agent --test all test_tool_rename_guard::
+$ cargo test -p codemason-agent --test all test_tool_rename_guard::
 running 0 tests
 test result: ok. 0 passed; 0 failed;      <-- exit 0, and nothing proved anything
 ```
@@ -61,7 +61,7 @@ Three other defects were found in the same pass:
 
 ### The registration (the defect that mattered)
 
-`crates/ragent-agent/tests/all.rs` gains one line:
+`crates/codemason-agent/tests/all.rs` gains one line:
 
 ```rust
 #[path = "test_tool_rename_guard.rs"]
@@ -114,16 +114,16 @@ are what the guard reports (`--exemptions`), not a recollection.
 
 39 entries, and that is the whole list.
 
-`crates/ragent-config/src/permission.rs` (8 entries) and the permission-class files
+`crates/codemason-config/src/permission.rs` (8 entries) and the permission-class files
 are exactly the class the task names, and FR-028 requires them to stay.
 
-### `crates/ragent-agent/src/agent/oasf.rs` needs **no** entry, and that is the finding
+### `crates/codemason-agent/src/agent/oasf.rs` needs **no** entry, and that is the finding
 
 The task text names the OASF doc list as one of "the only entries expected". It
 needs none, and the guard says so rather than being relaxed to accommodate it:
 
 ```
-$ sed -n '160,161p' crates/ragent-agent/src/agent/oasf.rs
+$ sed -n '160,161p' crates/codemason-agent/src/agent/oasf.rs
     /// Permission type: `"read"`, `"edit"`, `"bash"`, `"web"`, `"ask_user"`,
     /// `"todo"`, `"plan_enter"`, `"plan_exit"`. The legacy `"question"` string
 ```
@@ -158,11 +158,11 @@ byte-identically (`md5sum`-verified against `target/temp/guard_backup.py`,
 
 | # | Proof | Observed |
 |---|---|---|
-| 1 | the memory-tag exemption deleted | exit 1, `(e) crates/ragent-agent/src/memory/extract.rs:525: retired tool spelling "bash" ... migrate to "Bash"` |
+| 1 | the memory-tag exemption deleted | exit 1, `(e) crates/codemason-agent/src/memory/extract.rs:525: retired tool spelling "bash" ... migrate to "Bash"` |
 | 2 | `team/classify.rs`'s entry text changed to a line that does not exist | exit 1, both the unexempted hit **and** `exemption matches no line, so it is unreviewable and its reason is stale` |
 | 3 | that entry's declared literals widened to `("write", "bash")` | exit 1, `exemption '"write",' declares ['write', 'bash'] but the line carries ['write']` |
 | 4 | the entry's literals changed to a spelling that is not retired | exit 1, the hit is reported again (the entry is discarded, not honoured) |
-| 5 | a backticked literal seeded into `crates/ragent-tools-core/src/` | exit 1, `(e) .../__e_probe.rs:1: retired tool spelling "bash"` |
+| 5 | a backticked literal seeded into `crates/codemason-tools-core/src/` | exit 1, `(e) .../__e_probe.rs:1: retired tool spelling "bash"` |
 | 6 | a literal seeded into the root `src/` crate | exit 1, `(e) src/__f_probe.rs:1: retired tool spelling "skill_manage" ... migrate to "Skill"` |
 | 7 | `CHANGELOG.md` dropped from the structural-exemption report | case 3 fails, `the CHANGELOG.md entry must be named as a structural exemption` |
 | 8 | `--exemptions`' declared count incremented by one | case 3 fails, `the listing declares 40 per-line exemptions but printed 39 reason(s) - an entry without a reason is an unreviewable one` |
@@ -189,18 +189,18 @@ failure, because they pin properties whose regression would be *silent*:
 ## Verification
 
 - `cargo fmt --all -- --check`: clean.
-- `cargo clippy -p ragent-agent --all-targets`: no finding in
+- `cargo clippy -p codemason-agent --all-targets`: no finding in
   `test_tool_rename_guard.rs` (only the pre-existing `pub(crate)`-in-a-private-module
-  noise across `ragent-tools-vcs`).
-- `cargo test -p ragent-agent --test all test_tool_rename_guard::`: **4 passed,
+  noise across `codemason-tools-vcs`).
+- `cargo test -p codemason-agent --test all test_tool_rename_guard::`: **4 passed,
   0 failed** (was `running 0 tests`).
-- `cargo test -p ragent-agent --test all`: **1739 passed, 0 failed, 1 ignored**,
+- `cargo test -p codemason-agent --test all`: **1739 passed, 0 failed, 1 ignored**,
   of which 4 are this file's cases. Before the registration the file contributed
   **0** to that total (`running 0 tests`), so it accounts for 4 of the 1739.
 - `bash scripts/check-tool-rename.sh`: exit 0,
   `39 reviewed exemption(s) all match`.
 - `bash scripts/check-tool-rename.sh --self-test`: exit 0, and the seeded fixture
-  is removed (`crates/ragent-tools-core/src/` holds no `__*selftest.rs` after).
+  is removed (`crates/codemason-tools-core/src/` holds no `__*selftest.rs` after).
 - The other eight guards pass: `check-inline-tests`, `check-file-tool-containment`,
   `check-shared-guards`, `check-silent-errors`, `check-security-unwraps`,
   `check-poison-locks`, `check-dead-code-reasons`, `check-test-env-isolation`.
@@ -232,7 +232,7 @@ failure, because they pin properties whose regression would be *silent*:
 5. **`--self-test` seeds a real file inside the scanned tree.** If the run is
    interrupted between `cat > "$seed"` and `rm -f "$seed"`, the next guard run
    reports the fixture. The two invocations are adjacent for this reason; a stale
-   `__tool_rename_guard_selftest.rs` in `crates/ragent-tools-core/src/` means a
+   `__tool_rename_guard_selftest.rs` in `crates/codemason-tools-core/src/` means a
    self-test was killed, not that the tree regressed.
 
 ## Documentation

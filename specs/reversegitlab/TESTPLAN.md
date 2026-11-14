@@ -6,14 +6,14 @@ status: draft
 
 This is a manual test plan for verifying GitLab support and depth-controlled
 tree fetching in the `/reverse` command. All tests are performed by a human in
-the ragent TUI unless noted otherwise.
+the codemason TUI unless noted otherwise.
 
 ## Prerequisites
 
 ### Environment setup
 
-1. A working ragent build from the current branch: run `cargo build` in the
-   project root and confirm `target/debug/ragent` exists.
+1. A working codemason build from the current branch: run `cargo build` in the
+   project root and confirm `target/debug/cdmn` exists.
 2. At least one LLM provider configured (Anthropic, OpenAI, or Ollama) so
    the synthetic prompt generation step can complete. Run `/models` in the
    TUI to confirm a model is available.
@@ -39,7 +39,7 @@ the ragent TUI unless noted otherwise.
 
 Before running GitLab tests, configure GitLab credentials:
 
-1. In the ragent TUI, type `/gitlab setup` and press Enter.
+1. In the codemason TUI, type `/gitlab setup` and press Enter.
 2. In the **Instance URL** field, enter `https://gitlab.com` (or the
    self-hosted instance URL for self-hosted tests).
 3. In the **Token** field, enter the GitLab Personal Access Token.
@@ -53,7 +53,7 @@ Before running GitLab tests, configure GitLab credentials:
    ```
 
 Alternatively, set `GITLAB_TOKEN` and `GITLAB_URL` environment variables
-before launching ragent.
+before launching codemason.
 
 ## Test Cases
 
@@ -64,7 +64,7 @@ before launching ragent.
 **Preconditions:**
 - GitHub token configured
 - LLM provider available
-- ragent running in TUI
+- codemason running in TUI
 
 **Steps:**
 1. Type `/reverse octocat/Hello-World` in the TUI input box.
@@ -321,7 +321,7 @@ before launching ragent.
 **Title:** `/reverse justoneword` shows usage message with all formats
 
 **Preconditions:**
-- ragent running in TUI
+- codemason running in TUI
 
 **Steps:**
 1. Type `/reverse justoneword` in the TUI input box.
@@ -342,7 +342,7 @@ before launching ragent.
 **Title:** `/reverse help` lists both providers and --depth flag
 
 **Preconditions:**
-- ragent running in TUI
+- codemason running in TUI
 
 **Steps:**
 1. Type `/reverse help` in the TUI input box.
@@ -503,7 +503,7 @@ before launching ragent.
 **Title:** `/reverse github:octocat/Hello-World --depth 0` shows range error
 
 **Preconditions:**
-- ragent running in TUI
+- codemason running in TUI
 
 **Steps:**
 1. Type `/reverse github:octocat/Hello-World --depth 0` in the TUI input
@@ -523,7 +523,7 @@ before launching ragent.
 **Title:** `/reverse github:octocat/Hello-World --depth -1` shows range error
 
 **Preconditions:**
-- ragent running in TUI
+- codemason running in TUI
 
 **Steps:**
 1. Type `/reverse github:octocat/Hello-World --depth -1` in the TUI input
@@ -543,7 +543,7 @@ before launching ragent.
 **Title:** `/reverse github:octocat/Hello-World --depth 11` shows range error
 
 **Preconditions:**
-- ragent running in TUI
+- codemason running in TUI
 
 **Steps:**
 1. Type `/reverse github:octocat/Hello-World --depth 11` in the TUI input

@@ -18,12 +18,12 @@ rendered under `## Concepts` in the report layout) and a **Findings** section
 
 Both sections are currently unbounded apart from a soft prompt instruction:
 
-- `CONCEPT_EXTRACTION_PROMPT_TEMPLATE` in `crates/ragent-research/src/cluster.rs`
+- `CONCEPT_EXTRACTION_PROMPT_TEMPLATE` in `crates/codemason-research/src/cluster.rs`
   asks the model for "up to 20 core concepts" but enforces nothing; a model may
   return more or fewer, and the post-processor
   (`format_concepts_md_with_sources`, `concepts_section_for_research`) never
   truncates.
-- The findings list (`AnalysisResult.findings`, `crates/ragent-research/src/analysis.rs`)
+- The findings list (`AnalysisResult.findings`, `crates/codemason-research/src/analysis.rs`)
   is whatever the model emits; `merge_chunk_results` concatenates and renumbers
   but never caps or reorders.
 
@@ -45,7 +45,7 @@ applied, so truncation always discards the least-relevant entries.
    point (root CLI, hand parser, TUI, HTTP `POST /research`).
 3. Order concepts and findings by **reverse relevance** (most relevant first)
    before truncation, so the cap keeps the strongest entries.
-4. Make the limits configurable through `ragent.json` `research.*` with per-run
+4. Make the limits configurable through `codemason.json` `research.*` with per-run
    flag precedence, matching the existing `max_synthesis_sources` pattern.
 5. Keep the default report output stable for callers that do not set the flags
    beyond the newly-capped list lengths; never panic or emit an empty section
@@ -55,19 +55,19 @@ applied, so truncation always discards the least-relevant entries.
 
 In scope:
 
-- `crates/ragent-research/src/analysis.rs` (`AnalysisResult` ordering + cap).
-- `crates/ragent-research/src/session.rs` (`AnalysisConfig`, synthesis and
+- `crates/codemason-research/src/analysis.rs` (`AnalysisResult` ordering + cap).
+- `crates/codemason-research/src/session.rs` (`AnalysisConfig`, synthesis and
   concepts-engine cap application).
-- `crates/ragent-research/src/cluster.rs` (concept-section ordering and
+- `crates/codemason-research/src/cluster.rs` (concept-section ordering and
   truncation; prompt instruction parameterisation).
-- `crates/ragent-research/src/run_request.rs`, `cli.rs`, `run_config.rs`
+- `crates/codemason-research/src/run_request.rs`, `cli.rs`, `run_config.rs`
   (flag plumbing and `SessionConfig` build).
-- `crates/ragent-config/src/config.rs` (`research.max_concepts`,
+- `crates/codemason-config/src/config.rs` (`research.max_concepts`,
   `research.max_findings` defaults).
 - `src/cli.rs` (root clap arguments).
-- `crates/ragent-server/src/routes/research.rs` (HTTP parity + invocation
+- `crates/codemason-server/src/routes/research.rs` (HTTP parity + invocation
   summary).
-- `crates/ragent-tui` (completion/help parity).
+- `crates/codemason-tui` (completion/help parity).
 - Docs (`docs/howtos/research.md`, `docs/howtos/slashcommands/research.md`) and
   CHANGELOG entries.
 
@@ -88,7 +88,7 @@ Out of scope:
   count, then by original model order). A concept's relevance is derived the
   same way from the `[#N]`/`web-NN` citations in its section body.
 - **Effective limit** — the per-run flag value when supplied, otherwise the
-  `ragent.json` `research.*` value, otherwise the built-in default.
+  `codemason.json` `research.*` value, otherwise the built-in default.
 - **Concept section** — one `### N. Name` block inside `ResearchDocument.concepts`.
 
 ## Requirements
@@ -119,7 +119,7 @@ concept limit for a single research run.
 finding limit for a single research run.
 
 **FR-008** — The system shall accept `research.max_concepts` and
-`research.max_findings` keys in `ragent.json`, defaulting to 5 and 20
+`research.max_findings` keys in `codemason.json`, defaulting to 5 and 20
 respectively.
 
 **FR-009** — The system shall preserve the existing `## Concepts` and
@@ -163,7 +163,7 @@ system shall treat the limit as "unbounded" and apply no truncation, matching th
 `0 disables the cap` convention already used by `--search-max-retries`.
 
 **FR-017** — Where `research.max_concepts` / `research.max_findings` are
-configured in `ragent.json`, the system shall use them in preference to the
+configured in `codemason.json`, the system shall use them in preference to the
 built-in defaults for runs that do not pass the corresponding flag.
 
 **FR-018** — Where the concept-extraction engine is not wired (no LLM concepts
@@ -204,8 +204,8 @@ keep `RESEARCH.md` byte-stable for the no-findings and no-concepts cases.
 CHANGELOG entry.
 
 **NFR-004** — Code shall pass `cargo fmt --check`, `cargo clippy` (no new
-warnings), and the existing `ragent-research`, `ragent-config`, `ragent-server`,
-and `ragent-tui` test suites.
+warnings), and the existing `codemason-research`, `codemason-config`, `codemason-server`,
+and `codemason-tui` test suites.
 
 ## Acceptance Criteria
 
@@ -215,7 +215,7 @@ and `ragent-tui` test suites.
    findings (when that many are available), and the retained entries are the
    highest-relevance ones.
 3. `--max-concepts 0` and `--max-findings 0` produce no truncation.
-4. `research.max_concepts` / `research.max_findings` in `ragent.json` change the
+4. `research.max_concepts` / `research.max_findings` in `codemason.json` change the
    default for runs without the corresponding flag.
 5. `POST /research` accepts `max_concepts` / `max_findings` and the invocation
    summary round-trips them.

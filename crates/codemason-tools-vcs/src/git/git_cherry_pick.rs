@@ -1,0 +1,98 @@
+//! `git_cherry_pick` - Apply changes from specific commits.
+
+use anyhow::Result;
+use serde_json::{Value, json};
+
+use crate::{Tool, ToolContext, ToolOutput};
+
+/// Tool that applies changes from specific commits.
+pub struct GitCherryPickTool;
+
+#[async_trait::async_trait]
+impl Tool for GitCherryPickTool {
+    fn name(&self) -> &'static str {
+        "git_cherry_pick"
+    }
+
+    fn description(&self) -> &'static str {
+        "Apply the changes introduced by one or more existing commits onto the current branch. \
+         Required parameter: 'commits' (array of commit hash strings). \
+         Optional: 'no_commit' (boolean, default false) to apply changes to the working tree/index without creating a commit. \
+         Common gotcha: the first element of 'commits' must be a valid commit hash or ref; empty arrays are rejected."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "commits": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Commit hashes to cherry-pick (required)"
+                },
+                "no_commit": {
+                    "type": "boolean",
+                    "description": "Apply changes without committing (git cherry-pick -n) (default: false)"
+                }
+            },
+            "required": ["commits"]
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "git:write"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let commits = input["commits"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("'commits' array is required."))?;
+
+        if commits.is_empty() {
+            return Err(anyhow::anyhow!("'commits' array is empty."));
+        }
+
+        let no_commit = input["no_commit"].as_bool().unwrap_or(false);
+
+        let mut args: Vec<String> = vec!["cherry-pick".to_string()];
+
+        if no_commit {
+            args.push("-n".to_string());
+        }
+
+        for c in commits {
+            if let Some(hash) = c.as_str() {
+                // SEC-codemason-tools-vcs-00x (ANTIPAT A-1): a commit operand that
+                // begins with `-` would be parsed by git as an option.
+                crate::git::reject_option_like(hash, "commits[]")?;
+                args.push(hash.to_string());
+            }
+        }
+
+        let (stdout, stderr) = crate::git::run_git_async(args, ctx.working_dir.clone()).await?;
+
+        if !stderr.is_empty() && stdout.trim().is_empty() {
+            return Ok(ToolOutput {
+                content: format!("git cherry-pick error: {}", stderr.trim()),
+                metadata: None,
+            });
+        }
+
+        let content = if stdout.trim().is_empty() {
+            let count = commits.len();
+            if no_commit {
+                format!("Applied changes from {count} commit(s) without committing.")
+            } else {
+                format!("Cherry-picked {count} commit(s).")
+            }
+        } else {
+            stdout
+        };
+
+        Ok(ToolOutput {
+            content,
+            metadata: None,
+        })
+    }
+}

@@ -31,7 +31,7 @@ exact target: `left-click the Agents button beside the message input`.
    buttons, wheel scrolling and scrollbar-gutter dragging (TC-027, TC-034); TC-013 is
    the keyboard-only case and needs no mouse reporting at all.
 4. **Prepare a scratch root.** Create `~/scratch/agentui-tests/` and run every session
-   from inside it so the project `.ragent/` directory is local to the test.
+   from inside it so the project `.codemason/` directory is local to the test.
 5. **Know how to produce a background shell task.** Ask the agent to run a long command,
    e.g. `sleep 45` through the bash tool, so a background task row exists for a while.
 6. **Know how to produce a sub-agent.** Ask the agent to spawn a sub-agent, e.g.

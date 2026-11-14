@@ -7,15 +7,15 @@ audit:
   - { time: 1794443738, from: "approved", to: "in_progress", actor: "cli" }
   - { time: 1794443738, from: "in_progress", to: "implemented", actor: "cli" }
 ---
-# SPEC: Open Deep Research feature-gap integration into ragent
+# SPEC: Open Deep Research feature-gap integration into codemason
 
 ## Context
 
-LangChain's [Open Deep Research (ODR)](https://github.com/langchain-ai/open_deep_research) is an open-source deep-research agent that uses a multi-agent supervisor/researcher architecture to produce comprehensive reports. It scored competitively on the [Deep Research Bench leaderboard](https://huggingface.co/spaces/Ayanami0730/DeepResearch-Leaderboard). This specification identifies the feature gaps between ODR and ragent's existing `/research` tooling and defines the requirements to close those gaps inside ragent. The user is especially interested in competitive analysis capabilities.
+LangChain's [Open Deep Research (ODR)](https://github.com/langchain-ai/open_deep_research) is an open-source deep-research agent that uses a multi-agent supervisor/researcher architecture to produce comprehensive reports. It scored competitively on the [Deep Research Bench leaderboard](https://huggingface.co/spaces/Ayanami0730/DeepResearch-Leaderboard). This specification identifies the feature gaps between ODR and codemason's existing `/research` tooling and defines the requirements to close those gaps inside codemason. The user is especially interested in competitive analysis capabilities.
 
 ## Goals
 
-1. Add a clarification phase so ragent can resolve ambiguous research scope before expensive web searches begin.
+1. Add a clarification phase so codemason can resolve ambiguous research scope before expensive web searches begin.
 2. Generate an explicit research brief from the user's prompt so downstream agents have a concrete, detailed mission.
 3. Introduce a supervisor/researcher multi-agent research mode that can delegate independent sub-topics in parallel.
 4. Add a dedicated competitive-analysis research mode that produces structured comparison tables and per-entity profiles.
@@ -27,8 +27,8 @@ LangChain's [Open Deep Research (ODR)](https://github.com/langchain-ai/open_deep
 
 1. Port ODR's Python code verbatim or depend on LangGraph/LangChain.
 2. Add a hosted LangGraph Studio-style UI.
-3. Add new paid search APIs that require separate subscriptions beyond what ragent already supports.
-4. Replace ragent's existing tiered research pipeline; this spec extends it.
+3. Add new paid search APIs that require separate subscriptions beyond what codemason already supports.
+4. Replace codemason's existing tiered research pipeline; this spec extends it.
 
 ## Requirements
 
@@ -40,7 +40,7 @@ LangChain's [Open Deep Research (ODR)](https://github.com/langchain-ai/open_deep
 
 **FR-003** While a research run is in progress, the system SHALL persist every summarized source to the existing research vault so downstream agents and evaluation tools can reuse them.
 
-**FR-004** While the final report is generated, the system SHALL cite sources using the existing ragent citation format and reference the original URLs, even when a summarized version was used for synthesis.
+**FR-004** While the final report is generated, the system SHALL cite sources using the existing codemason citation format and reference the original URLs, even when a summarized version was used for synthesis.
 
 ### Event-driven requirements
 
@@ -62,13 +62,13 @@ LangChain's [Open Deep Research (ODR)](https://github.com/langchain-ai/open_deep
 
 ### Optional requirements
 
-**FR-012** The user MAY configure `research.supervisor.max_concurrent_research_units` in `ragent.json` to limit parallel researchers (default: 5).
+**FR-012** The user MAY configure `research.supervisor.max_concurrent_research_units` in `codemason.json` to limit parallel researchers (default: 5).
 
-**FR-013** The user MAY configure `research.models.research_model`, `research.models.compression_model`, and `research.models.final_report_model` in `ragent.json` to use distinct models for each phase.
+**FR-013** The user MAY configure `research.models.research_model`, `research.models.compression_model`, and `research.models.final_report_model` in `codemason.json` to use distinct models for each phase.
 
 **FR-014** The user MAY invoke `/research --mode competitive --format comparison-table` to request a shorter artifact that contains only the comparison table and entity profiles.
 
-**FR-015** The user MAY enable self-evaluation with `--evaluate` or `research.evaluate.enabled: true` in `ragent.json`.
+**FR-015** The user MAY enable self-evaluation with `--evaluate` or `research.evaluate.enabled: true` in `codemason.json`.
 
 ### Unwanted requirements
 
@@ -86,7 +86,7 @@ LangChain's [Open Deep Research (ODR)](https://github.com/langchain-ai/open_deep
 - **supervisor/researcher graph**: an execution mode where a lead agent plans and delegates sub-research tasks to worker agents that each produce compressed findings.
 - **competitive analysis mode**: a specialization of the supervisor/researcher graph where sub-researchers are assigned to individual entities in a comparison set.
 - **research brief**: a detailed, first-person research question derived from the user's prompt that guides all downstream agents.
-- **source vault**: the existing persistent source store used by ragent research runs.
+- **source vault**: the existing persistent source store used by codemason research runs.
 
 ## Acceptance criteria
 
@@ -98,6 +98,6 @@ LangChain's [Open Deep Research (ODR)](https://github.com/langchain-ai/open_deep
 
 ## Notes
 
-- The existing `ragent-research` crate already contains `ResearchRunRequest`, `Tier`, `OutputFormat`, `WebGatherer`, source vaults, and the tier router. The new modes should extend these modules rather than replace them.
+- The existing `codemason-research` crate already contains `ResearchRunRequest`, `Tier`, `OutputFormat`, `WebGatherer`, source vaults, and the tier router. The new modes should extend these modules rather than replace them.
 - The existing `mf_fetch` / `mf_search` infrastructure can fetch and search the web. Per-page summarization should invoke the configured lightweight LLM after fetching, if no lightweight LLM model is provided then it should use the currently selected model.
-- The existing `ragent-llm` provider registry can resolve model names such as `openai:gpt-4.1-mini`.
+- The existing `codemason-llm` provider registry can resolve model names such as `openai:gpt-4.1-mini`.

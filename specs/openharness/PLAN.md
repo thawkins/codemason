@@ -11,7 +11,7 @@ This plan implements the `openharness` specification
 the OpenHarness research (`research/openharness/RESEARCH.md`):
 
 1. **Hook exit-code semantics** — `PreToolUse`/`PostToolUse` hooks that block on
-   exit code 2, warn on exit code 1, and error on ≥3, layered on ragent's
+   exit code 2, warn on exit code 1, and error on ≥3, layered on codemason's
    existing JSON-decision hooks (FR-002 – FR-004, FR-016).
 2. **Dry-run readiness mode** — a `--dry-run` / `config check` flow that
    previews resolved config, auth, skills, tools, and MCP servers and emits a
@@ -25,14 +25,14 @@ the OpenHarness research (`research/openharness/RESEARCH.md`):
 5. **MCP HTTP transport** — an `http` transport variant for MCP servers with
    auto-reconnect (FR-013 – FR-014).
 
-All work targets existing crates (`ragent-agent`, `ragent-config`,
-`ragent-types`, `ragent-tui`, `src/cli.rs`). No new external crate
+All work targets existing crates (`codemason-agent`, `codemason-config`,
+`codemason-types`, `codemason-tui`, `src/cli.rs`). No new external crate
 dependencies are introduced (NFR-002).
 
 ## Architecture
 
 ```
-crates/ragent-agent/src/
+crates/codemason-agent/src/
 ├── hooks/
 │   └── mod.rs                  # + Blocked/Flagged/Warn variants, exit-code parsing
 ├── skill/
@@ -44,13 +44,13 @@ crates/ragent-agent/src/
 ├── session/
 │   └── processor.rs            # + publish RunCostSummary at run end
 
-crates/ragent-types/src/
+crates/codemason-types/src/
 └── event.rs                    # + HookWarning, ToolResultFlagged, RunCostSummary
 
-crates/ragent-config/src/
+crates/codemason-config/src/
 └── config.rs                   # + models.prices: Vec<PriceEntry>
 
-crates/ragent-tui/src/
+crates/codemason-tui/src/
 └── app/                        # + RunCostSummary banner, HookWarning toast
 
 src/cli.rs                      # + --dry-run flag, config check subcommand
@@ -76,7 +76,7 @@ run_pre_tool_use_hooks(hooks, wd, tool_name, tool_input)
 ### Data flow — dry run
 
 ```
-ragent --dry-run [--json]
+codemason --dry-run [--json]
       │
       ▼
 load + merge all config layers ──► report parse errors (file:line:col)
@@ -106,18 +106,18 @@ Verdict: READY / WARNING / BLOCKED  ──► stdout (or JSON) + exit code 0/1
 | T-001 | Add `PreToolUseResult::Blocked { reason }` variant and parse exit codes 1/2/≥3 in `run_pre_tool_use_hooks`; stdout JSON ignored when exit 2 | FR-002, FR-003, FR-016 | M | Critical | completed | — |
 | T-002 | Add `PostToolUseResult` enum (`Ok`, `Flagged { reason }`, `Warn { message }`) and parse exit codes 1/2 in `run_post_tool_use_hooks`; publish `Event::HookWarning` (1) and `Event::ToolResultFlagged` (2) | FR-004, FR-016 | M | High | completed | T-001 |
 | T-003 | Treat hook spawn failure / timeout as exit ≥3 (hook error) with `tracing::error!`; fall through to normal permission flow so a broken hook cannot lock out tools | FR-016 | S | Critical | completed | T-001 |
-| T-004 | Add `Event::HookWarning { session_id, tool_name, command, message }` and `Event::ToolResultFlagged { session_id, tool_name, reason }` to `ragent-types::event` | FR-002, FR-004 | S | High | completed | T-001 |
+| T-004 | Add `Event::HookWarning { session_id, tool_name, command, message }` and `Event::ToolResultFlagged { session_id, tool_name, reason }` to `codemason-types::event` | FR-002, FR-004 | S | High | completed | T-001 |
 | T-005 | Unit tests for `PreToolUse` exit codes 1, 2, 3, and 0 with JSON decision, using fixture hook scripts in a temp dir | FR-002, FR-003, NFR-003 | M | Critical | completed | T-001 |
 | T-006 | Unit tests for `PostToolUse` exit codes 1 and 2, asserting `Event::HookWarning` and `Event::ToolResultFlagged` are emitted | FR-004, NFR-003 | S | High | completed | T-002, T-004 |
 | T-007 | Add `SkillCatalogEntry { name, description, trigger, scope }` and `SkillRegistry::catalog() -> Vec<SkillCatalogEntry>` that derives entries from already-loaded skill metadata without reading bodies | FR-007, FR-009 | M | High | completed | — |
 | T-008 | Update `build_system_prompt*` functions to inject the `SkillCatalog` (compact list) instead of full skill bodies at startup; cache invoked skill bodies in a per-session `HashMap<String, String>` loaded on demand | FR-007, FR-008 | M | High | completed | T-007 |
 | T-009 | Unit test: `SkillRegistry::catalog()` returns correct entries and does not touch skill body files (assert via a temp-dir registry with spy reads); unit test: `invoke_skill` loads the body on demand and caches it | FR-007, FR-008, FR-009, NFR-003 | M | High | completed | T-007, T-008 |
-| T-010 | Create `crates/ragent-agent/src/cost/mod.rs` with `RunCostSummary` struct, `PriceTable` (`HashMap<&'static str, (f64, f64)>`), built-in price entries for Anthropic/OpenAI/Gemini/Ollama, and `compute_run_cost(usage_log, prices) -> RunCostSummary` | FR-010, FR-011, NFR-002 | M | High | completed | — |
-| T-011 | Add `models.prices: Vec<PriceEntry>` to `ragent-config::Config` with serde default + merge-overlay; `PriceEntry { model, input_per_1m, output_per_1m }` overrides built-in table | FR-011 | S | Medium | completed | T-010 |
+| T-010 | Create `crates/codemason-agent/src/cost/mod.rs` with `RunCostSummary` struct, `PriceTable` (`HashMap<&'static str, (f64, f64)>`), built-in price entries for Anthropic/OpenAI/Gemini/Ollama, and `compute_run_cost(usage_log, prices) -> RunCostSummary` | FR-010, FR-011, NFR-002 | M | High | completed | — |
+| T-011 | Add `models.prices: Vec<PriceEntry>` to `codemason-config::Config` with serde default + merge-overlay; `PriceEntry { model, input_per_1m, output_per_1m }` overrides built-in table | FR-011 | S | Medium | completed | T-010 |
 | T-012 | At session run end (agent loop exit), accumulate `Usage` records, call `compute_run_cost`, and publish `Event::RunCostSummary` on the event bus | FR-010 | S | High | completed | T-010, T-004 |
 | T-013 | TUI: on `Event::RunCostSummary`, render a one-line `⟡ run complete · {in}+{out} tokens · ${cost} · {dur}s` banner (dismiss on keypress) and log full summary to the log panel | FR-012 | S | Medium | completed | T-012 |
 | T-014 | Unit tests for `compute_run_cost`: known usage + known prices → expected cost; unknown model → cost 0.0; empty usage → zero summary | FR-010, FR-011, NFR-003 | S | High | completed | T-010 |
-| T-015 | Create `crates/ragent-agent/src/mcp/http.rs` with `HttpMcpClient` that sends JSON-RPC over `reqwest::Client` to a configured `url` with optional `headers` map; implement the existing MCP client trait | FR-013 | L | High | completed | — |
+| T-015 | Create `crates/codemason-agent/src/mcp/http.rs` with `HttpMcpClient` that sends JSON-RPC over `reqwest::Client` to a configured `url` with optional `headers` map; implement the existing MCP client trait | FR-013 | L | High | completed | — |
 | T-016 | Wire `HttpMcpClient` into the MCP server loader: when a config entry has `"transport": "http"` + `url`, instantiate `HttpMcpClient` instead of the stdio child process; default to `stdio` when `transport` is absent | FR-013 | S | High | completed | T-015 |
 | T-017 | Implement auto-reconnect for `HttpMcpClient`: on network error or non-2xx, retry up to 3 times with 1s/2s/4s backoff, then mark `disconnected` + `tracing::warn!`; retry on next tool invocation targeting that server | FR-014 | M | Medium | completed | T-015 |
 | T-018 | Integration test for HTTP MCP transport using a local mock HTTP server (existing `httptest`/`wiremock` dev-dep): assert tool listing + tool call round-trip; test reconnect after a forced 503 | FR-013, FR-014, NFR-003 | M | High | completed | T-016, T-017 |
@@ -129,12 +129,12 @@ Verdict: READY / WARNING / BLOCKED  ──► stdout (or JSON) + exit code 0/1
 | T-024 | Ensure `RunCostSummary` is omitted from session export JSON by default; add an opt-in `include_cost` flag to the export path | FR-018 | S | Low | completed | T-012 |
 | T-025 | Create `docs/howtos/howto_hooks.md` documenting exit-code convention (2=block, 1=warn, ≥3=error) and the JSON-decision protocol side by side with examples | FR-015, NFR-004 | S | Medium | completed | T-001, T-002 |
 | T-026 | Update `QUICKSTART.md` with a `--dry-run` usage example and a `--dry-run --json` CI example; update `SPEC.md` harness section to reference `SkillCatalog` and `RunCostSummary` | NFR-004 | S | Low | completed | T-020 |
-| T-027 | Run `cargo test`, `cargo clippy`, `cargo fmt --check`, `cargo test -p ragent-agent`, `cargo test -p ragent-config`, `cargo test -p ragent-tui` to confirm no regressions | NFR-001, NFR-002 | S | Critical | completed | T-001–T-026 |
+| T-027 | Run `cargo test`, `cargo clippy`, `cargo fmt --check`, `cargo test -p codemason-agent`, `cargo test -p codemason-config`, `cargo test -p codemason-tui` to confirm no regressions | NFR-001, NFR-002 | S | Critical | completed | T-001–T-026 |
 ## Risks & Mitigations
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|------------|--------|------------|
-| Exit-code blocking changes break existing `ragent.json` hook configs that exit non-zero while returning JSON allow decisions | Medium | High | FR-003 makes exit 2 absolute; exit 0 + JSON is unchanged. Test with existing config fixtures. |
+| Exit-code blocking changes break existing `codemason.json` hook configs that exit non-zero while returning JSON allow decisions | Medium | High | FR-003 makes exit 2 absolute; exit 0 + JSON is unchanged. Test with existing config fixtures. |
 | `SkillCatalog` deferral breaks an existing caller that reads skill bodies at startup | Low | Medium | FR-009 preserves `SkillRegistry` API; `catalog()` is additive. Audit `build_system_prompt*` callers. |
 | Price table goes stale as providers change pricing | High | Low | FR-011 allows `models.prices` config override for hot-fixes; table is per-release. |
 | MCP HTTP transport reconnect storm degrades UX | Low | Medium | FR-014 caps retries at 3 with backoff and marks server `disconnected` until next targeted invocation. |

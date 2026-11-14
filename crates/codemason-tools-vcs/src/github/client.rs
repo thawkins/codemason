@@ -1,0 +1,1099 @@
+//! GitHub API client.
+
+use anyhow::{Context, Result, bail};
+use serde_json::Value;
+
+use crate::vcs_error::{VcsStatus, classify_status};
+
+/// GitHub OAuth App client ID for codemason.
+///
+/// Override via the `CODEMASON_GITHUB_CLIENT_ID` environment variable, or set in
+/// `~/.codemason/config.toml` as `github_client_id`. Requires a registered
+/// GitHub OAuth App - see docs/github-oauth.md.
+///
+/// This value is shared with the GitHub Copilot provider, which already
+/// performs GitHub OAuth device flow. Using the same OAuth application keeps
+/// the login experience consistent across VCS tools and Copilot.
+const GITHUB_CLIENT_ID_DEFAULT: &str = "Iv1.b507a08c87ecfe98";
+
+/// Typed repository metadata extracted from `GET /repos/{owner}/{repo}`.
+///
+/// All string fields default to an empty string when the API response omits
+/// them, so callers can rely on non-`None` values. `topics` defaults to an
+/// empty vector. `stargazers_count` defaults to `0`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RepoMetadata {
+    /// Repository description (may be empty if the repo has none).
+    pub description: String,
+    /// Primary programming language reported by GitHub (may be empty).
+    pub language: String,
+    /// Repository topics (labels).
+    pub topics: Vec<String>,
+    /// Number of stars (stargazers count).
+    pub stargazers_count: u64,
+    /// Default branch name (e.g. `main`, `master`).
+    pub default_branch: String,
+}
+
+impl RepoMetadata {
+    /// Parse a `GET /repos/{owner}/{repo}` JSON response into [`RepoMetadata`].
+    ///
+    /// Missing optional fields default to empty strings / `0` / empty vector.
+    #[must_use]
+    pub fn from_response(value: &Value) -> Self {
+        let description = value
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let language = value
+            .get("language")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let topics = value
+            .get("topics")
+            .and_then(|t| t.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let stargazers_count = value
+            .get("stargazers_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let default_branch = value
+            .get("default_branch")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        Self {
+            description,
+            language,
+            topics,
+            stargazers_count,
+            default_branch,
+        }
+    }
+}
+
+/// Lightweight authenticated GitHub API client.
+///
+/// The `base_url` defaults to `https://api.github.com` but can be overridden
+/// via [`GitHubClient::with_base_url`] (primarily for tests that point the
+/// client at a local mock server).
+#[derive(Clone)]
+pub struct GitHubClient {
+    token: String,
+    client: reqwest::Client,
+    base_url: String,
+}
+
+impl GitHubClient {
+    /// Create a new client, resolving the token from environment/file.
+    pub fn new() -> Result<Self> {
+        let token = super::auth::load_token()
+            .context("No GitHub token found. Run /github login to authenticate.")?;
+        Ok(Self {
+            token,
+            client: crate::http_client::shared_client(),
+            base_url: "https://api.github.com".to_string(),
+        })
+    }
+
+    /// Create from an explicit token, using the default GitHub API base URL.
+    #[must_use]
+    pub fn with_token(token: String) -> Self {
+        Self {
+            token,
+            client: crate::http_client::shared_client(),
+            base_url: "https://api.github.com".to_string(),
+        }
+    }
+
+    /// Create from an explicit base URL and token. The `base_url` should not
+    /// have a trailing slash (it is trimmed if present). Used by tests to
+    /// point the client at a local mock server.
+    #[must_use]
+    pub fn with_base_url(base_url: String, token: String) -> Self {
+        Self {
+            token,
+            client: crate::http_client::shared_client(),
+            base_url: base_url.trim_end_matches('/').to_string(),
+        }
+    }
+
+    /// The OAuth App client ID used for device flow login.
+    /// Resolved from `CODEMASON_GITHUB_CLIENT_ID` env var, falling back to the compiled default.
+    #[must_use]
+    pub fn client_id() -> String {
+        std::env::var("CODEMASON_GITHUB_CLIENT_ID")
+            .unwrap_or_else(|_| GITHUB_CLIENT_ID_DEFAULT.to_string())
+    }
+
+    /// Resolve a request URL against the configured `base_url`.
+    ///
+    /// FUNC-062: `post`/`put`/`patch` previously hardcoded `api.github.com`,
+    /// silently bypassing a configured GitHub Enterprise host. All verbs now
+    /// route through this helper so `with_base_url` (and mock servers) apply
+    /// consistently. An absolute `https://` path is used verbatim.
+    fn resolve_url(&self, path: &str) -> String {
+        // Accept either absolute-http(s) URL so mock/test servers and
+        // http-only GitHub Enterprise installs are honored as-is instead
+        // of being concatenated to the default base URL.
+        if codemason_types::strutil::is_http_url(path) {
+            path.to_string()
+        } else {
+            format!("{}{path}", self.base_url)
+        }
+    }
+
+    /// Build a request with the standard GitHub API headers attached.
+    ///
+    /// Centralises the `Authorization`, `Accept`, and `User-Agent` headers that
+    /// every authenticated GitHub call shares, so each verb only supplies its
+    /// method, URL, and body.
+    fn request(&self, method: reqwest::Method, url: &str) -> reqwest::RequestBuilder {
+        self.client
+            .request(method, url)
+            .header(
+                "Authorization",
+                codemason_types::strutil::bearer_auth_header(&self.token),
+            )
+            .header("Accept", "application/vnd.github.v3+json")
+            .header("User-Agent", "codemason/0.1")
+    }
+
+    /// GET request to the GitHub API.
+    pub async fn get(&self, path: &str) -> Result<Value> {
+        let url = self.resolve_url(path);
+
+        let resp = self
+            .request(reqwest::Method::GET, &url)
+            .send()
+            .await
+            .with_context(|| format!("GitHub GET {path} failed"))?;
+
+        self.handle_response(resp, path).await
+    }
+
+    /// POST request to the GitHub API.
+    pub async fn post(&self, path: &str, body: &Value) -> Result<Value> {
+        let url = self.resolve_url(path);
+        let resp = self
+            .request(reqwest::Method::POST, &url)
+            .json(body)
+            .send()
+            .await
+            .with_context(|| format!("GitHub POST {path} failed"))?;
+
+        self.handle_response(resp, path).await
+    }
+
+    /// PUT request to the GitHub API.
+    pub async fn put(&self, path: &str, body: &Value) -> Result<Value> {
+        let url = self.resolve_url(path);
+        let resp = self
+            .request(reqwest::Method::PUT, &url)
+            .json(body)
+            .send()
+            .await
+            .with_context(|| format!("GitHub PUT {path} failed"))?;
+
+        self.handle_response(resp, path).await
+    }
+
+    /// PATCH request to the GitHub API.
+    pub async fn patch(&self, path: &str, body: &Value) -> Result<Value> {
+        let url = self.resolve_url(path);
+        let resp = self
+            .request(reqwest::Method::PATCH, &url)
+            .json(body)
+            .send()
+            .await
+            .with_context(|| format!("GitHub PATCH {path} failed"))?;
+
+        self.handle_response(resp, path).await
+    }
+
+    /// Map a non-success HTTP status onto the shared provider-specific error
+    /// shape via [`classify_status`].
+    ///
+    /// Classifies via the shared shape rule (T-308): a 429 is always a rate
+    /// limit; a 403 is a rate limit only when the quota is exhausted
+    /// (`x-ratelimit-remaining: 0`), otherwise an ordinary permission denial
+    /// matching the GitLab client (ANTIPAT.md I-5). `Other` statuses return
+    /// `Ok(())` so the caller can surface its own generic error.
+    fn check_status(
+        &self,
+        status: reqwest::StatusCode,
+        headers: &reqwest::header::HeaderMap,
+        path: &str,
+    ) -> Result<()> {
+        let rate_remaining = headers
+            .get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u32>().ok());
+
+        match classify_status(status.as_u16(), rate_remaining) {
+            VcsStatus::RateLimited => {
+                let reset_str = headers
+                    .get("x-ratelimit-reset")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("unknown");
+                bail!("GitHub rate limit exceeded. Resets at epoch {reset_str}. Path: {path}");
+            }
+            VcsStatus::PermissionDenied => {
+                bail!("GitHub permission denied for {path}. Check your token scopes.");
+            }
+            VcsStatus::Unauthorized => {
+                bail!("GitHub authentication failed. Run /github login to re-authenticate.");
+            }
+            VcsStatus::Other => {}
+        }
+        Ok(())
+    }
+
+    async fn handle_response(&self, resp: reqwest::Response, path: &str) -> Result<Value> {
+        let status = resp.status();
+        self.check_status(status, resp.headers(), path)?;
+
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            bail!("GitHub API error {status} for {path}: {body}");
+        }
+
+        let json: Value = resp
+            .json()
+            .await
+            .with_context(|| format!("Failed to parse GitHub response for {path}"))?;
+        Ok(json)
+    }
+
+    /// GET request returning raw bytes (follows redirects). Used for
+    /// endpoints that serve binary blobs such as the Actions logs zip.
+    pub async fn get_bytes(&self, path: &str) -> Result<Vec<u8>> {
+        let url = self.resolve_url(path);
+        // SEC-codemason-tools-vcs-005 (SECTASKS T-034): attach the Bearer token
+        // only when the resolved URL is the configured API origin. The URL can
+        // come from response *content* (the README `download_url`), so without
+        // this check a compromised or hostile GitHub Enterprise instance could
+        // direct the user's PAT to an attacker-controlled host.
+        let same_origin = same_origin_as(&url, &self.base_url);
+        // SEC-033: a cross-origin URL here comes from response *content* (an
+        // API-supplied `download_url`), so even a token-less fetch is SSRF.
+        // Refuse it entirely rather than issuing an unauthenticated request.
+        if !same_origin {
+            bail!(
+                "GitHub: refusing to fetch a cross-origin URL {url} (not under {})",
+                self.base_url
+            );
+        }
+        let request = self.request(reqwest::Method::GET, &url);
+        let resp = request
+            .header("Accept", "application/vnd.github.v3+json")
+            .header("User-Agent", "codemason/0.1")
+            .send()
+            .await
+            .with_context(|| format!("GitHub GET (bytes) {path} failed"))?;
+
+        let status = resp.status();
+        self.check_status(status, resp.headers(), path)?;
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            bail!("GitHub API error {status} for {path}: {body}");
+        }
+        let bytes = resp
+            .bytes()
+            .await
+            .with_context(|| format!("Failed to read GitHub bytes for {path}"))?;
+        Ok(bytes.to_vec())
+    }
+
+    /// GET request returning raw bytes, capped at `limit` during the download.
+    ///
+    /// SEC-032: unlike [`Self::get_bytes`], the body is streamed and the read
+    /// stops once `limit` bytes have arrived, so a hostile endpoint cannot force
+    /// an unbounded buffer. Refuses a cross-origin URL like `get_bytes`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a cross-origin URL, a non-success status, or a body
+    /// that exceeds `limit`.
+    pub async fn get_bytes_limited(&self, path: &str, limit: usize) -> Result<Vec<u8>> {
+        let url = self.resolve_url(path);
+        if !same_origin_as(&url, &self.base_url) {
+            bail!(
+                "GitHub: refusing to fetch a cross-origin URL {url} (not under {})",
+                self.base_url
+            );
+        }
+        let resp = self
+            .request(reqwest::Method::GET, &url)
+            .header("Accept", "application/vnd.github.v3+json")
+            .header("User-Agent", "codemason/0.1")
+            .send()
+            .await
+            .with_context(|| format!("GitHub GET (limited) {path} failed"))?;
+        let status = resp.status();
+        self.check_status(status, resp.headers(), path)?;
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            bail!("GitHub API error {status} for {path}: {body}");
+        }
+        let mut stream = resp.bytes_stream();
+        use futures::StreamExt as _;
+        let mut out: Vec<u8> = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.with_context(|| format!("Failed to read GitHub bytes for {path}"))?;
+            if out.len() + chunk.len() > limit {
+                bail!("GitHub response for {path} exceeded the {limit}-byte cap");
+            }
+            out.extend_from_slice(&chunk);
+        }
+        Ok(out)
+    }
+
+    /// GET request returning only the last `limit` bytes of the body
+    /// (follows redirects), for logs whose tail is all that is needed. The
+    /// body is streamed, so a huge log never sits in memory whole. Refuses
+    /// a cross-origin URL like [`Self::get_bytes`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a cross-origin URL, a non-success status, or a
+    /// body-read failure.
+    pub async fn get_bytes_tail(&self, path: &str, limit: usize) -> Result<Vec<u8>> {
+        let url = self.resolve_url(path);
+        if !same_origin_as(&url, &self.base_url) {
+            bail!(
+                "GitHub: refusing to fetch a cross-origin URL {url} (not under {})",
+                self.base_url
+            );
+        }
+        let resp = self
+            .request(reqwest::Method::GET, &url)
+            .header("Accept", "application/vnd.github.v3+json")
+            .header("User-Agent", "codemason/0.1")
+            .send()
+            .await
+            .with_context(|| format!("GitHub GET (tail) {path} failed"))?;
+        let status = resp.status();
+        self.check_status(status, resp.headers(), path)?;
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            bail!("GitHub API error {status} for {path}: {body}");
+        }
+        crate::http_client::read_tail(resp, limit)
+            .await
+            .with_context(|| format!("Failed to read GitHub bytes for {path}"))
+    }
+
+    /// Get the authenticated user's profile.
+    pub async fn current_user(&self) -> Result<Value> {
+        self.get("/user").await
+    }
+
+    /// Detect the GitHub owner/repo from the current git repository remote.
+    #[must_use]
+    pub fn detect_repo(working_dir: &std::path::Path) -> Option<(String, String)> {
+        // FUNC-050: use the timeout-bounded git runner so a hung
+        // credential/network prompt cannot block the caller indefinitely.
+        let output =
+            crate::git::run_git_output(&["remote", "get-url", "origin"], working_dir).ok()?;
+        if !output.success {
+            return None;
+        }
+        let url = String::from_utf8(output.stdout).ok()?;
+        let url = url.trim();
+
+        // Parse: git@github.com:owner/repo.git  or  https://github.com/owner/repo
+        let path = if url.contains("github.com:") {
+            url.split("github.com:").nth(1)?
+        } else if url.contains("github.com/") {
+            url.split("github.com/").nth(1)?
+        } else {
+            return None;
+        };
+
+        let path = path.trim_end_matches(".git");
+        let mut parts = path.splitn(2, '/');
+        let owner = parts.next()?.to_string();
+        let repo = parts.next()?.to_string();
+        Some((owner, repo))
+    }
+
+    /// Parse a user-supplied repository identifier into an `(owner, repo)` pair.
+    ///
+    /// Accepts three forms:
+    /// - Full HTTPS URL: `https://github.com/owner/repo`
+    /// - SSH URL: `git@github.com:owner/repo.git`
+    /// - Shorthand: `owner/repo`
+    ///
+    /// Trailing slashes, trailing `.git`, and optional query-string fragments
+    /// are stripped. Returns `None` if the identifier does not resolve to
+    /// exactly two non-empty path segments.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use codemason_tools_vcs::github::GitHubClient;
+    /// assert_eq!(
+    ///     GitHubClient::parse_repo_url("https://github.com/octocat/Hello-World"),
+    ///     Some(("octocat".to_string(), "Hello-World".to_string()))
+    /// );
+    /// assert_eq!(
+    ///     GitHubClient::parse_repo_url("octocat/Hello-World"),
+    ///     Some(("octocat".to_string(), "Hello-World".to_string()))
+    /// );
+    /// assert_eq!(GitHubClient::parse_repo_url("justoneword"), None);
+    /// ```
+    #[must_use]
+    pub fn parse_repo_url(input: &str) -> Option<(String, String)> {
+        let input = input.trim();
+        if input.is_empty() {
+            return None;
+        }
+
+        // Strip query string and fragments.
+        let input = input.split(['?', '#']).next().unwrap_or(input);
+
+        // Determine the owner/repo path portion based on the URL scheme.
+        let path = if let Some(rest) = input
+            .strip_prefix("https://github.com/")
+            .or_else(|| input.strip_prefix("http://github.com/"))
+        {
+            rest
+        } else if let Some(rest) = input.strip_prefix("git@github.com:") {
+            rest
+        } else if input.contains("github.com/") {
+            // Generic github.com URL (e.g. with www or other subdomains).
+            input.split("github.com/").nth(1).unwrap_or(input)
+        } else {
+            // Bare owner/repo shorthand.
+            input
+        };
+
+        // Strip trailing slashes, then trailing .git, then trailing slashes
+        // again so inputs like "owner/repo.git/" are normalised correctly.
+        let path = path.trim_end_matches('/');
+        let path = path.trim_end_matches(".git");
+        let path = path.trim_end_matches('/');
+
+        let mut parts = path.splitn(2, '/');
+        let owner = parts.next()?.trim();
+        let repo = parts.next()?.trim();
+
+        if owner.is_empty() || repo.is_empty() {
+            return None;
+        }
+
+        // Reject identifiers with more than two segments (e.g. owner/repo/extra).
+        if repo.contains('/') {
+            return None;
+        }
+
+        Some((owner.to_string(), repo.to_string()))
+    }
+
+    /// Validate a user-supplied repository identifier, returning either the
+    /// parsed `(owner, repo)` pair or a human-readable usage message.
+    ///
+    /// This wraps [`parse_repo_url`] for the user-facing rejection path
+    /// (FR-016): when the input does not resolve to exactly two non-empty
+    /// path segments (empty string, single word, three-segment path, etc.),
+    /// a usage message is returned instead of a silent `None`, and no API
+    /// calls should be made.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(message)` when the identifier is invalid. The `message`
+    /// is a human-readable usage string suitable for display in the TUI.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use codemason_tools_vcs::github::GitHubClient;
+    /// assert_eq!(
+    ///     GitHubClient::validate_repo_input("octocat/Hello-World").unwrap(),
+    ///     ("octocat".to_string(), "Hello-World".to_string())
+    /// );
+    /// assert!(GitHubClient::validate_repo_input("").is_err());
+    /// assert!(GitHubClient::validate_repo_input("justoneword").is_err());
+    /// assert!(GitHubClient::validate_repo_input("owner/repo/extra").is_err());
+    /// ```
+    pub fn validate_repo_input(input: &str) -> std::result::Result<(String, String), String> {
+        Self::parse_repo_url(input).ok_or_else(|| {
+            format!(
+                "Invalid repository identifier: '{input}'.\n\
+                 Usage: /spec reverse <owner/repo | https://github.com/owner/repo | \
+                 git@github.com:owner/repo.git>\n\
+                 The identifier must resolve to exactly two non-empty path segments \
+                 (owner and repo)."
+            )
+        })
+    }
+
+    /// Reject an `owner`/`repo` path segment that could escape the request path.
+    ///
+    /// SEC-codemason-tools-vcs-00x (ANTIPAT A-2): `owner` and `repo` are joined
+    /// into `/repos/{owner}/{repo}/...`, so a `..`, a `/`, or a leading `-`
+    /// would let the caller address a different API route (and, on the
+    /// `resolve_url` path, a different origin segment). Only the characters RFC
+    /// 3986 allows inside a path segment are accepted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming `label` when the segment is empty or contains a
+    /// character outside `[A-Za-z0-9._~-]`.
+    fn validate_repo_segment(value: &str, label: &str) -> Result<()> {
+        if value.is_empty()
+            || !value
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '~' | '-'))
+        {
+            bail!("Invalid GitHub {label} '{value}': only [A-Za-z0-9._~-] characters are allowed");
+        }
+        Ok(())
+    }
+
+    /// Fetch repository metadata via `GET /repos/{owner}/{repo}`.
+    ///
+    /// Returns a typed [`RepoMetadata`] struct extracting at minimum the
+    /// description, primary language, topics, star count, and default branch.
+    /// Missing optional fields default to empty strings / `0` / empty vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the GitHub API call fails (network, auth, or
+    /// non-success status code).
+    pub async fn fetch_repo_metadata(&self, owner: &str, repo: &str) -> Result<RepoMetadata> {
+        // SEC-codemason-tools-vcs-00x (ANTIPAT A-2): reject a `..`-bearing owner or
+        // repo before it is interpolated into the request path.
+        Self::validate_repo_segment(owner, "owner")?;
+        Self::validate_repo_segment(repo, "repo")?;
+        let path = format!("/repos/{owner}/{repo}");
+        let value = self.get(&path).await?;
+        Ok(RepoMetadata::from_response(&value))
+    }
+
+    /// Fetch the root-level file tree via `GET /repos/{owner}/{repo}/contents`.
+    ///
+    /// Returns the list of file and directory names at the repository root, in
+    /// the order returned by the API. An empty repository (or one with no
+    /// visible root entries) yields an empty vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the GitHub API call fails (network, auth, or
+    /// non-success status code).
+    pub async fn fetch_root_tree(&self, owner: &str, repo: &str) -> Result<Vec<String>> {
+        Self::validate_repo_segment(owner, "owner")?;
+        Self::validate_repo_segment(repo, "repo")?;
+        let path = format!("/repos/{owner}/{repo}/contents");
+        let value = self.get(&path).await?;
+        Ok(parse_root_tree(&value))
+    }
+
+    /// Fetch the repository file tree recursively up to the specified depth
+    /// (FR-027, FR-028).
+    ///
+    /// At depth 1, only the root-level entries are returned (equivalent to
+    /// [`fetch_root_tree`]). At depth N > 1, directories are recursively
+    /// expanded by calling `GET /repos/{owner}/{repo}/contents/{path}` for
+    /// each subdirectory discovered, stopping when the requested depth is
+    /// reached or no more directories exist.
+    ///
+    /// Directory entries are formatted with a trailing `/` to distinguish them
+    /// from files (FR-028). The returned paths use `/` separators so the LLM
+    /// can infer the full directory structure (e.g. `src/`, `src/main.rs`,
+    /// `src/models/`, `src/models/user.rs`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any API call fails. Individual directory fetch
+    /// failures are tolerated - the directory entry is still listed (with a
+    /// trailing slash) but its children are omitted.
+    pub async fn fetch_tree_recursive(
+        &self,
+        owner: &str,
+        repo: &str,
+        depth: u32,
+    ) -> Result<Vec<String>> {
+        let mut entries = Vec::new();
+        let mut budget = TreeWalkBudget {
+            requests: 0,
+            entries: 0,
+        };
+        self.fetch_tree_recursive_inner(owner, repo, "", depth, &mut entries, &mut budget)
+            .await?;
+        Ok(entries)
+    }
+
+    /// Maximum number of API requests a recursive tree walk may issue.
+    ///
+    /// SEC-codemason-tools-vcs-008 (SECTASKS T-034): the walk fan-out was
+    /// unbounded, unlike the GitLab equivalent, so a hostile repository with a
+    /// wide directory tree drove an unlimited number of authenticated calls.
+    pub const MAX_TREE_REQUESTS: u32 = 500;
+    /// Maximum number of entries a recursive tree walk may collect.
+    pub const MAX_TREE_ENTRIES: usize = 20_000;
+
+    /// Internal recursive helper for [`fetch_tree_recursive`].
+    ///
+    /// `prefix` is the directory path to fetch contents for (empty string for
+    /// root). `remaining` is the number of levels left to fetch (1 = this
+    /// level only, no recursion).
+    async fn fetch_tree_recursive_inner(
+        &self,
+        owner: &str,
+        repo: &str,
+        prefix: &str,
+        remaining: u32,
+        entries: &mut Vec<String>,
+        budget: &mut TreeWalkBudget,
+    ) -> Result<()> {
+        // SEC-codemason-tools-vcs-008 (SECTASKS T-034): stop before the walk
+        // exceeds its request or entry budget instead of hammering the API.
+        if budget.requests >= Self::MAX_TREE_REQUESTS || budget.entries >= Self::MAX_TREE_ENTRIES {
+            tracing::warn!(
+                requests = budget.requests,
+                entries = budget.entries,
+                "GitHub tree walk hit its budget; returning the entries collected so far"
+            );
+            return Ok(());
+        }
+        budget.requests += 1;
+        let path = if prefix.is_empty() {
+            format!("/repos/{owner}/{repo}/contents")
+        } else {
+            format!("/repos/{owner}/{repo}/contents/{prefix}")
+        };
+        let value = self.get(&path).await?;
+        let items = parse_contents_entries(&value);
+
+        for item in &items {
+            let full_path = if prefix.is_empty() {
+                item.name.clone()
+            } else {
+                format!("{prefix}/{}", item.name)
+            };
+            if budget.entries >= Self::MAX_TREE_ENTRIES {
+                tracing::warn!(
+                    entries = budget.entries,
+                    "GitHub tree walk hit its entry budget; truncating the listing"
+                );
+                return Ok(());
+            }
+            if item.is_dir {
+                // FR-028: directories get a trailing slash.
+                entries.push(format!("{full_path}/"));
+                budget.entries += 1;
+                // FR-027: recurse if there are more depth levels. Box::pin is
+                // required because async fns cannot be directly recursive
+                // (the future size would be infinite).
+                if remaining > 1 {
+                    // Tolerate failure - keep the dir entry but skip children.
+                    if let Err(e) = Box::pin(self.fetch_tree_recursive_inner(
+                        owner,
+                        repo,
+                        &full_path,
+                        remaining - 1,
+                        entries,
+                        budget,
+                    ))
+                    .await
+                    {
+                        tracing::debug!(
+                            path = %full_path,
+                            error = %e,
+                            "recursive tree fetch failed; keeping directory entry only"
+                        );
+                    }
+                }
+            } else {
+                entries.push(full_path);
+                budget.entries += 1;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Fetch the README content for a repository (FR-007).
+    ///
+    /// Calls `GET /repos/{owner}/{repo}/readme` to obtain the README metadata
+    /// (which includes a `download_url`), then fetches the raw README text via
+    /// [`get_bytes`]. If the repository has no README (HTTP 404), returns
+    /// `Ok(None)` so the caller can proceed with an empty README string rather
+    /// than failing. Any other API error (auth, rate limit, network) is
+    /// propagated.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for non-404 API failures (network, auth, rate limit,
+    /// 500, etc.). A 404 is **not** an error - it yields `Ok(None)`.
+    pub async fn fetch_readme(&self, owner: &str, repo: &str) -> Result<Option<String>> {
+        Self::validate_repo_segment(owner, "owner")?;
+        Self::validate_repo_segment(repo, "repo")?;
+        let path = format!("/repos/{owner}/{repo}/readme");
+        // SEC-codemason-tools-vcs-00x (ANTIPAT A-2): this call hardcoded
+        // `https://api.github.com`, so a configured GitHub Enterprise
+        // `base_url` was ignored and the Bearer token was attached to the
+        // public origin. Route it through `resolve_url` like every other verb.
+        let url = self.resolve_url(&path);
+
+        let resp = self
+            .request(reqwest::Method::GET, &url)
+            .send()
+            .await
+            .with_context(|| format!("GitHub GET {path} failed"))?;
+
+        let status = resp.status();
+        if status.as_u16() == 404 {
+            // No README present - proceed with empty README, per FR-007.
+            return Ok(None);
+        }
+        self.check_status(status, resp.headers(), &path)?;
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            bail!("GitHub API error {status} for {path}: {body}");
+        }
+
+        let value: Value = resp
+            .json()
+            .await
+            .with_context(|| format!("Failed to parse README metadata JSON for {path}"))?;
+
+        let download_url = extract_download_url(&value).ok_or_else(|| {
+            anyhow::anyhow!("README metadata response missing 'download_url' field for {path}")
+        })?;
+
+        let bytes = self.get_bytes(&download_url).await?;
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        Ok(Some(text))
+    }
+}
+
+/// Parse a `GET /repos/{owner}/{repo}/contents` JSON response into a list of
+/// root file and directory names.
+///
+/// The GitHub contents endpoint returns a JSON array of objects, each with a
+/// `name` string and a `type` field (e.g. `"file"` or `"dir"`). This helper
+/// extracts the `name` of every entry, preserving the API's ordering. A
+/// non-array response (e.g. an empty-repo 404 body or a single-file object)
+/// yields an empty vector.
+#[must_use]
+pub fn parse_root_tree(value: &Value) -> Vec<String> {
+    let arr = match value.as_array() {
+        Some(arr) => arr,
+        None => return Vec::new(),
+    };
+    arr.iter()
+        .filter_map(|entry| entry.get("name").and_then(Value::as_str).map(String::from))
+        .collect()
+}
+
+/// Whether `url` has the same scheme/host/port as `base`.
+///
+/// SEC-codemason-tools-vcs-005 (SECTASKS T-034): used before attaching the
+/// Authorization header. A `base_url` that is not parseable compares as
+/// not-same-origin, so the token is withheld rather than leaked.
+fn same_origin_as(url: &str, base: &str) -> bool {
+    fn origin(url: &str) -> Option<(String, String, Option<u16>)> {
+        let rest = url.split_once("://")?;
+        let scheme = rest.0.to_ascii_lowercase();
+        let authority = rest.1.split(['/', '?', '#']).next()?;
+        let (host, port) = match authority.rsplit_once(':') {
+            Some((h, p)) if p.chars().all(|c| c.is_ascii_digit()) => {
+                (h.to_ascii_lowercase(), p.parse::<u16>().ok())
+            }
+            _ => (authority.to_ascii_lowercase(), None),
+        };
+        if host.is_empty() {
+            return None;
+        }
+        Some((scheme, host, port))
+    }
+    match (origin(url), origin(base)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// Running request/entry counters for one recursive tree walk.
+///
+/// SEC-codemason-tools-vcs-008 (SECTASKS T-034).
+#[derive(Debug, Default)]
+struct TreeWalkBudget {
+    requests: u32,
+    entries: usize,
+}
+
+/// A parsed entry from a GitHub contents API response.
+struct ContentsEntry {
+    name: String,
+    is_dir: bool,
+}
+
+/// Parse a GitHub contents API JSON response into typed entries with name
+/// and type information (FR-027, FR-028).
+///
+/// Each entry in the JSON array has a `name` and a `type` field (`"file"` or
+/// `"dir"`). A non-array response yields an empty vector.
+fn parse_contents_entries(value: &Value) -> Vec<ContentsEntry> {
+    let arr = match value.as_array() {
+        Some(arr) => arr,
+        None => return Vec::new(),
+    };
+    arr.iter()
+        .filter_map(|entry| {
+            let name = entry.get("name").and_then(Value::as_str)?;
+            let is_dir = entry
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|t| t == "dir");
+            Some(ContentsEntry {
+                name: name.to_string(),
+                is_dir,
+            })
+        })
+        .collect()
+}
+
+/// Extract the `download_url` from a `GET /repos/{owner}/{repo}/readme` JSON
+/// response.
+///
+/// The README metadata object includes a `download_url` string pointing at the
+/// raw README content. Returns `None` if the field is absent or not a string.
+#[must_use]
+pub fn extract_download_url(value: &Value) -> Option<String> {
+    value
+        .get("download_url")
+        .and_then(Value::as_str)
+        .map(String::from)
+}
+
+/// Extract the `X-RateLimit-Reset` header value (a Unix timestamp) from a
+/// response's headers, if present and parseable as `u64`.
+#[must_use]
+pub fn extract_rate_limit_reset(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    headers
+        .get("x-ratelimit-reset")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok())
+}
+
+/// Format a Unix timestamp as a human-readable UTC time string.
+#[must_use]
+pub fn format_reset_time(reset: u64) -> String {
+    // Convert the Unix timestamp to a UTC calendar representation without
+    // pulling in chrono. We use a simple civil-from-days algorithm to avoid
+    // adding a new dependency (NFR-001).
+    let total_secs = reset as i64;
+    let days = total_secs.div_euclid(86_400);
+    let secs_of_day = total_secs.rem_euclid(86_400);
+
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = y + if m <= 2 { 1 } else { 0 };
+
+    let hour = secs_of_day / 3600;
+    let minute = (secs_of_day % 3600) / 60;
+    let second = secs_of_day % 60;
+
+    format!("{year:04}-{m:02}-{d:02} {hour:02}:{minute:02}:{second:02} UTC")
+}
+
+/// Classify a GitHub API error into a human-readable message that includes the
+/// HTTP status code and the repository identifier (FR-014, FR-015, FR-017).
+///
+/// # Arguments
+///
+/// - `status` - the HTTP status code.
+/// - `repo_id` - the repository identifier (e.g. `"owner/repo"`).
+/// - `body` - the raw response body (for diagnostic context).
+/// - `reset_time` - optional `X-RateLimit-Reset` Unix timestamp (for 403/429).
+///
+/// # Returns
+///
+/// A human-readable error string. For 404, the message states the repository
+/// was not found or is private (FR-017). For 403/429, the message includes the
+/// rate-limit reset time if available (FR-015). For all other non-success
+/// statuses, a generic message with the status code and repo identifier is
+/// returned (FR-014).
+#[must_use]
+pub fn classify_api_error(
+    status: u16,
+    repo_id: &str,
+    body: &str,
+    reset_time: Option<u64>,
+) -> String {
+    match status {
+        404 => format!(
+            "Repository '{repo_id}' was not found, or it is private and your \
+             token lacks access. No further API calls will be made."
+        ),
+        403 | 429 => {
+            let reset_msg = reset_time
+                .map(|r| format!("\nRate limit resets at: {}", format_reset_time(r)))
+                .unwrap_or_default();
+            format!(
+                "GitHub API rate limit hit (HTTP {status}) for repository \
+                 '{repo_id}'.{reset_msg}\nThe request was not retried."
+            )
+        }
+        401 => format!(
+            "GitHub authentication failed (HTTP 401). Run /github login to \
+             re-authenticate. Repository: '{repo_id}'."
+        ),
+        _ => {
+            let body_snippet = if body.is_empty() {
+                String::new()
+            } else {
+                let trimmed = body.trim();
+                // Char-boundary-safe truncation: byte slicing can panic on
+                // multibyte bodies.
+                let head: String = trimmed.chars().take(200).collect();
+                let head = if trimmed.chars().count() > 200 {
+                    format!("{head}...")
+                } else {
+                    head
+                };
+                format!("\nResponse: {head}")
+            };
+            format!(
+                "GitHub API error (HTTP {status}) for repository \
+                 '{repo_id}'.{body_snippet}"
+            )
+        }
+    }
+}
+
+/// Maximum number of README characters included in the reverse-engineering
+/// context block (NFR-003).
+pub const README_MAX_CHARS: usize = 8000;
+
+/// Assemble the reverse-engineering context block from repo metadata, root
+/// file tree, README content, an optional technology-stack constraint, and
+/// an optional provider label (FR-008, FR-016, NFR-003).
+///
+/// The returned string is a single context block suitable for passing to the
+/// LLM as part of the prompt that instructs the model to generate a synthetic
+/// creation prompt for the repository.
+///
+/// # Provider label (FR-016)
+///
+/// When `provider_label` is `Some(label)`, a `## Repository Source` section is
+/// emitted **before** the `## Repository Metadata` section, containing the
+/// label (e.g. `"GitHub"` or `"GitLab (gitlab.example.com)"`). When `None`,
+/// the section is omitted entirely, preserving backward compatibility with
+/// callers that do not supply a provider label.
+///
+/// When `scaffold` is `Some(spec)`, a `## Project Scaffold` section is emitted
+/// immediately after the repository source, naming the target language, app
+/// type, and optional stack the `/new` command would scaffold. Each field is
+/// an optional line (`- Language: ...`, `- Type: ...`, `- Stack: ...`); fields that
+/// are `None` are omitted, so a scaffold with no stack produces only the
+/// language and type lines.
+///
+/// # README truncation
+///
+/// The README content is truncated to [`README_MAX_CHARS`] (8000) characters
+/// before inclusion, with a truncation notice appended when truncation occurs.
+/// If `readme` is `None` (no README found) or empty, a placeholder line is
+/// emitted instead.
+///
+/// # Arguments
+///
+/// - `metadata` - typed repo metadata (description, language, topics, stars,
+///   default branch).
+/// - `tree` - root-level file and directory names.
+/// - `readme` - optional raw README text (`None` means no README was found).
+/// - `tech` - optional technology-stack constraint to include in the context.
+/// - `provider_label` - optional VCS provider label for the `## Repository
+///   Source` section (FR-016). Pass `None` to omit the section.
+/// - `scaffold` - optional target scaffold, as `(language, app_type, stack)`.
+///   Pass `None` to omit the `## Project Scaffold` section.
+#[must_use]
+pub fn build_reverse_prompt(
+    metadata: &RepoMetadata,
+    tree: &[String],
+    readme: Option<&str>,
+    tech: Option<&str>,
+    provider_label: Option<&str>,
+    scaffold: Option<(&str, Option<&str>, Option<&str>)>,
+) -> String {
+    let mut sections: Vec<String> = Vec::new();
+
+    // --- Optional provider source (FR-016) ---
+    if let Some(label) = provider_label {
+        sections.push(format!("## Repository Source\n{label}"));
+    }
+
+    // --- Optional target project scaffold ---
+    if let Some((language, app_type, stack)) = scaffold {
+        let mut lines = vec![format!("- Language: {language}")];
+        if let Some(app_type) = app_type {
+            lines.push(format!("- Type: {app_type}"));
+        }
+        if let Some(stack) = stack {
+            lines.push(format!("- Stack: {stack}"));
+        }
+        sections.push(format!("## Project Scaffold\n{}", lines.join("\n")));
+    }
+
+    // --- Repo metadata ---
+    let mut meta_lines = Vec::new();
+    meta_lines.push(format!("Description: {}", metadata.description));
+    meta_lines.push(format!("Language: {}", metadata.language));
+    meta_lines.push(format!("Stars: {}", metadata.stargazers_count));
+    meta_lines.push(format!("Default branch: {}", metadata.default_branch));
+    if metadata.topics.is_empty() {
+        meta_lines.push("Topics: (none)".to_string());
+    } else {
+        meta_lines.push(format!("Topics: {}", metadata.topics.join(", ")));
+    }
+    sections.push(format!("## Repository Metadata\n{}", meta_lines.join("\n")));
+
+    // --- Optional technology-stack constraint ---
+    if let Some(stack) = tech {
+        sections.push(format!("## Technology Stack Constraint\n{stack}"));
+    }
+
+    // --- Root file tree ---
+    let tree_block = if tree.is_empty() {
+        "(empty repository)".to_string()
+    } else {
+        tree.join("\n")
+    };
+    sections.push(format!("## Root File Tree\n{tree_block}"));
+
+    // --- README (truncated to 8000 chars) ---
+    let readme_block = match readme {
+        Some(text) if !text.is_empty() => {
+            if text.chars().count() > README_MAX_CHARS {
+                let truncated: String = text.chars().take(README_MAX_CHARS).collect();
+                format!(
+                    "{truncated}\n\n[... README truncated at {README_MAX_CHARS} characters ...]"
+                )
+            } else {
+                text.to_string()
+            }
+        }
+        _ => "(no README found)".to_string(),
+    };
+    sections.push(format!("## README\n{readme_block}"));
+
+    sections.join("\n\n")
+}

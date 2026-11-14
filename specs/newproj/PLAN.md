@@ -6,17 +6,17 @@
 
 Add a self-contained `project-scaffold` module family plus `/new` command wiring:
 
-1. **Scaffold engine** — a new module set in `crates/ragent-tools-extended`
+1. **Scaffold engine** — a new module set in `crates/codemason-tools-extended`
    (`project_scaffold/`) holding: flag parsing/validation, the language registry
    (`rust`/`python`/`go`/`typescript`), per-type layout templates (library/cmdline/tui/gui/webapp),
-   stack overlay snippets, and the ragent workspace initialiser (`.ragent/`, `specs/`,
+   stack overlay snippets, and the codemason workspace initialiser (`.codemason/`, `specs/`,
    `log/`, `.gitignore`, `AGENTS.md`). Pure functions — no I/O at the decision layer —
    so recipes are unit-testable as data.
 2. **Command surface** — register `new` as a static trigger in
-   `crates/ragent-tui/src/app/state.rs`, dispatch in `slash.rs`, mirroring the
+   `crates/codemason-tui/src/app/state.rs`, dispatch in `slash.rs`, mirroring the
    `/reverse` flag-parsing pattern (`--language`, `--type`, `--stack`, `--github`,
    `--gitlab`, `help`).
-3. **Hosting integration** — reuse `crates/ragent-tools-vcs`: local `git` init/commit via
+3. **Hosting integration** — reuse `crates/codemason-tools-vcs`: local `git` init/commit via
    the existing git tool family; remote creation + push via the GitHub/GitLab clients,
    with failure containment (FR-010) and idempotent retry (FR-015).
 4. **Help surface** — `/new help` renders a detailed help page whose accepted-value
@@ -35,7 +35,7 @@ Add a self-contained `project-scaffold` module family plus `/new` command wiring
 | FR-001 Command availability | T-011 |
 | FR-002 Empty-directory guard | T-001, T-006 |
 | FR-003 Required flag validation | T-001 |
-| FR-004 ragent workspace initialisation | T-005 |
+| FR-004 codemason workspace initialisation | T-005 |
 | FR-005 Hello-world generation | T-002 |
 | FR-006 App-type mapping | T-003 |
 | FR-007 Stack layering | T-004 |
@@ -62,7 +62,7 @@ Add a self-contained `project-scaffold` module family plus `/new` command wiring
 | T-002 | Build language registry with per-language recipes (rust/python/go/typescript) | FR-005, FR-017 | L | Critical | completed | T-001 |
 | T-003 | Implement app-type layout mapping (library/cmdline/tui/gui/webapp) per language | FR-006 | L | Critical | completed | T-002 |
 | T-004 | Implement stack overlay system with known-stack snippets and unknown-stack warning | FR-007 | M | High | completed | T-003 |
-| T-005 | Implement ragent workspace initialiser (`.ragent/`, `specs/`, `log/`, `.gitignore`, `AGENTS.md`) | FR-004 | S | Critical | completed | T-001 |
+| T-005 | Implement codemason workspace initialiser (`.codemason/`, `specs/`, `log/`, `.gitignore`, `AGENTS.md`) | FR-004 | S | Critical | completed | T-001 |
 | T-006 | Implement empty-directory guard with artifact allowlist | FR-002 | S | Critical | completed | T-001 |
 | T-007 | Implement no-silent-overwrite file emission (report existing files, leave untouched) | FR-016 | S | High | completed | T-005 |
 | T-008 | Local git init + initial commit + summary plumbing | FR-008, FR-011 | M | High | completed | T-005 |
@@ -97,7 +97,7 @@ Add a self-contained `project-scaffold` module family plus `/new` command wiring
 - **T-017** — README/QUICKSTART build-and-run instructions and STATS.md statistics are
   rendered from the per-language recipe data (NFR-002: e.g. QUICKSTART run command for
   Rust cmdline is `cargo run`); STATS.md records UTC timestamp, language, type, stack,
-  file count, and the ragent version; `docs/` is created as part of the FR-004 layout
+  file count, and the codemason version; `docs/` is created as part of the FR-004 layout
   emission step. The files flow through the T-007 no-silent-overwrite emitter and are
   reported in the FR-011 summary; when `--github`/`--gitlab` is used they are included
   in the initial commit (T-008/T-009/T-010).
@@ -105,11 +105,11 @@ Add a self-contained `project-scaffold` module family plus `/new` command wiring
   detailed help page (TC-015) in addition to the core/hosting flows, hence the added
   dependencies on T-016 and T-017.
 - **T-018** — GitHub credential resolution is a single shared chain in
-  `ragent_config::github::resolve_from_stored` (env → stored file → `gh` CLI, with a
+  `codemason_config::github::resolve_from_stored` (env → stored file → `gh` CLI, with a
   GitHub-App-token downgrade). The `/new` CLI scaffold runs the remote half inside a
   runtime-owning worker so the `reqwest::blocking` client never drops a runtime from an
   async context; the TUI path already runs on a worker `std::thread`. Coverage: the
-  `crates/ragent-config/tests/test_github_token.rs` unit suite plus the live
+  `crates/codemason-config/tests/test_github_token.rs` unit suite plus the live
   `--github` CLI run.- **T-019** — `StackRecipe::overlay_source` now runs the base source through
   `strip_entry_point`, which removes the single `fn main { … }` function
   (brace-balanced scan, so nested braces do not end it early) before the

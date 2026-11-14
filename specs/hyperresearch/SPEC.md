@@ -7,15 +7,15 @@ audit:
   - { time: 1794443735, from: "approved", to: "in_progress", actor: "cli" }
   - { time: 1794443735, from: "in_progress", to: "implemented", actor: "cli" }
 ---
-# SPEC: Hyperresearch integration for ragent /research
+# SPEC: Hyperresearch integration for codemason /research
 
 ## Context
 
-Hyperresearch (https://github.com/jordan-gibbs/hyperresearch) is a Claude Code plugin that turns a single prompt into a tier-adaptive, multi-step deep research pipeline. It produces adversarially-audited reports with full source provenance, a persistent searchable source vault, open-access recovery for paywalled papers, contradiction graphs, critic-driven gap filling, and surgical patch-based drafting. ragent already has a `/research` slash command and `ragent research` CLI that performs web search and local-file cross-referencing and writes a self-contained `RESEARCH.md`. This specification adds the most valuable Hyperresearch capabilities — tiered pipeline depth, persistent source vaults, adversarial audit, contradiction tracking, open-access recovery, and resumable runs — into ragent's research tooling while keeping it Rust-native and compatible with ragent's existing provider model.
+Hyperresearch (https://github.com/jordan-gibbs/hyperresearch) is a Claude Code plugin that turns a single prompt into a tier-adaptive, multi-step deep research pipeline. It produces adversarially-audited reports with full source provenance, a persistent searchable source vault, open-access recovery for paywalled papers, contradiction graphs, critic-driven gap filling, and surgical patch-based drafting. codemason already has a `/research` slash command and `codemason research` CLI that performs web search and local-file cross-referencing and writes a self-contained `RESEARCH.md`. This specification adds the most valuable Hyperresearch capabilities — tiered pipeline depth, persistent source vaults, adversarial audit, contradiction tracking, open-access recovery, and resumable runs — into codemason's research tooling while keeping it Rust-native and compatible with codemason's existing provider model.
 
 ## Goals
 
-1. Let ragent users run research at three depth tiers matching Hyperresearch's light / full / dissertation model.
+1. Let codemason users run research at three depth tiers matching Hyperresearch's light / full / dissertation model.
 2. Persist every gathered source into a searchable vault so future research reuses it before fetching anything new.
 3. Verify citations and detect contradictions before the report ships.
 4. Recover legal open-access copies of paywalled scholarly sources.
@@ -33,7 +33,7 @@ Hyperresearch (https://github.com/jordan-gibbs/hyperresearch) is a Claude Code p
 
 **FR-001** While the `/research` command is available, the system SHALL support a `--tier light|full|dissertation` option that selects the research depth. The system should default to "full".
 
-**FR-002** While a research run is in progress, the system SHALL write every acquired source into a persistent, searchable vault under `.ragent/research_vault/<run_tag>/`.
+**FR-002** While a research run is in progress, the system SHALL write every acquired source into a persistent, searchable vault under `.codemason/research_vault/<run_tag>/`.
 
 **FR-003** While a source is added to the vault, the system SHALL record source metadata including URL, title, fetch timestamp, search engine provenance, media type, and raw content path.
 
@@ -57,9 +57,9 @@ Hyperresearch (https://github.com/jordan-gibbs/hyperresearch) is a Claude Code p
 
 ### Optional requirements
 
-**FR-011** The user MAY configure `research.open_access_recovery` in `ragent.json` to enable or disable open-access recovery (default: false).
+**FR-011** The user MAY configure `research.open_access_recovery` in `codemason.json` to enable or disable open-access recovery (default: false).
 
-**FR-012** The user MAY configure `research.contact_email` in `ragent.json` to satisfy Unpaywall's terms of service.
+**FR-012** The user MAY configure `research.contact_email` in `codemason.json` to satisfy Unpaywall's terms of service.
 
 **FR-013** The user MAY supply a `--chapter-count N` option with `--tier dissertation` to partition the research into N chapters.
 
@@ -74,7 +74,7 @@ Hyperresearch (https://github.com/jordan-gibbs/hyperresearch) is a Claude Code p
 ## Definitions
 
 - **run_tag**: a stable, URL-safe identifier derived from the query and timestamp that names a single research run directory.
-- **vault**: the on-disk source store at `.ragent/research_vault/<run_tag>/` plus an embedded SQLite index.
+- **vault**: the on-disk source store at `.codemason/research_vault/<run_tag>/` plus an embedded SQLite index.
 - **tier**: one of `light`, `full`, or `dissertation`.
 - **open-access recovery**: the process of locating a legal, open-access copy of a scholarly work via Unpaywall or Europe PMC when the original URL is blocked or truncated.
 - **cite-check**: a verification step that confirms each cited claim is supported by the cited source text.
@@ -89,6 +89,6 @@ Hyperresearch (https://github.com/jordan-gibbs/hyperresearch) is a Claude Code p
 
 ## Notes
 
-- The existing `ragent-research` crate already has `WebGatherer`, `Source`, `Document`, and CLI modules. The new features should extend those modules rather than replacing them.
+- The existing `codemason-research` crate already has `WebGatherer`, `Source`, `Document`, and CLI modules. The new features should extend those modules rather than replacing them.
 - The existing `mf_search` engine already supports DuckDuckGo, Brave, OpenAlex, Wikipedia, Exa, and optional LangSearch / Tavily / Perplexity. The width sweep should leverage `mf_search` for parallel fetching.
-- The existing SQLite storage in `ragent-storage` can host the vault index.
+- The existing SQLite storage in `codemason-storage` can host the vault index.

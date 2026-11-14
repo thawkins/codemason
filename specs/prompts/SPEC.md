@@ -11,11 +11,11 @@ audit:
 
 ## Overview
 
-Every ragent agent runs with an assembled system prompt. The primary agent's
+Every codemason agent runs with an assembled system prompt. The primary agent's
 prompt is assembled by
 `build_system_prompt_with_storage_and_memory_and_config`
-(`crates/ragent-agent/src/agent/mod.rs:2462`) and gains its per-turn tool
-reference in the session loop (`crates/ragent-agent/src/session/loop_steps.rs`,
+(`crates/codemason-agent/src/agent/mod.rs:2462`) and gains its per-turn tool
+reference in the session loop (`crates/codemason-agent/src/session/loop_steps.rs`,
 via `build_tool_reference_from_defs` / `build_detailed_tool_reference_from_defs`
 in `session/prompt_builders.rs`). Sub-agent runs execute the same assembler with
 `AgentMode::Subagent`, which switches two mode gates: the `## Sub-Agent
@@ -23,7 +23,7 @@ Spawning` section is rendered only in primary mode (`agent/mod.rs:2635`) and
 the `## Sub-Agent Completion Protocol` section is rendered only in subagent
 mode (`agent/mod.rs:2816`).
 
-There is no way today to inspect any of this from inside ragent. This spec
+There is no way today to inspect any of this from inside codemason. This spec
 defines `/prompt`, a read-only TUI slash command that renders:
 
 - `/prompt primary` — the assembled primary-agent system prompt for the
@@ -74,23 +74,23 @@ Out of scope:
 
 Verified types and APIs the implementation will reuse (no re-implementation):
 
-- `ragent_agent::agent::build_system_prompt_with_storage_and_memory_and_config`
+- `codemason_agent::agent::build_system_prompt_with_storage_and_memory_and_config`
   — canonical assembler (`agent/mod.rs:2462`); takes the resolved `AgentInfo`,
   working dir, file tree, skills, git status, README, AGENTS.md, storage,
-  memory config/section, and `ragent_config::Config`.
-- `ragent_agent::agent::builtin_agents()` — the Arc-cached built-in roster
+  memory config/section, and `codemason_config::Config`.
+- `codemason_agent::agent::builtin_agents()` — the Arc-cached built-in roster
   (`agent/mod.rs:1136`); custom agents load via `agent::custom` (loaded in
   `agent/mod.rs:2651`). Roster names must come from these sources — README
   preset names (`coder`, `architect`, `debug`, ...) do not all exist as
   built-ins.
 - `build_tool_reference_from_defs` / `build_detailed_tool_reference_from_defs`
-  — `crates/ragent-agent/src/session/prompt_builders.rs:172/203`; the compact
+  — `crates/codemason-agent/src/session/prompt_builders.rs:172/203`; the compact
   and detailed tool-reference renderers. `build_tool_reference_from_defs` is
   currently `pub(crate)`; the implementation SHALL widen it to `pub` (one-line
-  visibility change) rather than duplicating the renderer in `ragent-tui`.
+  visibility change) rather than duplicating the renderer in `codemason-tui`.
 - Tool-surface filtering, mirroring `loop_steps.rs:454-529`:
   1. `tool_registry.definitions()` minus tools hidden by `tool_visibility`
-     (`ragent_config::Config::effective_hidden_tools` /
+     (`codemason_config::Config::effective_hidden_tools` /
      `ToolRegistry::set_hidden`, applied via
      `App::sync_tool_visibility_from_config` — `app/models.rs:2192`),
   2. filtered by the agent's `allowed_tools` allowlist
@@ -115,9 +115,9 @@ Verified types and APIs the implementation will reuse (no re-implementation):
 Slash-command plumbing (following the `/toolchain` precedent exactly):
 
 - Registry entry in `SLASH_COMMANDS`
-  (`crates/ragent-tui/src/app/state.rs:694`, alphabetical position).
+  (`crates/codemason-tui/src/app/state.rs:694`, alphabetical position).
 - Suggestions arm in `get_command_suggestions`
-  (`crates/ragent-tui/src/app/slash.rs:141-337`) and a parameter hint in the
+  (`crates/codemason-tui/src/app/slash.rs:141-337`) and a parameter hint in the
   hint table (precedent `app/session_ops.rs:1016`).
 - Dispatch arm `"prompt" => self.handle_prompt_command(args)` in
   `execute_slash_command_inner`'s `match cmd` (`slash.rs:1821`).
@@ -131,7 +131,7 @@ Slash-command plumbing (following the `/toolchain` precedent exactly):
 - Long work on `tokio::task::block_in_place` with `[wait] prompt` status set
   first (the `execute_slash_command` wrapper defers the Finished log line while
   status starts with `[wait]`, `slash.rs:1780-1793`).
-- Tab-completion regression pattern: `crates/ragent-tui/tests/test_slash_help.rs`
+- Tab-completion regression pattern: `crates/codemason-tui/tests/test_slash_help.rs`
   (toolchain cases at lines 300/819/876).
 
 ## Requirements

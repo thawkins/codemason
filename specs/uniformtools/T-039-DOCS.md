@@ -23,7 +23,7 @@ The first half is a migration. The second half is a **deliverable that did not
 exist**: before this task the `Unreleased` entry carried a table inside the
 T-031 bullet, but there was no `Renamed` section, and the table sat after the
 narrative that discussed it rather than being findable. A reader upgrading a
-`ragent.json` needs the mapping as its own section, not buried 690 lines into a
+`codemason.json` needs the mapping as its own section, not buried 690 lines into a
 release note.
 
 A document is not a dispatch site, so nothing fails to compile when it is
@@ -89,7 +89,7 @@ The mechanical half, by document, with the shape of each change:
 | `SPEC.md` | the `tools` array in the section 11.2 agent-schema example (`["read", "Edit", "Bash", "codeindex_search"]`), the sandbox routed-tool subset (`append_to_file` / `make_directory`, neither of which the container backend could match before), the `Skill action="..."` JSONC examples in section 19B.2, the architecture diagram's `Tools[File ops, Bash, ...]` node, the reachable-tools sentence, and the `command` field's `(for Bash)` |
 | `QUICKSTART.md` | the plugin-namespace paragraph: a plugin's tool `Bash`/`Edit` is namespaced by `plugin_<id>_`; rewritten so it reads as prose rather than a tool list |
 | `TUI-QUICKSTART.md` | **no change was needed, and that is a finding rather than an omission**: its 16 remaining tokens are all the shell program (`7-layer bash validation`, a fenced `bash` block), the English verb (`write the YOLO flag`), or the rename's own narrative. It is in scope and was read line by line, and it never names a tool by a retired spelling |
-| `crates/ragent-tools-core/DOCS.md` | `create_core_registry`'s registration list, which named `write`, `edit`, `glob`, `grep`, `bash`, `mkdir`, `append`, `copy`, `move`, `diff` - **none of those ten names is what the function registers**: five are retired spellings and five are short forms (`copy`, `move`, `mkdir`, `append`, `diff`) no build has ever registered. Now `Write`, `Edit`, `Glob`, `Grep`, `Bash`, `make_directory`, `append_to_file`, `copy_file`, `move_file`, `diff_files` |
+| `crates/codemason-tools-core/DOCS.md` | `create_core_registry`'s registration list, which named `write`, `edit`, `glob`, `grep`, `bash`, `mkdir`, `append`, `copy`, `move`, `diff` - **none of those ten names is what the function registers**: five are retired spellings and five are short forms (`copy`, `move`, `mkdir`, `append`, `diff`) no build has ever registered. Now `Write`, `Edit`, `Glob`, `Grep`, `Bash`, `make_directory`, `append_to_file`, `copy_file`, `move_file`, `diff_files` |
 | `docs/howtos/tools/*.md` (7 pages) | every per-tool heading and example invocation: `## Write`, `## Edit`, `## Glob`, `## Grep`, `## Bash`, `## AskUserQuestion`, `## Skill`, `## EnterPlanMode`/`## ExitPlanMode`, `## TaskCreate`/`## TaskUpdate`/`## TaskGet`/`## TaskList`, and the `text` examples under each (`Write path="..."`, `Grep pattern="..."`, `Bash command="..."`, `Skill action="list"`, `TaskCreate subject="..."`) |
 | `docs/howtos/bash.md` | "the bash tool" -> "the Bash tool" in the section intro, the config paragraph and the version footer |
 | `docs/howtos/codeindex.md` | "instead of grep" in the quoted system instruction and the section 7 heading; both now say `Grep`, which is what `prompt_builders.rs` actually emits |
@@ -99,13 +99,13 @@ The mechanical half, by document, with the shape of each change:
 | `docs/howtos/sandbox-backends.md` | the worked example's prompt `List the files ... with \`bash: ls -la\`` |
 | `docs/howtos/slashcommands/{bash,editlog,task,yolo}.md` | "the bash tool's 7-layer model", the edit-log's list of tools it records, `task_create`/`task_update`/`task_get` in the `/task` transcripts |
 | `docs/userdocs/introduction.md`, the former `userdocs` teams guide (superseded by `docs/howtos/teams.md`) | the built-in-tool sentence and the three plan-mode rows that said "no write/bash tools active" |
-| `crates/ragent-config/src/config.rs` | `ToolVisibilityConfig::plan`'s doc comment named `plan_enter, plan_exit` |
-| `crates/ragent-agent/src/skill/mod.rs` | a doc comment naming "the `skill_manage reload` action" |
-| `crates/ragent-agent/src/tool/skill_manage.rs` | the not-found hint a *user* reads: "run skill_manage action=reload" -> "run Skill action=reload" |
-| `crates/ragent-tui/src/app/session_ops.rs` | the log line "plan_exit called but agent stack is empty" - a user-facing string naming a tool that no longer exists by that name |
-| `crates/ragent-tui/src/app/event_handler.rs` | a comment "so plan_exit can restore it" |
-| `crates/ragent-tui/tests/test_message_widget_summaries.rs` | a doc comment describing what `plan_exit` emits |
-| `crates/ragent-tui/tests/test_session_models_state_deep.rs` | a comment recording that the assertion matches only the prose half of the migrated log line |
+| `crates/codemason-config/src/config.rs` | `ToolVisibilityConfig::plan`'s doc comment named `plan_enter, plan_exit` |
+| `crates/codemason-agent/src/skill/mod.rs` | a doc comment naming "the `skill_manage reload` action" |
+| `crates/codemason-agent/src/tool/skill_manage.rs` | the not-found hint a *user* reads: "run skill_manage action=reload" -> "run Skill action=reload" |
+| `crates/codemason-tui/src/app/session_ops.rs` | the log line "plan_exit called but agent stack is empty" - a user-facing string naming a tool that no longer exists by that name |
+| `crates/codemason-tui/src/app/event_handler.rs` | a comment "so plan_exit can restore it" |
+| `crates/codemason-tui/tests/test_message_widget_summaries.rs` | a doc comment describing what `plan_exit` emits |
+| `crates/codemason-tui/tests/test_session_models_state_deep.rs` | a comment recording that the assertion matches only the prose half of the migrated log line |
 
 The four Rust files above are prompt text or user-facing text, not dispatch
 sites: two are comments, one is a message the model reads, one is a log line the
@@ -123,7 +123,7 @@ entry, immediately before `## [1.0.149]`:
   before and after), so a reader is not left wondering whether the table is a
   complete list of *changes*;
 - the sentence that there is no alias behind it - `ToolRegistry::get` answers
-  `None` for the `before` column - so a stale `ragent.json`, hook `matcher`,
+  `None` for the `before` column - so a stale `codemason.json`, hook `matcher`,
   `allowed_tools` entry or slash alias stops resolving and is reported;
 - the two cases in the table that are **not** migrations, because they are the
   two a reader will most plausibly get wrong:
@@ -155,7 +155,7 @@ lines:
 | Lines | Class | Why it is not a tool name |
 |---|---|---|
 | 119 | a fenced code block or shell command | the fence language (a fenced `bash` block), a shell script (`#!/usr/bin/env bash`), a `bash -n` validation probe, `base64 ... | bash` in the obfuscation rules, `/bin/bash` |
-| 84 | a filesystem path or Rust module | `ragent-tools-core::bash`, `crates/ragent-tools-core/src/write.rs`, `ragent-config`'s `bash_lists`, `dir_lists`, `edit_common`, `edit_log`, `log/editlog/` |
+| 84 | a filesystem path or Rust module | `codemason-tools-core::bash`, `crates/codemason-tools-core/src/write.rs`, `codemason-config`'s `bash_lists`, `dir_lists`, `edit_common`, `edit_log`, `log/editlog/` |
 | 127 | FR-028 permission vocabulary | `"permission": "bash"`, `file:write`, `bash:execute`, `codeindex:write`, `skill:manage`, `Permission::Edit`, the `ask_user` category. FR-028 keeps every one |
 | 17 | the `bash` config section or `/bash` command | `"bash": { "allowlist": ... }`, "the `bash` block", `/bash add allow`, `bash.allowlist`. A config key and a slash command, not a tool |
 | 25 | the shell program `bash` | "7-layer bash validation", "bash security", "bash banned commands", "bash-timeout harness" |
@@ -191,11 +191,11 @@ them knows it is due.
 
 - `cargo fmt --all -- --check` - clean.
 - `cargo check --workspace --all-targets` - clean, no new warning.
-- `cargo clippy -p ragent-config -p ragent-tui --all-targets` - clean in every
+- `cargo clippy -p codemason-config -p codemason-tui --all-targets` - clean in every
   file this task touched (the reported warnings are the pre-existing
   `redundant_pub_crate` / `assert_eq!`-with-`assert!` ones in
   `event_handler.rs:37` and `test_text_selection.rs:279`).
-- `cargo test -p ragent-tui --test all` - 3654 passed, 3 failed. The three are
+- `cargo test -p codemason-tui --test all` - 3654 passed, 3 failed. The three are
   the pre-existing `Alt+T` -> `ToggleTasksPanel` cases
   (`test_input_more::alt_toggle_keys_map_to_actions`,
   `test_input_queue_menu_binding::test_other_alt_keys_are_unaffected`,
@@ -204,16 +204,16 @@ them knows it is due.
 - The two TUI cases this task touched directly:
   `test_session_models_state_deep::` 68 passed,
   `test_message_widget_summaries::` 17 passed.
-- `cargo test -p ragent-agent --test all` - **1741 passed / 1 ignored / 0
+- `cargo test -p codemason-agent --test all` - **1741 passed / 1 ignored / 0
   failed**, including `test_skill_manage::` 12 passed (the not-found hint is
   asserted by none of them, and the wording change keeps the `Skill` spelling
   the tests drive).
-- `cargo test -p ragent-config --test all` - 417 passed.
-- `cargo test -p ragent-tools-core --test all` - 394 passed.
+- `cargo test -p codemason-config --test all` - 417 passed.
+- `cargo test -p codemason-tools-core --test all` - 394 passed.
 - `bash scripts/check-tool-rename.sh` - `OK: ... 39 reviewed exemption(s) all
   match`, so the doc migration introduced no new source literal and broke none
   of the 39 recorded exemptions.
-- `./target/debug/ragent run --dry-run` - `total: 148 visible tools`, 21
+- `./target/debug/cdmn run --dry-run` - `total: 148 visible tools`, 21
   families, unchanged. `docs/howtos/tools/INDEX.md`'s "148 registered tools"
   and `README.md`'s "148 across 21 categories" still agree with the registry.
 - ASCII (NFR-005): every line this task *edited* keeps the non-ASCII budget it
@@ -260,7 +260,7 @@ Documentation - exactly the 25 documents in the scope whose diff removes a line
 carrying a retired spelling (a further eight documents in the same diff carry
 another task's edits and are not this task's):
 
-`README.md`, `SPEC.md`, `QUICKSTART.md`, `crates/ragent-tools-core/DOCS.md`,
+`README.md`, `SPEC.md`, `QUICKSTART.md`, `crates/codemason-tools-core/DOCS.md`,
 `docs/howtos/bash.md`, `docs/howtos/codeindex.md`, `docs/howtos/config.md`,
 `docs/howtos/custom-agents.md`, `docs/howtos/hooks.md`,
 `docs/howtos/loopprogramming.md`, `docs/howtos/permissions.md`,
@@ -276,13 +276,13 @@ the former `userdocs` teams guide (superseded by `docs/howtos/teams.md`),
 `CHANGELOG.md` (the `Renamed` section).
 
 Rust (7 files, comments/prompt text/log text only, each followed by
-`cargo fmt`): `crates/ragent-config/src/config.rs`,
-`crates/ragent-agent/src/skill/mod.rs`,
-`crates/ragent-agent/src/tool/skill_manage.rs`,
-`crates/ragent-tui/src/app/session_ops.rs`,
-`crates/ragent-tui/src/app/event_handler.rs`,
-`crates/ragent-tui/tests/test_message_widget_summaries.rs`,
-`crates/ragent-tui/tests/test_session_models_state_deep.rs`.
+`cargo fmt`): `crates/codemason-config/src/config.rs`,
+`crates/codemason-agent/src/skill/mod.rs`,
+`crates/codemason-agent/src/tool/skill_manage.rs`,
+`crates/codemason-tui/src/app/session_ops.rs`,
+`crates/codemason-tui/src/app/event_handler.rs`,
+`crates/codemason-tui/tests/test_message_widget_summaries.rs`,
+`crates/codemason-tui/tests/test_session_models_state_deep.rs`.
 
 No production behaviour changed: `--dry-run` is 148 tools over 21 families
 before and after.

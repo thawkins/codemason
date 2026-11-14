@@ -5,15 +5,15 @@ status: draft
 # Manual Test Plan — CodeIndex Graph Extension (graphCI)
 
 This is a **manual** test plan. It contains human-readable test cases to be
-executed by a tester in the ragent TUI. No automated test code is included.
+executed by a tester in the codemason TUI. No automated test code is included.
 
 ## Prerequisites
 
 1. **Rust toolchain** — Rust 1.85+ (edition 2024), `cargo build` succeeds for
-   the ragent workspace.
-2. **ragent binary** — built from the working tree that includes the graphCI
+   the codemason workspace.
+2. **codemason binary** — built from the working tree that includes the graphCI
    extension (`cargo build` in the project root).
-3. **A test project** — the ragent codebase itself is ideal. It has 1000+
+3. **A test project** — the codemason codebase itself is ideal. It has 1000+
    indexed files, 23000+ symbols, and a rich cross-file symbol graph.
 4. **Code index enabled** — the tester has run `/codeindex on` and
    `/codeindex reindex` at least once so the SQLite index is populated.
@@ -34,9 +34,9 @@ executed by a tester in the ragent TUI. No automated test code is included.
 
 **Steps:**
 
-1. Launch ragent in the project root:
+1. Launch codemason in the project root:
    ```
-   ragent
+   codemason
    ```
 2. At the TUI prompt, type:
    ```
@@ -67,7 +67,7 @@ executed by a tester in the ragent TUI. No automated test code is included.
 
 **Steps:**
 
-1. Launch ragent.
+1. Launch codemason.
 2. Type `/codeindex off` and press **Enter** (if not already off).
 3. Type `/codeindex graph build` and press **Enter**.
 
@@ -90,7 +90,7 @@ executed by a tester in the ragent TUI. No automated test code is included.
 
 **Steps:**
 
-1. Launch ragent.
+1. Launch codemason.
 2. Type `/codeindex explain CodeIndex` and press **Enter**.
 
 **Test data to enter:**
@@ -118,7 +118,7 @@ executed by a tester in the ragent TUI. No automated test code is included.
 
 **Steps:**
 
-1. Launch ragent.
+1. Launch codemason.
 2. Type `/codeindex explain NonExistentSymbol12345` and press **Enter**.
 
 **Test data to enter:**
@@ -140,7 +140,7 @@ executed by a tester in the ragent TUI. No automated test code is included.
 
 **Steps:**
 
-1. Launch ragent.
+1. Launch codemason.
 2. Type `/codeindex path CodeIndex ParserRegistry` and press **Enter**.
 
 **Test data to enter:**
@@ -167,7 +167,7 @@ executed by a tester in the ragent TUI. No automated test code is included.
 
 **Steps:**
 
-1. Launch ragent.
+1. Launch codemason.
 2. Type `/codeindex path CodeIndex DoesNotExistXYZ` and press **Enter**.
 
 **Test data to enter:**
@@ -190,7 +190,7 @@ executed by a tester in the ragent TUI. No automated test code is included.
 
 **Steps:**
 
-1. Launch ragent.
+1. Launch codemason.
 2. Type `/codeindex communities` and press **Enter**.
 
 **Test data to enter:**
@@ -200,7 +200,7 @@ executed by a tester in the ragent TUI. No automated test code is included.
 - The output displays a list of detected communities:
   - Each community shows: community ID, auto-generated label, member count.
   - Communities are sorted by member count (descending).
-  - At least 1 community is shown (for the ragent codebase, expect ≥ 3).
+  - At least 1 community is shown (for the codemason codebase, expect ≥ 3).
 - The status bar shows `codeindex: communities (N)`.
 
 ---
@@ -213,7 +213,7 @@ executed by a tester in the ragent TUI. No automated test code is included.
 
 **Steps:**
 
-1. Launch ragent.
+1. Launch codemason.
 2. Type `/codeindex godnodes` and press **Enter**.
 
 **Test data to enter:**
@@ -235,21 +235,21 @@ executed by a tester in the ragent TUI. No automated test code is included.
 
 **Steps:**
 
-1. Launch ragent.
+1. Launch codemason.
 2. Type `/codeindex graph export` and press **Enter**.
-3. Exit ragent (press **q** or type `/quit` and press **Enter**).
-4. In a terminal, list the `.ragent/codeindex/` directory:
+3. Exit codemason (press **q** or type `/quit` and press **Enter**).
+4. In a terminal, list the `.codemason/codeindex/` directory:
    ```
-   ls -la .ragent/codeindex/
+   ls -la .codemason/codeindex/
    ```
 5. Open `graph.json` in a text editor or `jq`:
    ```
-   jq '.nodes | length' .ragent/codeindex/graph.json
-   jq '.edges | length' .ragent/codeindex/graph.json
+   jq '.nodes | length' .codemason/codeindex/graph.json
+   jq '.edges | length' .codemason/codeindex/graph.json
    ```
 6. Open `GRAPH_REPORT.md` in a text editor or `cat` it:
    ```
-   cat .ragent/codeindex/GRAPH_REPORT.md
+   cat .codemason/codeindex/GRAPH_REPORT.md
    ```
 
 **Test data to enter:**
@@ -257,8 +257,8 @@ executed by a tester in the ragent TUI. No automated test code is included.
 
 **Expected results:**
 - The TUI output displays the paths to both files:
-  - `.ragent/codeindex/graph.json`
-  - `.ragent/codeindex/GRAPH_REPORT.md`
+  - `.codemason/codeindex/graph.json`
+  - `.codemason/codeindex/GRAPH_REPORT.md`
 - `graph.json` exists and is valid JSON.
 - `jq '.nodes | length'` returns a number > 0.
 - `jq '.edges | length'` returns a number > 0.
@@ -278,7 +278,7 @@ executed by a tester in the ragent TUI. No automated test code is included.
 
 **Steps:**
 
-1. Launch ragent.
+1. Launch codemason.
 2. Type `/codeindex explain CodeIndex` and press **Enter**.
 3. Type `/codeindex path CodeIndex ParserRegistry` and press **Enter**.
 4. Type `/codeindex communities` and press **Enter**.
@@ -303,7 +303,7 @@ executed by a tester in the ragent TUI. No automated test code is included.
 
 **Steps:**
 
-1. Launch ragent.
+1. Launch codemason.
 2. Type `/codeindex show` and press **Enter**. Verify status and stats are
    displayed (same as before the extension).
 3. Type `/codeindex lang` and press **Enter**. Verify the language list is
@@ -339,7 +339,7 @@ executed by a tester in the ragent TUI. No automated test code is included.
 
 **Steps:**
 
-1. Launch ragent.
+1. Launch codemason.
 2. Type the following prompt and press **Enter**:
    ```
    Use the codeindex_search tool to search for "ParserRegistry"
@@ -391,7 +391,7 @@ executed by a tester in the ragent TUI. No automated test code is included.
 
 **Steps:**
 
-1. Launch ragent.
+1. Launch codemason.
 2. Type:
    ```
    Use the codeindex_explain tool to explain the "CodeIndex" symbol
@@ -418,7 +418,7 @@ executed by a tester in the ragent TUI. No automated test code is included.
 
 **Steps:**
 
-1. Launch ragent.
+1. Launch codemason.
 2. Type:
    ```
    Use the codeindex_path tool to find the path from "CodeIndex" to "ParserRegistry"
@@ -445,7 +445,7 @@ executed by a tester in the ragent TUI. No automated test code is included.
 
 **Steps:**
 
-1. Launch ragent.
+1. Launch codemason.
 2. Type `/codeindex reindex` and press **Enter**.
 3. While the reindex is in progress (status bar shows "reindexing"),
    immediately type:
@@ -476,7 +476,7 @@ executed by a tester in the ragent TUI. No automated test code is included.
 
 **Steps:**
 
-1. Launch ragent.
+1. Launch codemason.
 2. Type `/graph` and press **Enter**.
 3. Type `/explain` and press **Enter**.
 4. Type `/path` and press **Enter**.
@@ -499,20 +499,20 @@ After all manual tests are complete:
 
 1. Delete the generated graph artifacts:
    ```
-   rm -f .ragent/codeindex/graph.json
-   rm -f .ragent/codeindex/GRAPH_REPORT.md
+   rm -f .codemason/codeindex/graph.json
+   rm -f .codemason/codeindex/GRAPH_REPORT.md
    ```
 2. Optionally clear the graph edges from the database:
    - Run `/codeindex reindex` to rebuild the index from scratch (this will
      also rebuild the graph if edge derivation is wired into reindex).
-3. If the test project was a clone of the ragent repo, discard any
-   `.ragent/codeindex/` changes with:
+3. If the test project was a clone of the codemason repo, discard any
+   `.codemason/codeindex/` changes with:
    ```
-   git checkout .ragent/codeindex/
+   git checkout .codemason/codeindex/
    ```
    or simply delete the directory:
    ```
-   rm -rf .ragent/codeindex/
+   rm -rf .codemason/codeindex/
    ```
 4. Disable the code index:
    ```

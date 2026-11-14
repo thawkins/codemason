@@ -1,13 +1,13 @@
 # SQLite review and remediation plan
 
-Scope: every `rusqlite` use in the ragent workspace. Five stores, five files,
+Scope: every `rusqlite` use in the codemason workspace. Five stores, five files,
 236 SQL sites. Findings below are evidence-backed: query plans and timings were
 measured against this repository's own live databases (see
 [Appendix A](#appendix-a---measurement-harness)).
 
 Analysed at `fba05a8e` (2026-10-27). Status (re-checked at `7e1d91e6`): T-01, T-03 (resolved by
 dropping `memories_fts`), T-05, T-06, T-11 and T-14 have landed in
-`crates/ragent-storage/src/storage.rs` (each marked `SQLITE T-NN` in the code).
+`crates/codemason-storage/src/storage.rs` (each marked `SQLITE T-NN` in the code).
 T-04, T-07, T-08, T-10 and T-12 are open; T-02, T-09 and T-13 have not been
 re-verified. Each remediation item is a separate, independently verifiable task.
 
@@ -30,7 +30,7 @@ set of index and retention gaps.
 | P-05 | `sessions` has no index for its only list query. Every session picker does a full table scan plus a temp b-tree sort. | Medium | `SCAN sessions` + `USE TEMP B-TREE FOR ORDER BY` |
 | P-06 | `todos` list queries sort in a temp b-tree (`ORDER BY created_at` is not a prefix of `(session_id, status)`). | Medium | `USE TEMP B-TREE FOR ORDER BY` on both list variants |
 | P-07 | Activity log has no retention: 259 runs / 65 783 events / 90 MiB, growing forever. `expire_runs_older_than` exists and has **no production caller**. | Medium | test-only call sites; file size |
-| P-08 | The code-index WAL is never checkpointed (`wal_autocheckpoint` unset). 204 MB WAL against a 468 MB db. | Medium | `ls .ragent/codeindex/`: `index.db-wal` 204 MB |
+| P-08 | The code-index WAL is never checkpointed (`wal_autocheckpoint` unset). 204 MB WAL against a 468 MB db. | Medium | `ls .codemason/codeindex/`: `index.db-wal` 204 MB |
 | P-09 | `graph_edges` carries `idx_edges_kind`, which no query can use (single-column, low cardinality, never the sole predicate). Writes pay for it on every edge upsert. | Low | no `WHERE kind = ?` without a symbol predicate |
 | P-10 | `storage.rs` never sets `PRAGMA foreign_keys = ON`, so its nine `FOREIGN KEY`/`ON DELETE CASCADE` declarations are inert. | Low | 9 `FOREIGN KEY` declarations, 0 `foreign_keys` pragmas |
 | P-11 | `SourceVault` and `ContentCache` use `conn.prepare(..)` (not `prepare_cached`) on their hot paths; `ContentCache` also runs the full eviction query after **every** insert. | Low | 0 `prepare_cached` in both files |
@@ -54,24 +54,24 @@ crate, no `tokio-rusqlite`, no ORM.
 
 | Crate | Use |
 |---|---|
-| `ragent-storage` | `storage.rs`, `activity_log.rs` |
-| `ragent-codeindex` | `store.rs` |
-| `ragent-research` | `source_vault.rs` |
-| `ragent-tools-extended` | `masterfetch/cache.rs` |
-| `ragent-types` | `error.rs` only (`#[from] rusqlite::Error`) |
+| `codemason-storage` | `storage.rs`, `activity_log.rs` |
+| `codemason-codeindex` | `store.rs` |
+| `codemason-research` | `source_vault.rs` |
+| `codemason-tools-extended` | `masterfetch/cache.rs` |
+| `codemason-types` | `error.rs` only (`#[from] rusqlite::Error`) |
 
-`ragent-telemetry`, `ragent-server`, `ragent-config`, `ragent-connectors`,
-`ragent-plugins`, `ragent-surface`, `ragent-tools-core` contain **no SQLite**.
+`codemason-telemetry`, `codemason-server`, `codemason-config`, `codemason-connectors`,
+`codemason-plugins`, `codemason-surface`, `codemason-tools-core` contain **no SQLite**.
 
 ### 1.2 The five stores
 
 | Store | File | Lines | Database | Tables | Indexes | Concurrency |
 |---|---|---|---|---|---|---|
-| `Storage` | `crates/ragent-storage/src/storage.rs` | 5702 | `$XDG_CONFIG_HOME/ragent/ragent.db` | 18 (+1 dup `settings`) | 16 | `Mutex<Connection>` writer + `Option<Mutex<Connection>>` reader |
-| `ActivityLog` | `crates/ragent-storage/src/activity_log.rs` | 1768 | `$XDG_CONFIG_HOME/ragent/activity_log.db` | 1 | 2 (1 unique) | `Mutex<Connection>` |
-| `IndexStore` | `crates/ragent-codeindex/src/store.rs` | 1815 | `<index_dir>/index.db` | 8 | 19 | bare `Connection`, wrapped by `CodeIndex.store: Mutex<_>` |
-| `SourceVault` | `crates/ragent-research/src/source_vault.rs` | 656 | `<run>/vault.db` (one per run) | 1 | 2 | `Arc<Mutex<Connection>>` |
-| `ContentCache` | `crates/ragent-tools-extended/src/masterfetch/cache.rs` | 710 | `<cwd>/.ragent/masterfetch_cache.db` | 1 | 2 | `Arc<Mutex<Connection>>` |
+| `Storage` | `crates/codemason-storage/src/storage.rs` | 5702 | `$XDG_CONFIG_HOME/codemason/codemason.db` | 18 (+1 dup `settings`) | 16 | `Mutex<Connection>` writer + `Option<Mutex<Connection>>` reader |
+| `ActivityLog` | `crates/codemason-storage/src/activity_log.rs` | 1768 | `$XDG_CONFIG_HOME/codemason/activity_log.db` | 1 | 2 (1 unique) | `Mutex<Connection>` |
+| `IndexStore` | `crates/codemason-codeindex/src/store.rs` | 1815 | `<index_dir>/index.db` | 8 | 19 | bare `Connection`, wrapped by `CodeIndex.store: Mutex<_>` |
+| `SourceVault` | `crates/codemason-research/src/source_vault.rs` | 656 | `<run>/vault.db` (one per run) | 1 | 2 | `Arc<Mutex<Connection>>` |
+| `ContentCache` | `crates/codemason-tools-extended/src/masterfetch/cache.rs` | 710 | `<cwd>/.codemason/masterfetch_cache.db` | 1 | 2 | `Arc<Mutex<Connection>>` |
 
 ### 1.3 Schema ownership
 
@@ -108,13 +108,13 @@ re-runs all 27 DDL statements on every open. See [T-09](#t-09---remove-the-unrea
 
 Measurements were taken on this repository's own data:
 
-- `.ragent/codeindex/index.db`: 3798 files, 45 323 symbols, 309 033 refs, 764 916 edges.
-- `~/.config/ragent/ragent.db`: 3734 sessions, 18 219 messages, 2841 todos, 4687 run costs.
-- `~/.config/ragent/activity_log.db`: 259 runs, 65 783 events.
+- `.codemason/codeindex/index.db`: 3798 files, 45 323 symbols, 309 033 refs, 764 916 edges.
+- `~/.config/codemason/codemason.db`: 3734 sessions, 18 219 messages, 2841 todos, 4687 run costs.
+- `~/.config/codemason/activity_log.db`: 259 runs, 65 783 events.
 
 ### P-01 - `messages.parts` dominates the database, and nothing prunes it
 
-`dbstat` on the live `ragent.db`:
+`dbstat` on the live `codemason.db`:
 
 ```
 messages             1607.0 MiB
@@ -280,7 +280,7 @@ hot Task-tool path and the fix is one index.
 `activity_log.db` is 90 MiB: 259 runs, 65 783 events, mean 254 events per run.
 `ActivityLog::expire_runs_older_than` (`activity_log.rs:1372`) exists, is
 tested, and has **no production caller** - only
-`crates/ragent-storage/tests/test_activity_retention.rs`. Nothing ever deletes a
+`crates/codemason-storage/tests/test_activity_retention.rs`. Nothing ever deletes a
 run.
 
 Also: `expire_runs_older_than` runs `SELECT run_id ... GROUP BY run_id HAVING
@@ -292,8 +292,8 @@ purge.
 ### P-08 - the code-index WAL is never checkpointed
 
 ```
--rw-r--r-- 467791872 .ragent/codeindex/index.db
--rw-r--r-- 204150152 .ragent/codeindex/index.db-wal
+-rw-r--r-- 467791872 .codemason/codeindex/index.db
+-rw-r--r-- 204150152 .codemason/codeindex/index.db-wal
 ```
 
 `IndexStore::init_schema` sets `journal_mode`, `synchronous`, `temp_store` and
@@ -316,7 +316,7 @@ upserts maintains an index that is read zero times.
 
 `PRAGMA foreign_keys` defaults to OFF in SQLite and is per-connection.
 `storage.rs` never sets it; `store.rs:161` does. The eight `FOREIGN KEY`
-declarations in `ragent.db` (`messages`, `snapshots`, `run_cost_summaries`,
+declarations in `codemason.db` (`messages`, `snapshots`, `run_cost_summaries`,
 `background_tasks`, `todos`, `memory_tags`, `kg_relationships`) therefore do
 nothing, and `ON DELETE CASCADE` never fires. There is no `DELETE FROM sessions` today, so nothing is currently broken
 - but the schema advertises an invariant that is not enforced, and the FTS
@@ -335,7 +335,7 @@ every insert, holding the mutex.
 
 `snapshots` (`storage.rs:887`) and `mcp_servers` (`storage.rs:880`) have DDL and
 no producer or consumer anywhere in the tree. `snapshots` is additionally
-superseded by the file-based `ragent-storage/src/snapshot.rs`, which contains no
+superseded by the file-based `codemason-storage/src/snapshot.rs`, which contains no
 SQL.
 
 ---
@@ -399,11 +399,11 @@ exception to "never delete transcript rows", so it is **off by default**:
 - `Storage::count_messages_older_than` uses the same predicate and deletes
   nothing, so `--dry-run` reports an honest count.
 - **The file does not shrink.** `DELETE` returns pages to SQLite's freelist;
-  `ragent.db` keeps its size until a `VACUUM` rewrites it, and `VACUUM` needs
-  exclusive access - every other ragent process must have released the database
+  `codemason.db` keeps its size until a `VACUUM` rewrites it, and `VACUUM` needs
+  exclusive access - every other codemason process must have released the database
   and its `-wal`/`-shm` sidecars first.
 
-Surfaces: startup (when `enabled`), `ragent db prune [--days N] [--dry-run]`,
+Surfaces: startup (when `enabled`), `codemason db prune [--days N] [--dry-run]`,
 and the TUI `/db prune [--days N] [--dry-run]` (which asks for confirmation,
 with `No` preselected, before deleting anything).
 
@@ -516,7 +516,7 @@ Three separate caps, applied at write time, in this order of importance:
 3. **Add a retention sweep.** `Storage::prune_session_messages(session_id,
    keep)` deleting everything older than the newest N messages, and
    `Storage::prune_messages_older_than(duration)`. Wire the former into the
-   existing compaction path (`ragent-agent/src/session/` compaction already
+   existing compaction path (`codemason-agent/src/session/` compaction already
    decides what the model sees; this makes storage agree with it).
 
 **Verification**
@@ -686,7 +686,7 @@ with both plans below.
 **Size:** half a day. **Depends on:** nothing.
 
 1. Add a config knob (`activity_log.retention_days`, default 30; `0` = keep
-   forever) following the existing `ragent_config::activity_log` module.
+   forever) following the existing `codemason_config::activity_log` module.
 2. Call `expire_runs_older_than` from the existing background writer task start
    (`SessionProcessor::start_activity_writer`) once per process start, and from
    a daily tick.
@@ -871,7 +871,7 @@ foreign_key_check` on a fresh migration of the live db must return zero rows.
 **Size:** 30 minutes. **Depends on:** nothing.
 
 Both have zero CRUD sites. `snapshots` is superseded by the file-based
-`ragent-storage/src/snapshot.rs`. Removing them shrinks the schema batch and
+`codemason-storage/src/snapshot.rs`. Removing them shrinks the schema batch and
 removes two indexes from the migration. Keep the DDL in a comment or in this
 document's history if a future feature wants them back.
 
@@ -910,7 +910,7 @@ after each task.
 # 1. Where the bytes are (main store)
 python3 - <<'PY'
 import sqlite3, os
-p = os.path.expanduser('~/.config/ragent/ragent.db')
+p = os.path.expanduser('~/.config/codemason/codemason.db')
 c = sqlite3.connect(f'file:{p}?mode=ro', uri=True)
 for name, mib in c.execute(
     'SELECT name, SUM(pgsize)/1048576.0 mib FROM dbstat GROUP BY name ORDER BY mib DESC LIMIT 15'
@@ -923,7 +923,7 @@ PY
 # 2. Code-index volumes
 python3 - <<'PY'
 import sqlite3
-c = sqlite3.connect('file:.ragent/codeindex/index.db?mode=ro', uri=True)
+c = sqlite3.connect('file:.codemason/codeindex/index.db?mode=ro', uri=True)
 for t in ['indexed_files','symbols','symbol_refs','imports','file_deps','graph_edges','communities']:
     print(t, c.execute(f'select count(*) from {t}').fetchone()[0])
 PY
@@ -931,13 +931,13 @@ PY
 # 3. Plan of any statement
 python3 -c "
 import sqlite3
-c = sqlite3.connect('file:.ragent/codeindex/index.db?mode=ro', uri=True)
+c = sqlite3.connect('file:.codemason/codeindex/index.db?mode=ro', uri=True)
 for r in c.execute('EXPLAIN QUERY PLAN ' + '''<statement>'''):
     print(r[3])
 "
 ```
 
-The existing `crates/ragent-storage/tests/test_warm_index_scan.rs` is the model
+The existing `crates/codemason-storage/tests/test_warm_index_scan.rs` is the model
 for turning a measured plan into a regression test - copy that pattern for the
 new plan assertions in T-01, T-05, T-06, T-10.
 
@@ -945,7 +945,7 @@ new plan assertions in T-01, T-05, T-06, T-10.
 
 Recorded so the "no regression" checks have something to compare against.
 
-### `ragent.db`
+### `codemason.db`
 
 | Query | Plan | Time |
 |---|---|---|
@@ -985,16 +985,16 @@ pass knows where the remaining seconds go.
 
 | Concern | Location |
 |---|---|
-| Main schema + migrations | `crates/ragent-storage/src/storage.rs:807-1197` |
-| FTS session query | `crates/ragent-storage/src/storage.rs:4344-4540` |
-| FTS warm-up / reconcile | `crates/ragent-storage/src/storage.rs:4644-4790` |
+| Main schema + migrations | `crates/codemason-storage/src/storage.rs:807-1197` |
+| FTS session query | `crates/codemason-storage/src/storage.rs:4344-4540` |
+| FTS warm-up / reconcile | `crates/codemason-storage/src/storage.rs:4644-4790` |
 | Memory FTS writes | `storage.rs:2949`, `:3226`, `:3328`, `:3359`, `:3368`, `:3527` |
-| Activity-log schema | `crates/ragent-storage/src/activity_log.rs:246-263` |
+| Activity-log schema | `crates/codemason-storage/src/activity_log.rs:246-263` |
 | Activity-log append | `activity_log.rs:369-470`, `:486-620` |
 | Activity-log retention | `activity_log.rs:1372-1395` |
-| Code-index schema | `crates/ragent-codeindex/src/store.rs:155-280` |
+| Code-index schema | `crates/codemason-codeindex/src/store.rs:155-280` |
 | `query_symbols` | `store.rs:847-940` |
-| `derive_edges_for_file` | `crates/ragent-codeindex/src/graph/edges.rs:328-370` |
-| Graph full-build split | `crates/ragent-codeindex/src/graph/edges.rs:404-660` |
-| Vault schema + search | `crates/ragent-research/src/source_vault.rs:335-435` |
-| Cache schema + eviction | `crates/ragent-tools-extended/src/masterfetch/cache.rs:258-320`, `:660-705` |
+| `derive_edges_for_file` | `crates/codemason-codeindex/src/graph/edges.rs:328-370` |
+| Graph full-build split | `crates/codemason-codeindex/src/graph/edges.rs:404-660` |
+| Vault schema + search | `crates/codemason-research/src/source_vault.rs:335-435` |
+| Cache schema + eviction | `crates/codemason-tools-extended/src/masterfetch/cache.rs:258-320`, `:660-705` |

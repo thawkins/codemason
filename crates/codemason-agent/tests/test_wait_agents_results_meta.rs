@@ -1,0 +1,826 @@
+//! Regression test for the recurring "wait_agents reports truncated output"
+//! complaint.
+//!
+//! Root cause: when the combined output from several completed background
+//! sub-agents exceeds the generic 12 000-char tool-result budget, the
+//! head+tail truncation in `session/history.rs::tool_result_content_for_llm`
+//! silently drops one agent's report from the middle.  The previously-fixed
+//! paths in `tool/wait_agents.rs` (lines 120-131 for already-completed tasks
+//! and 169-174 for tasks completing during the wait loop) both return the
+//! full `entry.result`; what was missing is a durable way for the model to
+//! recover that full report after the generic truncation fires.
+//!
+//! Fix: `wait_agents` now mirrors every completed agent's full output into
+//! the tool's JSON metadata as a `"results"` array
+//! (`{task_id, agent, success, output}` per entry) so the data survives in
+//! the persisted `ToolCallState` regardless of the context-window cut.
+//!
+//! This test seeds a pseudo-completed background task directly into the
+//! `AgentManager` map (the same state it would reach after
+//! `processor.process_message` returns) and drives `wait_agents` against
+//! it, asserting the full long output is recoverable from both `content`
+//! and `metadata.results[*].output`.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use chrono::Utc;
+use codemason_agent::event::{Event, EventBus};
+use codemason_agent::permission::PermissionChecker;
+use codemason_agent::session::SessionManager;
+use codemason_agent::session::processor::SessionProcessor;
+use codemason_agent::storage::Storage;
+use codemason_agent::task::{AgentManager, TaskEntry, TaskStatus};
+use codemason_agent::tool::wait_agents::WaitAgentsTool;
+use codemason_agent::tool::{Tool, ToolContext, ToolRegistry};
+use codemason_llm::provider::{ModelInfo, Provider, ProviderRegistry};
+use parking_lot::RwLock;
+use serde_json::json;
+use tokio::sync::RwLock as TokioRwLock;
+
+/// Provider whose model resolution panics, used to simulate a sub-agent
+/// that dies inside its background task.
+#[derive(Clone)]
+struct PanicProvider;
+
+#[async_trait::async_trait]
+impl Provider for PanicProvider {
+    fn id(&self) -> &'static str {
+        "panic"
+    }
+
+    fn name(&self) -> &'static str {
+        "Panic Provider"
+    }
+
+    fn default_models(&self) -> Vec<ModelInfo> {
+        panic!("simulated sub-agent panic during model resolution");
+    }
+
+    async fn create_client(
+        &self,
+        _api_key: &str,
+        _base_url: Option<&str>,
+        _options: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> anyhow::Result<Box<dyn codemason_agent::llm::LlmClient>> {
+        panic!("simulated sub-agent panic during client creation");
+    }
+
+    fn as_any_static(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+fn test_processor_with_panic_provider() -> Arc<SessionProcessor> {
+    let processor = test_processor();
+    let mut processor = Arc::try_unwrap(processor)
+        .unwrap_or_else(|_| panic!("test processor should have refcount 1"));
+    if let Some(registry) = Arc::get_mut(&mut processor.provider_registry) {
+        registry.register(Box::new(PanicProvider));
+    }
+    Arc::new(processor)
+}
+
+#[tokio::test]
+async fn test_wait_agents_returns_when_background_task_panics() {
+    let event_bus = Arc::new(EventBus::new(16));
+    let processor = test_processor_with_panic_provider();
+    let manager = Arc::new(AgentManager::new(event_bus.clone(), processor, 4, 300));
+    let parent_sid = "parent-sess";
+
+    let entry = manager
+        .spawn_background(
+            parent_sid,
+            "explore",
+            "do the thing",
+            None,
+            &PathBuf::from("target/temp"),
+            None,
+        )
+        .await
+        .expect("spawn should succeed");
+
+    let ctx = make_ctx(parent_sid, event_bus.clone(), Arc::clone(&manager));
+    let tool = WaitAgentsTool;
+
+    let output = tokio::time::timeout(
+        Duration::from_secs(5),
+        tool.execute(json!({"task_ids": [entry.id], "timeout_secs": 60}), &ctx),
+    )
+    .await
+    .expect("wait_agents should return quickly after a panic")
+    .expect("wait_agents should succeed");
+
+    assert!(
+        output.content.contains("panicked"),
+        "wait_agents should surface the panic failure; got: {}",
+        output.content
+    );
+}
+
+fn test_processor() -> Arc<SessionProcessor> {
+    let storage = Arc::new(Storage::open_in_memory().expect("in-memory storage"));
+    let event_bus = Arc::new(EventBus::new(16));
+    let session_manager = Arc::new(SessionManager::new(storage, event_bus.clone()));
+    Arc::new(SessionProcessor {
+        session_manager,
+        provider_registry: Arc::new(ProviderRegistry::new()),
+        tool_registry: Arc::new(ToolRegistry::new()),
+        permission_checker: Arc::new(RwLock::new(PermissionChecker::new(vec![]))),
+        event_bus,
+        agent_manager: std::sync::OnceLock::new(),
+        team_manager: Default::default(),
+        mcp_client: std::sync::OnceLock::new(),
+        connector_session: tokio::sync::RwLock::new(None),
+        connector_statuses: tokio::sync::RwLock::new(None),
+        code_index: std::sync::OnceLock::new(),
+        project_code_indexes: Default::default(),
+        project_tool_registries: Default::default(),
+        active_spec: TokioRwLock::new(None),
+        spec_manager: std::sync::OnceLock::new(),
+        cached_tool_definitions: RwLock::new(None),
+        cached_tool_names: RwLock::new(None),
+        cached_tool_definition_bytes: RwLock::new(None),
+        llm_client_cache: RwLock::new(std::collections::HashMap::new()),
+        cached_config: parking_lot::Mutex::new(None),
+        team_context_cache: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        tool_repeat_guard: std::sync::Arc::new(parking_lot::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
+        extraction_engine: std::sync::OnceLock::new(),
+        stream_config: codemason_agent::StreamConfig::default(),
+        auto_approve: false,
+        system_prompt_cache: RwLock::new(None),
+        skill_body_cache: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+        read_timestamps: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+        telemetry: Arc::new(codemason_agent::telemetry::TelemetrySubsystem::disabled()),
+        bg_service: std::sync::OnceLock::new(),
+        activity_log: std::sync::OnceLock::new(),
+        activity_log_tx: tokio::sync::Mutex::new(None),
+        skill_registry_cache: parking_lot::Mutex::new(None),
+        active_loops: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+        active_loop_specs: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+        loop_telemetry_recorded: std::sync::atomic::AtomicBool::new(false),
+        active_loop_interrupts: parking_lot::RwLock::new(std::collections::HashMap::new()),
+        active_loop_captures: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+        last_message_end_reason: std::sync::RwLock::new(std::collections::HashMap::new()),
+        pending_verdicts: codemason_agent::session::pending::PendingVerdicts::new(),
+    })
+}
+
+fn make_ctx(
+    session_id: &str,
+    event_bus: Arc<EventBus>,
+    agent_manager: Arc<AgentManager>,
+) -> ToolContext {
+    ToolContext {
+        session_id: session_id.to_string(),
+        working_dir: PathBuf::from("target/temp"),
+        event_bus,
+        storage: None,
+        agent_manager: Some(agent_manager),
+        active_model: None,
+        provider_registry: None,
+        team_context: None,
+        team_manager: None,
+        code_index: None,
+        bg_service: None,
+        spec_manager: None,
+        active_spec_id: None,
+        config: None,
+        allowed_roots: Vec::new(),
+        read_timestamps: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+        cached_team_dir: Arc::new(std::sync::Mutex::new(None)),
+        permission_checker: None,
+        tool_registry: ToolContext::default_tool_registry(),
+        canonical_cache: std::sync::Arc::new(codemason_tools_core::CanonicalPathCache::new()),
+    }
+}
+
+/// Seed a completed background task directly into the manager map (same state
+/// it reaches after `processor.process_message` succeeds).
+async fn seed_completed_task(
+    manager: &AgentManager,
+    parent_session_id: &str,
+    task_id: &str,
+    agent_name: &str,
+    result: &str,
+    output_file: Option<PathBuf>,
+) {
+    let entry = TaskEntry {
+        id: task_id.to_string(),
+        parent_session_id: parent_session_id.to_string(),
+        child_session_id: format!("child-{task_id}"),
+        agent_name: agent_name.to_string(),
+        task_prompt: "ignored".to_string(),
+        background: true,
+        detached: false,
+        status: TaskStatus::Completed,
+        result: Some(Arc::from(result)),
+        error: None,
+        created_at: Utc::now(),
+        completed_at: Some(Utc::now()),
+        reported: false,
+        waiter_count: 0,
+        output_file,
+        report_status: codemason_agent::task::ReportStatus::default(),
+        time_bound_secs: None,
+    };
+    manager.seed_completed_for_test(entry).await;
+}
+
+#[tokio::test]
+async fn test_wait_agents_results_meta_contains_full_output() {
+    let event_bus = Arc::new(EventBus::new(16));
+    let processor = test_processor();
+    let manager = Arc::new(AgentManager::new(event_bus.clone(), processor, 4, 300));
+    let parent_sid = "parent-sess";
+    let task_id = "task-alpha-0000";
+    // Deliberately longer than a single chunk of text the agent actually
+    // writes - ensures the results[] path carries the whole report, not a
+    // truncated preview.
+    let long_report = format!(
+        "FINDINGS: {}\n\nDetailed report body end.",
+        "x".repeat(20_000)
+    );
+    let report_path = PathBuf::from("/project/log/subagents/task-alpha-0000.md");
+    seed_completed_task(
+        &manager,
+        parent_sid,
+        task_id,
+        "explore",
+        &long_report,
+        Some(report_path.clone()),
+    )
+    .await;
+
+    let ctx = make_ctx(parent_sid, event_bus.clone(), Arc::clone(&manager));
+    let tool = WaitAgentsTool;
+    let output = tool
+        .execute(json!({}), &ctx)
+        .await
+        .expect("wait_agents should succeed");
+
+    // 1. `content` still carries the full report (previously fixed path).
+    assert!(
+        output.content.contains(&long_report),
+        "content must include the full agent report; got {} chars",
+        output.content.len()
+    );
+    assert!(output.content.contains("1 task(s) completed"));
+
+    // 2. Metadata `results[]` mirrors the same full output so the data
+    //    survives the generic 12k head+tail truncation applied later in
+    //    `history.rs::tool_result_content_for_llm`.
+    let meta = output.metadata.expect("metadata must be present");
+    let results = meta
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+        .expect("results array must exist");
+    assert_eq!(results.len(), 1, "one completed task → one results entry");
+    let entry = &results[0];
+    assert_eq!(
+        entry.get("task_id").and_then(serde_json::Value::as_str),
+        Some(task_id)
+    );
+    assert_eq!(
+        entry.get("agent").and_then(serde_json::Value::as_str),
+        Some("explore")
+    );
+    assert_eq!(
+        entry.get("success").and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+    let output_text = entry
+        .get("output")
+        .and_then(serde_json::Value::as_str)
+        .expect("results[0].output must be a string");
+    assert_eq!(
+        output_text, long_report,
+        "results[0].output must be the COMPLETE agent report, not a truncated preview"
+    );
+
+    // 3. The durable on-disk report path is surfaced in BOTH the tool
+    //    content and the metadata results entry so the parent agent can
+    //    recover omitted findings with the `read` tool.
+    assert_eq!(
+        entry.get("output_file").and_then(serde_json::Value::as_str),
+        Some(report_path.display().to_string().as_str())
+    );
+    assert!(
+        output.content.contains(&report_path.display().to_string()),
+        "content must reference the log/subagents report file"
+    );
+    assert!(output.content.contains("Full report:"));
+}
+
+/// Seed a running background task directly into the manager map.  Used to
+/// set up the race/scan regression tests below; the task can later be
+/// overwritten with a completed entry.
+async fn seed_running_task(
+    manager: &AgentManager,
+    parent_session_id: &str,
+    task_id: &str,
+    agent_name: &str,
+    task_prompt: &str,
+) {
+    let entry = TaskEntry {
+        id: task_id.to_string(),
+        parent_session_id: parent_session_id.to_string(),
+        child_session_id: format!("child-{task_id}"),
+        agent_name: agent_name.to_string(),
+        task_prompt: task_prompt.to_string(),
+        background: true,
+        detached: false,
+        status: TaskStatus::Running,
+        result: None,
+        error: None,
+        created_at: Utc::now(),
+        completed_at: None,
+        reported: false,
+        waiter_count: 0,
+        output_file: None,
+        report_status: codemason_agent::task::ReportStatus::default(),
+        time_bound_secs: None,
+    };
+    manager.seed_completed_for_test(entry).await;
+}
+
+/// Seed a settled background task with an arbitrary terminal status.
+///
+/// Used by the FR-007/FR-014 tests below: a cancelled task must report
+/// `cancelled`, not the `failed` label the older `success`-only metadata
+/// collapsed it into.
+async fn seed_settled_task(
+    manager: &AgentManager,
+    parent_session_id: &str,
+    task_id: &str,
+    agent_name: &str,
+    status: TaskStatus,
+    result: Option<&str>,
+    error: Option<&str>,
+) {
+    let entry = TaskEntry {
+        id: task_id.to_string(),
+        parent_session_id: parent_session_id.to_string(),
+        child_session_id: format!("child-{task_id}"),
+        agent_name: agent_name.to_string(),
+        task_prompt: "ignored".to_string(),
+        background: true,
+        detached: false,
+        status,
+        result: result.map(Arc::from),
+        error: error.map(Arc::from),
+        created_at: Utc::now(),
+        completed_at: Some(Utc::now()),
+        reported: false,
+        waiter_count: 0,
+        output_file: None,
+        report_status: codemason_agent::task::ReportStatus::default(),
+        time_bound_secs: None,
+    };
+    manager.seed_completed_for_test(entry).await;
+}
+
+/// Read `metadata.results[*]` and `metadata.tasks[*]` for `task_id`.
+fn entries_for(output: &codemason_agent::tool::ToolOutput, task_id: &str) -> (String, String) {
+    let meta = output.metadata.as_ref().expect("metadata must be present");
+    let find = |key: &str, id_field: &str| -> String {
+        meta.get(key)
+            .and_then(serde_json::Value::as_array)
+            .unwrap_or_else(|| panic!("metadata.{key} must be an array"))
+            .iter()
+            .find(|e| e.get(id_field).and_then(serde_json::Value::as_str) == Some(task_id))
+            .and_then(|e| e.get("status"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_else(|| panic!("{key} entry for {task_id} must carry a `status` string"))
+            .to_string()
+    };
+    (find("results", "task_id"), find("tasks", "id"))
+}
+
+#[tokio::test]
+async fn test_wait_agents_reports_cancelled_not_failed() {
+    let event_bus = Arc::new(EventBus::new(16));
+    let processor = test_processor();
+    let manager = Arc::new(AgentManager::new(event_bus.clone(), processor, 4, 300));
+    let parent_sid = "parent-sess";
+
+    seed_settled_task(
+        &manager,
+        parent_sid,
+        "task-cancelled-1",
+        "explore",
+        TaskStatus::Cancelled,
+        None,
+        None,
+    )
+    .await;
+    seed_settled_task(
+        &manager,
+        parent_sid,
+        "task-failed-0001",
+        "explore",
+        TaskStatus::Failed,
+        None,
+        Some("provider exploded"),
+    )
+    .await;
+
+    let ctx = make_ctx(parent_sid, event_bus.clone(), Arc::clone(&manager));
+    let output = WaitAgentsTool
+        .execute(json!({}), &ctx)
+        .await
+        .expect("wait_agents should succeed");
+
+    let (cancelled_results, cancelled_tasks) = entries_for(&output, "task-cancelled-1");
+    let (failed_results, failed_tasks) = entries_for(&output, "task-failed-0001");
+
+    assert_eq!(
+        cancelled_results, "cancelled",
+        "FR-014: a cancelled task must report `cancelled` in metadata.results"
+    );
+    assert_eq!(
+        cancelled_tasks, "cancelled",
+        "FR-014: a cancelled task must report `cancelled` in metadata.tasks"
+    );
+    assert_eq!(
+        failed_results, "failed",
+        "FR-014: a failed task must report `failed` in metadata.results"
+    );
+    assert_eq!(
+        failed_tasks, "failed",
+        "FR-014: a failed task must report `failed` in metadata.tasks"
+    );
+    assert_ne!(
+        cancelled_results, failed_results,
+        "FR-014: the two terminal states must not collapse into one label"
+    );
+    assert!(
+        output.content.contains("task-cancelled-1") || output.content.contains("cancelled"),
+        "the content must render the cancelled status; got: {}",
+        output.content
+    );
+}
+
+#[tokio::test]
+async fn test_wait_agents_status_uses_the_canonical_task_status_vocabulary() {
+    // FR-007: every reported status is TaskStatus::as_str(), never a
+    // re-derived label.
+    let event_bus = Arc::new(EventBus::new(16));
+    let processor = test_processor();
+    let manager = Arc::new(AgentManager::new(event_bus.clone(), processor, 4, 300));
+    let parent_sid = "parent-sess";
+
+    let seeded = [
+        ("task-completed-1", TaskStatus::Completed),
+        ("task-failed-0002", TaskStatus::Failed),
+        ("task-cancelled-2", TaskStatus::Cancelled),
+        // FR-017: a per-call time bound has its own terminal state.
+        ("task-timedout-01", TaskStatus::TimedOut),
+    ];
+    for (task_id, status) in &seeded {
+        seed_settled_task(
+            &manager,
+            parent_sid,
+            task_id,
+            "explore",
+            status.clone(),
+            None,
+            None,
+        )
+        .await;
+    }
+
+    let ctx = make_ctx(parent_sid, event_bus.clone(), Arc::clone(&manager));
+    let output = WaitAgentsTool
+        .execute(json!({}), &ctx)
+        .await
+        .expect("wait_agents should succeed");
+
+    for (task_id, status) in &seeded {
+        let (results_status, tasks_status) = entries_for(&output, task_id);
+        assert_eq!(
+            results_status,
+            status.as_str(),
+            "{task_id} must report the canonical status in metadata.results"
+        );
+        assert_eq!(
+            tasks_status,
+            status.as_str(),
+            "{task_id} must report the canonical status in metadata.tasks"
+        );
+    }
+
+    // The canonical vocabulary is what is rendered, so the reader sees the
+    // same words the registry uses.
+    for (_, status) in &seeded {
+        assert!(
+            output.content.contains(status.as_str()),
+            "content must render the canonical status `{}`; got: {}",
+            status.as_str(),
+            output.content
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_wait_agents_keeps_success_boolean_as_a_refinement() {
+    // The `success` boolean predates `status`; it must stay present and
+    // agree with the status (never contradict it) so older callers keep
+    // working.
+    let event_bus = Arc::new(EventBus::new(16));
+    let processor = test_processor();
+    let manager = Arc::new(AgentManager::new(event_bus.clone(), processor, 4, 300));
+    let parent_sid = "parent-sess";
+
+    seed_settled_task(
+        &manager,
+        parent_sid,
+        "task-ok-0000001",
+        "explore",
+        TaskStatus::Completed,
+        Some("all good"),
+        None,
+    )
+    .await;
+    seed_settled_task(
+        &manager,
+        parent_sid,
+        "task-cancelled-3",
+        "explore",
+        TaskStatus::Cancelled,
+        None,
+        None,
+    )
+    .await;
+
+    let ctx = make_ctx(parent_sid, event_bus.clone(), Arc::clone(&manager));
+    let output = WaitAgentsTool
+        .execute(json!({}), &ctx)
+        .await
+        .expect("wait_agents should succeed");
+
+    let meta = output.metadata.as_ref().expect("metadata must be present");
+    let results = meta
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+        .expect("results array must exist");
+    for entry in results {
+        let status = entry
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .expect("every results entry must carry `status`");
+        let success = entry
+            .get("success")
+            .and_then(serde_json::Value::as_bool)
+            .expect("every results entry must keep `success`");
+        assert_eq!(
+            success,
+            status == "completed",
+            "`success` must agree with `status` (status={status}, success={success})"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_wait_agents_event_path_prefers_registry_status_over_the_event_boolean() {
+    // A task that settles through the event path must also carry the
+    // registry's status. A `SubagentComplete` with `success: false` whose
+    // entry is `Cancelled` must report `cancelled`, not `failed`.
+    let event_bus = Arc::new(EventBus::new(16));
+    let processor = test_processor();
+    let manager = Arc::new(AgentManager::new(event_bus.clone(), processor, 4, 300));
+    let parent_sid = "parent-sess";
+    let task_id = "task-event-cancel";
+
+    seed_running_task(&manager, parent_sid, task_id, "explore", "do the thing").await;
+
+    let manager2 = Arc::clone(&manager);
+    let event_bus2 = Arc::clone(&event_bus);
+    let parent_sid2 = parent_sid.to_string();
+    let task_id2 = task_id.to_string();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        seed_settled_task(
+            &manager2,
+            &parent_sid2,
+            &task_id2,
+            "explore",
+            TaskStatus::Cancelled,
+            None,
+            None,
+        )
+        .await;
+        event_bus2.publish(Event::SubagentComplete {
+            session_id: parent_sid2,
+            task_id: task_id2,
+            child_session_id: "child-task-event-cancel".to_string(),
+            summary: "cancelled".to_string(),
+            success: false,
+            duration_ms: 10,
+            finish_reason: "cancelled".to_string(),
+            status: String::new(),
+            output_file: None,
+        });
+    });
+
+    let ctx = make_ctx(parent_sid, event_bus.clone(), Arc::clone(&manager));
+    let output = tokio::time::timeout(
+        Duration::from_secs(2),
+        WaitAgentsTool.execute(json!({"task_ids": [task_id], "timeout_secs": 60}), &ctx),
+    )
+    .await
+    .expect("wait_agents should return when the task settles via event")
+    .expect("wait_agents should succeed");
+
+    let (results_status, _) = entries_for(&output, task_id);
+    assert_eq!(
+        results_status, "cancelled",
+        "the event path must report the registry's `cancelled`, not the event's \
+         `success: false` collapsed to `failed`"
+    );
+}
+
+#[tokio::test]
+async fn test_wait_agents_returns_when_task_completes_via_event() {
+    let event_bus = Arc::new(EventBus::new(16));
+    let processor = test_processor();
+    let manager = Arc::new(AgentManager::new(event_bus.clone(), processor, 4, 300));
+    let parent_sid = "parent-sess";
+    let task_id = "explore-feedface";
+
+    seed_running_task(&manager, parent_sid, task_id, "explore", "do the thing").await;
+
+    let manager2 = Arc::clone(&manager);
+    let event_bus2 = Arc::clone(&event_bus);
+    let parent_sid2 = parent_sid.to_string();
+    let task_id2 = task_id.to_string();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let child_session_id = format!("child-{task_id2}");
+        seed_completed_task(
+            &manager2,
+            &parent_sid2,
+            &task_id2,
+            "explore",
+            "event result",
+            None,
+        )
+        .await;
+        event_bus2.publish(Event::SubagentComplete {
+            session_id: parent_sid2,
+            task_id: task_id2,
+            child_session_id,
+            summary: "event result".to_string(),
+            success: true,
+            duration_ms: 42,
+            finish_reason: "complete".to_string(),
+            status: String::new(),
+            output_file: None,
+        });
+    });
+
+    let ctx = make_ctx(parent_sid, event_bus.clone(), Arc::clone(&manager));
+    let tool = WaitAgentsTool;
+
+    let output = tokio::time::timeout(
+        Duration::from_secs(2),
+        tool.execute(json!({"task_ids": [task_id], "timeout_secs": 60}), &ctx),
+    )
+    .await
+    .expect("wait_agents should return when the task completes via event")
+    .expect("wait_agents should succeed");
+
+    assert!(
+        output.content.contains("event result"),
+        "wait_agents must return the completed task's result; got: {}",
+        output.content
+    );
+    assert!(
+        output.content.contains("1 task(s) completed"),
+        "wait_agents must report one completed task; got: {}",
+        output.content
+    );
+}
+
+#[tokio::test]
+async fn test_wait_agents_falls_back_to_scan_when_event_is_missed() {
+    let event_bus = Arc::new(EventBus::new(16));
+    let processor = test_processor();
+    let manager = Arc::new(AgentManager::new(event_bus.clone(), processor, 4, 300));
+    let parent_sid = "parent-sess";
+    let task_id = "explore-deadbeef";
+
+    seed_running_task(&manager, parent_sid, task_id, "explore", "do the thing").await;
+
+    let manager2 = Arc::clone(&manager);
+    let parent_sid2 = parent_sid.to_string();
+    let task_id2 = task_id.to_string();
+    tokio::spawn(async move {
+        // Let wait_agents finish its initial snapshot before marking the task
+        // complete, then do *not* publish SubagentComplete.  The periodic scan
+        // fallback must detect the completed entry instead.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        seed_completed_task(
+            &manager2,
+            &parent_sid2,
+            &task_id2,
+            "explore",
+            "scanned result",
+            None,
+        )
+        .await;
+    });
+
+    let ctx = make_ctx(parent_sid, event_bus.clone(), Arc::clone(&manager));
+    let tool = WaitAgentsTool;
+
+    let output = tokio::time::timeout(
+        // The tool polls the task map every 5 seconds; give it a generous
+        // margin so the test is not flaky on a busy CI runner.
+        Duration::from_secs(8),
+        tool.execute(json!({"task_ids": [task_id], "timeout_secs": 60}), &ctx),
+    )
+    .await
+    .expect("wait_agents should fall back to scanning the task map")
+    .expect("wait_agents should succeed");
+
+    assert!(
+        output.content.contains("scanned result"),
+        "periodic scan must pick up the completed task; got: {}",
+        output.content
+    );
+    assert!(
+        output.content.contains("1 task(s) completed"),
+        "wait_agents must report one completed task; got: {}",
+        output.content
+    );
+}
+
+#[tokio::test]
+async fn test_wait_agents_race_snapshot_and_completion_uses_scan() {
+    let event_bus = Arc::new(EventBus::new(16));
+    let processor = test_processor();
+    let manager = Arc::new(AgentManager::new(event_bus.clone(), processor, 4, 300));
+    let parent_sid = "parent-sess";
+    let task_id = "explore-cafebabe";
+
+    seed_running_task(&manager, parent_sid, task_id, "explore", "do the thing").await;
+
+    // Complete the task *synchronously* before invoking wait_agents, but
+    // do not publish the SubagentComplete event.  The initial snapshot will
+    // see Running, but the post-increment re-scan must notice it is already
+    // completed and return without entering the long wait loop.
+    seed_completed_task(
+        &manager,
+        parent_sid,
+        task_id,
+        "explore",
+        "race result",
+        None,
+    )
+    .await;
+
+    let ctx = make_ctx(parent_sid, event_bus.clone(), Arc::clone(&manager));
+    let tool = WaitAgentsTool;
+
+    let output = tokio::time::timeout(
+        Duration::from_millis(500),
+        tool.execute(json!({"task_ids": [task_id], "timeout_secs": 60}), &ctx),
+    )
+    .await
+    .expect("wait_agents should return immediately for an already-completed task")
+    .expect("wait_agents should succeed");
+
+    assert!(
+        output.content.contains("race result"),
+        "post-increment scan must catch the race between snapshot and completion; got: {}",
+        output.content
+    );
+    assert!(
+        output.content.contains("1 task(s) completed"),
+        "wait_agents must report one completed task; got: {}",
+        output.content
+    );
+}
+
+#[tokio::test]
+async fn test_wait_agents_results_meta_no_tasks() {
+    let event_bus = Arc::new(EventBus::new(16));
+    let processor = test_processor();
+    let manager = Arc::new(AgentManager::new(event_bus.clone(), processor, 4, 300));
+    let ctx = make_ctx("parent-sess", event_bus, manager);
+
+    let tool = WaitAgentsTool;
+    let output = tool
+        .execute(json!({}), &ctx)
+        .await
+        .expect("no running tasks must return early without error");
+    assert!(
+        output.content.contains("No running background tasks"),
+        "expected the 'no tasks' early-return path, got: {}",
+        output.content
+    );
+}

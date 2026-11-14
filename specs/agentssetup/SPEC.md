@@ -43,17 +43,17 @@ observed in the source, not inferred.
 
 **In scope**
 
-- `crates/ragent-agent/src/tool/new_agent.rs`
-- `crates/ragent-agent/src/tool/cancel_agent.rs`
-- `crates/ragent-agent/src/tool/list_agents.rs`
-- `crates/ragent-agent/src/tool/wait_agents.rs`
-- `crates/ragent-agent/src/tool/bg.rs` and `crates/ragent-agent/src/background/mod.rs`
-- `crates/ragent-agent/src/task/mod.rs` (`AgentManager`, `TaskEntry`, `TaskStatus`)
-- `crates/ragent-agent/src/agent/mod.rs` (the sub-agent guidance block in the system prompt)
-- `crates/ragent-tui/src/app/subagent_events.rs`, `crates/ragent-tui/src/app/spawn.rs`,
-  the `/cancel` arm of `crates/ragent-tui/src/app/slash.rs`, and the Agents panel
+- `crates/codemason-agent/src/tool/new_agent.rs`
+- `crates/codemason-agent/src/tool/cancel_agent.rs`
+- `crates/codemason-agent/src/tool/list_agents.rs`
+- `crates/codemason-agent/src/tool/wait_agents.rs`
+- `crates/codemason-agent/src/tool/bg.rs` and `crates/codemason-agent/src/background/mod.rs`
+- `crates/codemason-agent/src/task/mod.rs` (`AgentManager`, `TaskEntry`, `TaskStatus`)
+- `crates/codemason-agent/src/agent/mod.rs` (the sub-agent guidance block in the system prompt)
+- `crates/codemason-tui/src/app/subagent_events.rs`, `crates/codemason-tui/src/app/spawn.rs`,
+  the `/cancel` arm of `crates/codemason-tui/src/app/slash.rs`, and the Agents panel
   renderers
-- `crates/ragent-server/src/routes/mod.rs` sub-agent routes
+- `crates/codemason-server/src/routes/mod.rs` sub-agent routes
 
 **Out of scope**
 
@@ -169,7 +169,7 @@ close it.
   the primary artefact the model reads.
 - **D2 - `&task.id[..8]` is a byte slice on a possibly non-ASCII id.**
   `list_agents.rs:134-138` slices by bytes while the shared helper
-  `ragent_types::strutil::short_prefix` (`strutil.rs:194`) exists precisely to cut on
+  `codemason_types::strutil::short_prefix` (`strutil.rs:194`) exists precisely to cut on
   a character boundary, and `wait_agents.rs:330` already uses it. Two ids of the same
   registry are shortened two different ways, and one of them can panic.
 - **D3 - `/spawn` hand-rolls a launch slot and a helper runtime.**
@@ -320,7 +320,7 @@ distinct statuses into one label.
 
 **FR-008 - Short identifiers are produced by one helper.**
 Every renderer or formatter that abbreviates a task id or session id shall use
-`ragent_types::strutil::short_prefix`, and shall never slice a string by byte offset.
+`codemason_types::strutil::short_prefix`, and shall never slice a string by byte offset.
 
 **FR-009 - Refusals are errors, not successful results.**
 A precondition failure in a sub-agent tool (team context active, limit reached,

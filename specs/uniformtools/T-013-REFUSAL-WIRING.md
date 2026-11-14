@@ -28,7 +28,7 @@ owns its sentence, its record status, and therefore its flag.
 
 ## 2. What was actually missing
 
-`crates/ragent-agent/src/session/tool_input_error.rs` already existed
+`crates/codemason-agent/src/session/tool_input_error.rs` already existed
 (`d6abcd4a`): `ToolInputError` with `Undecodable` / `SchemaViolation` /
 `UnknownTool`, four constructors, `status()`, `is_error()`, `into_anyhow()`, and
 one `Display` that quotes the parser and states both the tool and the
@@ -37,13 +37,13 @@ cases.
 
 **Neither was reachable.**
 
-1. `crates/ragent-agent/src/session/mod.rs` never declared
+1. `crates/codemason-agent/src/session/mod.rs` never declared
    `pub mod tool_input_error;`. The file was dead source: `cargo check` did not
    build it.
-2. `crates/ragent-agent/tests/all.rs` never had a `#[path]` line for
+2. `crates/codemason-agent/tests/all.rs` never had a `#[path]` line for
    `test_tool_input_error.rs`. The 7 cases had never run.
-3. `crates/ragent-types/src/lib.rs` did not re-export `ToolArgDecodeError`, so
-   the test file's `use ragent_types::ToolArgDecodeError;` could not resolve.
+3. `crates/codemason-types/src/lib.rs` did not re-export `ToolArgDecodeError`, so
+   the test file's `use codemason_types::ToolArgDecodeError;` could not resolve.
 
 That is the same orphan-module defect T-030 and T-012 each found, third time in
 this spec. Meanwhile the two gates the task names were still hand-rolled, and
@@ -67,12 +67,12 @@ The type was in the schema it was reading and simply not reported.
 
 ### 3.1 The module is compiled, and its type is importable
 
-- `pub mod tool_input_error;` in `crates/ragent-agent/src/session/mod.rs`, with
+- `pub mod tool_input_error;` in `crates/codemason-agent/src/session/mod.rs`, with
   the module's one-line doc, in alphabetical position between `text_toolcalls`
   and `verification`.
 - `#[path = "test_tool_input_error.rs"] mod test_tool_input_error;` in
-  `crates/ragent-agent/tests/all.rs`.
-- `pub use tool_args::ToolArgDecodeError;` at the `ragent-types` crate root, so
+  `crates/codemason-agent/tests/all.rs`.
+- `pub use tool_args::ToolArgDecodeError;` at the `codemason-types` crate root, so
   the refusal's argument type is nameable from the root the rest of the workspace
   already imports.
 
@@ -99,7 +99,7 @@ The `undecodable_with_reason` arm preserves the pre-existing B3 behaviour - a
 non-object payload is *also*, as far as the tool's schema is concerned, missing
 every required parameter, so both reasons go into one sentence and the model can
 fix the call in a single retry. The type of `parsed_input` changed from
-`Result<Value, String>` to `Result<Value, ragent_types::ToolArgDecodeError>`, so
+`Result<Value, String>` to `Result<Value, codemason_types::ToolArgDecodeError>`, so
 the gate passes the decoder's own error value to the constructor instead of its
 `Display` rendering - the constructor quotes it, and nothing re-parses a string
 to recover a struct.
@@ -125,7 +125,7 @@ it was the second wording FR-008/FR-009 exist to prevent.
 
 ### 3.4 FR-009's "declared type" is now actually reported
 
-`crates/ragent-tools-core/src/schema.rs::validate_required_args` reads the
+`crates/codemason-tools-core/src/schema.rs::validate_required_args` reads the
 declared type before the presence check and states it when the required
 parameter is absent:
 
@@ -142,7 +142,7 @@ changes: the function still returns the first violation it finds.
 
 ## 4. The cases
 
-`crates/ragent-agent/tests/test_tool_input_error.rs` - **7 existing cases now
+`crates/codemason-agent/tests/test_tool_input_error.rs` - **7 existing cases now
 run, + 1 new**.
 
 | Case | Pins |
@@ -161,7 +161,7 @@ scan alone is satisfiable by a gate that never states a sentence at all - it
 could drift back to a bare status literal and a `format!` and stay green. The
 positive half names the constructor calls the two gates must make.
 
-`crates/ragent-agent/tests/test_processor_more_paths.rs` - **+1 case, +2 new
+`crates/codemason-agent/tests/test_processor_more_paths.rs` - **+1 case, +2 new
 assertions**:
 
 | Case | Pins |
@@ -195,21 +195,21 @@ real FR-009 gap rather than passing vacuously.
 ### Verification (green)
 
 - `cargo fmt --all -- --check` - clean
-- `cargo check -p ragent-agent` - clean
-- `cargo clippy -p ragent-agent -p ragent-tools-core -p ragent-types --all-targets`
+- `cargo check -p codemason-agent` - clean
+- `cargo clippy -p codemason-agent -p codemason-tools-core -p codemason-types --all-targets`
   - no new warning names any file this task touched (the only diagnostics are the
     pre-existing `pub(crate) ... inside private module` group and provider
   `unnecessary structure name repetition`)
-- `cargo test -p ragent-agent --test all test_tool_input_error::` - **8 passed**
+- `cargo test -p codemason-agent --test all test_tool_input_error::` - **8 passed**
   (previously 0 ran)
-- `cargo test -p ragent-agent --test all test_processor_more_paths::` -
+- `cargo test -p codemason-agent --test all test_processor_more_paths::` -
   **24 passed**
-- `cargo test -p ragent-agent --test all` - **1679 passed**, 0 failed, 1 ignored
-- `cargo test -p ragent-tools-core --test all` - **394 passed**, 0 failed
-- `cargo test -p ragent-tools-extended --test all` - **1806 passed**, 11 ignored
+- `cargo test -p codemason-agent --test all` - **1679 passed**, 0 failed, 1 ignored
+- `cargo test -p codemason-tools-core --test all` - **394 passed**, 0 failed
+- `cargo test -p codemason-tools-extended --test all` - **1806 passed**, 11 ignored
   (the extended tools' own `parameters_schema()` errors are unchanged)
-- `cargo test -p ragent-types --test all` - **418 passed**, 0 failed
-- `cargo test -p ragent-server --test all` - **192 passed**, 0 failed
+- `cargo test -p codemason-types --test all` - **418 passed**, 0 failed
+- `cargo test -p codemason-server --test all` - **192 passed**, 0 failed
 - guard scripts: `check-dead-code-reasons`, `check-inline-tests`,
   `check-test-env-isolation`, `check-silent-errors`, `check-security-unwraps`,
   `check-poison-locks`, `check-shared-guards` - all pass

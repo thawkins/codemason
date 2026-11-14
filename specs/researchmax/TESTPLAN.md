@@ -6,11 +6,11 @@ audit:
 # Concept and finding output limits — Manual Test Plan
 
 This is a **manual** test plan for spec `researchmax`. It is executed by a human
-operator against a built `ragent` binary. It contains no automated test code.
+operator against a built `codemason` binary. It contains no automated test code.
 
 Coverage: concept and finding limits (FR-001, FR-002, FR-006, FR-007),
 reverse-relevance ordering (FR-003, FR-004, FR-005), CLI/hand-parser/TUI/server
-plumbing (FR-012, FR-013), `ragent.json` defaults and precedence (FR-008,
+plumbing (FR-012, FR-013), `codemason.json` defaults and precedence (FR-008,
 FR-017), zero/unbounded behaviour (FR-016), boundary and unwanted cases
 (FR-015, FR-019, FR-020, FR-022), and documentation (NFR-003).
 
@@ -18,7 +18,7 @@ FR-017), zero/unbounded behaviour (FR-016), boundary and unwanted cases
 
 1. Build the current binary:
    - Run `cargo build` (debug is sufficient; allow up to 1000 seconds).
-   - Confirm `./target/debug/ragent --version` runs.
+   - Confirm `./target/debug/cdmn --version` runs.
 2. Configure a working LLM provider so concept extraction and synthesis run
    (the concepts engine is only wired when a model is available). Set the
    relevant API key for your configured provider in the environment, or use a
@@ -34,7 +34,7 @@ FR-017), zero/unbounded behaviour (FR-016), boundary and unwanted cases
    produced `RESEARCH.md` can be inspected. Also note `logs/research/` for run
    logs.
 6. Remove any `research.max_concepts` / `research.max_findings` keys from
-   `.ragent/ragent.json` before the default cases so the built-in defaults are
+   `.codemason/codemason.json` before the default cases so the built-in defaults are
    exercised first. Keep a copy of the file to restore afterwards.
 7. Have an HTTP client available (for example `curl`) for the server case.
 
@@ -44,12 +44,12 @@ FR-017), zero/unbounded behaviour (FR-016), boundary and unwanted cases
 
 **Covers:** FR-001, FR-002, FR-009, FR-014, FR-015, FR-022.
 
-**Preconditions:** Binary built; LLM provider configured; `.ragent/ragent.json`
+**Preconditions:** Binary built; LLM provider configured; `.codemason/codemason.json`
 has no `max_concepts`/`max_findings`; topic likely to exceed both limits.
 
 **Steps:**
 
-1. Launch the TUI: run `./target/debug/ragent` and press Enter at the prompt.
+1. Launch the TUI: run `./target/debug/cdmn` and press Enter at the prompt.
 2. Type exactly:
    `/research create rust-async-defaults --topic "rust async runtimes" --mode standard`
 3. Press Enter to submit.
@@ -167,16 +167,16 @@ baseline not available, so instead run a large-limit baseline) and TC-002.
   rendered (counts are not forced to 0 and not capped at 5 / 20).
 - The report remains well-formed with contiguous numbering.
 
-### TC-005 — `ragent.json` defaults apply when flags are omitted
+### TC-005 — `codemason.json` defaults apply when flags are omitted
 
 **Covers:** FR-008, FR-014, FR-017.
 
-**Preconditions:** `.ragent/ragent.json` is editable; a config key block is
+**Preconditions:** `.codemason/codemason.json` is editable; a config key block is
 available.
 
 **Steps:**
 
-1. Edit `.ragent/ragent.json` and add:
+1. Edit `.codemason/codemason.json` and add:
 
    ```json
    {
@@ -219,7 +219,7 @@ available.
 **Steps:**
 
 1. In a terminal, run:
-   `./target/debug/ragent research create bad-limit --topic "test" --max-concepts abc`
+   `./target/debug/cdmn research create bad-limit --topic "test" --max-concepts abc`
 2. Observe the exit status and error message.
 3. In the TUI prompt, type exactly:
    `/research create bad-limit --topic "test" --max-findings -1`
@@ -249,7 +249,7 @@ available; the server can be started.
 
 **Steps:**
 
-1. In a terminal, start the server: `./target/debug/ragent serve --port 9100`
+1. In a terminal, start the server: `./target/debug/cdmn serve --port 9100`
    (or the port configured in your setup).
 2. Send a create request with the caps set:
 
@@ -308,7 +308,7 @@ topic.
 
 ## Cleanup
 
-1. Restore `.ragent/ragent.json` to its original contents (remove the
+1. Restore `.codemason/codemason.json` to its original contents (remove the
    `research.max_concepts` / `research.max_findings` keys added in TC-005).
 2. Remove the scratch research items created by these tests if they are not
    wanted:

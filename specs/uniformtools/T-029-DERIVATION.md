@@ -8,7 +8,7 @@
 **Verified against:** `tools.xlsx`, `sha256 ad2a4574...0ba6bdae` (section 1)
 
 This document is the recorded derivation the specification requires. It is the
-input to T-030 (which commits the pairs as `crates/ragent-agent/src/tool/rename.rs`)
+input to T-030 (which commits the pairs as `crates/codemason-agent/src/tool/rename.rs`)
 and the comparison baseline for TC-019 in `TESTPLAN.md`.
 
 Nothing here is a judgement call: every accept and every refusal below is the
@@ -47,13 +47,13 @@ WebSearch <- mf_search, websearch
 ```
 
 Excluded by FR-024: 20 pairs where the Anthropic row is not `Exact` (including
-`new_agent` -> `Agent` and `read` -> `Read`), 40 pairs where the ragent row is
+`new_agent` -> `Agent` and `read` -> `Read`), 40 pairs where the codemason row is
 not `Exact` (including the five `cron_*` tools), and 121 entries that name no
 Anthropic tool at all. `TodoWrite` is `Exact` on the Anthropic sheet and named by
-no ragent row. Details and per-clause accounting follow.
+no codemason row. Details and per-clause accounting follow.
 
 Read section 3 first if you are checking the arithmetic: it closes the books
-twice, once over the 215 `(row, token)` pairs and once over the 148 ragent rows,
+twice, once over the 215 `(row, token)` pairs and once over the 148 codemason rows,
 and explains why the two views differ by two rows.
 
 ---
@@ -61,12 +61,12 @@ and explains why the two views differ by two rows.
 ## 1. Workbook facts
 
 Source: `tools.xlsx`, repository root, sheets `Anthropic Tools` and
-`ragent Tools` only. No other sheet is consulted.
+`codemason Tools` only. No other sheet is consulted.
 
 | Sheet | Rows | Columns used | Notes |
 |---|---|---|---|
 | `Anthropic Tools` | 46 | `Tool` (A), `Mapping` (E) | 19 rows carry `Mapping = Exact`; the rest are `Close`, `Partial` or `No equivalent` |
-| `ragent Tools` | 148 | `Tool` (A), `Anthropic equivalent` (E), `Mapping` (F) | `Exact` 24, `Close` 55, `Partial` 2, `Ragent-only` 67 |
+| `codemason Tools` | 148 | `Tool` (A), `Anthropic equivalent` (E), `Mapping` (F) | `Exact` 24, `Close` 55, `Partial` 2, `Codemason-only` 67 |
 
 Both sheets have unique tool names (0 duplicates in either). `Anthropic
 equivalent` is a free-text cell whose `/`-separated entries are the candidate
@@ -86,9 +86,9 @@ A pair `(before, after)` enters the table only if all three clauses hold
 
 - **Clause A** - the `Anthropic Tools` row whose `Tool` is `after` carries
   `Mapping = Exact`;
-- **Clause B** - the `ragent Tools` row whose `Tool` is `before` carries
+- **Clause B** - the `codemason Tools` row whose `Tool` is `before` carries
   `Mapping = Exact`;
-- **Clause C** - that ragent row's `Anthropic equivalent` cell names `after` as
+- **Clause C** - that codemason row's `Anthropic equivalent` cell names `after` as
   one of its `/`-separated entries, character for character.
 
 Then, for each surviving `after` (FR-025):
@@ -101,7 +101,7 @@ Then, for each surviving `after` (FR-025):
   them, and record the refusal with the competing names.
 
 Note the scope of the tie-break: FR-025 governs *collisions*. A target claimed
-by a single ragent tool is renamed even though its name does not match the
+by a single codemason tool is renamed even though its name does not match the
 target's spelling - that is how `ask_user` -> `AskUserQuestion`,
 `plan_enter` -> `EnterPlanMode`, `plan_exit` -> `ExitPlanMode` and
 `skill_manage` -> `Skill` survive. Applying the capitalisation test to
@@ -110,14 +110,14 @@ singletons as well would wrongly reduce the table to 9 pairs.
 ### 2.1 Tokenisation - entries are trimmed, and that is load-bearing
 
 Clause C compares names "character for character", but the cell is written with
-padding around the separators: 53 of the 148 ragent rows carry a cell of the
+padding around the separators: 53 of the 148 codemason rows carry a cell of the
 form `Edit / Write` or `CronCreate / CronDelete / CronList`, so the raw split
 yields `" Write"` with a leading space. Each entry is therefore `trim()`ed
 before it is compared, and nothing else is normalised - no case folding, no
 prefix matching, no punctuation stripping.
 
 The trimming is not cosmetic. Re-deriving without it drops **four** pairs,
-because the four `task_*` rows are the only `Exact` ragent rows whose cell has
+because the four `task_*` rows are the only `Exact` codemason rows whose cell has
 three separators and therefore padded middle entries:
 
 ```
@@ -141,9 +141,9 @@ are `TaskCreate`, `TaskGet`, `TaskList` and `TaskUpdate` on the four `task_*`
 rows. A re-derivation that reads the workbook with a different library must trim
 the same way, or it will report 9 pairs and call the table wrong.
 
-## 3. Accounting - every `(row, token)` pair from `ragent Tools`
+## 3. Accounting - every `(row, token)` pair from `codemason Tools`
 
-Each ragent row contributes one pair per `/`-separated entry in its
+Each codemason row contributes one pair per `/`-separated entry in its
 `Anthropic equivalent` cell: **215 pairs in total**. Each falls into exactly
 one bucket, and the buckets sum to the total.
 
@@ -151,7 +151,7 @@ one bucket, and the buckets sum to the total.
 |---|---|---|---|
 | Clause C fails | 121 | 90 | the entry is not the name of any `Anthropic Tools` row |
 | Clause A fails | 20 | 20 | the entry names an Anthropic row whose `Mapping` is not `Exact` |
-| Clause B fails | 40 | 18 | the entry names an `Exact` Anthropic row, but the ragent row itself is not `Exact` |
+| Clause B fails | 40 | 18 | the entry names an `Exact` Anthropic row, but the codemason row itself is not `Exact` |
 | Survives all three | 34 | 22 | 34 pairs over **15 distinct targets** |
 | **Total** | **215** | - | |
 
@@ -160,8 +160,8 @@ The 34 surviving pairs reduce to 15 targets, then to 13 renames and 2 refusals.
 The buckets are disjoint by construction, which is what makes the pair column
 sum to 215. A pair is counted against exactly one clause, decided in this order:
 the entry names no `Anthropic Tools` row -> clause C; else the Anthropic target
-is not `Exact` -> clause A; else the ragent row is not `Exact` -> clause B. So a
-`Close` ragent row that names a `Close` target is counted under clause A, not
+is not `Exact` -> clause A; else the codemason row is not `Exact` -> clause B. So a
+`Close` codemason row that names a `Close` target is counted under clause A, not
 under both. The distinct-tool columns inherit that: they count the tools that
 were refused *at* each clause, not every tool that could have failed it.
 
@@ -176,7 +176,7 @@ both tables is a row nobody accounted for:
 |---|---|---|
 | clause C - names no Anthropic tool | 90 | 7.3 |
 | clause A - Anthropic target is not `Exact` | 18 | 7.1 |
-| clause B - its own ragent row is not `Exact` | 18 | 7.2 |
+| clause B - its own codemason row is not `Exact` | 18 | 7.2 |
 | renamed (one of the 13) | 13 | 4 |
 | claimant of a refused target | 4 | 5 |
 | loses a collision to a winning claimant | 5 | 6 |
@@ -209,8 +209,8 @@ absent here because their prose entry fails clause C first.
 ## 4. The accepted pairs (13)
 
 Ascending by `after`, which is the order FR-023 requires and the order T-030
-commits. Every row's `Anthropic Tools` mapping is `Exact`, its `ragent Tools`
-mapping is `Exact`, and the ragent cell names the target exactly.
+commits. Every row's `Anthropic Tools` mapping is `Exact`, its `codemason Tools`
+mapping is `Exact`, and the codemason cell names the target exactly.
 
 | # | Before | After | Claimants for `after` | How selected |
 |---|---|---|---|---|
@@ -249,7 +249,7 @@ and that is the only route by which a Claude skill naming `WebFetch` reaches
 
 ## 6. Claimants left under their current names by the tie-break (5)
 
-Nine ragent tools lose at least one target to a *winning* claimant. Four of them -
+Nine codemason tools lose at least one target to a *winning* claimant. Four of them -
 `task_create`, `task_get`, `task_list`, `task_update` - lose three sibling
 `Task*` targets each but win their own spelling, so they are renamed anyway
 (rows 9-12 above). The other five are the losing claimants in the `Bash`, `Edit`
@@ -260,7 +260,7 @@ names, but they lose to a *refusal* rather than to a sibling: section 5.)
 The five that lose every target they claim, and therefore keep the name they ship
 today, are:
 
-| Tool | Claimed | Lost to | Its own ragent row |
+| Tool | Claimed | Lost to | Its own codemason row |
 |---|---|---|---|
 | `apply_patch` | `Edit` | `edit` | `Exact` (so clause B is not why it stays) |
 | `bash_reset` | `Bash` | `bash` | `Exact` |
@@ -278,11 +278,11 @@ tie-break exists to stop exactly that.
 
 ### 7.1 Clause A - the `Anthropic Tools` row is not `Exact` (20 pairs)
 
-These are ragent rows whose cell names a real Anthropic tool, but that tool's
-own row is not rated `Exact`. No amount of exactness on the ragent side can
+These are codemason rows whose cell names a real Anthropic tool, but that tool's
+own row is not rated `Exact`. No amount of exactness on the codemason side can
 rescue them.
 
-| Anthropic target | Its mapping | ragent rows naming it |
+| Anthropic target | Its mapping | codemason rows naming it |
 |---|---|---|
 | `Agent` | `Close` | `new_agent`, `wait_agents` |
 | `EndConversation` | `Close` | `agent_complete` |
@@ -293,25 +293,25 @@ rescue them.
 | `SendMessage` | `Close` | `team_message`, `team_read_messages` |
 | `TaskStop` | `Close` | `cancel_agent` |
 
-That is 8 distinct targets over 20 distinct ragent tools and 20 pairs (one pair
-each, because every excluded ragent row happens to name exactly one non-`Exact`
+That is 8 distinct targets over 20 distinct codemason tools and 20 pairs (one pair
+each, because every excluded codemason row happens to name exactly one non-`Exact`
 Anthropic tool). Two of those tools - `wait_agents` and `team_read_messages` -
 also carry a prose entry, so they are counted under clause C in the per-row view
 of section 3.1; that table is the same fact seen from the rows and totals 18
 there. Both are correct, and section 3.1 explains the difference.
 
 `new_agent` -> `Agent` and `read` -> `Read` are the two exclusions the
-specification calls out by name: both ragent rows are themselves `Exact`, so
+specification calls out by name: both codemason rows are themselves `Exact`, so
 only clause A refuses them. `read` keeps its name, and therefore "read" stays
 both the tool and the verb after this change - a fact every non-test literal
 must be read against (PLAN risk note, section "Risk Notes").
 
-### 7.2 Clause B - the `ragent Tools` row is not `Exact` (18 tools, 40 pairs)
+### 7.2 Clause B - the `codemason Tools` row is not `Exact` (18 tools, 40 pairs)
 
 These name a genuinely `Exact` Anthropic target, but their own row is `Close`,
 so FR-024 refuses the pair.
 
-| Anthropic target | ragent rows claiming it |
+| Anthropic target | codemason rows claiming it |
 |---|---|
 | `CronCreate`, `CronDelete`, `CronList` | `cron_add`, `cron_disable`, `cron_enable`, `cron_list`, `cron_remove` |
 | `Bash` | `copy_file`, `file_info`, `get_env`, `list`, `make_directory`, `move_file`, `rm` |
@@ -331,7 +331,7 @@ clause B three times - hence 15 of the 40 pairs here. The arithmetic reconciles:
 
 `Anthropic equivalent` is prose, not an enumeration of the Anthropic sheet.
 Of the 215 `(row, token)` pairs, 121 name something that is not an
-`Anthropic Tools` row, so clause C - "that ragent row's cell names `after` as
+`Anthropic Tools` row, so clause C - "that codemason row's cell names `after` as
 one of its `/`-separated entries" - has no `after` to name. The pair is
 discarded before any mapping is looked up. The 18 distinct forms, with the
 number of pairs each accounts for:
@@ -375,25 +375,25 @@ Two properties of this table matter for review:
   list `calculator` because its cell never reaches clause B - it fails clause C
   first).
 
-### 7.4 `Exact` targets with no `Exact` ragent claimant (4 targets)
+### 7.4 `Exact` targets with no `Exact` codemason claimant (4 targets)
 
 The remaining `Anthropic Tools` rows rated `Exact` that produced no rename:
 
 | Anthropic target | Status | Why no pair |
 |---|---|---|
-| `CronCreate` | `Exact` | its only ragent claimants are the five `cron_*` rows, all `Close` (clause B) |
+| `CronCreate` | `Exact` | its only codemason claimants are the five `cron_*` rows, all `Close` (clause B) |
 | `CronDelete` | `Exact` | same |
 | `CronList` | `Exact` | same |
-| `TodoWrite` | `Exact` | no `ragent Tools` row names it anywhere in the workbook (clause C) |
+| `TodoWrite` | `Exact` | no `codemason Tools` row names it anywhere in the workbook (clause C) |
 
 `WebFetch` and `WebSearch` are `Exact` too and also produce no rename, but for a
-different reason - they *do* have `Exact` ragent claimants (two each) and are
+different reason - they *do* have `Exact` codemason claimants (two each) and are
 refused by FR-025, so they are recorded in section 5, not here.
 
 `TodoWrite` is the exclusion the specification calls out by name. There is
 nothing to rename, so nothing is renamed. For the three `cron_*` targets the
 refusal is not that a rename is impossible at the spelling level - `cron_list`
-would capitalise to `CronList` - but that their ragent rows are screened `Close`,
+would capitalise to `CronList` - but that their codemason rows are screened `Close`,
 so FR-024 never puts them forward. That is the clause B list in section 7.2,
 seen from the target's side instead of the tool's.
 
@@ -402,7 +402,7 @@ Arithmetic check: 19 `Exact` Anthropic rows = 13 accepted (section 4) + 2 refuse
 
 ### 7.5 Rows excluded outright
 
-Breaking the 148 ragent rows by what their `Anthropic equivalent` cell contains:
+Breaking the 148 codemason rows by what their `Anthropic equivalent` cell contains:
 
 | Cell content | Rows |
 |---|---|
@@ -417,7 +417,7 @@ tools in section 3's clause-C column reconcile: 88 + 2 = 90.
 
 ## 8. How to reproduce this derivation
 
-`crates/ragent-tools-core/src/xlsx.rs` is a writer only; adding a reader purely
+`crates/codemason-tools-core/src/xlsx.rs` is a writer only; adding a reader purely
 to re-derive the table in a test would breach NFR-002 and FR-023 explicitly
 forbids the shipped test from opening the workbook. Reproduction is therefore a
 manual step (TC-019), run outside the repository's build:
@@ -425,7 +425,7 @@ manual step (TC-019), run outside the repository's build:
 ```python
 import openpyxl
 wb = openpyxl.load_workbook('tools.xlsx', data_only=True)
-anth, rag = wb['Anthropic Tools'], wb['ragent Tools']
+anth, rag = wb['Anthropic Tools'], wb['codemason Tools']
 anth_map = {r[0]: (r[4] or '').strip() for r in anth.iter_rows(min_row=2, values_only=True) if r[0]}
 rows = [{'tool': r[0], 'eq': str(r[4] or ''), 'm': (r[5] or '').strip()}
         for r in rag.iter_rows(min_row=2, values_only=True) if r[0]]
@@ -466,8 +466,8 @@ in section 1: a different `tools.xlsx` may legitimately derive a different set.
 Two numbers to read carefully when this script and TC-019 disagree:
 
 - **The target count and the pair count are different numbers.** The step-3
-  filter (an `Exact` ragent row naming an `Exact` target) yields **34 pairs** over
-  **22 ragent tools** and **15 distinct targets**. TC-019's expected-results
+  filter (an `Exact` codemason row naming an `Exact` target) yields **34 pairs** over
+  **22 codemason tools** and **15 distinct targets**. TC-019's expected-results
   bullet used to read "Step 3 yields 15 pairs", which conflated the two; this
   task corrected it to record 34 pairs and 15 targets. Either number reduces to
   the same 13 renames and 2 refusals.
@@ -490,16 +490,16 @@ two agreed on every number in this document:
    library (`zipfile`, `xml.etree.ElementTree`); and
 2. `openpyxl` 3.1.5, the reader the section 8 script uses.
 
-Both reported 46 Anthropic rows with 19 `Exact`, 148 ragent rows with 24
-`Exact` / 55 `Close` / 2 `Partial` / 67 `Ragent-only`, 215 `(row, token)` pairs,
+Both reported 46 Anthropic rows with 19 `Exact`, 148 codemason rows with 24
+`Exact` / 55 `Close` / 2 `Partial` / 67 `Codemason-only`, 215 `(row, token)` pairs,
 the same 121 / 20 / 40 / 34 split, the same 13 pairs and the same 2 refusals.
 The shared-string reader has to be careful about one thing the library hides:
 `xl/worksheets/sheetN.xml` references strings by index into
 `sharedStrings.xml`, and an index read from the wrong sheet file silently
 returns plausible-looking tool names from a different sheet. The sheet order in
 `workbook.xml` is Summary, Capability Map, OpenAI Tools, Anthropic Tools,
-ragent Tools, Coverage, Sources - so `Anthropic Tools` is `sheet4.xml` and
-`ragent Tools` is `sheet5.xml` under this workbook, and the reader resolves them
+codemason Tools, Coverage, Sources - so `Anthropic Tools` is `sheet4.xml` and
+`codemason Tools` is `sheet5.xml` under this workbook, and the reader resolves them
 through the relationship ids rather than by position.
 
 **Re-verified when the record was closed.** Both readers were run again against
@@ -524,10 +524,10 @@ workbook.
 
 - every `before` is a name the default registry registers - verified three ways:
   each appears as a tool `name()` literal in the crate sources; each appears as a
-  row in the workbook's `ragent Tools` sheet; and the registry's own count
-  matches that sheet - `ragent run --dry-run "<any prompt>"` reports
+  row in the workbook's `codemason Tools` sheet; and the registry's own count
+  matches that sheet - `codemason run --dry-run "<any prompt>"` reports
   `total: 148 visible tools` on the pre-rename tree, exactly the 148 rows
-  `ragent Tools` lists. The per-family counts agree too: `task` 4 (the four
+  `codemason Tools` lists. The per-family counts agree too: `task` 4 (the four
   `task_*`), `skill` 1 (`skill_manage`), `plan` 2 (`plan_enter`, `plan_exit`),
   `ask_user` 1 (`ask_user`), `bash` 3 (one of them `bash`), and
   `glob`/`grep`/`edit`/`write` inside `file` (27 tools);
@@ -546,9 +546,9 @@ workbook.
   non-registry string fields), which is safe for a collision test;
 - a raw text search for the adopted spelling `"Bash"` finds **two** literals in
   non-test source and neither registers a tool: the FR-023 table row itself
-  (`crates/ragent-agent/src/tool/rename.rs:75` where T-030 committed it; the
-  table now lives at `crates/ragent-types/src/tool_rename.rs:75`) and a language
-  name in `crates/ragent-agent/src/memory/knowledge_graph.rs:263`. The other
+  (`crates/codemason-agent/src/tool/rename.rs:75` where T-030 committed it; the
+  table now lives at `crates/codemason-types/src/tool_rename.rs:75`) and a language
+  name in `crates/codemason-agent/src/memory/knowledge_graph.rs:263`. The other
   **13** occurrences are all in the test tree - hook matchers, display
   assertions and the table's own invariant test (section 10) - so 2 + 13 = 15
   is the whole of the literal across the workspace. This bullet first read "The
@@ -561,8 +561,8 @@ workbook.
 ## 10. Consequences downstream
 
 - **T-030** commits exactly these 13 pairs, in this order.
-  `crates/ragent-agent/src/tool/rename.rs` holds them as `TOOL_RENAMES`, and
-  `crates/ragent-agent/tests/test_tool_rename_table.rs` pins the `after` sequence
+  `crates/codemason-agent/src/tool/rename.rs` holds them as `TOOL_RENAMES`, and
+  `crates/codemason-agent/tests/test_tool_rename_table.rs` pins the `after` sequence
   to this document's order - so a derivation that changes the set fails a shipped
   test rather than passing silently. At the time of writing the table module and
   its test exist in the working tree (`PLAN.md` still lists T-030 as pending) and
@@ -624,8 +624,8 @@ workbook.
   Re-run the commands below rather than trusting the table; the counts move as
   prose is written. Source comments count; `docs/`, `CHANGELOG.md` and this
   document do not. The `grep -v` covers both possible homes for the table (it
-  was `crates/ragent-agent/src/tool/rename.rs` when this derivation was written
-  and is `crates/ragent-types/src/tool_rename.rs` now), so the same pair of
+  was `crates/codemason-agent/src/tool/rename.rs` when this derivation was written
+  and is `crates/codemason-types/src/tool_rename.rs` now), so the same pair of
   commands is correct on either tree.
 
   ```bash
@@ -680,11 +680,11 @@ workbook.
 
   Two widening experiments, recorded so a reader does not have to redo them:
   adding the single-quoted form adds exactly the four literals in **two**
-  files - `crates/ragent-agent/src/agent/mod.rs:658` names `'grep'` and
-  `'glob'`, `crates/ragent-agent/src/tool/aliases.rs:94` names `'write'` and
+  files - `crates/codemason-agent/src/agent/mod.rs:658` names `'grep'` and
+  `'glob'`, `crates/codemason-agent/src/tool/aliases.rs:94` names `'write'` and
   `:140` names `'bash'` - and all four are prose about the retired names, so
   they stay outside the rule. Including `crates/*/benches` adds exactly the
-  six literals in `crates/ragent-bench/benches/agent_loop.rs` (five `bash`,
+  six literals in `crates/codemason-bench/benches/agent_loop.rs` (five `bash`,
   one `write`), which build `MessagePart::ToolCall` records and a
   `MockLlmScript` with the retired spelling.
 - **T-033/T-034** migration must not touch the five tie-break losers
@@ -693,23 +693,23 @@ workbook.
   `read`, none of which is renamed.
 - **T-019/T-033** the D7 alias table keeps `WebFetch` and `WebSearch` (refused
   targets) and the OpenAI spellings, and drops every entry whose target became a
-  ragent name.
+  codemason name.
 - **T-031/T-038, two pre-existing spellings the derivation found.** Both matter
   because the rename makes them *correct* where today they are speculative:
-  - `crates/ragent-tui/src/widgets/message_widget.rs:159` already has
+  - `crates/codemason-tui/src/widgets/message_widget.rs:159` already has
     `capitalize_tool_name`, which uppercases only the first character
     (`bash` -> `Bash`, but `task_create` -> `Task_create`). That is the wrong
     rule for FR-025's per-segment capitalisation and it must not be reused as
     the rename's implementation - the 13 pairs are a fixed table, not a
     transformation. Its one existing assertion
-    (`crates/ragent-tui/tests/test_tool_display.rs:459`) keeps passing unchanged
+    (`crates/codemason-tui/tests/test_tool_display.rs:459`) keeps passing unchanged
     because `bash` really does become `Bash`. (Both line numbers are the
     pre-rename ones; on the committed tree they are `:168` and `:474`, and the
     function's rule is unchanged.)
   - Eight test call sites already pass `"Bash"` as a hook matcher or as the tool
-    name a hook guard is asked about: `crates/ragent-agent/tests/test_plugin_hooks.rs:134`,
-    `:143`, `:144`, `crates/ragent-agent/tests/test_agent_skill_hooks_extra.rs:778`,
-    `:793`, `:794`, `:817`, and `crates/ragent-plugins/tests/test_manifest.rs:834`.
+    name a hook guard is asked about: `crates/codemason-agent/tests/test_plugin_hooks.rs:134`,
+    `:143`, `:144`, `crates/codemason-agent/tests/test_agent_skill_hooks_extra.rs:778`,
+    `:793`, `:794`, `:817`, and `crates/codemason-plugins/tests/test_manifest.rs:834`.
     Those matchers start matching a real tool once the rename lands, which is the
     outcome FR-028 wants; they need no migration, so T-038 should leave them
     untouched rather than "update" a matcher that is already correct. This
@@ -717,12 +717,12 @@ workbook.
     `test_plugin_hooks.rs:265` and `:269`; that file has 247 lines, so neither
     line exists and both are removed. Eight is the count that resolves.
   - Five more test literals across three files spell `Bash` and are also already
-    correct: `crates/ragent-tui/tests/test_tool_display.rs:459`
+    correct: `crates/codemason-tui/tests/test_tool_display.rs:459`
     (`capitalize_tool_name("bash") == "Bash"`),
-    `crates/ragent-tui/tests/test_text_selection.rs:503` (an either-spelling
+    `crates/codemason-tui/tests/test_text_selection.rs:503` (an either-spelling
     contains check; this bullet first said `:497`, which is the middle of the
     buffer-dump loop above the assertion), and three in
-    `crates/ragent-agent/tests/test_tool_rename_table.rs`
+    `crates/codemason-agent/tests/test_tool_rename_table.rs`
     (the FR-023 table's own pinned list and two lookup assertions). With the
     eight above that accounts for all **13** `"Bash"` literals in the test tree.
     This bullet and the one above originally totalled 15; the corrected pairs
@@ -736,16 +736,16 @@ workbook.
   count in `PLAN.md`. T-030 is the first task that writes code.
 - **One observation for whoever picks up T-030 (recorded, not acted on).** The
   FR-023 table's home moved after this derivation: it was committed at
-  `crates/ragent-agent/src/tool/rename.rs` and now sits at
-  `crates/ragent-types/src/tool_rename.rs` behind a one-line re-export, so
-  `ragent-config` can read it (FR-031). Section 9's table-row anchor is given
+  `crates/codemason-agent/src/tool/rename.rs` and now sits at
+  `crates/codemason-types/src/tool_rename.rs` behind a one-line re-export, so
+  `codemason-config` can read it (FR-031). Section 9's table-row anchor is given
   for both locations. This document does not prescribe the location - FR-023
   only requires one module - but a reader comparing paths should know the
   move happened and that no derivation number depends on it.
 
 ---
 
-## Appendix A - every one of the 148 ragent rows and its outcome
+## Appendix A - every one of the 148 codemason rows and its outcome
 
 Section 3.1 gives the counts; this table names the rows, so a reviewer can
 confirm that nothing fell between the buckets. Buckets are disjoint and decided
@@ -768,7 +768,7 @@ in the order C, A, B, then the FR-025 outcome, matching section 3.
 `gitlab_retry_pipeline`, `http_request`, `initiative`, `memory_forget`,
 `memory_recall`, `memory_store`, `mf_cache_clear`, `mf_crawl`, `mf_version`,
 `model_info`, `multi_edit`, `multiedit`, `open`, `os_info`, `pdf_write`,
-`ragent_info`, `session_search`, `spec_coverage`, `spec_list`, `spec_read`,
+`codemason_info`, `session_search`, `spec_coverage`, `spec_list`, `spec_read`,
 `spec_search`, `spec_task_update`, `team_approve_plan`, `team_assign_task`,
 `team_broadcast`, `team_cleanup`, `team_create`, `team_idle`, `team_memory_read`,
 `team_memory_write`, `team_read_messages`, `team_shutdown_ack`,
@@ -789,13 +789,13 @@ section 7.1's 20 pairs too (section 3.1).
 
 Every one names exactly one non-`Exact` Anthropic target (the mapping per target
 is in section 3.1's table). Only two of the 18 - `new_agent` and `read` - are
-themselves `Exact` on the ragent sheet, so for those two clause A is the *only*
+themselves `Exact` on the codemason sheet, so for those two clause A is the *only*
 thing refusing the pair; that is exactly why the specification names them. The
 other 16 are `Close` on their own row as well, so they would fail clause B if
 clause A had passed. They are counted here rather than in section A.3 because
 section 3's buckets are decided C then A then B, and their first failure is A.
 
-### A.3 Clause B - the ragent row is not `Exact` (18 rows)
+### A.3 Clause B - the codemason row is not `Exact` (18 rows)
 
 `append_to_file`, `copy_file`, `cron_add`, `cron_disable`, `cron_enable`,
 `cron_list`, `cron_remove`, `diff_files`, `file_info`, `get_env`, `list`,

@@ -19,7 +19,7 @@ queries:
   - "open source LLM API hosting costs vs proprietary 2025"
   - "large language model API pricing"
 open_access_recovery: true
-invocation: "target/debug/ragent research create llmcosts3 --no-clarify LLM API pricing comparison 2025"
+invocation: "target/debug/cdmn research create llmcosts3 --no-clarify LLM API pricing comparison 2025"
 ---
 
 # Title: The captured sources contain no vendor price lists or per-token dollar rates…

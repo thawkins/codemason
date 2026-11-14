@@ -99,14 +99,14 @@ packing (the dialect Copilot and Ollama share) and delegates the per-message wor
 
 ### 2.3 The refusal the Responses family owns
 
-`build_input_items` returned `Err(RagentError::WireLoss { construct: "ImageUrl",
+`build_input_items` returned `Err(CodemasonError::WireLoss { construct: "ImageUrl",
 provider: "openai_responses" })` for an image part (FR-018). The shared encoder had
 that arm as `{}` - it dropped the part - with a comment deferring the refusal to
 T-007. Deleting the client's loop without carrying the arm would have turned a
 refusal into a silent strip, which is the worse of the two behaviours.
 
 Resolution: the **family that has no slot for a construct is the one that refuses
-it**. `responses_items` returns `Result<_, RagentError>` and fails on an image,
+it**. `responses_items` returns `Result<_, CodemasonError>` and fails on an image,
 because that is the only place that knows the input list's slot set. The public
 surface gained:
 
@@ -131,7 +131,7 @@ and that remains T-018.
 
 ## 4. Tests
 
-`crates/ragent-llm/tests/test_wire_encode_message.rs`, **23 -> 36 cases**, in four
+`crates/codemason-llm/tests/test_wire_encode_message.rs`, **23 -> 36 cases**, in four
 groups:
 
 1. **One case per carrier** (unchanged) - the `role:"tool"` message, the
@@ -200,20 +200,20 @@ provider writes, and once those literals were replaced by a profile-driven read
 
 - `cargo fmt --all -- --check` - clean.
 - `cargo check --workspace --all-targets` - clean.
-- `cargo clippy -p ragent-llm --all-targets` - no finding in any touched file.
+- `cargo clippy -p codemason-llm --all-targets` - no finding in any touched file.
   The remaining warnings are pre-existing: 19 `unnecessary structure name
   repetition` in `providers/tool_cache.rs` (untouched by this task) and one
   `returning the result of a let binding` in
-  `crates/ragent-storage/src/storage.rs:1709` (untouched).
-- `cargo nextest run -p ragent-llm -E 'test(test_wire_encode_message::)'` -
+  `crates/codemason-storage/src/storage.rs:1709` (untouched).
+- `cargo nextest run -p codemason-llm -E 'test(test_wire_encode_message::)'` -
   **36 passed** (23 before).
-- `cargo nextest run -p ragent-llm -p ragent-agent` - **2732 passed, 1 failed, 3
+- `cargo nextest run -p codemason-llm -p codemason-agent` - **2732 passed, 1 failed, 3
   skipped**. The single failure is
   `test_wire_decode::test_no_module_invents_a_tool_call_id_or_recovers_a_name_from_one`
   ("`ollama_cloud.rs` still mints its own tool-call id with `_tc_{`"), which is
   T-010's and fails identically without this change.
-- `cargo test -p ragent-llm --lib` - 326 passed.
-- `cargo test -p ragent-llm --doc` - 30 passed (the `encode_message` example).
+- `cargo test -p codemason-llm --lib` - 326 passed.
+- `cargo test -p codemason-llm --doc` - 30 passed (the `encode_message` example).
 
 No dependency added (NFR-002), no `unsafe` (NFR-003), no tool renamed, tool
 surface unchanged.

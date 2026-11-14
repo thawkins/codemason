@@ -1,12 +1,12 @@
 # The Bash Tool: Configuration and Security
 
-The `Bash` tool is the workhorse of ragent. It executes shell commands from the agent's
+The `Bash` tool is the workhorse of codemason. It executes shell commands from the agent's
 working directory and applies a seven-layer security model.
 
 This document covers:
 
 1. [Overview](#overview)
-2. [Configuration](#configuration) — the `bash` block in `ragent.json`
+2. [Configuration](#configuration) — the `bash` block in `codemason.json`
 3. [The seven-layer security model](#the-seven-layer-security-model)
 4. [The `/bash` slash commands](#the-bash-slash-commands)
 5. [Runtime behaviour](#runtime-behaviour) — timeout, output truncation, process limits
@@ -18,9 +18,9 @@ This document covers:
 
 ## Overview
 
-The tool is implemented in `crates/ragent-tools-core/src/bash.rs` (~1750 lines) as the
+The tool is implemented in `crates/codemason-tools-core/src/bash.rs` (~1750 lines) as the
 `BashTool` struct. It is a unit struct with no fields of its own — all behaviour is
-driven by the global `ragent_config` at execution time, populated from your config files.
+driven by the global `codemason_config` at execution time, populated from your config files.
 
 Every command an agent runs through `Bash` goes through the same pipeline:
 
@@ -51,8 +51,8 @@ command string
 
 ## Configuration
 
-The Bash tool is configured via the top-level `bash` block in `ragent.json` (global at
-`~/.config/ragent/ragent.json`, or project at `.ragent/ragent.json`).
+The Bash tool is configured via the top-level `bash` block in `codemason.json` (global at
+`~/.config/codemason/codemason.json`, or project at `.codemason/codemason.json`).
 
 ### The `bash` config block
 
@@ -70,7 +70,7 @@ The Bash tool is configured via the top-level `bash` block in `ragent.json` (glo
 | `allowlist` | `string[]` | `[]`    | Command prefixes exempted from the built-in banned-command check   |
 | `denylist`  | `string[]` | `[]`    | Substring patterns that unconditionally reject a command           |
 
-The underlying Rust struct (`crates/ragent-config/src/config.rs`):
+The underlying Rust struct (`crates/codemason-config/src/config.rs`):
 
 ```rust
 pub struct BashConfig {
@@ -83,19 +83,19 @@ pub struct BashConfig {
 
 ### Merge semantics across global + project config
 
-When both a global and a project config exist, ragent merges them:
+When both a global and a project config exist, codemason merges them:
 
 - **allowlist** and **denylist** entries are **unioned** (deduplicated). An entry added
   in either config applies everywhere.
 
 ### Config flow
 
-The Bash tool does **not** read `Config` directly. At startup (and on `/reload`) ragent
+The Bash tool does **not** read `Config` directly. At startup (and on `/reload`) codemason
 copies the merged config into an in-memory snapshot via `bash_lists::load_from_config()`
-(`crates/ragent-config/src/bash_lists.rs`):
+(`crates/codemason-config/src/bash_lists.rs`):
 
-- TUI startup: `App::new` in `crates/ragent-tui/src/app/init.rs`
-- `/reload`: the `"reload"` arm in `crates/ragent-tui/src/app/slash.rs`
+- TUI startup: `App::new` in `crates/codemason-tui/src/app/init.rs`
+- `/reload`: the `"reload"` arm in `crates/codemason-tui/src/app/slash.rs`
 
 ```rust
 pub fn load_from_config() {
@@ -131,7 +131,7 @@ summarises them in the order the checks actually execute, full detail follows.
 
 ### Layer 1 — Safe-command whitelist
 
-A built-in list (`SAFE_COMMANDS` in `crates/ragent-tools-core/src/bash.rs`), mostly read-only but including the
+A built-in list (`SAFE_COMMANDS` in `crates/codemason-tools-core/src/bash.rs`), mostly read-only but including the
 file-modifying `mkdir`, `touch`, `cp` and `mv`, is prefix-matched and skips the
 permission prompt (`validate_shell_command` just logs
 `"Safe bash command auto-approved"` and still runs every later layer). A command is safe if
@@ -185,8 +185,8 @@ A banned command is rejected **unless**:
 
 ```rust
 if contains_banned_command(command) {
-    if ragent_config::yolo::is_enabled() { /* allow */ }
-    else if ragent_config::bash_lists::is_allowlisted(command) { /* allow */ }
+    if codemason_config::yolo::is_enabled() { /* allow */ }
+    else if codemason_config::bash_lists::is_allowlisted(command) { /* allow */ }
     else { bail!("Command rejected: uses banned external tool (curl, wget, nc, ...)"); }
 }
 ```
@@ -279,8 +279,8 @@ Substring-matches the command against your configured `denylist` patterns. This 
 project-specific guardrails go. Bypassed in YOLO mode only.
 
 ```rust
-if !ragent_config::yolo::is_enabled()
-    && let Some(pattern) = ragent_config::bash_lists::matches_denylist(command)
+if !codemason_config::yolo::is_enabled()
+    && let Some(pattern) = codemason_config::bash_lists::matches_denylist(command)
 { bail!("matches user-defined deny pattern ..."); }
 ```
 
@@ -315,7 +315,7 @@ The TUI exposes interactive management of the allowlist/denylist via `/bash`:
 ```
 
 Each `add`/`remove` accepts an optional `--global` flag to target the global config
-(`~/.config/ragent/ragent.json`) instead of the project config (`.ragent/ragent.json`).
+(`~/.config/codemason/codemason.json`) instead of the project config (`.codemason/codemason.json`).
 Changes persist to disk immediately and update the in-memory snapshot used by the tool.
 
 ---
@@ -331,7 +331,7 @@ tool returns `"Command timed out after N seconds"` with `timed_out: true` metada
 ### Process limits
 
 Before spawning, the tool acquires a process permit from a semaphore that caps
-**concurrent shell processes at 16** (`crates/ragent-types/src/resource.rs`). Combined
+**concurrent shell processes at 16** (`crates/codemason-types/src/resource.rs`). Combined
 with a separate cap of 5 concurrent tools, this prevents an agent from forking runaway
 process trees.
 
@@ -339,7 +339,7 @@ process trees.
 
 Every process builder sets `kill_on_drop(true)` **and** `process_group(0)`.
 `kill_on_drop(true)` kills the *direct child* if the command's future is dropped;
-it does not reach grandchildren. On **timeout**, ragent additionally SIGKILLs
+it does not reach grandchildren. On **timeout**, codemason additionally SIGKILLs
 the entire process group via `kill_process_group` (`libc::killpg`), so descendant
 processes (e.g. a deadlocked `cargo test` child) are reaped too. Without the
 timeout path, a plain dropped future kills the direct child only. This closed a
@@ -363,13 +363,13 @@ command output never blows up the agent context.
 ### Persistent shell state & working directory
 
 The tool maintains a per-session state file that records the current working directory.
-Commands can `cd` within the sandbox and ragent tracks the change (publishing
+Commands can `cd` within the sandbox and codemason tracks the change (publishing
 `Event::ShellCwdChanged` on the event bus) so subsequent commands run from the updated
 directory.
 
 ### Sudo askpass broker
 
-For the rare legitimate `sudo` case, ragent starts an `AskPassBroker` that routes the
+For the rare legitimate `sudo` case, codemason starts an `AskPassBroker` that routes the
 `SUDO_ASKPASS` prompt through the interactive question dialog instead of hanging on a
 terminal password prompt.
 
@@ -377,7 +377,7 @@ terminal password prompt.
 
 ## YOLO mode
 
-YOLO mode (`crates/ragent-config/src/yolo.rs`) is an escape hatch for trusted,
+YOLO mode (`crates/codemason-config/src/yolo.rs`) is an escape hatch for trusted,
 single-user environments. It bypasses **Layers 2, 5, 6, and 7** (banned commands, denied
 commands/patterns, user denylist, and obfuscation detection). Layers 1, 3, and 4
 (safe-command whitelist, directory-escape and syntax validation) remain active — YOLO does **not** let the agent
@@ -401,14 +401,14 @@ either the global or project config it stays enabled (OR merge semantics).
 
 | Path                                                        | Role                                        |
 | ----------------------------------------------------------- | ------------------------------------------- |
-| `crates/ragent-tools-core/src/bash.rs`                      | The `BashTool` implementation               |
-| `crates/ragent-tools-core/src/bg.rs`                        | Background shell integration                |
-| `crates/ragent-config/src/config.rs`                        | `BashConfig` struct and defaults            |
-| `crates/ragent-config/src/bash_lists.rs`                    | Runtime allowlist/denylist snapshot         |
-| `crates/ragent-config/src/yolo.rs`                          | YOLO mode                                   |
-| `crates/ragent-tui/src/app/slash.rs`                        | `/bash` slash commands                      |
-| `crates/ragent-tui/src/app/init.rs`                         | `load_from_config()` at startup             |
-| `crates/ragent-types/src/resource.rs`                       | Process/tool semaphores (16 processes, 5 tools) |
+| `crates/codemason-tools-core/src/bash.rs`                      | The `BashTool` implementation               |
+| `crates/codemason-tools-core/src/bg.rs`                        | Background shell integration                |
+| `crates/codemason-config/src/config.rs`                        | `BashConfig` struct and defaults            |
+| `crates/codemason-config/src/bash_lists.rs`                    | Runtime allowlist/denylist snapshot         |
+| `crates/codemason-config/src/yolo.rs`                          | YOLO mode                                   |
+| `crates/codemason-tui/src/app/slash.rs`                        | `/bash` slash commands                      |
+| `crates/codemason-tui/src/app/init.rs`                         | `load_from_config()` at startup             |
+| `crates/codemason-types/src/resource.rs`                       | Process/tool semaphores (16 processes, 5 tools) |
 
 ### Config JSON keys (summary)
 
@@ -433,4 +433,4 @@ either the global or project config it stays enabled (OR merge semantics).
 
 ---
 
-*This document describes the Bash tool as implemented in ragent v1.0.81.*
+*This document describes the Bash tool as implemented in codemason v1.0.81.*

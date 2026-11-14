@@ -6,29 +6,29 @@
 
 Add a **category navigator** to the existing plugin-store browse panel. No install or
 execution code changes: selecting a category only re-derives the in-memory result set,
-and `ENTER` over a result still runs the existing `ragent_plugins::add` pipeline. The
+and `ENTER` over a result still runs the existing `codemason_plugins::add` pipeline. The
 work splits into four layers:
 
-1. **Store-index model (`crates/ragent-plugins/src/store_index.rs`)** - add an optional
+1. **Store-index model (`crates/codemason-plugins/src/store_index.rs`)** - add an optional
    `category` field to `StoreEntry`, parsed through the same skip-and-count path that
    already handles `description`, `dialect`, `tags`, and `homepage`. An absent or empty
    category leaves the entry uncategorised (FR-003, FR-025/FR-026, A1).
 
-2. **Category model (`crates/ragent-connectors/src/browse.rs` or a shared crate)** -
+2. **Category model (`crates/codemason-connectors/src/browse.rs` or a shared crate)** -
    reuse the existing `CategoryFilter` / `CategoryFilterState` shape (the `ALL`
    sentinel, a derived sorted case-insensitive distinct set, exact case-insensitive
    matching) so the plugin navigator and the connector catalogue agree on what a
    category is (FR-001, FR-003, FR-018, A2, A5). Factor the shared shape if the two
    crates can share it without a new dependency edge (A6).
 
-3. **Browser state (`crates/ragent-tui/src/app/state.rs`, `PluginStoreBrowser`)** - add
+3. **Browser state (`crates/codemason-tui/src/app/state.rs`, `PluginStoreBrowser`)** - add
    the category set, the active category, the category cursor, the navigator scroll
    offset, and the focused-pane flag; extend `apply_filter` to compose the category
    predicate with the existing query predicate and to reset the result cursor (FR-002,
    FR-007..FR-015). All navigation is pure and unit-testable without a terminal.
 
-4. **Render + input routing (`crates/ragent-tui/src/layout.rs`,
-   `crates/ragent-tui/src/input.rs`, `crates/ragent-tui/src/app/input_handler.rs`)** -
+4. **Render + input routing (`crates/codemason-tui/src/layout.rs`,
+   `crates/codemason-tui/src/input.rs`, `crates/codemason-tui/src/app/input_handler.rs`)** -
    split the panel inner area into a left navigator column and the existing result
    column; render the navigator with its own `List::highlight_style` block cursor and
    active-category colour; route `Up`/`Down`/`Enter`/clear-key and the focus key to the
@@ -112,7 +112,7 @@ cursor. The body is plain ASCII inside the panel's Unicode box-drawing border (F
 ### T-001 - `category` field on the store index entry
 
 Add `category: Option<String>` (or `#[serde(default)] String`) to `StoreEntry` in
-`crates/ragent-plugins/src/store_index.rs`, alongside the existing optional fields. It is
+`crates/codemason-plugins/src/store_index.rs`, alongside the existing optional fields. It is
 deserialised by the same `StoreEntry::from_value` path, so a wrong-typed value is refused
 and counted as malformed rather than panicking. An absent or whitespace-only value leaves
 the entry uncategorised (FR-003, FR-026).
@@ -138,7 +138,7 @@ FR-003, FR-006, FR-007, FR-008, FR-014, FR-018, FR-025, FR-027, FR-028).
 
 ### T-004 - Navigator rendering
 
-In `render_plugin_store_panel` (`crates/ragent-tui/src/layout.rs`), split the inner area
+In `render_plugin_store_panel` (`crates/codemason-tui/src/layout.rs`), split the inner area
 into a fixed-width left navigator column and the existing result column. Render the
 navigator as a `List` with a block cursor via `highlight_style`; paint the active
 category in the active-category colour. Render `ALL` only while the fetch is loading
@@ -150,7 +150,7 @@ Unicode panel border (FR-004).
 
 ### T-005 - Keyboard routing
 
-Extend the plugin-store key block in `crates/ragent-tui/src/input.rs` with a
+Extend the plugin-store key block in `crates/codemason-tui/src/input.rs` with a
 focused-pane flag: `Tab` (or the chosen focus key, Open Question 1) transfers focus;
 `Up`/`Down` move the focused pane's cursor and, for the navigator, apply the highlighted
 category immediately (A4); `Enter` over the navigator applies the category and focuses
@@ -160,7 +160,7 @@ swallow unhandled keys (FR-007, FR-008, FR-009, FR-010, FR-015, FR-017, FR-024).
 
 ### T-006 - Mouse routing
 
-In `handle_mouse_event` (`crates/ragent-tui/src/app/input_handler.rs`), add a hit test for
+In `handle_mouse_event` (`crates/codemason-tui/src/app/input_handler.rs`), add a hit test for
 the navigator column: a left-click maps the row under the pointer to a category row,
 moves the cursor, applies the category, and focuses the navigator; the wheel over the
 navigator scrolls its viewport without changing the active category. A left-click on a
@@ -204,7 +204,7 @@ and `cargo check --workspace` clean before considering the feature done (Accepta
 
 - The navigator reuses the connector-catalogue category shape (A2, A6); if sharing the
   type across crates would add an unwanted dependency edge, the same shape is
-  re-implemented in `ragent-tui` with identical semantics.
+  re-implemented in `codemason-tui` with identical semantics.
 - Category comparison is exact and case-insensitive (A5); substring category matching is
   deliberately not offered, to keep the derived set and the predicate in agreement.
 - Filtering stays entirely in memory after the single index fetch (spec `pluginstores`

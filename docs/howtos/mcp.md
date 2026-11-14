@@ -1,12 +1,12 @@
 # How-To: MCP Servers
 
-ragent speaks the **Model Context Protocol (MCP)** directly. You install an MCP
+codemason speaks the **Model Context Protocol (MCP)** directly. You install an MCP
 server by whatever means it ships (npm, `uvx`/pip, or a released binary), point
-ragent at it in `ragent.json`, and its tools surface to the model as ordinary
+codemason at it in `codemason.json`, and its tools surface to the model as ordinary
 tools.
 
 This document is the practical manual for installing MCP servers and wiring them
-into ragent: the transport model, how to install the well-known servers, how
+into codemason: the transport model, how to install the well-known servers, how
 discovery works, the `mcp` config block, the enable/disable ledger, and how to
 call the tools.
 
@@ -33,7 +33,7 @@ in [`docs/howtos/config.md`](config.md) §7.7.
 
 ## 1. Overview
 
-MCP is ragent's transport for reaching external systems. Each server is defined
+MCP is codemason's transport for reaching external systems. Each server is defined
 by an id and one of three transports:
 
 | Transport | `type` | Requirement | Use case |
@@ -49,7 +49,7 @@ other tool.
 
 Three things can contribute a server to a session:
 
-1. a `mcp.<id>` entry in `ragent.json` (what this doc is mostly about);
+1. a `mcp.<id>` entry in `codemason.json` (what this doc is mostly about);
 2. an enabled **plugin** whose manifest declares `mcpServers` (bridged as
    `<plugin-id>.<server>`);
 3. an enabled **connector** whose descriptor names MCP servers (bridged as
@@ -61,7 +61,7 @@ All three feed the same client and the same enable/disable ledger.
 
 ## 2. Installing MCP Servers
 
-ragent does not install servers for you - install the server itself first, then
+codemason does not install servers for you - install the server itself first, then
 add a `mcp` entry (or let `/mcp discover` find it). There are three common
 install routes.
 
@@ -99,13 +99,13 @@ pip install mcp-server-git
 ### Route C - Drop a definition into the server directory
 
 For a server that is not one of the known executables, or that needs custom
-`args`/`env`, write a definition file under `~/.config/ragent/servers/` and let
-`/mcp discover` find it - no `ragent.json` edit. See
+`args`/`env`, write a definition file under `~/.config/codemason/servers/` and let
+`/mcp discover` find it - no `codemason.json` edit. See
 [section 3](#3-discovery) for the two accepted file shapes.
 
 ```bash
-mkdir -p ~/.config/ragent/servers/mytool
-cat > ~/.config/ragent/servers/mytool/server.json <<'EOF'
+mkdir -p ~/.config/codemason/servers/mytool
+cat > ~/.config/codemason/servers/mytool/server.json <<'EOF'
 {
   "name": "My Tool",
   "command": "npx",
@@ -141,7 +141,7 @@ npm global directories, and in the MCP registry directories:
 | `aws-kb-retrieval` | `mcp-server-aws-kb-retrieval` |
 | `exa` | `mcp-server-exa` |
 
-Any server not in this table can still be used - add it to `ragent.json` by hand
+Any server not in this table can still be used - add it to `codemason.json` by hand
 (section 4). Discovery is a convenience, not a requirement.
 
 ---
@@ -155,19 +155,19 @@ interactive selection dialog. The scan checks, in order:
 2. **npm global** - the npm prefix's `node_modules`, including the
    `@modelcontextprotocol` scope.
 3. **MCP registry directories** - `server.json` files, or direct `*.json`
-   configs, under the ragent-native directory:
-   - `~/.config/ragent/servers` - **the canonical ragent-native location**
+   configs, under the codemason-native directory:
+   - `~/.config/codemason/servers` - **the canonical codemason-native location**
      (see below).
 
    and the third-party locations, scanned for backwards compatibility:
    - `~/.claude/mcp-servers` - Claude Desktop
    - `~/.cline/mcp-servers` - Cline
    - `~/.mcp/servers` - legacy generic location (superseded by
-     `~/.config/ragent/servers`)
+     `~/.config/codemason/servers`)
    - `~/.config/mcp/servers`
    - `~/.config/claude/mcp-servers`
 
-   The ragent-native directory is scanned first, so its definitions win
+   The codemason-native directory is scanned first, so its definitions win
    de-duplication.
 
 Results are de-duplicated by id, first find wins.
@@ -178,20 +178,20 @@ followed by the discovered servers and their launch commands - run **`/mcp
 config`**. It uses the same scan (`McpClient::discover_locations`) and is the
 quickest way to confirm which directory a definition is actually coming from.
 
-### The ragent-native server directory
+### The codemason-native server directory
 
-Drop a server definition into `~/.config/ragent/servers/` (the canonical
+Drop a server definition into `~/.config/codemason/servers/` (the canonical
 location; on macOS that is
-`~/Library/Application Support/ragent/servers/`, on Windows
-`%APPDATA%/ragent/servers/`) and `/mcp discover` picks it up on the next scan
-with no `ragent.json` edit. Two file shapes are accepted, both requiring a
+`~/Library/Application Support/codemason/servers/`, on Windows
+`%APPDATA%/codemason/servers/`) and `/mcp discover` picks it up on the next scan
+with no `codemason.json` edit. Two file shapes are accepted, both requiring a
 `command` field:
 
 - a per-server subdirectory containing a `server.json` - the id is the
   directory name:
 
   ```text
-  ~/.config/ragent/servers/
+  ~/.config/codemason/servers/
   +-- filesystem/
       +-- server.json
   ```
@@ -208,7 +208,7 @@ with no `ragent.json` edit. Two file shapes are accepted, both requiring a
 - a standalone `*.json` file - the id is the file stem:
 
   ```text
-  ~/.config/ragent/servers/git.json
+  ~/.config/codemason/servers/git.json
   ```
 
   ```json
@@ -221,26 +221,26 @@ with no `ragent.json` edit. Two file shapes are accepted, both requiring a
 
 `name` is optional and defaults to the id. A definition whose file has no
 `command` is skipped. The legacy `~/.mcp/servers/` directory still works and is
-scanned after the ragent-native location.
+scanned after the codemason-native location.
 
 In the dialog, move the block cursor with `Up`/`Down` (or `k`/`j`; `Home`/`End`
 jump to the ends) and press `Space` to toggle the highlighted server's enabled
 state; `Esc` dismisses it and the list scrolls with a scrollbar when there are
 more servers than fit. Enabling a server **writes a new `mcp.<id>` entry into
-`.ragent/ragent.json`** (in the current project) with the discovered command,
+`.codemason/codemason.json`** (in the current project) with the discovered command,
 args, env, and `"disabled": false`, and records the choice in the global ledger;
-disabling it records the choice disabled and disconnects it. ragent reports:
+disabling it records the choice disabled and disconnects it. codemason reports:
 
 ```
 [ok] '<id>' enabled
 ```
 
-If a server id is already present in `ragent.json`, its own fields are kept (only
+If a server id is already present in `codemason.json`, its own fields are kept (only
 a `disabled: true` override is lifted). Discovery never overwrites a hand-edited
 entry. A discovered server is written enabled, but the durable ledger
 (section 5) can still switch it off afterwards.
 
-> Discovery is one way to get an entry into `ragent.json`. Editing the file by
+> Discovery is one way to get an entry into `codemason.json`. Editing the file by
 > hand is equally supported and gives you full control over `args`, `env`, and
 > `url`.
 
@@ -248,7 +248,7 @@ entry. A discovered server is written enabled, but the durable ledger
 
 ## 4. Configuring Servers
 
-MCP servers live in the top-level `mcp` object of `ragent.json`, **keyed by
+MCP servers live in the top-level `mcp` object of `codemason.json`, **keyed by
 server id** (the key is the id, there is no separate `name` field).
 
 ### stdio server
@@ -284,7 +284,7 @@ MCP client follows, so a command-launched server needs no transport key at all:
 ```
 
 The same default applies on every path that parses a server definition - the
-`mcp` section of `ragent.json`, plugin `mcpServers` bridges, and connector
+`mcp` section of `codemason.json`, plugin `mcpServers` bridges, and connector
 `servers` / `remote` entries - so a definition that names no transport is a
 stdio server everywhere. A config that is written back still serialises an
 explicit `"type": "stdio"`, so the transport is never ambiguous on disk.
@@ -353,7 +353,7 @@ to be enabled:
 
 ### Applying config changes
 
-A server added to `ragent.json` while ragent is running is picked up on the next
+A server added to `codemason.json` while codemason is running is picked up on the next
 start. To rebuild the display list from the current config without restarting,
 run `/reload mcp`; to connect a newly added server live, run `/mcp connect <id>`.
 
@@ -362,15 +362,15 @@ run `/reload mcp`; to connect a newly added server live, run `/mcp connect <id>`
 ## 5. Enabling and Disabling
 
 Whether a server actually starts is **durable, user-owned state**, not merely a
-side effect of appearing in `ragent.json`. The choice is held in a global ledger:
+side effect of appearing in `codemason.json`. The choice is held in a global ledger:
 
 ```
 <global state dir>/mcp_state.json
 ```
 
-On Linux that is `~/.config/ragent/mcp_state.json`; if the platform state
-directory cannot be determined, ragent falls back to
-`.ragent/mcp_state.json` in the working directory. The ledger maps a server id to
+On Linux that is `~/.config/codemason/mcp_state.json`; if the platform state
+directory cannot be determined, codemason falls back to
+`.codemason/mcp_state.json` in the working directory. The ledger maps a server id to
 a boolean:
 
 ```json
@@ -381,12 +381,12 @@ The precedence rules:
 
 - A server **absent** from the ledger is **enabled** - a newly added server
   starts with no extra step.
-- `mcp.<id>.disabled: true` in `ragent.json` is a **hard override** that always
+- `mcp.<id>.disabled: true` in `codemason.json` is a **hard override** that always
   disables the server, whatever the ledger says.
 - Otherwise, the ledger decides.
 
 Because the ledger is global, disabling a server once keeps it disabled in every
-project, and a plugin- or connector-contributed server (which has no `ragent.json`
+project, and a plugin- or connector-contributed server (which has no `codemason.json`
 entry at all) can still be toggled off.
 
 ### Toggling at runtime
@@ -424,8 +424,8 @@ callable under, run:
 
 ## 7. Plugin-Contributed Servers
 
-An enabled plugin can declare MCP servers in its manifest. ragent bridges them
-into the session automatically - no `ragent.json` entry is needed. Bridged ids
+An enabled plugin can declare MCP servers in its manifest. codemason bridges them
+into the session automatically - no `codemason.json` entry is needed. Bridged ids
 are prefixed with the plugin id to avoid collisions:
 
 ```
@@ -450,7 +450,7 @@ entries (the Claude marketplace layout):
 { "mcpServers": "./mcp.json" }
 ```
 
-A configured (`ragent.json`) server keeps its unprefixed id and wins any collision
+A configured (`codemason.json`) server keeps its unprefixed id and wins any collision
 with a bridged one. Disabled plugins contribute nothing. See
 [`docs/howtos/plugins.md`](plugins.md) for the plugin manifest.
 
@@ -461,22 +461,22 @@ with a bridged one. Disabled plugins contribute nothing. See
 A **connector** is a catalogue-style integration that resolves to one or more MCP
 servers, bridged as `<connector-id>.<server>` through the same machinery. If your
 integration is available in a connector catalogue, prefer
-`/connectors add <id>` over hand-editing `ragent.json` - connectors also carry
+`/connectors add <id>` over hand-editing `codemason.json` - connectors also carry
 their authentication shape. See [`docs/howtos/connectors.md`](connectors.md).
 
 ---
 
 ## 9. Config Locations and Merge
 
-`ragent.json` is loaded from, in order (later overrides earlier):
+`codemason.json` is loaded from, in order (later overrides earlier):
 
-1. `<global config dir>/ragent.json` - on Linux `~/.config/ragent/ragent.json`.
-2. `.ragent/ragent.json` in the current project directory.
+1. `<global config dir>/codemason.json` - on Linux `~/.config/codemason/codemason.json`.
+2. `.codemason/codemason.json` in the current project directory.
 
 The `mcp` object merges **per server id, last-wins**: a project entry with the
 same id replaces the global one, and ids only present in one layer are unioned.
 
-The `--config <path>` CLI flag (and the `RAGENT_CONFIG` / `RAGENT_CONFIG_CONTENT`
+The `--config <path>` CLI flag (and the `CODEMASON_CONFIG` / `CODEMASON_CONFIG_CONTENT`
 environment variables) override this resolution for a single run.
 
 A stdio entry containing secrets in `args` or `env` is best kept in the
@@ -495,9 +495,9 @@ arguments in the project file so they travel with the repository.
   (default 30 s) and retried once on timeout. A launcher such as `npx`/`npm exec`
   that stalls resolving a package fails within the bound with an actionable
   error. Raise the bound for a slow network with
-  `RAGENT_MCP_CONNECT_TIMEOUT_SECS=<seconds>`.
+  `CODEMASON_MCP_CONNECT_TIMEOUT_SECS=<seconds>`.
 - **A server is configured but not started** - check, in order: the ledger
-  (`/mcp status`), and `mcp.<id>.disabled` in `ragent.json`. The `disabled` flag
+  (`/mcp status`), and `mcp.<id>.disabled` in `codemason.json`. The `disabled` flag
   wins over the ledger.
 - **Tools do not appear** - confirm the server is connected (`/mcp`) and that its
   tools are registered (`/plugins list --mcp`). A server with no tools prints
@@ -505,7 +505,7 @@ arguments in the project file so they travel with the repository.
 - **A config edit had no effect** - run `/reload mcp` to rebuild the display list
   from config, then `/mcp connect <id>` to connect a newly added server. A
   process that never started needs a restart.
-- **A server in `~/.config/ragent/servers/` is not discovered** - the definition
+- **A server in `~/.config/codemason/servers/` is not discovered** - the definition
   file must contain a top-level `command` (a file without one is skipped
   silently). Use `server.json` inside a per-server subdirectory, or a standalone
   `*.json` file; the id is the directory name or file stem respectively.

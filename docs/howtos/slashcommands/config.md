@@ -1,6 +1,6 @@
 # /config
 
-> "Configuration: /config show|save|list|help" (SlashCommandDef, crates/ragent-tui/src/app/state.rs).
+> "Configuration: /config show|save|list|help" (SlashCommandDef, crates/codemason-tui/src/app/state.rs).
 
 ## Overview
 
@@ -12,7 +12,7 @@ final merged value of every key together with the source that supplied it. The
 `config_dir/saves/` directory, and the `list` form opens an interactive picker
 over previously saved backups so one can be restored.
 
-Handlers live in `crates/ragent-tui/src/app/slash.rs` (the `config` arm,
+Handlers live in `crates/codemason-tui/src/app/slash.rs` (the `config` arm,
 approximately lines 2238-2652). All output accumulates under a `From: /config`
 header in the message window.
 
@@ -50,15 +50,15 @@ Output (representative, condensed):
 From: /config show
 
 Application Paths
-  Working directory:  /home/user/Projects/ragent
-  Data directory:     ~/.local/share/ragent
-  Config directory:   ~/.config/ragent
+  Working directory:  /home/user/Projects/codemason
+  Data directory:     ~/.local/share/codemason
+  Config directory:   ~/.config/codemason
 
 Config Files
   Path                                        Exists
-  /home/user/Projects/ragent/.ragent/ragent.json   yes
-  /home/user/.config/ragent/ragent.json            no
-  $RAGENT_CONFIG                                   (unset)
+  /home/user/Projects/codemason/.codemason/codemason.json   yes
+  /home/user/.config/codemason/codemason.json            no
+  $CODEMASON_CONFIG                                   (unset)
 
 Resolved Values
   key                            | source                 | value
@@ -75,7 +75,7 @@ Output:
 
 ```
 From: /config save
-[ok] Configuration backed up to /home/user/.config/ragent/saves/ragent.json.20260911-101500
+[ok] Configuration backed up to /home/user/.config/codemason/saves/codemason.json.20260911-101500
 ```
 
 If the backup cannot be written the command reports `[err]` with
@@ -92,8 +92,8 @@ Output (picker state):
 ```
 From: /config list
 Saved configurations (newest first):
-  1. ragent.json.20260911-101500
-  2. ragent.json.20260910-183022
+  1. codemason.json.20260911-101500
+  2. codemason.json.20260910-183022
 ...
 ```
 
@@ -125,10 +125,10 @@ From: /config help
 - **Application Paths** - working directory, data directory, and config
   directory currently in use.
 - **Config Files** - a table with exists checks for the project config
-  (`<cwd>/.ragent/ragent.json`), the global config (`<config_dir>/ragent.json`),
-  and the path given by the `RAGENT_CONFIG` environment variable.
+  (`<cwd>/.codemason/codemason.json`), the global config (`<config_dir>/codemason.json`),
+  and the path given by the `CODEMASON_CONFIG` environment variable.
 - **Resolved Values** - a `key | source | value` table. Precedence is:
-  `defaults < global config < project config < env file < RAGENT_CONFIG_CONTENT`.
+  `defaults < global config < project config < env file < CODEMASON_CONFIG_CONTENT`.
   Every row names the source that supplied the winning value.
 - **Union fields** - the merged-map fields `permission`, `instructions`,
   `skill_dirs`, `hooks`, `Bash`, `yolo`, `edit_log`, `sdd`,
@@ -138,7 +138,7 @@ From: /config help
   `openalex_email`, and `gitlab` sections, are redacted
   before display.
 - **Storage** - the resolved SQLite database path.
-- **Code Index** - the index directory `.ragent/codeindex`.
+- **Code Index** - the index directory `.codemason/codeindex`.
 - **Memory** - project and global memory directories.
 - **Custom Agents** - the custom agent directories being scanned.
 
@@ -149,7 +149,7 @@ when the backup could not be written.
 
 ### `/config list`
 
-Scans `<config_dir>/saves/` for files matching `ragent.json.*` (excluding
+Scans `<config_dir>/saves/` for files matching `codemason.json.*` (excluding
 `.tmp` candidates), sorts newest-first by modification time, and opens the
 `ConfigSavePickerState` interactive picker. In the picker:
 
@@ -167,7 +167,7 @@ Prints the usage line `/config show | /config save | /config list | /config help
 ## Related
 
 - `/init config` - write a fresh default config file to disk
-- `/reload` - re-read `ragent.json` into the running session
+- `/reload` - re-read `codemason.json` into the running session
 - `/skills` - view the skill registry loaded from `skill_dirs`
 - [QUICKSTART.md](../../../QUICKSTART.md) - configuration examples
 - [SPEC.md](../../../SPEC.md) - full configuration schema

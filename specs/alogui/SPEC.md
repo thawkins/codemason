@@ -11,8 +11,8 @@ audit:
 
 ## Overview
 
-The activity log subsystem (implemented in `ragent-storage::activity_log` and
-`ragent_types::activity`) maintains an append-only, SQLite-backed event log of
+The activity log subsystem (implemented in `codemason-storage::activity_log` and
+`codemason_types::activity`) maintains an append-only, SQLite-backed event log of
 agent execution facts: model messages, tool calls, tool results, permission
 decisions, checkpoints, terminations, and lifecycle events. Each event belongs
 to a run identified by a `RunId` and carries a per-run monotonic sequence
@@ -58,13 +58,13 @@ Out of scope:
 
 Key types and APIs the implementation will use:
 
-- `ragent_storage::activity_log::ActivityLog`
+- `codemason_storage::activity_log::ActivityLog`
   - `open(path: &Path) -> Result<Self>` — opens or creates the log database.
   - `list_runs() -> Result<Vec<RunId>>` — all runs with at least one event.
   - `count(run_id) -> Result<u64>` — total events for a run.
   - `run_status(run_id) -> Result<RunStatus>` — derived lifecycle state.
   - `read_run(run_id) -> Result<Vec<ActivityEvent>>` — ordered events.
-- `ragent_types::activity`
+- `codemason_types::activity`
   - `RunId` — opaque identifier (string-backed).
   - `ActivityEvent { id, run_id, seq, schema_version, timestamp, kind }`.
   - `EventKind` — tagged union: `ModelMessage`, `ToolCall`, `ToolResult`,
@@ -74,8 +74,8 @@ Key types and APIs the implementation will use:
     `Rebuilding`, `RolledBack`.
   - `Projection` — derived state from `replay_run`.
 
-The activity-log database is stored alongside the main ragent database under
-the platform data directory (`dirs::data_dir().join("ragent")`). The exact
+The activity-log database is stored alongside the main codemason database under
+the platform data directory (`dirs::data_dir().join("codemason")`). The exact
 file name is an implementation detail of `ActivityLog::open`; `/alog config`
 will surface the resolved path.
 

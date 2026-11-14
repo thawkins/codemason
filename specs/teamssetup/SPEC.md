@@ -11,10 +11,10 @@ audit:
 
 ## Executive Summary
 
-This specification records a deep analysis of the ragent **team subsystem**
-(`crates/ragent-agent/src/team/`, the 21 `team_*` tools in
-`crates/ragent-agent/src/tool/team_*.rs`, and the TUI `/team` slash surface in
-`crates/ragent-tui/src/app/slash.rs`) and converts every finding into a testable
+This specification records a deep analysis of the codemason **team subsystem**
+(`crates/codemason-agent/src/team/`, the 21 `team_*` tools in
+`crates/codemason-agent/src/tool/team_*.rs`, and the TUI `/team` slash surface in
+`crates/codemason-tui/src/app/slash.rs`) and converts every finding into a testable
 requirement.
 
 The team subsystem lets one *lead* session spawn named *teammates*, share a
@@ -61,8 +61,8 @@ its own false findings cannot be audited later.
 
 ### In scope
 
-- `crates/ragent-agent/src/team/{manager,config,task,mailbox,store,swarm}.rs`
-- The `team_*` tool family in `crates/ragent-agent/src/tool/`
+- `crates/codemason-agent/src/team/{manager,config,task,mailbox,store,swarm}.rs`
+- The `team_*` tool family in `crates/codemason-agent/src/tool/`
 - The TUI `/team` and `/team cleanup` / `/team delete` / `/team tasks` surfaces
 - The `Teams` popup and teammate strip surfaces already defined by spec `agentui`
   (this spec only adds the state-transition contracts those surfaces display)
@@ -101,7 +101,7 @@ the concrete evidence, and the requirement that remediates it.
 | F-03 | Two divergent completion implementations | `TaskStore::complete` and `TeamManager::complete_task` are near-duplicates with different error text and different idempotency wording; a fix applied to one does not reach the other | High | FR-001, FR-025 |
 | F-04 | Two divergent claim implementations | `TaskStore::claim_next` / `claim_specific` versus `TeamManager::claim_next_task` / `apply_to_task_list` duplicate the claim logic including the "already has an in-progress task" guard | High | FR-025 |
 | F-05 | No task cancellation surface | `Cancelled` exists in `TaskStatus`, `as_str`, and the serde rename table, but no tool, no `/team` subcommand, and no manager method writes it. A lead cannot abandon a task without editing `tasks.json` | Medium | FR-005, FR-006 |
-| F-06 | `MemberStatus::Blocked` is a terminal sink | Only `crates/ragent-tui/src/app/swarm.rs:159` writes `Blocked`; nothing in `ragent-agent` reads it to unblock, and `resume_teammate` bails unless the member is `Suspended`. A `Blocked` member therefore blocks `team_cleanup` (FR-022) forever with no in-product escape | Critical | FR-009, FR-010, FR-011 |
+| F-06 | `MemberStatus::Blocked` is a terminal sink | Only `crates/codemason-tui/src/app/swarm.rs:159` writes `Blocked`; nothing in `codemason-agent` reads it to unblock, and `resume_teammate` bails unless the member is `Suspended`. A `Blocked` member therefore blocks `team_cleanup` (FR-022) forever with no in-product escape | Critical | FR-009, FR-010, FR-011 |
 | F-07 | Watchdog fails parked teammates | `manager.rs:1553-1560` treats `Suspended` as "still active" and therefore eligible for failure; a teammate the lead deliberately paused is marked `Failed` after the 5-minute timeout with `last_spawn_error` "watchdog: no progress" | Critical | FR-012 |
 | F-08 | Watchdog has no `Blocked` branch | `manager.rs:1553-1560` matches `Working`, `Spawning`, `PlanPending`, `Suspended` - not `Blocked`, not `ShuttingDown`. The two unlisted states take an implicit path determined by an unrelated `unwrap_or(false)` | Medium | FR-012 |
 | F-09 | Watchdog timeout is not configurable and not discoverable | The 5-minute timeout and 30-second tick are hardcoded; a teammate legitimately running one long build is failed with no operator recourse | Medium | FR-013 |
@@ -146,7 +146,7 @@ transition is legal, and every write path **shall** call it before mutating a
 task's `status`.
 
 The single function is `TaskStatus::can_transition_to(&self, to: Self) -> bool`
-in `crates/ragent-agent/src/team/task.rs`, with `TaskStatus::is_terminal`
+in `crates/codemason-agent/src/team/task.rs`, with `TaskStatus::is_terminal`
 (`Completed`, `Cancelled`) alongside it. Its table is design decision D3:
 `Pending -> {InProgress, Cancelled}`, `InProgress -> {Completed, Pending,
 Cancelled}`, and no outgoing edge from either terminal status. Self-transitions
@@ -223,7 +223,7 @@ watchdog **shall not** mark the teammate `Failed`, regardless of elapsed time.
 Only a member that `is_live()` is eligible for a failure verdict.
 
 The eligibility check is literally `MemberStatus::is_live()` in
-`TeamManager::start_watchdog` (`crates/ragent-agent/src/team/manager.rs`), so the
+`TeamManager::start_watchdog` (`crates/codemason-agent/src/team/manager.rs`), so the
 failable set is exactly `Spawning`, `Working`, `ShuttingDown`. A parked member
 (`Idle`, `PlanPending`, `Blocked`, `Suspended`) and a terminal member (`Stopped`,
 `Failed`) are skipped and have their progress marker refreshed so they are not
@@ -302,7 +302,7 @@ the same guard - "no member is `is_live()` or `ShuttingDown`" - and **shall**
 report the same refusal text listing every blocking member by name and status.
 
 The guard is `blocks_teardown` / `blocking_members` / `cleanup_refusal` in
-`crates/ragent-agent/src/team/mod.rs` (T-027). `/team delete` additionally
+`crates/codemason-agent/src/team/mod.rs` (T-027). `/team delete` additionally
 **shall** treat its `force` override as a request to confirm rather than a
 permission to delete (T-028): with live members present, the first
 `force`-bearing invocation **shall** print the `delete_confirmation` text, arm
@@ -484,7 +484,7 @@ removing the team directory, and **shall not** delete on a single unconfirmed
 `Enter`.
 
 The confirmation is `delete_confirmation` in
-`crates/ragent-agent/src/team/mod.rs`, which **shall** return `Some` for every
+`crates/codemason-agent/src/team/mod.rs`, which **shall** return `Some` for every
 roster that is not excluded - including a roster with nothing live and an empty
 one - so a live member is no longer the condition for it. The text **shall**
 name the team, **shall** name every blocking member with its status when there
@@ -554,17 +554,17 @@ visible in the event stream (FR-044, FR-024) rather than failing silently.
 
 ## References
 
-- `crates/ragent-agent/src/team/manager.rs` - `TeamManager`, watchdog,
+- `crates/codemason-agent/src/team/manager.rs` - `TeamManager`, watchdog,
   `complete_task`, `claim_next_task`, adoption, hooks
-- `crates/ragent-agent/src/team/task.rs` - `TaskStatus`, `Task`, `TaskList`,
+- `crates/codemason-agent/src/team/task.rs` - `TaskStatus`, `Task`, `TaskList`,
   `TaskStore` claim/complete
-- `crates/ragent-agent/src/team/config.rs` - `TeamSettings`, `MemberStatus`,
+- `crates/codemason-agent/src/team/config.rs` - `TeamSettings`, `MemberStatus`,
   `TeamStatus`, `PlanStatus`
-- `crates/ragent-agent/src/team/mailbox.rs` - `MessageType`, `Mailbox`,
+- `crates/codemason-agent/src/team/mailbox.rs` - `MessageType`, `Mailbox`,
   `drain_unread`
-- `crates/ragent-agent/src/tool/team_*.rs` - the 21 team tools
-- `crates/ragent-tui/src/app/slash.rs` - `/team` surface, `/team cleanup`
+- `crates/codemason-agent/src/tool/team_*.rs` - the 21 team tools
+- `crates/codemason-tui/src/app/slash.rs` - `/team` surface, `/team cleanup`
   (line 6426), `/team delete` (line 6154)
-- `crates/ragent-tui/src/app/swarm.rs:159` - the only `MemberStatus::Blocked`
+- `crates/codemason-tui/src/app/swarm.rs:159` - the only `MemberStatus::Blocked`
   producer
 - Spec `agentui` - the `Teams` popup and teammate strip layout this spec feeds

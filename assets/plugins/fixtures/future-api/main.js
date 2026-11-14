@@ -4,4 +4,4 @@
 // test both refuse with a version-mismatch report and this entry point is never
 // executed.
 
-ragent.message.info("future-api entry ran - this must never execute");
+codemason.message.info("future-api entry ran - this must never execute");

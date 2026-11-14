@@ -51,7 +51,7 @@ which is a turn silently missing from the request - precisely the failure FR-018
 exists to forbid ("**shall not** silently drop it"). It now returns
 
 ```rust
-return Err(RagentError::WireLoss {
+return Err(CodemasonError::WireLoss {
     construct: format!("role:{}", msg.role),
     provider: RESPONSES_PROVIDER_ID.to_string(),
 });
@@ -102,7 +102,7 @@ input list accepted before still produces the same items.
 
 ## 3. The cases
 
-`crates/ragent-llm/tests/test_wire_encode_message.rs`:
+`crates/codemason-llm/tests/test_wire_encode_message.rs`:
 
 1. `test_a_role_the_responses_input_list_has_no_item_for_is_refused` - the
    conversation plus a `role: "tool"` turn; asserts
@@ -138,12 +138,12 @@ would have had sent, with the `role: "tool"` turn simply absent.
 
 - `cargo fmt --all -- --check` clean.
 - `cargo check --workspace --all-targets` clean (1m16s).
-- `cargo clippy -p ragent-llm --all-targets`: only the pre-existing 19
+- `cargo clippy -p codemason-llm --all-targets`: only the pre-existing 19
   `unnecessary structure name repetition` in `tool_cache.rs` plus one
-  `ragent-storage` let-binding; nothing in a touched file.
-- `cargo nextest run -p ragent-llm --no-fail-fast`: 641 passed, 2 skipped,
+  `codemason-storage` let-binding; nothing in a touched file.
+- `cargo nextest run -p codemason-llm --no-fail-fast`: 641 passed, 2 skipped,
   0 failed.
-- `cargo nextest run -p ragent-llm -E 'test(test_wire_encode_message::)'`:
+- `cargo nextest run -p codemason-llm -E 'test(test_wire_encode_message::)'`:
   38 passed (was 36).
 
 ## 6. Hand-off

@@ -79,23 +79,23 @@ them explicitly so the work is testable; each is called out again under `## Open
 - **A5 - Reuse, not reinvention.** Content acquisition reuses the `mf_crawl` /
   `mf_fetch` tools and the local file readers; spec authoring reuses
   `SpecCommand::build_create_prompt` (or a sibling prompt builder); scaffolding reuses
-  `project_scaffold::plan_and_emit` and the `ragent new` CLI path.
+  `project_scaffold::plan_and_emit` and the `codemason new` CLI path.
 
 ## Background - existing machinery to reuse
 
 - **Slash-command surface.** Commands are declared as static `SlashCommandDef` entries
-  in `crates/ragent-tui/src/app/state.rs` (`SLASH_COMMANDS`, the `"spec"` entry is at
+  in `crates/codemason-tui/src/app/state.rs` (`SLASH_COMMANDS`, the `"spec"` entry is at
   line ~868) and dispatched in the `/spec` arm of
-  `crates/ragent-tui/src/app/slash.rs` (line ~6393). `SpecCommand::parse` lives in
-  `crates/ragent-specs/src/commands.rs` (line ~204) with the `"create"` arm at
+  `crates/codemason-tui/src/app/slash.rs` (line ~6393). `SpecCommand::parse` lives in
+  `crates/codemason-specs/src/commands.rs` (line ~204) with the `"create"` arm at
   ~211-223. `/new` is dispatched at `slash.rs:6388` into
-  `crates/ragent-tui/src/app/newproj.rs:98` (`handle_new_command`).
+  `crates/codemason-tui/src/app/newproj.rs:98` (`handle_new_command`).
 - **Spec authoring prompt.** `SpecCommand::build_create_prompt`
-  (`crates/ragent-specs/src/commands.rs:520`) produces the EARS `SPEC.md` + `PLAN.md` +
+  (`crates/codemason-specs/src/commands.rs:520`) produces the EARS `SPEC.md` + `PLAN.md` +
   `TESTPLAN.md` prompt; the `/spec create` arm spawns the general agent with
   `processor.process_message` (`slash.rs:6446`). `/spec specify`
   (`build_specify_prompt`, `commands.rs:604`) is the SPEC-only precedent.
-- **Scaffold engine.** `crates/ragent-tools-extended/src/project_scaffold/` provides the
+- **Scaffold engine.** `crates/codemason-tools-extended/src/project_scaffold/` provides the
   shared pipeline `plan_and_emit` (`mod.rs:94`), the empty-directory guard
   `enforce_empty_directory_guard` (`guard.rs:61`), and the flag parser `parse_flags`
   (`flags.rs:501`) over `ScaffoldRequest` (`flags.rs:283`), `Language` (`flags.rs:25`),
@@ -103,8 +103,8 @@ them explicitly so the work is testable; each is called out again under `## Open
   `ScaffoldArgs` in `src/cli.rs:1030` and `run_new_scaffold` (`cli.rs:1140`).
 - **Content acquisition.** `mf_crawl` (crawl tool with `max_pages`, `max_depth`,
   `max_total_chars`, `deadline_ms`, `sitemap`, `focus`, `respect_robots`) and
-  `mf_fetch` live under `crates/ragent-tools-extended/src/masterfetch/tools/`; the
-  legacy `webfetch` tool is `crates/ragent-tools-extended/src/webfetch.rs`.
+  `mf_fetch` live under `crates/codemason-tools-extended/src/masterfetch/tools/`; the
+  legacy `webfetch` tool is `crates/codemason-tools-extended/src/webfetch.rs`.
 - **Progress streaming.** `newproj.rs` demonstrates the streamed progress pattern
   (`ProgressLine`, `push_progress`, `poll_newproj_result`, `refresh_newproj_progress_message`);
   `/research` demonstrates the same pattern for long, multi-stage runs.
@@ -192,8 +192,8 @@ and hosting flags, and shall not implement a second scaffold path.
 
 ### FR-011 - Empty-target guard (unwanted)
 
-**If** the target folder is not empty (ignoring ragent's own artefact allowlist:
-`.ragent`, `log`, `target`), **then** the system shall refuse to scaffold, shall report
+**If** the target folder is not empty (ignoring codemason's own artefact allowlist:
+`.codemason`, `log`, `target`), **then** the system shall refuse to scaffold, shall report
 which entries block the operation, and shall not extract, generate, or write anything.
 
 ### FR-012 - Ordering guarantee (state-driven)
@@ -247,7 +247,7 @@ spec files after the cancellation point.
 
 ### FR-020 - CLI parity (optional)
 
-**Where** the ragent binary is invoked as `ragent spec govcreate ...`, the system shall
+**Where** the codemason binary is invoked as `codemason spec govcreate ...`, the system shall
 perform the same run as the TUI slash command, reporting progress and the summary to
 stdout.
 
@@ -309,7 +309,7 @@ Out of scope:
    writes nothing.
 4. A bad content reference produces a refusal before any scaffold write.
 5. `/spec govcreate help` lists every accepted flag and both content-reference forms.
-6. `ragent spec govcreate ...` performs the same run from the CLI.
+6. `codemason spec govcreate ...` performs the same run from the CLI.
 
 ## Open Questions
 

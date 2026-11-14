@@ -6,7 +6,7 @@
       "name": "Codex Weather",
       "version": "1.2.0",
       "description": "Weather lookups for the agent",
-      "source": "https://raw.githubusercontent.com/thawkins/ragent/main/assets/plugins/fixtures/codex-weather",
+      "source": "https://raw.githubusercontent.com/thawkins/codemason/main/assets/plugins/fixtures/codex-weather",
       "dialect": "codex",
       "tags": ["weather", "http"]
     },

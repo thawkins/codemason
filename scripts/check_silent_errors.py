@@ -210,7 +210,7 @@ def write_baseline(counts: dict[str, int]) -> None:
 def self_test() -> int:
     """Seed a violation in a temp file inside a scan root and confirm the
     scanner flags it. Proves the guard actually fails on a seeded breach."""
-    seed = pathlib.Path("crates/ragent-types/src/__silent_error_selftest.rs")
+    seed = pathlib.Path("crates/codemason-types/src/__silent_error_selftest.rs")
     seed.write_text(
         "pub fn f() {\n    let _ = std::fs::write(\"/nonexistent\", b\"\");\n}\n",
         encoding="utf-8",

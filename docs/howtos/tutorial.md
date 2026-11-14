@@ -1,6 +1,6 @@
-# ragent Tutorial: From Setup to Release
+# codemason Tutorial: From Setup to Release
 
-This tutorial is a hands-on, end-to-end walkthrough for using **ragent**
+This tutorial is a hands-on, end-to-end walkthrough for using **codemason**
 through its full-screen terminal UI. It covers the complete lifecycle of a
 project: selecting an agent mode, setting up a new project, generating code,
 debugging, and releasing to a version-control host such as GitHub.
@@ -29,9 +29,9 @@ cross-referenced so you can go deeper without re-reading material here.
 
 Before you begin, make sure you have:
 
-- **ragent** built and on your `PATH` (see `README.md` for build
+- **codemason** built and on your `PATH` (see `README.md` for build
   instructions).
-- At least one LLM provider configured. ragent supports Anthropic, OpenAI,
+- At least one LLM provider configured. codemason supports Anthropic, OpenAI,
   Google Gemini, Hugging Face, GitHub Copilot, Ollama (local and cloud),
   Generic OpenAI-compatible endpoints, Azure AI Foundry, Azure Resource,
   Amazon Bedrock, Microsoft Foundry Local, OpenRouter, XAI, and a Model Router
@@ -74,7 +74,7 @@ project to live (or create one):
 ```bash
 mkdir -p ~/Projects/my-app
 cd ~/Projects/my-app
-ragent
+codemason
 ```
 
 The TUI opens with three main regions:
@@ -94,7 +94,7 @@ The TUI opens with three main regions:
 | `--log` | Open with the log panel already visible |
 
 ```bash
-ragent --model ollamacloud/kimi-k2.7-code --agent coder
+codemason --model ollamacloud/kimi-k2.7-code --agent coder
 ```
 
 For a detailed walkthrough of the TUI layout and panels, see
@@ -104,7 +104,7 @@ For a detailed walkthrough of the TUI layout and panels, see
 
 ## 3. Selecting a Mode (Agent Preset)
 
-ragent ships with several built-in agent presets, each tuned to a specific
+codemason ships with several built-in agent presets, each tuned to a specific
 workflow. The preset controls the system prompt, default permissions, and
 tool emphasis. Switch presets at any time without restarting.
 
@@ -137,8 +137,8 @@ switch.
 ### Creating custom agents
 
 If no built-in preset fits, define your own via Markdown profiles (`.md`)
-or OASF JSON (`.json`). Place files in `.ragent/agents/` (project-local) or
-`~/.ragent/agents/` (user-global). For the full schema and examples, see
+or OASF JSON (`.json`). Place files in `.codemason/agents/` (project-local) or
+`~/.codemason/agents/` (user-global). For the full schema and examples, see
 `docs/howtos/custom-agents.md`.
 
 ---
@@ -146,7 +146,7 @@ or OASF JSON (`.json`). Place files in `.ragent/agents/` (project-local) or
 ## 4. Setting Up a New Project
 
 This section walks through creating a new Rust CLI project, configuring
-the workspace, and establishing project guidelines that ragent follows for
+the workspace, and establishing project guidelines that codemason follows for
 the rest of the session.
 
 ### 4.1 Initialise the project skeleton
@@ -157,7 +157,7 @@ Switch to the `coder` agent:
 /agent coder
 ```
 
-Ask ragent to scaffold the project:
+Ask codemason to scaffold the project:
 
 ```text
 Create a new Rust CLI project in the current directory. It should be a
@@ -171,7 +171,7 @@ binary crate called "my-app" with:
 - A .gitignore for the target/ directory
 ```
 
-ragent calls `Bash` to run `cargo init`, then `Write` and
+codemason calls `Bash` to run `cargo init`, then `Write` and
 `Edit` to create the files. When it requests permission, respond with `y`
 (allow once) or `a` (allow always for this session). To skip prompts
 entirely, press `Alt+Y` to toggle YOLO mode, or start with `--yes`.
@@ -179,7 +179,7 @@ entirely, press `Alt+Y` to toggle YOLO mode, or start with `--yes`.
 ### 4.2 Create an AGENTS.md guidelines file
 
 `AGENTS.md` is a project-level instruction file loaded into the system
-prompt on every launch. Ask ragent to generate one:
+prompt on every launch. Ask codemason to generate one:
 
 ```text
 Create a concise AGENTS.md for this Rust project covering the technology
@@ -209,7 +209,7 @@ A typical result:
 - Prefer multi_edit when changing several files at once
 ```
 
-Keep it concise — ragent reads it on every launch.
+Keep it concise — codemason reads it on every launch.
 
 ### 4.3 Enable the code index
 
@@ -252,8 +252,8 @@ available as soon as the session starts. To see them, run `/tools list`.
 ```
 
 A dialog appears with a verification URL and a user code. Open the URL in
-a browser, enter the code, and authorise. ragent polls in the background
-and stores the token in `~/.ragent/github_token`.
+a browser, enter the code, and authorise. codemason polls in the background
+and stores the token in `~/.codemason/github_token`.
 
 Check status:
 
@@ -268,7 +268,7 @@ For GitLab, the flow is analogous: `/gitlab setup`.
 ## 5. Generating Code for the Project
 
 With the scaffold in place, the code index active, and the `coder` agent
-selected, ask ragent to implement features.
+selected, ask codemason to implement features.
 
 ### 5.1 Implementing a feature
 
@@ -281,7 +281,7 @@ argument (default "World") and print "Hello, {name}!" to stdout. Add a
 unit test in tests/ that verifies the output.
 ```
 
-ragent reads the existing file (via `read` or `codeindex_search`), edits
+codemason reads the existing file (via `read` or `codeindex_search`), edits
 `src/cli.rs` (via `Edit` or `multi_edit`), creates the test file, and
 optionally runs `cargo check` to verify. Each tool call appears in the
 message pane with a step number; the Log panel shows full JSON.
@@ -304,8 +304,8 @@ For larger features, create a formal specification first:
 environment variable overrides
 ```
 
-ragent generates `SPEC.md`, `PLAN.md`, and `TESTPLAN.md` under
-`specs/add-config-file/`. Validate, then implement by asking ragent to run
+codemason generates `SPEC.md`, `PLAN.md`, and `TESTPLAN.md` under
+`specs/add-config-file/`. Validate, then implement by asking codemason to run
 the spec's implementation command (e.g. `/spec impl add-config-file` to
 execute the plan's tasks in dependency order, or `/spec impl add-config-file
 --dry-run` to preview it):
@@ -329,7 +329,7 @@ See `docs/howtos/spec.md` for the full command reference and SDD workflow.
 /research create toml-config "TOML configuration file patterns in Rust"
 ```
 
-ragent searches the web, fetches key pages, cross-references local files,
+codemason searches the web, fetches key pages, cross-references local files,
 and writes `research/toml-config/RESEARCH-<YYYY-MM-DD>.md` (a re-run adds a new
 dated report instead of replacing it). Link research to a spec:
 
@@ -369,7 +369,7 @@ For features split into independent streams (API, UI, tests), use teams:
 /team create feature-squad
 ```
 
-ragent spawns teammates from a blueprint with role-specific prompts. The
+codemason spawns teammates from a blueprint with role-specific prompts. The
 lead coordinates via a shared task queue and mailbox messaging. See
 `docs/howtos/teams.md` for the full manual.
 
@@ -438,7 +438,7 @@ Show me the last 5 commits and the diff for src/cli.rs since HEAD~3.
 Identify which commit introduced the failing test.
 ```
 
-ragent calls `git_log` and `git_diff` to gather the history and analyse
+codemason calls `git_log` and `git_diff` to gather the history and analyse
 it.
 
 ### 6.7 Creating a task list for the fix
@@ -473,7 +473,7 @@ Once the code is working and tested, release it to your VCS.
 Show me the current git status and a summary of the diff.
 ```
 
-ragent calls `git_status` and `git_diff --stat`.
+codemason calls `git_status` and `git_diff --stat`.
 
 ### 7.3 Commit changes
 
@@ -495,7 +495,7 @@ Create a new branch called "feature/greet-command", push it to the
 origin remote, and set up upstream tracking.
 ```
 
-ragent uses `git_checkout` and `git_push`.
+codemason uses `git_checkout` and `git_push`.
 
 ### 7.5 Create a pull request
 
@@ -504,7 +504,7 @@ Create a pull request titled "Add greet subcommand" with a body
 describing the changes. Set the base branch to "main".
 ```
 
-ragent calls `github_create_pr`. The head branch must already be pushed.
+codemason calls `github_create_pr`. The head branch must already be pushed.
 
 ### 7.6 Review and merge
 
@@ -512,13 +512,13 @@ ragent calls `github_create_pr`. The head branch must already be pushed.
 Show me the open pull requests and the latest GitHub Actions runs.
 ```
 
-ragent calls `github_list_prs` and `github_get_actions`. Once CI passes:
+codemason calls `github_list_prs` and `github_get_actions`. Once CI passes:
 
 ```text
 Merge the pull request using the squash method.
 ```
 
-ragent calls `github_merge_pr` with `method: "squash"`.
+codemason calls `github_merge_pr` with `method: "squash"`.
 
 ### 7.7 Tag a release
 
@@ -528,7 +528,7 @@ commit with "Version: 0.1.0", push to main, and tag the commit as
 v0.1.0.
 ```
 
-ragent edits `Cargo.toml` and `CHANGELOG.md`, commits, pushes, creates
+codemason edits `Cargo.toml` and `CHANGELOG.md`, commits, pushes, creates
 the tag, and pushes the tag.
 
 ### 7.8 Create a GitHub release
@@ -541,7 +541,7 @@ Use the `gh` CLI through a bang command:
 
 ### 7.9 Automating the release flow
 
-Create a custom agent in `.ragent/agents/release.md`:
+Create a custom agent in `.codemason/agents/release.md`:
 
 ```markdown
 ---
@@ -579,7 +579,7 @@ See `docs/howtos/custom-agents.md` for the full schema.
 | `Enter` | Send prompt |
 | `Shift+Enter` / `Alt+Enter` | New line in input |
 | `Escape` | Cancel current agent operation |
-| `Ctrl+D` | Quit ragent |
+| `Ctrl+D` | Quit codemason |
 | `Ctrl+C` | Copy selection / arm quit |
 | `Alt+L` | Toggle Log panel |
 | `Alt+P` | Toggle Profile panel |

@@ -1,0 +1,465 @@
+//! GitLab merge request tools: list, get, create, merge, and approve MRs.
+
+use anyhow::{Context, Result};
+use serde_json::{Value, json};
+
+use super::helpers::detect;
+use super::{Tool, ToolContext, ToolOutput};
+use crate::limits::{DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, NOTES_PER_PAGE};
+use crate::vocab::normalize_gitlab_state;
+
+// -- helpers ------------------------------------------------------------------
+
+/// Create an authenticated client and detect the project path.
+// -- GitLabListMrsTool ---------------------------------------------------------
+
+/// Tool that lists merge requests in a GitLab project.
+pub struct GitLabListMrsTool;
+
+#[async_trait::async_trait]
+impl Tool for GitLabListMrsTool {
+    fn name(&self) -> &'static str {
+        "gitlab_list_mrs"
+    }
+
+    fn description(&self) -> &'static str {
+        "List GitLab merge requests in the project detected from the current working directory. \
+         No required parameters. 'state' (enum 'opened', 'closed', 'merged', 'all', default 'opened') filters by MR state; \
+         both 'opened' and GitHub's 'open' spelling are accepted. \
+         'target_branch' (string) filters by the target branch; 'limit' (integer, default 20, max 100) caps the result count. \
+         Requires GitLab configuration and a GitLab-backed git repo. \
+         Common gotcha: 'target_branch' must exactly match the branch name in GitLab; only the most recent MRs up to 'limit' are returned. \
+         Cross-provider note: GitLab calls these 'merge requests' filtered by 'target_branch' where GitHub calls them 'pull requests' filtered by 'base'."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "state": {
+                    "type": "string",
+                    "enum": ["opened", "closed", "merged", "all"],
+                    "description": "Filter by MR state (default: opened; GitHub's 'open' is also accepted)"
+                },
+                "target_branch": {
+                    "type": "string",
+                    "description": "Filter by target branch name"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max MRs to return (default 20, max 100)"
+                }
+            }
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "gitlab:read"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let (client, project) = detect(ctx)?;
+
+        let state = normalize_gitlab_state(input["state"].as_str().unwrap_or("opened"));
+        let limit = input["limit"]
+            .as_u64()
+            .unwrap_or(DEFAULT_PAGE_LIMIT)
+            .min(MAX_PAGE_LIMIT);
+
+        let mut path = format!("/projects/{project}/merge_requests?state={state}&per_page={limit}");
+        if let Some(target) = input["target_branch"].as_str() {
+            path.push_str(&format!("&target_branch={target}"));
+        }
+
+        let mrs = client.get(&path).await?;
+        let arr = mrs
+            .as_array()
+            .context("Unexpected response format from GitLab")?;
+
+        if arr.is_empty() {
+            return Ok(ToolOutput {
+                content: format!("No merge requests found (state={state})."),
+                metadata: None,
+            });
+        }
+
+        let mut lines = Vec::with_capacity(arr.len());
+        for mr in arr {
+            let iid = mr["iid"].as_u64().unwrap_or(0);
+            let title = mr["title"].as_str().unwrap_or("(no title)");
+            let mr_state = mr["state"].as_str().unwrap_or("?");
+            let author = mr["author"]["username"].as_str().unwrap_or("?");
+            let source = mr["source_branch"].as_str().unwrap_or("?");
+            let target = mr["target_branch"].as_str().unwrap_or("?");
+            lines.push(format!(
+                "!{iid} [{mr_state}] {title} (by {author}, from {source} -> {target})"
+            ));
+        }
+
+        Ok(ToolOutput {
+            content: lines.join("\n"),
+            metadata: Some(json!({"count": arr.len()})),
+        })
+    }
+}
+
+// -- GitLabGetMrTool -----------------------------------------------------------
+
+/// Tool that retrieves a single GitLab merge request by IID.
+pub struct GitLabGetMrTool;
+
+#[async_trait::async_trait]
+impl Tool for GitLabGetMrTool {
+    fn name(&self) -> &'static str {
+        "gitlab_get_mr"
+    }
+
+    fn description(&self) -> &'static str {
+        "Get full details of a specific GitLab merge request including title, description, source/target branches, state, \
+         and the first 10 user notes (reviews/comments). \
+         Required parameter: 'iid' (integer) - the project-scoped MR IID. \
+         Requires GitLab configuration and a GitLab-backed git repo. \
+         Common gotcha: use the project-scoped IID from the MR URL; approval rules may prevent the token user from seeing full approval details."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "iid": {
+                    "type": "integer",
+                    "description": "Merge request IID"
+                }
+            },
+            "required": ["iid"]
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "gitlab:read"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let (client, project) = detect(ctx)?;
+        let iid = input["iid"]
+            .as_u64()
+            .context("Missing required 'iid' parameter")?;
+
+        let mr_path = format!("/projects/{project}/merge_requests/{iid}");
+        let notes_path =
+            format!("/projects/{project}/merge_requests/{iid}/notes?per_page={NOTES_PER_PAGE}");
+
+        let (mr, notes_val) = tokio::try_join!(client.get(&mr_path), client.get(&notes_path))?;
+
+        let title = mr["title"].as_str().unwrap_or("(no title)");
+        let state = mr["state"].as_str().unwrap_or("?");
+        let author = mr["author"]["username"].as_str().unwrap_or("?");
+        let source = mr["source_branch"].as_str().unwrap_or("?");
+        let target = mr["target_branch"].as_str().unwrap_or("?");
+        let body = mr["description"].as_str().unwrap_or("*(no description)*");
+        let url = mr["web_url"].as_str().unwrap_or("");
+
+        let mut md = format!(
+            "## MR !{iid}: {title}\n\n\
+             **State**: {state}  \n\
+             **Author**: {author}  \n\
+             **Branch**: {source} -> {target}  \n\
+             **URL**: {url}\n\n\
+             ### Description\n\n{body}\n"
+        );
+
+        if let Some(notes) = notes_val.as_array() {
+            let user_notes: Vec<&Value> = notes
+                .iter()
+                .filter(|n| !n["system"].as_bool().unwrap_or(true))
+                .collect();
+            if !user_notes.is_empty() {
+                md.push_str(&format!("\n### Notes ({})\n\n", user_notes.len()));
+                for note in user_notes.iter().take(NOTES_PER_PAGE as usize) {
+                    let reviewer = note["author"]["username"].as_str().unwrap_or("?");
+                    let nbody = note["body"].as_str().unwrap_or("");
+                    if nbody.is_empty() {
+                        md.push_str(&format!("- **{reviewer}**: (empty)\n"));
+                    } else {
+                        md.push_str(&format!("- **{reviewer}**: {nbody}\n"));
+                    }
+                }
+            }
+        }
+
+        Ok(ToolOutput {
+            content: md,
+            metadata: Some(json!({"iid": iid, "state": state})),
+        })
+    }
+}
+
+// -- GitLabCreateMrTool --------------------------------------------------------
+
+/// Tool that creates a new GitLab merge request.
+pub struct GitLabCreateMrTool;
+
+#[async_trait::async_trait]
+impl Tool for GitLabCreateMrTool {
+    fn name(&self) -> &'static str {
+        "gitlab_create_mr"
+    }
+
+    fn description(&self) -> &'static str {
+        "Create a new GitLab merge request in the project detected from the working directory. \
+         Required parameter: 'title' (string) - the MR title. \
+         Optional: 'target_branch' (string, default 'main') is the branch to merge into; 'source_branch' (string, default current git branch) is the branch to merge from; \
+         'description' (string) is the MR body in markdown; 'draft' (boolean, default false) creates a draft MR by prefixing the title with 'Draft: '. \
+         Requires GitLab configuration and a GitLab-backed git repo. \
+         Common gotcha: 'source_branch' must already exist on the remote; creating an MR from a local-only branch will fail."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "MR title"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "MR description (markdown supported)"
+                },
+                "target_branch": {
+                    "type": "string",
+                    "description": "Target branch (default: main)"
+                },
+                "source_branch": {
+                    "type": "string",
+                    "description": "Source branch (default: current git branch)"
+                },
+                "draft": {
+                    "type": "boolean",
+                    "description": "Create as draft MR"
+                }
+            },
+            "required": ["title"]
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "gitlab:write"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let (client, project) = detect(ctx)?;
+
+        let title = input["title"]
+            .as_str()
+            .context("Missing required 'title' parameter")?;
+
+        let source_branch = if let Some(s) = input["source_branch"].as_str() {
+            s.to_string()
+        } else {
+            // FUNC-050: timeout-bounded git runner off the async runtime.
+            let out = crate::git::run_git_async(
+                vec![
+                    "rev-parse".to_string(),
+                    "--abbrev-ref".to_string(),
+                    "HEAD".to_string(),
+                ],
+                ctx.working_dir.clone(),
+            )
+            .await
+            .context("Failed to run git rev-parse")?;
+            String::from_utf8(out.0.into_bytes())
+                .context("Non-UTF8 branch name")?
+                .trim()
+                .to_string()
+        };
+
+        let target_branch = input["target_branch"].as_str().unwrap_or("main");
+        let draft = input["draft"].as_bool().unwrap_or(false);
+
+        let display_title = if draft {
+            format!("Draft: {title}")
+        } else {
+            title.to_string()
+        };
+
+        let mut body_json = json!({
+            "title": display_title,
+            "source_branch": source_branch,
+            "target_branch": target_branch,
+        });
+        if let Some(desc) = input["description"].as_str() {
+            body_json["description"] = Value::String(desc.to_string());
+        }
+
+        let resp = client
+            .post(&format!("/projects/{project}/merge_requests"), &body_json)
+            .await?;
+
+        let mr_iid = resp["iid"].as_u64().unwrap_or(0);
+        let url = resp["web_url"].as_str().unwrap_or("");
+        crate::binding::bind_created(
+            ctx,
+            codemason_storage::SessionRequest {
+                session_id: String::new(),
+                forge: "gitlab".to_string(),
+                host: String::new(),
+                repo: project.replace("%2F", "/").replace("%2f", "/"),
+                number: mr_iid,
+                title: resp["title"].as_str().unwrap_or(title).to_string(),
+                web_url: url.to_string(),
+                head_branch: source_branch.clone(),
+                state: "open".to_string(),
+            },
+        );
+
+        Ok(ToolOutput {
+            content: format!("Created MR !{mr_iid}: {url}"),
+            metadata: Some(json!({"iid": mr_iid, "url": url})),
+        })
+    }
+}
+
+// -- GitLabMergeMrTool ---------------------------------------------------------
+
+/// Tool that merges a GitLab merge request.
+pub struct GitLabMergeMrTool;
+
+#[async_trait::async_trait]
+impl Tool for GitLabMergeMrTool {
+    fn name(&self) -> &'static str {
+        "gitlab_merge_mr"
+    }
+
+    fn description(&self) -> &'static str {
+        "Merge an open GitLab merge request. \
+         Required parameter: 'iid' (integer) - the project-scoped MR IID. \
+         Optional: 'squash' (boolean, default false) squashes commits on merge; 'message' (string) provides a custom merge commit message; \
+         'delete_source_branch' (boolean, default false) removes the source branch after a successful merge. \
+         Requires GitLab configuration and a GitLab-backed git repo. \
+         Common gotcha: the MR must be mergeable and not have unresolved threads or blocking checks; protected target branches may enforce squash-only merges."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "iid": {
+                    "type": "integer",
+                    "description": "Merge request IID"
+                },
+                "squash": {
+                    "type": "boolean",
+                    "description": "Squash commits on merge (default: false)"
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Optional merge commit message"
+                },
+                "delete_source_branch": {
+                    "type": "boolean",
+                    "description": "Delete source branch after merge (default: false)"
+                }
+            },
+            "required": ["iid"]
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "gitlab:write"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let (client, project) = detect(ctx)?;
+
+        let iid = input["iid"]
+            .as_u64()
+            .context("Missing required 'iid' parameter")?;
+        let squash = input["squash"].as_bool().unwrap_or(false);
+        let delete_branch = input["delete_source_branch"].as_bool().unwrap_or(false);
+
+        let mut body = json!({
+            "squash": squash,
+            "should_remove_source_branch": delete_branch,
+        });
+        if let Some(msg) = input["message"].as_str() {
+            body["merge_commit_message"] = Value::String(msg.to_string());
+        }
+
+        client
+            .put(
+                &format!("/projects/{project}/merge_requests/{iid}/merge"),
+                &body,
+            )
+            .await?;
+
+        Ok(ToolOutput {
+            content: format!(
+                "MR !{iid} merged successfully{}.",
+                if squash { " (squashed)" } else { "" }
+            ),
+            metadata: Some(json!({"iid": iid, "squash": squash})),
+        })
+    }
+}
+
+// -- GitLabApproveMrTool ------------------------------------------------------
+
+/// Tool that approves a GitLab merge request.
+pub struct GitLabApproveMrTool;
+
+#[async_trait::async_trait]
+impl Tool for GitLabApproveMrTool {
+    fn name(&self) -> &'static str {
+        "gitlab_approve_mr"
+    }
+
+    fn description(&self) -> &'static str {
+        "Approve a GitLab merge request using the configured token user. \
+         Required parameter: 'iid' (integer) - the project-scoped MR IID. \
+         Requires GitLab configuration and a GitLab-backed git repo. \
+         Common gotcha: approval rules may require a certain number of approvers or disallow self-approval; insufficient permissions will return an API error."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "iid": {
+                    "type": "integer",
+                    "description": "Merge request IID"
+                }
+            },
+            "required": ["iid"]
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "gitlab:write"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let (client, project) = detect(ctx)?;
+
+        let iid = input["iid"]
+            .as_u64()
+            .context("Missing required 'iid' parameter")?;
+
+        client
+            .post(
+                &format!("/projects/{project}/merge_requests/{iid}/approve"),
+                &json!({}),
+            )
+            .await?;
+
+        Ok(ToolOutput {
+            content: format!("MR !{iid} approved."),
+            metadata: Some(json!({"iid": iid})),
+        })
+    }
+}

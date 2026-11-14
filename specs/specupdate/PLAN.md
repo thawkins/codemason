@@ -14,9 +14,9 @@ target spec, and delegates to an LLM agent to regenerate `PLAN.md` and
 
 The implementation touches two crates:
 
-1. **`ragent-specs`** — new `Update` variant, parser, usage-error guard,
+1. **`codemason-specs`** — new `Update` variant, parser, usage-error guard,
    help-message entry, and builder helper functions.
-2. **`ragent-tui`** — TUI dispatch handler in the `/spec` slash command branch.
+2. **`codemason-tui`** — TUI dispatch handler in the `/spec` slash command branch.
 
 No changes are needed to `SpecManager`, `SpecIo`, `Spec`, or the HTTP server
 layer — the feature reuses existing read/validate infrastructure and delegates
@@ -38,14 +38,14 @@ file writing to the LLM agent via the session processor.
 | T-008 | Implement `build_update_prompt(spec_id)` helper — instructs agent to re-read SPEC.md and regenerate PLAN.md + TESTPLAN.md | FR-008, FR-011 | M | Critical | completed | T-001 |
 | T-009 | Add `SpecCommand::Update` dispatch handler in TUI `execute_slash_command_inner` — validate spec ID, read spec, guard archived, select explore agent, build prompt, spawn processor | FR-005, FR-006, FR-007, FR-010, FR-013 | M | Critical | completed | T-001, T-002, T-008 |
 | T-010 | Add `Unknown("update")` to the TUI usage-error branch so missing spec-id shows `"Usage: /spec update — try /spec help"` | FR-012 | S | High | completed | T-002, T-009 |
-| T-011 | Add unit tests in `crates/ragent-specs/tests/test_slash_spec.rs` — parse `update <id>`, parse `update` (empty), `is_usage_error` for update, help-message contains update row, builder helpers return expected substrings | FR-001, FR-003, FR-004, FR-009, NFR-003 | S | High | completed | T-001, T-002, T-003, T-004, T-005, T-006, T-007, T-008 |
-| T-012 | Add TUI slash-command test in `crates/ragent-tui/tests/test_slash_commands.rs` — verify `Update` variant dispatches without panic and sets expected status | FR-010, NFR-003 | S | Medium | completed | T-009 |
+| T-011 | Add unit tests in `crates/codemason-specs/tests/test_slash_spec.rs` — parse `update <id>`, parse `update` (empty), `is_usage_error` for update, help-message contains update row, builder helpers return expected substrings | FR-001, FR-003, FR-004, FR-009, NFR-003 | S | High | completed | T-001, T-002, T-003, T-004, T-005, T-006, T-007, T-008 |
+| T-012 | Add TUI slash-command test in `crates/codemason-tui/tests/test_slash_commands.rs` — verify `Update` variant dispatches without panic and sets expected status | FR-010, NFR-003 | S | Medium | completed | T-009 |
 ## Task Detail
 
 ### T-001 — Add Update variant
 
 Add a new variant to the `SpecCommand` enum in
-`crates/ragent-specs/src/commands.rs`:
+`crates/codemason-specs/src/commands.rs`:
 
 ```rust
 /// Re-read the existing SPEC.md and regenerate PLAN.md and TESTPLAN.md.
@@ -147,7 +147,7 @@ Key prompt content:
 
 ### T-009 — TUI dispatch handler
 
-In `crates/ragent-tui/src/app/slash.rs`, in the `execute_slash_command_inner`
+In `crates/codemason-tui/src/app/slash.rs`, in the `execute_slash_command_inner`
 method's `SpecCommand` match block, add a new arm for `SpecCommand::Update`:
 
 1. Call `append_assistant_text(build_update_message)`.
@@ -175,9 +175,9 @@ the usage-error subcommands via a guard that checks `sub == "create" || ... ||
 sub == "jtbd"`. Add `|| sub == "update"` to that guard so the missing-spec-id
 case displays `"Usage: /spec update — try /spec help"`.
 
-### T-011 — ragent-specs unit tests
+### T-011 — codemason-specs unit tests
 
-In `crates/ragent-specs/tests/test_slash_spec.rs`, add tests:
+In `crates/codemason-specs/tests/test_slash_spec.rs`, add tests:
 
 - `test_spec_command_update_parses` — `parse("update myspec")` returns
   `Update { spec_id: "myspec" }`.
@@ -197,7 +197,7 @@ In `crates/ragent-specs/tests/test_slash_spec.rs`, add tests:
 
 ### T-012 — TUI slash-command test
 
-In `crates/ragent-tui/tests/test_slash_commands.rs`, add a test that verifies
+In `crates/codemason-tui/tests/test_slash_commands.rs`, add a test that verifies
 the `Update` variant is dispatched without panic and that a missing spec-id
 produces a usage-error status. This follows the pattern of
 `test_spec_command_unknown_subcommand` in `test_slash_spec.rs`.
@@ -224,8 +224,8 @@ produces a usage-error status. This follows the pattern of
 5. `/spec update <archived-id>` shows an archived error.
 6. `/spec update <valid-id>` spawns an LLM agent that regenerates PLAN.md and
    TESTPLAN.md without modifying SPEC.md.
-7. All unit tests pass (`cargo test -p ragent-specs`).
-8. TUI slash-command test passes (`cargo test -p ragent-tui`).
+7. All unit tests pass (`cargo test -p codemason-specs`).
+8. TUI slash-command test passes (`cargo test -p codemason-tui`).
 9. `cargo clippy` and `cargo fmt --check` pass.
 
 ---

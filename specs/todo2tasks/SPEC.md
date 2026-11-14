@@ -11,7 +11,7 @@ audit:
 
 ## Background
 
-ragent currently provides a lightweight **Todo** system: two LLM-callable
+codemason currently provides a lightweight **Todo** system: two LLM-callable
 tools (`todo_read`, `todo_write`) backed by a `todos` SQLite table, and a
 TUI side panel (Alt+T) that renders items as `[PENDING] / [IN_PROGRESS] /
 [DONE] / [BLOCKED]` status lines. The model is flat: each todo has an
@@ -39,7 +39,7 @@ out-of-band via spec/hydration files), but they add:
 **This spec covers ONLY the session-scoped Todo→Task replacement.**
 It does **not** touch the sub-agent task system (`AgentManager` /
 `TaskEntry` / `new_agent` / `cancel_agent`), the team task system
-(`ragent_agent::team::task::Task` / `TaskStore` / `team_task_*` tools),
+(`codemason_agent::team::task::Task` / `TaskStore` / `team_task_*` tools),
 or the spec-hydration pattern described in the article. Those are
 separate concerns. The migration is a pure in-place upgrade of the
 existing Todo data model, tool surface, and TUI panel.
@@ -276,7 +276,7 @@ session (≤ 100 tasks) this SHALL be sub-millisecond.
 
 The SQLite schema migration SHALL be additive-only (ALTER TABLE ADD
 COLUMN with defaults). No destructive DROP or RENAME shall occur at
-startup. A user upgrading ragent SHALL not lose existing todos.
+startup. A user upgrading codemason SHALL not lose existing todos.
 
 ### NFR-003 — No new dependencies
 

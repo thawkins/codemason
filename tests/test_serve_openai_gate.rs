@@ -1,16 +1,16 @@
 //! Refuse-to-start gate for the OpenAI-compatible surface (spec `openhands`
 //! T-018; FR-024, FR-032).
 //!
-//! FR-032 requires `ragent serve` to refuse to start the OpenAI-compatible
+//! FR-032 requires `codemason serve` to refuse to start the OpenAI-compatible
 //! surface when it is enabled without a configured bearer token, rather than
 //! serving it unauthenticated. This is a *startup* decision made in the binary
 //! (`src/main.rs`, the `Serve` arm) before the router is built, so it is
 //! exercised here by spawning the built binary - the same pattern the other
-//! `ragent <subcommand>` CLI tests use.
+//! `codemason <subcommand>` CLI tests use.
 //!
 //! The token lives in a **trusted** config (`--config`), not the project-local
-//! `.ragent/ragent.json`: the project overlay is untrusted repository content
-//! and its `openai` section is stripped (SEC-ragent-config), so a project file
+//! `.codemason/codemason.json`: the project overlay is untrusted repository content
+//! and its `openai` section is stripped (SEC-codemason-config), so a project file
 //! could never enable or arm the surface on its own.
 
 use std::path::{Path, PathBuf};
@@ -32,7 +32,7 @@ enum ServeOutcome {
 }
 
 /// An isolated working directory plus a private `HOME`/`XDG_CONFIG_HOME`, so a
-/// developer's own config and the project-local `.ragent/` cannot influence the
+/// developer's own config and the project-local `.codemason/` cannot influence the
 /// child's startup decision.
 struct Fixture {
     temp: tempfile::TempDir,
@@ -52,7 +52,7 @@ impl Fixture {
         path
     }
 
-    /// Spawn `ragent serve --addr 127.0.0.1:0 --config <trusted>`, bounded by
+    /// Spawn `codemason serve --addr 127.0.0.1:0 --config <trusted>`, bounded by
     /// [`SERVE_TIMEOUT`]. Credential-bearing env vars are stripped so the
     /// surface token can only come from the trusted config.
     fn serve(&self, trusted: &Path) -> ServeOutcome {
@@ -61,20 +61,20 @@ impl Fixture {
         std::fs::create_dir_all(&home).expect("home dir");
         std::fs::create_dir_all(&config_home).expect("config dir");
 
-        let mut child: Child = Command::new(env!("CARGO_BIN_EXE_ragent"))
+        let mut child: Child = Command::new(env!("CARGO_BIN_EXE_cdmn"))
             .args(["serve", "--addr", "127.0.0.1:0", "--config"])
             .arg(trusted)
             .current_dir(self.temp.path())
             .env("HOME", &home)
             .env("XDG_CONFIG_HOME", &config_home)
-            .env_remove("RAGENT_TOKEN")
-            .env_remove("RAGENT_CONFIG")
-            .env_remove("RAGENT_CONFIG_CONTENT")
+            .env_remove("CODEMASON_TOKEN")
+            .env_remove("CODEMASON_CONFIG")
+            .env_remove("CODEMASON_CONFIG_CONTENT")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
-            .expect("spawn ragent serve");
+            .expect("spawn codemason serve");
 
         let deadline = Instant::now() + SERVE_TIMEOUT;
         loop {
@@ -131,7 +131,7 @@ fn serve_starts_the_surface_when_a_token_is_configured() {
     // not a blanket startup failure.
     let fixture = Fixture::new();
     let trusted = fixture.trusted_config(
-        r#"{ "openai": { "enabled": true, "token": "sk-ragent-local-test-0001" } }"#,
+        r#"{ "openai": { "enabled": true, "token": "sk-codemason-local-test-0001" } }"#,
     );
 
     match fixture.serve(&trusted) {

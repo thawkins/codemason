@@ -8,17 +8,17 @@ maps to acceptance criteria AC-1..AC-8.
 
 ## Prerequisites
 
-- Debug build of ragent with the GCF feature implemented:
-  `cargo build` (binary at `target/debug/ragent`).
+- Debug build of codemason with the GCF feature implemented:
+  `cargo build` (binary at `target/debug/cdmn`).
 - A working LLM provider: at least one of `ANTHROPIC_API_KEY`,
   `OPENAI_API_KEY`, or a local Ollama endpoint reachable
-  (`ollama list` shows a model). Configure via `ragent auth` or environment.
+  (`ollama list` shows a model). Configure via `codemason auth` or environment.
 - A scratch project directory with a project-local config so config writes
   are easy to inspect:
   ```bash
-  mkdir -p /tmp/gcf-test/.ragent
+  mkdir -p /tmp/gcf-test/.codemason
   cd /tmp/gcf-test
-  cat > .ragent/ragent.json <<'EOF'
+  cat > .codemason/codemason.json <<'EOF'
   {
     "provider": {
       "ollama": {
@@ -34,7 +34,7 @@ maps to acceptance criteria AC-1..AC-8.
 - A tool that returns JSON-dense output. Recommended: `task_list` /
   `codeindex_search` after running `/codeindex on`. A provider that produces tool calls on request is needed;
   prompt example given per case.
-- No `gcf` key present in `.ragent/ragent.json` before TC-001.
+- No `gcf` key present in `.codemason/codemason.json` before TC-001.
 
 ## Test Cases
 
@@ -43,11 +43,11 @@ maps to acceptance criteria AC-1..AC-8.
 **Requirement(s):** FR-001, FR-002 · **AC:** AC-1
 
 **Preconditions**
-- `.ragent/ragent.json` in the scratch project has NO `gcf` section.
-- ragent is not yet running.
+- `.codemason/codemason.json` in the scratch project has NO `gcf` section.
+- codemason is not yet running.
 
 **Steps**
-1. Launch the TUI from the scratch project: `ragent`.
+1. Launch the TUI from the scratch project: `codemason`.
 2. In the message input, type `/gcf` and press Enter, then press Enter on the
    autocomplete menu if it appears (bare `/gcf` = help; no state change).
 3. Read the help notice bubble that appears.
@@ -63,8 +63,8 @@ maps to acceptance criteria AC-1..AC-8.
   `show`, `help`.
 - Step 5: state notice says GCF is **off**, and states the source is the
   default (no config section). Status bar shows `gcf: show`.
-- `.ragent/ragent.json` remains without a `gcf` section
-  (`cat .ragent/ragent.json | grep gcf` finds nothing).
+- `.codemason/codemason.json` remains without a `gcf` section
+  (`cat .codemason/codemason.json | grep gcf` finds nothing).
 - No tool result in any later turn is encoded (TC-003 style checks confirm).
 
 ### TC-002 — `/gcf on` persists and survives restart
@@ -79,8 +79,8 @@ maps to acceptance criteria AC-1..AC-8.
 2. Read the confirmation notice.
 3. Exit the TUI: press `Ctrl+C`, then confirm quit (or type `/quit` and
    Enter).
-4. Inspect the config file: `cat .ragent/ragent.json`.
-5. Relaunch: `ragent`.
+4. Inspect the config file: `cat .codemason/codemason.json`.
+5. Relaunch: `codemason`.
 6. Type `/gcf show` and press Enter.
 
 **Test data**
@@ -104,7 +104,7 @@ maps to acceptance criteria AC-1..AC-8.
 1. Type `/gcf off` and press Enter.
 2. Read the confirmation notice.
 3. Type `/gcf show` and press Enter.
-4. Exit (`/quit`), then `cat .ragent/ragent.json`.
+4. Exit (`/quit`), then `cat .codemason/codemason.json`.
 5. Relaunch and `/gcf show` again.
 
 **Test data**
@@ -122,7 +122,7 @@ maps to acceptance criteria AC-1..AC-8.
 **Requirement(s):** FR-004, FR-005 · **AC:** AC-3, AC-5
 
 **Preconditions**
-- ragent running in the scratch project, GCF **off** (after TC-003).
+- codemason running in the scratch project, GCF **off** (after TC-003).
 - A JSON-dense tool available: `task_list` or `codeindex_search`
   (offline). This case uses `task_list`.
 
@@ -164,7 +164,7 @@ maps to acceptance criteria AC-1..AC-8.
 **Requirement(s):** FR-003 · **AC:** AC-8
 
 **Preconditions**
-- ragent running (any GCF state).
+- codemason running (any GCF state).
 
 **Steps**
 1. Type `/gcf help` and press Enter. Read the notice.
@@ -186,14 +186,14 @@ maps to acceptance criteria AC-1..AC-8.
 **Requirement(s):** FR-003 · **AC:** AC-7
 
 **Preconditions**
-- ragent running; `.ragent/ragent.json` currently has a known `gcf` value.
+- codemason running; `.codemason/codemason.json` currently has a known `gcf` value.
 
 **Steps**
 1. Record current state: `/gcf show`.
 2. Type `/gcf enable-now` and press Enter.
 3. Read the rejection notice.
 4. Type `/gcf show` again; compare with step 1.
-5. Exit and `cat .ragent/ragent.json`; confirm the `gcf` section matches the
+5. Exit and `cat .codemason/codemason.json`; confirm the `gcf` section matches the
    value from step 1's source.
 
 **Test data**
@@ -210,15 +210,15 @@ maps to acceptance criteria AC-1..AC-8.
 **Requirement(s):** FR-008 · **AC:** AC-7
 
 **Preconditions**
-- ragent NOT running.
+- codemason NOT running.
 
 **Steps**
-1. Edit `.ragent/ragent.json`, change the gcf section to:
+1. Edit `.codemason/codemason.json`, change the gcf section to:
    `"gcf": { "enabled": "yes" }`
-2. Launch `ragent`.
+2. Launch `codemason`.
 3. Read the startup/config diagnostic.
 4. Exit. Change the value to `"gcf": true` (wrong shape).
-5. Launch `ragent` again and read diagnostics.
+5. Launch `codemason` again and read diagnostics.
 6. Restore a valid config (`"gcf": { "enabled": true }` or remove the
    section) and relaunch; `/gcf show`.
 
@@ -228,7 +228,7 @@ maps to acceptance criteria AC-1..AC-8.
 
 **Expected results**
 - Steps 2-3 and 4-5: load fails with the actionable parse diagnostics (file
-  path, line, column, caret marker pointing at the offending value); ragent
+  path, line, column, caret marker pointing at the offending value); codemason
   does not silently coerce to default-off.
 - Step 6: valid config loads, `/gcf show` reports the restored state.
 
@@ -237,7 +237,7 @@ maps to acceptance criteria AC-1..AC-8.
 **Requirement(s):** FR-003 · **AC:** AC-8
 
 **Preconditions**
-- ragent running at the TUI message input.
+- codemason running at the TUI message input.
 
 **Steps**
 1. Type `/gcf` in the message input but DO NOT press Enter.
@@ -259,9 +259,9 @@ maps to acceptance criteria AC-1..AC-8.
 
 ## Cleanup
 
-1. Exit the ragent TUI (`/quit`).
+1. Exit the codemason TUI (`/quit`).
 2. Restore the scratch config: remove the `gcf` section from
-   `.ragent/ragent.json`, or delete the scratch directory:
+   `.codemason/codemason.json`, or delete the scratch directory:
    `rm -rf /tmp/gcf-test`.
 3. No network calls are made by the recommended `task_list` tool.
 4. If any test sessions were created in the scratch project, they are

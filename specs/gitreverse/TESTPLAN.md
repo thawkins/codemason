@@ -5,23 +5,23 @@ status: draft
 # Manual Test Plan: GitHub Repository Reverse-Engineering Prompt Generator
 
 This is a manual test plan for the `/reverse` slash command. All test cases
-are executed by a human in the ragent TUI.
+are executed by a human in the codemason TUI.
 
 ## Prerequisites
 
-1. **Ragent built from source** — run `cargo build` in the project root and
-   launch `./target/debug/ragent` (or use `cargo run`).
+1. **Codemason built from source** — run `cargo build` in the project root and
+   launch `./target/debug/cdmn` (or use `cargo run`).
 2. **GitHub authentication** — run `/github login` in the TUI and complete the
    OAuth device flow so that `/github status` shows a configured token.
    Alternatively, set `GITHUB_TOKEN` in the environment before launching.
 3. **LLM provider configured** — use `/provider` to configure at least one
    provider (e.g. Anthropic, OpenAI, or a local Ollama instance) and use
    `/model` to select a model. Verify `/model` shows a non-empty selection.
-4. **Working directory** — launch ragent from a directory that is a git repo
-   (the ragent repo itself works) so that session creation succeeds.
+4. **Working directory** — launch codemason from a directory that is a git repo
+   (the codemason repo itself works) so that session creation succeeds.
 5. **Test repositories** — the following public GitHub repos are used as test
    data:
-   - `thawkins/ragent` — a real repo with a README, multiple languages, and a
+   - `thawkins/codemason` — a real repo with a README, multiple languages, and a
      clear structure.
    - `octocat/Hello-World` — a minimal repo with a very short README.
    - `torvalds/linux` — a large repo with a long README (truncation test).
@@ -37,7 +37,7 @@ are executed by a human in the ragent TUI.
 - A model is selected via `/model`.
 
 **Instructions:**
-1. Launch ragent in the project root: `cargo run`
+1. Launch codemason in the project root: `cargo run`
 2. Wait for the TUI to initialise and the input cursor to appear.
 3. Type `/reverse https://github.com/octocat/Hello-World` and press `Enter`.
 4. Observe the status bar at the bottom of the screen.
@@ -112,14 +112,14 @@ are executed by a human in the ragent TUI.
 
 **Instructions:**
 1. In the TUI input field, type
-   `/spec reverse https://github.com/thawkins/ragent --language rust --type cmdline` and press `Enter`.
+   `/spec reverse https://github.com/thawkins/codemason --language rust --type cmdline` and press `Enter`.
 2. Wait for completion.
 
 **Test data to enter:**
-- Input: `/spec reverse https://github.com/thawkins/ragent --language rust --type cmdline`
+- Input: `/spec reverse https://github.com/thawkins/codemason --language rust --type cmdline`
 
 **Expected results:**
-- The status bar shows `⏳ reverse: thawkins/ragent…`.
+- The status bar shows `⏳ reverse: thawkins/codemason…`.
 - The generated prompt explicitly mentions Rust and a command-line app, either
   in the opening sentence or in a dedicated section.
 - The prompt references the repo's actual file structure and README.
@@ -185,7 +185,7 @@ are executed by a human in the ragent TUI.
 **Title:** `/reverse help` displays a usage message
 
 **Preconditions:**
-- Ragent is running.
+- Codemason is running.
 
 **Instructions:**
 1. In the TUI input field, type `/reverse help` and press `Enter`.
@@ -207,7 +207,7 @@ are executed by a human in the ragent TUI.
 **Title:** `/reverse` with no argument displays a usage error
 
 **Preconditions:**
-- Ragent is running.
+- Codemason is running.
 
 **Instructions:**
 1. In the TUI input field, type `/reverse` and press `Enter`.
@@ -227,7 +227,7 @@ are executed by a human in the ragent TUI.
 **Title:** `/reverse not-a-valid-identifier` shows an error
 
 **Preconditions:**
-- Ragent is running.
+- Codemason is running.
 
 **Instructions:**
 1. In the TUI input field, type `/reverse justoneword` and press `Enter`.
@@ -316,7 +316,7 @@ are executed by a human in the ragent TUI.
 **Title:** Typing `/rev` in the input shows `reverse` in the autocomplete menu
 
 **Preconditions:**
-- Ragent is running.
+- Codemason is running.
 
 **Instructions:**
 1. In the TUI input field, type `/rev` (do **not** press `Enter`).
@@ -383,20 +383,20 @@ are executed by a human in the ragent TUI.
 
 **Preconditions:**
 - Same as TC-001.
-- `<dir>` does not exist (or exists and is empty apart from `.ragent/`, `log/`, `target/`).
+- `<dir>` does not exist (or exists and is empty apart from `.codemason/`, `log/`, `target/`).
 
 **Instructions:**
 1. In the TUI input field, type
-   `/spec reverse https://github.com/thawkins/ragent --language rust --type cmdline --folder <dir>` and press `Enter`.
+   `/spec reverse https://github.com/thawkins/codemason --language rust --type cmdline --folder <dir>` and press `Enter`.
 2. Wait for completion.
 
 **Test data to enter:**
-- Input: `/spec reverse https://github.com/thawkins/ragent --language rust --type cmdline --folder <dir>`
+- Input: `/spec reverse https://github.com/thawkins/codemason --language rust --type cmdline --folder <dir>`
 
 **Expected results:**
 - An `[ ok ] project scaffolded in <dir>` summary appears before the fetch status,
   listing the git init and (when requested) remote outcome.
-- `<dir>` contains the `/new` workspace (`src/main.rs`, `Cargo.toml`, `.ragent/`, `docs/`)
+- `<dir>` contains the `/new` workspace (`src/main.rs`, `Cargo.toml`, `.codemason/`, `docs/`)
   and a git repository with an initial commit.
 - The generated prompt still follows in the chat window.
 
@@ -408,10 +408,10 @@ are executed by a human in the ragent TUI.
 
 **Preconditions:**
 - Same as TC-001.
-- `<dir>` exists and contains at least one file that is not `.ragent/`, `log/`, or `target/`.
+- `<dir>` exists and contains at least one file that is not `.codemason/`, `log/`, or `target/`.
 
 **Instructions:**
-1. Run `/spec reverse https://github.com/thawkins/ragent --language rust --type cmdline --folder <dir>`.
+1. Run `/spec reverse https://github.com/thawkins/codemason --language rust --type cmdline --folder <dir>`.
 2. Wait for completion.
 
 **Expected results:**
@@ -427,10 +427,10 @@ are executed by a human in the ragent TUI.
 
 **Preconditions:**
 - Same as TC-001.
-- `<dir>` does not exist (or is empty apart from `.ragent/`, `log/`, `target/`).
+- `<dir>` does not exist (or is empty apart from `.codemason/`, `log/`, `target/`).
 
 **Instructions:**
-1. Run `/spec reverse https://github.com/thawkins/ragent --language rust --type cmdline \
+1. Run `/spec reverse https://github.com/thawkins/codemason --language rust --type cmdline \
    --folder <dir> --create port-spec`.
 2. Wait for the generated prompt and the chained `/spec create` to finish.
 
@@ -471,7 +471,7 @@ are executed by a human in the ragent TUI.
 
 **Instructions:**
 1. Run
-   `/spec reverse https://github.com/thawkins/ragent --language rust --type cmdline --folder <dir> --github`.
+   `/spec reverse https://github.com/thawkins/codemason --language rust --type cmdline --folder <dir> --github`.
 2. Wait for completion.
 
 **Expected results:**

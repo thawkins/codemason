@@ -21,11 +21,11 @@ written with the change. What the landing pass actually had to do:
    `test_tool_metadata_measures_the_selected_providers_own_envelope` were all missing.
    They are written now (and the TUI one asserts the measured delta, 51 vs 532, not
    the equality section 4.1 described - see section 5).
-3. **Found a pre-existing, build-dependent red in `ragent-llm`.** Its byte-pin
+3. **Found a pre-existing, build-dependent red in `codemason-llm`.** Its byte-pin
    case passed under `--test all` alone and failed in a wider run *in both
    directions*: this workspace's graph carries two copies of `serde_json` (the
-   `gcf` crate enables `preserve_order`, so `ragent-agent` links an
-   insertion-ordered copy while `ragent-llm`'s copy sorts), and which one a build
+   `gcf` crate enables `preserve_order`, so `codemason-agent` links an
+   insertion-ordered copy while `codemason-llm`'s copy sorts), and which one a build
    links changes the key order the encoder emits. The case now asserts the parts
    that may not change - byte *length* and field *set* per envelope, plus the
    explicit separator behaviour - and does not pin an order that depends on the
@@ -34,7 +34,7 @@ written with the change. What the landing pass actually had to do:
 
 ## 1. What was there
 
-`crates/ragent-llm/src/providers/openai_responses.rs`, inside
+`crates/codemason-llm/src/providers/openai_responses.rs`, inside
 `ResponsesApiClient::build_request_body`:
 
 ```rust
@@ -76,7 +76,7 @@ task deletes, and it named the missing cache key as the one documented exception
 
 ### 2.1 `ToolFormat::OpenAiResponses` (the cache key)
 
-`crates/ragent-llm/src/providers/tool_cache.rs`:
+`crates/codemason-llm/src/providers/tool_cache.rs`:
 
 | Item | Why |
 |---|---|
@@ -94,7 +94,7 @@ the same inner array.
 
 ### 2.2 `CachedTools::responses_tools_array`
 
-`crates/ragent-llm/src/providers/wire/encode.rs`. It returns the same slice as
+`crates/codemason-llm/src/providers/wire/encode.rs`. It returns the same slice as
 `openai_tools_array` because both families assign the inner array to `body["tools"]`,
 and it exists as a *named* accessor because the caller asks for a shape, not for an
 offset: the encoder decides which bytes a named shape occupies. Without it the
@@ -118,7 +118,7 @@ the five families that already used it.
 
 ### 2.4 The TUI's envelope accounting
 
-`crates/ragent-tui/src/app/session_ops.rs`, `tool_format_for_provider` gained:
+`crates/codemason-tui/src/app/session_ops.rs`, `tool_format_for_provider` gained:
 
 ```rust
 "openai_responses" => ToolFormat::OpenAiResponses,
@@ -164,7 +164,7 @@ subtraction had been taken from the chat buffer.
 | | `cached_tools_hit_is_byte_identical_to_a_fresh_encode`, `empty_tool_list_is_a_valid_empty_payload` (extended) | iterate `ToolFormat::ALL`, so a seventh key is covered the moment it joins the array |
 | `tests/inline/openai_responses_tests.rs` | `test_build_request_body_tools_come_from_the_shared_encoder` (new) | the body's `tools` value **equals** the encoder's payload - not merely "is an array of the right length" - plus the flattened item's `type`/`name` and the absence of `function` |
 | | `test_build_request_body_omits_tools_when_the_list_is_empty` (new) | pinning the guard the old code had, so "route it through the encoder" did not quietly add `"tools":[]` |
-| `crates/ragent-tui/tests/test_context_panel_t005.rs` | `test_tool_metadata_measures_the_selected_providers_own_envelope` (new) | a Responses session's metadata count is strictly smaller than a chat session's over the same 148 definitions (measured: 51 vs 532) |
+| `crates/codemason-tui/tests/test_context_panel_t005.rs` | `test_tool_metadata_measures_the_selected_providers_own_envelope` (new) | a Responses session's metadata count is strictly smaller than a chat session's over the same 148 definitions (measured: 51 vs 532) |
 
 The equality in `test_build_request_body_tools_come_from_the_shared_encoder` is the
 case that matters. "Agrees today" is not "derived": an inline array that produced the
@@ -220,13 +220,13 @@ Verification, all green on this tree:
 ```
 cargo fmt --all -- --check                        clean
 cargo check --workspace --all-targets             clean
-cargo clippy -p ragent-llm -p ragent-tui --all-targets
+cargo clippy -p codemason-llm -p codemason-tui --all-targets
                                                   no new warning in a touched file
-cargo test -p ragent-llm --lib                    324 passed
-cargo test -p ragent-llm --test all               254 passed, 2 ignored
-cargo test -p ragent-llm --doc                    29 passed
-cargo test -p ragent-tui --test all               3705 passed
-ragent run --dry-run "x"                          148 visible tools, 20 families
+cargo test -p codemason-llm --lib                    324 passed
+cargo test -p codemason-llm --test all               254 passed, 2 ignored
+cargo test -p codemason-llm --doc                    29 passed
+cargo test -p codemason-tui --test all               3705 passed
+codemason run --dry-run "x"                          148 visible tools, 20 families
 scripts/check-inline-tests.sh                     PASS
 scripts/check-test-env-isolation.sh               PASS
 scripts/check-silent-errors.sh                    PASS
@@ -245,25 +245,25 @@ tool surface is unchanged at 148 across 21 families (FR-030).
 ```
 cargo fmt --all -- --check                     clean
 cargo check --workspace --all-targets           no error, no warning
-cargo clippy -p ragent-llm -p ragent-tui --all-targets
+cargo clippy -p codemason-llm -p codemason-tui --all-targets
                                                no finding in a touched file (the 7
                                                `unnecessary structure name repetition`
                                                in `tool_cache.rs:67-99` are the
                                                pre-existing family this repo tolerates)
-cargo nextest run -p ragent-llm --lib          326 passed
-cargo nextest run -p ragent-llm --test all     295 passed / 3 failed / 2 skipped
-cargo test -p ragent-llm --doc                 30 passed
-cargo nextest run -p ragent-tui -E 'test(test_context_panel_t005::)'
+cargo nextest run -p codemason-llm --lib          326 passed
+cargo nextest run -p codemason-llm --test all     295 passed / 3 failed / 2 skipped
+cargo test -p codemason-llm --doc                 30 passed
+cargo nextest run -p codemason-tui -E 'test(test_context_panel_t005::)'
                                                3 passed
-ragent run guard scripts (12)                  11 PASS; check-bench-regression needs a
+codemason run guard scripts (12)                  11 PASS; check-bench-regression needs a
                                                bench run (no target/criterion)
 ```
 
-The two `ragent-llm --test all` failures are the pre-existing FR-006/FR-019 guards T-006
+The two `codemason-llm --test all` failures are the pre-existing FR-006/FR-019 guards T-006
 and T-010 own (`test_no_module_invents_a_tool_call_id_or_recovers_a_name_from_one`,
 `test_no_provider_module_writes_a_result_carrier_literal`); the third red seen earlier
 in the wider run was the byte-pin case of section 0.3, now fixed. The one
-`ragent-tui` failure, `test_slash_arms_deep::tools_visibility_save_failure_is_reported`,
+`codemason-tui` failure, `test_slash_arms_deep::tools_visibility_save_failure_is_reported`,
 belongs to the tool-visibility work (two `test_tool_visibility.rs` files are deleted in
 this tree), not to this task.
 

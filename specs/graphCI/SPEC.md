@@ -18,14 +18,14 @@ relationships (calls, imports, inherits, references, mixes_in), communities
 are detected via Leiden clustering, and the graph supports `explain`, `path`,
 and `query` operations — all without an LLM or embeddings.
 
-The existing `ragent-codeindex` crate already parses source code with
+The existing `codemason-codeindex` crate already parses source code with
 tree-sitter, stores symbols/imports/references in SQLite, provides a
 tantivy full-text index, and exposes six LLM tools plus the `/codeindex`
 slash command. However, it has no concept of a *typed edge* between symbols,
 no community detection, and no graph-traversal queries (shortest path,
 explain, scoped subgraph).
 
-This specification defines an extension to `ragent-codeindex` that adds all
+This specification defines an extension to `codemason-codeindex` that adds all
 graphify capabilities **while retaining every existing capability and
 interface** — the existing `/codeindex` sub-commands and the six
 `codeindex_*` tools must continue to work unchanged. The extension adds new
@@ -72,7 +72,7 @@ fixed set `{ calls, imports, inherits, references, mixes_in, implements }`
 and a `confidence` tag of either `EXTRACTED` or `INFERRED`.
 
 **FR-003** — The system shall persist semantic edges in a new `graph_edges`
-table within the existing `ragent-codeindex` SQLite database, co-located in
+table within the existing `codemason-codeindex` SQLite database, co-located in
 the same `index.db` file, and shall rebuild edges during `full_reindex` and
 incremental `index_file` operations.
 
@@ -107,7 +107,7 @@ counts.
 
 **FR-010** — When the user runs `/codeindex graph export`, the system shall
 write `graph.json` and `GRAPH_REPORT.md` into the project's
-`.ragent/codeindex/` directory and print the output paths to the TUI.
+`.codemason/codeindex/` directory and print the output paths to the TUI.
 
 **FR-011** — When the user runs `/codeindex explain <symbol>`, the system
 shall display the symbol's node metadata (source file, line, community,
@@ -182,7 +182,7 @@ table, and reads from the existing tables in a read-only manner.
 
 ## Architecture
 
-### New modules in `ragent-codeindex`
+### New modules in `codemason-codeindex`
 
 | Module | Responsibility |
 |--------|---------------|

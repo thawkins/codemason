@@ -8,7 +8,7 @@ enumeration agrees)
 **Dependencies:** none (root task)
 **Recorded against:** the working tree at commit `d6abcd4a`
 (`spec/uniformtools: Claude-compatible tool renames and wire profiles`) on top of
-`d172b658` (`Version: 1.0.149`), `ragent 1.0.149`, debug binary
+`d172b658` (`Version: 1.0.149`), `codemason 1.0.149`, debug binary
 `sha256 231360cab75f63210040d52b7a93edc25a32df04194252bb6038c77ba613ccf3`, built
 with `rustc 1.99.1 (58cf8f9c3 2026-10-13)` on 2026-10-25. That tree is the
 **pre-rename** tree: no tool is renamed in it, because T-031 is still pending.
@@ -37,8 +37,8 @@ and the family *count* (21) in the first draft did reproduce.
 
 | Surface | Value | What it reports |
 |---|---|---|
-| `ragent --dry-run` (`tools` section, `total`) | **148** | `ToolRegistry::list().len()` - the registered key set |
-| `ragent run --dry-run --json <prompt>` (`tools.total`) | **148** | the same call, JSON encoded |
+| `codemason --dry-run` (`tools` section, `total`) | **148** | `ToolRegistry::list().len()` - the registered key set |
+| `codemason run --dry-run --json <prompt>` (`tools.total`) | **148** | the same call, JSON encoded |
 | `/tools list` (TUI) header | **`Visible Tools (148 total, 0 disabled):`** | `definitions().len()`, `hidden_definitions().len()` |
 | `/tools list` data rows | **148** | one row per name, visible block plus disabled block |
 | `/bug-report` line | **no tool count** - it writes `- **Tools visible**: 1` | the count of *enabled visibility switches*, not tools |
@@ -139,7 +139,7 @@ gitlab (19)    gitlab:write: gitlab_approve_mr gitlab_cancel_job gitlab_cancel_p
                gitlab_list_issues gitlab_list_jobs gitlab_list_mrs gitlab_list_pipelines
 model (1)      model:read: model_info
 network (1)    network:fetch: http_request
-none (8)       none: agent_complete calculator commands_info list_agents os_info ragent_info think
+none (8)       none: agent_complete calculator commands_info list_agents os_info codemason_info think
                tool_info
 plan (2)       plan: plan_enter plan_exit
 shell (1)      shell:execute: open
@@ -217,7 +217,7 @@ gitlab_list_pipelines gitlab_merge_mr gitlab_retry_job gitlab_retry_pipeline
 glob grep http_request initiative list list_agents make_directory
 memory_forget memory_recall memory_store mf_cache_clear mf_crawl mf_fetch
 mf_search mf_version model_info move_file multi_edit multiedit new_agent open
-os_info patch pdf_read pdf_write plan_enter plan_exit ragent_info read rm
+os_info patch pdf_read pdf_write plan_enter plan_exit codemason_info read rm
 session_search skill_manage spec_coverage spec_list spec_read spec_search
 spec_task_update task_create task_get task_list task_update team_approve_plan
 team_assign_task team_broadcast team_cleanup team_create team_idle
@@ -310,7 +310,7 @@ machine and call it a regression.
 
 - **`mf_screenshot` is absent from the 148, by design.** It registers only when
   `headless-browser` is enabled *and* an engine binary resolves on `PATH`
-  (`crates/ragent-tools-extended/src/lib.rs`, `headless_engine_present()`; spec
+  (`crates/codemason-tools-extended/src/lib.rs`, `headless_engine_present()`; spec
   `openhands` FR-029). The default build therefore advertises 148, not 149. If
   T-037 is run on a machine with a drivable engine the number is legitimately
   149; record which build was measured rather than treating the difference as a
@@ -340,7 +340,7 @@ machine and call it a regression.
   (`definitions().len()` would be 92 under the default configuration). The label
   and the number disagree; the number is the one FR-030 means.
 - **`multiedit` is a real registered name.** It is the deprecated alias wrapper
-  (`crates/ragent-agent/src/tool/mod.rs`), not a stale literal, and it is one of
+  (`crates/codemason-agent/src/tool/mod.rs`), not a stale literal, and it is one of
   the 148. It is not in FR-023 and keeps its spelling. `update_file` is likewise
   a registered alias of `write` and keeps its spelling.
 - **`commands_info` is not a tool count.** It returns the slash-command
@@ -355,7 +355,7 @@ machine and call it a regression.
   21 families above. The rename changes neither number (FR-028).
 - **The outbound provider tool list is the same `definitions()` call.**
   `SessionProcessor::get_cached_tool_definitions` returns
-  `tool_registry.definitions()` (cached), so the list ragent sends to a provider
+  `tool_registry.definitions()` (cached), so the list codemason sends to a provider
   is by construction the same names the CLI, the TUI and `tool_info` report. That
   is why FR-030 can require the outbound list to agree with the registry: it is
   not a parallel copy that could drift, and the rename must not introduce one.
@@ -368,7 +368,7 @@ Reproducible from the recorded commit alone; nothing here needs the workbook.
 
 | Number | Command |
 |---|---|
-| `--dry-run` total and per-family counts | `ragent --dry-run`, read the `tools:` section; or `ragent run --dry-run --json <prompt>`, read that section's `total` and one item per family |
+| `--dry-run` total and per-family counts | `codemason --dry-run`, read the `tools:` section; or `codemason run --dry-run --json <prompt>`, read that section's `total` and one item per family |
 | `/tools list` header and rows | TUI: `/tools list`; headless: render the message from an `App` built on `create_default_registry()` |
 | `/bug-report` total | TUI: `/bug-report`, then read the written report's `## Tool Configuration` section - which reports no tool count (Section 4) |
 | registry counts and name list | a scratch example calling `create_default_registry()`, then `list()`, `definitions()`, `all_tools()` |
@@ -377,7 +377,7 @@ Reproducible from the recorded commit alone; nothing here needs the workbook.
 | `commands_info` total | the same example, executing `commands_info` |
 
 The registry-side figures and the surface-side figures were produced by
-different code paths - one through `ragent`'s CLI/TUI rendering, one through the
+different code paths - one through `codemason`'s CLI/TUI rendering, one through the
 library API - and agree on every name, so the baseline is not an artefact of a
 single renderer.
 
@@ -429,7 +429,7 @@ measurement needed. The files this task adds or edits are all documents:
 Note for T-034: this document, like `T-029-DERIVATION.md`, `PLAN.md`,
 `TESTPLAN.md` and `SPEC.md`, contains the 13 `before` spellings as backticked
 literals. The FR-027 guard is scoped to non-test **source** files, where the only
-structural exemption is the FR-023 table (`crates/ragent-types/src/tool_rename.rs`)
+structural exemption is the FR-023 table (`crates/codemason-types/src/tool_rename.rs`)
 beside the `CHANGELOG.md` entry; the specification and design documents already
 carry these spellings today and are not source. If a later guard revision widens
 its scope to markdown, this file is a documentation exemption of the same kind as
@@ -447,7 +447,7 @@ the reason so a reader can re-derive it rather than trusting the prose.
 | `/tools list` header: `Registered Tools (148 total):` | `Visible Tools (148 total, 0 disabled):` | There is no `Registered Tools` string anywhere in the tree. The header is built by `render_tool_visibility_table` from `definitions().len()` and `hidden_definitions().len()`. |
 | `/bug-report`: `- **Tools registered**: 148` | `- **Tools visible**: 1`, and no `Tools registered` line at all | The count is `iter_switches().filter(enabled).count()` - enabled visibility *switches*, of which one is on by default. FR-030 names a line the tree does not have. |
 | `agent` 3 / `team` 20 | `agent` 4 / `team` 19 | `team_wait`'s category is `agent:spawn`, so it counts in `agent`. 3/20 is what a reading based on the name prefix produces. |
-| Section 2.1, "the stale-binary trap": `target/release/ragent` built from 1.0.148 reports 148 with `agent` 4 / `team` 19 | No `target/release/ragent` exists in this tree; the debug binary built from this tree reports 148 with `agent` 4 / `team` 19 | The two rows of that table were transposed. The real, checkable trap is the family-versus-name-prefix trap in Section 2.1, which needs no second binary. |
+| Section 2.1, "the stale-binary trap": `target/release/cdmn` built from 1.0.148 reports 148 with `agent` 4 / `team` 19 | No `target/release/cdmn` exists in this tree; the debug binary built from this tree reports 148 with `agent` 4 / `team` 19 | The two rows of that table were transposed. The real, checkable trap is the family-versus-name-prefix trap in Section 2.1, which needs no second binary. |
 | `/tools list` rows: 148 | 148 across the visible and disabled blocks, but 92 in the visible block under the default configuration | The draft measured with nothing hidden and stated the figure as unconditional. |
 | `--dry-run` total reported as `definitions().len()` | `list().len()` | `tools_section` calls `list()`, which ignores the hidden set. The label says "visible"; the number is the registered set. |
 
@@ -472,14 +472,14 @@ The **three test constants** are *not* corrected here, and deliberately so:
 
 | File | Where |
 |---|---|
-| `crates/ragent-agent/tests/test_fr030_surface_agreement.rs` | `FR030_CANARY_FAMILIES` (line 78) and the module doc (line 25) |
-| `crates/ragent-agent/tests/test_tool_rename_atomic_landing.rs` | `FR030_CANARY_FAMILIES` (line 73) and the doc (line 71) |
-| `crates/ragent-agent/tests/test_fr028_state_survival.rs` | a comment (line 39) |
+| `crates/codemason-agent/tests/test_fr030_surface_agreement.rs` | `FR030_CANARY_FAMILIES` (line 78) and the module doc (line 25) |
+| `crates/codemason-agent/tests/test_tool_rename_atomic_landing.rs` | `FR030_CANARY_FAMILIES` (line 73) and the doc (line 71) |
+| `crates/codemason-agent/tests/test_fr028_state_survival.rs` | a comment (line 39) |
 
 They will fail on a correct tree as written, and the pair must become
 `("agent", 4), ("team", 19)` when T-037 and T-046 land. Nothing is red today:
 all three files belong to those two pending tasks and none is registered in
-`crates/ragent-agent/tests/all.rs`. Correcting them is not this task's to do -
+`crates/codemason-agent/tests/all.rs`. Correcting them is not this task's to do -
 T-041 measures and records, T-037 and T-046 assert - and editing them here would
 have made this record's own claim ("no test changed") false, which is the reason
 they are named instead. A reader who finds a failing guard on a correct tree

@@ -130,5 +130,5 @@ plugin and connector catalogue panels wear):
 - `/model` - pick a model from the configured provider
 - `/provider_reset` - remove the current provider and its stored credentials
 - `/router` - manage router runtime state (enable/disable, test, reload)
-- `ragent config` - CLI view of the resolved configuration
-- `ragent auth` - CLI provider authentication setup
+- `codemason config` - CLI view of the resolved configuration
+- `codemason auth` - CLI provider authentication setup

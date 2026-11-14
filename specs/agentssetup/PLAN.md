@@ -13,7 +13,7 @@ description that has drifted. The plan therefore changes the seams, not the engi
 
 The change splits into **five layers**, and every layer is independently shippable:
 
-1. **Contract (tool layer, `crates/ragent-agent/src/tool/` and `task/mod.rs`).**
+1. **Contract (tool layer, `crates/codemason-agent/src/tool/` and `task/mod.rs`).**
    Make the three execution contracts explicit, enforce the declared schema, add the
    per-call bound, fix the permission taxonomy, share the short-id helper, and make
    refusals into errors with machine-readable reasons (FR-001..FR-010, FR-017,
@@ -24,13 +24,13 @@ The change splits into **five layers**, and every layer is independently shippab
    limit and its headroom, expose waiter counts, and make the durable-copy absence
    explicit (FR-007, FR-011..FR-015, FR-018, FR-029..FR-033, FR-035, FR-043).
 
-3. **Presentation (`crates/ragent-tui/src/app/subagent_events.rs`, `layout*.rs`).**
+3. **Presentation (`crates/codemason-tui/src/app/subagent_events.rs`, `layout*.rs`).**
    Paint the real execution contract, add the completed-history section, add the
    `SubagentKilled` arm, paint cancellation-requested and terminating states, and
    give the window a keyboard open chord (FR-020..FR-022, FR-026..FR-028,
    FR-031, FR-036, FR-042).
 
-4. **Commands (`crates/ragent-tui/src/app/slash.rs`, `app/spawn.rs`).**
+4. **Commands (`crates/codemason-tui/src/app/slash.rs`, `app/spawn.rs`).**
    Make `/cancel` delegate to `AgentManager::cancel_agent` with ambiguity handling,
    and fold the `/spawn` hand-rolled launch slot into the shared async-launch helper
    (FR-023, FR-024, FR-041).

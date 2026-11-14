@@ -1,4 +1,4 @@
-# cargo-deny configuration for ragent.
+# cargo-deny configuration for codemason.
 # See https://embarkstudios.github.io/cargo-deny/ for full documentation.
 # Schema updated for cargo-deny >=0.19 (older keys like vulnerability/unmaintained removed).
 

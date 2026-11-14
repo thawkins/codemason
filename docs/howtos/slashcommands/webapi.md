@@ -91,5 +91,5 @@ Stops the HTTP server.
 ## Related
 
 - `/websearch` - inspect and diagnose the web search engine configuration
-- `ragent serve --port 9100` - run the HTTP server without the TUI
-- SSE streaming and REST routes are implemented in the `ragent-server` crate
+- `codemason serve --port 9100` - run the HTTP server without the TUI
+- SSE streaming and REST routes are implemented in the `codemason-server` crate

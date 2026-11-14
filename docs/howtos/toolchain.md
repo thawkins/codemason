@@ -1,13 +1,13 @@
-# ragent Toolchain Report Manual
+# codemason Toolchain Report Manual
 
-This guide explains ragent's `/toolchain` slash command — a read-only
+This guide explains codemason's `/toolchain` slash command — a read-only
 runtime-toolchain presence report that shows which language toolchains are
 installed on the local machine, at what versions, for every language the code
 index can parse. It covers the command surface, the language classification,
 the runtime mapping, the probe mechanics, and the report formats.
 
 > **Scope:** the `/toolchain` slash command (TUI-only), the
-> `crates/ragent-tui/src/app/toolchain.rs` probe engine, and the
+> `crates/codemason-tui/src/app/toolchain.rs` probe engine, and the
 > language-to-runtime mapping. For the code index itself see
 > `docs/howtos/codeindex.md`. For the full tool catalog see
 > `docs/howtos/tools/INDEX.md`. For TUI workflow see `docs/howtos/tutorial.md`.
@@ -31,7 +31,7 @@ the runtime mapping, the probe mechanics, and the report formats.
 
 ## 1. Overview
 
-The code index (`ragent-codeindex::scanner`) maintains
+The code index (`codemason-codeindex::scanner`) maintains
 `SUPPORTED_LANGUAGES`, a 50-entry list of language identifiers it can parse
 (50 canonical entries including dialect/header aliases such as `tsx`, `jsx`,
 `c_header`, `cpp_header`). Those entries split into two groups:
@@ -45,7 +45,7 @@ The code index (`ragent-codeindex::scanner`) maintains
   `terraform`, `openscad`, `cmake`, `gradle`, `gradle_kts`, `maven`, `nix`,
   `hcl`).
 
-There was no way, from inside ragent, to see which of those runtimes are
+There was no way, from inside codemason, to see which of those runtimes are
 actually installed locally and at what version. `/toolchain` fills that gap:
 it walks `SUPPORTED_LANGUAGES`, classifies every entry, probes the local
 system for each application language's runtime, and reports presence and
@@ -99,7 +99,7 @@ From: /toolchain help
 Reports which language toolchains are installed on this machine,
 walking the code-index supported-language list. The report is
 **read-only** — it never installs, upgrades, or configures any
-runtime, and it never touches ragent state.
+runtime, and it never touches codemason state.
 
 | Subcommand | Description |
 |---|---|
@@ -349,13 +349,13 @@ by the 2-second per-probe timeout.
 
 | Component | Location |
 |---|---|
-| Language classification + runtime mapping | `crates/ragent-tui/src/app/toolchain.rs` (`LANGUAGE_RUNTIMES`, `LanguageClass`, `LanguageRuntime`) |
+| Language classification + runtime mapping | `crates/codemason-tui/src/app/toolchain.rs` (`LANGUAGE_RUNTIMES`, `LanguageClass`, `LanguageRuntime`) |
 | Exhaustiveness check | `toolchain.rs` (`exhaustiveness_errors`) |
 | Presence probe (`PATH` walk) | `toolchain.rs` (`probe_installed`, `resolve_in_dirs`) |
 | Version probes + overrides | `toolchain.rs` (`probe_version_args`, `version_flag_for`, `VERSION_FLAG_OVERRIDES`, `VERSION_PROBE_ARGS_OVERRIDES`, `VERSION_PROBE_TIMEOUT`) |
 | Report walk | `toolchain.rs` (`build_report_rows`) |
 | Markdown / JSON renderers | `toolchain.rs` (`render_markdown_report`, `render_json_report`) |
-| Slash dispatch + help/usage/filter/`--json` handling | `crates/ragent-tui/src/app/slash.rs` (`handle_toolchain_command`, `handle_toolchain_help`, `handle_toolchain_list`, `handle_toolchain_unknown`) |
-| Command registration + autocomplete | `crates/ragent-tui/src/app/state.rs` (`SLASH_COMMANDS`), `slash.rs` (`get_command_suggestions`) |
+| Slash dispatch + help/usage/filter/`--json` handling | `crates/codemason-tui/src/app/slash.rs` (`handle_toolchain_command`, `handle_toolchain_help`, `handle_toolchain_list`, `handle_toolchain_unknown`) |
+| Command registration + autocomplete | `crates/codemason-tui/src/app/state.rs` (`SLASH_COMMANDS`), `slash.rs` (`get_command_suggestions`) |
 | Spec (requirements FR-001 to FR-016, NFR-001 to NFR-003) | `specs/toolchain/SPEC.md` |
-| Manual test-plan driver | `crates/ragent-tui/examples/toolchain_tc_pass.rs` |
+| Manual test-plan driver | `crates/codemason-tui/examples/toolchain_tc_pass.rs` |

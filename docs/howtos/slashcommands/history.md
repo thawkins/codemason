@@ -98,6 +98,6 @@ No history entries contain "zzz"
 ## Related
 
 - `/clear`  -  wipe the displayed message history (input history is separate)
-- `ragent session resume <id>` (CLI)  -  resume stored sessions
+- `codemason session resume <id>` (CLI)  -  resume stored sessions
 - The picker supports text selection and clipboard copy of entries
 - `c` copies the highlighted entry to the clipboard directly from the picker

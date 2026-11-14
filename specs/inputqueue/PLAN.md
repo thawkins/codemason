@@ -9,7 +9,7 @@ the primary agent executes, render a two-digit queue counter before the `>` prom
 drain the queue at each turn boundary. Layer a keyboard-driven control menu (ALT-Q) over
 the queue so the user can advance, halt, or clear without leaving the chat screen, and
 guard the destructive `Clear` action behind a default-`No` confirmation dialog. All
-work is confined to `crates/ragent-tui`; no other crate changes are required.
+work is confined to `crates/codemason-tui`; no other crate changes are required.
 
 Six integration points:
 
@@ -43,7 +43,7 @@ Six integration points:
 | Item | Value |
 |------|-------|
 | Spec ID | `inputqueue` |
-| Crate | `crates/ragent-tui` |
+| Crate | `crates/codemason-tui` |
 | New state | `App::input_queue: VecDeque<QueuedInput>`, `App::queue_menu_open: bool`, `App::queue_clear_confirm_open: bool` |
 | Default capacity | 32 entries (`MAX_INPUT_QUEUE`) |
 | Counter format | two-digit zero-padded, e.g. `03` |
@@ -100,7 +100,7 @@ Six integration points:
 
 ### T-002 - Relax input guards so plain messages are accepted while executing
 
-- In `crates/ragent-tui/src/input.rs`, the Enter arm currently returns the busy status
+- In `crates/codemason-tui/src/input.rs`, the Enter arm currently returns the busy status
   when `is_input_blocked()`. Change it so Enter with non-empty input proceeds to
   `InputAction::SendMessage` regardless of the blocked state, except when the text starts
   with `/` or `!` (those keep the busy guard).
@@ -176,7 +176,7 @@ Six integration points:
 
 ### T-013 - Bind ALT-Q to open the queue-control menu overlay
 
-- In `crates/ragent-tui/src/input.rs`, detect the ALT-Q chord (`KeyCode::Char('q')` with
+- In `crates/codemason-tui/src/input.rs`, detect the ALT-Q chord (`KeyCode::Char('q')` with
   `KeyModifiers::ALT`) and return a new `InputAction::OpenQueueMenu`.
 - Add `pub queue_menu_open: bool` (or an overlay enum variant) to `App` in `app/state.rs`,
   initialised `false`.
@@ -229,7 +229,7 @@ Six integration points:
 
 ### T-019 - Add automated tests for the ALT-Q menu and its three actions
 
-- Tests live in `crates/ragent-tui/tests/`. Cover: ALT-Q opens the menu; `Next` hidden at
+- Tests live in `crates/codemason-tui/tests/`. Cover: ALT-Q opens the menu; `Next` hidden at
   empty queue and visible otherwise; `Next` stops and dispatches the oldest entry in FIFO
   order; `Stop` halts without advancing; `Resume` label when stopped and resumes; `Clear`
   opens the confirmation dialog; `Esc` dismisses without mutating input.
@@ -295,7 +295,7 @@ Six integration points:
 
 ### T-026 - Add automated tests for menu navigation and the `Show` panel
 
-- Tests live in `crates/ragent-tui/tests/`. Cover: Up/Down move and clamp the highlight;
+- Tests live in `crates/codemason-tui/tests/`. Cover: Up/Down move and clamp the highlight;
   navigation skips the non-selectable empty-queue `Next` row; Enter activates each row
   and is a no-op on the dead `Next` row; the `Show` panel lists entries oldest-first with
   a block cursor; Enter walks an entry toward the front and preserves the others; Del
@@ -320,7 +320,7 @@ Six integration points:
   `execute_slash_command` (new `dispatch_queued_input` helper) and re-enters the drain
   when a synchronous slash command leaves the boundary free, so consecutive queued
   commands run back-to-back without stalling the tail.
-- Tests in `crates/ragent-tui/tests/test_input_queue_slash.rs` and the amended
+- Tests in `crates/codemason-tui/tests/test_input_queue_slash.rs` and the amended
   `test_busy_send_guard.rs`.
 
 ## Risks

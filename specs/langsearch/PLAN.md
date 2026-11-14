@@ -1,6 +1,6 @@
 # Implementation Plan — langsearch backend for `mf_search`
 
-This plan implements the `langsearch` spec. All work is confined to the `ragent-config` and `ragent-tools-extended` crates.
+This plan implements the `langsearch` spec. All work is confined to the `codemason-config` and `codemason-tools-extended` crates.
 
 ## Tasks
 
@@ -17,12 +17,12 @@ This plan implements the `langsearch` spec. All work is confined to the `ragent-
 | T-009 | Add unit tests for response parsing | FR-001, FR-005 | S | High | completed | T-005 |
 | T-010 | Add config merge/load tests for `langsearch_api_key` | FR-002, FR-006 | S | High | completed | T-002 |
 | T-011 | Add `#[ignore]` integration test for live LangSearch API | FR-001, FR-005 | S | Medium | completed | T-006 |
-| T-012 | Update `ragent-tools-extended` module exports | FR-001 | S | High | completed | T-004 |
+| T-012 | Update `codemason-tools-extended` module exports | FR-001 | S | High | completed | T-004 |
 ## Task details
 
 ### T-001 — Add `langsearch_api_key` to `Config`
 
-In `crates/ragent-config/src/config.rs`, add `pub langsearch_api_key: Option<String>` next to `tavily_api_key` with a matching doc comment. The field should use `#[serde(default)]` and `#[serde(skip_serializing_if = "Option::is_none")]` so empty keys are omitted from serialised output.
+In `crates/codemason-config/src/config.rs`, add `pub langsearch_api_key: Option<String>` next to `tavily_api_key` with a matching doc comment. The field should use `#[serde(default)]` and `#[serde(skip_serializing_if = "Option::is_none")]` so empty keys are omitted from serialised output.
 
 ### T-002 — Merge `langsearch_api_key` across config layers
 
@@ -36,7 +36,7 @@ if overlay.langsearch_api_key.is_some() {
 
 ### T-003 — Create `LangSearchEngine` struct and request builder
 
-Create `crates/ragent-tools-extended/src/masterfetch/search/langsearch.rs` containing:
+Create `crates/codemason-tools-extended/src/masterfetch/search/langsearch.rs` containing:
 
 - `LangSearchEngine { api_key: String, client: Option<reqwest::Client> }`
 - `impl LangSearchEngine { pub fn new(api_key: String), pub fn with_client(...) }`
@@ -68,7 +68,7 @@ Update the description string in `MfSearchTool` to note that supplying a LangSea
 
 ### T-008 — Add unit tests for request body mapping
 
-In `langsearch.rs` inline tests or in `crates/ragent-tools-extended/tests/test_mf_search_langsearch.rs`:
+In `langsearch.rs` inline tests or in `crates/codemason-tools-extended/tests/test_mf_search_langsearch.rs`:
 
 - Assert `day` maps to `"oneDay"`.
 - Assert `max_results > 10` is clamped to `10`.
@@ -84,7 +84,7 @@ In `langsearch.rs` inline tests or in `crates/ragent-tools-extended/tests/test_m
 
 ### T-010 — Add config merge/load tests for `langsearch_api_key`
 
-In `crates/ragent-config/tests/test_config_save.rs` or a new test file:
+In `crates/codemason-config/tests/test_config_save.rs` or a new test file:
 
 - Load a JSON config containing `langsearch_api_key`, verify the field is populated.
 - Load global + project configs with different keys, verify project wins.
@@ -92,24 +92,24 @@ In `crates/ragent-config/tests/test_config_save.rs` or a new test file:
 
 ### T-011 — Add `#[ignore]` integration test for live LangSearch API
 
-In `crates/ragent-tools-extended/tests/test_mf_search_langsearch_integration.rs`:
+In `crates/codemason-tools-extended/tests/test_mf_search_langsearch_integration.rs`:
 
 - Read `LANGSEARCH_API_KEY` from the environment.
 - Build `LangSearchEngine::new(key)` and call `search` with a simple query.
 - Assert at least one result is returned when the key is valid.
 - Mark `#[ignore]` so CI does not run it without a key.
 
-### T-012 — Update `ragent-tools-extended` module exports
+### T-012 — Update `codemason-tools-extended` module exports
 
-In `crates/ragent-tools-extended/src/masterfetch/search/mod.rs`:
+In `crates/codemason-tools-extended/src/masterfetch/search/mod.rs`:
 
 - Add `pub mod langsearch;`
 - Re-export `LangSearchEngine` if useful for tests / callers.
 
 ## Acceptance criteria
 
-1. `cargo test -p ragent-config` and `cargo test -p ragent-tools-extended` pass.
+1. `cargo test -p codemason-config` and `cargo test -p codemason-tools-extended` pass.
 2. `mf_search` without a key behaves exactly as before (DuckDuckGo + Brave).
 3. `mf_search` with `langsearch_api_key` configured includes LangSearch results in the consensus merge.
-4. The API key is read from `ragent.json`, survives config merge, and is not logged.
+4. The API key is read from `codemason.json`, survives config merge, and is not logged.
 5. All new code is documented with `///` docblocks and module-level `//!` comments.

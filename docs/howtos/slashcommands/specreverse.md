@@ -62,7 +62,7 @@ project shape. `--language` and `--type` must be supplied together; a lone
 `--folder`, `--github`, and `--gitlab` only take effect when the scaffold
 flags are present: with them, `/spec reverse` scaffolds a real project using
 the same engine `/new` and `/spec govcreate` use. `--folder` names the target
-directory (it must be empty apart from `.ragent/`, `log/`, and `target/`);
+directory (it must be empty apart from `.codemason/`, `log/`, and `target/`);
 without it the current directory is scaffolded in place. `--github` /
 `--gitlab` additionally create a private remote and push the initial commit.
 Supplying `--folder`, `--github`, or `--gitlab` without `--language` and

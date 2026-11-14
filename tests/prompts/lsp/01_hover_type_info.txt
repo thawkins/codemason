@@ -1,7 +1,7 @@
 # LSP Hover Test - Type Information
 # Tests the lsp_hover tool to retrieve type information for Rust symbols
 
-Use the lsp_hover tool to get the type information for the `Config` struct in crates/ragent-core/src/config/mod.rs.
+Use the lsp_hover tool to get the type information for the `Config` struct in crates/codemason-core/src/config/mod.rs.
 
 Expected behavior:
 1. The tool should return type documentation for the Config struct

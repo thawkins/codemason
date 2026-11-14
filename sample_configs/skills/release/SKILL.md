@@ -6,7 +6,7 @@ argument-hint: "[commit message]"
 allowed-tools:
  - any
 ---
-Perform a release of the ragent project by following these steps **in order**:
+Perform a release of the codemason project by following these steps **in order**:
 
 1. **Read the current version** from the workspace `Cargo.toml` (the `version = "..."` line near the top).
 2. **Increment the least-significant version digit** by exactly 1.

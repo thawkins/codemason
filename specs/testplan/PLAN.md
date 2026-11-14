@@ -9,8 +9,8 @@ task maps to one or more requirements in [`SPEC.md`](SPEC.md).
 | Item | Value |
 |------|-------|
 | Spec ID | `testplan` |
-| Crate touched | `ragent-specs` |
-| Primary change site | `crates/ragent-specs/src/commands.rs` — `build_create_prompt` |
+| Crate touched | `codemason-specs` |
+| Primary change site | `crates/codemason-specs/src/commands.rs` — `build_create_prompt` |
 | Secondary change sites | `build_create_message`, `build_create_log`, `build_create_status` |
 | New file per spec | `specs/<id>/TESTPLAN.md` |
 | No new dependencies | ✅ |
@@ -33,7 +33,7 @@ task maps to one or more requirements in [`SPEC.md`](SPEC.md).
 ### T-001 — Extend `build_create_prompt` to request `TESTPLAN.md`
 
 Append a third numbered item to the prompt in
-`crates/ragent-specs/src/commands.rs::build_create_prompt`:
+`crates/codemason-specs/src/commands.rs::build_create_prompt`:
 
 ```
 3. `specs/{specname}/TESTPLAN.md` — A manual test plan for a human tester:
@@ -78,7 +78,7 @@ spec: writing specs/{specname}/SPEC.md + specs/{specname}/PLAN.md + specs/{specn
 
 ### T-005 — Update existing tests
 
-In `crates/ragent-specs/tests/test_slash_spec.rs::test_slash_spec_create_starts_generation`,
+In `crates/codemason-specs/tests/test_slash_spec.rs::test_slash_spec_create_starts_generation`,
 add assertions:
 
 - `prompt.contains("TESTPLAN.md")`
@@ -100,7 +100,7 @@ is manual and should not include `#[test]` or `cargo test`.
 
 ### T-008 — Update TUI create test (if needed)
 
-Check `crates/ragent-tui/tests/test_slash_commands.rs` for any test that
+Check `crates/codemason-tui/tests/test_slash_commands.rs` for any test that
 asserts the exact create message or prompt text; update it to account for
 the new `TESTPLAN.md` mention. If no such assertion exists, this task is a
 no-op.
@@ -121,4 +121,4 @@ Add an entry under the Unreleased section:
    all mention `TESTPLAN.md`.
 3. Existing tests pass with the new assertions.
 4. New tests verify the prompt structure and the no-automated-tests rule.
-5. `cargo test -p ragent-specs` and `cargo clippy -p ragent-specs` pass.
+5. `cargo test -p codemason-specs` and `cargo clippy -p codemason-specs` pass.

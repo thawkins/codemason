@@ -78,7 +78,7 @@ mapping could drift, and FR-002 asks for a declaration, not a runtime lookup tab
 `FAMILIES` and states the reason the table needs it: the table is many-to-one, so
 on its own it cannot tell a shared declared contract from fifteen literals that
 happen to be equal today. `wire/mod.rs`'s crate-header link list gained the same
-sentence, and `crates/ragent-llm/DOCS.md` names the list in the `wire` bullet.
+sentence, and `crates/codemason-llm/DOCS.md` names the list in the `wire` bullet.
 
 ## 4. The cases - 13 in `tests/test_wire_profile_table.rs`
 
@@ -154,10 +154,10 @@ observed and is not counted here.
 Green on this tree:
 
 - `cargo fmt --all -- --check` - clean
-- `cargo test -p ragent-llm --test all test_wire_profile` - **25 passed**, 0 failed
+- `cargo test -p codemason-llm --test all test_wire_profile` - **25 passed**, 0 failed
   (12 in `test_wire_profile.rs`, 13 here)
-- `cargo test -p ragent-llm --doc` - **30 passed**, 0 failed
-- `cargo clippy -p ragent-llm --lib` / `--test all` - no new warning (the 19
+- `cargo test -p codemason-llm --doc` - **30 passed**, 0 failed
+- `cargo clippy -p codemason-llm --lib` / `--test all` - no new warning (the 19
   `unnecessary structure name repetition` warnings in `tool_cache.rs` are
   pre-existing and untouched); `--all-targets` still fails to compile the **lib
   test** target on `tests/inline/anthropic_tests.rs:50`/`:267`
@@ -168,7 +168,7 @@ Green on this tree:
 
 ### Pre-existing, not caused by this task
 
-`cargo test -p ragent-llm --test all` reports **5 failed / 293 passed / 2 ignored**.
+`cargo test -p codemason-llm --test all` reports **5 failed / 293 passed / 2 ignored**.
 All five are source-scan guards for work this task does not own, reproduced with
 this task's diff stashed:
 

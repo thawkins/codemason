@@ -3,11 +3,11 @@ status: implemented
 audit:
   - { time: 1787493532, from: "none", to: "draft", actor: "system" }
 ---
-# Optimise `ragent-agent` Crate Performance
+# Optimise `codemason-agent` Crate Performance
 
 ## Context
 
-`ragent-agent` is the core agent/runtime crate in the ragent workspace. It owns
+`codemason-agent` is the core agent/runtime crate in the codemason workspace. It owns
 the session processor, agent loop, tool dispatch, memory and compaction
 pipelines, background tasks, team coordination, MCP bridging, skill handling,
 and reference resolution. Recent exploratory code review identified many small
@@ -25,7 +25,7 @@ unless a deliberate breaking change is explicitly documented.
 
 ### Ubiquitous requirements
 
-FR-001: The optimisation work **shall** target only `crates/ragent-agent` and
+FR-001: The optimisation work **shall** target only `crates/codemason-agent` and
 its direct dependencies, leaving other workspace crates untouched unless a
 change there is strictly necessary for the optimisation.
 

@@ -506,7 +506,7 @@ impl<T: Clone + Eq + Debug + Default> WrappedBlock<T> {
                 })
                 .unwrap_or(WhiteSpace::Normal);
             self.pre_wrapped = false;
-            // RAGENT PATCH: use saturating_sub — the line can legitimately be
+            // CODEMASON PATCH: use saturating_sub — the line can legitimately be
             // longer than the render width (e.g. after an unbreakable overflow
             // word or certain table constructions), and plain subtraction
             // panics in debug builds with "attempt to subtract with overflow".
@@ -591,7 +591,7 @@ impl<T: Clone + Eq + Debug + Default> WrappedBlock<T> {
     fn flush_word_hard_wrap(&mut self) -> Result<()> {
         use self::TaggedLineElement::Str;
 
-        // RAGENT PATCH: saturating_sub for the same reason as flush_word —
+        // CODEMASON PATCH: saturating_sub for the same reason as flush_word —
         // `self.line.len` may exceed `self.width` when an overflow word was
         // just emitted, and debug builds panic on underflow.
         let mut lineleft = self.width.saturating_sub(self.line.len);

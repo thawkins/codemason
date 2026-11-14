@@ -42,7 +42,7 @@ telling nobody.
 
 ## 3. What this task added
 
-`crates/ragent-agent/src/session/loop_steps.rs`:
+`crates/codemason-agent/src/session/loop_steps.rs`:
 
 1. **A per-attempt start flag.** `tool_calls_ever_started` is set when a
    `StreamEvent::ToolCallStart` arrives and cleared on a plain retry alongside
@@ -117,7 +117,7 @@ time and both say something about what the tests can see:
 
 ## 6. Tests
 
-`crates/ragent-agent/tests/test_loop_steps_harness.rs` (the existing fake-provider
+`crates/codemason-agent/tests/test_loop_steps_harness.rs` (the existing fake-provider
 harness, extended with two scripted replies):
 
 - `test_a_tool_use_finish_without_a_call_is_a_truncation` - every arm of the rule.
@@ -132,20 +132,20 @@ harness, extended with two scripted replies):
   reclassification notice, and the next request carries
   `ToolResult { tool_use_id: "call_cut", is_error: true }` for the cut-off call.
 
-`crates/ragent-agent/tests/test_processor_more_paths.rs`:
+`crates/codemason-agent/tests/test_processor_more_paths.rs`:
 `test_finish_tool_use_without_calls_records_truncation`.
 
 ## 7. Verification
 
 - `cargo fmt --all -- --check` clean.
-- `cargo nextest run -p ragent-agent --no-fail-fast`: 2121 tests run, 2121
+- `cargo nextest run -p codemason-agent --no-fail-fast`: 2121 tests run, 2121
   passed, 1 skipped.
-- `cargo nextest run -p ragent-server -p ragent-llm -p ragent-config -p ragent-tui --no-fail-fast`:
+- `cargo nextest run -p codemason-server -p codemason-llm -p codemason-config -p codemason-tui --no-fail-fast`:
   5058 passed, 2 failed - `test_clipboard::test_clipboard_repeated_writes` (the
   clipboard lock is not held across the read in this sandbox; it passes in
   isolation) and `test_slash_arms_deep::tools_visibility_save_failure_is_reported`
   (pre-existing, recorded in earlier tasks). Neither touches this change.
-- `cargo clippy -p ragent-agent --all-targets`: no finding names a file this task
+- `cargo clippy -p codemason-agent --all-targets`: no finding names a file this task
   edited.
 - Guard scripts: unchanged by this task (no source-scan list or count was edited).
 

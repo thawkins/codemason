@@ -12,7 +12,7 @@ performed by hand.
 ## Prerequisites
 
 1. Build the binary. Run `cargo build` (allow up to 1000 seconds) and confirm
-   `./target/debug/ragent --version` prints the current version.
+   `./target/debug/cdmn --version` prints the current version.
 2. Use a **deliberately slow** model so there is time to queue messages while a turn
    runs. A small local Ollama model (for example `qwen2.5:0.5b` with a low token cap) or
    any provider with noticeable latency works. Confirm a plain turn takes at least ~3
@@ -44,7 +44,7 @@ performed by hand.
 **Steps:**
 1. Launch the TUI:
    ```
-   ./target/debug/ragent
+   ./target/debug/cdmn
    ```
 2. Type the first prompt: `write a haiku about compilers`
 3. Press `Enter`.

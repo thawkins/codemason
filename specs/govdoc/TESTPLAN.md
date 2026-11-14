@@ -13,11 +13,11 @@ prerequisite is listed before the steps. This document contains no automated tes
 ## Prerequisites
 
 1. **Build the binary.** Run `cargo build` (debug is sufficient; allow up to 1000
-   seconds). Confirm `./target/debug/ragent --version` runs and reports the current
+   seconds). Confirm `./target/debug/cdmn --version` runs and reports the current
    version.
 2. **Configure an LLM provider.** The architecture-extraction and spec-authoring stages
    need a model. Set the API key for your configured provider in the environment, or
-   point ragent at a local Ollama model. Confirm a plain `ragent run "say hello"` returns
+   point codemason at a local Ollama model. Confirm a plain `codemason run "say hello"` returns
    a response.
 3. **Prepare a scratch root.** Create `~/scratch/govdoc-tests/` and inside it one
    **empty** subdirectory per scaffold case, e.g. `tc-url-rust/`, `tc-local-python/`,
@@ -43,8 +43,8 @@ prerequisite is listed before the steps. This document contains no automated tes
    example `https://example.com/architecture/`). If you are offline, skip TC-002, TC-005,
    TC-009, TC-010 and TC-012 and record them as not run.
 9. **For hosting cases:** valid GitHub credentials (and separately GitLab) previously used
-   successfully in a ragent session.
-10. **Preserve config.** Back up `.ragent/ragent.json` before starting so any temporary
+   successfully in a codemason session.
+10. **Preserve config.** Back up `.codemason/codemason.json` before starting so any temporary
     flags can be reverted in Cleanup.
 
 ## Test Cases
@@ -53,7 +53,7 @@ prerequisite is listed before the steps. This document contains no automated tes
 
 **Requirement:** FR-001, FR-002, FR-003, NFR-001, NFR-005
 
-**Preconditions:** ragent running in the TUI from `~/scratch/govdoc-tests/`; scratch root
+**Preconditions:** codemason running in the TUI from `~/scratch/govdoc-tests/`; scratch root
 empty of test projects except the fixtures folder.
 
 **Steps:**
@@ -101,7 +101,7 @@ reachable crawlable docs URL; LLM provider configured.
   acquisition (naming the number of pages gathered), extraction, authoring, completion.
 - Only one progress message is used (it is edited, not appended-to-per-stage).
 - The scaffold creates a Rust cmdline project (Cargo layout) with the `axum` stack
-  overlay applied, `specs/`, `log/`, `.ragent/`, `AGENTS.md`, and a git repository.
+  overlay applied, `specs/`, `log/`, `.codemason/`, `AGENTS.md`, and a git repository.
 - `specs/payments-arch/` contains `SPEC.md`, `PLAN.md`, and `TESTPLAN.md`.
 - `SPEC.md` starts with `status: draft` YAML frontmatter and contains an
   `## Requirements` section with FR-001, FR-002, ... requirements using at least one
@@ -143,7 +143,7 @@ reachable crawlable docs URL; LLM provider configured.
   `diagrams/notes.txt` was filtered.
 - Acquisition completes within 30 seconds for this small fixture.
 - The scaffold creates a Python library layout with `pyproject.toml` (or equivalent) and
-  the standard ragent workspace files.
+  the standard codemason workspace files.
 - `specs/datahub-arch/SPEC.md` describes at least the three components (Ingest API,
   Transform Worker, Query Service) and the Postgres data store, i.e. the extracted
   structure is reflected in the generated requirements.
@@ -200,7 +200,7 @@ fixture from Prerequisites item 5.
 
 **Requirement:** FR-002
 
-**Preconditions:** ragent running from the scratch root.
+**Preconditions:** codemason running from the scratch root.
 
 **Steps:**
 1. Type:
@@ -317,7 +317,7 @@ docs URL; the ability to cancel a run (the TUI cancel key, typically `Esc`).
 
 **Steps:**
 1. Run:
-   `./target/debug/ragent spec govcreate cli-arch ./fixtures/datahub-docs ./tc-cli --language python --type library`
+   `./target/debug/cdmn spec govcreate cli-arch ./fixtures/datahub-docs ./tc-cli --language python --type library`
 2. Observe the streamed progress on stdout.
 3. Run `ls ~/scratch/govdoc-tests/tc-cli/specs/cli-arch`.
 4. Run the same CLI invocation with a nonexistent content reference and check the exit
@@ -357,12 +357,12 @@ docs URL; the ability to cancel a run (the TUI cancel key, typically `Esc`).
 
 **Requirement:** NFR-003
 
-**Preconditions:** ragent running from `~/scratch/govdoc-tests/tc-escape-src/` (create it
+**Preconditions:** codemason running from `~/scratch/govdoc-tests/tc-escape-src/` (create it
 empty); a target folder `~/scratch/govdoc-tests/tc-escape/` (create it empty); the
 fixtures folder at `~/scratch/govdoc-tests/fixtures/`.
 
 **Steps:**
-1. In the TUI, run ragent from `~/scratch/govdoc-tests/tc-escape-src/`.
+1. In the TUI, run codemason from `~/scratch/govdoc-tests/tc-escape-src/`.
 2. Type:
    `/spec govcreate escape-arch ../fixtures/datahub-docs ../tc-escape --language rust --type cmdline`
 3. Press `Enter`.
@@ -377,7 +377,7 @@ fixtures folder at `~/scratch/govdoc-tests/fixtures/`.
 
 **Requirement:** FR-002
 
-**Preconditions:** ragent running from the scratch root; an empty target folder
+**Preconditions:** codemason running from the scratch root; an empty target folder
 `~/scratch/govdoc-tests/tc-badid/`; the local fixture folder.
 
 **Steps:**
@@ -402,6 +402,6 @@ fixtures folder at `~/scratch/govdoc-tests/fixtures/`.
 2. If any GitHub or GitLab test repositories were created (TC-005), delete them from the
    hosting account and remove the associated local remote (the local project is being
    deleted anyway).
-3. Restore `.ragent/ragent.json` from the backup taken in Prerequisites item 10.
-4. Stop any ragent processes started for the tests and clear the TUI history if
+3. Restore `.codemason/codemason.json` from the backup taken in Prerequisites item 10.
+4. Stop any codemason processes started for the tests and clear the TUI history if
    desired.

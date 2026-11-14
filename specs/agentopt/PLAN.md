@@ -1,4 +1,4 @@
-# Implementation Plan: Optimise `ragent-agent` Crate Performance
+# Implementation Plan: Optimise `codemason-agent` Crate Performance
 
 This plan is the companion to [`SPEC.md`](SPEC.md). Each task maps
 back to one or more requirements and targets a single, measurable change with
@@ -9,8 +9,8 @@ minimal blast radius.
 | Item | Value |
 |------|-------|
 | Spec ID | `agentopt` |
-| Primary crate | `crates/ragent-agent` |
-| Secondary crates | `crates/ragent-config` (permission checker canonicalisation), `crates/ragent-tools-*` (shared context), `cragent-storage` (tag batching) |
+| Primary crate | `crates/codemason-agent` |
+| Secondary crates | `crates/codemason-config` (permission checker canonicalisation), `crates/codemason-tools-*` (shared context), `ccodemason-storage` (tag batching) |
 | No new dependencies | ✅ unless a crate already transitively uses `dashmap` / `parking_lot` |
 | Public API changes | Minimal; document any `Arc` / shared-reference changes |
 
@@ -44,7 +44,7 @@ minimal blast radius.
 
 ### T-001 — Reuse `reqwest::Client` for URL references
 
-In `crates/ragent-agent/src/reference/resolve.rs` (lines ~126–131),
+In `crates/codemason-agent/src/reference/resolve.rs` (lines ~126–131),
 `resolve_url` constructs a fresh `reqwest::Client` for every `@https://...`
 reference.
 
@@ -55,7 +55,7 @@ reference.
 - Keep the existing timeout and redirect policy defaults in the shared client.
 
 **Verification:**
-- Existing reference tests in `crates/ragent-agent/tests/` still pass.
+- Existing reference tests in `crates/codemason-agent/tests/` still pass.
 - New regression test or micro-benchmark demonstrates that multiple URL
   references use the same client instance.
 
@@ -63,7 +63,7 @@ reference.
 
 ### T-002 — Reuse `reqwest::Client` for HTTP MCP transport
 
-In `crates/ragent-agent/src/mcp/http.rs` (lines ~102–110), a new client is built
+In `crates/codemason-agent/src/mcp/http.rs` (lines ~102–110), a new client is built
 per HTTP MCP server connection.
 
 **Change:**
@@ -79,7 +79,7 @@ per HTTP MCP server connection.
 
 ### T-003 — Cache fuzzy reference project file list
 
-In `crates/ragent-agent/src/reference/fuzzy.rs` (lines ~44–49),
+In `crates/codemason-agent/src/reference/fuzzy.rs` (lines ~44–49),
 `collect_project_files` walks the whole project tree on every fuzzy reference.
 
 **Change:**
@@ -95,7 +95,7 @@ In `crates/ragent-agent/src/reference/fuzzy.rs` (lines ~44–49),
 
 ### T-004 — Reduce fuzzy matching allocations
 
-In `crates/ragent-agent/src/reference/fuzzy.rs` (lines ~111–172),
+In `crates/codemason-agent/src/reference/fuzzy.rs` (lines ~111–172),
 `fuzzy_match` materialises several lowercased strings per candidate.
 
 **Change:**
@@ -112,7 +112,7 @@ In `crates/ragent-agent/src/reference/fuzzy.rs` (lines ~111–172),
 
 ### T-005 — Return `Arc<AgentInfo>` from agent resolution
 
-In `crates/ragent-agent/src/agent/mod.rs` (lines ~1324–1371), `resolve_agent`
+In `crates/codemason-agent/src/agent/mod.rs` (lines ~1324–1371), `resolve_agent`
 finds a built-in and calls `.cloned()` on a struct containing the full prompt.
 
 **Change:**
@@ -160,7 +160,7 @@ all built-ins again.
 
 ### T-008 — Avoid `definitions()` clone in tool registry
 
-In `crates/ragent-agent/src/tool/mod.rs` (lines ~1337+), `definitions()` clones
+In `crates/codemason-agent/src/tool/mod.rs` (lines ~1337+), `definitions()` clones
 the entire tool definition vector.
 
 **Change:**
@@ -176,7 +176,7 @@ the entire tool definition vector.
 
 ### T-009 — Share session `ToolContext` across tool calls
 
-Tool adapters rebuild `ragent_tools_core::ToolContext` and related context
+Tool adapters rebuild `codemason_tools_core::ToolContext` and related context
 structs on every `execute()` (lines ~520–524, ~1055–1063, ~1160–1164).
 
 **Change:**
@@ -193,7 +193,7 @@ structs on every `execute()` (lines ~520–524, ~1055–1063, ~1160–1164).
 
 ### T-010 — Batch storage output/status writes in `BackgroundTaskService`
 
-In `crates/ragent-agent/src/background/mod.rs`, `flush_task` writes output and
+In `crates/codemason-agent/src/background/mod.rs`, `flush_task` writes output and
 status in two separate storage calls every 2 seconds even when unchanged.
 
 **Change:**
@@ -225,7 +225,7 @@ status in two separate storage calls every 2 seconds even when unchanged.
 
 ### T-012 — Avoid full `TaskEntry` clones in `AgentManager` read paths
 
-In `crates/ragent-agent/src/task/mod.rs`, `list_agents`,
+In `crates/codemason-agent/src/task/mod.rs`, `list_agents`,
 `running_background_count`, and `drain_completed` clone entire `TaskEntry`
 records, including large result strings.
 
@@ -351,7 +351,7 @@ Add small Criterion benchmarks covering:
 - skill substitution.
 
 **Verification:**
-- `cargo bench -p ragent-agent` runs and produces numbers.
+- `cargo bench -p codemason-agent` runs and produces numbers.
 
 ---
 
@@ -359,9 +359,9 @@ Add small Criterion benchmarks covering:
 
 Before declaring the work done:
 
-1. `cargo test -p ragent-agent` passes.
-2. `cargo clippy -p ragent-agent -- -D warnings` passes.
-3. `cargo fmt -p ragent-agent` is clean.
+1. `cargo test -p codemason-agent` passes.
+2. `cargo clippy -p codemason-agent -- -D warnings` passes.
+3. `cargo fmt -p codemason-agent` is clean.
 
 ---
 
@@ -370,14 +370,14 @@ Before declaring the work done:
 - Transition `AGENTSPEC.md` frontmatter status to `in_progress` after T-001–T-003
   land, and to `implemented` after T-021 passes.
 - Add a `CHANGELOG.md` entry under the current version describing the
-  ragent-agent performance improvements.
+  codemason-agent performance improvements.
 
 ## Definition of Done
 
 - All tasks listed above are marked `completed` in this plan.
-- `cargo test -p ragent-agent` passes without warnings.
-- `cargo clippy -p ragent-agent` passes.
-- `cargo fmt -p ragent-agent` produces no diff.
+- `cargo test -p codemason-agent` passes without warnings.
+- `cargo clippy -p codemason-agent` passes.
+- `cargo fmt -p codemason-agent` produces no diff.
 - Hot-path benchmarks (T-020) show measurable improvement or at minimum no
   regression.
 - `AGENTSPEC.md` status is `implemented` and `CHANGELOG.md` is updated.

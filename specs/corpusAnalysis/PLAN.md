@@ -9,7 +9,7 @@ Implementation plan for `specs/corpusAnalysis/SPEC.md`.
 
 ## Approach
 
-All work lands in `crates/ragent-research`. The scoreboard is a new pure
+All work lands in `crates/codemason-research`. The scoreboard is a new pure
 rendering module that consumes `ResearchDocument` fields which already exist
 (`corpus_critic`, `synthesis_audit`, `cite_check`, `sources`). `assemble_report_body`
 (document.rs) and `assemble_imrad_body` (document.rs) each insert the rendered
@@ -40,7 +40,7 @@ Key existing symbols to build on:
 ## Notes
 
 - T-001/T-002 should be a single new module (e.g.
-  `crates/ragent-research/src/scoreboard.rs`) declared in `lib.rs`, keeping
+  `crates/codemason-research/src/scoreboard.rs`) declared in `lib.rs`, keeping
   `document.rs` changes limited to the two assembly insertion points.
 - T-006 is expected to be a no-code-change verification in most cases: the
   overlay renders the assembled markdown verbatim; the task exists to prove it

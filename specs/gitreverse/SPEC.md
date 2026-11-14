@@ -26,13 +26,13 @@ the generated prompt into `/spec create` (`--create <name>`).
 
 ### Existing infrastructure
 
-- **GitHub API client** — `crates/ragent-tools-vcs/src/github/client.rs` provides
+- **GitHub API client** — `crates/codemason-tools-vcs/src/github/client.rs` provides
   `GitHubClient` with `get(path)` (returns `serde_json::Value`) and
   `get_bytes(path)` (returns raw bytes). Token resolution is handled by
   `github::auth::load_token()` (env var `GITHUB_TOKEN` or
-  `~/.ragent/github_token`). The client is re-exported via
-  `ragent_agent::github`.
-- **Slash command dispatch** — `crates/ragent-tui/src/app/slash.rs` dispatches
+  `~/.codemason/github_token`). The client is re-exported via
+  `codemason_agent::github`.
+- **Slash command dispatch** — `crates/codemason-tui/src/app/slash.rs` dispatches
   slash commands in `execute_slash_command_inner`. Each command is registered
   in the `SLASH_COMMANDS` constant in `state.rs`. Commands like `/spec`,
   `/research`, `/plan`, and `/swarm` demonstrate the pattern: parse args, show a
@@ -68,8 +68,8 @@ The existing `GitHubClient::detect_repo` parses git-remote URLs; a new
 ### FR-001 — Slash command registered (ubiquitous)
 
 The system **shall** register a `/spec reverse` slash command through the
-`/spec` subcommand table in `crates/ragent-specs/src/commands.rs` (dispatched
-from `crates/ragent-tui/src/app/slash.rs`) with a trigger of `reverse` and a
+`/spec` subcommand table in `crates/codemason-specs/src/commands.rs` (dispatched
+from `crates/codemason-tui/src/app/slash.rs`) with a trigger of `reverse` and a
 description documenting its usage.
 
 > *Ubiquitous requirement — applies to all environments where the TUI is
@@ -136,7 +136,7 @@ resolve to exactly two path segments.
 ### FR-004 — GitHub authentication required (state-driven)
 
 When no GitHub token is configured (neither `GITHUB_TOKEN` env var nor
-`~/.ragent/github_token` file), the system **shall** display a clear error
+`~/.codemason/github_token` file), the system **shall** display a clear error
 message instructing the user to run `/github login` and **shall not** make any
 API calls.
 
@@ -289,8 +289,8 @@ when the user types `/r` or `/rev`, using the `SLASH_COMMANDS` registration.
 ### NFR-001 — No new dependencies
 
 The implementation **shall not** add any new crate dependencies beyond those
-already present in the workspace (reqwest, serde_json, anyhow, tokio, ragent_agent,
-ragent_tools_vcs).
+already present in the workspace (reqwest, serde_json, anyhow, tokio, codemason_agent,
+codemason_tools_vcs).
 
 ### NFR-002 — No panics on user-facing paths
 

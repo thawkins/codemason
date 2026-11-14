@@ -1,0 +1,251 @@
+//! File discovery tool using glob patterns.
+//!
+//! Provides [`GlobTool`], which recursively searches directories for files
+//! matching a glob pattern (e.g., `**/*.rs`), skipping hidden and generated directories.
+//!
+//! The directory walk is parallelised with Rayon when the entry count is large,
+//! reducing latency on big codebases.
+
+use anyhow::{Context, Result};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use super::{Tool, ToolContext, ToolOutput};
+use crate::path_util::resolve_path;
+
+/// Finds files matching a glob pattern by recursively walking directories.
+///
+/// Hidden entries and common generated directories (`node_modules`, `target`, etc.)
+/// are skipped. Results are capped at 1 000 matches.
+pub struct GlobTool;
+
+#[async_trait::async_trait]
+impl Tool for GlobTool {
+    fn name(&self) -> &'static str {
+        "Glob"
+    }
+
+    /// Returns a human-readable description of what the tool does.
+    fn description(&self) -> &'static str {
+        "Find files matching a glob pattern by recursively searching directories. \
+         Required parameter: `pattern` (string), e.g. `'**/*.rs'` or \
+         `'src/**/*.ts'`. Optional: `path` (string) - the base directory to \
+         search, defaulting to the agent's working directory. Hidden entries \
+         and common generated directories (such as `node_modules` and `target`) \
+         are skipped automatically. Results are capped at 1,000 matches; if \
+         the cap is reached, the output is marked as truncated."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "REQUIRED. Glob pattern to match (e.g. '**/*.rs', 'src/**/*.ts')"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Base directory (default: working directory)"
+                }
+            },
+            "required": ["pattern"],
+            "additionalProperties": false
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "file:read"
+    }
+
+    /// Finds files matching a glob pattern.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The `pattern` parameter is missing or invalid
+    /// - The glob pattern is malformed or cannot be compiled
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let pattern = input["pattern"]
+            .as_str()
+            .context("Missing required 'pattern' parameter")?;
+        let base_dir = input["path"].as_str().map_or_else(
+            || ctx.working_dir.clone(),
+            |p| resolve_path(&ctx.working_dir, p),
+        );
+
+        // C-002 / FUNC-068: glob must stay inside the allowed roots even when
+        // `path` is provided (ANTIPAT F-06).
+        super::check_path_within_allowed_roots_cached(
+            &base_dir,
+            &ctx.working_dir,
+            &ctx.allowed_roots,
+            &ctx.canonical_cache,
+        )?;
+
+        let glob = globset::GlobBuilder::new(pattern)
+            .case_insensitive(false)
+            .build()
+            .with_context(|| format!("Invalid glob pattern: {pattern}"))?;
+        let matcher = glob.compile_matcher();
+
+        const MAX_MATCHES: usize = 1000;
+
+        // PERF-052: the recursive walk is filesystem-bound; run it on the
+        // blocking pool so a large tree does not pin an async worker.
+        let walk_root = base_dir.clone();
+        let mut match_results = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+            let mut results = Vec::new();
+            collect_matches(
+                &walk_root,
+                &walk_root,
+                &matcher,
+                &mut results,
+                MAX_MATCHES,
+                0,
+            )?;
+            Ok(results)
+        })
+        .await
+        .context("glob walk task failed")??;
+
+        match_results.sort();
+
+        if match_results.is_empty() {
+            Ok(ToolOutput {
+                content: format!("No files matching '{}' in {}", pattern, base_dir.display()),
+                metadata: Some(json!({
+                    "count": 0,
+                    "pattern": pattern,
+                })),
+            })
+        } else {
+            let truncated = match_results.len() >= MAX_MATCHES;
+            let content = match_results.join("\n");
+            Ok(ToolOutput {
+                content: format!(
+                    "{} file{} found{}\n\n{}",
+                    match_results.len(),
+                    if match_results.len() == 1 { "" } else { "s" },
+                    if truncated { " (truncated)" } else { "" },
+                    content
+                ),
+                metadata: Some(json!({
+                    "count": match_results.len(),
+                    "truncated": truncated,
+                    "pattern": pattern,
+                })),
+            })
+        }
+    }
+}
+
+/// Maximum directory recursion depth for a glob walk.
+///
+/// Bounds the walk so a symlink loop or a pathologically deep tree cannot
+/// recurse without limit (ANTIPAT F-21); mirrors `list.rs`'s depth bounding.
+const MAX_WALK_DEPTH: usize = 64;
+
+/// Recursively collects file paths matching a glob pattern.
+///
+/// Uses Rayon for parallel directory walking to accelerate large trees.
+/// IO errors on individual entries are silently skipped. Symlinked
+/// directories are not followed (verified via `entry.file_type()`), and the
+/// recursion is bounded by [`MAX_WALK_DEPTH`].
+fn collect_matches(
+    root: &Path,
+    dir: &Path,
+    matcher: &globset::GlobMatcher,
+    results: &mut Vec<String>,
+    max: usize,
+    depth: usize,
+) -> Result<()> {
+    if depth >= MAX_WALK_DEPTH {
+        return Ok(());
+    }
+    // Gather all entries in this directory
+    let entries: Vec<_> = match std::fs::read_dir(dir) {
+        Ok(rd) => rd.filter_map(std::result::Result::ok).collect(),
+        Err(_) => return Ok(()),
+    };
+
+    let root = Arc::new(root.to_path_buf());
+    let matcher = Arc::new(matcher.clone());
+    let max_results = max;
+
+    // Partition entries into files and sub-directories
+    let mut subdirs: Vec<PathBuf> = Vec::new();
+    let mut matched: Vec<String> = Vec::new();
+
+    for entry in &entries {
+        let path = entry.path();
+        let name = codemason_types::strutil::path_file_name(&path);
+        if name.starts_with('.') {
+            continue;
+        }
+        // ANTIPAT F-21: classify via the directory entry's own file type so a
+        // symlink is NOT followed (a symlinked directory is neither descended
+        // into nor matched as a regular file), preventing symlink loops.
+        let is_dir = entry.file_type().is_ok_and(|ft| ft.is_dir());
+        if is_dir {
+            if !matches!(
+                name,
+                "node_modules" | "target" | "__pycache__" | "dist" | "build"
+            ) {
+                subdirs.push(path);
+            }
+        } else if !entry.file_type().is_ok_and(|ft| ft.is_symlink())
+            && let Ok(rel) = path.strip_prefix(root.as_path())
+            && matcher.is_match(rel)
+        {
+            matched.push(rel.display().to_string());
+        }
+    }
+
+    // Collect matching files from this level
+    for m in matched {
+        if results.len() >= max_results {
+            return Ok(());
+        }
+        results.push(m);
+    }
+
+    // Walk sub-directories in parallel when there are many of them
+    if subdirs.len() > 4 {
+        let parallel_results: Vec<Vec<String>> = subdirs
+            .par_iter()
+            .map(|sub| {
+                let mut local = Vec::new();
+                if let Err(e) = collect_matches(
+                    sub,
+                    sub,
+                    matcher.as_ref(),
+                    &mut local,
+                    max_results,
+                    depth + 1,
+                ) {
+                    tracing::warn!(path = %sub.display(), error = %e, "glob walk failed");
+                }
+                local
+            })
+            .collect();
+        for batch in parallel_results {
+            for item in batch {
+                if results.len() >= max_results {
+                    return Ok(());
+                }
+                results.push(item);
+            }
+        }
+    } else {
+        for sub in &subdirs {
+            if results.len() >= max_results {
+                return Ok(());
+            }
+            collect_matches(sub, sub, matcher.as_ref(), results, max_results, depth + 1)?;
+        }
+    }
+    Ok(())
+}

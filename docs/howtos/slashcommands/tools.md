@@ -85,6 +85,6 @@ From: /tools
 ## Related
 
 - `/config show` - inspect the resolved configuration
-- `/reload config` - re-read `ragent.json` after manual edits
+- `/reload config` - re-read `codemason.json` after manual edits
 - [`docs/howtos/tools/INDEX.md`](../tools/INDEX.md) - the tool catalogue by
   category

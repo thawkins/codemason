@@ -6,7 +6,7 @@ argument-hint: "[commit message]"
 allowed-tools:
  - any
 ---
-Perform a shipment of the ragent project by following these steps **in order**:
+Perform a shipment of the codemason project by following these steps **in order**:
 
 If any step fails, halt and report the problem:.
 

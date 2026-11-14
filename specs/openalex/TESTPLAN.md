@@ -10,13 +10,13 @@ test code.
 
 ## Prerequisites
 
-1. A working build of ragent (`cargo build`).
+1. A working build of codemason (`cargo build`).
 2. Internet access (the OpenAlex API is at `https://api.openalex.org`).
 3. No OpenAlex API key is required — the backend is keyless. An optional
    `OPENALEX_EMAIL` environment variable (or `openalex_email` config field)
    may be set to participate in the OpenAlex polite pool; this is
    recommended but not required for the tests below.
-4. A shell with `curl` available, or the ragent TUI / CLI, to issue
+4. A shell with `curl` available, or the codemason TUI / CLI, to issue
    `mf_search` queries.
 5. (Optional) `jq` for inspecting JSON responses in the terminal.
 
@@ -28,14 +28,14 @@ test code.
 configuration.
 
 **Preconditions:**
-- ragent is built.
+- codemason is built.
 - No `OPENALEX_EMAIL`, `TAVILY_API_KEY`, `LANGSEARCH_API_KEY`, or
   `PERPLEXITY_API_KEY` environment variables are set.
-- No `openalex_email` config field is set in `ragent.json`.
+- No `openalex_email` config field is set in `codemason.json`.
 
 **Instructions:**
 1. Open a terminal in the project root.
-2. Run the ragent TUI: `ragent`.
+2. Run the codemason TUI: `codemason`.
 3. At the prompt, type:
    ```
    mf_search query="machine learning" max_results=5
@@ -61,12 +61,12 @@ configuration.
 year, citation count, open-access URL).
 
 **Preconditions:**
-- ragent is built.
+- codemason is built.
 - Internet access is available.
 
 **Instructions:**
 1. Open a terminal in the project root.
-2. Run: `ragent run "Use mf_search to search for 'graph neural networks' with max_results=3 and list each result's title, URL, and any scholarly metadata you can see in the snippet."`
+2. Run: `codemason run "Use mf_search to search for 'graph neural networks' with max_results=3 and list each result's title, URL, and any scholarly metadata you can see in the snippet."`
 3. Alternatively, use `curl` against a running server:
    ```
    curl -s -X POST http://localhost:9100/mf_search \
@@ -94,12 +94,12 @@ year, citation count, open-access URL).
 to the specified publisher/repository.
 
 **Preconditions:**
-- ragent is built.
+- codemason is built.
 - Internet access is available.
 
 **Instructions:**
 1. Open a terminal in the project root.
-2. Run the ragent TUI: `ragent`.
+2. Run the codemason TUI: `codemason`.
 3. At the prompt, type:
    ```
    mf_search query="open access" site="nature.com" max_results=5
@@ -125,13 +125,13 @@ to the specified publisher/repository.
 published within the last 365 days.
 
 **Preconditions:**
-- ragent is built.
+- codemason is built.
 - Internet access is available.
 - The current date is known (to verify the publication-year window).
 
 **Instructions:**
 1. Open a terminal in the project root.
-2. Run the ragent TUI: `ragent`.
+2. Run the codemason TUI: `codemason`.
 3. At the prompt, type:
    ```
    mf_search query="covid vaccine efficacy" freshness=year max_results=5
@@ -157,7 +157,7 @@ published within the last 365 days.
 still returns results from the other backends.
 
 **Preconditions:**
-- ragent is built.
+- codemason is built.
 - A way to simulate an OpenAlex failure (e.g. temporarily block
   `api.openalex.org` via `/etc/hosts` pointing to `127.0.0.1`, or
   disconnect from the internet).
@@ -165,7 +165,7 @@ still returns results from the other backends.
 **Instructions:**
 1. Simulate the OpenAlex outage (e.g. add `127.0.0.1 api.openalex.org`
    to `/etc/hosts`, or disable network).
-2. Run the ragent TUI: `ragent`.
+2. Run the codemason TUI: `codemason`.
 3. At the prompt, type:
    ```
    mf_search query="quantum computing" max_results=5
@@ -192,7 +192,7 @@ still returns results from the other backends.
 `mailto=` parameter, and the email is masked in any diagnostics.
 
 **Preconditions:**
-- ragent is built.
+- codemason is built.
 - Internet access is available.
 - Log level is set to show `debug`/`trace` output
   (e.g. `--log-level debug`).
@@ -202,9 +202,9 @@ still returns results from the other backends.
    ```
    export OPENALEX_EMAIL="tester@example.org"
    ```
-2. Run the ragent TUI with debug logging:
+2. Run the codemason TUI with debug logging:
    ```
-   ragent --log-level debug
+   codemason --log-level debug
    ```
 3. At the prompt, type:
    ```
@@ -234,12 +234,12 @@ error; the engine clamps `per_page` to 200 and truncates to the requested
 count.
 
 **Preconditions:**
-- ragent is built.
+- codemason is built.
 - Internet access is available.
 
 **Instructions:**
 1. Open a terminal in the project root.
-2. Run the ragent TUI: `ragent`.
+2. Run the codemason TUI: `codemason`.
 3. At the prompt, type:
    ```
    mf_search query="climate change" max_results=250
@@ -265,4 +265,4 @@ count.
 2. Restore `/etc/hosts` if it was modified for TC-005 (remove the
    `127.0.0.1 api.openalex.org` entry).
 3. Reconnect the network if it was disabled for TC-005.
-4. Exit the ragent TUI / CLI session.
+4. Exit the codemason TUI / CLI session.

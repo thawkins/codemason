@@ -1,0 +1,814 @@
+//! OTEL instrument registry - constructs and holds all metrics from the catalog.
+//!
+//! The [`InstrumentRegistry`] owns a [`Meter`] and all OTEL instruments
+//! (counters, histograms, gauges, up/down counters) defined in the otel
+//! spec's Metric Catalog (FR-003). When telemetry is enabled, it creates real
+//! instruments from the live [`SdkMeterProvider`]; when disabled, it creates
+//! no-op instruments from the global [`NoopMeterProvider`] (FR-022, NFR-002).
+//!
+//! All instruments are named per the OTEL semantic conventions: lowercase,
+//! dot-separated, with a `{unit}` suffix where applicable.
+
+#[cfg(feature = "telemetry")]
+use opentelemetry::KeyValue;
+#[cfg(feature = "telemetry")]
+use opentelemetry::metrics::MeterProvider;
+
+#[cfg(feature = "telemetry")]
+use crate::cardinality::CardinalityCache;
+
+/// Instrument names from the otel spec Metric Catalog.
+///
+/// Centralised as constants so the registry and tests reference a single
+/// source of truth (FR-003). The module is public so external callers (e.g.
+/// dashboards, exporters, and integration tests) can use the canonical names
+/// without duplicating them.
+pub mod names {
+    // -- Usage metrics ---------------------------------------------------
+    /// Metric name for total LLM requests (`codemason.llm.requests`).
+    pub const LLM_REQUESTS: &str = "codemason.llm.requests";
+    /// Metric name for currently active sessions (`codemason.sessions.active`).
+    pub const SESSIONS_ACTIVE: &str = "codemason.sessions.active";
+    /// Metric name for total sessions created (`codemason.sessions.total`).
+    pub const SESSIONS_TOTAL: &str = "codemason.sessions.total";
+    /// Metric name for user messages submitted (`codemason.messages.user`).
+    pub const MESSAGES_USER: &str = "codemason.messages.user";
+    /// Metric name for tool invocations (`codemason.tool.invocations`).
+    pub const TOOL_INVOCATIONS: &str = "codemason.tool.invocations";
+    /// Metric name for currently active sub-agents (`codemason.agents.active`).
+    pub const AGENTS_ACTIVE: &str = "codemason.agents.active";
+    /// Metric name for completed sub-agents (`codemason.agents.completed`).
+    pub const AGENTS_COMPLETED: &str = "codemason.agents.completed";
+    /// Metric name for sub-agent spawn events (`codemason.subagent.spawns`).
+    pub const SUBAGENT_SPAWNS: &str = "codemason.subagent.spawns";
+    /// Metric name for current team members (`codemason.team.members`).
+    pub const TEAM_MEMBERS: &str = "codemason.team.members";
+
+    // -- Performance metrics ---------------------------------------------
+    /// Metric name for LLM call duration (`codemason.llm.duration`).
+    pub const LLM_DURATION: &str = "codemason.llm.duration";
+    /// Metric name for LLM time-to-first-token (`codemason.llm.time_to_first_token`).
+    pub const LLM_TTFT: &str = "codemason.llm.time_to_first_token";
+    /// Metric name for tool execution duration (`codemason.tool.duration`).
+    pub const TOOL_DURATION: &str = "codemason.tool.duration";
+    /// Metric name for agent loop duration (`codemason.agent_loop.duration`).
+    pub const AGENT_LOOP_DURATION: &str = "codemason.agent_loop.duration";
+    /// Metric name for agent loop iterations (`codemason.agent_loop.iterations`).
+    pub const AGENT_LOOP_ITERATIONS: &str = "codemason.agent_loop.iterations";
+    /// Metric name for session duration (`codemason.session.duration`).
+    pub const SESSION_DURATION: &str = "codemason.session.duration";
+    /// Metric name for tool permission wait time (`codemason.tool.permission_wait`).
+    pub const TOOL_PERMISSION_WAIT: &str = "codemason.tool.permission_wait";
+    /// Metric name for agent-loop profiler samples (`codemason.profile.duration`).
+    ///
+    /// Every profiler scope (e.g. `loop.llm.stream`, `tool.total:bash`) is
+    /// recorded here tagged with `profile.operation` and `profile.group`.
+    pub const PROFILE_DURATION: &str = "codemason.profile.duration";
+
+    // -- Cost metrics ----------------------------------------------------
+    /// Metric name for input tokens (`codemason.tokens.input`).
+    pub const TOKENS_INPUT: &str = "codemason.tokens.input";
+    /// Metric name for output tokens (`codemason.tokens.output`).
+    pub const TOKENS_OUTPUT: &str = "codemason.tokens.output";
+    /// Metric name for cache-read tokens (`codemason.tokens.cache_read`).
+    pub const TOKENS_CACHE_READ: &str = "codemason.tokens.cache_read";
+    /// Metric name for cache-write tokens (`codemason.tokens.cache_write`).
+    pub const TOKENS_CACHE_WRITE: &str = "codemason.tokens.cache_write";
+    /// Metric name for estimated cost (`codemason.cost.estimated`).
+    pub const COST_ESTIMATED: &str = "codemason.cost.estimated";
+    /// Metric name for per-session cost (`codemason.cost.session`).
+    pub const COST_SESSION: &str = "codemason.cost.session";
+    /// Metric name for request rate-limit percentage (`codemason.rate_limit.requests_pct`).
+    pub const RATE_LIMIT_REQUESTS_PCT: &str = "codemason.rate_limit.requests_pct";
+    /// Metric name for token rate-limit percentage (`codemason.rate_limit.tokens_pct`).
+    pub const RATE_LIMIT_TOKENS_PCT: &str = "codemason.rate_limit.tokens_pct";
+
+    // -- Effectiveness metrics -----------------------------------------
+    /// Metric name for total errors (`codemason.errors.total`).
+    pub const ERRORS_TOTAL: &str = "codemason.errors.total";
+    /// Metric name for total timeouts (`codemason.timeouts.total`).
+    pub const TIMEOUTS_TOTAL: &str = "codemason.timeouts.total";
+    /// Metric name for permission denials (`codemason.permission.denied`).
+    pub const PERMISSION_DENIED: &str = "codemason.permission.denied";
+    /// Metric name for permission approvals (`codemason.permission.approved`).
+    pub const PERMISSION_APPROVED: &str = "codemason.permission.approved";
+    /// Metric name for context compression invocations (`codemason.context.compressions`).
+    pub const CONTEXT_COMPRESSIONS: &str = "codemason.context.compressions";
+    /// Metric name for context compression ratio (`codemason.context.compression_ratio`).
+    pub const CONTEXT_COMPRESSION_RATIO: &str = "codemason.context.compression_ratio";
+    /// Metric name for tool calls per session (`codemason.tool.calls_per_session`).
+    pub const TOOL_CALLS_PER_SESSION: &str = "codemason.tool.calls_per_session";
+    /// Metric name for task completions (`codemason.task.completions`).
+    pub const TASK_COMPLETIONS: &str = "codemason.task.completions";
+    /// Metric name for LLM retries (`codemason.retries.llm`).
+    pub const RETRIES_LLM: &str = "codemason.retries.llm";
+    /// Metric name for snapshot restores (`codemason.snapshot.restores`).
+    pub const SNAPSHOT_RESTORES: &str = "codemason.snapshot.restores";
+}
+
+/// Profiler bucket labels attached as `profile.bucket` to metrics that
+/// measure the same span as an agent-loop profiler scope.
+pub mod profile_buckets {
+    /// `codemason.llm.duration` covers the profiler's `loop.llm.total` scope.
+    pub const LLM_TOTAL: &str = "loop.llm.total";
+    /// `codemason.llm.time_to_first_token` covers `loop.llm.first_event_wait`.
+    pub const LLM_FIRST_EVENT_WAIT: &str = "loop.llm.first_event_wait";
+    /// `codemason.tool.duration` covers the profiler's `tool.total:<tool>` scopes.
+    pub const TOOL_TOTAL: &str = "tool.total";
+}
+
+/// A registry of all OTEL instruments defined in the otel spec Metric Catalog.
+///
+/// When the `telemetry` feature is enabled, instruments are backed by a real
+/// [`Meter`] from the live [`SdkMeterProvider`]. When the feature is disabled
+/// (or the subsystem is in [`Disabled`](crate::TelemetryState::Disabled) mode),
+/// instruments are no-op handles that discard all recorded data (FR-022,
+/// NFR-002).
+///
+/// All instrument handles are cheap to clone; the underlying SDK uses `Arc`
+/// internally, so passing clones around has no measurable cost.
+#[cfg(feature = "telemetry")]
+#[derive(Clone)]
+pub struct InstrumentRegistry {
+    /// Cardinality cache shared across all clones (FR-035).
+    /// Tracks distinct attribute combinations per metric and collapses
+    /// overflow into an `unknown` bucket.
+    cardinality: std::sync::Arc<CardinalityCache>,
+
+    /// Per-metric enable/disable toggles keyed by instrument name (FR-027).
+    ///
+    /// A metric absent from this map is enabled by default. A metric
+    /// present and set to `false` is disabled - recording calls to that
+    /// instrument are short-circuited by
+    /// [`is_metric_enabled`](Self::is_metric_enabled) before they reach the
+    /// underlying OTEL instrument, so the metric produces zero exported
+    /// data points.
+    metric_toggles: std::sync::Arc<std::collections::HashMap<String, bool>>,
+
+    // -- Usage: counters ------------------------------------------------
+    /// Total LLM API requests made by the harness (`codemason.llm.requests`).
+    pub llm_requests: opentelemetry::metrics::Counter<u64>,
+    /// Total number of sessions created (`codemason.sessions.total`).
+    pub sessions_total: opentelemetry::metrics::Counter<u64>,
+    /// Total user messages submitted (`codemason.messages.user`).
+    pub messages_user: opentelemetry::metrics::Counter<u64>,
+    /// Total tool invocations, tagged by `tool.name` (`codemason.tool.invocations`).
+    pub tool_invocations: opentelemetry::metrics::Counter<u64>,
+    /// Total sub-agent completions (`codemason.agents.completed`).
+    pub agents_completed: opentelemetry::metrics::Counter<u64>,
+    /// Total sub-agent spawn events (`codemason.subagent.spawns`).
+    pub subagent_spawns: opentelemetry::metrics::Counter<u64>,
+
+    // -- Usage: up/down counters ----------------------------------------
+    /// Currently active sessions (`codemason.sessions.active`).
+    pub sessions_active: opentelemetry::metrics::UpDownCounter<i64>,
+    /// Currently active sub-agents (`codemason.agents.active`).
+    pub agents_active: opentelemetry::metrics::UpDownCounter<i64>,
+
+    // -- Usage: gauges ---------------------------------------------------
+    /// Current number of team members (`codemason.team.members`).
+    pub team_members: opentelemetry::metrics::Gauge<i64>,
+
+    // -- Performance: histograms ---------------------------------------
+    /// LLM call wall-clock duration in ms, tagged by model and provider (`codemason.llm.duration`).
+    pub llm_duration: opentelemetry::metrics::Histogram<f64>,
+    /// Time to first token from LLM stream in ms, tagged by model (`codemason.llm.time_to_first_token`).
+    pub llm_ttft: opentelemetry::metrics::Histogram<f64>,
+    /// Tool execution wall-clock duration in ms, tagged by tool.name (`codemason.tool.duration`).
+    pub tool_duration: opentelemetry::metrics::Histogram<f64>,
+    /// Agent loop iteration duration in ms (`codemason.agent_loop.duration`).
+    pub agent_loop_duration: opentelemetry::metrics::Histogram<f64>,
+    /// Number of iterations in a completed agent loop (`codemason.agent_loop.iterations`).
+    pub agent_loop_iterations: opentelemetry::metrics::Histogram<u64>,
+    /// Session start-to-close wall-clock duration in ms (`codemason.session.duration`).
+    pub session_duration: opentelemetry::metrics::Histogram<f64>,
+    /// Time spent waiting for user permission on a tool call in ms (`codemason.tool.permission_wait`).
+    pub tool_permission_wait: opentelemetry::metrics::Histogram<f64>,
+    /// Agent-loop profiler scope duration in ms, tagged by `profile.operation`
+    /// and `profile.group` (`codemason.profile.duration`).
+    pub profile_duration: opentelemetry::metrics::Histogram<f64>,
+
+    // -- Cost: counters ------------------------------------------------
+    /// Input/prompt tokens consumed, tagged by model (`codemason.tokens.input`).
+    pub tokens_input: opentelemetry::metrics::Counter<u64>,
+    /// Output/completion tokens produced, tagged by model (`codemason.tokens.output`).
+    pub tokens_output: opentelemetry::metrics::Counter<u64>,
+    /// Cache-read tokens, tagged by model (`codemason.tokens.cache_read`).
+    pub tokens_cache_read: opentelemetry::metrics::Counter<u64>,
+    /// Cache-write tokens, tagged by model (`codemason.tokens.cache_write`).
+    pub tokens_cache_write: opentelemetry::metrics::Counter<u64>,
+    /// Estimated cost in USD, tagged by model and provider (`codemason.cost.estimated`).
+    pub cost_estimated: opentelemetry::metrics::Counter<f64>,
+
+    // -- Cost: histograms -----------------------------------------------
+    /// Total estimated cost per session in USD (`codemason.cost.session`).
+    pub cost_session: opentelemetry::metrics::Histogram<f64>,
+
+    // -- Cost: gauges --------------------------------------------------
+    /// Percentage of request quota consumed, tagged by provider (`codemason.rate_limit.requests_pct`).
+    pub rate_limit_requests_pct: opentelemetry::metrics::Gauge<f64>,
+    /// Percentage of token quota consumed, tagged by provider (`codemason.rate_limit.tokens_pct`).
+    pub rate_limit_tokens_pct: opentelemetry::metrics::Gauge<f64>,
+
+    // -- Effectiveness: counters -----------------------------------------
+    /// Total errors, tagged by component (`codemason.errors.total`).
+    pub errors_total: opentelemetry::metrics::Counter<u64>,
+    /// Total timeout events (`codemason.timeouts.total`).
+    pub timeouts_total: opentelemetry::metrics::Counter<u64>,
+    /// Permission denials, tagged by tool.name (`codemason.permission.denied`).
+    pub permission_denied: opentelemetry::metrics::Counter<u64>,
+    /// Permission approvals, tagged by tool.name (`codemason.permission.approved`).
+    pub permission_approved: opentelemetry::metrics::Counter<u64>,
+    /// Context compression pipeline invocations (`codemason.context.compressions`).
+    pub context_compressions: opentelemetry::metrics::Counter<u64>,
+    /// Completed sub-agent and team tasks (`codemason.task.completions`).
+    pub task_completions: opentelemetry::metrics::Counter<u64>,
+    /// LLM provider retry attempts, tagged by model (`codemason.retries.llm`).
+    pub retries_llm: opentelemetry::metrics::Counter<u64>,
+    /// Snapshot undo system restores (`codemason.snapshot.restores`).
+    pub snapshot_restores: opentelemetry::metrics::Counter<u64>,
+
+    // -- Effectiveness: histograms -------------------------------------
+    /// Context compression before/after token ratio (`codemason.context.compression_ratio`).
+    pub context_compression_ratio: opentelemetry::metrics::Histogram<f64>,
+    /// Tool call count per session (`codemason.tool.calls_per_session`).
+    pub tool_calls_per_session: opentelemetry::metrics::Histogram<u64>,
+}
+
+#[cfg(feature = "telemetry")]
+impl InstrumentRegistry {
+    /// Build the instrument registry from a live [`SdkMeterProvider`].
+    ///
+    /// Creates a [`Meter`] scoped to `"codemason"` and constructs every
+    /// instrument listed in the Metric Catalog with its correct name, unit,
+    /// and description (FR-003, FR-004).
+    #[must_use]
+    pub fn from_provider(provider: &opentelemetry_sdk::metrics::SdkMeterProvider) -> Self {
+        let meter = provider.meter("codemason");
+        Self::from_meter(meter)
+    }
+
+    /// Build the instrument registry from a genuinely no-op [`Meter`].
+    ///
+    /// Used when telemetry is disabled so all instrument calls are cheap
+    /// no-ops with zero overhead (FR-022, NFR-002).
+    ///
+    /// ANTIPAT HIGH-5: this previously built from
+    /// `opentelemetry::global::meter_provider()`. If any code (a test, another
+    /// library) had installed a global provider, `noop()` recordings would have
+    /// exported real data points, contradicting the zero-traffic guarantee.
+    /// The no-op provider is now an explicit, locally-owned SDK provider with a
+    /// discarding reader, so it can never export anything.
+    #[must_use]
+    pub fn noop() -> Self {
+        let provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder().build();
+        let meter = provider.meter("codemason");
+        Self::from_meter(meter)
+    }
+
+    /// Sets the cardinality limit for this registry (FR-035).
+    ///
+    /// Returns a new registry with a fresh [`CardinalityCache`] using the
+    /// given limit. This should be called after `from_provider` or
+    /// `from_meter` but before any recording occurs. The default limit is
+    /// [`DEFAULT_CARDINALITY_LIMIT`](crate::cardinality::DEFAULT_CARDINALITY_LIMIT)
+    /// (1000).
+    ///
+    /// NOTE: a per-call fresh cache only observes recordings made through the
+    /// returned registry, so a caller that builds a registry per tool call
+    /// never accumulates the cap. Prefer
+    /// [`with_shared_cardinality`](Self::with_shared_cardinality) when the
+    /// registry is short-lived (SEC-codemason-telemetry-003 / SECTASKS T-032).
+    #[must_use]
+    pub fn with_cardinality_limit(mut self, limit: usize) -> Self {
+        self.cardinality = std::sync::Arc::new(CardinalityCache::new(limit));
+        self
+    }
+
+    /// Use a process-wide shared cardinality cache (SEC-codemason-telemetry-003).
+    ///
+    /// The subsystem owns one [`CardinalityCache`] for the lifetime of the
+    /// provider and clones this `Arc` into every registry it hands out, so the
+    /// distinct-signature cap actually binds across all recorders.
+    #[must_use]
+    pub fn with_shared_cardinality(mut self, cache: std::sync::Arc<CardinalityCache>) -> Self {
+        self.cardinality = cache;
+        self
+    }
+
+    /// The cardinality cache this registry resolves attributes through, for
+    /// recorders that keep a single instrument rather than the whole registry.
+    pub(crate) fn shared_cardinality(&self) -> std::sync::Arc<CardinalityCache> {
+        std::sync::Arc::clone(&self.cardinality)
+    }
+
+    /// Sets the per-metric enable/disable toggles for this registry (FR-027).
+    ///
+    /// The map is keyed by instrument name (e.g. `"codemason.llm.requests"`).
+    /// A metric absent from the map is enabled by default; a metric present
+    /// and set to `false` is disabled. Disabled metrics short-circuit in
+    /// [`is_metric_enabled`](Self::is_metric_enabled) before any recording
+    /// reaches the underlying OTEL instrument, so the metric produces zero
+    /// exported data points and zero cardinality growth.
+    ///
+    /// This should be called after `from_provider` but before any recording
+    /// occurs. The default is an empty map (all metrics enabled).
+    #[must_use]
+    pub fn with_metric_toggles(mut self, toggles: std::collections::HashMap<String, bool>) -> Self {
+        self.metric_toggles = std::sync::Arc::new(toggles);
+        self
+    }
+
+    /// Returns `true` when the named metric is enabled (FR-027).
+    ///
+    /// A metric is enabled when it is **absent** from the toggles map or
+    /// present and set to `true`. A metric present and set to `false` is
+    /// disabled. Recorders call this before touching the underlying OTEL
+    /// instrument so disabled metrics produce zero exported data.
+    ///
+    /// This is a cheap `Arc`-cloned `HashMap` lookup; it never blocks and
+    /// never panics.
+    #[must_use]
+    pub fn is_metric_enabled(&self, metric_name: &str) -> bool {
+        match self.metric_toggles.get(metric_name) {
+            Some(enabled) => *enabled,
+            None => true,
+        }
+    }
+
+    /// Resolve a set of attributes for the given metric, applying the
+    /// cardinality cap (FR-035).
+    ///
+    /// If the attribute combination is already tracked for this metric,
+    /// the original attributes are returned unchanged. If the combination
+    /// is new and the per-metric limit has not been reached, the
+    /// combination is registered and the original attributes are returned.
+    /// If the limit has been reached, all attribute values are replaced
+    /// with `"unknown"`.
+    ///
+    /// This is called by the recorder methods before passing attributes to
+    /// the underlying OTEL instruments.
+    #[must_use]
+    pub fn resolve_attrs(&self, metric_name: &str, attrs: &[KeyValue]) -> Vec<KeyValue> {
+        self.cardinality.resolve(metric_name, attrs)
+    }
+
+    /// Construct all instruments from the given [`Meter`].
+    fn from_meter(meter: opentelemetry::metrics::Meter) -> Self {
+        use names::{
+            AGENT_LOOP_DURATION, AGENT_LOOP_ITERATIONS, AGENTS_ACTIVE, AGENTS_COMPLETED,
+            CONTEXT_COMPRESSION_RATIO, CONTEXT_COMPRESSIONS, COST_ESTIMATED, COST_SESSION,
+            ERRORS_TOTAL, LLM_DURATION, LLM_REQUESTS, LLM_TTFT, MESSAGES_USER, PERMISSION_APPROVED,
+            PERMISSION_DENIED, PROFILE_DURATION, RATE_LIMIT_REQUESTS_PCT, RATE_LIMIT_TOKENS_PCT,
+            RETRIES_LLM, SESSION_DURATION, SESSIONS_ACTIVE, SESSIONS_TOTAL, SNAPSHOT_RESTORES,
+            SUBAGENT_SPAWNS, TASK_COMPLETIONS, TEAM_MEMBERS, TIMEOUTS_TOTAL, TOKENS_CACHE_READ,
+            TOKENS_CACHE_WRITE, TOKENS_INPUT, TOKENS_OUTPUT, TOOL_CALLS_PER_SESSION, TOOL_DURATION,
+            TOOL_INVOCATIONS, TOOL_PERMISSION_WAIT,
+        };
+
+        // The metric toggles map defaults to empty (all metrics enabled).
+        // TelemetrySubsystem::instruments() calls with_metric_toggles() to
+        // wire the user's telemetry.otel.metrics config (FR-027).
+        let metric_toggles = std::sync::Arc::new(std::collections::HashMap::new());
+
+        // Collapses the repeated `meter.<method>(<name>).with_unit(<unit>)
+        // .with_description(<desc>).build()` pattern into one line per
+        // instrument (FR-003).
+        macro_rules! instrument {
+            ($method:ident, $name:expr, $unit:expr, $desc:expr) => {
+                meter
+                    .$method($name)
+                    .with_unit($unit)
+                    .with_description($desc)
+                    .build()
+            };
+        }
+
+        // -- Usage: counters --------------------------------------------
+        let llm_requests = instrument!(
+            u64_counter,
+            LLM_REQUESTS,
+            "{request}",
+            "Total LLM API requests made by the harness"
+        );
+        let sessions_total = instrument!(
+            u64_counter,
+            SESSIONS_TOTAL,
+            "{session}",
+            "Total number of sessions created"
+        );
+        let messages_user = instrument!(
+            u64_counter,
+            MESSAGES_USER,
+            "{message}",
+            "Total user messages submitted"
+        );
+        let tool_invocations = instrument!(
+            u64_counter,
+            TOOL_INVOCATIONS,
+            "{invocation}",
+            "Total tool invocations, tagged by tool.name"
+        );
+        let agents_completed = instrument!(
+            u64_counter,
+            AGENTS_COMPLETED,
+            "{agent}",
+            "Total sub-agent completions"
+        );
+        let subagent_spawns = instrument!(
+            u64_counter,
+            SUBAGENT_SPAWNS,
+            "{subagent}",
+            "Total sub-agent spawn events"
+        );
+
+        // -- Usage: up/down counters ------------------------------------
+        let sessions_active = instrument!(
+            i64_up_down_counter,
+            SESSIONS_ACTIVE,
+            "{session}",
+            "Currently active sessions"
+        );
+        let agents_active = instrument!(
+            i64_up_down_counter,
+            AGENTS_ACTIVE,
+            "{agent}",
+            "Currently active sub-agents"
+        );
+
+        // -- Usage: gauges ------------------------------------------
+        let team_members = instrument!(
+            i64_gauge,
+            TEAM_MEMBERS,
+            "{member}",
+            "Current number of team members"
+        );
+
+        // -- Performance: histograms -------------------------------------
+        let llm_duration = instrument!(
+            f64_histogram,
+            LLM_DURATION,
+            "ms",
+            "LLM call wall-clock duration, tagged by model and provider"
+        );
+        let llm_ttft = instrument!(
+            f64_histogram,
+            LLM_TTFT,
+            "ms",
+            "Time to first token from LLM stream, tagged by model"
+        );
+        let tool_duration = instrument!(
+            f64_histogram,
+            TOOL_DURATION,
+            "ms",
+            "Tool execution wall-clock duration, tagged by tool.name"
+        );
+        let agent_loop_duration = instrument!(
+            f64_histogram,
+            AGENT_LOOP_DURATION,
+            "ms",
+            "Agent loop iteration duration"
+        );
+        let agent_loop_iterations = instrument!(
+            u64_histogram,
+            AGENT_LOOP_ITERATIONS,
+            "{iteration}",
+            "Number of iterations in a completed agent loop"
+        );
+        let session_duration = instrument!(
+            f64_histogram,
+            SESSION_DURATION,
+            "ms",
+            "Session start-to-close wall-clock duration"
+        );
+        let tool_permission_wait = instrument!(
+            f64_histogram,
+            TOOL_PERMISSION_WAIT,
+            "ms",
+            "Time spent waiting for user permission on a tool call"
+        );
+        let profile_duration = instrument!(
+            f64_histogram,
+            PROFILE_DURATION,
+            "ms",
+            "Agent-loop profiler scope duration, tagged by profile.operation and profile.group"
+        );
+
+        // -- Cost: counters -------------------------------------------
+        let tokens_input = instrument!(
+            u64_counter,
+            TOKENS_INPUT,
+            "{token}",
+            "Input tokens, tagged by model"
+        );
+        let tokens_output = instrument!(
+            u64_counter,
+            TOKENS_OUTPUT,
+            "{token}",
+            "Output tokens, tagged by model"
+        );
+        let tokens_cache_read = instrument!(
+            u64_counter,
+            TOKENS_CACHE_READ,
+            "{token}",
+            "Cache-read tokens, tagged by model"
+        );
+        let tokens_cache_write = instrument!(
+            u64_counter,
+            TOKENS_CACHE_WRITE,
+            "{token}",
+            "Cache-write tokens, tagged by model"
+        );
+        let cost_estimated = instrument!(
+            f64_counter,
+            COST_ESTIMATED,
+            "USD",
+            "Estimated cost in USD, tagged by model and provider"
+        );
+
+        // -- Cost: histograms -------------------------------------------
+        let cost_session = instrument!(
+            f64_histogram,
+            COST_SESSION,
+            "USD",
+            "Total estimated cost per session"
+        );
+
+        // -- Cost: gauges ----------------------------------------------
+        let rate_limit_requests_pct = instrument!(
+            f64_gauge,
+            RATE_LIMIT_REQUESTS_PCT,
+            "%",
+            "Percentage of request quota consumed, tagged by provider"
+        );
+        let rate_limit_tokens_pct = instrument!(
+            f64_gauge,
+            RATE_LIMIT_TOKENS_PCT,
+            "%",
+            "Percentage of token quota consumed, tagged by provider"
+        );
+
+        // -- Effectiveness: counters -----------------------------------
+        let errors_total = instrument!(
+            u64_counter,
+            ERRORS_TOTAL,
+            "{error}",
+            "Total errors, tagged by component"
+        );
+        let timeouts_total = instrument!(
+            u64_counter,
+            TIMEOUTS_TOTAL,
+            "{timeout}",
+            "Total timeout events"
+        );
+        let permission_denied = instrument!(
+            u64_counter,
+            PERMISSION_DENIED,
+            "{denial}",
+            "Permission denials, tagged by tool.name"
+        );
+        let permission_approved = instrument!(
+            u64_counter,
+            PERMISSION_APPROVED,
+            "{approval}",
+            "Permission approvals, tagged by tool.name"
+        );
+        let context_compressions = instrument!(
+            u64_counter,
+            CONTEXT_COMPRESSIONS,
+            "{compression}",
+            "Context compression pipeline invocations"
+        );
+        let task_completions = instrument!(
+            u64_counter,
+            TASK_COMPLETIONS,
+            "{task}",
+            "Completed sub-agent and team tasks"
+        );
+        let retries_llm = instrument!(
+            u64_counter,
+            RETRIES_LLM,
+            "{retry}",
+            "LLM provider retry attempts, tagged by model"
+        );
+        let snapshot_restores = instrument!(
+            u64_counter,
+            SNAPSHOT_RESTORES,
+            "{restore}",
+            "Snapshot undo system restores"
+        );
+
+        // -- Effectiveness: histograms -----------------------------------
+        let context_compression_ratio = instrument!(
+            f64_histogram,
+            CONTEXT_COMPRESSION_RATIO,
+            "%",
+            "Context compression before/after token ratio"
+        );
+        let tool_calls_per_session = instrument!(
+            u64_histogram,
+            TOOL_CALLS_PER_SESSION,
+            "{call}",
+            "Tool call count per session"
+        );
+
+        Self {
+            cardinality: std::sync::Arc::new(CardinalityCache::default()),
+            metric_toggles,
+            llm_requests,
+            sessions_total,
+            messages_user,
+            tool_invocations,
+            agents_completed,
+            subagent_spawns,
+            sessions_active,
+            agents_active,
+            team_members,
+            llm_duration,
+            llm_ttft,
+            tool_duration,
+            agent_loop_duration,
+            agent_loop_iterations,
+            session_duration,
+            tool_permission_wait,
+            profile_duration,
+            tokens_input,
+            tokens_output,
+            tokens_cache_read,
+            tokens_cache_write,
+            cost_estimated,
+            cost_session,
+            rate_limit_requests_pct,
+            rate_limit_tokens_pct,
+            errors_total,
+            timeouts_total,
+            permission_denied,
+            permission_approved,
+            context_compressions,
+            task_completions,
+            retries_llm,
+            snapshot_restores,
+            context_compression_ratio,
+            tool_calls_per_session,
+        }
+    }
+    /// Build a sanitised metric attribute for `key`, replacing any sensitive
+    /// `name` with `"redacted"` before it reaches the exporter (FR-034).
+    ///
+    /// The value is passed through [`crate::sensitive::sanitize_attr_value`] so
+    /// a caller that accidentally passes a sensitive string (e.g. an API key or
+    /// a chunk of file content) has it redacted rather than exported as a
+    /// metric attribute.
+    fn sanitized_attr(key: &'static str, name: &str) -> KeyValue {
+        KeyValue::new(key, crate::sensitive::sanitize_attr_value(name))
+    }
+
+    /// Returns the [`KeyValue`] attribute for a tool name, suitable for
+    /// tagging instrument calls.
+    ///
+    /// SEC-052: `tool.name` is model-controlled, so it is validated against the
+    /// conservative allow-list in [`crate::sensitive::sanitize_tool_name`]
+    /// rather than the deny-list [`Self::sanitized_attr`] uses. A value that is
+    /// not a plausible tool-name shape is replaced with `"unknown"` before it
+    /// reaches the exporter.
+    #[must_use]
+    pub fn attr_tool(name: &str) -> KeyValue {
+        KeyValue::new("tool.name", crate::sensitive::sanitize_tool_name(name))
+    }
+
+    /// Returns the [`KeyValue`] attribute for a model name.
+    ///
+    /// Sanitised via [`Self::sanitized_attr`] (FR-034).
+    #[must_use]
+    pub fn attr_model(name: &str) -> KeyValue {
+        Self::sanitized_attr("model", name)
+    }
+
+    /// Returns the [`KeyValue`] attribute for a provider name.
+    ///
+    /// Sanitised via [`Self::sanitized_attr`] (FR-034).
+    #[must_use]
+    pub fn attr_provider(name: &str) -> KeyValue {
+        Self::sanitized_attr("provider", name)
+    }
+
+    /// Returns the [`KeyValue`] attribute for a component name (used by
+    /// `codemason.errors.total`).
+    ///
+    /// Sanitised via [`Self::sanitized_attr`] (FR-034).
+    #[must_use]
+    pub fn attr_component(name: &str) -> KeyValue {
+        Self::sanitized_attr("component", name)
+    }
+
+    /// Returns the `profile.bucket` attribute naming the profiler bucket a
+    /// non-profiler metric corresponds to (e.g. `codemason.llm.duration` ->
+    /// `loop.llm.total`), so the two can be correlated in a dashboard.
+    ///
+    /// `bucket` is always one of the static [`profile_buckets`] constants, so
+    /// no sanitisation is needed.
+    #[must_use]
+    pub fn attr_profile_bucket(bucket: &'static str) -> KeyValue {
+        KeyValue::new("profile.bucket", bucket)
+    }
+
+    /// Returns the attributes for one profiler sample on
+    /// `codemason.profile.duration`.
+    ///
+    /// * `profile.operation` - the full profiler label, with any `:<tool>`
+    ///   suffix passed through [`crate::sensitive::sanitize_tool_name`]
+    ///   (e.g. `tool.total:bash`).
+    /// * `profile.group` - the label minus its last dot segment and any
+    ///   `:<tool>` suffix (e.g. `loop.llm.stream` -> `loop.llm`,
+    ///   `tool.total:bash` -> `tool`).
+    /// * `tool.name` - present only when the label carries a `:<tool>` suffix.
+    ///
+    /// # Arguments
+    ///
+    /// * `label` - The profiler operation label.
+    #[must_use]
+    pub fn profile_attrs(label: &str) -> Vec<KeyValue> {
+        let (base, tool) = match label.split_once(':') {
+            Some((base, tool)) => (base, Some(crate::sensitive::sanitize_tool_name(tool))),
+            None => (label, None),
+        };
+        let base = crate::sensitive::sanitize_attr_value(base);
+        let group = base
+            .rsplit_once('.')
+            .map_or_else(|| base.clone(), |(group, _)| group.to_string());
+        let operation = match &tool {
+            Some(tool) => format!("{base}:{tool}"),
+            None => base,
+        };
+        let mut attrs = vec![
+            KeyValue::new("profile.operation", operation),
+            KeyValue::new("profile.group", group),
+        ];
+        if let Some(tool) = tool {
+            attrs.push(KeyValue::new("tool.name", tool));
+        }
+        attrs
+    }
+
+    /// Returns the [`KeyValue`] attribute for a session ID (FR-025).
+    ///
+    /// `service.name`, `service.version`, and `host.name` are static resource
+    /// attributes set at provider construction, while `session.id` is dynamic -
+    /// it changes per session - so it is attached as a metric attribute rather
+    /// than a resource attribute. Callers include it in the `attributes` slice
+    /// when recording metrics within a specific session context.
+    ///
+    /// # Status: not yet applied by a production recorder (ANTIPAT M5.2, MEDIUM-6)
+    ///
+    /// No production recorder threads a session id into its instrument calls
+    /// yet. The session-scoped [`SessionRecorder`](crate::recorder::SessionRecorder)
+    /// methods do not receive a session id, and the call sites that hold one
+    /// live in the `codemason-agent` crate - so wiring `session.id` through them
+    /// requires a cross-crate API change that is out of scope for this crate's
+    /// cleanup. The helper is retained (and hidden from the rendered docs) as
+    /// the sanctioned FR-025 attribute source for that follow-up; the attribute
+    /// is covered directly by `tests/test_resource_attributes.rs` and
+    /// `tests/test_sensitive_data_guard.rs`.
+    ///
+    /// Sanitised via [`crate::sensitive::sanitize_attr_value`] (FR-034).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn attr_session(id: &str) -> KeyValue {
+        KeyValue::new("session.id", crate::sensitive::sanitize_attr_value(id))
+    }
+}
+
+// -- No-op stub when `telemetry` feature is off -------------------------
+
+/// A no-op instrument registry that discards all recorded metrics.
+///
+/// This is used when the `telemetry` Cargo feature is not enabled. It
+/// provides the same public fields as the feature-gated
+/// [`InstrumentRegistry`](crate::InstrumentRegistry) but all methods are
+/// no-ops. In practice, when the feature is off, callers should not hold
+/// an `InstrumentRegistry` at all - the [`TelemetrySubsystem`] returns
+/// `None` from `instruments()`.
+#[cfg(not(feature = "telemetry"))]
+pub struct NoopInstrumentRegistry;
+
+#[cfg(not(feature = "telemetry"))]
+impl NoopInstrumentRegistry {
+    /// Create a new no-op instrument registry.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[cfg(not(feature = "telemetry"))]
+impl Default for NoopInstrumentRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// -- Tests --------------------------------------------------------------
+
+#[cfg(all(test, feature = "telemetry"))]
+#[path = "../tests/inline/instruments_tests.rs"]
+mod tests;

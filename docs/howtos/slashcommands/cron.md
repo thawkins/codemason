@@ -11,7 +11,7 @@ survive restarts. Each run's outcome is recorded in a cron log that `/cron log`
 can display.
 
 The prompt argument must be enclosed in double quotes. Schedules are parsed by
-`ragent_types::parse_schedule` and stored with `storage.insert_cron_event`.
+`codemason_types::parse_schedule` and stored with `storage.insert_cron_event`.
 
 ## Syntax
 
@@ -100,4 +100,4 @@ Timestamp/Event/Agent/Outcome/Prompt table read from the cron log.
 
 - `/inbox`  -  findings produced by stateful cron runs
 - `/task`  -  session task tracking
-- ragent-tools-core cron logging (`read_cron_log`)
+- codemason-tools-core cron logging (`read_cron_log`)

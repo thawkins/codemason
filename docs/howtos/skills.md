@@ -22,7 +22,7 @@ that should live with it in version control.
 
 ### Discovery
 
-At session start ragent scans a fixed, ordered list of directories. Every
+At session start codemason scans a fixed, ordered list of directories. Every
 immediate subdirectory that contains a `SKILL.md` is one skill; the
 subdirectory name is the skill's default name. Subdirectories without a
 `SKILL.md` are skipped silently, and a pack whose frontmatter does not parse is
@@ -34,11 +34,11 @@ The scan order is also the precedence order, lowest priority first:
 |---|-------|-----------|-------|
 | 1 | `bundled` | compiled into the binary | `simplify`, `batch`, `debug`, `loop` |
 | 2 | `openskills-global` | `~/.agents/skills/`, `~/.agent/skills/`, `~/.claude/skills/` | AgentSkills convention and its OpenSkills siblings |
-| 3 | `personal` | `~/.config/ragent/skills/` | shared by every project for this user |
-| 4 | `personal` | each `skill_dirs` entry from `ragent.json` | a configured extra root |
+| 3 | `personal` | `~/.config/codemason/skills/` | shared by every project for this user |
+| 4 | `personal` | each `skill_dirs` entry from `codemason.json` | a configured extra root |
 | 5 | `openskills-project` | `.agents/skills/`, `.agent/skills/`, `.claude/skills/` under the working directory | |
-| 6 | `project` | `.ragent/skills/` under the working directory | |
-| 7 | `project` | `<subdir>/.ragent/skills/` for each first-level subdirectory | monorepo support |
+| 6 | `project` | `.codemason/skills/` under the working directory | |
+| 7 | `project` | `<subdir>/.codemason/skills/` for each first-level subdirectory | monorepo support |
 
 Skill directories contributed by **enabled plugins** are appended to the
 configured `skill_dirs` list, so a plugin's packs are discovered by the same
@@ -49,7 +49,7 @@ scan. See [plugins.md](plugins.md) for the plugin side.
 On a clash a higher-numbered scope wins outright. Within one scope the first
 pack registered wins, which is why the order above matters: a project pack
 `deploy` overrides a personal `deploy`, which overrides a bundled `deploy`, and
-a ragent-native directory wins over an AgentSkills directory at the same level.
+a codemason-native directory wins over an AgentSkills directory at the same level.
 The `scope` column in `/skill` shows which one you actually got.
 
 ### Lazy loading
@@ -79,10 +79,10 @@ Put the pack in the scope you want. For a pack that only makes sense in this
 repository use the project scope:
 
 ```bash
-mkdir -p .ragent/skills/deploy
+mkdir -p .codemason/skills/deploy
 ```
 
-Use `~/.config/ragent/skills/deploy` for a pack you want in every project.
+Use `~/.config/codemason/skills/deploy` for a pack you want in every project.
 
 ### 2. Write `SKILL.md`
 
@@ -122,7 +122,7 @@ Fetch the open PRs and produce a table of title, author, age, and CI status.
 Anything else in the directory is yours to use. Conventional subdirectories:
 
 ```
-.ragent/skills/deploy/
+.codemason/skills/deploy/
   SKILL.md          # required
   scripts/          # helper scripts the instructions call
   templates/        # files the agent fills in
@@ -130,7 +130,7 @@ Anything else in the directory is yours to use. Conventional subdirectories:
   resources/        # reference material
 ```
 
-Refer to them from the body with the `${RAGENT_SKILL_DIR}` placeholder so the
+Refer to them from the body with the `${CODEMASON_SKILL_DIR}` placeholder so the
 instructions work wherever the pack is installed.
 
 ### 4. Verify it loads
@@ -219,8 +219,8 @@ Substituted in this order every time the skill is invoked:
 
 | Placeholder | Replaced with | Example |
 |---|---|---|
-| `${RAGENT_SESSION_ID}` | the current session id | `sess-01H...` |
-| `${RAGENT_SKILL_DIR}` | absolute path to the directory holding `SKILL.md` | `/repo/.ragent/skills/deploy` |
+| `${CODEMASON_SESSION_ID}` | the current session id | `sess-01H...` |
+| `${CODEMASON_SKILL_DIR}` | absolute path to the directory holding `SKILL.md` | `/repo/.codemason/skills/deploy` |
 | `$ARGUMENTS[N]` | argument N, 0-based | `$ARGUMENTS[0]` |
 | `$ARGUMENTS` | the whole argument string, verbatim | `/deploy staging prod` -> `staging prod` |
 | `$N` | shorthand for `$ARGUMENTS[N]` | `$0`, `$1` |
@@ -286,7 +286,7 @@ The `Skill` tool exposes the same surface to the agent itself:
 
 ## Worked example
 
-`.ragent/skills/release-notes/SKILL.md`:
+`.codemason/skills/release-notes/SKILL.md`:
 
 ```markdown
 ---

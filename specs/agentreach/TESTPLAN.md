@@ -5,12 +5,12 @@ status: draft
 
 This manual test plan validates the `agentreach` specification (`SPEC.md`).
 Each test case is designed to be executed by a human tester with access to the
-ragent TUI, CLI, HTTP server, and a working build of the `ragent-reach` crate.
+codemason TUI, CLI, HTTP server, and a working build of the `codemason-reach` crate.
 
 Preconditions common to all test cases:
-- A debug build of ragent with the `reach` Cargo feature enabled (`cargo build`).
+- A debug build of codemason with the `reach` Cargo feature enabled (`cargo build`).
 - An in-memory or temporary-file storage backend available for credential
-  isolation (tests must never touch the real user `ragent.db`).
+  isolation (tests must never touch the real user `codemason.db`).
 - A configured LLM provider (any) for tests that require the agent loop.
 
 ## Test Cases
@@ -18,11 +18,11 @@ Preconditions common to all test cases:
 ### TC-001 — Reach tools registered and visible by default
 
 **Preconditions:**
-- ragent is built with the `reach` feature on (default).
-- `tool_visibility.reach` is not set in `ragent.json` (defaults to `true`).
+- codemason is built with the `reach` feature on (default).
+- `tool_visibility.reach` is not set in `codemason.json` (defaults to `true`).
 
 **Steps:**
-1. Launch the ragent TUI: `ragent`.
+1. Launch the codemason TUI: `codemason`.
 2. Type `/tools` or open the tool-list view.
 3. Search for `reach_` in the tool list.
 
@@ -43,14 +43,14 @@ Preconditions common to all test cases:
 ### TC-002 — Reach tools hidden when `tool_visibility.reach` is false
 
 **Preconditions:**
-- `ragent.json` contains `"tool_visibility": { "reach": false }`.
+- `codemason.json` contains `"tool_visibility": { "reach": false }`.
 
 **Steps:**
-1. Launch the ragent TUI: `ragent`.
+1. Launch the codemason TUI: `codemason`.
 2. Type `/tools` or open the tool-list view.
 3. Search for `reach_` in the tool list.
 
-**Test data:** `ragent.json` with `tool_visibility.reach = false`.
+**Test data:** `codemason.json` with `tool_visibility.reach = false`.
 
 **Expected results:**
 - No `reach_*` tool appears in the tool list or is offered to the LLM.
@@ -62,12 +62,12 @@ Preconditions common to all test cases:
 ### TC-003 — Feature-gated build compiles without the `reach` feature
 
 **Preconditions:**
-- A clean checkout of the ragent source.
+- A clean checkout of the codemason source.
 
 **Steps:**
-1. Run: `cargo build --no-default-features -p ragent-tools-extended` (or the
+1. Run: `cargo build --no-default-features -p codemason-tools-extended` (or the
    workspace equivalent that disables the `reach` feature).
-2. Run: `ragent --no-tui run "list available tools"` and inspect the output.
+2. Run: `codemason --no-tui run "list available tools"` and inspect the output.
 
 **Test data:** None.
 
@@ -82,7 +82,7 @@ Preconditions common to all test cases:
 
 **Preconditions:**
 - No platform credentials configured.
-- ragent TUI is running.
+- codemason TUI is running.
 
 **Steps:**
 1. Invoke `reach_doctor` by typing: `/tool reach_doctor` (or asking the agent
@@ -127,7 +127,7 @@ Preconditions common to all test cases:
 ### TC-006 — `reach_credentials set` persists without echoing the secret
 
 **Preconditions:**
-- ragent TUI is running.
+- codemason TUI is running.
 - In-memory storage is configured.
 
 **Steps:**
@@ -152,7 +152,7 @@ Preconditions common to all test cases:
 
 **Preconditions:**
 - `reach::twitter::bearer_token` is stored.
-- ragent TUI is running.
+- codemason TUI is running.
 
 **Steps:**
 1. Invoke: `reach_credentials set twitter bearer_token sk-original`.
@@ -295,10 +295,10 @@ Preconditions common to all test cases:
 ### TC-014 — Credential store uses `StorageBackend` trait only (no raw SQL)
 
 **Preconditions:**
-- The `ragent-reach` source code is available for inspection.
+- The `codemason-reach` source code is available for inspection.
 
 **Steps:**
-1. Search all `.rs` files under `crates/ragent-reach/src/` for the strings
+1. Search all `.rs` files under `crates/codemason-reach/src/` for the strings
    `CREATE TABLE`, `ALTER TABLE`, `CREATE INDEX`, `rusqlite`, `SELECT `,
    `INSERT `, `DELETE FROM`, `UPDATE `.
 2. Inspect the `ReachCredentialStore` implementation for storage calls.
@@ -308,7 +308,7 @@ Preconditions common to all test cases:
 **Expected results:**
 - No SQL DDL strings (`CREATE TABLE`, `ALTER TABLE`, `CREATE INDEX`, `CREATE
   VIEW`, `CREATE TRIGGER`, `ADD COLUMN`, `DROP COLUMN`, `migration`,
-  `migrate`) appear in any `.rs` file under `crates/ragent-reach/src/`.
+  `migrate`) appear in any `.rs` file under `crates/codemason-reach/src/`.
 - No direct `rusqlite` calls appear in reach code.
 - All credential reads/writes/deletes go through `get_provider_auth`,
   `set_provider_auth`, `delete_provider_auth`, `get_setting`, `set_setting`,
@@ -412,7 +412,7 @@ Preconditions common to all test cases:
 
 **Preconditions:**
 - At least one reach credential is stored.
-- ragent TUI or CLI is running.
+- codemason TUI or CLI is running.
 
 **Steps:**
 1. Invoke `reach_credentials` with action `list`.
@@ -427,7 +427,7 @@ Preconditions common to all test cases:
 - Step 2: no `dump`, `export`, `export-all`, or `get-all-credentials` action
   exists. The tool returns an "unknown action" error for each.
 - Step 3: `reach_doctor` output contains no decrypted credential plaintext.
-- A source audit confirms no `.rs` file under `crates/ragent-reach/src/`
+- A source audit confirms no `.rs` file under `crates/codemason-reach/src/`
   contains the strings `dump`, `export_all`, or `get_all_credentials`.
 
 ---
@@ -481,10 +481,10 @@ Preconditions common to all test cases:
 ### TC-022 — Reach uses shared `ToolContext.storage`, not its own `Storage::open`
 
 **Preconditions:**
-- The `ragent-reach` source code is available for inspection.
+- The `codemason-reach` source code is available for inspection.
 
 **Steps:**
-1. Search all `.rs` files under `crates/ragent-reach/src/` for the strings
+1. Search all `.rs` files under `crates/codemason-reach/src/` for the strings
    `Storage::open`, `Storage::open_in_memory`, `open(`.
 2. Inspect the `ReachStorageProvider` and `ReachCredentialStore` for how they
    obtain the `Storage` handle.
@@ -492,12 +492,12 @@ Preconditions common to all test cases:
 **Test data:** None.
 
 **Expected results:**
-- No production code path under `crates/ragent-reach/src/` calls
+- No production code path under `crates/codemason-reach/src/` calls
   `Storage::open` or `Storage::open_in_memory`.
 - The `Storage` handle is obtained from `ToolContext.storage` (the session's
   shared `Arc`).
-- Test code under `crates/ragent-reach/tests/` may use
-  `Storage::open_in_memory()` but no test resolves the real user `ragent.db`
+- Test code under `crates/codemason-reach/tests/` may use
+  `Storage::open_in_memory()` but no test resolves the real user `codemason.db`
   path.
 
 ---
@@ -600,11 +600,11 @@ Preconditions common to all test cases:
 ### TC-027 — `ReachCredentialStore` is the sole credential facade
 
 **Preconditions:**
-- The `ragent-reach` source code is available for inspection.
+- The `codemason-reach` source code is available for inspection.
 
 **Steps:**
-1. Search all `.rs` files under `crates/ragent-reach/src/channels/` and
-   `crates/ragent-reach/src/backends/` for the strings `provider_auth`,
+1. Search all `.rs` files under `crates/codemason-reach/src/channels/` and
+   `crates/codemason-reach/src/backends/` for the strings `provider_auth`,
    `set_setting`, `get_setting`, `set_provider_auth`, `get_provider_auth`,
    `delete_provider_auth`.
 2. Inspect the `Storage` / `StorageBackend` handle accessibility outside
@@ -624,20 +624,20 @@ Preconditions common to all test cases:
 ### TC-028 — Secret-free audit events on credential I/O
 
 **Preconditions:**
-- Tracing is enabled with `RUST_LOG=ragent_reach::credentials=debug`.
+- Tracing is enabled with `RUST_LOG=codemason_reach::credentials=debug`.
 - A known test secret is stored.
 
 **Steps:**
 1. Invoke `reach_credentials set twitter bearer_token sk-known-test-secret`.
 2. Invoke `reach_credentials list`.
 3. Invoke `reach_credentials delete twitter`.
-4. Inspect the tracing log output for `ragent_reach::credentials` events.
+4. Inspect the tracing log output for `codemason_reach::credentials` events.
 
 **Test data:** `bearer_token` = `sk-known-test-secret`.
 
 **Expected results:**
 - Each operation (`set`, `list`, `delete`) emits a `tracing::debug!` event
-  with `target = "ragent_reach::credentials"`.
+  with `target = "codemason_reach::credentials"`.
 - Each event records the operation type and the `ReachCredentialKey` name.
 - No event includes the credential value `sk-known-test-secret`, masked or
   otherwise.
@@ -650,23 +650,23 @@ Preconditions common to all test cases:
 
 **Preconditions:**
 - A reach credential is stored in the shared `provider_auth` table.
-- The `ragent-reach` source code is available for inspection.
+- The `codemason-reach` source code is available for inspection.
 
 **Steps:**
-1. Start a ragent session (triggers `seed_secret_registry` on the shared
+1. Start a codemason session (triggers `seed_secret_registry` on the shared
    `Storage`).
 2. Produce a log line that would contain the credential plaintext if not
    redacted.
-3. Search all `.rs` files under `crates/ragent-reach/src/` for the string
+3. Search all `.rs` files under `crates/codemason-reach/src/` for the string
    `seed_secret_registry`.
 
 **Test data:** Any stored reach credential.
 
 **Expected results:**
-- Step 2: the credential plaintext is redacted by `ragent_storage::sanitize`
+- Step 2: the credential plaintext is redacted by `codemason_storage::sanitize`
   (it was seeded into the redaction registry at startup by the existing
   `seed_secret_registry` call).
-- Step 3: no `.rs` file under `crates/ragent-reach/src/` contains
+- Step 3: no `.rs` file under `crates/codemason-reach/src/` contains
   `seed_secret_registry`. Reach does not implement its own startup seeding.
 
 ---
@@ -674,10 +674,10 @@ Preconditions common to all test cases:
 ### TC-030 — Zero SQLite schema footprint in reach crate
 
 **Preconditions:**
-- The `ragent-reach` source code is available for inspection.
+- The `codemason-reach` source code is available for inspection.
 
 **Steps:**
-1. Search all `.rs` files under `crates/ragent-reach/src/` for the SQL strings:
+1. Search all `.rs` files under `crates/codemason-reach/src/` for the SQL strings:
    `CREATE TABLE`, `ALTER TABLE`, `CREATE INDEX`, `CREATE VIEW`,
    `CREATE TRIGGER`, `ADD COLUMN`, `DROP COLUMN`, `migration`, `migrate`.
 2. Inspect the database schema before and after a reach credential is stored.
@@ -686,9 +686,9 @@ Preconditions common to all test cases:
 
 **Expected results:**
 - Step 1: none of the listed SQL strings appear in any `.rs` file under
-  `crates/ragent-reach/src/`.
+  `crates/codemason-reach/src/`.
 - Step 2: the set of tables, columns, indexes, views, and triggers in the
-  shared `ragent.db` is identical before and after the reach credential
+  shared `codemason.db` is identical before and after the reach credential
   operation. Reach uses only the existing `provider_auth` and `settings`
   tables.
 
@@ -697,7 +697,7 @@ Preconditions common to all test cases:
 ### TC-031 — Async non-blocking: reach tools do not block the executor
 
 **Preconditions:**
-- ragent is running with the agent loop active.
+- codemason is running with the agent loop active.
 - A slow storage backend or a simulated delay in SQLite is configured.
 
 **Steps:**
@@ -741,46 +741,46 @@ Preconditions common to all test cases:
 ### TC-033 — Test isolation from the real user database
 
 **Preconditions:**
-- The `ragent-reach` test suite source is available for inspection.
+- The `codemason-reach` test suite source is available for inspection.
 
 **Steps:**
-1. Inspect every test file under `crates/ragent-reach/tests/`.
+1. Inspect every test file under `crates/codemason-reach/tests/`.
 2. Verify each test constructs its own storage via `Storage::open_in_memory()`
    or a unique file under `target/temp/`.
-3. Search for any reference to the real user `ragent.db` path or the default
+3. Search for any reference to the real user `codemason.db` path or the default
    storage path.
 
 **Test data:** None.
 
 **Expected results:**
 - No test resolves the default user database path.
-- No test opens, reads, or mutates the user's real `ragent.db`.
+- No test opens, reads, or mutates the user's real `codemason.db`.
 - Every test uses an isolated in-memory or temporary-file storage.
 - A CI-safe guard test asserts the test harness never passes the real
-  `ragent.db` path to `Storage::open`.
+  `codemason.db` path to `Storage::open`.
 
 ---
 
-### TC-034 — No new cryptographic code in `ragent-reach`
+### TC-034 — No new cryptographic code in `codemason-reach`
 
 **Preconditions:**
-- The `ragent-reach` source code is available for inspection.
+- The `codemason-reach` source code is available for inspection.
 
 **Steps:**
-1. Search all `.rs` files under `crates/ragent-reach/src/` for the strings
+1. Search all `.rs` files under `crates/codemason-reach/src/` for the strings
    `aes`, `gcm`, `blake3`, `chacha`, `argon2`, `pbkdf`, `scrypt`, `ring::`,
    `openssl`, `Encrypt`, `Cipher`.
-2. Inspect the `Cargo.toml` of `ragent-reach` for crypto-related dependencies.
+2. Inspect the `Cargo.toml` of `codemason-reach` for crypto-related dependencies.
 
 **Test data:** None.
 
 **Expected results:**
 - No cryptographic primitive implementation appears in reach source.
 - `Cargo.toml` does not list any crypto crate as a direct dependency.
-- All encryption is delegated to `ragent-storage` via `set_provider_auth` /
+- All encryption is delegated to `codemason-storage` via `set_provider_auth` /
   `get_provider_auth`.
 - The at-rest cipher is the v2 blake3-derived keystream (`encrypt_key`)
-  implemented in `ragent-storage`, not AES-GCM (NFR-007 clarifies NFR-003).
+  implemented in `codemason-storage`, not AES-GCM (NFR-007 clarifies NFR-003).
 
 ---
 
@@ -788,7 +788,7 @@ Preconditions common to all test cases:
 
 **Preconditions:**
 - Network access is available.
-- ragent TUI is running.
+- codemason TUI is running.
 
 **Steps:**
 1. Invoke `reach_web_read` with a public URL.
@@ -872,12 +872,12 @@ Preconditions common to all test cases:
 ### TC-039 — Zero-warnings build and clippy clean
 
 **Preconditions:**
-- A clean checkout of the ragent source.
+- A clean checkout of the codemason source.
 
 **Steps:**
-1. Run: `cargo build -p ragent-reach`.
-2. Run: `cargo clippy -p ragent-reach`.
-3. Run: `cargo clippy -p ragent-tools-extended`.
+1. Run: `cargo build -p codemason-reach`.
+2. Run: `cargo clippy -p codemason-reach`.
+3. Run: `cargo clippy -p codemason-tools-extended`.
 
 **Test data:** None.
 
@@ -892,7 +892,7 @@ Preconditions common to all test cases:
 
 **Preconditions:**
 - A reach credential is stored.
-- The `ragent-reach` source code is available for inspection or debug
+- The `codemason-reach` source code is available for inspection or debug
   tracing is enabled.
 
 **Steps:**

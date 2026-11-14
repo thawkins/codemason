@@ -22,7 +22,7 @@ and each encoder that reads a field is a later task.
 
 ## 2. What is in the tree
 
-`crates/ragent-llm/src/providers/wire/mod.rs` declares the contract:
+`crates/codemason-llm/src/providers/wire/mod.rs` declares the contract:
 
 | Item | Shape | Purpose |
 |---|---|---|
@@ -45,7 +45,7 @@ test:
    is what makes FR-002's compile-time clause true rather than aspirational: a
    client that does not state a profile has nothing to inherit, and a provider
    registered without a row in
-   [`PROVIDER_WIRE`](../../crates/ragent-llm/src/providers/wire/profile_table.rs)
+   [`PROVIDER_WIRE`](../../crates/codemason-llm/src/providers/wire/profile_table.rs)
    fails T-003's coverage assertion instead of encoding with a plausible guess.
 2. **It is not configuration.** No field carries a serde attribute and the type is
    not deserialised: a profile is a statement of what a provider's wire format
@@ -81,13 +81,13 @@ declaration doubles as the map from decision to feature.
 
 ## 4. Proof
 
-`crates/ragent-llm/tests/test_wire_profile.rs` grew from 9 to 12 cases (255 added
+`crates/codemason-llm/tests/test_wire_profile.rs` grew from 9 to 12 cases (255 added
 lines). The three new cases pin the properties a value-level test cannot reach:
 
 | Case | Asserts |
 |---|---|
 | `..._declares_exactly_the_nine_named_decisions` | the declaration's `pub` fields are exactly the nine FR-002 names, in order; no field is `Option<...>`; no serde attribute appears on the type; every requirement (FR-003/004/006/010/011/014/019) is named by some field's documentation |
-| `..._has_no_default_impl_anywhere_in_the_crate` | the derive list above the declaration does not contain `Default`, and no file under `crates/ragent-llm/src` contains `impl Default for ToolWireProfile` or `ToolWireProfile::default()` - so the escape cannot be added quietly in a later task while T-003's doc comment claims it does not exist |
+| `..._has_no_default_impl_anywhere_in_the_crate` | the derive list above the declaration does not contain `Default`, and no file under `crates/codemason-llm/src` contains `impl Default for ToolWireProfile` or `ToolWireProfile::default()` - so the escape cannot be added quietly in a later task while T-003's doc comment claims it does not exist |
 | `..._is_send_sync_static_and_fully_derived` | `ToolWireProfile: Send + Sync + 'static` and `Copy + Eq + Hash + Debug` hold as bounds (`LlmClient: Send + Sync`, and a client holds a profile as a field); the six derives are present in the declaration; two equal profiles hash equally and two different contracts do not collide |
 
 It also gained a fourth case that closes a real gap in the pre-existing file:
@@ -102,7 +102,7 @@ a `const` lets the compiler fold the assertion). Freedom to copy is only sound w
 the copy still equals the constant - a drifted copy would make eight passing cases
 true of a contract nothing speaks.
 
-`crates/ragent-llm/tests/test_wire_profile_table.rs` had its module docs corrected:
+`crates/codemason-llm/tests/test_wire_profile_table.rs` had its module docs corrected:
 it described the no-`Default` guarantee and disclaimed asserting it, and pointed at
 "T-003 declares the contract" when the contract is T-002's. The docs now name T-002
 for the type and T-003 for the table, and point at the case that does assert the
@@ -137,9 +137,9 @@ attribute run immediately above `pub struct`, skipping doc comments.
 Green on the tree as it stands:
 
 - `cargo fmt --all -- --check` - clean
-- `cargo test -p ragent-llm --test all test_wire_profile` - **23 passed**, 0 failed
+- `cargo test -p codemason-llm --test all test_wire_profile` - **23 passed**, 0 failed
   (12 in this file, 11 in `test_wire_profile_table`)
-- `cargo clippy -p ragent-llm --test all` - no new warning (19 pre-existing
+- `cargo clippy -p codemason-llm --test all` - no new warning (19 pre-existing
   `use_self` warnings in `tool_cache.rs`, untouched here)
 - 7 guard scripts PASS: `check-dead-code-reasons`, `check-inline-tests`,
   `check-test-env-isolation`, `check-silent-errors`, `check-security-unwraps`,
@@ -150,12 +150,12 @@ Green on the tree as it stands:
 Recorded because a reader will see them and should not attribute them here. Both
 were reproduced with this task's diff stashed and the tree otherwise unchanged:
 
-1. `cargo test -p ragent-llm --test all` fails 5 cases, all of them source-scan
+1. `cargo test -p codemason-llm --test all` fails 5 cases, all of them source-scan
    guards for **unimplemented** tasks: `test_wire_decode::*` (2, T-008's
    accumulator not yet adopted by `anthropic.rs`/`gemini.rs`'s `format!("fc_`),
    `test_wire_encode_message::test_no_provider_module_writes_a_result_carrier_literal`
    (T-006), and `test_wire_trace::*` (2, T-023's payload trace). 291 passed.
-2. `cargo check -p ragent-llm --all-targets` fails to compile the **lib test**
+2. `cargo check -p codemason-llm --all-targets` fails to compile the **lib test**
    target on `tests/inline/anthropic_tests.rs:50` and `:267` (`ChatContent` not in
    scope). That file is included from inside `anthropic.rs`, whose `use` list does
    not import `ChatContent`; it is unrelated to the wire module. The integration

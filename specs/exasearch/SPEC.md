@@ -20,7 +20,7 @@ alongside the keyless backends (DuckDuckGo, Brave, OpenAlex, Wikipedia).
 
 The backend will be implemented as an `ExaEngine` struct that implements the
 `SearchEngine` trait, following the established patterns in the
-`ragent-tools-extended` `masterfetch::search` module.
+`codemason-tools-extended` `masterfetch::search` module.
 
 ### Exa API Summary
 
@@ -51,7 +51,7 @@ The backend will be implemented as an `ExaEngine` struct that implements the
 
 ### FR-002: Configuration Field (State-Driven)
 
-> **When** the `exa_api_key` field is present in `ragent.json` or the
+> **When** the `exa_api_key` field is present in `codemason.json` or the
 > `EXA_API_KEY` environment variable is set, the `mf_search` orchestrator
 > **shall** instantiate `ExaEngine` and add it as an additional backend.
 

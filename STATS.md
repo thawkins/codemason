@@ -13,11 +13,11 @@
 >
 > Metrics below are measured against the current working tree at the
 > `1.0.168` release plus the telemetry review (`a861dd14`, `00d75a77`,
-> `4b4302f7`). The telemetry review changes only `crates/ragent-telemetry`
+> `4b4302f7`). The telemetry review changes only `crates/codemason-telemetry`
 > (+207 lines: the `RetiringPipeline` detach/retire machinery and its
-> generation counter in `export_health.rs`), `crates/ragent-tui` (+275:
+> generation counter in `export_health.rs`), `crates/codemason-tui` (+275:
 > `app/slash.rs`, `input.rs`, `layout.rs` and
-> `test_telemetry_slash.rs`) and `crates/ragent-config` (+14:
+> `test_telemetry_slash.rs`) and `crates/codemason-config` (+14:
 > `OtelConfig::validate`), so the crate line totals move by under a fifth of a
 > percent and no crate, binary, tool or test target is added or removed. It
 > supersedes nothing: the `1.0.168` tree it measures is the spec-system repair
@@ -26,63 +26,63 @@
 > The session context menu and PR/MR Auto-fix (`docs/plans/SESSIONMENU.md`,
 > branch `session-menu-wip`) are not re-measured in the tables below either.
 > Against `main` they add 7,729 and remove 162 lines across 60 files, tests
-> and docs included: `crates/ragent-tui` +3,348 (`session_menu.rs`,
-> `open_in.rs`, `app/autofix.rs`, the sidebar), `crates/ragent-agent` +1,873
+> and docs included: `crates/codemason-tui` +3,348 (`session_menu.rs`,
+> `open_in.rs`, `app/autofix.rs`, the sidebar), `crates/codemason-agent` +1,873
 > (the new `autofix` watcher module and request binding),
-> `crates/ragent-storage` +1,312 (sections, fork, delete, bindings,
-> `autofix_events`; schema 11), `crates/ragent-tools-vcs` +215
-> (`binding.rs`), `crates/ragent-config` +134 (`vcs` block),
-> `crates/ragent-server` +29 and `crates/ragent-types` +15. No crate or
+> `crates/codemason-storage` +1,312 (sections, fork, delete, bindings,
+> `autofix_events`; schema 11), `crates/codemason-tools-vcs` +215
+> (`binding.rs`), `crates/codemason-config` +134 (`vcs` block),
+> `crates/codemason-server` +29 and `crates/codemason-types` +15. No crate or
 > binary is added; 8 test files are added.
 >
 > The `autofix_status` and `autofix_add` tools and the sidebar layout
 > change (branch `wip/next`, after PR #69 merged) are not re-measured either.
 > Against `main` they add 1,657 and remove 36 lines across 20 files:
-> `crates/ragent-agent` +1,362 (the two tools, the watcher heartbeat and
-> their tests), `crates/ragent-tui` +192 (sidebar spacer rows, permanent
-> `Pinned` heading, drag-to-pin) and `crates/ragent-storage` +60
+> `crates/codemason-agent` +1,362 (the two tools, the watcher heartbeat and
+> their tests), `crates/codemason-tui` +192 (sidebar spacer rows, permanent
+> `Pinned` heading, drag-to-pin) and `crates/codemason-storage` +60
 > (`autofix_bindings`). The registry grows from 150 to 152 tools; no crate
 > or binary is added; 2 test files are added.
 >
 > The project-heading and selection menus, the PR/MR history and the sidebar
 > restyle (branch `wip/next2`, after PR #70 merged) are not re-measured
 > either. Against `main` they add 2,307 and remove 134 lines across 22
-> files: `crates/ragent-tui` +1,972 (the two menus, multi-selection,
-> `branch_names`, the restyle and their tests), `crates/ragent-storage` +187
-> (`session_request_history`, schema 11 to 12) and `crates/ragent-agent`
+> files: `crates/codemason-tui` +1,972 (the two menus, multi-selection,
+> `branch_names`, the restyle and their tests), `crates/codemason-storage` +187
+> (`session_request_history`, schema 11 to 12) and `crates/codemason-agent`
 > +57 (`check_unchecked_remotes`). No crate, binary or tool is added; 2 test
 > files are added.
 >
 > The review fixes for those menus (branch `wip/next3`, after PR #71
 > merged) are not re-measured either. They add 415 and remove 207 lines
-> across 10 files: `crates/ragent-tui` +350/-151 and
-> `crates/ragent-storage` +65/-56. No crate, binary, tool or test file is
+> across 10 files: `crates/codemason-tui` +350/-151 and
+> `crates/codemason-storage` +65/-56. No crate, binary, tool or test file is
 > added.
 >
 > The project Properties dialog and per-session backends (branch
 > `wip/next4`, after PR #72 merged) are not re-measured either. They add
-> 1,393 and remove 44 lines across 24 files: `crates/ragent-tui` +998
+> 1,393 and remove 44 lines across 24 files: `crates/codemason-tui` +998
 > (`project_properties.rs`, the menu entry, `/project describe` and
 > `/project backend`, heading descriptions and their tests),
-> `crates/ragent-storage` +204 (schema 12 to 13), `crates/ragent-agent`
+> `crates/codemason-storage` +204 (schema 12 to 13), `crates/codemason-agent`
 > +105 (project setters, session backend at tool dispatch) and
-> `crates/ragent-config` +40 (`Config::with_backend_kind`). No crate,
+> `crates/codemason-config` +40 (`Config::with_backend_kind`). No crate,
 > binary or tool is added; 1 test file is added.
 >
 > The `projects` spec (`specs/projects/PLAN.md`), added on top of the
 > multi-session work, is not re-measured in the tables below. It adds 6,879
 > and removes 198 lines across 54 files, tests included:
-> `crates/ragent-agent` +3,031 (the new `project` module: manager, remote
+> `crates/codemason-agent` +3,031 (the new `project` module: manager, remote
 > detection, session worktrees, request counts, reports),
-> `crates/ragent-tui` +1,631 (`app/projects.rs`, the sidebar),
-> `crates/ragent-storage` +1,294 (`project_store.rs`, schema 6) and
-> `crates/ragent-server` +827 (`routes/projects.rs`). No crate or binary is
+> `crates/codemason-tui` +1,631 (`app/projects.rs`, the sidebar),
+> `crates/codemason-storage` +1,294 (`project_store.rs`, schema 6) and
+> `crates/codemason-server` +827 (`routes/projects.rs`). No crate or binary is
 > added; 12 test files are added.
 >
 > The `1.0.167` pass repairs a flaky ACP transport test
 > (`test_mcp_acp_more`'s four ACP cases shared one scratch script path, so a
 > sibling nextest process could hand `python3` a half-written script) and
-> touches no production code; the spec repair changes only `crates/ragent-specs`,
+> touches no production code; the spec repair changes only `crates/codemason-specs`,
 > the `spec_*` tools and the TUI `/spec` handlers, so the crate line totals move
 > by under half a percent there. The
 > research, teams and agents release carries the substantive changes on top
@@ -93,22 +93,22 @@
 > restores one `TaskStatus::is_terminal()` definition of "finished" for
 > sub-agents. The code-audit pass closes rows 1-25 of `docs/reports/code-audit.md`: it redacts credentials
 > on five logging paths and two `Debug` impls, validates the `GITLAB_*` instance
-> URL through one shared rule (`ragent_types::url_validation`), fences the LLM
+> URL through one shared rule (`codemason_types::url_validation`), fences the LLM
 > security analyzer's model-authored values, defaults an MCP server entry's
 > `"type"` to `stdio`, moves the broken-pipe-safe output macros into
-> `ragent_types::cli_out`, and completes `READ_ONLY_PERMISSION_CATEGORIES` so a
+> `codemason_types::cli_out`, and completes `READ_ONLY_PERMISSION_CATEGORIES` so a
 > pure inspection sub-agent no longer resolves a write scope. Seven new test
 > modules land with it (`test_vault_id`, `test_untrusted_fence`,
 > `test_permission_prompt`, `test_read_only_permission_categories`,
 > `test_security_analyzer_request`, `test_mcp_type_default`, plus the extended
 > `test_tool_param_schema`) and five new runtime modules
-> (`ragent_types::cli_out`, `ragent_types::url_validation`,
-> `ragent_types::tool_args::no_parameters_schema`).
+> (`codemason_types::cli_out`, `codemason_types::url_validation`,
+> `codemason_types::tool_args::no_parameters_schema`).
 >
 > The `1.0.164` baseline is the deep-refactor audit train
 > (`docs/reports/deep-refactor-audit.md`): fifteen defects fixed - a file-tool
 > path-guard escape on the not-yet-existing tail, a runtime-flag toggle that
-> rewrote the whole global `ragent.json` when it existed but could not be read,
+> rewrote the whole global `codemason.json` when it existed but could not be read,
 > a cancelled sub-agent reported `Completed`, a dropped `MessageEnd` on an
 > aborted turn, concurrent `team_task_create` id collisions, an unembedded web
 > UI, and seven panics or off-by-one defects in `/swarm`, `/spec govcreate`,
@@ -129,13 +129,13 @@
 > which sits on `1.0.158`'s CI dead-code-lint fix, the `1.0.157` CI-fix and
 > clippy-cleanup pass, and the `1.0.156` version bump that publishes the
 > `docs/reports/code-audit.md` remediation pass). The uncommitted pass adds a
-> `telemetry.otel.logs` config block, a new `ragent-telemetry/src/logs.rs`
+> `telemetry.otel.logs` config block, a new `codemason-telemetry/src/logs.rs`
 > module with the composing `TracingLogsLayer`, `otlp_http_signal_endpoint`
 > (the signal-path resolver both the metrics and logs exporters now share),
 > `/telemetry logs` plus the `Logs level` row in `/telemetry setup`, the
 > `Storage::prune_messages_older_than` / `count_messages_older_than` pair with
-> the startup retention pass, `ragent db prune` and the TUI `/db` surface, and
-> the `journal_size_limit` bound on `ragent.db-wal`. A follow-up noise-and-
+> the startup retention pass, `codemason db prune` and the TUI `/db` surface, and
+> the `journal_size_limit` bound on `codemason.db-wal`. A follow-up noise-and-
 > correctness pass sits on top of it: the code index counts its skip reasons
 > instead of logging one `trace!` per path (roughly 6,000 events per reindex),
 > Ollama Cloud's per-frame line drops to `DEBUG`, the `TuiTracingLayer` and
@@ -172,7 +172,7 @@
 > sub-agent tool, the `hook-failures.jsonl` ledger, `team_task_cancel`, the
 > ownership rule on `team_task_complete`, the `agents` config section
 > (`completed_history`, `max_launching`), and the shared sub-agent launch set in
-> `ragent-tui/src/app/launch.rs`. It rebuilds on the v1.0.152 `/research --age`
+> `codemason-tui/src/app/launch.rs`. It rebuilds on the v1.0.152 `/research --age`
 > work (typed `AgeSpan`, the `DateTime` tool, the `Alt+O` autopilot toggle), the
 > v1.0.150 `uniformtools` tool-call model, the v1.0.149 `agentui` keyboard-first
 > rework, the v1.0.138 consolidated test layout (see the `[1.0.138]` CHANGELOG
@@ -209,25 +209,25 @@ tool *behaviour* rather than the registry (one `TaskStatus::is_terminal()`
 predicate behind reaping, injection, kill refusal and both wait tools), and the
 code-audit remediation only routed the eight parameterless tools through the
 shared `no_parameters_schema()` helper. The crate count stays at
-19 - `ragent-hyperresearch` is a workspace member picked up by `crates/*`.
+19 - `codemason-hyperresearch` is a workspace member picked up by `crates/*`.
 
 The spec-repair pair (`6953c57c`, `9ed32bd8`) moves `crates/` from 801,292 to
-803,408 lines (+2,116): `ragent-specs` +592 (`io.rs`, `manager.rs`,
+803,408 lines (+2,116): `codemason-specs` +592 (`io.rs`, `manager.rs`,
 `plan_parser.rs`, `spec.rs` and the new `test_spec_roundtrip` suite),
-`ragent-tui` +1,151 (`slash.rs`, `event_handler.rs` and the extended
+`codemason-tui` +1,151 (`slash.rs`, `event_handler.rs` and the extended
 `test_slash_spec_deep` / `test_event_swarm_research_deep` suites) and
-`ragent-agent` +17 (`spec_read.rs`), with the rest in `tests/all.rs` wiring.
+`codemason-agent` +17 (`spec_read.rs`), with the rest in `tests/all.rs` wiring.
 
 The 1.0.165-1.0.166 passes move `crates/` from 760,840 to 801,292 lines (+40,452) and the
 test tree from 1,211 to 1,253 files, most of it the `test_subagent_lifecycle_review`
-modules in `ragent-agent` (8 cases) and `ragent-tui` (5 cases), the
+modules in `codemason-agent` (8 cases) and `codemason-tui` (5 cases), the
 `test_team_manager_binding` / `test_team_caller_roles` / `test_team_store_atomic_update`
 / `test_team_teammate_wake` suites, and the per-crate `tests/all.rs` rewiring that
-moved every crate's test tree onto the consolidated target. `ragent-research` (+11,871 lines) is the largest single mover across the
+moved every crate's test tree onto the consolidated target. `codemason-research` (+11,871 lines) is the largest single mover across the
 1.0.161 -> 1.0.164 span, carrying the research diff deck (`deck.rs`,
 `deck_enrich.rs`, `deck_pptx.rs`), its concept-grouped model stage and the
-`imrad`/`newsletter` assembly; `ragent-tui` (+1,641) and `ragent-agent` (+3,331)
-move by the deep-refactor fixes and their regression tests, and `ragent-types`
+`imrad`/`newsletter` assembly; `codemason-tui` (+1,641) and `codemason-agent` (+3,331)
+move by the deep-refactor fixes and their regression tests, and `codemason-types`
 (+541) by `cli_out`, `url_validation` and `tool_args`.
 
 The test-binary count is the headline effect of the consolidation rollout: the
@@ -240,7 +240,7 @@ links one integration binary per crate plus one for the root package
 (`.config/nextest.toml`); run one file by filter:
 `cargo nextest run -p <crate> -E 'test(test_foo::)'`.
 
-The registered-tool count is a live registry fact, not a constant: `ragent run
+The registered-tool count is a live registry fact, not a constant: `codemason run
 --dry-run` prints the per-family breakdown, and 21 families currently sum to
 152 (`file: 27`, `team: 20`, `gitlab: 19`, `git: 19`, `github: 11`,
 `codeindex: 10`, `none: 8`, `web: 5`, `cron: 5`, `spec: 5`, `agent: 5`,
@@ -263,25 +263,25 @@ shows the file count, line count, and test-file count for each crate (including
 
 | Crate | Rust files | Rust lines | Test files |
 |---|---|---|---|
-| `ragent-agent` | 461 | 175,162 | 260 |
-| `ragent-bench` | 34 | 10,844 | 8 |
-| `ragent-codeindex` | 82 | 25,558 | 50 |
-| `ragent-config` | 79 | 19,718 | 52 |
-| `ragent-connectors` | 45 | 19,729 | 20 |
-| `ragent-hyperresearch` | 47 | 1,576 | 3 |
-| `ragent-llm` | 98 | 39,188 | 37 |
-| `ragent-plugins` | 66 | 23,647 | 37 |
-| `ragent-research` | 196 | 78,374 | 78 |
-| `ragent-server` | 27 | 11,250 | 14 |
-| `ragent-specs` | 39 | 21,278 | 19 |
-| `ragent-storage` | 55 | 18,421 | 49 |
-| `ragent-surface` | 19 | 2,475 | 8 |
-| `ragent-telemetry` | 42 | 14,590 | 26 |
-| `ragent-tools-core` | 76 | 22,078 | 33 |
-| `ragent-tools-extended` | 163 | 62,517 | 81 |
-| `ragent-tools-vcs` | 75 | 18,142 | 30 |
-| `ragent-tui` | 322 | 184,438 | 244 |
-| `ragent-types` | 73 | 16,054 | 43 |
+| `codemason-agent` | 461 | 175,162 | 260 |
+| `codemason-bench` | 34 | 10,844 | 8 |
+| `codemason-codeindex` | 82 | 25,558 | 50 |
+| `codemason-config` | 79 | 19,718 | 52 |
+| `codemason-connectors` | 45 | 19,729 | 20 |
+| `codemason-hyperresearch` | 47 | 1,576 | 3 |
+| `codemason-llm` | 98 | 39,188 | 37 |
+| `codemason-plugins` | 66 | 23,647 | 37 |
+| `codemason-research` | 196 | 78,374 | 78 |
+| `codemason-server` | 27 | 11,250 | 14 |
+| `codemason-specs` | 39 | 21,278 | 19 |
+| `codemason-storage` | 55 | 18,421 | 49 |
+| `codemason-surface` | 19 | 2,475 | 8 |
+| `codemason-telemetry` | 42 | 14,590 | 26 |
+| `codemason-tools-core` | 76 | 22,078 | 33 |
+| `codemason-tools-extended` | 163 | 62,517 | 81 |
+| `codemason-tools-vcs` | 75 | 18,142 | 30 |
+| `codemason-tui` | 322 | 184,438 | 244 |
+| `codemason-types` | 73 | 16,054 | 43 |
 | **Total** | **1,999** | **765,039** | **1,089** |
 
 ---
@@ -290,25 +290,25 @@ shows the file count, line count, and test-file count for each crate (including
 
 ```
 
-ragent-tui            ###########   184,438 lines (24.1%)
-ragent-agent          ###########   175,162 lines (22.9%)
-ragent-research       #####         78,374 lines (10.3%)
-ragent-tools-extended ####          62,517 lines (8.2%)
-ragent-llm            ##            39,188 lines (5.1%)
-ragent-codeindex      ##            25,558 lines (3.3%)
-ragent-plugins        #             23,647 lines (3.1%)
-ragent-tools-core     #             22,078 lines (2.9%)
-ragent-specs          #             21,278 lines (2.8%)
-ragent-connectors     #             19,729 lines (2.6%)
-ragent-config         #             19,718 lines (2.6%)
-ragent-storage        #             18,421 lines (2.4%)
-ragent-tools-vcs      #             18,142 lines (2.4%)
-ragent-types          #             16,054 lines (2.1%)
-ragent-telemetry      #             14,590 lines (1.9%)
-ragent-server         #             11,250 lines (1.5%)
-ragent-bench          #             10,844 lines (1.4%)
-ragent-surface                     2,475 lines (0.3%)
-ragent-hyperresearch               1,576 lines (0.2%)
+codemason-tui            ###########   184,438 lines (24.1%)
+codemason-agent          ###########   175,162 lines (22.9%)
+codemason-research       #####         78,374 lines (10.3%)
+codemason-tools-extended ####          62,517 lines (8.2%)
+codemason-llm            ##            39,188 lines (5.1%)
+codemason-codeindex      ##            25,558 lines (3.3%)
+codemason-plugins        #             23,647 lines (3.1%)
+codemason-tools-core     #             22,078 lines (2.9%)
+codemason-specs          #             21,278 lines (2.8%)
+codemason-connectors     #             19,729 lines (2.6%)
+codemason-config         #             19,718 lines (2.6%)
+codemason-storage        #             18,421 lines (2.4%)
+codemason-tools-vcs      #             18,142 lines (2.4%)
+codemason-types          #             16,054 lines (2.1%)
+codemason-telemetry      #             14,590 lines (1.9%)
+codemason-server         #             11,250 lines (1.5%)
+codemason-bench          #             10,844 lines (1.4%)
+codemason-surface                     2,475 lines (0.3%)
+codemason-hyperresearch               1,576 lines (0.2%)
 ```
 
 ---
@@ -317,25 +317,25 @@ ragent-hyperresearch               1,576 lines (0.2%)
 
 | Crate | Test Files | Approx. Tests |
 |-------|-----------:|--------------:|
-| `ragent-tui` | 244 | 4,014 |
-| `ragent-agent` | 260 | 2,668 |
-| `ragent-tools-extended` | 81 | 1,897 |
-| `ragent-research` | 78 | 1,484 |
-| `ragent-specs` | 19 | 704 |
-| `ragent-llm` | 37 | 668 |
-| `ragent-plugins` | 37 | 494 |
-| `ragent-tools-vcs` | 30 | 483 |
-| `ragent-codeindex` | 50 | 457 |
-| `ragent-config` | 52 | 452 |
-| `ragent-types` | 43 | 436 |
-| `ragent-tools-core` | 33 | 425 |
-| `ragent-connectors` | 20 | 369 |
-| `ragent-storage` | 49 | 363 |
-| `ragent-telemetry` | 26 | 335 |
-| `ragent-server` | 14 | 210 |
-| `ragent-bench` | 8 | 145 |
-| `ragent-surface` | 8 | 70 |
-| `ragent-hyperresearch` | 3 | 22 |
+| `codemason-tui` | 244 | 4,014 |
+| `codemason-agent` | 260 | 2,668 |
+| `codemason-tools-extended` | 81 | 1,897 |
+| `codemason-research` | 78 | 1,484 |
+| `codemason-specs` | 19 | 704 |
+| `codemason-llm` | 37 | 668 |
+| `codemason-plugins` | 37 | 494 |
+| `codemason-tools-vcs` | 30 | 483 |
+| `codemason-codeindex` | 50 | 457 |
+| `codemason-config` | 52 | 452 |
+| `codemason-types` | 43 | 436 |
+| `codemason-tools-core` | 33 | 425 |
+| `codemason-connectors` | 20 | 369 |
+| `codemason-storage` | 49 | 363 |
+| `codemason-telemetry` | 26 | 335 |
+| `codemason-server` | 14 | 210 |
+| `codemason-bench` | 8 | 145 |
+| `codemason-surface` | 8 | 70 |
+| `codemason-hyperresearch` | 3 | 22 |
 | **Total** | **1,089** | **15,699** |
 
 The per-crate test attributes above are counted directly from the tree
@@ -351,7 +351,7 @@ and cache-rebuild cases), `test_export_health` (+30, generation isolation
 between a retired and a live pipeline), `test_telemetry_config` (+15, the
 chained endpoint validation) and `test_input_deep2` (+39, the
 protocol/port-swap and setup-merge cases). The spec repair adds
-`test_spec_roundtrip` (round-trip and frontmatter cases in `ragent-specs`) and
+`test_spec_roundtrip` (round-trip and frontmatter cases in `codemason-specs`) and
 extends `test_slash_spec_deep`, `test_event_swarm_research_deep`, `test_manager`,
 `test_spec_impl` and the inline `plan_parser`, `impl_runner` and `manager`
 modules. The code-audit
@@ -362,12 +362,12 @@ classification over the live registry), `test_security_analyzer_request` (the
 analyzer's bounded request shape) and `test_mcp_type_default` (the `stdio`
 default from both ends). The
 v1.0.137 test-coverage campaign added 170 new external test files (roughly 80 in
-`ragent-agent` plus suites across 12 further crates) and a set of inline test
+`codemason-agent` plus suites across 12 further crates) and a set of inline test
 files, moving 13 of the 19 crates past 85% line coverage; the follow-up
-`ragent-tui` deep-coverage work adds 17 more files (642 tests, ~16.1k lines) on
+`codemason-tui` deep-coverage work adds 17 more files (642 tests, ~16.1k lines) on
 top of the phase-1 TUI suites, and the `agentui` line adds about 20
 more TUI suites (roughly 900 tests) plus the suspension, write-target, and
-recovery suites in `ragent-agent` and `ragent-config`. The keyboard-first rework
+recovery suites in `codemason-agent` and `codemason-config`. The keyboard-first rework
 added the `test_agents_teams_cursor` (17 cases) and `test_output_view_footer`
 suites and rewrote the window, hit-rect, keyboard-control, row-action, and wheel
 suites around the block cursor; the setup-dialog chrome work adds
@@ -409,8 +409,8 @@ campaign, the deep-coverage follow-up and this re-measurement. The instrumented
 line total is now 168,392 (up from 158,779 because the tree grew), of which
 146,001 are executed. The pre-campaign baseline was 158,446 instrumented lines,
 110,596 executed, 47,850 missed. The prior v1.0.95 measurement was 68.9% line /
-67.8% function, but it predated the `ragent-plugins`, `ragent-connectors`, and
-`ragent-surface` crates, so the totals are not directly comparable.
+67.8% function, but it predated the `codemason-plugins`, `codemason-connectors`, and
+`codemason-surface` crates, so the totals are not directly comparable.
 
 The `2026-11-01` column is the current figure; it moves by tenths of a point
 rather than points because the intervening releases added production code
@@ -419,34 +419,34 @@ the dated research naming) alongside its tests.
 
 | Crate | Baseline | After phase 1 | 2026-10-18 | 2026-11-01 |
 |---|---:|---:|---:|---:|
-| `ragent-plugins` | 90.2% | 90.3% | 90.27% | 90.34% |
-| `ragent-types` | 82.2% | 96.3% | 96.24% | 96.22% |
-| `ragent-storage` | 81.1% | 91.5% | 91.59% | 92.01% |
-| `ragent-config` | 75.4% | 90.5% | 92.21% | 91.14% |
-| `ragent-surface` | 70.2% | 90.9% | 90.89% | 90.37% |
-| `ragent-specs` | 88.1% | 88.1% | 90.11% | 90.18% |
-| `ragent-codeindex` | 83.0% | 88.8% | 89.31% | 89.32% |
-| `ragent-server` | 67.4% | 88.2% | 88.07% | 88.62% |
-| `ragent-telemetry` | 74.9% | 92.0% | 92.04% | 88.60% |
-| `ragent-tools-vcs` | 75.4% | 86.9% | 87.58% | 87.53% |
-| `ragent-llm` | 70.4% | 86.1% | 86.11% | 87.33% |
-| `ragent-tui` | 54.1% | 75.0% | 86.77% | 87.28% |
-| `ragent-agent` | 65.1% | 85.6% | 86.73% | 86.74% |
-| `ragent-connectors` | 85.9% | 85.9% | 86.74% | 86.46% |
-| `ragent-tools-core` | 73.2% | 85.7% | 86.99% | 87.09% |
-| `ragent-tools-extended` | 79.1% | 86.0% | 86.27% | 86.31% |
-| `ragent-bench` | 75.2% | 86.0% | 86.01% | 86.01% |
-| `ragent-research` | 83.2% | 85.8% | 86.20% | 85.96% |
+| `codemason-plugins` | 90.2% | 90.3% | 90.27% | 90.34% |
+| `codemason-types` | 82.2% | 96.3% | 96.24% | 96.22% |
+| `codemason-storage` | 81.1% | 91.5% | 91.59% | 92.01% |
+| `codemason-config` | 75.4% | 90.5% | 92.21% | 91.14% |
+| `codemason-surface` | 70.2% | 90.9% | 90.89% | 90.37% |
+| `codemason-specs` | 88.1% | 88.1% | 90.11% | 90.18% |
+| `codemason-codeindex` | 83.0% | 88.8% | 89.31% | 89.32% |
+| `codemason-server` | 67.4% | 88.2% | 88.07% | 88.62% |
+| `codemason-telemetry` | 74.9% | 92.0% | 92.04% | 88.60% |
+| `codemason-tools-vcs` | 75.4% | 86.9% | 87.58% | 87.53% |
+| `codemason-llm` | 70.4% | 86.1% | 86.11% | 87.33% |
+| `codemason-tui` | 54.1% | 75.0% | 86.77% | 87.28% |
+| `codemason-agent` | 65.1% | 85.6% | 86.73% | 86.74% |
+| `codemason-connectors` | 85.9% | 85.9% | 86.74% | 86.46% |
+| `codemason-tools-core` | 73.2% | 85.7% | 86.99% | 87.09% |
+| `codemason-tools-extended` | 79.1% | 86.0% | 86.27% | 86.31% |
+| `codemason-bench` | 75.2% | 86.0% | 86.01% | 86.01% |
+| `codemason-research` | 83.2% | 85.8% | 86.20% | 85.96% |
 | root bin (`src/`) | 31.3% | ~31% | 31.94% | 32.74% |
 | **Workspace** | **69.8%** | **73.9%** | **86.58%** | **86.70%** |
 
 **All 18 crates are above 85% line coverage** except the root binary, which is
 the CLI presentation surface and is exercised through subprocess tests the
-profiler does not see. `ragent-telemetry` reads 88.60% (down from 92.04%)
+profiler does not see. `codemason-telemetry` reads 88.60% (down from 92.04%)
 because the OTLP log pipeline is a second exporter whose error paths need a
 failing collector to reach. The largest single gain remains
-`ragent-tui` (75.14% -> 87.28%, +4,788 covered lines in the first step) from the
-17 deep-coverage suites. `ragent-llm` (+1.22 pts) and `ragent-surface` (+0.9 pts
+`codemason-tui` (75.14% -> 87.28%, +4,788 covered lines in the first step) from the
+17 deep-coverage suites. `codemason-llm` (+1.22 pts) and `codemason-surface` (+0.9 pts
 in the first step) are the next largest movers.
 
 Notes:
@@ -457,11 +457,11 @@ Notes:
   a point. `cargo check --workspace` is the gate for that pass.
 - The campaign covers 15 of the 18 crates with new or expanded suites. Tests
   only: no production logic changed (three `pub(crate)` items in
-  `ragent-tools-vcs` - `run_status`, `filter_log_text`, and the GitLab
+  `codemason-tools-vcs` - `run_status`, `filter_log_text`, and the GitLab
   `make_client`/`detect_project`/`detect` helpers - were widened to `pub` so
   their helpers could be exercised directly).
-- The workspace total folds in all 18 crates, including `ragent-plugins` (added
-  v1.0.112), `ragent-connectors` (added v1.0.123), and `ragent-surface` (added
+- The workspace total folds in all 18 crates, including `codemason-plugins` (added
+  v1.0.112), `codemason-connectors` (added v1.0.123), and `codemason-surface` (added
   v1.0.129) that the pre-v1.0.95 measurement predated.
 - Line counts here are executable lines under LLVM profiling, which is smaller
   than the raw `wc -l` figures in the crate table above (declarations, blank
@@ -469,13 +469,13 @@ Notes:
 - The deep-coverage follow-up closed most of the TUI gap: the 17 suites drive
   `app/slash.rs`, `app/event_handler.rs`, `layout.rs`,
   `widgets/message_widget.rs` and `input.rs` through public entry points,
-  lifting `ragent-tui` from 75.14% to 87.28%.
+  lifting `codemason-tui` from 75.14% to 87.28%.
 - The largest remaining gap is the agent session processor's live-LLM paths -
   the parts that require a real provider stream to exercise.
 - Root binary sources (`src/cli.rs`, `src/main.rs`, `src/plugins.rs`,
   `src/connectors.rs`, `src/panic_hook.rs`) remain lightly covered (32.74%)
   because `cargo llvm-cov` does not drive the interactive TUI.
-- `ragent-research` slipped 0.24 pts to 85.96% in the 2026-11-01 re-measurement
+- `codemason-research` slipped 0.24 pts to 85.96% in the 2026-11-01 re-measurement
   even though it gained coverage: the dated-naming resolution helpers add
   branches (a `try_exists` fast path, a directory scan, an error arm) that the
   new tests reach but cannot exercise exhaustively, so both numerator and
@@ -486,39 +486,39 @@ Notes:
 ## Key Architecture Ratios
 
 - Test-to-code ratio: ~1 test per 49 lines (15,774 tests / 773,062 lines)
-- Largest crate: `ragent-tui` (184,438 lines, 24.1%)
-- Smallest crate: `ragent-hyperresearch` (1,576 lines, 0.2%)
-- Median crate size: ~20,244 lines (between `ragent-specs` and `ragent-config`)
+- Largest crate: `codemason-tui` (184,438 lines, 24.1%)
+- Smallest crate: `codemason-hyperresearch` (1,576 lines, 0.2%)
+- Median crate size: ~20,244 lines (between `codemason-specs` and `codemason-config`)
 - Crates over 10k lines: 17 of 19
 - Crates under 5k lines: 2 of 19
 
 Function definitions by crate (lexical lower bounds, 2026-10-21 tree):
 
 ```
-ragent-tui             ############# 6,054 fns (22.8%)
-ragent-agent           ########## 4,630 fns (17.4%)
-ragent-tools-extended  ###### 2,956 fns (11.1%)
-ragent-research        ##### 2,513 fns (9.4%)
-ragent-codeindex       ## 1,130 fns (4.2%)
-ragent-llm             ## 1,102 fns (4.1%)
-ragent-tools-core      ## 1,001 fns (3.8%)
-ragent-plugins         # 991 fns (3.7%)
-ragent-specs           # 981 fns (3.7%)
-ragent-tools-vcs       # 941 fns (3.5%)
-ragent-connectors      # 907 fns (3.4%)
-ragent-config          # 787 fns (3.0%)
-ragent-types           # 590 fns (2.2%)
-ragent-storage         # 585 fns (2.2%)
-ragent-telemetry       # 550 fns (2.1%)
-ragent-bench           # 412 fns (1.5%)
-ragent-server          # 363 fns (1.4%)
-ragent (root binary)   # 159 fns (0.6%)
-ragent-surface         # 114 fns (0.4%)
+codemason-tui             ############# 6,054 fns (22.8%)
+codemason-agent           ########## 4,630 fns (17.4%)
+codemason-tools-extended  ###### 2,956 fns (11.1%)
+codemason-research        ##### 2,513 fns (9.4%)
+codemason-codeindex       ## 1,130 fns (4.2%)
+codemason-llm             ## 1,102 fns (4.1%)
+codemason-tools-core      ## 1,001 fns (3.8%)
+codemason-plugins         # 991 fns (3.7%)
+codemason-specs           # 981 fns (3.7%)
+codemason-tools-vcs       # 941 fns (3.5%)
+codemason-connectors      # 907 fns (3.4%)
+codemason-config          # 787 fns (3.0%)
+codemason-types           # 590 fns (2.2%)
+codemason-storage         # 585 fns (2.2%)
+codemason-telemetry       # 550 fns (2.1%)
+codemason-bench           # 412 fns (1.5%)
+codemason-server          # 363 fns (1.4%)
+codemason (root binary)   # 159 fns (0.6%)
+codemason-surface         # 114 fns (0.4%)
 ```
 
 Test share: 17,667 of 26,768 definitions (66%) live under `tests/`; the
-most test-dominant crates by ratio are `ragent-tui` (82%), `ragent-tools-extended`
-(73%) and `ragent-specs` (73%).
+most test-dominant crates by ratio are `codemason-tui` (82%), `codemason-tools-extended`
+(73%) and `codemason-specs` (73%).
 
 ---
 
@@ -541,9 +541,9 @@ waiting on running tasks again;
 every entry point through a rebindable `TeamManagerSlot`; and per-tool caller
 checks inside teams, on top of the code-audit remediation pass:
 credential redaction on the remaining log and `Debug` paths, one shared
-`ragent_types::url_validation` rule for the GitLab instance URL, prompt fenced
+`codemason_types::url_validation` rule for the GitLab instance URL, prompt fenced
 LLM security analyzer values, the `stdio` default for an MCP server entry that
-omits `"type"`, the broken-pipe-safe `ragent_types::cli_out` macros, the shared
+omits `"type"`, the broken-pipe-safe `codemason_types::cli_out` macros, the shared
 `no_parameters_schema()` helper and a completed
 `READ_ONLY_PERMISSION_CATEGORIES`, on top of the v1.0.164 deep-refactor audit
 train, the v1.0.163 research diff deck and the v1.0.161 dated research output
@@ -568,18 +568,18 @@ windows, the teammate strip, row actions with confirmation modals, cooperative
 sub-agent suspension, and the live event plumbing), the widened text-format
 tool-call recovery (a fifth dialect family plus reasoning-channel scanning and
 the transcript narration scrub), `/yolo on|off|status` with the `--config`
-write-target fix, the mailbox sender-session fix (SEC-ragent-team-003), and the
+write-target fix, the mailbox sender-session fix (SEC-codemason-team-003), and the
 Windows-safe `same-file` path-alias check. On top of the v1.0.138 test-consolidation rollout - one
 `tests/all.rs` integration target per crate, 19 binaries instead of
 ~948, with every test-name set verified identical to the pre-change set; the
 test-coverage campaign -
 roughly 80 new `tests/` suites raising 13 of 18 crates to >=85% line coverage,
-plus 17 `ragent-tui` deep-coverage suites (642 tests) -
+plus 17 `codemason-tui` deep-coverage suites (642 tests) -
 on top of the interactive `/plugins list` panel and
 the manifest/runtime tool merge fix, on top of the v1.0.135
 `docs/reports/security-audit.md` critical/high fix set:
 `Config::merge_project` now drops a project overlay's `mcp`, `acp`, and provider
-`api` blocks (SEC-001/002/005), the new `ragent_types::guard`
+`api` blocks (SEC-001/002/005), the new `codemason_types::guard`
 `reject_symlink_components`/`reject_symlink_escape`/`open_owner_only` guards close
 the symlink escapes across the specs/config/crash/askpass/TUI image paths
 (SEC-006/018/027/028/059), the bounded-HTTP read caps and redirect limits land in
@@ -588,10 +588,10 @@ the binary updater requires a verified SHA-256 digest (SEC-043), the
 `http_request` header allow-list replaces the deny-list (SEC-035), the plugin
 host-call sinks and the connector command/env boundaries are bounded
 (SEC-009/031/071), and the shared `strutil`/`sanitize`/`store` helpers are routed
-through every call site - plus the `ragent --version` flag and the code-audit
+through every call site - plus the `codemason --version` flag and the code-audit
 Quick Wins on top of the
 v1.0.134 MCP-discovery ergonomics, `/simplify all` working
-tree - the four new `ragent-surface` shared modules (`config_splice`, `marketplace`,
+tree - the four new `codemason-surface` shared modules (`config_splice`, `marketplace`,
 `net`, `scan`) and the delegation of the plugin/connector marketplace writers to
 `write_atomic_json`, the collapse of the four redacting `Debug` impls into
 `macro_rules! redacted_debug_impl!`, the `redact_secrets_cow` allocation fix, the
@@ -601,7 +601,7 @@ de-duplication (with the question-expiry `unreachable!()` removed) - on top of t
 v1.0.133 `/plugins` browse-panel refinements (reversed-video navigator titles above
 each `ALL` row, hit-test areas moved below the header, and per-row `Name (N)` counts), the
 bottom-edge search box with a click-to-clear button, and the `git+<url>#<ref>` install
-checkout fix in `ragent-plugins` (`plugins` FR-024), on top of the v1.0.132 merged
+checkout fix in `codemason-plugins` (`plugins` FR-024), on top of the v1.0.132 merged
 connector and plugin marketplace browsers (additional marketplaces, a per-row
 marketplace column, and off-loop description/version enrichment), the connector and
 plugin-store alphabetical id sorts (`connectors` FR-046, `pluginstores` FR-050), the
@@ -615,8 +615,8 @@ service with webhook ingress, scheduler, run history, and backend confinement,
 AgentSkills (`.agents/skills/`) discovery, and an LLM security analyzer; the
 plugin-store category navigator (`catnav`); and the `browser` CDP tool and its
 `browser` visibility switch removed, taking the registered count 152 -> 151 across
-22 categories. **Dependency and standards work** on this tree: the `ragent-agent`,
-`ragent-server`, and `ragent-tools-extended` manifests gain the new modules'
+22 categories. **Dependency and standards work** on this tree: the `codemason-agent`,
+`codemason-server`, and `codemason-tools-extended` manifests gain the new modules'
 dependencies and the workspace gains the opt-in `acp-server` / `headless-browser`
 features. **OpenHands quality gates** (spec `openhands` T-019): the engine-gated
 `mf_screenshot` capability is registered only when a drivable headless browser is
@@ -624,14 +624,14 @@ present, so the default build advertises 148 tools across 21 categories. **Prior
 release line.** Builds on v1.0.129: the `docs/plans/code-audit.md`
 remediation plan through M9. Dependency upkeep
 (M9): the yanked `yoke-derive` is cleared; all crates converge on `thiserror 2`,
-`reqwest 0.13`, `rand 0.10`, and `criterion 0.8`; `ragent-storage` moves from
+`reqwest 0.13`, `rand 0.10`, and `criterion 0.8`; `codemason-storage` moves from
 `rand 0.8` to `0.10`; `lopdf` converges on `0.44` and the dedicated `vendor/lopdf`
 crate is deleted; `opentelemetry` 0.29 -> 0.33 (`experimental_metrics_custom_reader`
 for the Prometheus scrape endpoint); `notify` 8.2, `rquickjs` 0.14, `tree-sitter`
 0.27, `chacha20poly1305` 0.11, `which` 8. Dead-code removal (M5): the stale
-`ragent-agent::snapshot` module and the duplicated inline schema test suite are
+`codemason-agent::snapshot` module and the duplicated inline schema test suite are
 deleted, placeholder tests gain real assertions, the dead connector `NeverProbe`/
-`NoProbe` fallbacks go, and the new 18th `ragent-surface` crate owns the shared
+`NoProbe` fallbacks go, and the new 18th `codemason-surface` crate owns the shared
 `/plugins`/`/connectors` surface glue. Test hygiene (M6): scratch paths move to
 `target/temp`, `TempTree` support modules replace 28 copy-pasted sandboxes,
 diagnostic and live-network tests are `#[ignore]`-gated, the config-key test
@@ -646,14 +646,14 @@ source-scraping test rewrite. Security (M1): `.gitignore` gains the SQLite
 sidecar and certificate/credential patterns, and a tracked `.env.example`
 template lands. Also fixes the config-write comparison folding a corrupt file to
 `Null`. Builds on
-v1.0.128: the `ragent.json` write path lands in a uniquely named temp file,
+v1.0.128: the `codemason.json` write path lands in a uniquely named temp file,
 `fsync`-ed and renamed over the target, so an interrupted write can no longer
 silently reset a persisted YOLO flag; runtime-flag persistence edits only the
 single top-level key in the raw global file (`Config::set_global_bool_key`); every
 MCP connect runs under a bounded per-attempt timeout with a single timeout retry;
 the TUI startup no longer blocks on the MCP connect loop; MCP connect failures are
 recorded as `McpStatus::Failed` and reported instead of being dropped; the
-`ragent_info` tool reports runtime execution details (pid, uptime, memory, thread
+`codemason_info` tool reports runtime execution details (pid, uptime, memory, thread
 count) alongside build metadata; runtime-flag writes and the load-time state are
 logged with attribution; and `/spec reverse --folder` scaffolds before the token
 gate. Builds on
@@ -672,7 +672,7 @@ new tracked research items (`codemigrate`, `connectors`, `vendormarketplace`) -
 alongside earlier `/memory clear`, the session-start connector lifecycle, the
 MCP orphan sweep, and the committed v1.0.122 security and anti-pattern
 remediation sweep folding in the `ANTIPAT.md` M0 plus M2-M7 and `SECTASKS.md`
-MS-05 work - `ragent-team` shim crate removed - and the `ragent_types::guard`
+MS-05 work - `codemason-team` shim crate removed - and the `codemason_types::guard`
 shared-guard module added. Earlier v1.0.121 work: rollback-capture
 remove-after-restore race fix (CI flake
 `test_rollback_accept_restores_snapshot`), OpenSkills `.agents` discovery, Claude

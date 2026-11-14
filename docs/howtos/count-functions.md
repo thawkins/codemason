@@ -7,17 +7,17 @@ are counted accurately; other languages fall back to an approximate regex mode.
 
 ```bash
 # one crate's source (the workspace default language is Rust)
-scripts/count_functions.py crates/ragent-config/src
+scripts/count_functions.py crates/codemason-config/src
 
 # the headline number only, tests excluded
-scripts/count_functions.py crates/ragent-config/src --tests exclude
+scripts/count_functions.py crates/codemason-config/src --tests exclude
 
 # machine-readable, for a report
-scripts/count_functions.py crates/ragent-tui/src --json
+scripts/count_functions.py crates/codemason-tui/src --json
 
 # per-file counts and every counted name
-scripts/count_functions.py crates/ragent-tui/src --list
-scripts/count_functions.py crates/ragent-config/src/config.rs --names
+scripts/count_functions.py crates/codemason-tui/src --list
+scripts/count_functions.py crates/codemason-config/src/config.rs --names
 ```
 
 A bare `path` may be a directory or a single file. The script is executable and
@@ -151,7 +151,7 @@ and the extension filter end to end without touching the repository.
 
 For a Rust tree, the script's production count should equal a plain grep over
 the same files minus anything grep mistakes for a definition. On
-`crates/ragent-config/src` the script reports 349 production functions and a
+`crates/codemason-config/src` the script reports 349 production functions and a
 naive `rg '^\s*(pub\s+)?(async\s+|const\s+|unsafe\s+)*fn\s+[A-Za-z_]'` reports
 350; the difference is the `fn fmt` inside `macro_rules! redacted_debug_impl`,
 which the script excludes by category. That equivalence — and the one-line

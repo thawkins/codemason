@@ -32,7 +32,7 @@ cannot become two keys in the allowed set. There is no translation layer, so:
 - the thirteen Claude Code spellings the rename adopted resolve as written -
   `AskUserQuestion`, `Bash`, `Edit`, `EnterPlanMode`, `ExitPlanMode`, `Glob`,
   `Grep`, `Skill`, `TaskCreate`, `TaskGet`, `TaskList`, `TaskUpdate`, `Write`;
-- the tools the rename did **not** touch keep their ragent spelling - `read`,
+- the tools the rename did **not** touch keep their codemason spelling - `read`,
   `list`, `think`, `codeindex_search`, and so on;
 - **case does not matter**: `Bash`, `bash` and `BASH` all name the registry's
   `Bash`, and `grep` names `Grep`, so a manifest can use whatever case reads best
@@ -67,12 +67,12 @@ Manage the skill registry at runtime.
 |----------|------|----------|-------------|---------------|
 | `action` | enum | yes | `list`, `read`, `load`, `reload` | `"list"` |
 | `name` | string | yes for `read`/`load` | Skill name | `"code-audit"` |
-| `arguments` | string | no | Substituted into the skill body (`$ARGUMENTS` and friends) for `read`/`load` | `"crates/ragent-server"` |
+| `arguments` | string | no | Substituted into the skill body (`$ARGUMENTS` and friends) for `read`/`load` | `"crates/codemason-server"` |
 | `scope` | enum | no | `list` filter: `bundled`, `enterprise`, `openskills-global`, `personal`, `openskills-project`, `project` | `"project"` |
 | `include_bodies` | boolean | no | `list` includes full prompt bodies (default false: metadata only) | `false` |
 
 **Example:**
 ```text
 Skill action="list"
-Skill action="load" name="code-audit" arguments="crates/ragent-server"
+Skill action="load" name="code-audit" arguments="crates/codemason-server"
 ```

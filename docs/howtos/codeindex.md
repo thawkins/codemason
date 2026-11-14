@@ -1,6 +1,6 @@
-# ragent Code Index Manual
+# codemason Code Index Manual
 
-This guide explains ragent's built-in **code index** — a tree-sitter-powered
+This guide explains codemason's built-in **code index** — a tree-sitter-powered
 codebase indexing system that provides fast, structured search across all
 indexed source files. It covers the ten codeindex tools, the TUI slash
 commands, supported languages, the semantic code graph, and practical
@@ -41,7 +41,7 @@ usage patterns.
 
 ## 1. Overview
 
-The code index (`ragent-codeindex` crate) provides structured search across
+The code index (`codemason-codeindex` crate) provides structured search across
 your codebase. It uses **tree-sitter** parsers to extract symbols
 (functions, structs, enums, traits, etc.) from source files, stores them
 in a **SQLite** database, and builds a **Tantivy** full-text search index
@@ -81,8 +81,8 @@ Check status:
 /codeindex show
 ```
 
-When enabled, ragent opens the index database at
-`.ragent/codeindex/` within the project root, scans all source files, and
+When enabled, codemason opens the index database at
+`.codemason/codeindex/` within the project root, scans all source files, and
 starts the background file watcher. The first scan may take a few seconds
 on large codebases.
 
@@ -629,7 +629,7 @@ All codeindex slash commands are available in the TUI:
 /codeindex path <A> <B>    Shortest path between two symbols
 /codeindex communities     List detected communities
 /codeindex godnodes        List high-degree hub symbols
-/codeindex skillgen        Install the graphify skill to ~/.ragent/skills/
+/codeindex skillgen        Install the graphify skill to ~/.codemason/skills/
 /codeindex help            Show available sub-commands
 ```
 

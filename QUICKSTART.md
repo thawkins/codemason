@@ -1,6 +1,6 @@
-# Ragent Quick Start Guide
+# Codemason Quick Start Guide
 
-Get up and running with ragent in minutes. This guide covers installation,
+Get up and running with codemason in minutes. This guide covers installation,
 configuration, and common workflows.
 
 ---
@@ -17,16 +17,16 @@ configuration, and common workflows.
 
 ```bash
 # Clone and build
-git clone https://github.com/thawkins/ragent.git
-cd ragent
+git clone https://github.com/thawkins/codemason.git
+cd codemason
 cargo build --release
 
-# The binary is at target/release/ragent
+# The binary is at target/release/cdmn
 # Optionally copy it to your PATH:
-cp target/release/ragent ~/.local/bin/
+cp target/release/cdmn ~/.local/bin/
 
 # Check the installed version:
-ragent --version    # or: ragent -V
+cdmn --version    # or: codemason -V
 ```
 
 Build requirements, the incremental-build setting and expected build cost are in
@@ -37,10 +37,10 @@ measured numbers.
 
 ## 1. Configure a Provider
 
-Ragent needs at least one LLM provider. The easiest way is via the **interactive TUI**:
+Codemason needs at least one LLM provider. The easiest way is via the **interactive TUI**:
 
 ```bash
-ragent        # launch ragent
+cdmn        # launch codemason
 # press 'p' to open the provider setup dialog
 ```
 
@@ -57,7 +57,7 @@ longer than the dialog keeps the highlighted row painted and the legend reads
 `Showing a-b of N`; a mouse wheel notch over the dialog steps the cursor exactly
 like `Up`/`Down`.
 
-The key is stored persistently in `~/.local/share/ragent/ragent.db` so you only need to
+The key is stored persistently in `~/.local/share/codemason/codemason.db` so you only need to
 configure once.
 
 A **health indicator** appears next to the provider on both the home and chat screens:
@@ -72,7 +72,7 @@ You can also configure providers via **environment variables** or the **CLI**:
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
 # or store persistently:
-ragent auth anthropic sk-ant-your-key-here
+cdmn auth anthropic sk-ant-your-key-here
 ```
 
 ### Option B: OpenAI (GPT-4o)
@@ -80,7 +80,7 @@ ragent auth anthropic sk-ant-your-key-here
 ```bash
 export OPENAI_API_KEY="sk-..."
 # or store persistently:
-ragent auth openai sk-your-key-here
+cdmn auth openai sk-your-key-here
 ```
 
 ### Option C: Google Gemini
@@ -88,7 +88,7 @@ ragent auth openai sk-your-key-here
 ```bash
 export GEMINI_API_KEY="AIza..."
 # or store persistently:
-ragent auth gemini AIza-your-key-here
+cdmn auth gemini AIza-your-key-here
 ```
 
 ### Option D: OpenRouter (200+ models with one key)
@@ -96,27 +96,27 @@ ragent auth gemini AIza-your-key-here
 ```bash
 export OPENROUTER_API_KEY="sk-or-..."
 # or store persistently:
-ragent auth openrouter sk-or-your-key-here
+cdmn auth openrouter sk-or-your-key-here
 ```
 
 OpenRouter exposes vendor models behind an OpenAI-compatible endpoint, so
 model ids keep their vendor slug:
 
 ```bash
-ragent run --model openrouter/anthropic/claude-sonnet-4 "Explain this code"
-ragent run --model openrouter/openai/gpt-4o "Write a Rust test"
-ragent run --model openrouter/deepseek/deepseek-chat "Summarise this file"
+cdmn run --model openrouter/anthropic/claude-sonnet-4 "Explain this code"
+cdmn run --model openrouter/openai/gpt-4o "Write a Rust test"
+cdmn run --model openrouter/deepseek/deepseek-chat "Summarise this file"
 ```
 
 ### Option E: GitHub Copilot (No Extra API Key)
 
 If you have an active [GitHub Copilot](https://github.com/features/copilot)
-subscription and the extension installed in VS Code or JetBrains, ragent will
+subscription and the extension installed in VS Code or JetBrains, codemason will
 auto-discover your Copilot token. No configuration needed.
 
 ```bash
 # Just works if Copilot is configured in your IDE
-ragent run --model copilot/gpt-4o "Explain this code"
+cdmn run --model copilot/gpt-4o "Explain this code"
 
 # Or set the token explicitly
 export GITHUB_COPILOT_TOKEN="ghu_your_token_here"
@@ -127,7 +127,7 @@ export GITHUB_COPILOT_TOKEN="ghu_your_token_here"
 ```bash
 export HF_TOKEN="hf_..."
 # or store persistently:
-ragent auth huggingface hf_your-token-here
+cdmn auth huggingface hf_your-token-here
 ```
 
 HuggingFace provides free access to many open-source models via the Inference API.
@@ -135,9 +135,9 @@ Get your token at https://huggingface.co/settings/tokens.
 
 ```bash
 # Use a specific HF model
-ragent run --model huggingface/meta-llama/Llama-3.1-70B-Instruct "Hello world"
+cdmn run --model huggingface/meta-llama/Llama-3.1-70B-Instruct "Hello world"
 
-# For dedicated Inference Endpoints, set base_url in ragent.json
+# For dedicated Inference Endpoints, set base_url in codemason.json
 ```
 
 ### Option G: Ollama (Local — No API Key Required)
@@ -147,7 +147,7 @@ ragent run --model huggingface/meta-llama/Llama-3.1-70B-Instruct "Hello world"
 ollama serve          # Start the server
 ollama pull llama3.2  # Pull a model
 
-# Ragent auto-detects Ollama at localhost:11434.
+# Codemason auto-detects Ollama at localhost:11434.
 # For a remote server, set:
 export OLLAMA_HOST="http://your-server:11434"
 ```
@@ -161,12 +161,12 @@ export AWS_SECRET_ACCESS_KEY="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 export AWS_REGION="us-east-1"
 
 # Use a Bedrock model
-ragent run --model bedrock/anthropic.claude-sonnet-4-20250514-v1:0 "Hello world"
+cdmn run --model bedrock/anthropic.claude-sonnet-4-20250514-v1:0 "Hello world"
 
 # Or use a short alias
-ragent run --model bedrock/claude-sonnet-4-20250514 "Explain this code"
+cdmn run --model bedrock/claude-sonnet-4-20250514 "Explain this code"
 
-# Or configure in ragent.json
+# Or configure in codemason.json
 # {
 #   "provider": {
 #     "bedrock": {
@@ -191,19 +191,19 @@ missing credentials, misconfigured MCP servers, or broken skill paths:
 
 ```bash
 # Human-readable report
-ragent --dry-run
+cdmn --dry-run
 
 # Same check, machine-readable JSON for CI/CD
-ragent --dry-run --json
+cdmn --dry-run --json
 
 # Equivalent subcommand
-ragent config check --json
+cdmn config check --json
 ```
 
 Example human output:
 
 ```text
-config    ready   ragent.json parsed
+config    ready   codemason.json parsed
 provider  ready   anthropic/claude-sonnet-4-20250514 (ANTHROPIC_API_KEY set)
 skills    ready   7 skills loaded (4 bundled + 3 discovered)
 tools     ready   111 tools visible across 15 families
@@ -217,7 +217,7 @@ Example CI script consuming the JSON report:
 #!/usr/bin/env bash
 set -euo pipefail
 
-report=$(ragent --dry-run --json)
+report=$(codemason --dry-run --json)
 verdict=$(echo "$report" | jq -r '.verdict')
 
 if [[ "$verdict" == "BLOCKED" ]]; then
@@ -248,22 +248,22 @@ Exit codes follow the verdict:
 
 ```bash
 # Start an interactive session with the default agent ("general")
-ragent run "Explain the structure of this project"
+cdmn run "Explain the structure of this project"
 
 # Use a specific model
-ragent run --model anthropic/claude-sonnet-4-20250514 "Refactor this function"
+cdmn run --model anthropic/claude-sonnet-4-20250514 "Refactor this function"
 
 # Use a specific agent
-ragent run --agent explore "How does the config system work?"
+cdmn run --agent explore "How does the config system work?"
 
 # Use Ollama
-ragent run --model ollama/llama3.2 "Write a hello world in Rust"
+cdmn run --model ollama/llama3.2 "Write a hello world in Rust"
 
 # Skip the TUI and stream to stdout
-ragent run --no-tui "List all tasks"
+cdmn run --no-tui "List all tasks"
 
 # Auto-approve all tool calls (no permission prompts)
-ragent run --yes "Fix the failing test in src/lib.rs"
+cdmn run --yes "Fix the failing test in src/lib.rs"
 ```
 
 ---
@@ -272,21 +272,21 @@ ragent run --yes "Fix the failing test in src/lib.rs"
 
 ```bash
 # Show all registered models
-ragent models
+cdmn models
 
 # Show only OpenRouter models
-ragent models --provider openrouter
+cdmn models --provider openrouter
 
 # Show only Ollama models (queries the running server)
-ragent models --provider ollama
+cdmn models --provider ollama
 
 # Discover models on a remote Ollama server
-ragent models --ollama-url http://remote-server:11434
+cdmn models --ollama-url http://remote-server:11434
 
 # Filter by provider
-ragent models --provider anthropic
-ragent models --provider openai
-ragent models --provider gemini
+cdmn models --provider anthropic
+cdmn models --provider openai
+cdmn models --provider gemini
 ```
 
 **Default models:**
@@ -310,21 +310,21 @@ ragent models --provider gemini
 
 ## 4. Configuration File
 
-Ragent loads configuration from multiple sources (last wins):
+Codemason loads configuration from multiple sources (last wins):
 
 1. Built-in defaults
-2. `~/.config/ragent/ragent.json` (global)
-3. `./ragent.json` (project-local)
-4. `$RAGENT_CONFIG` (path to a config file)
-5. `$RAGENT_CONFIG_CONTENT` (inline JSON)
+2. `~/.config/codemason/codemason.json` (global)
+3. `./codemason.json` (project-local)
+4. `$CODEMASON_CONFIG` (path to a config file)
+5. `$CODEMASON_CONFIG_CONTENT` (inline JSON)
 
 A project-local file is untrusted, so the privileged keys it may not set are
 stripped before the merge: `yolo`, allow-rules, bash/dirs lists, `telemetry`,
 `hooks`, `openai`, `mcp`, `acp`, and every provider's `api` block. Put those in
-the user-global `~/.config/ragent/ragent.json`. Rejected keys are logged at
+the user-global `~/.config/codemason/codemason.json`. Rejected keys are logged at
 `warn!`.
 
-### Example `ragent.json`
+### Example `codemason.json`
 
 ```jsonc
 {
@@ -432,9 +432,9 @@ the user-global `~/.config/ragent/ragent.json`. Rejected keys are logged at
       "protocol": "http",
       "export_interval_seconds": 30,
       "export_timeout_seconds": 10,
-      "service_name": "ragent",
+      "service_name": "codemason",
       "resource_attributes": { "deployment": "local" },
-      "metrics": { "ragent.snapshot.restores": false },
+      "metrics": { "codemason.snapshot.restores": false },
       "internal_port": null
     }
   },
@@ -469,12 +469,12 @@ the user-global `~/.config/ragent/ragent.json`. Rejected keys are logged at
   // Execution backend (optional). Omitted = `local` (host execution). A
   // `docker`/`podman` label runs shell/file/search tools inside a container whose
   // workspace is a named volume, never a host bind mount; `remote` drives a
-  // second ragent server. `credentials` names encrypted-store secrets injected as
+  // second codemason server. `credentials` names encrypted-store secrets injected as
   // container env vars at spawn time (the value is never in this file).
   "execution_backend": "podman",
   "backends": [
     { "id": "sandbox", "name": "Podman sandbox", "kind": "podman",
-      "image": "ghcr.io/yourorg/ragent-sandbox:latest", "workspace": "/projects",
+      "image": "ghcr.io/yourorg/codemason-sandbox:latest", "workspace": "/projects",
       "credentials": ["EXAMPLE_API_KEY"] }
   ],
 
@@ -487,7 +487,7 @@ the user-global `~/.config/ragent/ragent.json`. Rejected keys are logged at
   },
 
   // OpenAI-compatible inbound surface (optional). When `enabled` is true a
-  // `token` (or the ambient `RAGENT_TOKEN`) is required or `ragent serve`
+  // `token` (or the ambient `CODEMASON_TOKEN`) is required or `codemason serve`
   // refuses to start the surface.
   "openai": {
     "enabled": true,
@@ -509,7 +509,7 @@ the full schemas, plus the manuals in `docs/howtos/slashcommands/`.
 View the resolved config at any time:
 
 ```bash
-ragent config
+cdmn config
 ```
 
 ### Backing Up and Restoring Configuration
@@ -521,7 +521,7 @@ Before making risky edits, snapshot the current global config:
 /config save
 ```
 
-This writes a timestamped copy to `~/.config/ragent/saves/ragent.json.YYYY-MM-DD.HH-MM-SS`.
+This writes a timestamped copy to `~/.config/codemason/saves/codemason.json.YYYY-MM-DD.HH-MM-SS`.
 
 To view or restore a previous snapshot:
 
@@ -531,7 +531,7 @@ To view or restore a previous snapshot:
 ```
 
 Use ↑/↓ (or `k`/`j`) to choose a backup, **Enter** to restore it over the active
-`ragent.json`, or **Esc**/**q** to cancel. Restore is atomic and the running
+`codemason.json`, or **Esc**/**q** to cancel. Restore is atomic and the running
 session's cached configuration is invalidated so the next agent turn picks up
 the restored values.
 
@@ -549,12 +549,12 @@ Enable background metric export to any OTLP-compatible collector by adding a
       "protocol": "http",
       "export_interval_seconds": 30,
       "export_timeout_seconds": 10,
-      "service_name": "ragent",
+      "service_name": "codemason",
       "resource_attributes": { "deployment": "local" },
       "metrics": {
-        "ragent.llm.requests": true,
-        "ragent.tool.invocations": true,
-        "ragent.snapshot.restores": false
+        "codemason.llm.requests": true,
+        "codemason.tool.invocations": true,
+        "codemason.snapshot.restores": false
       },
       "internal_port": 9090,
       "logs": { "enabled": true, "level": "warn" }
@@ -566,7 +566,7 @@ Enable background metric export to any OTLP-compatible collector by adding a
 - `enabled` — master switch. Default `false`; no metrics are recorded or
   exported when disabled.
 - `endpoint` — OTLP collector **base** URL. Use `http://host:4318` for HTTP and
-  `http://host:4317` for gRPC. ragent appends the OTLP/HTTP signal path itself
+  `http://host:4317` for gRPC. codemason appends the OTLP/HTTP signal path itself
   (`/v1/metrics`, `/v1/logs`), so `http://localhost:4318` exports metrics to
   `http://localhost:4318/v1/metrics`; a base path
   (`https://gw.example.com/otel`) is kept, and a value that already names a
@@ -631,7 +631,7 @@ Inside the TUI you can also run:
 /telemetry_panel                             # toggle the live telemetry side panel
 ```
 
-OTEL support is built in by default: `ragent-telemetry` enables its
+OTEL support is built in by default: `codemason-telemetry` enables its
 `telemetry` Cargo feature by default, so a plain `cargo build --release`
 includes the exporters. Only a build that disables that crate's default
 features compiles telemetry to zero-overhead no-ops with no OpenTelemetry
@@ -657,15 +657,15 @@ use `/agent <name>` for direct switching, or cycle with `Tab`/`Shift+Tab`.
 
 ```bash
 # Use a specific agent from the CLI
-ragent run --agent ask "What is the capital of France?"
-ragent run --agent plan "Design a REST API for user management"
-ragent run --agent explore "How does authentication work in this codebase?"
+cdmn run --agent ask "What is the capital of France?"
+cdmn run --agent plan "Design a REST API for user management"
+cdmn run --agent explore "How does authentication work in this codebase?"
 ```
 
 ### Project Guidelines (AGENTS.md)
 
 Place an `AGENTS.md` file in your project root to define project-specific guidelines.
-On session start, ragent automatically loads this file into the system prompt for all
+On session start, codemason automatically loads this file into the system prompt for all
 multi-step agents (general, build, plan, explore). The `ask` agent and internal utility
 agents skip it.
 
@@ -699,7 +699,7 @@ before the guidelines are loaded into the system prompt. Paths resolve
 relative to the directory of the file containing the directive, includes are
 transitive (included files can themselves include other files), and cycles are
 detected and skipped; nesting is capped at 16 levels. Paths must stay under the project root or the global
-ragent data dir — `../` escapes and absolute paths are rejected.
+codemason data dir — `../` escapes and absolute paths are rejected.
 
 A leading `@@` is an escape sequence: the line is emitted verbatim with the
 `@@` collapsed to a single literal `@` character (use this to write a line
@@ -716,22 +716,22 @@ They are loaded automatically at startup.
 
 | Directory | Scope |
 |-----------|-------|
-| `.ragent/agents/` | Project-local — this project only (takes priority) |
-| `~/.config/ragent/agents/` | User-global — every project (XDG config; takes priority over `~/.ragent/agents/`) |
-| `~/.ragent/agents/` | User-global — every project (legacy location) |
+| `.codemason/agents/` | Project-local — this project only (takes priority) |
+| `~/.config/codemason/agents/` | User-global — every project (XDG config; takes priority over `~/.codemason/agents/`) |
+| `~/.codemason/agents/` | User-global — every project (legacy location) |
 
 ### Create a minimal custom agent
 
 ```bash
-mkdir -p ~/.ragent/agents
-cat > ~/.ragent/agents/my-agent.json << 'EOF'
+mkdir -p ~/.codemason/agents
+cat > ~/.codemason/agents/my-agent.json << 'EOF'
 {
   "name": "my-agent",
   "description": "My custom agent",
   "version": "1.0.0",
   "schema_version": "0.7.0",
   "modules": [{
-    "type": "ragent/agent/v1",
+    "type": "codemason/agent/v1",
     "payload": {
       "system_prompt": "You are a helpful AI agent.\nProject: {{WORKING_DIR}}\n\n{{AGENTS_MD}}",
       "mode": "primary",
@@ -741,7 +741,7 @@ cat > ~/.ragent/agents/my-agent.json << 'EOF'
 EOF
 ```
 
-Start ragent and run `/agents` to confirm it loaded. Use `/agent` to switch
+Start codemason and run `/agents` to confirm it loaded. Use `/agent` to switch
 to it — it will appear with a yellow `[custom]` badge in the picker.
 
 ### Template variables
@@ -757,8 +757,8 @@ Inside `system_prompt` you can use:
 
 ### Read-only reviewer example
 
-Write this profile to `~/.ragent/agents/security-reviewer.json` (or to
-`.ragent/agents/` for one project only):
+Write this profile to `~/.codemason/agents/security-reviewer.json` (or to
+`.codemason/agents/` for one project only):
 
 ```json
 {
@@ -767,7 +767,7 @@ Write this profile to `~/.ragent/agents/security-reviewer.json` (or to
   "version": "1.0.0",
   "schema_version": "0.7.0",
   "modules": [{
-    "type": "ragent/agent/v1",
+    "type": "codemason/agent/v1",
     "payload": {
       "system_prompt": "You are a security-focused code reviewer.\nWorking directory: {{WORKING_DIR}}\n\n{{AGENTS_MD}}",
       "mode": "primary",
@@ -875,7 +875,7 @@ The AI agent can use these tools during a session:
 | `Glob`     | Find files by name pattern                     | `file:read`     |
 | `list`     | List directory contents (2 levels deep)         | `file:read`     |
 | `AskUserQuestion` | Ask the user a clarifying question; accepts an optional `default` option used if the dialog times out | `AskUserQuestion`      |
-| `ragent_info`| Report ragent version, build time, and execution details | `none`          |
+| `codemason_info`| Report codemason version, build time, and execution details | `none`          |
 | `os_info`  | Report host OS/hardware (also `/osinfo show`)   | `none`          |
 | `tool_info`| JSON dump of the tool registry                | `none`          |
 | `commands_info`| JSON dump of the slash-command catalog      | `none`          |
@@ -883,16 +883,16 @@ The AI agent can use these tools during a session:
 | `autofix_add`| Push the current branch, open (or reuse) its PR/MR against the branch it came from, bind it and turn Auto-fix on | `git:write` |
 | `DateTime` | Current date/time: RFC 3339 UTC instant, an optional fixed UTC-offset rendering, date/time fields, Unix timestamp | `none`          |
 
-Run `/tools` in the TUI to list every registered tool, or `ragent --dry-run --json
+Run `/tools` in the TUI to list every registered tool, or `codemason --dry-run --json
 run x` for the total and per-category counts (see
 [docs/howtos/tools/INDEX.md](docs/howtos/tools/INDEX.md)). `mf_screenshot` is
 registered only when a drivable headless browser engine is present — spec
 `openhands` FR-029.
 
 **Provider spellings (optional).** A model, an ACP client or an MCP server may
-name a tool with a spelling ragent does not register — Anthropic's `WebFetch`,
-OpenAI's `web_search`/`file_search`. Enable `tools.aliases` in `ragent.json` to
-resolve such a spelling onto the ragent tool **before** the unknown-tool check:
+name a tool with a spelling codemason does not register — Anthropic's `WebFetch`,
+OpenAI's `web_search`/`file_search`. Enable `tools.aliases` in `codemason.json` to
+resolve such a spelling onto the codemason tool **before** the unknown-tool check:
 
 ```json
 { "tools": { "aliases": true } }
@@ -916,7 +916,7 @@ it runs a `LoopSpec` (agent, goal, verify command, scope, tool set, budget) to
 a stop condition, with checkpoint capture and an optional post-loop rollback.
 The one-shot form `/loop <agent> [flags] <goal>` accepts `--max-steps N`,
 `--cost_limit N`, and `--timeout N` overrides in any position; the default
-step budget is 512 (`loop.max_steps` in `ragent.json`).
+step budget is 512 (`loop.max_steps` in `codemason.json`).
 See [`docs/howtos/loopprogramming.md`](docs/howtos/loopprogramming.md).
 
 GCF (Graph Compact Format) token-efficient tool-result encoding is off by
@@ -933,23 +933,23 @@ MCP servers can provide additional tools that are automatically discovered and
 made available to the agent (see [SPEC.md §19](SPEC.md#19-mcp-integration-model-context-protocol)). MCP
 tools use the official `rmcp` SDK and support both stdio and HTTP transports.
 
-Use **`/mcp config`** to see where ragent looks for MCP server definitions — the
-ragent-native `~/.config/ragent/servers/` directory, npm global `node_modules`,
+Use **`/mcp config`** to see where codemason looks for MCP server definitions — the
+codemason-native `~/.config/codemason/servers/` directory, npm global `node_modules`,
 `PATH`, and the Claude/Cline/legacy/XDG registry directories — with the number of
 definitions found at each location (and a `(missing)` marker for an absent
 directory) followed by the individual servers discovered. Use `/mcp discover` to
 scan and install interactively, and `/mcp connect <id>` / `/mcp disconnect <id>`
 to toggle a server live. `/mcp remove <id>` deletes a configured server's
-`ragent.json` entry (preserving every other key) and clears its enable-ledger
+`codemason.json` entry (preserving every other key) and clears its enable-ledger
 row, so a re-added server starts enabled; a server bridged from a plugin or a
 connector is refused by name and is removed with `/plugins remove <id>` or
 `/connectors remove <id>` instead. `/mcp config` and the discover dialog both
 name the manifest that declares each server, so a bridged row is
-distinguishable from your own `ragent.json` entry before any removal.
+distinguishable from your own `codemason.json` entry before any removal.
 
 UI internationalisation is opt-in and English by default. Install a locale
-message catalog at `<project>/.ragent/locales/<locale>.json` (or
-`~/.config/ragent/locales/<locale>.json`), then enable it with the **`/i18n`**
+message catalog at `<project>/.codemason/locales/<locale>.json` (or
+`~/.config/codemason/locales/<locale>.json`), then enable it with the **`/i18n`**
 slash command: `/i18n on`, `/i18n fr` (or any locale tag such as
 `/i18n de_DE.UTF-8`), `/i18n off`, `/i18n status`, `/i18n list`, and
 `/i18n help`. Translated keys render from the catalog; any key the catalog does
@@ -966,7 +966,7 @@ Skills are reusable task packages that enhance the agent's capabilities. They su
 
 ### Bundled Skills
 
-Ragent bundles these skills:
+Codemason bundles these skills:
 
 | Skill | Description | Usage |
 |-------|-------------|-------|
@@ -980,8 +980,8 @@ Ragent bundles these skills:
 Create a skill in your project:
 
 ```bash
-mkdir -p .ragent/skills/deploy
-cat > .ragent/skills/deploy/SKILL.md << 'EOF'
+mkdir -p .codemason/skills/deploy
+cat > .codemason/skills/deploy/SKILL.md << 'EOF'
 ---
 name: deploy
 description: Deploy the application to production
@@ -1009,7 +1009,7 @@ EOF
 /deploy production
 
 # Or via CLI:
-ragent run --agent general "/deploy staging"
+cdmn run --agent general "/deploy staging"
 ```
 
 **Agent auto-invocation:**
@@ -1030,19 +1030,19 @@ Result returned to agent
 
 ### Skill Features
 
-- **Arguments**: Use `$0`, `$ARGUMENTS[1]`, `${RAGENT_SESSION_ID}` for dynamic substitution
+- **Arguments**: Use `$0`, `$ARGUMENTS[1]`, `${CODEMASON_SESSION_ID}` for dynamic substitution
 - **Dynamic context**: Use `` !`command` `` to execute shell commands and inject output
 - **Forked execution**: Set `context: fork` to run in an isolated subagent (separate conversation history)
 - **Model override**: Use `model: "provider/model"` to use a different model for this skill
-- **Tool restrictions**: Use `allowed-tools: [Bash, read]` (or the YAML block form) to limit tools available when running the skill. Entries resolve by name, **ignoring case**: the adopted Claude spellings (`Bash`, `Edit`, `Grep`, ...) and the tools that kept their ragent names (`read`, `list`, ...) work as written, and `bash`/`grep` resolve to the same tools. `any` (any case) lifts the restriction entirely. A retired spelling that names a *different* tool, or a typo, matches nothing and is reported, naming the entry and the skill
+- **Tool restrictions**: Use `allowed-tools: [Bash, read]` (or the YAML block form) to limit tools available when running the skill. Entries resolve by name, **ignoring case**: the adopted Claude spellings (`Bash`, `Edit`, `Grep`, ...) and the tools that kept their codemason names (`read`, `list`, ...) work as written, and `bash`/`grep` resolve to the same tools. `any` (any case) lifts the restriction entirely. A retired spelling that names a *different* tool, or a typo, matches nothing and is reported, naming the entry and the skill
 
 ### Personal Skills
 
-Create skills in `~/.ragent/skills/` to make them available across all projects:
+Create skills in `~/.codemason/skills/` to make them available across all projects:
 
 ```bash
-mkdir -p ~/.ragent/skills/code-review
-cat > ~/.ragent/skills/code-review/SKILL.md << 'EOF'
+mkdir -p ~/.codemason/skills/code-review
+cat > ~/.codemason/skills/code-review/SKILL.md << 'EOF'
 ---
 name: code-review
 description: My code review checklist
@@ -1060,7 +1060,7 @@ Then use `/code-review` in any project.
 
 ### AgentSkills Packs
 
-ragent also loads the AgentSkills convention: a directory of packs under
+codemason also loads the AgentSkills convention: a directory of packs under
 `.agents/skills/` (project) or `~/.agents/skills/` (user), each pack a directory
 holding a `SKILL.md` whose YAML frontmatter declares at least `name` and
 `description`:
@@ -1088,7 +1088,7 @@ with `/skill <name> [args]` (or the bare `/<name>` trigger):
 ```
 
 On a name clash the existing higher-scope pack wins, so an AgentSkills pack never
-shadows a same-named `.ragent/skills/` pack. Reload after edits with
+shadows a same-named `.codemason/skills/` pack. Reload after edits with
 `/reload skills`.
 
 A skill's `allowed-tools` frontmatter narrows the run's tool surface: entries
@@ -1101,12 +1101,12 @@ by name and skill rather than silently removing the capability. See
 
 ## 7b. Plugins
 
-ragent can load third-party plugins written for OpenAI Codex and Claude
+codemason can load third-party plugins written for OpenAI Codex and Claude
 Code/Desktop, running their JavaScript on an embedded, budget-sandboxed engine
 (no Node.js, Deno, or Bun required). Plugins contribute tools (registered as
-`plugin_<id>_<tool>`) and slash commands through a versioned `ragent` host API.
+`plugin_<id>_<tool>`) and slash commands through a versioned `codemason` host API.
 The `plugin_<id>_` namespace keeps a plugin's own tool - even one it calls
-`Bash` or `Edit` - from occupying a name ragent owns or a spelling the tool
+`Bash` or `Edit` - from occupying a name codemason owns or a spelling the tool
 rename retired; the bridge reports such a contribution once, names the
 replacement, and keeps the plugin's other tools working.
 
@@ -1129,13 +1129,13 @@ Manage plugins from the TUI or the CLI:
 | `/plugins claude [query] [--category <name>] [--refresh]` | Open the interactive Claude plugin-marketplace browser, with the same `query`, `--category`, and `--refresh` arguments (and the same per-row marketplace column) |
 | `/plugins help` | Show the usage block |
 
-The same operations are available from a shell as `ragent plugins <sub> …`.
-Plugins are discovered under `.ragent/plugins/` (project) or
-`~/.config/ragent/plugins/` (user-global). Set `plugins.enabled: false` to make
+The same operations are available from a shell as `codemason plugins <sub> …`.
+Plugins are discovered under `.codemason/plugins/` (project) or
+`~/.config/codemason/plugins/` (user-global). Set `plugins.enabled: false` to make
 the whole subsystem inert.
 
 An enabled plugin's slash commands appear in the `/` menu and in `/help`. Besides
-the inline commands a plugin registers through the host API, ragent reads the
+the inline commands a plugin registers through the host API, codemason reads the
 Claude-dialect `commands/*.md` prompt files (for example the official
 `commit-commands` plugin's `/commit`, `/clean_gone`, and `/commit-push-pr`): each
 command's markdown body is injected into the session as a user turn, with its
@@ -1150,7 +1150,7 @@ bridged into the session:
 - **MCP servers** (FR-030) - a declared `mcpServers` entry connects as
   `<plugin-id>.<server>`;
 - **agents** (FR-032) - a plugin's `agents/*.md` profiles join agent discovery, so
-  they appear in the agent picker and are spawnable via `new_agent`. Both ragent's
+  they appear in the agent picker and are spawnable via `new_agent`. Both codemason's
   JSON frontmatter and the Claude-dialect YAML frontmatter are accepted, and a
   project agent of the same name wins a clash;
 - **hooks** (FR-033) - a plugin's declared `hooks` fire on the matching session
@@ -1162,8 +1162,8 @@ bridged into the session:
   `CLAUDE_PLUGIN_ROOT` and the Claude event JSON on stdin, a `PostToolUse`
   `additionalContext` is folded into the tool result, and a blocking Stop hook
   can feed findings back to the model before the turn ends. The trigger name
-  accepts both ragent's `pre_tool_use` and the Claude `PreToolUse` spellings, and
-  configured `ragent.json` hooks run first at a shared trigger.
+  accepts both codemason's `pre_tool_use` and the Claude `PreToolUse` spellings, and
+  configured `codemason.json` hooks run first at a shared trigger.
 
 ---
 
@@ -1171,7 +1171,7 @@ bridged into the session:
 
 Connectors are named integrations (Google Drive, Slack, GitHub, Git, Postgres,
 Puppeteer, and the wider community catalogue) that reach an external system
-through one or more **MCP servers** — the transport ragent already speaks. A
+through one or more **MCP servers** — the transport codemason already speaks. A
 connector is a catalogue entry carrying a display name, a category, an auth
 shape, and one or more servers; adding one installs the entry, and enabling it
 connects its servers and exposes their tools to the model. The system is
@@ -1196,9 +1196,9 @@ Manage connectors from the TUI or the CLI:
 | `/connectors marketplace claude list\|add <source> [--force]\|remove <name>` | List, add, or remove an additional catalogue marketplace (an `owner/repo` slug, a GitHub SSH remote, an `https://` URL, or a local directory), written to the user-global `connectors.stores.marketplaces` |
 | `/connectors help` | Show the usage block |
 
-The same operations are available from a shell as `ragent connectors <sub> …`.
-Connectors are discovered under `.ragent/connectors/` (project) or
-`~/.config/ragent/connectors/` (user-global). Their secrets live in the encrypted
+The same operations are available from a shell as `codemason connectors <sub> …`.
+Connectors are discovered under `.codemason/connectors/` (project) or
+`~/.config/codemason/connectors/` (user-global). Their secrets live in the encrypted
 credential store — the manifest stores only the credential *name*. Set
 `connectors.enabled: false` to make the whole subsystem inert. See
 [`docs/howtos/slashcommands/connectors.md`](docs/howtos/slashcommands/connectors.md)
@@ -1231,16 +1231,16 @@ Tab / Shift+Tab         # Cycle through agents
 
 **CLI invocation:**
 ```bash
-ragent run --agent plan "Design a REST API"
-ragent run --agent explore "How does the auth system work?"
-ragent run --agent build "Fix the failing tests"
+cdmn run --agent plan "Design a REST API"
+cdmn run --agent explore "How does the auth system work?"
+cdmn run --agent build "Fix the failing tests"
 ```
 
 ---
 
 ## 8b. Background Agents (F13 & F14)
 
-Ragent supports spawning multiple sub-agents concurrently for parallel task execution.
+Codemason supports spawning multiple sub-agents concurrently for parallel task execution.
 Use the `new_agent` tool to spawn a background agent while the parent continues processing.
 
 ### Spawning Background Tasks
@@ -1311,7 +1311,7 @@ curl -X DELETE http://localhost:9100/sessions/{sid}/tasks/{task_id} \
 
 ### Configuration
 
-Control background agent limits in `ragent.json`:
+Control background agent limits in `codemason.json`:
 
 ```jsonc
 {
@@ -1335,22 +1335,22 @@ written to `log/subagents/<task-id>.md` for retrieval with the `read` tool.
 
 ## 9. Sessions
 
-Ragent persists conversations in sessions stored in SQLite.
+Codemason persists conversations in sessions stored in SQLite.
 
 ```bash
 # List sessions, grouped by project
-ragent session list
-ragent session list --project my-app   # one project only
-ragent session list --json             # machine-readable
+cdmn session list
+cdmn session list --project my-app   # one project only
+cdmn session list --json             # machine-readable
 
 # Resume a previous session (loads message history into the TUI)
-ragent session resume <session-id>
+cdmn session resume <session-id>
 
 # Export a session to a portable archive (default: session_archive.tar.gz)
-ragent session export-archive <session-id> -o session_archive.tar.gz
+cdmn session export-archive <session-id> -o session_archive.tar.gz
 
 # Import a session from an archive written by export-archive
-ragent session import session_archive.tar.gz
+cdmn session import session_archive.tar.gz
 ```
 
 ### Multiple sessions in the TUI
@@ -1378,8 +1378,8 @@ question) its sidebar row shows `!` and the status bar shows `N need you`.
 /session section --none      # back under its project
 ```
 
-`ragent` reopens the sessions that were open when it last exited;
-`ragent --new` starts a fresh one. Untitled sessions take their title from
+`codemason` reopens the sessions that were open when it last exited;
+`codemason --new` starts a fresh one. Untitled sessions take their title from
 the first prompt.
 
 The left-hand sidebar lists sessions by project. `Alt+S` shows, focuses or
@@ -1396,7 +1396,7 @@ on one of them acts on all of them.
 ### Auto-fix for pull and merge requests
 
 A session can be bound to one pull request (GitHub) or merge request
-(GitLab). With Auto-fix on, ragent checks it every minute and sends the
+(GitLab). With Auto-fix on, codemason checks it every minute and sends the
 session a message when CI fails (with the end of the failing job's log),
 the branch has merge conflicts, or someone else leaves a review comment.
 
@@ -1417,7 +1417,7 @@ Auto-fix on. The sidebar row shows `#` when bound and `#!` when
 Auto-fix has paused after 3 tries on one commit (`/autofix on` resumes). It
 stops when the request is merged or closed, and never merges, force-pushes
 or resolves review threads. GitHub Enterprise Server hosts and the Auto-fix
-settings go under `vcs` in your global `ragent.json` (a project's config
+settings go under `vcs` in your global `codemason.json` (a project's config
 cannot set them); the enterprise token comes from `GH_ENTERPRISE_TOKEN`:
 
 ```json
@@ -1468,27 +1468,27 @@ the number of pull/merge requests for that branch beside the session.
 The same data is available outside the TUI:
 
 ```bash
-ragent project list
-ragent project show Storefront
-ragent project add ../other-repo
-ragent project remove Storefront
+cdmn project list
+cdmn project show Storefront
+cdmn project add ../other-repo
+cdmn project remove Storefront
 ```
 
 To get a desktop notification when a background session needs you, add an
-`on_notification` hook to `ragent.json`:
+`on_notification` hook to `codemason.json`:
 
 ```json
 {
   "hooks": [
     {
       "trigger": "on_notification",
-      "command": "notify-send ragent \"$RAGENT_NOTIFICATION_MESSAGE\""
+      "command": "notify-send codemason \"$CODEMASON_NOTIFICATION_MESSAGE\""
     }
   ]
 }
 ```
 
-`RAGENT_NOTIFICATION_KIND` is `waiting`, `finished` or `failed`.
+`CODEMASON_NOTIFICATION_KIND` is `waiting`, `finished` or `failed`.
 
 ### Pruning an old transcript
 
@@ -1498,14 +1498,14 @@ expired conversation stays listed and resumable with an empty transcript.
 
 ```bash
 # Report how many messages are older than 30 days - deletes nothing
-ragent db prune --days 30 --dry-run
+cdmn db prune --days 30 --dry-run
 
 # Delete messages older than the configured window
 # (storage.retention.message_days, default 14)
-ragent db prune
+cdmn db prune
 
 # Delete messages older than 30 days
-ragent db prune --days 30
+cdmn db prune --days 30
 ```
 
 ```
@@ -1519,29 +1519,29 @@ count (a zero-day window would empty the store, so it is refused). The
 confirmation dialog opens on `No`, so a stray `Enter` deletes nothing.
 
 To run the same prune automatically at every start, enable retention in
-`ragent.json`:
+`codemason.json`:
 
 ```json
 { "storage": { "retention": { "enabled": true, "message_days": 14 } } }
 ```
 
 Retention is **off by default**; with no `storage` section no message is ever
-expired. Deleting rows returns their pages to SQLite's freelist, so `ragent.db`
+expired. Deleting rows returns their pages to SQLite's freelist, so `codemason.db`
 keeps its size until a `VACUUM` - which needs exclusive access, so stop every
-other ragent process first.
+other codemason process first.
 
 ---
 
 ## 10. HTTP Server Mode
 
-Run ragent as a headless API server for IDE integrations or remote use:
+Run codemason as a headless API server for IDE integrations or remote use:
 
 ```bash
 # Start the server (prints a bearer token for auth)
-ragent serve
+cdmn serve
 
 # With a custom bind address (default 127.0.0.1:3000)
-ragent serve --addr 127.0.0.1:8080
+cdmn serve --addr 127.0.0.1:8080
 ```
 
 ### API Endpoints
@@ -1567,11 +1567,11 @@ The full REST surface is described by an OpenAPI 3.1 document served at
 `/openapi.json` (public — it carries no runtime data or secrets). It is rendered
 from a single route table so it cannot drift from the served routes, and the same
 table generates a dependency-free typed TypeScript client checked in at
-[`docs/openapi/ragent-client.d.ts`](docs/openapi/ragent-client.d.ts):
+[`docs/openapi/codemason-client.d.ts`](docs/openapi/codemason-client.d.ts):
 
 ```bash
-ragent openapi              # print the OpenAPI 3.1 document
-ragent openapi --client     # print the generated typed TypeScript client
+cdmn openapi              # print the OpenAPI 3.1 document
+cdmn openapi --client     # print the generated typed TypeScript client
 ```
 
 All endpoints except `/health` and `/openapi.json` require the bearer token:
@@ -1607,9 +1607,9 @@ a command-launched server needs no transport key:
 
 A config that is written back still carries an explicit `"type": "stdio"`.
 
-### ACP server for IDE clients (`ragent acp-server`)
+### ACP server for IDE clients (`codemason acp-server`)
 
-ragent can serve the Agent Client Protocol (ACP) over stdio so an ACP-capable
+codemason can serve the Agent Client Protocol (ACP) over stdio so an ACP-capable
 editor (Zed, VS Code, JetBrains) can attach to it. This is **feature-gated and
 disabled by default** — build with `--features acp-server` and set
 `acp.server_enabled: true`:
@@ -1626,7 +1626,7 @@ disabled by default** — build with `--features acp-server` and set
 
 ```bash
 cargo build --features acp-server
-ragent acp-server            # editor attaches over stdin/stdout
+cdmn acp-server            # editor attaches over stdin/stdout
 ```
 
 When either gate is closed the command exits with a usage error (code 2) rather
@@ -1638,7 +1638,7 @@ calls back as ACP `session/update` notifications.
 
 A pluggable execution backend selects **where** a session's tools run. The
 default is `local` (the host, exactly as before); `docker`/`podman` run them
-inside a per-session container, and `remote` drives a second ragent server over
+inside a per-session container, and `remote` drives a second codemason server over
 REST+SSE and mirrors its events locally.
 
 ```
@@ -1651,8 +1651,8 @@ The container workspace is a **named volume, never a host bind mount**, so a
 sandboxed tool cannot read or write the host working directory; `Bash` is still
 gated by the full 7-layer host validator, and a provisioning failure fails the
 turn instead of falling back to the host. Configure backends under the
-`execution_backend` / `backends` keys (see the example `ragent.json` above).
-`ragent config` prints the resolved registry.
+`execution_backend` / `backends` keys (see the example `codemason.json` above).
+`codemason config` prints the resolved registry.
 
 ### LLM security analyzer (`/security`)
 
@@ -1672,7 +1672,7 @@ model, provider error, timeout) degrades to the normal interactive prompt.
 
 ### OpenAI-compatible surface
 
-When enabled, `ragent serve` exposes `POST /v1/chat/completions` and
+When enabled, `codemason serve` exposes `POST /v1/chat/completions` and
 `GET /v1/models` behind the native bearer token, bridging to the same agent loop
 (permission checks preserved):
 
@@ -1684,7 +1684,7 @@ curl -s http://127.0.0.1:3000/v1/chat/completions \
 
 `stream:false` returns an OpenAI `chat.completion` object; `stream:true` returns a
 `chat.completion.chunk` `text/event-stream` ending in `data: [DONE]`. Enabling the
-surface without a token makes `ragent serve` refuse to start it rather than serve
+surface without a token makes `codemason serve` refuse to start it rather than serve
 it unauthenticated.
 
 ---
@@ -1703,19 +1703,19 @@ it unauthenticated.
 | `OLLAMA_API_KEY`       | Optional auth for remote Ollama                | —                          |
 | `HF_TOKEN`             | HuggingFace API token                          | —                          |
 | `HUGGING_FACE_HUB_TOKEN` | HuggingFace API token (legacy name)          | —                          |
-| `RAGENT_CONFIG`        | Path to a config file                          | —                          |
-| `RAGENT_CONFIG_CONTENT`| Inline JSON config                             | —                          |
+| `CODEMASON_CONFIG`        | Path to a config file                          | —                          |
+| `CODEMASON_CONFIG_CONTENT`| Inline JSON config                             | —                          |
 
 ---
 
 ## 12. Permissions
 
-Ragent asks for approval before performing potentially dangerous actions.
+Codemason asks for approval before performing potentially dangerous actions.
 Control this behavior with permission rules in your config or with `--yes`:
 
 ```bash
 # Auto-approve everything (use with caution)
-ragent run --yes "Delete all .tmp files"
+cdmn run --yes "Delete all .tmp files"
 ```
 
 **Permission types:** `file:read`, `file:write`, `bash:execute`, `web`,
@@ -1742,27 +1742,27 @@ Rules are evaluated last-match-wins. Example config:
 ### Code Review
 
 ```bash
-ragent run --agent explore "Review the changes in the last 3 commits"
+cdmn run --agent explore "Review the changes in the last 3 commits"
 ```
 
 ### Refactoring
 
 ```bash
-ragent run --agent build "Refactor the user module to use the repository pattern"
+cdmn run --agent build "Refactor the user module to use the repository pattern"
 ```
 
 ### Local Ollama for Privacy
 
 ```bash
 ollama pull qwen2.5-coder:32b
-ragent run --model ollama/qwen2.5-coder:32b "Implement a binary search function"
+cdmn run --model ollama/qwen2.5-coder:32b "Implement a binary search function"
 ```
 
 ### Project Setup
 
 ```bash
 # Create a project-specific config
-cat > ragent.json << 'EOF'
+cat > codemason.json << 'EOF'
 {
   "default_agent": "general",
   "agent": {
@@ -1778,12 +1778,12 @@ cat > ragent.json << 'EOF'
 }
 EOF
 
-ragent run "Add input validation to the create_user endpoint"
+cdmn run "Add input validation to the create_user endpoint"
 ```
 
 ### Scaffold a New Project
 
-The `/new` command (TUI) and `ragent new` (CLI) scaffold a brand-new,
+The `/new` command (TUI) and `codemason new` (CLI) scaffold a brand-new,
 agent-friendly project in an **empty** directory:
 
 ```bash
@@ -1793,10 +1793,10 @@ mkdir my-project && cd my-project
 /new --language rust --type cmdline
 
 # or CLI
-ragent new --language rust --type cmdline
+cdmn new --language rust --type cmdline
 ```
 
-The scaffold generates the ragent workspace (`.ragent/`, `specs/`, `log/`,
+The scaffold generates the codemason workspace (`.codemason/`, `specs/`, `log/`,
 `.gitignore`, `AGENTS.md`), a runnable hello-world artifact set for 26
 application languages (`rust`, `python`, `go`, `typescript`, `shell`, ...) in
 `library`/`cmdline`/`tui`/`gui`/`webapp` layouts plus sample-document stubs for data,
@@ -1810,14 +1810,14 @@ scaffold steps stream into the message window as they complete.
 
 ```bash
 # Rust web service starter, pushed to GitHub
-ragent new --language rust --type cmdline --stack axum --github
+cdmn new --language rust --type cmdline --stack axum --github
 ```
 
 See [`docs/howtos/newproj.md`](docs/howtos/newproj.md) for the full manual.
 
 ### Research → Spec → Implement
 
-The `ragent research` workflow lets you gather information on a topic
+The `codemason research` workflow lets you gather information on a topic
 before turning it into a spec. The new iterative engine decomposes the topic
 into sub-questions, gathers sources for each one in parallel, verifies claims,
 detects missing links, and stops adaptively.
@@ -1884,22 +1884,22 @@ Or from the CLI:
 
 ```bash
 # Flags go BEFORE the name: everything after the name is taken as topic text.
-ragent research create rust-async "async/await idioms in stable Rust"
-ragent research create --depth deep --format executive-summary rust-async "async/await idioms"
-ragent research create --from-urls https://example.com/article rust-async
-ragent research continue rust-async "focus on io_uring integration"
-ragent research create --mode competitive fireworks "Compare Fireworks AI, Together.ai and Groq"   # --format comparison-table is implied
-ragent research create --mode supervisor --max-concurrent-research-units 3 rust-async "async/await idioms"
-ragent research create --max-concepts 3 --max-findings 10 brief "Vector databases"
-ragent research create --use-local --papers local-only "Project error handling"
-ragent research create --url-cloak vendors "Managed vector db vendors"
-ragent research create --max-age 30d llm-pricing "Current frontier model pricing"
-ragent research list          # aligned table; add --json for machine-readable output
-ragent research open rust-async
-ragent research search "async"
-ragent research show rust-async
-ragent research archive rust-async
-ragent research delete rust-async --yes
+cdmn research create rust-async "async/await idioms in stable Rust"
+cdmn research create --depth deep --format executive-summary rust-async "async/await idioms"
+cdmn research create --from-urls https://example.com/article rust-async
+cdmn research continue rust-async "focus on io_uring integration"
+cdmn research create --mode competitive fireworks "Compare Fireworks AI, Together.ai and Groq"   # --format comparison-table is implied
+cdmn research create --mode supervisor --max-concurrent-research-units 3 rust-async "async/await idioms"
+cdmn research create --max-concepts 3 --max-findings 10 brief "Vector databases"
+cdmn research create --use-local --papers local-only "Project error handling"
+cdmn research create --url-cloak vendors "Managed vector db vendors"
+cdmn research create --max-age 30d llm-pricing "Current frontier model pricing"
+cdmn research list          # aligned table; add --json for machine-readable output
+cdmn research open rust-async
+cdmn research search "async"
+cdmn research show rust-async
+cdmn research archive rust-async
+cdmn research delete rust-async --yes
 ```
 
 The HTTP API exposes the same surface at `GET /research`, `POST /research`,
@@ -1965,14 +1965,14 @@ alongside the QA companion `CORPA-<YYYY-MM-DD>.md`. The primary report is named
 for the item's creation date (so an item answers the same path before and after
 its first run); a later run writes its own dated file. That is what makes a
 re-run non-destructive: an item accumulates one report per run date instead of
-overwriting the last one. An item created by an older ragent keeps its legacy
+overwriting the last one. An item created by an older codemason keeps its legacy
 undated `RESEARCH.md` / `CORPA.md`, and every read surface resolves whichever
 file exists (newest dated first, legacy last).
 
 Every report frontmatter also records an `invocation` line — the
-verbatim `ragent research create ...` command, `/research ...` TUI slash
+verbatim `codemason research create ...` command, `/research ...` TUI slash
 command, or `POST /research` request summary that started the run. The
-`/research update <name>` command (or `ragent research update <name>` /
+`/research update <name>` command (or `codemason research update <name>` /
 `PUT /research/<name>`) reads that line and replays the exact run,
 writing a fresh dated report and companion while the earlier run's report
 stays on disk. The original invocation is preserved on
@@ -1986,8 +1986,8 @@ Author a draft spec (plus `PLAN.md`/`TESTPLAN.md`) directly from an
 architecture document — a local folder/file or a public URL:
 
 ```bash
-ragent spec govcreate payments-arch https://example.com/arch.html ./payments-svc
-ragent spec govcreate records-arch ./docs/sad.md ./records --language python --type library
+cdmn spec govcreate payments-arch https://example.com/arch.html ./payments-svc
+cdmn spec govcreate records-arch ./docs/sad.md ./records --language python --type library
 ```
 
 The run acquires the document, extracts its structure, and authors the spec
@@ -1999,8 +1999,8 @@ Escape to cancel. See `docs/howtos/spec.md` §5.19.
 ### Spec status from the shell
 
 ```bash
-ragent spec status 001-auth              # current status and allowed transitions
-ragent spec status 001-auth in_review    # move it on (recorded in the audit trail)
+cdmn spec status 001-auth              # current status and allowed transitions
+cdmn spec status 001-auth in_review    # move it on (recorded in the audit trail)
 ```
 
 The same transition rules and SDD gates as `/spec status` apply; a refused
@@ -2037,10 +2037,10 @@ is sent to the model for review and error resolution.
 ! git status
 ```
 
-This also works in headless `ragent run` mode:
+This also works in headless `codemason run` mode:
 
 ```bash
-ragent run "! cargo check"
+cdmn run "! cargo check"
 ```
 
 ### Slash Commands
@@ -2059,7 +2059,7 @@ Type `/` in the input to open an autocomplete menu:
 | `/provider` | Change provider |
 | `/provider_reset` | Reset provider credentials |
 | `/queue [list\|clear\|next\|help]` | Inspect and control the message input queue |
-| `/quit` | Exit ragent |
+| `/quit` | Exit codemason |
 | `/system <prompt>` | Override system prompt |
 | `/prompt help\|primary [agent]\|subagent [agent]\|list\|<agent>` | Inspect the assembled agent system prompt (read-only, no LLM call) |
 | `/bench list` | List available benchmark suites and profiles |
@@ -2100,7 +2100,7 @@ Type `/` in the input to open an autocomplete menu:
 
 ## Cron Scheduling
 
-Ragent supports scheduling agent runs with a cron-like system. Use the
+Codemason supports scheduling agent runs with a cron-like system. Use the
 `/cron` slash command to add, remove, list, and view scheduled events.
 
 ### Schedule Forms
@@ -2218,9 +2218,9 @@ Notes:
 
 | Item                | Location                                |
 |---------------------|-----------------------------------------|
-| Config (global)     | `~/.config/ragent/ragent.json`          |
-| Config (project)    | `./ragent.json`                         |
-| Database            | `~/.local/share/ragent/ragent.db`       |
+| Config (global)     | `~/.config/codemason/codemason.json`          |
+| Config (project)    | `./codemason.json`                         |
+| Database            | `~/.local/share/codemason/codemason.db`       |
 | Sessions & messages | Stored in the SQLite database           |
 | API keys            | Stored obfuscated in the database       |
 
@@ -2228,13 +2228,13 @@ Notes:
 
 ## Multi-Agent Orchestration (F6)
 
-`ragent-core` includes a built-in orchestration layer that lets multiple agents collaborate on a single job.
+`codemason-core` includes a built-in orchestration layer that lets multiple agents collaborate on a single job.
 
 ### Register agents and start a job (Rust)
 
 ```rust
-use ragent_core::orchestrator::{AgentRegistry, Coordinator, JobDescriptor, Responder};
-use ragent_core::orchestrator::policy::{ConflictPolicy, ConflictResolver};
+use codemason_core::orchestrator::{AgentRegistry, Coordinator, JobDescriptor, Responder};
+use codemason_core::orchestrator::policy::{ConflictPolicy, ConflictResolver};
 use futures::future::FutureExt;
 use std::sync::Arc;
 
@@ -2264,7 +2264,7 @@ let (status, result) = coord.get_job_result(&job_id).await.unwrap();
 
 Run the complete example with:
 ```sh
-cargo run -p ragent-core --example orchestration
+cargo run -p codemason-core --example orchestration
 ```
 
 ### Conflict resolution policies
@@ -2280,7 +2280,7 @@ cargo run -p ragent-core --example orchestration
 ### Remote agents via pluggable transport
 
 ```rust
-use ragent_core::orchestrator::transport::{HttpRouter, RemoteAgentDescriptor, RouterComposite};
+use codemason_core::orchestrator::transport::{HttpRouter, RemoteAgentDescriptor, RouterComposite};
 
 let mut http_router = HttpRouter::new();
 http_router.register(RemoteAgentDescriptor {
@@ -2301,7 +2301,7 @@ let coord = Coordinator::with_router(registry, Arc::new(composite));
 ### Leader election for distributed coordinators
 
 ```rust
-use ragent_core::orchestrator::leader::{CoordinatorCluster, LeaderElector};
+use codemason_core::orchestrator::leader::{CoordinatorCluster, LeaderElector};
 
 let elector = LeaderElector::new(3); // quorum size
 let cluster = CoordinatorCluster::new(elector);
@@ -2315,7 +2315,7 @@ cluster.start_job(desc).await?; // routes to elected leader
 
 ### HTTP API
 
-When running `ragent serve`, the orchestration endpoints are available under `/orchestrator`:
+When running `codemason serve`, the orchestration endpoints are available under `/orchestrator`:
 
 ```sh
 # Start a job (async)
@@ -2344,7 +2344,7 @@ The automation service runs a named agent on a **schedule** or from a
 **webhook**, confined to a chosen execution backend, with durable run history
 (spec `openhands` FR-013, FR-014, FR-018, FR-033).
 
-Declare automations under the `automation` block in `.ragent/ragent.json`:
+Declare automations under the `automation` block in `.codemason/codemason.json`:
 
 ```jsonc
 {
@@ -2379,9 +2379,9 @@ leaves it inert.
 /automation run nightly      # enqueue a manual run now
 /automation help
 
-ragent automation list
-ragent automation runs on-issue
-ragent automation run nightly
+cdmn automation list
+cdmn automation runs on-issue
+cdmn automation run nightly
 ```
 
 ### HTTP
@@ -2400,7 +2400,7 @@ curl -s http://127.0.0.1:3000/automation/runs/on-issue \
 
 A completed run can notify Slack, GitHub, Linear, Notion, or a generic webhook;
 each dispatch target names the environment variable holding its credential
-(`token_env`), so no secret is stored in `ragent.json`.
+(`token_env`), so no secret is stored in `codemason.json`.
 
 ---
 
@@ -2410,7 +2410,7 @@ each dispatch target names the environment variable holding its credential
 → Ensure GitHub Copilot is active in VS Code or JetBrains, or set `GITHUB_COPILOT_TOKEN`. The token is read from `~/.config/github-copilot/apps.json`.
 
 **"No API key found for provider"**
-→ Set the environment variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) or run `ragent auth <provider> <key>`.
+→ Set the environment variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) or run `codemason auth <provider> <key>`.
 
 **"Failed to connect to Ollama server"**
 → Ensure Ollama is running (`ollama serve`) and accessible at the configured host.
@@ -2422,7 +2422,7 @@ each dispatch target names the environment variable holding its credential
 → Add `"permission": [{"permission": "file:read", "action": "allow"}]` to your config, or use `--yes`.
 
 **See debug output**
-→ Run with `ragent --log-level debug run "..."` for verbose logging.
+→ Run with `codemason --log-level debug run "..."` for verbose logging.
 
 ---
 
@@ -2430,7 +2430,7 @@ For full details, see [README.md](README.md) and [SPEC.md](SPEC.md).
 
 ## Research prompt configuration
 
-The `/research create` synthesis prompt accepts optional `ragent.json`
+The `/research create` synthesis prompt accepts optional `codemason.json`
 keys under a top-level `research` object (see SPEC.md → "Research
 Configuration" for the full schema):
 

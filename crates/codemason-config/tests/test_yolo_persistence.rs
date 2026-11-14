@@ -1,0 +1,201 @@
+//! Tests for YOLO mode persistence.
+//!
+//! Note: `std::env::set_var` is `unsafe` in Rust 2024; the workspace denies
+//! `unsafe_code`, so this test target opts back in explicitly.
+
+#![allow(unsafe_code)]
+
+use std::io::Write;
+
+use codemason_config::Config;
+
+fn write_config(dir: &std::path::Path, contents: &str) -> std::path::PathBuf {
+    let codemason_dir = dir.join(".codemason");
+    std::fs::create_dir_all(&codemason_dir).expect("create .codemason dir");
+    let path = codemason_dir.join("codemason.json");
+    let mut file = std::fs::File::create(&path).expect("create config file");
+    file.write_all(contents.as_bytes())
+        .expect("write config file");
+    path
+}
+
+/// Restores the env vars these (serially run) tests mutate so the real user
+/// config and config-dir resolution are never left clobbered.
+struct EnvGuard {
+    keys: Vec<(&'static str, Option<String>)>,
+}
+
+impl EnvGuard {
+    fn new() -> Self {
+        Self {
+            keys: vec![
+                ("XDG_CONFIG_HOME", std::env::var("XDG_CONFIG_HOME").ok()),
+                ("CODEMASON_CONFIG", std::env::var("CODEMASON_CONFIG").ok()),
+                (
+                    "CODEMASON_CONFIG_CONTENT",
+                    std::env::var("CODEMASON_CONFIG_CONTENT").ok(),
+                ),
+            ],
+        }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        for (k, v) in &self.keys {
+            match v {
+                Some(val) => unsafe { std::env::set_var(k, val) },
+                None => unsafe { std::env::remove_var(k) },
+            }
+        }
+    }
+}
+
+#[test]
+#[serial_test::serial]
+fn test_yolo_defaults_to_false() {
+    let config = Config::default();
+    assert!(!config.yolo);
+}
+
+#[test]
+#[serial_test::serial]
+fn test_yolo_round_trips_through_config() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let path = write_config(temp.path(), r#"{ "yolo": true }"#);
+
+    unsafe { std::env::set_var("CODEMASON_CONFIG", &path) };
+    let config = Config::load().expect("load config");
+
+    assert!(config.yolo);
+    codemason_config::yolo::sync_from_config();
+    assert!(codemason_config::yolo::is_enabled());
+}
+
+#[test]
+#[serial_test::serial]
+fn test_yolo_persist_helper_updates_global_config_file() {
+    let _guard = EnvGuard::new();
+    let temp = tempfile::tempdir().expect("temp dir");
+
+    // Redirect the user-global config dir into the tempdir and clear the env
+    // overrides so `Config::load` resolves the global file we can inspect.
+    unsafe { std::env::set_var("XDG_CONFIG_HOME", temp.path().join(".config")) };
+    unsafe { std::env::remove_var("CODEMASON_CONFIG") };
+    unsafe { std::env::remove_var("CODEMASON_CONFIG_CONTENT") };
+
+    codemason_config::yolo::persist_yolo(true).expect("persist yolo");
+
+    // YOLO is a user-only toggle: it must land in the global config, never a
+    // project file (a project `yolo` is stripped by `merge_project`).
+    let global_path = Config::global_config_path().expect("global config path");
+    assert_eq!(
+        global_path,
+        temp.path()
+            .join(".config")
+            .join("codemason")
+            .join("codemason.json"),
+        "XDG_CONFIG_HOME redirect should retarget the global config path"
+    );
+    assert!(
+        global_path.exists(),
+        "persist_yolo should write the global config at {}",
+        global_path.display()
+    );
+    let on_disk = std::fs::read_to_string(&global_path).expect("read global config");
+    assert!(
+        on_disk.contains("\"yolo\": true"),
+        "global config should contain yolo: true, got:\n{on_disk}"
+    );
+
+    // Reloading should pick up the persisted value.
+    let config = Config::load().expect("reload config");
+    assert!(config.yolo);
+    assert!(codemason_config::yolo::is_enabled());
+}
+
+#[test]
+#[serial_test::serial]
+fn test_yolo_false_is_serialized() {
+    let mut config = Config::default();
+    config.yolo = false;
+    let json = serde_json::to_string_pretty(&config).expect("serialize config");
+    assert!(!json.contains("\"yolo\": true"));
+}
+
+#[test]
+#[serial_test::serial]
+fn test_yolo_true_is_serialized() {
+    let mut config = Config::default();
+    config.yolo = true;
+    let json = serde_json::to_string_pretty(&config).expect("serialize config");
+    assert!(json.contains("\"yolo\": true"));
+}
+
+#[test]
+#[serial_test::serial]
+fn test_yolo_persist_preserves_unrelated_and_unknown_keys() {
+    let _guard = EnvGuard::new();
+    let temp = tempfile::tempdir().expect("temp dir");
+    unsafe { std::env::set_var("XDG_CONFIG_HOME", temp.path().join(".config")) };
+    unsafe { std::env::remove_var("CODEMASON_CONFIG") };
+    unsafe { std::env::remove_var("CODEMASON_CONFIG_CONTENT") };
+
+    // A hand-written global config carrying an unmodelled key and a non-default
+    // value the running build knows nothing about.
+    let global_path = Config::global_config_path().expect("global path");
+    std::fs::create_dir_all(global_path.parent().expect("parent")).expect("create dir");
+    std::fs::write(
+        &global_path,
+        "{\n  \"yolo\": false,\n  \"user_note\": \"keep me\"\n}\n",
+    )
+    .expect("seed global config");
+
+    codemason_config::yolo::persist_yolo(true).expect("persist yolo");
+
+    let on_disk = std::fs::read_to_string(&global_path).expect("read global config");
+    assert!(
+        on_disk.contains("\"yolo\": true"),
+        "yolo should be persisted, got:\n{on_disk}"
+    );
+    assert!(
+        on_disk.contains("\"user_note\": \"keep me\""),
+        "an unrelated hand-written key must survive the toggle, got:\n{on_disk}"
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn test_yolo_persist_is_atomic_and_leaves_no_temp_files() {
+    use codemason_config::Config;
+
+    let _guard = EnvGuard::new();
+    let temp = tempfile::tempdir().expect("temp dir");
+    unsafe { std::env::set_var("XDG_CONFIG_HOME", temp.path().join(".config")) };
+    unsafe { std::env::remove_var("CODEMASON_CONFIG") };
+    unsafe { std::env::remove_var("CODEMASON_CONFIG_CONTENT") };
+
+    codemason_config::yolo::persist_yolo(true).expect("persist yolo");
+    codemason_config::yolo::persist_yolo(false).expect("persist yolo off");
+
+    let config_dir = Config::global_config_dir().expect("config dir");
+    let leftovers: Vec<String> = std::fs::read_dir(&config_dir)
+        .expect("read config dir")
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|name| {
+            std::path::Path::new(name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("tmp"))
+        })
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "atomic write must not leave temp files behind: {leftovers:?}"
+    );
+
+    // The final file must be valid JSON with the last value applied.
+    let on_disk = std::fs::read_to_string(config_dir.join("codemason.json")).expect("read global");
+    let value: serde_json::Value = serde_json::from_str(&on_disk).expect("valid JSON after writes");
+    assert_eq!(value.get("yolo"), Some(&serde_json::Value::Bool(false)));
+}

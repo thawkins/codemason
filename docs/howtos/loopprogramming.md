@@ -66,15 +66,15 @@ loop remains interruptible and observable like any other turn.
 
 | Layer | Location | Contents |
 |---|---|---|
-| State + enforcement | `crates/ragent-agent/src/session/loop_state.rs` | `LoopSpec`, `LoopTracker`, `StopCondition`, `LOOP_WRITE_TOOLS`, `LOOP_ALWAYS_ALLOWED_TOOLS`, the `deny_reason` predicate |
-| Runtime wiring | `crates/ragent-agent/src/session/processor.rs` | `SessionProcessor::start_loop`, `terminate_loop_inner`, `request_loop_interrupt`, `ensure_pre_loop_capture`, `rollback_loop`, `clear_loop`, `clear_loop_captures` |
-| Verification | `crates/ragent-agent/src/session/verification.rs` | `run_verification_command`, `VerificationOutcome`, `verification_failure_observation` |
-| Capture / rollback | `crates/ragent-agent/src/session/loop_capture.rs` | Pre-loop snapshot, git state, change summary, `compute_change_summary` |
-| Prompt injection | `crates/ragent-agent/src/session/prompt_builders.rs` | `build_goal_loop_section` renders the `## Goal Loop` block into the turn system prompt |
-| One-shot parsing | `crates/ragent-tui/src/app/slash.rs` | `handle_loop_command` (`/loop <agent> <goal...>`) |
-| Interactive dialog | `crates/ragent-tui/src/app/loop_dialog.rs` (+ `loop_dialog/` module dir) | `LoopSetupField`, `LoopSetupState`, `build_spec_from_state`, key handling |
-| Termination rendering | `crates/ragent-tui/src/app/helpers.rs`, `event_handler.rs` | `loop_termination_banner`, `LoopTerminated` / `LoopChangeSummary` handling, rollback offer |
-| Config | `crates/ragent-config/src/config.rs` | `LoopConfig` serde section (`loop` key) and its defaults |
+| State + enforcement | `crates/codemason-agent/src/session/loop_state.rs` | `LoopSpec`, `LoopTracker`, `StopCondition`, `LOOP_WRITE_TOOLS`, `LOOP_ALWAYS_ALLOWED_TOOLS`, the `deny_reason` predicate |
+| Runtime wiring | `crates/codemason-agent/src/session/processor.rs` | `SessionProcessor::start_loop`, `terminate_loop_inner`, `request_loop_interrupt`, `ensure_pre_loop_capture`, `rollback_loop`, `clear_loop`, `clear_loop_captures` |
+| Verification | `crates/codemason-agent/src/session/verification.rs` | `run_verification_command`, `VerificationOutcome`, `verification_failure_observation` |
+| Capture / rollback | `crates/codemason-agent/src/session/loop_capture.rs` | Pre-loop snapshot, git state, change summary, `compute_change_summary` |
+| Prompt injection | `crates/codemason-agent/src/session/prompt_builders.rs` | `build_goal_loop_section` renders the `## Goal Loop` block into the turn system prompt |
+| One-shot parsing | `crates/codemason-tui/src/app/slash.rs` | `handle_loop_command` (`/loop <agent> <goal...>`) |
+| Interactive dialog | `crates/codemason-tui/src/app/loop_dialog.rs` (+ `loop_dialog/` module dir) | `LoopSetupField`, `LoopSetupState`, `build_spec_from_state`, key handling |
+| Termination rendering | `crates/codemason-tui/src/app/helpers.rs`, `event_handler.rs` | `loop_termination_banner`, `LoopTerminated` / `LoopChangeSummary` handling, rollback offer |
+| Config | `crates/codemason-config/src/config.rs` | `LoopConfig` serde section (`loop` key) and its defaults |
 
 `SessionProcessor::start_loop` accepts an already-built `LoopSpec`; argument
 parsing and validation live in the TUI layer.
@@ -101,8 +101,8 @@ goal. Examples:
 
 One-shot defaults (documented in the handler doc comment):
 
-- Step limit: the `loop.max_steps` value from `ragent.json` (default **512**).
-- Cost limit: the `loop.cost_limit` value from `ragent.json` (default: none).
+- Step limit: the `loop.max_steps` value from `codemason.json` (default **512**).
+- Cost limit: the `loop.cost_limit` value from `codemason.json` (default: none).
 - Checkpoints: **on**.
 - No verification command, no scope, no read-only constraints, no tool-set
   restriction.
@@ -217,8 +217,8 @@ has been reached. The strongest form pairs the goal with a verification command:
 
 | Element | Weak | Strong |
 |---|---|---|
-| Goal | "improve the tests" | "all unit tests in `crates/ragent-tui` pass" |
-| Verify cmd | -- | `cargo test -p ragent-tui` |
+| Goal | "improve the tests" | "all unit tests in `crates/codemason-tui` pass" |
+| Verify cmd | -- | `cargo test -p codemason-tui` |
 | Goal | "clean up the docs" | "every `.md` file in `docs/` has a one-line summary in `docs/INDEX.md`" |
 | Verify cmd | -- | `python check_index.py` |
 
@@ -419,7 +419,7 @@ retry.
 
 ## 11. Configuration options
 
-The `loop` section of `ragent.json` configures the goal-loop feature. It is
+The `loop` section of `codemason.json` configures the goal-loop feature. It is
 **exclusively** the `/loop` feature's section -- it does not tune the core
 per-turn loop (see `docs/howtos/reactagent.md` for `agent_perf.*` / `stream.*`).
 
@@ -508,8 +508,8 @@ Interactive dialog:
 
 1. `/loop`
 2. `agent`: `coder`
-3. `goal`: `cargo test -p ragent-tui passes with zero failures`
-4. `verify cmd`: `cargo test -p ragent-tui`
+3. `goal`: `cargo test -p codemason-tui passes with zero failures`
+4. `verify cmd`: `cargo test -p codemason-tui`
 5. `max steps`: `40`
 6. `Enter`
 
@@ -520,7 +520,7 @@ One-shot equivalent (no verify command, so the first tool-free answer ends the
 loop):
 
 ```
-/loop coder make cargo test -p ragent-tui pass with zero failures
+/loop coder make cargo test -p codemason-tui pass with zero failures
 ```
 
 ### 13.2 Scoped refactor with protected paths
@@ -528,7 +528,7 @@ loop):
 Dialog values:
 
 - `agent`: `coder`
-- `goal`: `rename crate ragent-server to ragent-http across the workspace`
+- `goal`: `rename crate codemason-server to codemason-http across the workspace`
 - `scope`: `crates/**, Cargo.toml`
 - `read-only`: `specs/**, docs/**`
 - `max steps`: `60`
@@ -556,14 +556,14 @@ the TUI):
 
 ```bash
 curl -s -X POST http://127.0.0.1:3000/sessions \
-  -H "Authorization: Bearer $RAGENT_TOKEN" \
+  -H "Authorization: Bearer $CODEMASON_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"directory": "."}'
 
 curl -s -X POST http://127.0.0.1:3000/sessions/<id>/messages \
-  -H "Authorization: Bearer $RAGENT_TOKEN" \
+  -H "Authorization: Bearer $CODEMASON_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"content": "list every public function missing doc comments in crates/ragent-agent/src/session"}'
+  -d '{"content": "list every public function missing doc comments in crates/codemason-agent/src/session"}'
 ```
 
 Then, in the TUI against the same session, program the fix loop:
@@ -575,14 +575,14 @@ Then, in the TUI against the same session, program the fix loop:
 ### 13.5 CLI one-shot, then inspect the outcome
 
 ```
-ragent run --agent coder --maxsteps 50 "audit specs/agentloop against its FRs and report gaps"
+codemason run --agent coder --maxsteps 50 "audit specs/agentloop against its FRs and report gaps"
 ```
 
 - `--maxsteps` (single word) caps the agentic loop steps.
 - `--yes` (alias `--no-prompt`) auto-approves permission prompts -- note that
   forced loop checkpoints still interrupt destructive actions when checkpoints
   are on.
-- `ragent serve --addr 127.0.0.1:9100` starts the HTTP API (there is no
+- `codemason serve --addr 127.0.0.1:9100` starts the HTTP API (there is no
   `--port` flag).
 
 ---

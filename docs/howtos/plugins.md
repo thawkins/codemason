@@ -1,11 +1,11 @@
 # How-To: The Plugin System
 
-ragent can load and run third-party **plugins written for OpenAI Codex and
+codemason can load and run third-party **plugins written for OpenAI Codex and
 Claude Code / Claude Desktop**. Plugin JavaScript executes on an embedded,
-budget-sandboxed engine (`rquickjs`) built into the ragent binary - **no
+budget-sandboxed engine (`rquickjs`) built into the codemason binary - **no
 Node.js, Deno, or Bun installation is required**. Enabled plugins contribute
 tools (registered as `plugin_<id>_<tool>`) and slash commands through a
-versioned `ragent` host API.
+versioned `codemason` host API.
 
 This document is the full manual: what the system is, how to install and
 manage plugins, how to write your own, and how to acquire plugins from the
@@ -17,7 +17,7 @@ existing Claude and Codex ecosystems.
 - [2. Architecture](#2-architecture)
 - [3. The Plugin Store](#3-the-plugin-store)
 - [4. Plugin Dialects and Manifests](#4-plugin-dialects-and-manifests)
-- [5. The `ragent` Host API (version 1)](#5-the-ragent-host-api-version-1)
+- [5. The `codemason` Host API (version 1)](#5-the-codemason-host-api-version-1)
 - [6. Permissions and the Sandbox](#6-permissions-and-the-sandbox)
 - [7. Managing Plugins](#7-managing-plugins)
 - [8. Writing Your Own Plugin](#8-writing-your-own-plugin)
@@ -37,14 +37,14 @@ existing Claude and Codex ecosystems.
 
 Codex and Claude Code/Desktop have growing third-party plugin ecosystems. Users
 who have already installed or authored plugins for those tools gain nothing from
-them inside ragent unless there is a compatibility layer. The plugin system
+them inside codemason unless there is a compatibility layer. The plugin system
 provides that layer:
 
 - it **reuses the existing ecosystem** instead of forcing authors to rewrite
-  plugins ragent-natively;
-- it lets **ragent-native plugins** be written once in JavaScript against a
+  plugins codemason-natively;
+- it lets **codemason-native plugins** be written once in JavaScript against a
   documented host API;
-- it keeps the ragent single-binary, zero-runtime-dependency promise by running
+- it keeps the codemason single-binary, zero-runtime-dependency promise by running
   JavaScript in-process on `rquickjs`.
 
 ### What a plugin can do
@@ -65,7 +65,7 @@ messages, write log lines, and read files **inside its own directory only**.
 - No network access, no environment variables, no process spawning.
 - No `node_modules`, no npm resolution, no CommonJS `require` of arbitrary
   packages.
-- No access to ragent credentials, memory database handles, or session internals.
+- No access to codemason credentials, memory database handles, or session internals.
 - No execution at all until the plugin is explicitly **enabled** (discovery and
   listing parse manifests only).
 
@@ -78,14 +78,14 @@ messages, write log lines, and read files **inside its own directory only**.
   disabled.
 - **Disable takes effect immediately** in the running session (no restart).
 - Plugin code is untrusted by default; every failure is contained so it can
-  never terminate the ragent process.
+  never terminate the codemason process.
 
 ---
 
 ## 2. Architecture
 
-The system lives in the **`ragent-plugins`** crate. It deliberately does **not**
-depend on `ragent-agent` (the tool registry) or `ragent-tui` (the command
+The system lives in the **`codemason-plugins`** crate. It deliberately does **not**
+depend on `codemason-agent` (the tool registry) or `codemason-tui` (the command
 surface); the session passes closures instead, so the crate stays a bounded,
 testable unit.
 
@@ -100,7 +100,7 @@ testable unit.
 | `commands` | `/plugins add|remove` parse + dispatch glue |
 | `control` | `/plugins list|enable|disable` |
 | `runtime` | sandboxed JavaScript runtime (`RuntimePool`, `SandboxContext`) |
-| `host_api` | versioned `ragent` host-API bridge |
+| `host_api` | versioned `codemason` host-API bridge |
 | `lifecycle` | enable/disable/load/unload/errored lifecycle |
 | `tool_adapter` | plugin tools in the session registry |
 | `command_adapter` | plugin slash commands in the command surface |
@@ -142,17 +142,17 @@ memory-ceiling hooks is what the sandbox depends on.
 Plugins live in a **store**. There are two store roots, scanned in
 ascending-priority order (project wins on plugin-id collision):
 
-1. **user-global**: `~/.config/ragent/plugins/`
-2. **project-local**: `<working dir>/.ragent/plugins/`
+1. **user-global**: `~/.config/codemason/plugins/`
+2. **project-local**: `<working dir>/.codemason/plugins/`
 
-`plugins.store_dir` in `ragent.json`, when set, **replaces** the project leg.
+`plugins.store_dir` in `codemason.json`, when set, **replaces** the project leg.
 
 ### Layout
 
 Each plugin is its own subdirectory named after its plugin id:
 
 ```
-.ragent/plugins/
+.codemason/plugins/
 |-- _state.json            <- per-store enable/disable state + telemetry ledger
 |-- codex-weather/
 |   |-- codex-plugin.json
@@ -208,7 +208,7 @@ A directory carries **exactly one** dialect. A directory whose contents match
 both dialects is ambiguous and rejected — **except** the multi-target case: a
 directory carrying *both nested* manifests (`.codex-plugin/plugin.json` **and**
 `.claude-plugin/plugin.json`) is a single upstream tree shipping one manifest
-per host, so ragent resolves it deterministically to the **Claude** dialect
+per host, so codemason resolves it deterministically to the **Claude** dialect
 (the richer of the two). Any other both-match — a top-level `codex-plugin.json`
 beside a `claude-plugin.json`, or a `plugin.json` with a `"codex"` marker beside
 a Claude manifest — stays ambiguous.
@@ -309,7 +309,7 @@ a Claude manifest — stays ambiguous.
 
 ### 4.4 Unsupported capabilities
 
-Manifest sections with no ragent host-API equivalent are **recorded and
+Manifest sections with no codemason host-API equivalent are **recorded and
 reported, never silently dropped**. The stable labels surfaced by
 `/plugins list` and `/plugins test` are:
 
@@ -357,20 +357,20 @@ character, drop empties, join with `-`, lowercase. `"Codex Weather"` becomes
 
 ---
 
-## 5. The `ragent` Host API (version 1)
+## 5. The `codemason` Host API (version 1)
 
-Plugin code accesses exactly these capabilities through the global `ragent`
+Plugin code accesses exactly these capabilities through the global `codemason`
 object:
 
 ```text
-ragent.api_version                          -> 1
-ragent.plugin_id                            -> string
-ragent.register_tool(def)                   -> { name, description, parameters, handler }
-ragent.register_command(def)                -> { name, description, usage, handler }
-ragent.config.get(key)                      -> JSON value from plugin-scoped config, or undefined
-ragent.message.info(text) / .warn(text) / .error(text)
-ragent.log(level, text)
-ragent.plugin.read_text_file(rel_path)      -> string (restricted to the plugin directory)
+codemason.api_version                          -> 1
+codemason.plugin_id                            -> string
+codemason.register_tool(def)                   -> { name, description, parameters, handler }
+codemason.register_command(def)                -> { name, description, usage, handler }
+codemason.config.get(key)                      -> JSON value from plugin-scoped config, or undefined
+codemason.message.info(text) / .warn(text) / .error(text)
+codemason.log(level, text)
+codemason.plugin.read_text_file(rel_path)      -> string (restricted to the plugin directory)
 ```
 
 ### 5.1 `register_tool(def)`
@@ -378,7 +378,7 @@ ragent.plugin.read_text_file(rel_path)      -> string (restricted to the plugin 
 Registers a tool whose handler executes when the agent invokes it.
 
 ```js
-ragent.register_tool({
+codemason.register_tool({
   name: "add_todo",
   description: "Add an item to the plugin's todo list",
   parameters: {
@@ -395,7 +395,7 @@ ragent.register_tool({
 
 You may also declare the tool in the manifest and define a **global function
 named after the tool**; dispatch resolves the handler from
-`globalThis.__ragent_tools[name]` and falls back to a global function of the
+`globalThis.__codemason_tools[name]` and falls back to a global function of the
 same name:
 
 ```js
@@ -408,7 +408,7 @@ function get_weather(args) {
 ### 5.2 `register_command(def)`
 
 ```js
-ragent.register_command({
+codemason.register_command({
   name: "todo-add",
   description: "Add a todo item",
   usage: "/todo-add <text>",
@@ -426,7 +426,7 @@ anything else is `JSON.stringify`-compacted).
 ### 5.3 Marshalling rules
 
 Tool arguments cross into the sandbox as a JSON document bound to the scratch
-global `__ragent_plugin_args` and handed to the handler as a plain JavaScript
+global `__codemason_plugin_args` and handed to the handler as a plain JavaScript
 value. The handler's return value is interpreted as:
 
 | Return value | Result |
@@ -458,7 +458,7 @@ tools, commands, config, message, log, plugin.read_text_file
 ```
 
 Before installing a group, the runtime asks a **permission gate** for a
-decision. An ungranted group is **simply absent** from the injected `ragent`
+decision. An ungranted group is **simply absent** from the injected `codemason`
 object. The full permission key for a capability is:
 
 ```
@@ -468,7 +468,7 @@ plugin:<pluginid>:<capability>
 ### 6.2 How gates are built
 
 The gate is built from the plugin's declared permissions plus the
-`plugins.permissions` config grants. In `ragent.json`:
+`plugins.permissions` config grants. In `codemason.json`:
 
 ```jsonc
 {
@@ -503,7 +503,7 @@ code cannot overflow the host stack via JS recursion.
   absolute paths are rejected before any read).
 - Network access of any kind.
 - Environment variables and process spawning.
-- Everything not explicitly exposed through the `ragent` object.
+- Everything not explicitly exposed through the `codemason` object.
 
 ---
 
@@ -513,7 +513,7 @@ The same operations are available on two surfaces that share one help text and
 one set of handlers:
 
 - the **TUI slash command**: `/plugins <sub> [args...]`
-- the **CLI parity surface**: `ragent plugins <sub> [args...]`
+- the **CLI parity surface**: `codemason plugins <sub> [args...]`
 
 ### 7.1 Subcommands
 
@@ -529,7 +529,7 @@ one set of handlers:
 
 | Form | Description |
 | --- | --- |
-| `list [--verbose]` | Open the interactive plugin panel. The table is pinned at the top - a fixed column heading and separator above a scrollable block-cursor list - and the capability blocks (contributions, unsupported capabilities, errors, and a totals summary) are listed at the end of the same scrollable body. Each row shows id, name, version, dialect, state (`disabled`/`enabled`/`loaded`/`errored`), the contributed tool/command/skill/agent/hook counts, and the `MCP` server / `MCP Tools` tool counts; an enabled plugin's row is tinted yellow. `Up`/`Down` (or `k`/`j`) move the cursor, `Home`/`End` jump to the ends, `Space` toggles the highlighted plugin's enabled state (enable/disable, reporting the outcome on a feedback line), and `Esc` closes. `--verbose` (alias `-v`) appends the per-plugin telemetry block. The panel and the `ragent plugins list` CLI text share one discovery path, so the two cannot disagree. |
+| `list [--verbose]` | Open the interactive plugin panel. The table is pinned at the top - a fixed column heading and separator above a scrollable block-cursor list - and the capability blocks (contributions, unsupported capabilities, errors, and a totals summary) are listed at the end of the same scrollable body. Each row shows id, name, version, dialect, state (`disabled`/`enabled`/`loaded`/`errored`), the contributed tool/command/skill/agent/hook counts, and the `MCP` server / `MCP Tools` tool counts; an enabled plugin's row is tinted yellow. `Up`/`Down` (or `k`/`j`) move the cursor, `Home`/`End` jump to the ends, `Space` toggles the highlighted plugin's enabled state (enable/disable, reporting the outcome on a feedback line), and `Esc` closes. `--verbose` (alias `-v`) appends the per-plugin telemetry block. The panel and the `codemason plugins list` CLI text share one discovery path, so the two cannot disagree. |
 | `add <source> [--force]` | Install and validate a plugin; reports id and dialect. Recorded **enabled**, so it loads at the next session start. Refuses a duplicate id unless `--force`. |
 | `remove <pluginid>` | Uninstall from the store. **Refused while the plugin is enabled.** |
 | `enable <pluginid>` | Mark enabled, load into the current session, register tools and commands. States the declared permissions and the outcome. |
@@ -574,19 +574,19 @@ path-traversal protection (no `..` or absolute entries).
 ### 7.4 CLI parity
 
 ```
-ragent plugins list
-ragent plugins add ./my-plugin
-ragent plugins add https://example.com/pkg.zip --force
-ragent plugins enable my-plugin
-ragent plugins test my-plugin
-ragent plugins disable my-plugin
-ragent plugins remove my-plugin
-ragent plugins help
+codemason plugins list
+codemason plugins add ./my-plugin
+codemason plugins add https://example.com/pkg.zip --force
+codemason plugins enable my-plugin
+codemason plugins test my-plugin
+codemason plugins disable my-plugin
+codemason plugins remove my-plugin
+codemason plugins help
 ```
 
 The CLI rewrites the TUI attribution lines: `From: /plugins ...` becomes a
-plain `ragent plugins ...` header and `## /plugins` becomes
-`## ragent plugins`.
+plain `codemason plugins ...` header and `## /plugins` becomes
+`## codemason plugins`.
 
 ### 7.5 Output shape
 
@@ -658,7 +658,7 @@ Create a directory with two files.
 
 ```js
 // Entry-point top-level code runs once, when the plugin is enabled.
-ragent.message.info("hello-codex loaded");
+codemason.message.info("hello-codex loaded");
 
 // The tool "greet" is declared in the manifest; dispatch finds this global.
 function greet(args) {
@@ -692,7 +692,7 @@ The model can now call `plugin_hello-codex_greet`.
 **`index.js`**
 
 ```js
-ragent.register_tool({
+codemason.register_tool({
   name: "shout",
   description: "Uppercase a message",
   parameters: {
@@ -705,7 +705,7 @@ ragent.register_tool({
   }
 });
 
-ragent.register_command({
+codemason.register_command({
   name: "hello",
   description: "Say hello",
   usage: "/hello <name>",
@@ -720,26 +720,26 @@ ragent.register_command({
 Grant the `config` capability, then read keys the host provides:
 
 ```js
-var city = ragent.config.get("default_city");   // undefined when absent
+var city = codemason.config.get("default_city");   // undefined when absent
 ```
 
 ### 8.4 Emitting messages and logs
 
 ```js
-ragent.message.info("informational note in the message window");
-ragent.message.warn("a warning");
-ragent.message.error("an error");
-ragent.log("debug", "goes to the host log, not the message window");
+codemason.message.info("informational note in the message window");
+codemason.message.warn("a warning");
+codemason.message.error("an error");
+codemason.log("debug", "goes to the host log, not the message window");
 ```
 
 ### 8.5 Reading a file inside the plugin directory
 
 ```js
 // Allowed: a file inside the plugin's own directory.
-var data = ragent.plugin.read_text_file("data/seed.json");
+var data = codemason.plugin.read_text_file("data/seed.json");
 
 // Refused: '..' components and absolute paths are rejected before any read.
-// var nope = ragent.plugin.read_text_file("../../outside.txt");
+// var nope = codemason.plugin.read_text_file("../../outside.txt");
 ```
 
 ### 8.6 Test before enabling
@@ -753,7 +753,7 @@ never leaves the plugin enabled. Use it as the first check after any edit.
 
 ## 9. Acquiring Plugins from the Claude and Codex Stores
 
-ragent installs plugins from a directory, a local archive, or an `https://` URL
+codemason installs plugins from a directory, a local archive, or an `https://` URL
 with `/plugins add <source>`, and it also browses each store's official
 marketplace from the TUI. Two subcommands open an interactive browse panel over
 a store index:
@@ -804,7 +804,7 @@ takes any of the forms the Claude Code `/plugin marketplace add` prompt accepts:
 ```
 
 The marketplace is written to the **user-global** config
-(`plugins.stores.marketplaces` in `~/.config/ragent/ragent.json`), never the
+(`plugins.stores.marketplaces` in `~/.config/codemason/codemason.json`), never the
 untrusted project config, and is picked up by the next `/plugins <store>` browse.
 `--force` replaces an existing marketplace with the same name; without it a
 duplicate name is refused. `/plugins marketplace show` lists every configured
@@ -917,9 +917,9 @@ one you want and install that subdirectory.
 /plugins enable <pluginid>
 ```
 
-If the plugin declares `mcp_servers`, sections ragent cannot satisfy, or
+If the plugin declares `mcp_servers`, sections codemason cannot satisfy, or
 Desktop-only `mounts`/`window` sections, those are reported under
-`Unsupported capabilities:` in `ragent`'s list output - the rest of the plugin
+`Unsupported capabilities:` in `codemason`'s list output - the rest of the plugin
 still loads.
 
 ### 9.3 OpenAI Codex plugins
@@ -927,7 +927,7 @@ still loads.
 Codex plugins are recognised by a `codex-plugin.json`, a
 `.codex-plugin/plugin.json` (the layout the official `openai/plugins` catalogue
 ships), or a `plugin.json` with a top-level `"codex"` marker. The Codex plugin
-packaging format is not yet formally standardised, so ragent's recogniser treats
+packaging format is not yet formally standardised, so codemason's recogniser treats
 the Codex dialect as the `name`/`version`/`entry` shape documented in
 [section 4.2](#42-codex-manifest-codex-pluginjson), with optional `tools[]` and
 `commands[]`.
@@ -973,20 +973,20 @@ also works: it is downloaded, extracted, the single wrapper directory
 (`<repo>-<ref>/`) is descended automatically, and the manifest is validated
 before anything lands in the store.
 
-### 9.5 Adapting a plugin that is not yet ragent-compatible
+### 9.5 Adapting a plugin that is not yet codemason-compatible
 
-Because ragent recognises the **manifest dialects**, many upstream plugins load
+Because codemason recognises the **manifest dialects**, many upstream plugins load
 unchanged. When one does not, the usual fixes are small:
 
 1. **No manifest in a recognised location.** Add `codex-plugin.json`,
    `.codex-plugin/plugin.json`, or `.claude-plugin/plugin.json` with `name`, `version`,
    and `entry`.
 2. **No JavaScript entry point.** Point `entry` at the plugin's JS file; a
-   hand-written `main.js` that calls `ragent.register_tool` is enough.
-3. **A capability ragent does not implement** (MCP transports, subprocess
+   hand-written `main.js` that calls `codemason.register_tool` is enough.
+3. **A capability codemason does not implement** (MCP transports, subprocess
    grants, Desktop mounts). Nothing to do - it is reported as unsupported and
    the plugin still loads for its other contributions.
-4. **`api_version` newer than 1.** ragent's host API is version 1; reduce the
+4. **`api_version` newer than 1.** codemason's host API is version 1; reduce the
    declaration if the plugin only uses v1 features.
 
 ### 9.6 A note on trust
@@ -1004,18 +1004,18 @@ See [section 11](#11-security-model) for the full security posture.
 ### 9.7 Capability coverage by store
 
 Codex and Claude plugins ship much the same broad set of contribution surfaces,
-but each store spells them differently and ragent bridges only some. The table
+but each store spells them differently and codemason bridges only some. The table
 below lists the known surfaces for each store provider (the Codex store
 `openai/plugins` and the Claude store `claude-plugins-official`, the two
-documents the store browser parses) and whether ragent consumes them.
+documents the store browser parses) and whether codemason consumes them.
 
 "Partial" and "No" rows never block a plugin's other contributions: a surface
 that has an FR-025 label is recorded and reported under `Unsupported
 capabilities:`, and any other unrecognised section is simply ignored. The
-"In ragent?" column answers "if the plugin's manifest is recognised, does ragent
+"In codemason?" column answers "if the plugin's manifest is recognised, does codemason
 consume this surface?".
 
-| Capability | Codex store (`openai/plugins`) | Claude store (`claude-plugins-official`) | In ragent? |
+| Capability | Codex store (`openai/plugins`) | Claude store (`claude-plugins-official`) | In codemason? |
 | --- | --- | --- | --- |
 | **Manifest** | `.codex-plugin/plugin.json` | `.claude-plugin/plugin.json` | **Yes** - both nested locations are recognised (plus a root `codex-plugin.json` / `claude-plugin.json`, and a `plugin.json` with a top-level `"codex"` marker) |
 | **JavaScript tools** | - (store entries carry no `entry`) | `entry` / `main` / `server.entry` | **Yes** - the entry point runs on the sandbox; `tools[]` and `register_tool` register as `plugin_<id>_<tool>` |
@@ -1023,7 +1023,7 @@ consume this surface?".
 | **Skills** | `skills/` (declared `skills`) | `skills/` (declared `skills`) | **Yes** - each declared skill directory joins skill discovery (FR-029) |
 | **MCP servers** | `mcpServers` / `.mcp.json` | `mcpServers` / `.mcp.json` | **Yes** - bridged and connected as `<plugin-id>.<server>` (FR-030) |
 | **Agents / subagents** | `agents/` | `agents/` | **Yes** - declared profiles and every `agents/*.md` file join agent discovery, so they appear in the agent picker and are spawnable (FR-032) |
-| **Hooks** | `hooks.json` | `hooks/`, `hooks.json` | **Yes** - hooks declared inline or in a `hooks.json` file (plugin root or `hooks/`) are normalised onto the session hook engine (FR-033), including the group `{matcher, hooks: [...]}` shape; the trigger name accepts both ragent's `pre_tool_use` and the Claude `PreToolUse` spellings; a plugin hook gets `CLAUDE_PLUGIN_ROOT` and the Claude event JSON on stdin, and a blocking Stop hook can feed findings back before the turn ends |
+| **Hooks** | `hooks.json` | `hooks/`, `hooks.json` | **Yes** - hooks declared inline or in a `hooks.json` file (plugin root or `hooks/`) are normalised onto the session hook engine (FR-033), including the group `{matcher, hooks: [...]}` shape; the trigger name accepts both codemason's `pre_tool_use` and the Claude `PreToolUse` spellings; a plugin hook gets `CLAUDE_PLUGIN_ROOT` and the Claude event JSON on stdin, and a blocking Stop hook can feed findings back before the turn ends |
 | **App / UI surfaces** | `apps`, `.app.json`, `interface` | - | **No** - Codex app/UI metadata is host-specific and ignored |
 | **Desktop integration** | - | `mounts`, `window` | **No** - recorded as `claude desktop mounts` / `claude desktop window` |
 | **Subprocess / filesystem grants** | `permissions.fs`, `permissions.exec` | - | **No** - recorded as `codex permissions.fs` / `codex permissions.exec` |
@@ -1033,7 +1033,7 @@ consume this surface?".
 Two practical consequences:
 
 - **Codex store entries install and load.** The `openai/plugins` catalogue keeps
-  each manifest in `.codex-plugin/plugin.json`, and ragent recognises that nested
+  each manifest in `.codex-plugin/plugin.json`, and codemason recognises that nested
   location just like Claude's `.claude-plugin/plugin.json`, so `/plugins add`
   and `/plugins enable` both succeed. (A Codex entry whose manifest sits in some
   other unrecognised location still reports `no plugin manifest found`.)
@@ -1048,7 +1048,7 @@ Two practical consequences:
 
 ## 10. Configuration Reference
 
-The optional `plugins` block in `ragent.json`:
+The optional `plugins` block in `codemason.json`:
 
 ```jsonc
 {
@@ -1071,7 +1071,7 @@ The optional `plugins` block in `ragent.json`:
 | `max_execution_ms` | u64 | `5000` | Per-plugin-tool wall-clock execution budget, milliseconds. |
 | `max_entry_ms` | u64 | `10000` | Entry-point wall-clock budget, milliseconds. |
 | `max_memory_mb` | u64 | `64` | Per-JavaScript-context memory ceiling, MiB. |
-| `store_dir` | string? | `null` | Override of the plugin store directory. When `null`, the store is `.ragent/plugins/` (project) falling back to `~/.config/ragent/plugins/` (user-global). |
+| `store_dir` | string? | `null` | Override of the plugin store directory. When `null`, the store is `.codemason/plugins/` (project) falling back to `~/.config/codemason/plugins/` (user-global). |
 | `permissions` | map<string, string[]> | `{}` | Per-plugin capability grants keyed by plugin id. Use `["*"]` to grant everything. |
 
 The section merges **overlay-wins**: a project-level `plugins` block is not
@@ -1085,7 +1085,7 @@ executes.
 
 ### 11.1 Isolation
 
-- Plugin code runs with **no access** to the ragent process filesystem, network
+- Plugin code runs with **no access** to the codemason process filesystem, network
   stack, environment variables, or credentials other than what the host API
   explicitly exposes.
 - The host API **never** exposes API keys, provider credentials, memory
@@ -1104,7 +1104,7 @@ executes.
 - Discovery and `/plugins list` parse manifests only; nothing executes.
 - JavaScript executes only for an **enabled** plugin during session start, or
   inside `/plugins test`.
-- Every plugin failure is contained; a plugin can never terminate the ragent
+- Every plugin failure is contained; a plugin can never terminate the codemason
   process.
 - Host-level traces of capability use and gate decisions are emitted at
   `debug`/`trace` only - no plugin file contents, tool results, or message
@@ -1159,7 +1159,7 @@ loads_ok, load_failures, tool_invocations, tool_failures, consecutive_failures
 | `/plugins test` on a plugin contributing up to 10 tools | under 15 s, excluding user permission prompts |
 
 Observed on a debug build: discovery + list over 50 installed plugins completes
-in 0.01-0.02 s; `ragent plugins test` on a 10-tool plugin completes in 0.01 s;
+in 0.01-0.02 s; `codemason plugins test` on a 10-tool plugin completes in 0.01 s;
 an infinite-loop entry is contained at the configured entry budget (e.g. 0.8 s
 at an 800 ms budget).
 
@@ -1169,16 +1169,16 @@ at an 800 ms budget).
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `No plugins discovered.` | Store empty or wrong location | Check `.ragent/plugins/` and `~/.config/ragent/plugins/`; set `plugins.store_dir` if using a custom path |
+| `No plugins discovered.` | Store empty or wrong location | Check `.codemason/plugins/` and `~/.config/codemason/plugins/`; set `plugins.store_dir` if using a custom path |
 | Plugin row shows `dialect ?` and version `-` | Manifest failed to parse | Read the `Errors:` section for the JSON position; validate the manifest |
 | `ambiguous plugin manifest` | Directory matches both Codex and Claude recognition *and* is not the both-nested-manifest multi-target layout | Remove one of the two manifest forms (a plugin shipping both `.codex-plugin/plugin.json` and `.claude-plugin/plugin.json` is accepted as Claude and needs no change) |
-| `plugin add: no plugin manifest found in <dir>` | The installed tree carries no manifest ragent recognises | Check for `.claude-plugin/plugin.json`, `claude-plugin.json`, `.codex-plugin/plugin.json`, `codex-plugin.json`, or a `plugin.json` with a top-level `"codex"` marker. A Claude-dialect plugin's only manifest is the *nested* `.claude-plugin/plugin.json`, so a source that names a subdirectory without it fails: point the source at the directory that actually holds the manifest |
+| `plugin add: no plugin manifest found in <dir>` | The installed tree carries no manifest codemason recognises | Check for `.claude-plugin/plugin.json`, `claude-plugin.json`, `.codex-plugin/plugin.json`, `codex-plugin.json`, or a `plugin.json` with a top-level `"codex"` marker. A Claude-dialect plugin's only manifest is the *nested* `.claude-plugin/plugin.json`, so a source that names a subdirectory without it fails: point the source at the directory that actually holds the manifest |
 | `plugin requires host API vN` | Declared `api_version` newer than 1 | Lower the declaration to `1` |
 | Enable reports cause `entry` | Entry point threw or timed out | Run `/plugins test <id>` for the exception/timeout detail |
 | Enable reports cause `name-collision` | A command name collides with a built-in trigger, or a tool/command is declared twice by the same plugin | Rename the contribution |
 | Tool call fails with a serialisation error | Handler returned a value `JSON.stringify` cannot serialise (e.g. cyclic) | Return a plain object or string |
-| `[err] Plugin subsystem is disabled` | `plugins.enabled` is `false` | Set `plugins.enabled: true` in `ragent.json` |
-| A capability is missing from the `ragent` object | The plugin's `plugins.permissions` grant omits that group | Add the capability (or `"*"`) to the grant list |
+| `[err] Plugin subsystem is disabled` | `plugins.enabled` is `false` | Set `plugins.enabled: true` in `codemason.json` |
+| A capability is missing from the `codemason` object | The plugin's `plugins.permissions` grant omits that group | Add the capability (or `"*"`) to the grant list |
 | `mcp server transports` under Unsupported | Plugin declares an `mcpServers` entry shape the bridge cannot satisfy (e.g. an array of transports) | Often none - an inline object or a `"mcpServers": "./mcp.json"` file reference is bridged and connected as `<plugin-id>.<server>`; only the unparseable shape is reported |
 
 ---
@@ -1194,14 +1194,14 @@ list, add, remove, enable, disable, test, help
 ### 15.2 Host API v1 surface (quick list)
 
 ```
-ragent.api_version
-ragent.plugin_id
-ragent.register_tool(def)
-ragent.register_command(def)
-ragent.config.get(key)
-ragent.message.info(text) / .warn(text) / .error(text)
-ragent.log(level, text)
-ragent.plugin.read_text_file(relative_path)
+codemason.api_version
+codemason.plugin_id
+codemason.register_tool(def)
+codemason.register_command(def)
+codemason.config.get(key)
+codemason.message.info(text) / .warn(text) / .error(text)
+codemason.log(level, text)
+codemason.plugin.read_text_file(relative_path)
 ```
 
 ### 15.3 Config keys
@@ -1236,7 +1236,7 @@ criteria and can be used as worked examples:
 - `/reload` - reload customisations after plugin files change.
 - `/tools` - list every registered tool, including the `plugin_<id>_<tool>`
   entries a loaded plugin contributes.
-- `ragent plugins <sub>` - CLI parity for the same subcommands.
+- `codemason plugins <sub>` - CLI parity for the same subcommands.
 - [`docs/howtos/slashcommands/plugins.md`](slashcommands/plugins.md) - the
   `/plugins` command reference.
 - [`docs/howtos/config.md`](config.md) section 7.31 - the `plugins` config block.

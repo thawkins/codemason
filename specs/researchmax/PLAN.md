@@ -9,7 +9,7 @@ The overall strategy is:
 3. Apply the finding cap after synthesis and the concept cap after extraction,
    with contiguous renumbering.
 4. Expose `--max-concepts` / `--max-findings` on the CLI, hand parser, TUI, and
-   server, plus `ragent.json` defaults.
+   server, plus `codemason.json` defaults.
 5. Add tests, update docs, and verify no regressions.
 
 ## Tasks
@@ -24,7 +24,7 @@ The overall strategy is:
 | T-006 | Plumb`max_concepts`/`max_findings` through `ResearchRunRequest` and `build_session_config` | FR-012, FR-014 | M | High | completed | T-002 |
 | T-007 | Add`--max-concepts` / `--max-findings` to the research hand parser and help | FR-006, FR-007, FR-019, NFR-003 | M | High | completed | T-006 |
 | T-008 | Add`--max-concepts` / `--max-findings` to the root clap CLI | FR-006, FR-007, FR-019 | S | High | completed | T-007 |
-| T-009 | Add`research.max_concepts` / `research.max_findings` to `ragent.json` config | FR-008, FR-017 | M | High | completed | T-002 |
+| T-009 | Add`research.max_concepts` / `research.max_findings` to `codemason.json` config | FR-008, FR-017 | M | High | completed | T-002 |
 | T-010 | Add HTTP`max_concepts`/`max_findings` fields and invocation summary parity | FR-012, FR-013 | S | Medium | completed | T-006 |
 | T-011 | Update TUI completion and parameter hints for the two flags | FR-006, FR-007, NFR-003 | S | Medium | completed | T-007 |
 | T-012 | Add tests for ordering, truncation, zero/unbounded, and config defaults | FR-001, FR-003, FR-004, FR-015, FR-016, FR-022, NFR-002 | M | High | completed | T-003, T-004, T-006, T-009 |
@@ -36,7 +36,7 @@ The overall strategy is:
 ### T-001 — Define default limits and shared reverse-relevance ordering helper
 
 - Add `pub const DEFAULT_MAX_CONCEPTS: usize = 5;` and
-  `pub const DEFAULT_MAX_FINDINGS: usize = 20;` in `crates/ragent-research/src/lib.rs`
+  `pub const DEFAULT_MAX_FINDINGS: usize = 20;` in `crates/codemason-research/src/lib.rs`
   (or `session.rs`, next to the other research defaults).
 - Add one helper (for example `rank_entries_by_reverse_relevance`) that accepts
   a list of `(body, cited_ranks)` entries and sorts by
@@ -93,7 +93,7 @@ The overall strategy is:
 ### T-007 — Add the flags to the research hand parser and help
 
 - Add `--max-concepts` and `--max-findings` to `parse_create` in
-  `crates/ragent-research/src/cli.rs`, including them in the value-taking
+  `crates/codemason-research/src/cli.rs`, including them in the value-taking
   argument list, the parse match arms, the returned variant fields, and the
   `build_help_message` flag list (NFR-003).
 - Reject malformed values with a clear error rather than silently defaulting
@@ -107,10 +107,10 @@ The overall strategy is:
 - Forward them into `ResearchCliCommand::Create` alongside the other
   `max_*` fields.
 
-### T-009 — Add the config keys to `ragent.json`
+### T-009 — Add the config keys to `codemason.json`
 
 - Add `max_concepts` (default 5) and `max_findings` (default 20) to
-  `ResearchConfig` in `crates/ragent-config/src/config.rs` with
+  `ResearchConfig` in `crates/codemason-config/src/config.rs` with
   `#[serde(default = "...")]` accessors.
 - Update `ResearchConfig::is_empty` and the config merge and tests so the keys
   round-trip and are omitted from serialization at their defaults (FR-008).
@@ -118,7 +118,7 @@ The overall strategy is:
 ### T-010 — Add HTTP fields and invocation-summary parity
 
 - Add `max_concepts` / `max_findings` (optional, serde default) to
-  `CreateResearchRequest` in `crates/ragent-server/src/routes/research.rs`.
+  `CreateResearchRequest` in `crates/codemason-server/src/routes/research.rs`.
 - Forward them in `to_run_request()` and emit
   `--max-concepts N` / `--max-findings N` in `invocation_summary()` only when
   set, so the recorded invocation replays (FR-012, FR-013).
@@ -126,7 +126,7 @@ The overall strategy is:
 ### T-011 — Update TUI completion and parameter hints
 
 - Add `--max-concepts` and `--max-findings` to the `/research` suggestion list
-  in `crates/ragent-tui/src/app/slash.rs` and the parameter hint in
+  in `crates/codemason-tui/src/app/slash.rs` and the parameter hint in
   `session_ops.rs`.
 
 ### T-012 — Add ordering/truncation/config tests
@@ -156,5 +156,5 @@ The overall strategy is:
 ### T-015 — Verify
 
 - Run `cargo fmt --check`, `cargo clippy --workspace --all-targets`, and the
-  `ragent-research`, `ragent-config`, `ragent-server`, and `ragent-tui` test
+  `codemason-research`, `codemason-config`, `codemason-server`, and `codemason-tui` test
   suites, then confirm each SPEC acceptance criterion 1–6.

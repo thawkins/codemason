@@ -25,7 +25,7 @@ Throughout:
 - **"step"** is one model request inside a turn.
 - **"the workbook"** is `tools.xlsx` in the repository root.
 - **"the rename table"** is the checked-in list of 13 `(before, after)` pairs
-  the change adds, in `crates/ragent-agent/src/tool/rename.rs`.
+  the change adds, in `crates/codemason-agent/src/tool/rename.rs`.
 
 Three groups of cases run here. Cases TC-001 to TC-018 exercise the unified
 tool-calling layer (FR-001 to FR-022). Cases TC-019 to TC-028 exercise the
@@ -42,19 +42,19 @@ same finished build as TC-019 to TC-028.
 
 ## Prerequisites
 
-1. **Build the binary.** Build a debug binary and confirm `ragent --version`
+1. **Build the binary.** Build a debug binary and confirm `codemason --version`
    prints a version string. Run every case with that binary.
 
 2. **Keep a pre-change binary.** Before the rename lands, copy the binary built
    from the commit immediately before the change to a path outside the
-   repository, for example `~/scratch/ragent-before/ragent`. TC-017 and TC-027
+   repository, for example `~/scratch/codemason-before/codemason`. TC-017 and TC-027
    need it to compare against.
 
 3. **Configure an OpenAI-family provider.** Set `OPENAI_API_KEY` (or use a local
    Ollama endpoint with `OLLAMA_HOST`). Confirm a plain prompt returns a reply:
 
    ```
-   ragent run "reply with the single word: ready"
+   codemason run "reply with the single word: ready"
    ```
 
    Expected: the word `ready` appears in the output and no error banner is
@@ -71,7 +71,7 @@ same finished build as TC-019 to TC-028.
 
 5. **Create a scratch project.** Create an empty directory
    `~/scratch/uniformtools-tests/` and run every session from inside it, so the
-   project `.ragent/` directory belongs to the test:
+   project `.codemason/` directory belongs to the test:
 
    ```
    mkdir -p ~/scratch/uniformtools-tests
@@ -109,7 +109,7 @@ same finished build as TC-019 to TC-028.
 9. **Have a spreadsheet reader for the workbook.** Any tool that opens `.xlsx`
    files and shows cell values will do. Confirm you can see, in the
    `Anthropic Tools` sheet, columns headed `Tool` and `Mapping`, and in the
-   `ragent Tools` sheet, columns headed `Tool`, `Anthropic equivalent` and
+   `codemason Tools` sheet, columns headed `Tool`, `Anthropic equivalent` and
    `Mapping`.
 
 10. **Record the model name and provider.** Note them for each case; several
@@ -120,7 +120,7 @@ same finished build as TC-019 to TC-028.
     than the running binary.
 
 12. **Enable the payload trace for TC-001.** Set `tools.wire_trace: true` in the
-    project's `ragent.json` so the encoder's output is recorded under
+    project's `codemason.json` so the encoder's output is recorded under
     `target/temp/wire-trace/`, one file per step. TC-001 reads that file to check
     the carrier each family actually emitted; the trace is redacted, so it is
     safe to read and safe to keep.
@@ -140,7 +140,7 @@ project.
 
 **Steps:**
 
-1. Start the TUI: run `ragent` in `~/scratch/uniformtools-tests/`.
+1. Start the TUI: run `codemason` in `~/scratch/uniformtools-tests/`.
 2. Wait for the status bar to show a model name and no error.
 3. Click the input field, then type the test data and press `Enter`.
 4. Watch the log panel for the tool-call block and note the call id shown beside
@@ -182,10 +182,10 @@ project.
    flag by typing the test data and pressing `Enter`.
 2. Read the printed table.
 3. Count the rows and compare against the provider list printed by
-   `ragent --help` (or the provider selector in the TUI, reached by typing
+   `codemason --help` (or the provider selector in the TUI, reached by typing
    `/provider` in the input field and pressing `Enter`).
 
-**Test data:** `ragent --wire-matrix`
+**Test data:** `codemason --wire-matrix`
 
 **Expected results:**
 
@@ -198,12 +198,12 @@ project.
   executing a tool. No network activity occurs and no session is created.
 - The table is plain ASCII.
 - Adding a provider would require a new row: there is no provider in
-  `ragent --help` that is missing from the table.
+  `codemason --help` that is missing from the table.
 
 **Automated counterpart (T-003):** the coverage half of FR-002 - every
 registered provider id has a declared profile, and every profile a row names is
 one of the six declared families - is pinned by
-`crates/ragent-llm/tests/test_wire_profile_table.rs` (13 cases). It is hermetic:
+`crates/codemason-llm/tests/test_wire_profile_table.rs` (13 cases). It is hermetic:
 it builds the provider registry offline from `create_default_registry()` (no
 client is constructed, no credential is read) and reads the library's `const`
 tables, so it needs no provider, no network and no scratch project. The cases a
@@ -214,11 +214,11 @@ some row, labels ASCII and ascending),
 family and never composes a seventh contract) and
 `..._source_declares_no_family_outside_the_list` (the module's
 `pub const X: ToolWireProfile` declarations and `FAMILIES` hold the same set).
-Run it with `cargo test -p ragent-llm --test all test_wire_profile_table::`.
+Run it with `cargo test -p codemason-llm --test all test_wire_profile_table::`.
 
 **Automated half (T-022).** The printing half of this case - the table itself, its
 cells, its ASCII-ness and its exit behaviour - is pinned by two files.
-`crates/ragent-llm/tests/test_wire_matrix.rs` (8 cases, hermetic, no binary spawn)
+`crates/codemason-llm/tests/test_wire_matrix.rs` (8 cases, hermetic, no binary spawn)
 covers the renderer: `..._prints_one_row_per_provider` (one row per `PROVIDER_WIRE`
 id, steps 2 and 3's count), `..._has_no_blank_cell` (ten populated columns per row,
 no cell empty, `-` or `none` - the expected-results bullet about empty fields),
@@ -233,13 +233,13 @@ provider and a mixed known/unknown list renders nothing), and
 `..._headings_match_the_columns_each_row_prints`. `tests/test_wire_matrix_flag.rs`
 (4 cases, root crate) covers the flag as the user meets it, in a fresh tempdir with
 an isolated `HOME`/`XDG_CONFIG_HOME`: `..._prints_one_row_per_provider` (exit 0 and
-step 3's comparison - every provider `ragent models` names has a row, rows sorted and
+step 3's comparison - every provider `codemason models` names has a row, rows sorted and
 unique), `..._populates_every_column`, `..._exits_without_network_or_session_side_effects`
 (finishes in under 10 s, where a connect attempt alone is seconds, and leaves no
 database, session store or config root behind - the "exits immediately without
 contacting any provider" bullet) and `..._is_documented_in_help`. Run them with
-`cargo test -p ragent-llm --test all test_wire_matrix::` and
-`cargo test -p ragent --test all test_wire_matrix_flag::`.
+`cargo test -p codemason-llm --test all test_wire_matrix::` and
+`cargo test -p codemason --test all test_wire_matrix_flag::`.
 
 ---
 
@@ -343,7 +343,7 @@ rather than in production. The cases need no credential, no network and no model
 
 **Automated half (T-008).** Every expectation above that is a property of the
 *stream layer* rather than of a live model is pinned hermetically in
-`crates/ragent-llm/tests/test_wire_decode.rs`, which needs no provider and no
+`crates/codemason-llm/tests/test_wire_decode.rs`, which needs no provider and no
 network (NFR-004). Step 3's "two blocks in one message" and step 4's "each block
 carries its own arguments, neither a concatenation of the other's" are
 `test_accumulator_by_index_attributes_interleaved_deltas_to_their_own_block`
@@ -372,7 +372,7 @@ skipped with a warning instead of being attributed to the last-opened call, so a
 **Automated half (T-009).** The Bedrock half of the last bullet - "no call's
 arguments are lost when the two streams interleave" - is now pinned through the
 **real Converse stream parser** rather than the accumulator alone.
-`crates/ragent-llm/tests/inline/bedrock_tests.rs` gained
+`crates/codemason-llm/tests/inline/bedrock_tests.rs` gained
 `test_converse_chat_stream_keeps_two_parallel_tool_use_blocks_apart`: two
 `toolUse` blocks open back to back, four `toolUse.input` fragments interleave
 `1, 0, 1, 0`, the stop frames arrive `1, 0`, and the case asserts two starts
@@ -384,7 +384,7 @@ the other's input), and exactly one end per call in stop-frame order.
 `toolUse` delta with no `contentBlockIndex` between two indexed fragments reaches
 no call, the named call keeps only its own fragments, and both calls still end
 exactly once. Structurally,
-`crates/ragent-llm/tests/test_wire_decode.rs` carries
+`crates/codemason-llm/tests/test_wire_decode.rs` carries
 `test_no_stream_attributes_a_frame_to_the_call_opened_last`, a source scan over
 `wire/decode.rs`, `bedrock.rs`, `anthropic.rs`, `gemini.rs` and `sse.rs` that
 fails on `delta_last(`, `end_last(`, `.last_mut()` and `active_tool_call_id` - the
@@ -399,12 +399,12 @@ assume) and the TUI rendering in step 3; both need a provider and a terminal
 **Automated half (T-010).** The last bullet's FR-019 clause - "the displayed ids
 are non-empty and unique, and neither id is used to work out which tool was
 called" - is now pinned end to end for the two providers that supply no ids of
-their own. `crates/ragent-llm/tests/inline/ollama_cloud_tests.rs` drives the real
+their own. `crates/codemason-llm/tests/inline/ollama_cloud_tests.rs` drives the real
 native Ollama Cloud stream with two id-less `tool_calls` frames and asserts the
 starts are `ollama_cloud_0_read_file` and `ollama_cloud_1_read_file`, each
 frame's arguments landing on its own call; the frame-local index restarts at zero
 in each frame, which is the fold the stream-scoped counter exists to prevent.
-`crates/ragent-llm/tests/test_gemini_tool_calls.rs` drives the real Gemini stream
+`crates/codemason-llm/tests/test_gemini_tool_calls.rs` drives the real Gemini stream
 with two `functionCall` parts in one frame and asserts `gemini_0_read_file` and
 `gemini_1_read_file` with the two argument payloads kept apart.
 `test_wire_decode.rs` gained
@@ -460,7 +460,7 @@ that will emit broken JSON, so it is normally run with a small local model
   with `"{\"thought\":\"x\"}"` to see both.
 
 **Automated counterpart (T-013):** the whole case is pinned hermetically by
-`crates/ragent-agent/tests/test_processor_more_paths.rs`, which drives a scripted
+`crates/codemason-agent/tests/test_processor_more_paths.rs`, which drives a scripted
 provider through `SessionProcessor::process_message` with no network and no
 model: `test_non_object_arguments_are_still_refused` sends `[1, 2]` to
 `tool_info` and asserts the tool never ran, the record is `ToolCallStatus::Error`,
@@ -468,7 +468,7 @@ the corrective text names the tool and what was found, it instructs a resend, an
 the request the provider receives carries `is_error: true`. The sentence itself -
 naming the tool, quoting the decoder verbatim, instructing a resend, saying the
 tool was not executed - is
-`crates/ragent-agent/tests/test_tool_input_error.rs::undecodable_refusal_names_quotes_and_instructs`,
+`crates/codemason-agent/tests/test_tool_input_error.rs::undecodable_refusal_names_quotes_and_instructs`,
 where the quote is compared against the decoder's own `Display` output rather
 than a copy of it.
 
@@ -496,11 +496,11 @@ than a copy of it.
 - If the model resends with both arguments, the retry executes normally.
 
 **Automated counterpart (T-013):** step 3 is
-`crates/ragent-agent/tests/test_tool_input_error.rs::schema_refusal_names_the_parameter_and_its_type`,
+`crates/codemason-agent/tests/test_tool_input_error.rs::schema_refusal_names_the_parameter_and_its_type`,
 which runs `validate_required_args` over the real shape (a required `destination`
 declared `string`) and asserts the sentence names the tool, the parameter and
 `string`. The whole call is
-`crates/ragent-agent/tests/test_processor_more_paths.rs::test_schema_violation_names_the_parameter_and_is_marked_on_the_wire`,
+`crates/codemason-agent/tests/test_processor_more_paths.rs::test_schema_violation_names_the_parameter_and_is_marked_on_the_wire`,
 which drives a `move_file` call carrying only `source` through
 `SessionProcessor::process_message` and asserts the record is
 `ToolCallStatus::Error`, the sentence comes from the shared constructor (the
@@ -540,8 +540,8 @@ before the run.
 
 **Steps:**
 
-1. Open the config file used by the session (the project `.ragent/ragent.json`,
-   or the file named by `RAGENT_CONFIG`) in an editor and set the experimental
+1. Open the config file used by the session (the project `.codemason/codemason.json`,
+   or the file named by `CODEMASON_CONFIG`) in an editor and set the experimental
    block:
 
    ```
@@ -557,7 +557,7 @@ before the run.
    provider and the reason:
 
    ```
-   ragent run --log-level debug "you must use the read tool on notes.txt and the list tool on this directory"
+   codemason run --log-level debug "you must use the read tool on notes.txt and the list tool on this directory"
    ```
 
 **Test data:** `you must use the read tool on notes.txt and the list tool on this directory`
@@ -580,7 +580,7 @@ every declared family sets the field to `true`, so step 3 can only be satisfied
 by editing the profile table, which is the one edit a test must not make. What
 the automated cases pin instead:
 
-- `crates/ragent-agent/tests/test_parallel_gate.rs`
+- `crates/codemason-agent/tests/test_parallel_gate.rs`
   `test_a_parallelising_provider_keeps_the_concurrent_arm` - a row that declares
   `true` is not demoted, logs nothing, and still dispatches the step
   concurrently (its permission prompts all arrive before the calls close).
@@ -636,7 +636,7 @@ autopilot must be off.
 **Automated half (T-016).** The procedural steps need a human who deliberately
 leaves a TUI dialog unanswered, which no test can be. What the automated cases
 pin instead is the invariant those steps observe, in
-`crates/ragent-agent/tests/test_approval_blocks_result.rs` (registered in
+`crates/codemason-agent/tests/test_approval_blocks_result.rs` (registered in
 `tests/all.rs` only by this task - it had been an orphan file since an earlier
 pass, so its cases had never run):
 
@@ -700,7 +700,7 @@ decision, and the handler's consultation of it - with the seam recorded in
 **Automated counterpart (T-013, record half):** the flag's *origin* - that
 `is_error` is derived from the recorded status and never re-derived at a call
 site - is pinned by
-`crates/ragent-agent/tests/test_tool_input_error.rs::is_error_is_derived_from_the_status_type`
+`crates/codemason-agent/tests/test_tool_input_error.rs::is_error_is_derived_from_the_status_type`
 (the flag is `ToolCallStatus::is_error()`, and `history.rs`,
 `compaction/convert.rs` and `processor.rs` write neither `is_error: !success` nor
 a status-to-`Error` comparison) and by
@@ -712,7 +712,7 @@ request in
 and `...::test_non_object_arguments_are_still_refused`.
 
 **Automated half (T-017, transmit side):** what the *encoder* does with the flag
-is pinned by `crates/ragent-llm/tests/test_tool_result_error_marking.rs` (7
+is pinned by `crates/codemason-llm/tests/test_tool_result_error_marking.rs` (7
 cases): every format derives its marking rule from its declared message profile
 (`transmits_is_error_natively`), with exactly Anthropic and Bedrock native and
 the other four prefixed; a non-native format prefixes an error and never a
@@ -837,30 +837,30 @@ false` loop over every declared profile.
 
 ---
 
-### TC-013 - An alias spelling resolves to the ragent tool (FR-015, FR-025)
+### TC-013 - An alias spelling resolves to the codemason tool (FR-015, FR-025)
 
 **Preconditions:** Prerequisites 1, 3 and 5. Alias resolution enabled: add to
-the project `.ragent/ragent.json`:
+the project `.codemason/codemason.json`:
 
 ```
 "tools": { "aliases": true, "expose_alias_names": true }
 ```
 
 Note: on the finished build the alias table holds only provider spellings that
-are **not** ragent names. `Bash`, `Edit`, `Write` and the other ten renamed
+are **not** codemason names. `Bash`, `Edit`, `Write` and the other ten renamed
 spellings are the registered names themselves, so they resolve on the registry
 lookup and must not appear in the table (FR-026). This case therefore uses an
-OpenAI spelling ragent does not adopt.
+OpenAI spelling codemason does not adopt.
 
 **Steps:**
 
 1. Restart the TUI so the config is re-read.
 2. Establish what the table actually contains, so the case tests a real entry
    rather than an assumed one. In a session with a model available, run
-   `ragent run --log-level debug "list the tools you can call"`, and read the
+   `codemason run --log-level debug "list the tools you can call"`, and read the
    tools array in the request with the payload trace from TC-018 enabled.
 3. Write down every name the tools array advertises that is not a registered
-   ragent name. These are the alias spellings.
+   codemason name. These are the alias spellings.
 4. For each spelling written down in step 3, check it maps to the tool the
    alias source file declares. If the list is empty, record the case as not
    applicable to this build and note it - the built-in table may be empty, and an
@@ -871,7 +871,7 @@ OpenAI spelling ragent does not adopt.
 7. Disable aliases by setting `"aliases": false` in the same block, restart,
    type `/new`, `Enter`, and repeat step 5.
 8. Set `"tools": { "aliases": false }` and run the Claude spelling the workbook
-   made ragent adopt.
+   made codemason adopt.
 
 **Test data:**
 
@@ -882,13 +882,13 @@ OpenAI spelling ragent does not adopt.
 
 **Expected results:**
 
-- Step 2: the advertised tools array contains both ragent names and the alias
-  spellings, and no alias spelling equals a ragent tool name.
-- Step 5, aliases enabled: the tool block shows the canonical ragent name
+- Step 2: the advertised tools array contains both codemason names and the alias
+  spellings, and no alias spelling equals a codemason tool name.
+- Step 5, aliases enabled: the tool block shows the canonical codemason name
   (`websearch` for the example spelling), the tool executes, and the result is
   reported. The model is not told the tool is unknown.
 - Step 7, aliases disabled: the same prompt is refused as an unknown tool named
-  by the provider spelling, and the suggested name is the ragent name.
+  by the provider spelling, and the suggested name is the codemason name.
 - In both cases no unrelated tool runs.
 - Step 8 works with aliases off, and the tool block names `Bash`: the registry
   holds that spelling, so no table lookup happened. This is the difference the
@@ -898,9 +898,9 @@ OpenAI spelling ragent does not adopt.
 
 **Automated counterparts (T-019):** the manual steps above are pinned by two
 registered test files, so a regression is caught without a model or a network -
-`crates/ragent-agent/tests/test_tool_alias_table.rs` (25 cases: the table's shape
+`crates/codemason-agent/tests/test_tool_alias_table.rs` (25 cases: the table's shape
 and registry agreement, the six resolver guards, and the once-only unresolved
-target report) and `crates/ragent-agent/tests/test_tool_alias_resolution.rs` (4
+target report) and `crates/codemason-agent/tests/test_tool_alias_resolution.rs` (4
 end-to-end cases through `SessionProcessor::process_message`). They use an
 explicit entry onto the offline `think` tool rather than a built-in row, because
 the built-in targets (`webfetch`, `websearch`) perform network I/O. Step 5 is
@@ -915,8 +915,8 @@ registered name to resolve by registry lookup even when a table entry maps it
 elsewhere.
 
 **Automated counterparts (T-020) - the config the preconditions write:**
-`crates/ragent-config/tests/test_tools_config.rs` (24 value cases) and
-`crates/ragent-config/tests/test_tools_config_load.rs` (5 cases through the real
+`crates/codemason-config/tests/test_tools_config.rs` (24 value cases) and
+`crates/codemason-config/tests/test_tools_config_load.rs` (5 cases through the real
 layered loader in a sandboxed temp tree) pin the section this case's
 preconditions assume. `test_global_and_project_layers_merge_the_alias_entries` is
 the precondition's own claim (a project entry plus a user-global entry compose,
@@ -929,8 +929,8 @@ covers a typo'd switch, so a preconditions block with `"expose_alias_names":
 "yes"` fails loudly rather than quietly running the case with advertising off.
 
 **Automated half (T-021) - the outbound list:** step 2 ("the advertised tools
-array contains both ragent names and the alias spellings") is
-`crates/ragent-agent/tests/test_tool_alias_exposure.rs`, 12 cases over the one
+array contains both codemason names and the alias spellings") is
+`crates/codemason-agent/tests/test_tool_alias_exposure.rs`, 12 cases over the one
 projection every outbound surface reads. `test_advertising_off_advertises_only_registry_names`
 and `test_an_empty_table_advertises_nothing_even_when_the_switch_is_on` are
 FR-015's "where neither is enabled, behaviour shall be unchanged";
@@ -941,7 +941,7 @@ spelling is shaped like a call through the canonical name) and
 `test_every_builtin_entry_is_advertisable` are step 2's two halves - the
 spellings and the canonical names, against the real registry;
 `test_the_advertised_list_is_sorted_by_name` is FR-030's ordering. Step 2's
-"no alias spelling equals a ragent tool name" is
+"no alias spelling equals a codemason tool name" is
 `test_a_registered_spelling_is_never_advertised_twice` and
 `test_no_name_is_advertised_twice_for_any_builtin_entry`, which are also the last
 expected result ("With `expose_alias_names` true, no renamed tool is advertised
@@ -953,7 +953,7 @@ which would be refused at use is never offered,
 `test_no_retired_spelling_is_ever_advertised` is FR-031's outbound half for every
 row of the rename table, and `test_advertising_never_renames_a_canonical_entry`
 is "advertising adds entries and changes none".
-`crates/ragent-agent/tests/test_tool_alias_resolution.rs` adds the end-to-end
+`crates/codemason-agent/tests/test_tool_alias_resolution.rs` adds the end-to-end
 half: `test_the_wire_and_the_prompt_advertise_the_alias_spelling` reads the tools
 array of the request the processor actually sends (both the spelling and the
 canonical name are there, and the prompt's tool reference names the spelling),
@@ -1019,14 +1019,14 @@ issued" is
 drives `ResponsesApiClient::build_request_body` - the function `chat` applies `?`
 to - so the refusal leaves the body builder as an error rather than as a body
 with fewer entries, while a carryable history still builds. All three are in
-`crates/ragent-llm/tests/test_wire_encode_message.rs`; run them with
+`crates/codemason-llm/tests/test_wire_encode_message.rs`; run them with
 
 ```
-cargo nextest run -p ragent-llm -E 'test(test_wire_encode_message::)'
+cargo nextest run -p codemason-llm -E 'test(test_wire_encode_message::)'
 ```
 
 **Automated half (T-006).** Steps 1-6 are covered by
-`crates/ragent-llm/tests/test_wire_encode_message.rs`:
+`crates/codemason-llm/tests/test_wire_encode_message.rs`:
 `test_the_responses_client_body_uses_the_encoder_for_its_input_list` drives
 `ResponsesApiClient::build_request_body` and asserts the input list carries both
 the call and its output for the canonical history, which is step 6's check that
@@ -1195,7 +1195,7 @@ finished binary, and compare.
    the encoder's payload exactly - a hand-built array that happens to be the
    right shape is not the contract (FR-003).
 8. Without any provider credentials configured, run
-   `ragent run --dry-run --json "x"` and confirm it completes: the encoder and
+   `codemason run --dry-run --json "x"` and confirm it completes: the encoder and
    the profile table are exercisable offline, with no live provider and no
    network call.
 
@@ -1220,7 +1220,7 @@ finished binary, and compare.
 **Automated counterpart (T-025):** the FR-001 half of this case - that the
 canonical record carries decoded JSON `input` rather than a narrowing typed
 field, and that this is a recorded decision rather than an open TODO - is pinned
-by `crates/ragent-types/tests/test_typed_args_decision.rs` (6 cases). It is
+by `crates/codemason-types/tests/test_typed_args_decision.rs` (6 cases). It is
 hermetic: it reads the crate's own `src/` tree from `CARGO_MANIFEST_DIR` and the
 decision record from the workspace root, so it needs no provider, no network and
 no build artefact. It asserts that `ToolCallState::input` / `::output`,
@@ -1229,10 +1229,10 @@ no build artefact. It asserts that `ToolCallState::input` / `::output`,
 `src/`, that each of the four fields carries a doc comment naming
 `specs/uniformtools/T-025-TYPED-ARGS-DECISION.md`, and that the record still
 names its three sites plus FR-001 and NFR-002. Run it with
-`cargo test -p ragent-types --test all test_typed_args_decision::`.
+`cargo test -p codemason-types --test all test_typed_args_decision::`.
 
 **Automated half (T-004):** steps 6 and 7 are the two a reviewer cannot check
-from the TUI, and both are hermetic in `crates/ragent-llm`. For step 7's "the
+from the TUI, and both are hermetic in `crates/codemason-llm`. For step 7's "the
 tools JSON is byte-identical", `tests/test_wire_encode.rs` carries
 `test_encode_tools_bytes_match_the_pre_fold_builders` - the literal pre-fold
 bytes for all five builders plus the HuggingFace-prefixed row - so a key-order,
@@ -1253,8 +1253,8 @@ provider" is the same property: `encode_tools` is a pure function over
 `&[ToolDefinition]`. Run them with
 
 ```
-cargo test -p ragent-llm --test all test_wire_encode::
-cargo test -p ragent-llm --lib providers::tool_cache::
+cargo test -p codemason-llm --test all test_wire_encode::
+cargo test -p codemason-llm --lib providers::tool_cache::
 ```
 
 Both are green on the current tree. The `--lib` filter is necessary rather than
@@ -1265,7 +1265,7 @@ the lib binary, not the `--test all` one.
 scoped to the six modules its fold touched; T-027 makes the claim hold over the
 tree, and it is in the same file, so no extra target is needed.
 `test_no_provider_module_writes_an_envelope_key` walks every `.rs` file under
-`crates/ragent-llm/src/providers/` (recursively, `wire/` included), strips
+`crates/codemason-llm/src/providers/` (recursively, `wire/` included), strips
 comments first so module docs that *name* a shape do not fire it, and reports
 each offending `file:line: key` for the eight keys a definition object can be
 built from; `wire/encode.rs` - `item_json`, the one definition site - is the
@@ -1281,7 +1281,7 @@ under `tools`), so a provider cannot put the encoded list where nothing reads
 it. Run them with
 
 ```
-cargo test -p ragent-llm --test all test_wire_encode::
+cargo test -p codemason-llm --test all test_wire_encode::
 ```
 
 **Not covered by a test:** the tool-*call* `"type": "function"` literal inside an
@@ -1309,15 +1309,15 @@ while each `byte_len` is its own inner array, and
 `openai_responses.rs` two ways: no `"parameters":` / `"type": "function"` literal,
 **and** a `cached_tools(ToolFormat::OpenAiResponses` call - so deleting the array
 without wiring the encoder fails too. Step 6's on-screen estimate is covered by
-`crates/ragent-tui/tests/test_context_panel_t005.rs::test_tool_metadata_measures_the_selected_providers_own_envelope`
+`crates/codemason-tui/tests/test_context_panel_t005.rs::test_tool_metadata_measures_the_selected_providers_own_envelope`
 (a Responses session measures 51 tokens of envelope overhead against 532 for a
 chat session over the same 148 definitions). Run them with
 
 ```
-cargo test -p ragent-llm --lib providers::openai_responses::
-cargo test -p ragent-llm --lib providers::tool_cache::
-cargo test -p ragent-llm --test all test_wire_encode::
-cargo test -p ragent-tui --test all test_context_panel_t005::
+cargo test -p codemason-llm --lib providers::openai_responses::
+cargo test -p codemason-llm --lib providers::tool_cache::
+cargo test -p codemason-llm --test all test_wire_encode::
+cargo test -p codemason-tui --test all test_context_panel_t005::
 ```
 
 ---
@@ -1334,7 +1334,7 @@ cargo test -p ragent-tui --test all test_context_panel_t005::
    scratch project:
    `ls -R ~/scratch/uniformtools-tests/target/temp/wire-trace 2>&1`
 3. Stop the TUI with `Esc` then `Ctrl+C` in the terminal.
-4. Add to the project `.ragent/ragent.json`:
+4. Add to the project `.codemason/codemason.json`:
 
    ```
    "tools": { "wire_trace": true }
@@ -1362,13 +1362,13 @@ cargo test -p ragent-tui --test all test_context_panel_t005::
 **Automated counterparts (T-020) - the switch itself:** this case's
 preconditions depend on `tools.wire_trace` existing, defaulting off and parsing
 from either layer, which is what
-`crates/ragent-config/tests/test_tools_config.rs` and
-`crates/ragent-config/tests/test_tools_config_load.rs` pin
+`crates/codemason-config/tests/test_tools_config.rs` and
+`crates/codemason-config/tests/test_tools_config_load.rs` pin
 (`test_serialised_default_omits_the_tools_key`,
 `test_expose_alias_names_and_wire_trace_parse_independently`,
 `test_merge_ors_the_opt_in_booleans`).
 
-**Automated half (T-023) - the dump:** `crates/ragent-llm/tests/test_wire_trace.rs`
+**Automated half (T-023) - the dump:** `crates/codemason-llm/tests/test_wire_trace.rs`
 pins every step below except the two manual confirmations that need a live
 provider. Step 1/2 ("no trace directory is created") is
 `test_wire_trace_is_inert_by_default`: with the switch off, `trace::next_path`
@@ -1413,21 +1413,21 @@ record as well as against the table in the source.
 1. Open `tools.xlsx` in the repository root.
 2. In the `Anthropic Tools` sheet, list every row whose `Mapping` cell reads
    exactly `Exact`. Record its `Tool` value. These are the *candidate targets*.
-3. In the `ragent Tools` sheet, list every row whose `Mapping` cell reads
+3. In the `codemason Tools` sheet, list every row whose `Mapping` cell reads
    exactly `Exact` and whose `Anthropic equivalent` cell names at least one
    candidate target. Record its `Tool` value and the target it names.
-4. Drop every candidate whose target is named only by ragent rows that are not
-   `Exact`, or named by no ragent row at all (FR-024).
-5. For each remaining target, collect every ragent tool that names it. Where
+4. Drop every candidate whose target is named only by codemason rows that are not
+   `Exact`, or named by no codemason row at all (FR-024).
+5. For each remaining target, collect every codemason tool that names it. Where
    there is more than one, keep the claimant whose name equals the target once
    each `_`-separated segment is capitalised; leave the others under their
    current names. Where no claimant matches, refuse the target and record the
    competing names (FR-025).
 6. Open the rename table. The pairs are in
-   `crates/ragent-types/src/tool_rename.rs` (`TOOL_RENAMES`);
-   `crates/ragent-agent/src/tool/rename.rs` is a re-export shim and holds no
+   `crates/codemason-types/src/tool_rename.rs` (`TOOL_RENAMES`);
+   `crates/codemason-agent/src/tool/rename.rs` is a re-export shim and holds no
    pairs. (The body sits one crate lower because FR-031 makes the config loader
-   read it, and `ragent-config` cannot depend on `ragent-agent`.)
+   read it, and `codemason-config` cannot depend on `codemason-agent`.)
 7. Compare the two lists row by row. Then check the order: the table is
    ascending by `after`.
 8. Confirm the test that ships with the table has been reported as passing by
@@ -1437,8 +1437,8 @@ record as well as against the table in the source.
    valid identifier, and both columns are unique. Before the rename landed the
    first two read the other way round; that polarity flipped with the tools, in
    the same change (FR-034), and neither half may be relaxed. The suite is
-   `crates/ragent-agent/tests/test_tool_rename_table.rs` (9 cases, run as
-   `cargo test -p ragent-agent --test all test_tool_rename_table::`); its last
+   `crates/codemason-agent/tests/test_tool_rename_table.rs` (9 cases, run as
+   `cargo test -p codemason-agent --test all test_tool_rename_table::`); its last
    case asserts the table's test opens no workbook, which is why step 2 onward
    is a manual comparison rather than a script. The `after` names are what
    `--dry-run` must list; see TC-020 for that half.
@@ -1447,7 +1447,7 @@ record as well as against the table in the source.
 
 **Expected results:**
 
-- Step 3 yields 34 `(tool, target)` pairs over 22 ragent tools and 15 distinct
+- Step 3 yields 34 `(tool, target)` pairs over 22 codemason tools and 15 distinct
   candidate targets (15 is the target count, not the pair count).
 - Steps 4 and 5 leave exactly 13 renames, matching this list: `ask_user` to
   `AskUserQuestion`, `bash` to `Bash`, `edit` to `Edit`, `plan_enter` to
@@ -1460,15 +1460,15 @@ record as well as against the table in the source.
   Neither claimant equals the target's spelling.
 - `new_agent` and `read` are absent because their Anthropic rows are `Close`.
   All five `cron_*` tools (`cron_add`, `cron_remove`, `cron_list`, `cron_enable`,
-  `cron_disable`) are absent because their own ragent rows are `Close`, even
+  `cron_disable`) are absent because their own codemason rows are `Close`, even
   though `CronCreate`, `CronDelete` and `CronList` are `Exact`. `TodoWrite` is
-  absent because no ragent row names it.
+  absent because no codemason row names it.
 - `bash_reset`, `apply_patch`, `patch`, `create` and `update_file` keep their
   current names.
 - Step 7: the table and the workbook agree in both directions - nothing added,
   nothing missing, order ascending by `after`.
 - The invariant test does not read the workbook. Confirm by searching
-  `crates/ragent-agent` for any call that opens `tools.xlsx`; there must be
+  `crates/codemason-agent` for any call that opens `tools.xlsx`; there must be
   none.
 - The refusal reasons recorded in step 4 and step 5 name the clause that failed
   for every excluded candidate, not only the count.
@@ -1523,15 +1523,15 @@ record as well as against the table in the source.
 **Steps:**
 
 1. In the scratch project, run
-   `ragent run "Use the Bash tool to print the working directory"` and approve
+   `codemason run "Use the Bash tool to print the working directory"` and approve
    the permission prompt if one appears.
 2. Repeat with `Edit`:
-   `ragent run "Use the Edit tool to replace the word alpha with beta in notes.txt"`.
+   `codemason run "Use the Edit tool to replace the word alpha with beta in notes.txt"`.
 3. Repeat with `Write`:
-   `ragent run "Use the Write tool to create note.txt containing the single line hello"`.
+   `codemason run "Use the Write tool to create note.txt containing the single line hello"`.
 4. Repeat with the search tools:
-   `ragent run "Use Grep to find the word beta in this directory"` and
-   `ragent run "Use Glob to list every .txt file here"`.
+   `codemason run "Use Grep to find the word beta in this directory"` and
+   `codemason run "Use Glob to list every .txt file here"`.
 5. Repeat once with `Skill`, `TaskCreate` and `AskUserQuestion` if the session
    exposes them (the task tools and the question tool are visible in
    `/tools list`).
@@ -1566,7 +1566,7 @@ record as well as against the table in the source.
    `CronCreate`, `CronDelete`, `CronList` and `TodoWrite`.
 4. In the source, confirm the two refused spellings survived as alias targets
    only, if the change chose to keep them: open
-   `crates/ragent-agent/src/tool/aliases.rs` or `tool/rename.rs` and read the
+   `crates/codemason-agent/src/tool/aliases.rs` or `tool/rename.rs` and read the
    alias entries.
 
 **Test data:** none - this case reads the listing and the source.
@@ -1575,10 +1575,10 @@ record as well as against the table in the source.
 
 - Step 2: every name is still present, spelled exactly as listed.
 - Step 3: none of those names is present. `WebFetch` and `WebSearch` were
-  refused because two ragent tools claim each and neither is an exact spelling
+  refused because two codemason tools claim each and neither is an exact spelling
   match. `Read` and `Agent` were excluded because the workbook rates those
   Anthropic tools `Close`. `CronCreate`, `CronDelete` and `CronList` were
-  excluded because the ragent rows for the cron tools are `Close`, and no ragent
+  excluded because the codemason rows for the cron tools are `Close`, and no codemason
   tool declares a `TodoWrite` equivalent.
 - A refused spelling may appear as an alias entry (so a Claude skill naming
   `WebFetch` still reaches `webfetch`), but never as a registered tool.
@@ -1597,7 +1597,7 @@ spellings. Resume it through the session list the TUI offers.
 
 **Steps:**
 
-1. Add a permission rule to the project `.ragent/ragent.json` that denies the
+1. Add a permission rule to the project `.codemason/codemason.json` that denies the
    permission category the shell tool uses. Note that the rule names the
    *category* (`bash`), not the tool, and that a rule with no `pattern` is
    skipped, so the pattern must be present:
@@ -1606,7 +1606,7 @@ spellings. Resume it through the session list the TUI offers.
    "permission": [ { "permission": "bash", "pattern": "**", "action": "deny" } ]
    ```
 
-2. Run `ragent run "Use the Bash tool to print the working directory"`.
+2. Run `codemason run "Use the Bash tool to print the working directory"`.
 3. Remove that rule and add a hook whose `matcher` names only an old spelling.
    Hooks are an array of objects, each with a `trigger` and a `command`:
 
@@ -1652,15 +1652,15 @@ recorded in TC-027 (part one).
 **Steps:**
 
 1. Record the surface size:
-   `ragent run --dry-run "x"` and read the `tools: ready` section.
+   `codemason run --dry-run "x"` and read the `tools: ready` section.
 2. In the TUI, type `/tools list` and note the total it reports.
 3. Run one prompt that uses two different tools:
-   `ragent run --log-level debug "read Cargo.toml, then use Grep to find the word name in it"`.
+   `codemason run --log-level debug "read Cargo.toml, then use Grep to find the word name in it"`.
    Note that `read` keeps its lower-case spelling after the rename; only the 13
    adopted names change.
 4. Search the debug output for any rename or translation step that consults a
    before/after table:
-   `ragent run --log-level debug "read Cargo.toml, then use Grep to find the word name in it" 2>&1 | grep -i "rename\|alias\|translate\|lookup"`
+   `codemason run --log-level debug "read Cargo.toml, then use Grep to find the word name in it" 2>&1 | grep -i "rename\|alias\|translate\|lookup"`
 5. Send `/bug-report` in the TUI. Read the `## Tool Configuration` section. On
    the tree T-041 measured there is **no** `Tools registered` line: the section
    reports `- **Tools visible**: <n>` where `n` is the number of *enabled
@@ -1670,7 +1670,7 @@ recorded in TC-027 (part one).
 6. Ask the agent to report the registry's own total, in a session with a model
    available: `call tool_info and tell me the total number of tools it reports`.
 7. Check the emitted readiness report as JSON agrees with step 1:
-   `ragent run --dry-run --json "x"`, and read the `tools` section.
+   `codemason run --dry-run --json "x"`, and read the `tools` section.
 8. Check the dependency manifests: `git diff --stat` on `Cargo.toml` and
    `Cargo.lock`, and search the changed Rust files for `unsafe`.
 9. Ask the agent for the tool catalogue it can see:
@@ -1703,7 +1703,7 @@ recorded in TC-027 (part one).
 **Automated half (T-040).** Steps 4 and the last bullet above are the manual
 half of NFR-006 and are kept for the reason a log read is worth doing once. The
 mechanical half is
-`cargo test -p ragent-agent --test all test_nfr006_rename_cost::` (6 cases): a
+`cargo test -p codemason-agent --test all test_nfr006_rename_cost::` (6 cases): a
 function-granular source scan that fails on any FR-023 table read inside
 `session/`, `tool/` or `backend/` outside the two once-per-turn sites (and, in
 reverse, on an exemption that no longer matches), explicit `&str` /
@@ -1759,7 +1759,7 @@ reviewer re-runs, and what it printed:
 | step 2's hits are the tool | `34` backticked `Bash` hits, including every place a page tells a caller what to invoke |
 | step 3 finds one table, not two | `sed -n '/^### Renamed/,/^## \[1.0.149\]/p' CHANGELOG.md` prints a `### Renamed` section with 13 rows and the two "this is not a migration" notes; the T-031 bullet now points at it |
 | the section is a sibling of `### Added` | the `### Renamed` heading sits after `### Changed`, not inside `### Added` - its first draft did, and the table was then a sub-heading of the wrong section |
-| the docs agree with the registry | `ragent run --dry-run` still prints `total: 148 visible tools` over 21 families, and the rosters in `README.md` / `SPEC.md` / `docs/howtos/tools/INDEX.md` name those 148 |
+| the docs agree with the registry | `codemason run --dry-run` still prints `total: 148 visible tools` over 21 families, and the rosters in `README.md` / `SPEC.md` / `docs/howtos/tools/INDEX.md` name those 148 |
 | step 5 holds for the edited lines | no line this task added introduces a non-ASCII character the line it replaced did not already carry |
 | the guard still agrees | `scripts/check-tool-rename.sh` exits 0 with all `39` exemptions matching - the doc migration added no source literal and broke no entry |
 | the generated PDFs are knowingly stale | `pdftotext docs/howtos/tools/pdf/shell.md.pdf -` still shows `bash` in the tool table. They are release-step artifacts and are recorded as due, not silently ignored |
@@ -1772,10 +1772,10 @@ the named section, and check every symbol and number it claims against the tree.
 |---|---|
 | `SPEC.md` states the contract, not just the symbols | `grep -n "Unified Tool-Calling Wire Path" -A 40 SPEC.md` prints the nine-field table with all nine `ToolWireProfile` fields, the six families, and the no-catch-all sentence naming `test_wire_profile_table.rs` |
 | `SPEC.md` states the path, not just the pipeline | `grep -n "Tool-Call Wire Path and the One Dispatch Pipeline" -A 45 SPEC.md` prints the four rules: declared contract, one ordered pipeline for both modes, an unknown name never executes, a result is never indistinguishable from a success |
-| the crate docs state the chain end to end | `grep -n "Unified tool path" crates/ragent-llm/DOCS.md` prints one bullet naming `encode_tools`, `encode_message`, `ToolCallAccumulator` and `decode_tool_arguments`, and the `router` bullet records that its row is nominal |
+| the crate docs state the chain end to end | `grep -n "Unified tool path" crates/codemason-llm/DOCS.md` prints one bullet naming `encode_tools`, `encode_message`, `ToolCallAccumulator` and `decode_tool_arguments`, and the `router` bullet records that its row is nominal |
 | every symbol the prose names exists | each name in the T-028 table of checked symbols resolves in the named file; a name that does not is a documentation defect, not a typo |
 | `CHANGELOG.md` announces the shape change once | `sed -n '/^### Added/,/^### Renamed/p' CHANGELOG.md` opens with the T-028 entry, which names the requirement ids, the two `SPEC.md` sections, the crate `DOCS.md` addition, and the words "documentation only" |
-| the claim has a guard | `cargo nextest run -p ragent-llm -E 'test(test_folded_provider_modules_no_longer_write_an_envelope_literal)'` passes, and T-027's full-tree scan is what will hold the same claim over every `providers/` file |
+| the claim has a guard | `cargo nextest run -p codemason-llm -E 'test(test_folded_provider_modules_no_longer_write_an_envelope_literal)'` passes, and T-027's full-tree scan is what will hold the same claim over every `providers/` file |
 | NFR-005 holds for the added prose | no line T-028 added introduces a non-ASCII character; `grep -P '[^\x00-\x7F]'` over the three documents' added lines prints nothing |
 
 ---
@@ -1798,8 +1798,8 @@ the named section, and check every symbol and number it claims against the tree.
    system prompt. Search it for old spellings. This makes no model call.
 5. In the scratch project, write a skill whose manifest restricts its tools,
    naming them exactly as they are registered after the rename - `Grep` and
-   `Glob` in the Claude spelling the workbook made ragent adopt, and `read` in
-   its unchanged ragent spelling - at `.agents/skills/rename-check/SKILL.md`:
+   `Glob` in the Claude spelling the workbook made codemason adopt, and `read` in
+   its unchanged codemason spelling - at `.agents/skills/rename-check/SKILL.md`:
 
    ```
    ---
@@ -1850,7 +1850,7 @@ trigger carries the instruction; for step 7, `now summarise what you just read`
 ### TC-026 automated half (T-034)
 
 Step 1's guard has an automated half:
-`crates/ragent-agent/tests/test_tool_rename_guard.rs` (4 cases, registered by
+`crates/codemason-agent/tests/test_tool_rename_guard.rs` (4 cases, registered by
 T-034 - before that it was tracked but never in `tests/all.rs`, so it reported
 `running 0 tests` and proved nothing). The cases invoke the same implementation
 the CI job runs (`scripts/check_tool_rename.py`, NFR-009), so the script and the
@@ -1866,7 +1866,7 @@ test cannot drift:
 What stays manual: step 2's by-hand `grep` comparison, steps 3 and 4 (the tool
 descriptions and the assembled prompt - prose, not literals), and steps 5 to 8
 (the skill surface). The one deliberate difference from the task text is
-`crates/ragent-agent/src/agent/oasf.rs`: its permission list is doc-comment prose
+`crates/codemason-agent/src/agent/oasf.rs`: its permission list is doc-comment prose
 on lines 160-161 and the scan does not read comments, so the file needs **zero**
 entries. Recording two would have added dead entries, which case 3's reverse check
 fails.
@@ -1884,13 +1884,13 @@ reviewer can re-run is:
 | the pre-rename figure the task quotes actually reproduces | the T-029 scan on the `1.0.149` tag: `775` occurrences `/ 160` files, and the code-only half `633` `/ 142` |
 | no test **fixture** feeds a retired spelling to a path that dispatches on the name | `201` code literals remain, and every one is one of the twelve classified classes: FR-028 permission vocabulary, a shell program, the `bash.allowlist` section, a language id, a GovCreate stage id, an agent capability tag, a memory tag, a scratch-dir tag, English prose, or an assertion that a spelling **is** retired |
 | no assertion was relaxed | the assertion count rose (`35 980` -> `37 183`) and no test file lost one; spot-check the twelve files whose fixtures moved to match their assertion, listed in the T-038 record |
-| the assertions are load-bearing | six red proofs, each restored byte-identically and `md5sum`-checked - the sharpest is reverting `crates/ragent-tools-core/src/write.rs`'s `Tool::name()` to `"write"`, which fails **both** FR-023 registry cases. A migration whose assertions cannot fail proves nothing |
+| the assertions are load-bearing | six red proofs, each restored byte-identically and `md5sum`-checked - the sharpest is reverting `crates/codemason-tools-core/src/write.rs`'s `Tool::name()` to `"write"`, which fails **both** FR-023 registry cases. A migration whose assertions cannot fail proves nothing |
 | the guard's scope and this migration agree | `scripts/check-tool-rename.sh` still exits 0 with the 39 reviewed exemptions, i.e. nothing in `crates/*/src` came back; and T-034's case 4 (a literal seeded into `crates/*/tests/` passes) still holds |
 
 Two pre-existing failure sets are **not** T-038 regressions and are recorded so a
-reviewer does not attribute them to a 136-file diff: `ragent-llm --test all` keeps
+reviewer does not attribute them to a 136-file diff: `codemason-llm --test all` keeps
 its six `test_wire_*` guard failures (T-004/T-005/T-006/T-017/T-019 are still
-pending) and `ragent-tui --test all` keeps its three `Alt+T` ->
+pending) and `codemason-tui --test all` keeps its three `Alt+T` ->
 `ToggleTasksPanel` failures. Both counts and both identities match the baseline
 taken before this task started.
 
@@ -1911,7 +1911,7 @@ against.
 **Steps:**
 
 1. With the pre-change binary, in the scratch project, run
-   `ragent run --dry-run "x"` and copy the whole `tools` section into a file
+   `codemason run --dry-run "x"` and copy the whole `tools` section into a file
    outside the repository, for example `~/scratch/baseline-tools.txt`.
 2. Still with the pre-change binary, start the TUI and type `/tools list`, then
    copy the reported total and the full list of names into the same directory as
@@ -1924,7 +1924,7 @@ against.
 6. Compare the name lists, sorted:
    `sort ~/scratch/baseline-names.txt > ~/scratch/a.txt; sort ~/scratch/after-names.txt > ~/scratch/b.txt; diff ~/scratch/a.txt ~/scratch/b.txt`.
 
-**Test data:** `ragent run --dry-run "x"` and `/tools list` in each build.
+**Test data:** `codemason run --dry-run "x"` and `/tools list` in each build.
 
 **Expected results:**
 
@@ -1962,8 +1962,8 @@ against.
 
 ### TC-027 automated half (T-037)
 
-`crates/ragent-agent/tests/test_fr030_surface_agreement.rs` (7 cases) and
-`crates/ragent-tui/tests/test_fr030_surface_agreement.rs` (2 cases) automate
+`crates/codemason-agent/tests/test_fr030_surface_agreement.rs` (7 cases) and
+`crates/codemason-tui/tests/test_fr030_surface_agreement.rs` (2 cases) automate
 steps 5 and 6 against the recorded baseline, so no one has to diff two hand-saved
 files:
 
@@ -1987,7 +1987,7 @@ manual; the automated cases pin the after figures against the numbers
 
 ---
 
-### TC-028 - Provider spellings ragent did not adopt still resolve, and the narrowing holds (FR-015, FR-025, FR-026)
+### TC-028 - Provider spellings codemason did not adopt still resolve, and the narrowing holds (FR-015, FR-025, FR-026)
 
 **Preconditions:** Prerequisites 1, 3 and 5. Alias resolution enabled in the
 project config:
@@ -2002,7 +2002,7 @@ project config:
 2. Ask for a tool by a refused Claude spelling:
    `use the WebFetch tool to download https://example.com and tell me the page title`.
 3. Read the tool block and the result.
-4. Ask for the ragent spelling directly:
+4. Ask for the codemason spelling directly:
    `use the webfetch tool to download https://example.com and tell me the page title`.
 5. Disable aliases (`"aliases": false`), restart, and repeat step 2.
 6. Open the alias source file the change names and read every entry.
@@ -2023,7 +2023,7 @@ project config:
 - Step 6: no alias entry maps a spelling onto the identical string - no no-op
   self-mapping. No entry maps `Bash`, `Edit`, `Write`, `Glob`, `Grep`, `Skill`,
   `TaskCreate`, `TaskGet`, `TaskList`, `TaskUpdate`, `AskUserQuestion`,
-  `EnterPlanMode` or `ExitPlanMode`, because those are ragent names now and
+  `EnterPlanMode` or `ExitPlanMode`, because those are codemason names now and
   FR-026 forbids a second spelling for them.
 - Step 7: the advertised tool list gains the remaining provider spellings and
   nothing else. In particular `Bash` appears once, never twice.
@@ -2032,7 +2032,7 @@ project config:
 
 The behavioural half of FR-026 - no second registration, no forwarding wrapper,
 and the refusal reaching every inbound path - is
-`crates/ragent-agent/tests/test_fr026_no_alias_survives.rs` (9 cases,
+`crates/codemason-agent/tests/test_fr026_no_alias_survives.rs` (9 cases,
 `specs/uniformtools/T-032-NO-ALIAS.md`). It re-reads the same claims this case
 makes by hand, at the places a hand check cannot reach:
 
@@ -2053,11 +2053,11 @@ behaviour rather than the resolver's.
 ### TC-029 - No configuration restores a retired spelling, and no bridge can either (FR-031, FR-032)
 
 **Preconditions:** Prerequisites 1, 3, 5 and 11, a finished build that includes the
-rename, and a scratch project whose `.ragent/ragent.json` you may edit.
+rename, and a scratch project whose `.codemason/codemason.json` you may edit.
 
 **Steps:**
 
-1. Open the scratch project's `.ragent/ragent.json` and add an alias whose
+1. Open the scratch project's `.codemason/codemason.json` and add an alias whose
    source is a retired spelling:
 
    ```
@@ -2065,7 +2065,7 @@ rename, and a scratch project whose `.ragent/ragent.json` you may edit.
    ```
 
 2. Start the TUI in the scratch project and read the startup output.
-3. Fix the entry to a provider spelling ragent did not adopt, restart, and
+3. Fix the entry to a provider spelling codemason did not adopt, restart, and
    confirm the session starts:
 
    ```
@@ -2092,15 +2092,15 @@ rename, and a scratch project whose `.ragent/ragent.json` you may edit.
    names.
 10. Ask for the retired spelling by the bare name `bash`.
 11. Try an environment variable and a CLI flag that look like they might restore
-    a retired name - for example `RAGENT_TOOL_ALIAS=bash=Bash` and a
+    a retired name - for example `CODEMASON_TOOL_ALIAS=bash=Bash` and a
     `--tool-alias` flag - and record that neither is accepted.
 12. Stop the TUI.
 
 **Test data:** the four `tools.aliases` blocks above; for step 9,
 `use the mcp_<server>_notes_read tool to list my notes` and
 `use the mcp_<server>_bash tool to echo hi`; for step 10, `use the bare tool named
-bash to echo hi`; for step 11, `RAGENT_TOOL_ALIAS=bash=Bash ragent run "list the
-registered tools"` and `ragent run --tool-alias bash=Bash "list the registered
+bash to echo hi`; for step 11, `CODEMASON_TOOL_ALIAS=bash=Bash codemason run "list the
+registered tools"` and `codemason run --tool-alias bash=Bash "list the registered
 tools"`
 
 **Expected results:**
@@ -2109,7 +2109,7 @@ tools"`
   spelling `bash` and its replacement `Bash`. The session does not start with
   `bash` still resolvable.
 - Step 3: the session starts, and the alias resolves `WebFetch` to `webfetch`,
-  because `WebFetch` is a refused Claude spelling, not a retired ragent name.
+  because `WebFetch` is a refused Claude spelling, not a retired codemason name.
 - Step 5: the run is refused at load. The error names the file and the target
   `bash`, and points at `Bash`. Pointing an alias at a retired spelling is
   rejected exactly as naming one as a source is.
@@ -2122,7 +2122,7 @@ tools"`
   `mcp_<server>_notes_read`. Nothing is reported, because nothing needed to be.
 - Step 9: both tools appear under their namespaced names and run. `/tools list`
   shows no second `Bash` row, and no bare `bash` row - the namespaces are what
-  keep the server out of the bare ragent namespace (FR-032 clause 1). The TUI's
+  keep the server out of the bare codemason namespace (FR-032 clause 1). The TUI's
   stale-server scan finds them by their `mcp_<server>_` prefix, which is the same
   derivation the registry used.
 - Step 10: the bare `bash` call resolves to nothing (its ordinary unknown-tool
@@ -2131,27 +2131,27 @@ tools"`
 - A refusal (clause 2) fires only for a bridge that surfaces a name outside its
   namespace - the shape of the regression the backstop exists for, since the
   shipped mangler always namespaces. It is covered mechanically rather than by
-  hand: `crates/ragent-agent/tests/test_fr032_bridge_containment.rs` drives it with a
+  hand: `crates/codemason-agent/tests/test_fr032_bridge_containment.rs` drives it with a
   test-supplied mangler and asserts the sentence names the source, the spelling and
   the `after` replacement, that the refusal is reported once and not per turn, and
   that the server keeps its other tools.
 - **Automated half (T-044) - all three files were dead until T-044 declared them.**
   Steps 8-10 and the clause-2 bullet are proved by 16 cases in three files, and
-  until T-044 landed **none of them had ever compiled**: `ragent-types/src/lib.rs`
+  until T-044 landed **none of them had ever compiled**: `codemason-types/src/lib.rs`
   had no `pub mod tool_bridge;` and none of the three `tests/all.rs` files carried a
   `#[path]` line for its `test_fr032_*` file. The registrations are part of the
   deliverable, so a reader re-running this step should confirm the declarations
-  first (`grep 'mod tool_bridge' crates/ragent-types/src/lib.rs`, and `fr032` in the
+  first (`grep 'mod tool_bridge' crates/codemason-types/src/lib.rs`, and `fr032` in the
   three `tests/all.rs` files) and only then the behaviour: 9 cases in
-  `crates/ragent-types/tests/test_fr032_dynamic_bridge.rs` (namespacing for both
+  `crates/codemason-types/tests/test_fr032_dynamic_bridge.rs` (namespacing for both
   manglings, the exhaustive "no bridged form of any of the 13 pairs equals a bare
   spelling", the prefix-agnostic contract, the refusal sentence, and the
   once-per-source-and-name ledger), 5 in
-  `crates/ragent-agent/tests/test_fr032_bridge_containment.rs` (all `#[serial]`,
+  `crates/codemason-agent/tests/test_fr032_bridge_containment.rs` (all `#[serial]`,
   because the ledger is process-wide and the consolidated `--test all` binary
   shares one process; `bridge_server_tools_named` supplies the mangler a real
   registration never supplies, so containment can be observed at all), and 2 in
-  `crates/ragent-plugins/tests/test_fr032_plugin_bridge.rs` (through the real
+  `crates/codemason-plugins/tests/test_fr032_plugin_bridge.rs` (through the real
   `PluginManager::register_plugin_tools` path). Red proofs are recorded in
   `specs/uniformtools/T-044-DYNAMIC-BRIDGE-REFUSAL.md`: disabling the prefix
   clause, pinning the retired-spelling lookup, dropping the ledger's `continue`,
@@ -2159,7 +2159,7 @@ tools"`
   a named case.
 - Step 11: the `--tool-alias` flag is rejected by the argument parser as an
   unexpected argument, and the command exits non-zero without running. The
-  `RAGENT_TOOL_ALIAS` variable is not read anywhere and has no effect: the run
+  `CODEMASON_TOOL_ALIAS` variable is not read anywhere and has no effect: the run
   completes and `bash` stays unresolvable. Record both outcomes verbatim in the
   change description - the flag failing loudly and the variable being ignored
   are different results, and a reader rebuilding the audit needs to know which
@@ -2167,8 +2167,8 @@ tools"`
 - No step panics, and the only files written are the config edits you made.
 - **Automated half (T-042) - steps 1-7 and 12, through the real loader.**
   Steps 2, 5 and 7 are proved by
-  `crates/ragent-config/tests/test_retired_alias_spelling.rs`, which writes each
-  block into a temp file, points `RAGENT_CONFIG` at it and calls `Config::load()`
+  `crates/codemason-config/tests/test_retired_alias_spelling.rs`, which writes each
+  block into a temp file, points `CODEMASON_CONFIG` at it and calls `Config::load()`
   - the uncached path, so no cwd change and no project file is involved - then
   asserts the refusal names the file, the spelling and its `after` replacement:
   `test_a_retired_source_key_is_refused_at_load_naming_file_spelling_and_replacement`
@@ -2184,24 +2184,24 @@ tools"`
   is `test_the_inline_environment_route_is_refused_and_names_itself`; and
   `test_every_pair_in_the_rename_table_is_refused_as_key_and_as_target` walks
   the whole FR-023 table so the check cannot pass by pinning `bash` alone.
-  `ragent run --dry-run` parses the same files through its own path, so
-  `crates/ragent-agent/tests/test_dry_run_extra.rs` carries the readiness
+  `codemason run --dry-run` parses the same files through its own path, so
+  `crates/codemason-agent/tests/test_dry_run_extra.rs` carries the readiness
   report's agreement with the loader:
   `test_project_config_with_a_retired_alias_spelling_is_blocked` (the config
   section goes BLOCKED, exit 1, the message names the spelling and `Bash`) and
   `test_project_config_with_an_unregistered_alias_target_still_loads`. The
   resolver half - that no retired entry is ever consulted, and that an
   unresolved target is reported once and refused when used - is
-  `crates/ragent-agent/tests/test_tool_alias_table.rs`.
+  `crates/codemason-agent/tests/test_tool_alias_table.rs`.
 
 **Automated counterparts (T-043) - the surfaces no manual step can enumerate:**
 steps 1-7 and 11 are hand-checkable one entry at a time; the question FR-031
 really asks is whether *any* mechanism in the tree can restore a spelling, and
-that is what `crates/ragent-agent/tests/test_escape_hatch_audit.rs` answers (8
+that is what `crates/codemason-agent/tests/test_escape_hatch_audit.rs` answers (8
 cases: one per row of `T-043-ESCAPE-HATCH-AUDIT.md`'s seven-row table, plus one
 pinning the single reviewed exemption). Step 11's two
 outcomes are recorded verbatim in the audit document: `--tool-alias` is refused
-by the argument parser with exit **2**, while `RAGENT_TOOL_ALIAS` is read
+by the argument parser with exit **2**, while `CODEMASON_TOOL_ALIAS` is read
 nowhere (`--dry-run --json` output is byte-identical with and without it set,
 SHA-256 compared with `--model` pinned). Each scanning case asserts a floor on
 how many names it inspected, so deleting the thing being searched cannot make a
@@ -2246,7 +2246,7 @@ case pass vacuously.
    and compare the report with the `scripts/` form.
 9. Land the rename check: confirm in the change history that the commit which
    registers `after` is the commit that removes `before`, and that at that
-   commit `ragent run --dry-run "x"` reports the FR-030 count and the workspace
+   commit `codemason run --dry-run "x"` reports the FR-030 count and the workspace
    tests pass. A commit that does both, neither, or resolves both spellings is
    a failure of FR-034.
 10. Restore `tools.xlsx` and revert every edit from step 6.
@@ -2286,8 +2286,8 @@ case pass vacuously.
 
 ### TC-030 automated half (T-045)
 
-`crates/ragent-agent/tests/test_fr033_completion_sources.rs` (6 cases) and
-`crates/ragent-tui/tests/test_fr033_completion_surfaces.rs` (4 cases) automate the
+`crates/codemason-agent/tests/test_fr033_completion_sources.rs` (6 cases) and
+`crates/codemason-tui/tests/test_fr033_completion_surfaces.rs` (4 cases) automate the
 steps above that can be asserted without a human reading a menu:
 
 | TC-030 step | Automated case |
@@ -2308,7 +2308,7 @@ fails there.
 
 **Automated counterpart (T-046):** step 9's tree half - "exactly one spelling of
 each FR-023 pair resolves, and it is the `after` one" - is pinned by
-`crates/ragent-agent/tests/test_tool_rename_atomic_landing.rs` (7 cases, all
+`crates/codemason-agent/tests/test_tool_rename_atomic_landing.rs` (7 cases, all
 green). It reads `TOOL_RENAMES` and asserts the **live registry**:
 
 | Case | What it proves |
@@ -2338,7 +2338,7 @@ rather than a reading of the history.
 ### TC-030 automated half, part 2 (T-048, NFR-009)
 
 Steps 5, 7, 8 and the "one implementation" expected result are automated by
-`crates/ragent-agent/tests/test_tool_rename_guard.rs` (16 cases), which runs the
+`crates/codemason-agent/tests/test_tool_rename_guard.rs` (16 cases), which runs the
 one guard implementation `scripts/check_tool_rename.py` as a subprocess - the
 same program `scripts/check-tool-rename.sh` and the CI job run.
 
@@ -2374,7 +2374,7 @@ report produced from a real (not seeded) edit. Both need a person at a terminal.
 4. Revert the test config changes made in TC-008, TC-013, TC-018, TC-023, TC-026,
    TC-028 and TC-029 by deleting the `experimental`, `tools`, `mcp`,
    `permission` and `hooks` blocks from the scratch project's
-   `.ragent/ragent.json`, or deleting that file entirely if it was created by
+   `.codemason/codemason.json`, or deleting that file entirely if it was created by
    these tests.
 5. Delete the scratch skill used by TC-026:
    `rm -rf ~/scratch/uniformtools-tests/.agents/skills/rename-check`.
@@ -2395,8 +2395,8 @@ report produced from a real (not seeded) edit. Both need a person at a terminal.
    sources and expect it empty.
 10. Unset any environment variables set only for these tests
     (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OLLAMA_HOST`, and the
-    `RAGENT_TOOL_ALIAS` TC-029's step 11 used to prove it is not honoured) if
+    `CODEMASON_TOOL_ALIAS` TC-029's step 11 used to prove it is not honoured) if
     they were added to your shell for the session.
 11. Remove the pre-change binary copy from prerequisite 2 once TC-017, TC-024
     and TC-027 have been signed off:
-    `rm -rf ~/scratch/ragent-before`.
+    `rm -rf ~/scratch/codemason-before`.

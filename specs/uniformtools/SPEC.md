@@ -7,17 +7,17 @@ audit:
   - { time: 1794443746, from: "approved", to: "in_progress", actor: "cli" }
   - { time: 1794443746, from: "in_progress", to: "implemented", actor: "cli" }
 ---
-# Specification: Unified Tool Calling Across Providers, Mapped to ragent Tools
+# Specification: Unified Tool Calling Across Providers, Mapped to codemason Tools
 
 ## Executive Summary
 
-ragent already routes every provider through one canonical request/response
+codemason already routes every provider through one canonical request/response
 type (`ChatRequest` / `ChatContent` / `ContentPart`) declared in
-`crates/ragent-types/src/llm.rs`. The abstraction is real but **leaky**: each
+`crates/codemason-types/src/llm.rs`. The abstraction is real but **leaky**: each
 provider family re-implements tool-definition serialisation, tool-call stream
 parsing, tool-result encoding, and tool-call-id handling in its own module, and
 at least one provider silently discards tool history. The result is that the
-same ragent tool behaves differently depending on which model the user picked,
+same codemason tool behaves differently depending on which model the user picked,
 and adding a provider means re-deriving the whole tool-calling contract from
 scratch.
 
@@ -37,15 +37,15 @@ This specification defines the **unification layer**:
 5. **One dispatch pipeline** shared by the sequential and parallel execution
    paths, with arguments parsed and schema-validated exactly once, before any
    guard, hook, permission check, or backend call.
-6. **An explicit provider-name to ragent-name alias table**, so a model or an
+6. **An explicit provider-name to codemason-name alias table**, so a model or an
    ACP/MCP client that names a tool with its OpenAI or Claude Code spelling
    (`Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, `WebFetch`, `web_search`,
-   `file_search`) resolves to the corresponding ragent tool.
+   `file_search`) resolves to the corresponding codemason tool.
 7. **Explicit, non-silent failure** where a provider cannot carry a canonical
    construct, replacing today's silent drops.
 8. **One rename pass over the tool surface** (FR-023 to FR-030): where
-   `tools.xlsx` records a ragent tool and a Claude Code tool as an exact match
-   one-to-one, the ragent tool takes the Claude spelling - `bash` becomes
+   `tools.xlsx` records a codemason tool and a Claude Code tool as an exact match
+   one-to-one, the codemason tool takes the Claude spelling - `bash` becomes
    `Bash`, `edit` becomes `Edit`, `write` becomes `Write`, and ten others
    follow - with no alias kept behind. A Claude skill that names `Bash`, `Edit`
    or `Write` then resolves because the registry genuinely calls the tool that,
@@ -58,8 +58,8 @@ This specification defines the **unification layer**:
    alias by another route. Each of those routes is refused, and a guard fails
    the build if one comes back.
 
-The scope is the existing `ragent-types`, `ragent-llm`, `ragent-agent` and
-`ragent-config` crates. No new external dependency is introduced.
+The scope is the existing `codemason-types`, `codemason-llm`, `codemason-agent` and
+`codemason-config` crates. No new external dependency is introduced.
 
 ---
 
@@ -69,21 +69,21 @@ Facts verified in the tree at the time of writing.
 
 | Layer | Location | What exists |
 |---|---|---|
-| Canonical types | `crates/ragent-types/src/llm.rs` | `ChatMessage`, `ChatContent`, `ContentPart{Text,ToolUse,ToolResult,ImageUrl}`, `ToolDefinition{name,description,parameters}`, `StreamEvent{...ToolCallStart,ToolCallDelta,ToolCallEnd...}`, `ChatRequest` |
-| Client trait | `crates/ragent-llm/src/llm.rs:36` | `LlmClient::chat(&self, ChatRequest) -> Result<Stream<StreamEvent>>` |
-| History | `crates/ragent-types/src/message/mod.rs` | `Message`, `MessagePart{ToolCall{tool,call_id,state}}`, `ToolCallState{status,input,output,error,duration_ms}` |
-| Tool trait | `crates/ragent-tools-core/src/lib.rs:170` | `name`, `description`, `parameters_schema`, `permission_category`, `async execute(Value, &ToolContext) -> Result<ToolOutput>` |
-| Registry | `crates/ragent-agent/src/tool/mod.rs:1389,1481,1558` | `register`, `definitions() -> Arc<Vec<ToolDefinition>>` (sorted, cached), `create_default_registry()` |
-| Definition cache | `crates/ragent-llm/src/providers/tool_cache.rs` | `ToolFormat{OpenAi,Anthropic,Gemini,Bedrock,HuggingFace}`, `cached_tools`, `invalidate_tool_cache` |
-| OpenAI-family body | `crates/ragent-llm/src/providers/openai_compat.rs` | `OpenAiCompatSpec`, `base_body`, `with_messages`; emits `tool_calls` + `role:"tool"` |
-| OpenAI-family stream | `crates/ragent-llm/src/providers/sse.rs` | `OpenAiSseSpec`, `parse_openai_sse_stream` |
-| Argument validation | `crates/ragent-tools-core/src/schema.rs` | `validate_required_args(schema, input)` |
-| Refusal values | `crates/ragent-agent/src/session/tool_input_error.rs` | `ToolInputError{Undecodable,SchemaViolation,UnknownTool}` - the sentence, the record status and therefore the `is_error` flag of a call refused before it ran (FR-008, FR-009, FR-014; D8) |
-| Dispatch | `crates/ragent-agent/src/session/processor.rs:305` | `dispatch_tool_with_permissions`, `dispatch_tool_leaf`, `schema_violation` |
-| Loop | `crates/ragent-agent/src/session/loop_steps.rs` | `LlmStepResult{tool_calls: Vec<PendingToolCall>}`, event accumulation |
-| Permissions | `crates/ragent-agent/src/session/permissions.rs` | `PermissionAction{Allow,Deny,Ask}`, 120 s prompt timeout, YOLO bypass, `TOOL_REPEAT_LIMIT = 5` |
-| Tool config section | `crates/ragent-config/src/tools.rs` | `ToolsConfig{aliases, expose_alias_names, wire_trace}` behind `Config::tools`; `AliasesConfig` as a five-field four-state value (absent / `true` / `false` / object) with `is_unspecified`, `is_enabled`, `uses_builtin_table`, `entries`, custom serde in both directions, plus `ToolsConfig::merge` and `is_default`; every switch off and the whole section omitted from a serialised config while default (FR-015, FR-017; T-020) |
-| Escape-hatch audit | `crates/ragent-agent/tests/test_escape_hatch_audit.rs` | Seven predicates over the whole tree (config field and serde names, environment-variable names, the resolution path's purity, CLI flag/alias/subcommand names, the `tools` key set, plugin/connector/agent/hook/skill settings, the built-in alias table), each with an inspection floor, plus the pinned one-entry `EXEMPTIONS` list; the evidence lives in `T-043-ESCAPE-HATCH-AUDIT.md` (FR-031; T-043) |
+| Canonical types | `crates/codemason-types/src/llm.rs` | `ChatMessage`, `ChatContent`, `ContentPart{Text,ToolUse,ToolResult,ImageUrl}`, `ToolDefinition{name,description,parameters}`, `StreamEvent{...ToolCallStart,ToolCallDelta,ToolCallEnd...}`, `ChatRequest` |
+| Client trait | `crates/codemason-llm/src/llm.rs:36` | `LlmClient::chat(&self, ChatRequest) -> Result<Stream<StreamEvent>>` |
+| History | `crates/codemason-types/src/message/mod.rs` | `Message`, `MessagePart{ToolCall{tool,call_id,state}}`, `ToolCallState{status,input,output,error,duration_ms}` |
+| Tool trait | `crates/codemason-tools-core/src/lib.rs:170` | `name`, `description`, `parameters_schema`, `permission_category`, `async execute(Value, &ToolContext) -> Result<ToolOutput>` |
+| Registry | `crates/codemason-agent/src/tool/mod.rs:1389,1481,1558` | `register`, `definitions() -> Arc<Vec<ToolDefinition>>` (sorted, cached), `create_default_registry()` |
+| Definition cache | `crates/codemason-llm/src/providers/tool_cache.rs` | `ToolFormat{OpenAi,Anthropic,Gemini,Bedrock,HuggingFace}`, `cached_tools`, `invalidate_tool_cache` |
+| OpenAI-family body | `crates/codemason-llm/src/providers/openai_compat.rs` | `OpenAiCompatSpec`, `base_body`, `with_messages`; emits `tool_calls` + `role:"tool"` |
+| OpenAI-family stream | `crates/codemason-llm/src/providers/sse.rs` | `OpenAiSseSpec`, `parse_openai_sse_stream` |
+| Argument validation | `crates/codemason-tools-core/src/schema.rs` | `validate_required_args(schema, input)` |
+| Refusal values | `crates/codemason-agent/src/session/tool_input_error.rs` | `ToolInputError{Undecodable,SchemaViolation,UnknownTool}` - the sentence, the record status and therefore the `is_error` flag of a call refused before it ran (FR-008, FR-009, FR-014; D8) |
+| Dispatch | `crates/codemason-agent/src/session/processor.rs:305` | `dispatch_tool_with_permissions`, `dispatch_tool_leaf`, `schema_violation` |
+| Loop | `crates/codemason-agent/src/session/loop_steps.rs` | `LlmStepResult{tool_calls: Vec<PendingToolCall>}`, event accumulation |
+| Permissions | `crates/codemason-agent/src/session/permissions.rs` | `PermissionAction{Allow,Deny,Ask}`, 120 s prompt timeout, YOLO bypass, `TOOL_REPEAT_LIMIT = 5` |
+| Tool config section | `crates/codemason-config/src/tools.rs` | `ToolsConfig{aliases, expose_alias_names, wire_trace}` behind `Config::tools`; `AliasesConfig` as a five-field four-state value (absent / `true` / `false` / object) with `is_unspecified`, `is_enabled`, `uses_builtin_table`, `entries`, custom serde in both directions, plus `ToolsConfig::merge` and `is_default`; every switch off and the whole section omitted from a serialised config while default (FR-015, FR-017; T-020) |
+| Escape-hatch audit | `crates/codemason-agent/tests/test_escape_hatch_audit.rs` | Seven predicates over the whole tree (config field and serde names, environment-variable names, the resolution path's purity, CLI flag/alias/subcommand names, the `tools` key set, plugin/connector/agent/hook/skill settings, the built-in alias table), each with an inspection floor, plus the pinned one-entry `EXEMPTIONS` list; the evidence lives in `T-043-ESCAPE-HATCH-AUDIT.md` (FR-031; T-043) |
 
 ### Divergences that this specification closes
 
@@ -136,8 +136,8 @@ Rationale: a second parallel representation would need a translation on every
 hop, and every translation is a place to lose the tool-call id.
 
 D1 keeps the record's JSON **untyped**: `ToolCallState::input`/`::output`
-(`ragent-types/src/message/mod.rs`), `ContentPart::ToolUse::input` and
-`ToolDefinition::parameters` (`ragent-types/src/llm.rs`) all stay
+(`codemason-types/src/message/mod.rs`), `ContentPart::ToolUse::input` and
+`ToolDefinition::parameters` (`codemason-types/src/llm.rs`) all stay
 `serde_json::Value`. FR-001's "decoded JSON `input`" is a decode guarantee, not
 a type guarantee: the arguments shape is owned by the callee, and the callee set
 is open at run time (148 built-in tools today, plus every MCP server and plugin
@@ -149,7 +149,7 @@ subset could only narrow (FR-003) or that would need a schema crate (NFR-002
 forbids one). The three former `TODO: Replace Value with a typed struct` markers
 are resolved by this decision and recorded in full in
 `T-025-TYPED-ARGS-DECISION.md`, which the guard
-`crates/ragent-types/tests/test_typed_args_decision.rs` pins.
+`crates/codemason-types/tests/test_typed_args_decision.rs` pins.
 
 ### D2 - `ToolWireProfile` is the single source of truth per provider family
 
@@ -184,19 +184,19 @@ folded into `encode_tools`; `openai_responses.rs` stops building its own array.
 
 Providers emit `ToolCallDelta{args_json}` fragments verbatim. The harness
 accumulates them and calls one `decode_tool_arguments` helper
-(`ragent_types::tool_args`, T-012) that accepts a JSON object, or a JSON string
+(`codemason_types::tool_args`, T-012) that accepts a JSON object, or a JSON string
 that parses to an object, or empty/whitespace (which means `{}`). Anything else
 is a corrective, LLM-visible error and the tool does not run. The helper is
-reachable from `crates/ragent-types/src/lib.rs` and every decode site in the
+reachable from `crates/codemason-types/src/lib.rs` and every decode site in the
 loop, the hook layer and the TUI routes through it; the provider layer names it
-nowhere, and `crates/ragent-agent/tests/test_tool_arg_decode_routing.rs` fails
+nowhere, and `crates/codemason-agent/tests/test_tool_arg_decode_routing.rs` fails
 the build when a new bare `serde_json::from_str` appears on argument text.
 
 ### D5 - Alias resolution is declarative and bidirectional
 
-A static table maps provider spellings to ragent tool names. It is used
-inbound (a model or client names `Bash`; ragent resolves it to `bash`) and
-outbound when `tools.expose_alias_names` is enabled (ragent advertises `Bash`
+A static table maps provider spellings to codemason tool names. It is used
+inbound (a model or client names `Bash`; codemason resolves it to `bash`) and
+outbound when `tools.expose_alias_names` is enabled (codemason advertises `Bash`
 in addition to `bash`). Unmapped names are never guessed: an unmapped name is
 an unknown-tool error carrying the did-you-mean hint that
 `processor.rs` already builds.
@@ -216,7 +216,7 @@ example is now wrong: after FR-023 to FR-030 the registry's tool for Claude's
 none is permitted (FR-026 forbids an alias for a renamed tool).
 
 The alias table therefore keeps only the entries whose provider spelling is
-**not** a ragent tool name after the rename - the OpenAI spellings
+**not** a codemason tool name after the rename - the OpenAI spellings
 (`web_search`, `file_search`, `code_interpreter`) and any Claude spelling that
 FR-024 or FR-025 refused (`WebFetch`, `WebSearch`). Where an entry would map a
 spelling onto the identical string, it is deleted rather than kept as a no-op.
@@ -239,7 +239,7 @@ aligned - so before this specification each gate decided all four separately and
 they drifted: a decode failure was formatted one way and a schema violation
 another, and the `is_error` flag was derived again at every append site.
 
-`crates/ragent-agent/src/session/tool_input_error.rs` makes the refusal itself
+`crates/codemason-agent/src/session/tool_input_error.rs` makes the refusal itself
 the unit: one `ToolInputError` value owns its model-facing sentence (via
 `Display`), its record status, and - through `ToolCallStatus::is_error` - the
 result flag, so a gate cannot state a refusal one way and record it another. Both
@@ -251,7 +251,7 @@ refusal named.
 
 The module is also where FR-009's full sentence is delivered: the violation
 names the offending parameter **and its declared type**, which
-`ragent-tools-core`'s validator states directly rather than leaving each caller
+`codemason-tools-core`'s validator states directly rather than leaving each caller
 to look the type up from the same schema a second time.
 
 Declared but uncompiled is the worst of both positions - the invariant looks
@@ -266,7 +266,7 @@ FR-015 and FR-017 are both conditional on configuration, which makes the
 it did before this specification. That is a claim about the file on disk as much
 as about control flow, so the section is omitted while every switch is at its
 default and each key is omitted while it is at its own; a build that has never
-seen `tools` writes a byte-identical `ragent.json`, and the first unrelated
+seen `tools` writes a byte-identical `codemason.json`, and the first unrelated
 `save_to_source` cannot introduce a key the user never wrote.
 
 `tools.aliases` is a four-state value, not a boolean: absent (this layer has no
@@ -446,7 +446,7 @@ content change **shall** be made.
 ### FR-015 - Declarative tool-name alias resolution (optional)
 
 Where `tools.aliases` is configured (or the built-in default table is enabled),
-the system **shall** resolve an inbound tool name to its ragent tool before the
+the system **shall** resolve an inbound tool name to its codemason tool before the
 unknown-tool check, using a case-sensitive table of exact spellings. Where
 `tools.expose_alias_names` is `true`, the outbound tool list **shall** advertise
 each alias alongside the canonical name. Where neither is enabled, behaviour
@@ -534,13 +534,13 @@ A test **shall** assert that (a) every `before` is a name the default registry
 registers, (b) every `after` is a valid ASCII identifier that the default
 registry does not register, (c) the `after` column is unique, and (d) the
 `before` column is unique. The test **shall not** open the workbook:
-`crates/ragent-tools-core/src/xlsx.rs` is a writer only, and adding a reader to
+`crates/codemason-tools-core/src/xlsx.rs` is a writer only, and adding a reader to
 compare against it in a test would breach NFR-002. Cross-checking the table
 against the workbook is a manual step recorded in the test plan.
 
 Under the workbook as delivered, the table is exactly:
 
-| Before | After | Anthropic sheet | ragent sheet |
+| Before | After | Anthropic sheet | codemason sheet |
 |---|---|---|---|
 | `ask_user` | `AskUserQuestion` | Exact | Exact |
 | `bash` | `Bash` | Exact | Exact |
@@ -562,21 +562,21 @@ Under the workbook as delivered, the table is exactly:
 match (ubiquitous)
 
 A `(before, after)` pair **shall** appear in the FR-023 table if and only if all
-three clauses hold for the workbook's `Anthropic Tools` and `ragent Tools`
+three clauses hold for the workbook's `Anthropic Tools` and `codemason Tools`
 sheets:
 
 - the `Anthropic Tools` row whose `Tool` is `after` carries `Mapping = Exact`;
-- the `ragent Tools` row whose `Tool` is `before` carries
+- the `codemason Tools` row whose `Tool` is `before` carries
   `Mapping = Exact`;
-- that ragent row's `Anthropic equivalent` cell names `after` as one of its
+- that codemason row's `Anthropic equivalent` cell names `after` as one of its
   `/`-separated entries.
 
 A pair that fails any clause **shall not** be renamed, and **shall** be listed
 with the clause it failed wherever the refusal is reported. Under the workbook
 as delivered this excludes `new_agent` (the Anthropic sheet rates `Agent`
 `Close`), `read` (`Read` is `Close` there), the five `cron_*` tools (their
-ragent rows are `Close` although `CronCreate`, `CronDelete` and `CronList` are
-`Exact`), and `TodoWrite`, which no ragent tool names.
+codemason rows are `Close` although `CronCreate`, `CronDelete` and `CronList` are
+`Exact`), and `TodoWrite`, which no codemason tool names.
 
 > *Ubiquitous requirement - eligibility is a property of the workbook, not of a
 > reviewer's judgement.*
@@ -584,7 +584,7 @@ ragent rows are `Close` although `CronCreate`, `CronDelete` and `CronList` are
 ### FR-025 - One-to-one claims are resolved by exact spelling, or refused
 (unwanted)
 
-If two or more ragent tools name the same `after` under FR-024, the system
+If two or more codemason tools name the same `after` under FR-024, the system
 **shall** rename the claimant whose current name equals `after` once each
 `_`-separated segment is capitalised (`bash` -> `Bash`, `edit` -> `Edit`,
 `write` -> `Write`), and **shall** leave every other claimant under its current
@@ -599,7 +599,7 @@ keep their names, and it refuses `WebFetch` (`webfetch`, `mf_fetch`) and
 `WebSearch` (`websearch`, `mf_search`), neither of which has an exact spelling
 match.
 
-> *Unwanted-behaviour requirement - guards against two ragent tools racing for
+> *Unwanted-behaviour requirement - guards against two codemason tools racing for
 > one Claude spelling and one of them silently disappearing.*
 
 ### FR-026 - The rename is a rename; no alias is registered (ubiquitous)
@@ -634,17 +634,17 @@ same change (ubiquitous)
 Every non-test source site that compares, matches, lists or stores a renamed
 tool name as a literal **shall** be updated to the `after` spelling, including
 at least: `SKILL_ALWAYS_ALLOWED_TOOLS`
-(`crates/ragent-agent/src/session/permissions.rs:561`), `LOOP_WRITE_TOOLS`
-(`crates/ragent-agent/src/session/loop_state.rs:412`), the write-tool list in
-`crates/ragent-agent/src/session/history.rs:1001`, the `bash` special cases in
-`crates/ragent-agent/src/session/processor.rs:331`,
-`crates/ragent-agent/src/session/permissions.rs` and
-`crates/ragent-agent/src/backend/container.rs`, the legacy alias targets in
-`crates/ragent-agent/src/tool/aliases.rs`, the tool-repeat guard keys, the
+(`crates/codemason-agent/src/session/permissions.rs:561`), `LOOP_WRITE_TOOLS`
+(`crates/codemason-agent/src/session/loop_state.rs:412`), the write-tool list in
+`crates/codemason-agent/src/session/history.rs:1001`, the `bash` special cases in
+`crates/codemason-agent/src/session/processor.rs:331`,
+`crates/codemason-agent/src/session/permissions.rs` and
+`crates/codemason-agent/src/backend/container.rs`, the legacy alias targets in
+`crates/codemason-agent/src/tool/aliases.rs`, the tool-repeat guard keys, the
 bundled skill `allowed_tools` lists
-(`crates/ragent-agent/src/skill/bundled.rs`), and the per-tool
+(`crates/codemason-agent/src/skill/bundled.rs`), and the per-tool
 pretty-printers and summaries in
-`crates/ragent-tui/src/widgets/message_widget.rs`.
+`crates/codemason-tui/src/widgets/message_widget.rs`.
 
 Tool *descriptions* **shall** be migrated too, because they are prompt text the
 model reads: at least eleven shipped `description()` strings tell the model to
@@ -715,7 +715,7 @@ If any supported mechanism - a configuration key, an environment variable, a CLI
 flag, or a plugin, connector or agent setting - would make a retired `before`
 spelling resolvable, the system **shall** not honour it.
 
-`tools.aliases` (FR-015) **shall** map provider spellings onto registered ragent
+`tools.aliases` (FR-015) **shall** map provider spellings onto registered codemason
 names only, and **shall** reject two entry forms when the configuration is
 loaded, each with an error naming the file, the offending spelling and the
 `after` replacement so the reader is sent to the name that does exist:
@@ -746,7 +746,7 @@ and its `after` replacement, and **shall** keep the rest of that source working.
 A tool that arrives from a dynamic source - an MCP server bridged as
 `<server>.<tool>` or through `mcp_tool`, a plugin tool `plugin_<id>_<tool>`, a
 connector's servers, or a skill-contributed tool - **shall** be namespaced so
-that it cannot occupy a bare ragent name at all; the refusal above is the
+that it cannot occupy a bare codemason name at all; the refusal above is the
 backstop for a name that reaches the bare namespace anyway. A refused bridge
 **shall** leave the session usable and **shall** be reported once, not once per
 turn.
@@ -862,7 +862,7 @@ NFR-009's last clause is a design rule, not a packaging preference: the check is
 `scripts/check_tool_rename.py`, and both front doors run **that program**.
 `scripts/check-tool-rename.sh` is a wrapper that `exec`s it with the caller's
 arguments and holds no predicate logic and no fixture, and
-`crates/ragent-agent/tests/test_tool_rename_guard.rs` reads its `--json` report
+`crates/codemason-agent/tests/test_tool_rename_guard.rs` reads its `--json` report
 and asserts the same verdict, the same hits and the same ASCII wording the
 script prints. A predicate change lands in one file, and a change that makes the
 two forms disagree fails a case rather than surviving review.
@@ -886,8 +886,8 @@ from the checkout the program happens to live in.
 - Redesigning the TUI rendering of tool calls.
 - Server-side hosted tools that have no local execution (OpenAI
   `code_interpreter`, Anthropic computer use). These are mapped as
-  `No equivalent` and are not executed by ragent.
-- Any Python or TypeScript harness. ragent is the harness; the deliverable is
+  `No equivalent` and are not executed by codemason.
+- Any Python or TypeScript harness. codemason is the harness; the deliverable is
   its Rust provider layer.
 
 ---
@@ -897,7 +897,7 @@ from the checkout the program happens to live in.
 The specification is met when:
 
 1. `cargo fmt --check`, `cargo clippy --all-targets` and the crate test suites
-   for `ragent-types`, `ragent-llm` and `ragent-agent` pass.
+   for `codemason-types`, `codemason-llm` and `codemason-agent` pass.
 2. A recorded-frame replay test per profile proves FR-004, FR-005, FR-006 and
    FR-014.
 3. The wire matrix (FR-016) lists every registered provider with no empty

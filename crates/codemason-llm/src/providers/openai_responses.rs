@@ -1,0 +1,655 @@
+//! OpenAI Responses API provider implementation.
+//!
+//! Implements the [`Provider`] trait for the OpenAI Responses API, which is the
+//! recommended API for reasoning models (GPT-5.x, o1, o3, etc.). The Responses API
+//! provides better support for:
+//! - Reasoning tokens and summaries
+//! - Multi-turn conversation continuity via `previous_response_id`
+//! - Cache write tracking for cost optimization
+//! - 409 Conflict surface as a stream error for concurrent modifications
+//!
+//! Unlike the Chat Completions API, the Responses API:
+//! - Uses `input` instead of `messages`
+//! - Returns `output` array with structured content
+//! - Supports `reasoning.effort` and `reasoning.mode` parameters
+//! - Exposes reasoning summaries (not raw tokens)
+//! - Tracks `cache_write_tokens` separately in usage
+
+use anyhow::{Context, Result, bail};
+use futures::stream::StreamExt;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::pin::Pin;
+
+use super::http_client::{create_http_client, create_streaming_http_client};
+use super::thinking::openai_thinking_levels_for_model;
+use super::tool_cache::{ToolFormat, cached_tools};
+use super::wire::encode::{MessageContext, encode_messages_fallible};
+use super::wire::profile_table::OPENAI_RESPONSES;
+use super::wire::trace;
+#[cfg(test)]
+use crate::llm::{ChatContent, ContentPart};
+use crate::llm::{ChatMessage, ChatRequest, LlmClient, StreamEvent};
+use crate::provider::http_client::{MAX_ERROR_BODY_BYTES, read_body_capped};
+use crate::{ModelInfo, Provider};
+use codemason_config::{Capabilities, Cost};
+use codemason_types::event::FinishReason;
+use codemason_types::thinking::ThinkingLevel;
+
+/// Default API base URL for OpenAI Responses API.
+pub const RESPONSES_API_BASE: &str = "https://api.openai.com/v1";
+
+/// Returns the default OpenAI Responses API model catalog.
+///
+/// These models are optimized for the Responses API format.
+#[must_use]
+pub fn responses_api_default_models(provider_id: &str) -> Vec<ModelInfo> {
+    vec![
+        ModelInfo {
+            id: "gpt-5.6".to_string(),
+            provider_id: provider_id.to_string(),
+            name: "GPT-5.6".to_string(),
+            cost: Cost {
+                input: 1.25,
+                output: 10.0,
+            },
+            capabilities: Capabilities {
+                reasoning: true,
+                streaming: true,
+                vision: true,
+                tool_use: true,
+                thinking_levels: openai_thinking_levels_for_model("gpt-5.6"),
+            },
+            context_window: 400_000,
+            max_output: Some(128_000),
+            request_multiplier: None,
+            thinking_config: None,
+        },
+        ModelInfo {
+            id: "gpt-5.6-sol".to_string(),
+            provider_id: provider_id.to_string(),
+            name: "GPT-5.6 Sol (Pro)".to_string(),
+            cost: Cost {
+                input: 2.50,
+                output: 20.0,
+            },
+            capabilities: Capabilities {
+                reasoning: true,
+                streaming: true,
+                vision: true,
+                tool_use: true,
+                thinking_levels: openai_thinking_levels_for_model("gpt-5.6-sol"),
+            },
+            context_window: 400_000,
+            max_output: Some(128_000),
+            request_multiplier: None,
+            thinking_config: None,
+        },
+        ModelInfo {
+            id: "o1".to_string(),
+            provider_id: provider_id.to_string(),
+            name: "o1".to_string(),
+            cost: Cost {
+                input: 15.0,
+                output: 60.0,
+            },
+            capabilities: Capabilities {
+                reasoning: true,
+                streaming: true,
+                vision: true,
+                tool_use: true,
+                thinking_levels: openai_thinking_levels_for_model("o1"),
+            },
+            context_window: 200_000,
+            max_output: Some(100_000),
+            request_multiplier: None,
+            thinking_config: None,
+        },
+        ModelInfo {
+            id: "o3".to_string(),
+            provider_id: provider_id.to_string(),
+            name: "o3".to_string(),
+            cost: Cost {
+                input: 10.0,
+                output: 40.0,
+            },
+            capabilities: Capabilities {
+                reasoning: true,
+                streaming: true,
+                vision: true,
+                tool_use: true,
+                thinking_levels: openai_thinking_levels_for_model("o3"),
+            },
+            context_window: 200_000,
+            max_output: Some(100_000),
+            request_multiplier: None,
+            thinking_config: None,
+        },
+    ]
+}
+
+/// Provider implementation for the OpenAI Responses API.
+pub struct ResponsesApiProvider;
+
+#[async_trait::async_trait]
+impl Provider for ResponsesApiProvider {
+    /// Returns `"openai_responses"`.
+    fn id(&self) -> &'static str {
+        "openai_responses"
+    }
+
+    /// Returns `"OpenAI Responses API"`.
+    fn name(&self) -> &'static str {
+        "OpenAI Responses API"
+    }
+
+    fn as_any_static(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    /// Returns the default Responses API model catalog.
+    fn default_models(&self) -> Vec<ModelInfo> {
+        responses_api_default_models("openai_responses")
+    }
+
+    /// Discover available models from the OpenAI `/v1/models` endpoint.
+    async fn discover_models(&self) -> Result<Vec<ModelInfo>> {
+        let api_key = codemason_config::credential_env::provider_credential_env("openai")
+            .context("OpenAI Responses API model discovery requires OPENAI_API_KEY")?;
+
+        let client = create_http_client();
+        let url = format!("{}/models", RESPONSES_API_BASE);
+
+        let response = client
+            .get(&url)
+            .bearer_auth(&api_key)
+            .send()
+            .await
+            .context("Failed to fetch OpenAI models")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            // ANTIPAT 3.1/3.2: capped error-body read.
+            let body = read_body_capped(response, MAX_ERROR_BODY_BYTES).await;
+            bail!("OpenAI model discovery failed with {}: {}", status, body);
+        }
+
+        let data: Value = response
+            .json()
+            .await
+            .context("Failed to parse models response")?;
+        let models_array = data
+            .get("data")
+            .and_then(|v| v.as_array())
+            .context("Invalid models response format")?;
+
+        let mut models = Vec::new();
+        for model_value in models_array {
+            if let Some(model_id) = model_value.get("id").and_then(|v| v.as_str()) {
+                // Only include reasoning models
+                if model_id.starts_with("gpt-5") || model_id.starts_with('o') {
+                    let base_models = responses_api_default_models("openai_responses");
+                    if let Some(base) = base_models.iter().find(|m| m.id == model_id) {
+                        models.push(base.clone());
+                    } else {
+                        // Unknown model, add with defaults
+                        models.push(ModelInfo {
+                            id: model_id.to_string(),
+                            provider_id: "openai_responses".to_string(),
+                            name: model_id.to_string(),
+                            cost: Cost {
+                                input: 1.0,
+                                output: 5.0,
+                            },
+                            capabilities: Capabilities {
+                                reasoning: true,
+                                streaming: true,
+                                vision: true,
+                                tool_use: true,
+                                thinking_levels: openai_thinking_levels_for_model(model_id),
+                            },
+                            context_window: 200_000,
+                            max_output: Some(50_000),
+                            request_multiplier: None,
+                            thinking_config: None,
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(models)
+    }
+
+    async fn create_client(
+        &self,
+        api_key: &str,
+        base_url: Option<&str>,
+        _options: &HashMap<String, Value>,
+    ) -> Result<Box<dyn LlmClient>> {
+        // ANTIPAT 3.6: register the credential with the shared redaction
+        // registry so any text passed through `redact_secrets` masks it.
+        codemason_types::sanitize::register_secret(api_key);
+        let resolved_base = base_url
+            .unwrap_or(RESPONSES_API_BASE)
+            .trim_end_matches('/')
+            .to_string();
+        let client = ResponsesApiClient::new(api_key, &resolved_base);
+        tracing::info!(
+            provider = "openai_responses",
+            responses_endpoint = %format!("{}/responses", resolved_base),
+            "provider initialized"
+        );
+        Ok(Box::new(client))
+    }
+}
+
+/// Client for the OpenAI Responses API.
+pub struct ResponsesApiClient {
+    api_key: String,
+    base_url: String,
+    http_client: reqwest::Client,
+}
+
+impl ResponsesApiClient {
+    /// Creates a new Responses API client.
+    pub fn new(api_key: &str, base_url: &str) -> Self {
+        Self {
+            api_key: api_key.to_string(),
+            base_url: base_url.to_string(),
+            http_client: create_streaming_http_client(),
+        }
+    }
+
+    /// The Responses input list (FR-018), from the one shared encoder.
+    ///
+    /// Every [`ChatMessage`] becomes zero or more entries: a message item for its
+    /// text, then one item per tool construct (the call and its output), so the
+    /// tool exchange is carried rather than filtered out. The construction, including the `ImageUrl` -> `WireLoss`
+    /// refusal the input list has no slot to avoid, is `wire::encode`'s (FR-006):
+    /// this client names its profile and nothing else.
+    fn build_input_items(
+        &self,
+        messages: &[ChatMessage],
+    ) -> Result<Vec<Value>, codemason_types::CodemasonError> {
+        encode_messages_fallible(OPENAI_RESPONSES, messages, &MessageContext::default())
+    }
+
+    /// Builds the request body for the Responses API.
+    ///
+    /// Returns `Err(WireLoss)` when the history contains a construct the
+    /// Responses input list has no slot for (FR-018). The caller shall not
+    /// issue the request in that case.
+    pub fn build_request_body(
+        &self,
+        request: &ChatRequest,
+    ) -> Result<Value, codemason_types::CodemasonError> {
+        // Map thinking config to reasoning effort
+        let reasoning_effort = request
+            .thinking
+            .as_ref()
+            .map(|t| match t.level {
+                ThinkingLevel::Low => "low",
+                ThinkingLevel::Medium => "medium",
+                ThinkingLevel::High => "high",
+                ThinkingLevel::Auto => "medium",
+                ThinkingLevel::Off => "none",
+            })
+            .unwrap_or("medium");
+
+        let input_array = self.build_input_items(&request.messages)?;
+
+        // The tool array comes from the one shared encoder (FR-003): the
+        // Responses API takes the flattened function shape, so the payload is
+        // the same inner array the chat family assigns, only differently shaped.
+        let tools = if request.tools.is_empty() {
+            None
+        } else {
+            Some(cached_tools(ToolFormat::OpenAiResponses, &request.tools).responses_tools_array())
+        };
+
+        let mut body = json!({
+            "model": request.model,
+            "input": input_array,
+            "reasoning": {
+                "effort": reasoning_effort,
+            },
+            "stream": true,
+        });
+
+        // An empty list stays absent rather than becoming `"tools":[]`, which some
+        // Responses deployments reject.
+        if let Some(tools) = tools {
+            body[ToolFormat::OpenAiResponses.body_key()] = tools;
+        }
+
+        if let Some(max_tokens) = request.max_tokens {
+            body["max_output_tokens"] = Value::Number(max_tokens.into());
+        }
+
+        if let Some(temp) = request.temperature {
+            body["temperature"] = json!(temp);
+        }
+
+        if let Some(top_p) = request.top_p {
+            body["top_p"] = json!(top_p);
+        }
+
+        // Include system prompt as instructions if present
+        if let Some(system) = &request.system {
+            body["instructions"] = Value::String(system.to_string());
+        }
+
+        // Add reasoning mode if specified in options
+        if let Some(mode) = request
+            .options
+            .get("reasoning_mode")
+            .and_then(|v| v.as_str())
+        {
+            body["reasoning"]["mode"] = Value::String(mode.to_string());
+        }
+
+        // Add reasoning context if specified
+        if let Some(context) = request
+            .options
+            .get("reasoning_context")
+            .and_then(|v| v.as_str())
+        {
+            body["reasoning"]["context"] = Value::String(context.to_string());
+        }
+
+        // Add previous_response_id if present for conversation continuity
+        if let Some(prev_id) = request
+            .options
+            .get("previous_response_id")
+            .and_then(|v| v.as_str())
+        {
+            body["previous_response_id"] = Value::String(prev_id.to_string());
+        }
+
+        Ok(body)
+    }
+
+    /// Parses the SSE stream from the Responses API.
+    pub(crate) fn parse_sse_stream(
+        &self,
+        response: reqwest::Response,
+    ) -> Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>> {
+        let status = response.status();
+
+        Box::pin(async_stream::stream! {
+            // Check for error status first
+            if !status.is_success() {
+                // ANTIPAT 3.1/3.2: capped error-body read.
+                let body =
+                    read_body_capped(response, MAX_ERROR_BODY_BYTES)
+                        .await;
+
+                // Check for 409 Conflict - retryable error
+                if status == reqwest::StatusCode::CONFLICT {
+                    yield StreamEvent::Error {
+                        message: "HTTP 409 Conflict: Concurrent modification detected. Please retry the request.".to_string(),
+                    };
+                } else {
+                    yield StreamEvent::Error {
+                        message: format!("HTTP {}: {}", status, body),
+                    };
+                }
+                return;
+            }
+
+            let stream = response.bytes_stream();
+            // PERF-063: pre-size the SSE accumulation buffer so a long stream does
+            // not repeatedly realloc/copy as it grows.
+            let mut buffer = String::with_capacity(8 * 1024);
+            // FUNC-033: hold an incomplete trailing multibyte character from the
+            // previous chunk so a UTF-8 sequence split across TCP chunks is not
+            // corrupted.
+            let mut pending_utf8: Vec<u8> = Vec::new();
+            futures::pin_mut!(stream);
+
+            loop {
+                let chunk = match tokio::time::timeout(
+                    std::time::Duration::from_secs(super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS),
+                    stream.next(),
+                )
+                .await
+                {
+                    Ok(Some(r)) => match r {
+                        Ok(c) => c,
+                        Err(e) => {
+                            yield StreamEvent::Error { message: format!("Stream error: {}", e) };
+                            break;
+                        }
+                    },
+                    Ok(None) => break,
+                    Err(_) => {
+                        yield StreamEvent::Error {
+                            message: format!(
+                                "OpenAI Responses: stream stalled - no data received for {}s",
+                                super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS
+                            ),
+                        };
+                        break;
+                    }
+                };
+
+                // SEC-codemason-llm-004 (SECTASKS T-028): fail the stream when a
+
+                // peer dribbles bytes without ever emitting a newline instead
+
+                // of letting the accumulation buffer grow without bound.
+
+                if let Err(e) = super::http_client::append_chunk_guarded(
+
+                    &mut buffer,
+
+                    &mut pending_utf8,
+
+                    &chunk,
+
+                    "OpenAI Responses",
+
+                ) {
+
+                    yield StreamEvent::Error {
+
+                        message: e.to_string(),
+
+                    };
+
+                    return;
+
+                }
+
+                while let Some(line) = super::http_client::take_sse_line(&mut buffer) {
+                    let line = line.trim();
+                    // ANTIPAT 5.2: standard SSE `data:` prefix handling; a line
+                    // without the prefix is not a data frame and is skipped.
+                    let data = match line.strip_prefix("data: ") {
+                        Some(d) => d.trim(),
+                        None => continue,
+                    };
+                    if data == "[DONE]" {
+                        yield StreamEvent::Finish { reason: FinishReason::Stop };
+                        return;
+                    }
+
+                    let event: Value = match serde_json::from_str(data) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            // SEC: the raw SSE frame carries streamed model output;
+                            // redact before logging.
+                            tracing::warn!(provider = "openai_responses", error = %e, data = %codemason_types::sanitize::redact_secrets(data), "failed to parse SSE event");
+                            continue;
+                        }
+                    };
+
+                    // Parse Responses API SSE events
+                    if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
+                        match event_type {
+                            "response.created" => {
+                                // Response started
+                            }
+                            "response.in_progress" => {
+                                // Response is being generated
+                            }
+                            "response.output_text.delta" => {
+                                if let Some(delta) = event.get("delta").and_then(|v| v.as_str()) {
+                                    yield StreamEvent::TextDelta { text: delta.to_string() };
+                                }
+                            }
+                            "response.output_text.done" => {
+                                // Text output complete
+                            }
+                            "response.reasoning_summary_text.delta" => {
+                                yield StreamEvent::ReasoningStart;
+                                if let Some(delta) = event.get("delta").and_then(|v| v.as_str()) {
+                                    yield StreamEvent::ReasoningDelta { text: delta.to_string() };
+                                }
+                            }
+                            "response.reasoning_summary_text.done" => {
+                                yield StreamEvent::ReasoningEnd;
+                            }
+                            "response.output_item.added" => {
+                                // F1: the function-call item announces the call
+                                // id and name BEFORE the argument deltas
+                                // arrive. Without emitting `ToolCallStart`
+                                // here, the agent loop never creates a pending
+                                // call and every delta for the unknown id is
+                                // dropped - the tool call was lost entirely.
+                                if let Some(item) = event.get("item")
+                                    && item.get("type").and_then(|v| v.as_str())
+                                        == Some("function_call")
+                                    && let (Some(call_id), Some(name)) = (
+                                        item.get("call_id").and_then(|v| v.as_str()),
+                                        item.get("name").and_then(|v| v.as_str()),
+                                    )
+                                {
+                                    yield StreamEvent::ToolCallStart {
+                                        id: call_id.to_string(),
+                                        name: name.to_string(),
+                                    };
+                                }
+                            }
+                            "response.function_call_arguments.delta" => {
+                                if let (Some(call_id), Some(delta)) = (
+                                    event.get("call_id").and_then(|v| v.as_str()),
+                                    event.get("delta").and_then(|v| v.as_str()),
+                                ) {
+                                    yield StreamEvent::ToolCallDelta {
+                                        id: call_id.to_string(),
+                                        args_json: delta.to_string(),
+                                    };
+                                }
+                            }
+                            "response.function_call_arguments.done" => {
+                                if let Some(call_id) = event.get("call_id").and_then(|v| v.as_str()) {
+                                    yield StreamEvent::ToolCallEnd {
+                                        id: call_id.to_string(),
+                                    };
+                                }
+                            }
+                            "response.completed" => {
+                                // Extract usage information
+                                if let Some(usage) = event.get("response").and_then(|r| r.get("usage")) {
+                                    let input_tokens = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                                    let output_tokens = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+
+                                    // Extract cache write tokens if present
+                                    let cache_write_tokens = usage
+                                        .get("cache_write_tokens")
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0);
+
+                                    if cache_write_tokens > 0 {
+                                        tracing::debug!(
+                                            cache_write_tokens = cache_write_tokens,
+                                            "OpenAI Responses API cache write tokens"
+                                        );
+                                    }
+
+                                    yield StreamEvent::Usage {
+                                        input_tokens,
+                                        output_tokens,
+                                    };
+                                }
+
+                                yield StreamEvent::Finish { reason: FinishReason::Stop };
+                            }
+                            "error" => {
+                                if let Some(error_msg) = event.get("error").and_then(|e| e.get("message").and_then(|v| v.as_str())) {
+                                    yield StreamEvent::Error { message: error_msg.to_string() };
+                                }
+                            }
+                            _ => {
+                                tracing::debug!(event_type = %event_type, "Unknown Responses API event type");
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmClient for ResponsesApiClient {
+    async fn chat(
+        &self,
+        request: ChatRequest,
+    ) -> anyhow::Result<Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>>> {
+        let url = format!("{}/responses", self.base_url);
+        let body = self.build_request_body(&request)?;
+        trace::record_body(&request, &body);
+
+        tracing::debug!(
+            url = %url,
+            model = %request.model,
+            "Sending OpenAI Responses API request"
+        );
+
+        // RETRY POLICY (ANTIPAT 3.4): the `/responses` POST is a billed
+        // completion request, so it is sent exactly once. The previous bespoke
+        // 409 retry loop (up to 3 sends) risked double-billing the same
+        // completion; a 409 Conflict is surfaced to the caller as a
+        // stream-level error (which already includes remediation text) instead
+        // of being retried automatically.
+        let response = self
+            .http_client
+            .post(&url)
+            .bearer_auth(&self.api_key)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to send Responses API request")?;
+
+        // Success - parse the stream (409 and other non-success statuses are
+        // turned into `StreamEvent::Error` inside `parse_sse_stream`).
+        Ok(self.parse_sse_stream(response))
+    }
+}
+
+/// Usage details specific to Responses API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResponsesApiUsage {
+    /// Number of input tokens.
+    pub input_tokens: u64,
+    /// Number of output tokens (includes reasoning tokens).
+    pub output_tokens: u64,
+    /// Number of reasoning tokens used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
+    /// Number of tokens written to cache.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<u64>,
+    /// Number of tokens read from cache.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u64>,
+}
+
+#[cfg(test)]
+#[path = "../../tests/inline/openai_responses_tests.rs"]
+mod tests;

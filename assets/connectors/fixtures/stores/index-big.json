@@ -83,7 +83,7 @@
         {
           "id": "main",
           "transport": "stdio",
-          "command": "ragent-fixture-missing-command",
+          "command": "codemason-fixture-missing-command",
           "args": []
         }
       ]
@@ -91,7 +91,7 @@
     {
       "id": "unsupported",
       "name": "Unsupported",
-      "description": "An entry declaring a transport ragent does not speak, skipped and counted",
+      "description": "An entry declaring a transport codemason does not speak, skipped and counted",
       "category": "developer",
       "tags": ["unsupported", "fixture"],
       "auth": "none",

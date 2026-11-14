@@ -13,7 +13,7 @@ That branch is not merged into `main`. This work must start from it, or after it
 MULTISESSION already delivers the sessions sidebar: sessions grouped by project,
 collapsible headings, pin, archive, filter, attention markers, per-session directory and
 model. In it a "project" is only a string: `sessions.project_id` holds the git work-tree
-root path computed by `ragent_storage::project_root`. There is no project record, so
+root path computed by `codemason_storage::project_root`. There is no project record, so
 nothing can hold a base model or a remote description, and worktree-per-session was left
 out of scope (MULTISESSION Q2).
 
@@ -31,7 +31,7 @@ sidebar and the reference screenshot:
 
 | Area | Exists today | Change |
 |------|--------------|--------|
-| Project identity | `sessions.project_id` = root path string; `project_root()` in `ragent-storage/src/project.rs` | `project_id` becomes a `projects.id`; the path moves to `projects.worktree` |
+| Project identity | `sessions.project_id` = root path string; `project_root()` in `codemason-storage/src/project.rs` | `project_id` becomes a `projects.id`; the path moves to `projects.worktree` |
 | Grouping API | `Storage::list_sessions_grouped() -> Vec<ProjectSessions { project_id, sessions }>` | `ProjectSessions` carries the `ProjectRow`; projects with no sessions are listed too |
 | Session creation | `create_session`, `create_session_with`, `create_child_session`, `create_session_of_kind` | Each resolves (or creates) the project record; child sessions copy the parent's `project_id` |
 | Linked worktrees | `project_root()` treats a linked worktree as its own project | A session worktree is attached to the owning project explicitly, so it groups under it |
@@ -39,12 +39,12 @@ sidebar and the reference screenshot:
 | Sidebar rows | `+ New session`, `Pinned`, project sections; row = title, relative age, attention marker (`*` `!` `o` `x`) | Add chevron, branch marker + count, right-aligned state marker; see "Sidebar" |
 | Sidebar labels | `project_labels()` derives the heading from the path basename | Heading is `Project::name` (user-editable) |
 | Persisted sidebar state | `tui.sessions.sidebar` stores collapsed sections keyed by path | Re-keyed by project id in the migration |
-| Remote parsing | `ragent_tools_vcs::vcs_provider::{VcsProvider, parse_reverse_repo}`; `git::run_git_output` | Reused for remote detection; no new parser |
+| Remote parsing | `codemason_tools_vcs::vcs_provider::{VcsProvider, parse_reverse_repo}`; `git::run_git_output` | Reused for remote detection; no new parser |
 | Schema | `SCHEMA_VERSION = 5` (`pinned`, `kind`) | Version 6 |
 
 ## Data Model
 
-### `Project` (new: `ragent-storage/src/project.rs` row type, `ragent-agent/src/project/mod.rs` domain type)
+### `Project` (new: `codemason-storage/src/project.rs` row type, `codemason-agent/src/project/mod.rs` domain type)
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -138,10 +138,10 @@ lazily the first time a backfilled project is focused, not in the migration.
 
 7. **Pull/merge request count.** The number beside a row's branch marker is the count of
    pull requests (GitHub) or merge requests (GitLab) whose source branch is the session's
-   `branch`. A `PullRequestCounts` service in `ragent-agent/src/project/` fetches it:
+   `branch`. A `PullRequestCounts` service in `codemason-agent/src/project/` fetches it:
    - One paginated list call per project (all requests of the repository, grouped by
      source branch in memory), not one call per row. It reuses the existing clients in
-     `ragent-tools-vcs` (`github/github_prs.rs`, `gitlab/gitlab_mrs.rs`) and their stored
+     `codemason-tools-vcs` (`github/github_prs.rs`, `gitlab/gitlab_mrs.rs`) and their stored
      credentials.
    - It runs on a background task, never on the render path. Triggers: sidebar shown,
      project focused, a session's turn ends, `/project refresh`, and a 5-minute interval
@@ -164,7 +164,7 @@ lazily the first time a backfilled project is focused, not in the migration.
 | Branch icon on each row | None | Branch marker; colour distinguishes a session-owned worktree from the shared project worktree |
 | Number next to the branch icon | None | Count of pull/merge requests whose source branch is the session's branch (Behaviour 7); blank when the session has no branch, the project has no remote, or the count is zero or unknown |
 | Right-aligned dot (unread, needs attention) | Marker at the row start | Move to the right edge; keep `*` `!` `o` `x` meanings and colours |
-| Cloud icon (remote session) | None | Out of scope: ragent has no cloud sessions |
+| Cloud icon (remote session) | None | Out of scope: codemason has no cloud sessions |
 | Highlighted focused row | Exists | No change |
 | Relative age | Exists, not in the screenshot | Keep when the row is wide enough; drop first when space is short |
 
@@ -176,9 +176,9 @@ All glyphs stay ASCII, per the project style rule.
   `model <provider>/<model>`, `refresh`, `prune`, `remove`, `help`. `add <url>` clones
   through the existing clone path and registers the result. Entry added to the command
   catalogue.
-- **CLI (`src/main.rs`):** `ragent session list` groups by project (`--project <name>`,
-  `--json`); `ragent project list | show | add | remove`.
-- **Server (`ragent-server`):** `GET/POST /projects`, `GET/DELETE /projects/{id}`,
+- **CLI (`src/main.rs`):** `codemason session list` groups by project (`--project <name>`,
+  `--json`); `codemason project list | show | add | remove`.
+- **Server (`codemason-server`):** `GET/POST /projects`, `GET/DELETE /projects/{id}`,
   `GET /projects/{id}/sessions`; `POST /sessions` accepts `project_id` and optional
   `branch`; `SessionResponse` gains `project_id`, `branch`, `worktree`; OpenAPI updated.
 - **Session archive (`session/archive.rs`):** export records the project name and remote;
@@ -188,20 +188,20 @@ All glyphs stay ASCII, per the project style rule.
 
 | ID | Title | Crate | Effort | Depends | Status |
 |----|-------|-------|--------|---------|--------|
-| T-001 | `projects` table, session columns, backfill, setting re-key, `SCHEMA_VERSION` 6 | ragent-storage | M | - | completed |
-| T-002 | `ProjectRow` CRUD; `ProjectSessions` carries the project; empty projects listed; `branch`/`worktree` accessors | ragent-storage | M | T-001 | completed |
-| T-003 | `Project`, `ProjectRemote`, `RemoteKind`, `ProjectManager::resolve_for_dir`, project events | ragent-agent | M | T-002 | completed |
-| T-004 | Remote detection (GitHub, GitLab incl. self-hosted), credential stripping, lazy refresh | ragent-agent, ragent-tools-vcs | S | T-003 | completed |
-| T-005 | All four session-creation paths attach a project record; child sessions inherit | ragent-agent | S | T-003 | completed |
-| T-006 | Session worktree create/prune; per-project services keyed by `project_id` | ragent-agent, ragent-tui | L | T-005 | completed |
-| T-007 | Base model seeding and `/project model` | ragent-tui | S | T-005 | completed |
-| T-008 | `/project` command and `/session new --branch` | ragent-tui | M | T-006 | completed |
-| T-009 | Sidebar data: headings from `Project::name`, empty projects, branch + request count per row | ragent-tui | M | T-005, T-015 | completed |
-| T-010 | Sidebar rendering: chevron, remote tag, branch marker, right-aligned state marker, `Search` row | ragent-tui | M | T-009 | completed |
-| T-011 | CLI grouped `session list` and `project` subcommands | ragent (root) | S | T-005 | completed |
-| T-012 | Server routes, `SessionResponse` fields, OpenAPI | ragent-server | M | T-005 | completed |
-| T-013 | Session archive carries the project | ragent-agent | S | T-005 | completed |
-| T-015 | `PullRequestCounts` service: per-project list call for GitHub and GitLab, grouping by source branch, cache, background refresh, back-off, `sessions.pr_count` | ragent-agent, ragent-tools-vcs, ragent-storage | L | T-004 | completed |
+| T-001 | `projects` table, session columns, backfill, setting re-key, `SCHEMA_VERSION` 6 | codemason-storage | M | - | completed |
+| T-002 | `ProjectRow` CRUD; `ProjectSessions` carries the project; empty projects listed; `branch`/`worktree` accessors | codemason-storage | M | T-001 | completed |
+| T-003 | `Project`, `ProjectRemote`, `RemoteKind`, `ProjectManager::resolve_for_dir`, project events | codemason-agent | M | T-002 | completed |
+| T-004 | Remote detection (GitHub, GitLab incl. self-hosted), credential stripping, lazy refresh | codemason-agent, codemason-tools-vcs | S | T-003 | completed |
+| T-005 | All four session-creation paths attach a project record; child sessions inherit | codemason-agent | S | T-003 | completed |
+| T-006 | Session worktree create/prune; per-project services keyed by `project_id` | codemason-agent, codemason-tui | L | T-005 | completed |
+| T-007 | Base model seeding and `/project model` | codemason-tui | S | T-005 | completed |
+| T-008 | `/project` command and `/session new --branch` | codemason-tui | M | T-006 | completed |
+| T-009 | Sidebar data: headings from `Project::name`, empty projects, branch + request count per row | codemason-tui | M | T-005, T-015 | completed |
+| T-010 | Sidebar rendering: chevron, remote tag, branch marker, right-aligned state marker, `Search` row | codemason-tui | M | T-009 | completed |
+| T-011 | CLI grouped `session list` and `project` subcommands | codemason (root) | S | T-005 | completed |
+| T-012 | Server routes, `SessionResponse` fields, OpenAPI | codemason-server | M | T-005 | completed |
+| T-013 | Session archive carries the project | codemason-agent | S | T-005 | completed |
+| T-015 | `PullRequestCounts` service: per-project list call for GitHub and GitLab, grouping by source branch, cache, background refresh, back-off, `sessions.pr_count` | codemason-agent, codemason-tools-vcs, codemason-storage | L | T-004 | completed |
 | T-014 | SPEC.md, QUICKSTART.md, TUI-QUICKSTART.md, CHANGELOG.md, `docs/plans/MULTISESSION.md` Q2 note | docs | S | all | completed |
 
 Effort key: S = under half a day, M = about one day, L = two to three days. Total: about
@@ -215,15 +215,15 @@ Each task lands with tests in the crate's `tests/` directory, registered in `tes
 
 | Task | Test file | Checks |
 |------|-----------|--------|
-| T-001 | `ragent-storage/tests/test_projects_migration.rs` | A v5 database under `target/temp/` upgrades; one project per distinct root; every session's `project_id` resolves to a project; collapsed sections survive the re-key; second open is a no-op |
-| T-002 | `ragent-storage/tests/test_projects_crud.rs` | CRUD round trip; unique `worktree`; grouped list includes an empty project and still uses `idx_sessions_project_updated` |
-| T-003/4 | `ragent-agent/tests/test_project_manager.rs`, `test_project_remote.rs` | `resolve_for_dir` is stable from a subdirectory; https and ssh GitHub URLs, gitlab.com, self-hosted GitLab with nested groups; unknown host yields `None`; credentials stripped |
-| T-005 | `ragent-agent/tests/test_session_project_attach.rs` | Interactive, sub-agent, teammate, skill and automation sessions all carry a valid project; children match the parent |
-| T-006 | `ragent-agent/tests/test_session_worktree.rs` | Worktree created at the requested branch; the session groups under the owning project, not a new one; prune skips a dirty worktree |
-| T-007 | `ragent-tui/tests/test_project_base_model.rs` | New session takes the project base model; `/model` in one session leaves the project base and other sessions unchanged |
-| T-009/10 | extend `ragent-tui/tests/test_sessions_sidebar.rs` | Painted rows show the chevron, remote tag, branch + count and right-aligned marker; an empty project is listed; a renamed project shows its new name; narrow widths drop the age before the title |
-| T-015 | `ragent-agent/tests/test_pull_request_counts.rs` | Against a local mock HTTP server: GitHub and GitLab list responses are grouped by source branch across pages; one request series per project regardless of session count; missing credentials, 403 rate limit and network failure leave counts unknown and widen the interval; the stored `pr_count` is shown before the first fetch |
-| T-012 | `ragent-server/tests/test_projects_routes.rs` | Route round trips; `POST /sessions` with `project_id`; containment check still rejects outside paths |
+| T-001 | `codemason-storage/tests/test_projects_migration.rs` | A v5 database under `target/temp/` upgrades; one project per distinct root; every session's `project_id` resolves to a project; collapsed sections survive the re-key; second open is a no-op |
+| T-002 | `codemason-storage/tests/test_projects_crud.rs` | CRUD round trip; unique `worktree`; grouped list includes an empty project and still uses `idx_sessions_project_updated` |
+| T-003/4 | `codemason-agent/tests/test_project_manager.rs`, `test_project_remote.rs` | `resolve_for_dir` is stable from a subdirectory; https and ssh GitHub URLs, gitlab.com, self-hosted GitLab with nested groups; unknown host yields `None`; credentials stripped |
+| T-005 | `codemason-agent/tests/test_session_project_attach.rs` | Interactive, sub-agent, teammate, skill and automation sessions all carry a valid project; children match the parent |
+| T-006 | `codemason-agent/tests/test_session_worktree.rs` | Worktree created at the requested branch; the session groups under the owning project, not a new one; prune skips a dirty worktree |
+| T-007 | `codemason-tui/tests/test_project_base_model.rs` | New session takes the project base model; `/model` in one session leaves the project base and other sessions unchanged |
+| T-009/10 | extend `codemason-tui/tests/test_sessions_sidebar.rs` | Painted rows show the chevron, remote tag, branch + count and right-aligned marker; an empty project is listed; a renamed project shows its new name; narrow widths drop the age before the title |
+| T-015 | `codemason-agent/tests/test_pull_request_counts.rs` | Against a local mock HTTP server: GitHub and GitLab list responses are grouped by source branch across pages; one request series per project regardless of session count; missing credentials, 403 rate limit and network failure leave counts unknown and widen the interval; the stored `pr_count` is shown before the first fetch |
+| T-012 | `codemason-server/tests/test_projects_routes.rs` | Route round trips; `POST /sessions` with `project_id`; containment check still rejects outside paths |
 
 Git-using tests build their repositories under `target/temp/<unique-name>` and pass the
 worktree root explicitly; no test writes into the repository.
@@ -235,7 +235,7 @@ Where the delivered code differs from the plan above, and why:
 1. **Remote parsing is a dedicated parser, not `parse_reverse_repo`.**
    `parse_reverse_repo` treats every non-GitHub https host as GitLab and
    reads process configuration while parsing. A project remote must be
-   `None` for an unknown host, so `ragent_agent::project::remote` classifies
+   `None` for an unknown host, so `codemason_agent::project::remote` classifies
    by host only: `github.com`; `gitlab.com`, a host whose first label is
    `gitlab`, or the configured GitLab instance.
 2. **Per-project services stay keyed by checkout root (Behaviour 6).** A
@@ -271,8 +271,8 @@ Where the delivered code differs from the plan above, and why:
    archived sessions keep a valid `project_id`. Creating a session in the
    worktree again restores the same project.
 10. **Test file names.** T-009/T-010 tests extend
-    `ragent-tui/tests/test_sessions_sidebar.rs`; T-008 has
-    `test_project_command.rs`; T-011 has `ragent-agent/tests/test_project_report.rs`
+    `codemason-tui/tests/test_sessions_sidebar.rs`; T-008 has
+    `test_project_command.rs`; T-011 has `codemason-agent/tests/test_project_report.rs`
     (the report functions the CLI prints); T-013 has
     `test_session_archive_project.rs`.
 
@@ -317,7 +317,7 @@ applied to each. Changing an answer is a follow-up change.
    unless a branch is requested. Alternative: every new session gets its own worktree and
    branch, which matches the screenshot's one-branch-per-row look but costs a checkout
    and disk per session.
-2. **Worktree location.** Plan assumes the ragent data directory
+2. **Worktree location.** Plan assumes the codemason data directory
    (`worktrees/<project>/<branch>`). Alternative: a sibling directory of the project
    worktree.
 3. **Which requests are counted.** Decided: the number is a count of pull/merge

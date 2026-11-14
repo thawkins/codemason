@@ -5,7 +5,7 @@ in production code on a security-relevant path.
 The workspace treats "no `.unwrap()`/`.expect()` on user-facing paths" as a
 review-enforced rule (AGENTS.md Core Code Rules). That relies on a reviewer, so
 a new `.unwrap()` in a parser, a path builder, or a network client can ship
-unnoticed — exactly how SEC-ragent-types-003/005 and SEC-ragent-llm-006 arose.
+unnoticed — exactly how SEC-codemason-types-003/005 and SEC-codemason-llm-006 arose.
 
 This scanner is a *baseline* gate: it records the current count of panicking
 unwrap/expect calls per file in ``scripts/security-unwrap-baseline.txt`` and
@@ -204,7 +204,7 @@ def self_test() -> int:
         )
         return 1
 
-    seed = SCAN_ROOT / "ragent-types" / "src" / "__unwrap_guard_selftest.rs"
+    seed = SCAN_ROOT / "codemason-types" / "src" / "__unwrap_guard_selftest.rs"
     seed.write_text(
         "pub fn f() -> u32 {\n"
         "    let v: Option<u32> = Some(1);\n"

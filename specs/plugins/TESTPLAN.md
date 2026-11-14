@@ -14,14 +14,14 @@ test code.
 ## Prerequisites
 
 1. **Build the binary.** Run `cargo build` (debug is sufficient; allow up to 1000
-   seconds). Confirm `./target/debug/ragent --version` runs and reports the current
+   seconds). Confirm `./target/debug/cdmn --version` runs and reports the current
    version.
 2. **Configure an LLM provider.** Acceptance criteria involving tool invocation from the
    agent loop need a model. Set the API key for your configured provider in the
-   environment, or point ragent at a local Ollama model. Confirm a plain
-   `ragent run "say hello"` returns a response.
+   environment, or point codemason at a local Ollama model. Confirm a plain
+   `codemason run "say hello"` returns a response.
 3. **Prepare a scratch root.** Create `~/scratch/plugins-tests/` and run every TUI
-   session from inside it so the project plugin store is `~/scratch/plugins-tests/.ragent/plugins/`.
+   session from inside it so the project plugin store is `~/scratch/plugins-tests/.codemason/plugins/`.
 4. **Stage the fixture plugins.** Copy the fixture plugins from the repository into the
    scratch root as *add sources* (do not pre-install them):
    - `~/scratch/plugins-tests/fixtures-src/codex-weather/` — Codex dialect
@@ -33,7 +33,7 @@ test code.
    - `~/scratch/plugins-tests/fixtures-src/loop-forever/` — Codex dialect whose entry
      contains `while (true) {}`.
    - `~/scratch/plugins-tests/fixtures-src/escape-attempt/` — Codex dialect whose tool
-     handler calls `ragent.plugin.read_text_file("../../outside.txt")`.
+     handler calls `codemason.plugin.read_text_file("../../outside.txt")`.
    - `~/scratch/plugins-tests/fixtures-src/future-api/` — Codex dialect whose manifest
      declares `api_version: 99`.
    - `~/scratch/plugins-tests/fixtures-src/bad-manifest/` — a folder with a
@@ -50,7 +50,7 @@ test code.
 7. **For URL add cases (TC-009, offline-safe alternative provided):** serve
    `codex-weather.zip` over a local HTTPS endpoint, or use any reachable HTTPS URL to a
    small zip. If you cannot produce an HTTPS URL, skip TC-009 and record it as not run.
-8. **Preserve config.** Back up `~/scratch/plugins-tests/.ragent/ragent.json` (if it
+8. **Preserve config.** Back up `~/scratch/plugins-tests/.codemason/codemason.json` (if it
    exists) before starting so temporary flags can be reverted in Cleanup.
 
 ## Test Cases
@@ -59,7 +59,7 @@ test code.
 
 **Requirement:** FR-006, FR-014
 
-**Preconditions:** ragent TUI running from `~/scratch/plugins-tests/`.
+**Preconditions:** codemason TUI running from `~/scratch/plugins-tests/`.
 
 **Steps:**
 1. Type `/plugins ` into the message input and observe the autocomplete menu.
@@ -94,7 +94,7 @@ store empty.
    `Enter`.
 3. Approve any permission prompt shown.
 4. Read the report line in the message window.
-5. In a second terminal, run `ls -R ~/scratch/plugins-tests/.ragent/plugins/`.
+5. In a second terminal, run `ls -R ~/scratch/plugins-tests/.codemason/plugins/`.
 6. Run `/plugins list`.
 
 **Test data:** source path `~/scratch/plugins-tests/fixtures-src/codex-weather`.
@@ -102,12 +102,12 @@ store empty.
 **Expected results:**
 - The report names plugin id `codex-weather`, dialect `codex`, version matching the
   fixture manifest, and states the plugin is enabled and loads at the next session start.
-- The store now contains `.ragent/plugins/codex-weather/` with `codex-plugin.json` and
-  `main.js`, and `.ragent/plugins/_state.json` records `codex-weather` enabled.
+- The store now contains `.codemason/plugins/codex-weather/` with `codex-plugin.json` and
+  `main.js`, and `.codemason/plugins/_state.json` records `codex-weather` enabled.
 - `/plugins list` shows one row: id `codex-weather`, state `enabled`, 1 tool and 0
   commands contributed.
 - No evidence of code execution: the fixture's entry contains an immediate
-  `ragent.message.info("entry ran")` line, and no such message appears in the message
+  `codemason.message.info("entry ran")` line, and no such message appears in the message
   window at any point in this case.
 
 ### TC-003 — Add a Claude plugin from a packaged archive
@@ -121,7 +121,7 @@ store empty.
    `Enter`.
 2. Read the report line.
 3. Run `/plugins list`.
-4. Inspect `.ragent/plugins/claude-todo/.claude-plugin/plugin.json` exists.
+4. Inspect `.codemason/plugins/claude-todo/.claude-plugin/plugin.json` exists.
 
 **Test data:** source path `~/scratch/plugins-tests/fixtures-src/claude-todo.tar.gz`.
 
@@ -160,7 +160,7 @@ store empty.
 - Step 4 fails with a manifest-parse report including the JSON error; `bad-manifest` may
   appear in `/plugins list` with state `errored`, may not appear at all, but in no case
   executes code.
-- The ragent process remains responsive throughout.
+- The codemason process remains responsive throughout.
 
 ### TC-005 — Enable a Codex plugin and invoke its tool from the agent loop
 
@@ -273,7 +273,7 @@ installed (remove it first via `/plugins remove codex-weather` if needed).
 - Download and extraction succeed; the store contains the unpacked plugin; the report
   and `/plugins list` row match TC-002.
 - If the URL is unreachable, the command fails with a network error report, changes no
-  state, and leaves no partial directory under `.ragent/plugins/`.
+  state, and leaves no partial directory under `.codemason/plugins/`.
 
 ### TC-010 — Sandbox: infinite-loop entry is contained
 
@@ -295,7 +295,7 @@ installed (remove it first via `/plugins remove codex-weather` if needed).
   budget (within a few seconds of 10 s), not indefinitely.
 - The TUI stayed usable for the whole wait.
 - `/plugins list` shows `loop-forever` as `errored` with a timeout cause.
-- The ragent process does not crash, hang permanently, or consume unbounded CPU after
+- The codemason process does not crash, hang permanently, or consume unbounded CPU after
   termination (check `top` in another terminal).
 
 ### TC-011 — Sandbox: filesystem escape attempt is denied
@@ -372,11 +372,11 @@ installed (remove it first via `/plugins remove codex-weather` if needed).
 
 **Requirement:** Config schema (master switch), FR-016
 
-**Preconditions:** `.ragent/ragent.json` backed up (Prerequisite 8).
+**Preconditions:** `.codemason/codemason.json` backed up (Prerequisite 8).
 
 **Steps:**
 1. Exit the TUI.
-2. Edit `~/scratch/plugins-tests/.ragent/ragent.json` to contain
+2. Edit `~/scratch/plugins-tests/.codemason/codemason.json` to contain
    `{ "plugins": { "enabled": false } }`.
 3. Relaunch the TUI from the scratch root.
 4. Type `/plugins list` and press `Enter`.
@@ -389,19 +389,19 @@ installed (remove it first via `/plugins remove codex-weather` if needed).
 - `enable` refuses with the same disabled-subsystem notice; no code executes.
 - `help` still prints usage.
 
-### TC-016 — CLI parity `ragent plugins`
+### TC-016 — CLI parity `codemason plugins`
 
 **Requirement:** FR-021
 
 **Preconditions:** shell at `~/scratch/plugins-tests/`; config restored to enabled.
 
 **Steps:**
-1. Run `./target/debug/ragent plugins list` (adjust the binary path to the repo build).
-2. Run `./target/debug/ragent plugins disable codex-weather` if it was left enabled,
-   then `./target/debug/ragent plugins list` again.
-3. Run `./target/debug/ragent plugins enable codex-weather` then
-   `./target/debug/ragent plugins test codex-weather`.
-4. Run `./target/debug/ragent plugins help`.
+1. Run `./target/debug/cdmn plugins list` (adjust the binary path to the repo build).
+2. Run `./target/debug/cdmn plugins disable codex-weather` if it was left enabled,
+   then `./target/debug/cdmn plugins list` again.
+3. Run `./target/debug/cdmn plugins enable codex-weather` then
+   `./target/debug/cdmn plugins test codex-weather`.
+4. Run `./target/debug/cdmn plugins help`.
 
 **Expected results:**
 - Each CLI subcommand prints the same information as its TUI counterpart (table rows and
@@ -437,9 +437,9 @@ exit the TUI.
 one `SKILL.md` and an `mcp.json`.
 
 **Steps:**
-1. `ragent plugins add <path-to-skill-only-plugin>`.
-2. `ragent plugins list`.
-3. `ragent plugins enable mongodb` (or `/plugins enable mongodb`), then `/plugins list`.
+1. `codemason plugins add <path-to-skill-only-plugin>`.
+2. `codemason plugins list`.
+3. `codemason plugins enable mongodb` (or `/plugins enable mongodb`), then `/plugins list`.
 4. `/plugins test mongodb`.
 
 **Expected results:**
@@ -461,7 +461,7 @@ one `SKILL.md` and an `mcp.json`.
 `file://` mirror built for the test.
 
 **Steps:**
-1. `ragent plugins add 'git+<https-url>#<ref>:<subpath-that-is-not-a-plugin>'`.
+1. `codemason plugins add 'git+<https-url>#<ref>:<subpath-that-is-not-a-plugin>'`.
 2. Inspect the store's `.add-staging` directory.
 
 **Expected results:**
@@ -478,14 +478,14 @@ one `SKILL.md` and an `mcp.json`.
 
 **Steps:**
 1. With the plugin disabled, inspect the skill catalog and the MCP server list.
-2. `ragent plugins enable <pluginid>`.
+2. `codemason plugins enable <pluginid>`.
 3. Inspect the skill catalog (`/skills`) and the MCP server list (`/mcp`) again.
 
 **Expected results:**
 - While disabled the plugin contributes nothing (no skills, no MCP servers).
 - After enable, each `skills/<name>/SKILL.md` is a registered skill and each
   `mcpServers` entry is present as `<plugin-id>.<server>`.
-- A configured `ragent.json` `mcp` entry with the same id wins over the plugin's entry.
+- A configured `codemason.json` `mcp` entry with the same id wins over the plugin's entry.
 
 ### TC-021 — Plugin prompt commands surface as slash commands
 
@@ -529,8 +529,8 @@ directory containing one `agents/<name>.md` profile with YAML frontmatter (`name
    as its system prompt.
 4. Disable the plugin, then repeat step 2.
 5. From a turn, invoke a tool and confirm the plugin hook fires (e.g. the hook command writes
-   a sentinel line); add a `ragent.json` hook at the same trigger and confirm it runs first.
-6. Add a project agent at `.ragent/agents/<same-name>.md` and confirm it wins over the
+   a sentinel line); add a `codemason.json` hook at the same trigger and confirm it runs first.
+6. Add a project agent at `.codemason/agents/<same-name>.md` and confirm it wins over the
    plugin profile.
 
 **Expected results:**
@@ -550,10 +550,10 @@ directory containing one `agents/<name>.md` profile with YAML frontmatter (`name
 not run if offline).
 
 **Steps:**
-1. `ragent plugins add 'git+https://github.com/openai/plugins#main:plugins/linear'`.
-2. `ragent plugins list` and read the `linear` row.
-3. `ragent plugins enable linear`.
-4. `ragent plugins test linear`.
+1. `codemason plugins add 'git+https://github.com/openai/plugins#main:plugins/linear'`.
+2. `codemason plugins list` and read the `linear` row.
+3. `codemason plugins enable linear`.
+4. `codemason plugins test linear`.
 
 **Expected results:**
 - Step 1 reports `Installed plugin 'linear' (dialect: codex, version: 5.0.1).` with no
@@ -564,7 +564,7 @@ not run if offline).
   `mcpServers` bridge connects as `linear.linear`).
 - Step 4 passes all four harness steps, with manifest validation naming dialect `codex` and
   the entry execution step reporting `no entry point (non-JS plugin)`.
-- Cleanup: `ragent plugins remove linear`.
+- Cleanup: `codemason plugins remove linear`.
 
 ### TC-024 — Multi-target nested manifests resolve to Claude (both `.codex-plugin/plugin.json` and `.claude-plugin/plugin.json`)
 
@@ -574,9 +574,9 @@ not run if offline).
 not run if offline).
 
 **Steps:**
-1. `ragent plugins add 'git+https://github.com/mongodb/agent-skills#main:plugins/mongodb'`.
-2. `ragent plugins list` and read the `mongodb` row.
-3. `ragent plugins test mongodb`.
+1. `codemason plugins add 'git+https://github.com/mongodb/agent-skills#main:plugins/mongodb'`.
+2. `codemason plugins list` and read the `mongodb` row.
+3. `codemason plugins test mongodb`.
 
 **Expected results:**
 - Step 1 reports `Installed plugin 'mongodb' (dialect: claude, version: 1.2.1).` with no
@@ -589,7 +589,7 @@ not run if offline).
 - A directory matching both dialects in any *other* combination (e.g. a top-level
   `codex-plugin.json` beside `claude-plugin.json`) still reports
   `ambiguous plugin manifest`; only the both-nested pairing resolves.
-- Cleanup: `ragent plugins disable mongodb` then `ragent plugins remove mongodb`.
+- Cleanup: `codemason plugins disable mongodb` then `codemason plugins remove mongodb`.
 
 ### TC-025 — A `git+` source naming a non-default ref is checked out
 
@@ -599,7 +599,7 @@ not run if offline).
 `github.com/mongodb/agent-skills` (skip and record as not run if offline).
 
 **Steps:**
-1. `ragent plugins add 'git+https://github.com/mongodb/agent-skills#main:plugins/mongodb'`.
+1. `codemason plugins add 'git+https://github.com/mongodb/agent-skills#main:plugins/mongodb'`.
 2. Read the reported dialect/version and confirm the installed manifest is the one on
    `main`.
 
@@ -610,9 +610,9 @@ not run if offline).
 - The fetched ref is the one that was checked out, not the remote's default branch: when the
   ref names a branch other than the default, the installed manifest is the one that branch
   carries. The offline regression `add_checks_out_a_non_default_ref` in
-  `crates/ragent-plugins/tests/test_store_git_source.rs` pins this by giving the default and
+  `crates/codemason-plugins/tests/test_store_git_source.rs` pins this by giving the default and
   `alt` branches different plugin ids.
-- Cleanup: `ragent plugins remove mongodb`.
+- Cleanup: `codemason plugins remove mongodb`.
 
 ## Cleanup
 
@@ -620,7 +620,7 @@ not run if offline).
    `/plugins remove codex-weather`, `/plugins remove claude-todo`, and equivalent removes
    for every other fixture installed during the run; confirm `/plugins list` shows an
    empty store.
-2. Restore the backed-up `~/scratch/plugins-tests/.ragent/ragent.json` (or delete the
+2. Restore the backed-up `~/scratch/plugins-tests/.codemason/codemason.json` (or delete the
    scratch copy if it was created only for these tests).
 3. Delete the sentinel file `~/scratch/plugins-tests/outside.txt`.
 4. Delete the scratch tree: `rm -rf ~/scratch/plugins-tests/` (confirm this only removes

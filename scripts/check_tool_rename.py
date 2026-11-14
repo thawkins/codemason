@@ -6,7 +6,7 @@ One implementation, two entry points:
 * ``python3 scripts/check_tool_rename.py`` -- the CI guard. Exits 0 when no
   NFR-008 predicate holds anywhere in the tree, 1 otherwise, naming every
   offending file and line for every predicate in one report.
-* ``cargo test -p ragent-agent -E 'test(test_tool_rename_guard::)'`` -- the crate
+* ``cargo test -p codemason-agent -E 'test(test_tool_rename_guard::)'`` -- the crate
   test imports the same predicates by invoking this file as a subprocess, so the
   guard cannot drift between the script and the test (NFR-009).
 
@@ -47,7 +47,7 @@ which edit fixes it.
 (c) **A `before` spelling is a default configuration value.** The defaults are
     constructed in Rust, so the authoritative half is the real ``Config::default()``
     observed by the crate test (``test_fr026_no_alias_survives``). This guard adds
-    the shape half inside ``ragent-config``: a retired spelling in a
+    the shape half inside ``codemason-config``: a retired spelling in a
     ``default = "..."`` serde attribute, or any literal inside a ``fn default_*()``
     body (which is where a defaulted value is written).
 (d) **A `before` spelling is a registry key.** A registry key is a tool's
@@ -94,7 +94,7 @@ note and is stripped, leaving the code judged on its own.
 
 ## The two structural exemptions
 
-1. ``crates/ragent-types/src/tool_rename.rs`` -- the FR-023 table itself. Its
+1. ``crates/codemason-types/src/tool_rename.rs`` -- the FR-023 table itself. Its
    ``before:`` fields necessarily carry every retired spelling, and it is the
    single source of truth this guard *reads* (see below), so scanning it would be
    circular. The exemption covers the literal scan only: the table is read, not
@@ -136,7 +136,7 @@ One implementation, three callers, no separate logic to drift:
 
 * ``scripts/check-tool-rename.sh`` - the CI and ``pre-flight.sh`` entry point;
 * ``python3 scripts/check_tool_rename.py`` - the same program, invoked directly;
-* ``crates/ragent-agent/tests/test_tool_rename_guard.rs`` - the ``cargo test``
+* ``crates/codemason-agent/tests/test_tool_rename_guard.rs`` - the ``cargo test``
   case, which runs ``--json`` and asserts the *same* verdict, the *same* hits and
   the *same* ASCII wording the script prints. The two forms cannot disagree
   because there is only one of them.
@@ -182,7 +182,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # pairs live in exactly one place") true of the guard too. A parse failure is a
 # guard failure, not a skip: guessing the spellings would defeat the point.
 
-TABLE_FILE = "crates/ragent-types/src/tool_rename.rs"
+TABLE_FILE = "crates/codemason-types/src/tool_rename.rs"
 
 # Structural exemption 1 (FR-023 table). It is where BEFORE/AFTER come from.
 STRUCTURAL_SKIP = frozenset({TABLE_FILE})
@@ -363,7 +363,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
     # The `from` arms are also resolver arms of the permission vocabulary, so
     # they are exempt from predicate (b) as well as predicate (e).
     Exemption(
-        "crates/ragent-config/src/permission.rs",
+        "crates/codemason-config/src/permission.rs",
         ("edit", "write"),
         '"edit" | "write" => Self::Edit,',
         1,
@@ -371,7 +371,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         ("e", "b"),
     ),
     Exemption(
-        "crates/ragent-config/src/permission.rs",
+        "crates/codemason-config/src/permission.rs",
         ("bash",),
         '"bash" | "execute" => Self::Bash,',
         1,
@@ -379,7 +379,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         ("e", "b"),
     ),
     Exemption(
-        "crates/ragent-config/src/permission.rs",
+        "crates/codemason-config/src/permission.rs",
         ("plan_enter",),
         '"plan_enter" | "plan" => Self::PlanEnter,',
         1,
@@ -387,7 +387,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         ("e", "b"),
     ),
     Exemption(
-        "crates/ragent-config/src/permission.rs",
+        "crates/codemason-config/src/permission.rs",
         ("plan_exit",),
         '"plan_exit" => Self::PlanExit,',
         1,
@@ -395,49 +395,49 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         ("e", "b"),
     ),
     Exemption(
-        "crates/ragent-config/src/permission.rs",
+        "crates/codemason-config/src/permission.rs",
         ("edit",),
         'Self::Edit => write!(f, "edit"),',
         1,
         "Permission::Display arm -- the round trip of the type string (FR-028)",
     ),
     Exemption(
-        "crates/ragent-config/src/permission.rs",
+        "crates/codemason-config/src/permission.rs",
         ("bash",),
         'Self::Bash => write!(f, "bash"),',
         1,
         "Permission::Display arm -- the round trip of the type string (FR-028)",
     ),
     Exemption(
-        "crates/ragent-config/src/permission.rs",
+        "crates/codemason-config/src/permission.rs",
         ("plan_enter",),
         'Self::PlanEnter => write!(f, "plan_enter"),',
         1,
         "Permission::Display arm -- the round trip of the type string (FR-028)",
     ),
     Exemption(
-        "crates/ragent-config/src/permission.rs",
+        "crates/codemason-config/src/permission.rs",
         ("plan_exit",),
         'Self::PlanExit => write!(f, "plan_exit"),',
         1,
         "Permission::Display arm -- the round trip of the type string (FR-028)",
     ),
     Exemption(
-        "crates/ragent-agent/src/session/permissions.rs",
+        "crates/codemason-agent/src/session/permissions.rs",
         ("edit",),
         '|| permission == "edit"',
         1,
         "permission-type comparison -- file:write family, not a dispatch (FR-028)",
     ),
     Exemption(
-        "crates/ragent-agent/src/session/permissions.rs",
+        "crates/codemason-agent/src/session/permissions.rs",
         ("write",),
         '|| permission == "write")',
         1,
         "permission-type comparison -- file:write family, not a dispatch (FR-028)",
     ),
     Exemption(
-        "crates/ragent-agent/src/tool/aliases.rs",
+        "crates/codemason-agent/src/tool/aliases.rs",
         ("ask_user",),
         '"ask_user"',
         1,
@@ -446,21 +446,21 @@ EXEMPTIONS: tuple[Exemption, ...] = (
     ),
     # --- Shell program names: the shell binary, not the Bash tool ---
     Exemption(
-        "crates/ragent-agent/src/session/verification.rs",
+        "crates/codemason-agent/src/session/verification.rs",
         ("bash",),
         'let result = Command::new("bash")',
         1,
         "spawns the shell program to run a verification script",
     ),
     Exemption(
-        "crates/ragent-tools-core/src/bash.rs",
+        "crates/codemason-tools-core/src/bash.rs",
         ("bash",),
         'if let Ok(path) = which::which("bash") {',
         1,
         "discovers the shell binary on PATH; no tool registry involved",
     ),
     Exemption(
-        "crates/ragent-tools-core/src/bash.rs",
+        "crates/codemason-tools-core/src/bash.rs",
         ("bash",),
         'OsStr::new("bash"),',
         2,
@@ -468,7 +468,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         "and the PowerShell fallback that reaches the same arm)",
     ),
     Exemption(
-        "crates/ragent-tools-core/src/bash.rs",
+        "crates/codemason-tools-core/src/bash.rs",
         ("bash",),
         'ShellType::Bash => "bash".as_ref(),',
         1,
@@ -476,7 +476,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         ("e", "b"),
     ),
     Exemption(
-        "crates/ragent-tools-core/src/bash.rs",
+        "crates/codemason-tools-core/src/bash.rs",
         ("bash",),
         'ShellType::PowerShell(_) => "bash".as_ref(),',
         1,
@@ -485,14 +485,14 @@ EXEMPTIONS: tuple[Exemption, ...] = (
     ),
     # --- Shell commands in a validation list: program names, not tools ---
     Exemption(
-        "crates/ragent-tools-core/src/bash.rs",
+        "crates/codemason-tools-core/src/bash.rs",
         ("grep",),
         '"cat", "head", "tail", "grep", "egrep", "fgrep", "rg", // ripgrep',
         1,
         "SAFE_COMMANDS entry -- the UNIX program the shell may run",
     ),
     Exemption(
-        "crates/ragent-agent/src/skill/context.rs",
+        "crates/codemason-agent/src/skill/context.rs",
         ("grep",),
         '"grep", "rg", "cut", "sort", "uniq", "tr", "diff", "comm", "paste", '
         '"column", "fmt", "fold",',
@@ -501,7 +501,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         "run, checked against the base name of a spawned process",
     ),
     Exemption(
-        "crates/ragent-connectors/src/descriptor.rs",
+        "crates/codemason-connectors/src/descriptor.rs",
         ("bash",),
         '"bash",',
         1,
@@ -510,7 +510,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
     ),
     # --- Config section names, not tool keys ---
     Exemption(
-        "crates/ragent-config/src/bash_lists.rs",
+        "crates/codemason-config/src/bash_lists.rs",
         ("bash",),
         'crate::list_config::patch_config(scope, "bash", &["allowlist", '
         '"denylist"], |bash| {',
@@ -520,7 +520,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
     ),
     # --- Language ids: the shell dialect a file or project is written in ---
     Exemption(
-        "crates/ragent-codeindex/src/scanner.rs",
+        "crates/codemason-codeindex/src/scanner.rs",
         ("bash",),
         '"sh" | "bash" => "shell",',
         1,
@@ -528,7 +528,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         ("e", "b"),
     ),
     Exemption(
-        "crates/ragent-tools-extended/src/project_scaffold/flags.rs",
+        "crates/codemason-tools-extended/src/project_scaffold/flags.rs",
         ("bash",),
         '"shell" | "sh" | "bash" => Ok(Language::Shell),',
         1,
@@ -537,14 +537,14 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         ("e", "b"),
     ),
     Exemption(
-        "crates/ragent-tools-extended/src/project_scaffold/help.rs",
+        "crates/codemason-tools-extended/src/project_scaffold/help.rs",
         ("bash",),
         "\\x20     `js`/`jsx`, `c++`, `c_header`/`cpp_header`, `sh`/`bash`,\\n\\",
         1,
         "scaffold help text listing the language ids `--language` accepts",
     ),
     Exemption(
-        "crates/ragent-tui/src/app/toolchain.rs",
+        "crates/codemason-tui/src/app/toolchain.rs",
         ("bash",),
         'Some(LanguageRuntime::many(&["bash"])),',
         1,
@@ -553,7 +553,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
     ),
     # --- Pipeline stage ids (GovCreate): a stage label, not the Write tool ---
     Exemption(
-        "crates/ragent-tools-extended/src/archdoc/govcreate_run.rs",
+        "crates/codemason-tools-extended/src/archdoc/govcreate_run.rs",
         ("write",),
         '"write" => "writing spec files",',
         1,
@@ -562,35 +562,35 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         ("e", "b"),
     ),
     Exemption(
-        "crates/ragent-tools-extended/src/archdoc/govcreate_run.rs",
+        "crates/codemason-tools-extended/src/archdoc/govcreate_run.rs",
         ("write",),
         'return cancelled(completed, "write", progress);',
         1,
         "GovCreate stage id passed to the cancellation reporter",
     ),
     Exemption(
-        "crates/ragent-tools-extended/src/archdoc/govcreate_run.rs",
+        "crates/codemason-tools-extended/src/archdoc/govcreate_run.rs",
         ("write",),
         'progress.emit(GovCreateProgress::Started { id: "write" });',
         1,
         "GovCreate stage id for the streaming display",
     ),
     Exemption(
-        "crates/ragent-tools-extended/src/archdoc/govcreate_run.rs",
+        "crates/codemason-tools-extended/src/archdoc/govcreate_run.rs",
         ("write",),
         'return stage_failed(completed, "write", cause, progress);',
         1,
         "GovCreate stage id passed to the failure reporter",
     ),
     Exemption(
-        "crates/ragent-tools-extended/src/archdoc/govcreate_run.rs",
+        "crates/codemason-tools-extended/src/archdoc/govcreate_run.rs",
         ("write",),
         'return stage_failed(completed, "write", other.to_string(), progress);',
         1,
         "GovCreate stage id on the catch-all error path",
     ),
     Exemption(
-        "crates/ragent-tools-extended/src/archdoc/govcreate_run.rs",
+        "crates/codemason-tools-extended/src/archdoc/govcreate_run.rs",
         ("write",),
         'id: "write",',
         1,
@@ -598,35 +598,35 @@ EXEMPTIONS: tuple[Exemption, ...] = (
     ),
     # --- English nouns and verbs in heuristic tables (not tool names) ---
     Exemption(
-        "crates/ragent-agent/src/team/classify.rs",
+        "crates/codemason-agent/src/team/classify.rs",
         ("write",),
         '"write",',
         1,
         "KEYWORD_MAP stem -- the English verb in a swarm topic classifier",
     ),
     Exemption(
-        "crates/ragent-specs/src/validate.rs",
+        "crates/codemason-specs/src/validate.rs",
         ("write",),
         '"write",',
         1,
         "TESTABLE_VERBS entry -- the English verb a requirement is validated on",
     ),
     Exemption(
-        "crates/ragent-tui/src/widgets/message_widget.rs",
+        "crates/codemason-tui/src/widgets/message_widget.rs",
         ("edit",),
         'pluralize(count, "edit", "edits")',
         1,
         "pluralize noun -- the count of edits shown in a summary line",
     ),
     Exemption(
-        "crates/ragent-tui/src/widgets/message_widget.rs",
+        "crates/codemason-tui/src/widgets/message_widget.rs",
         ("edit",),
         'pluralize(edits, "edit", "edits"),',
         1,
         "pluralize noun -- the inline diff summary's edit count",
     ),
     Exemption(
-        "crates/ragent-agent/src/memory/extract.rs",
+        "crates/codemason-agent/src/memory/extract.rs",
         ("bash",),
         '"bash".to_string(),',
         1,
@@ -635,21 +635,21 @@ EXEMPTIONS: tuple[Exemption, ...] = (
     ),
     # --- Slash commands: `/bash` is a command trigger, not the Bash tool ---
     Exemption(
-        "crates/ragent-agent/src/tool/command_catalog.rs",
+        "crates/codemason-agent/src/tool/command_catalog.rs",
         ("bash",),
         'trigger: "bash",',
         1,
         "slash-command trigger `/bash` (the command-list editor), not a tool",
     ),
     Exemption(
-        "crates/ragent-tui/src/app/state.rs",
+        "crates/codemason-tui/src/app/state.rs",
         ("bash",),
         'trigger: "bash",',
         1,
         "slash-command trigger `/bash` in the TUI's command table",
     ),
     Exemption(
-        "crates/ragent-tui/src/app/slash.rs",
+        "crates/codemason-tui/src/app/slash.rs",
         ("bash",),
         '"bash" => {',
         1,
@@ -657,7 +657,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         ("e", "b"),
     ),
     Exemption(
-        "crates/ragent-tui/src/app/slash.rs",
+        "crates/codemason-tui/src/app/slash.rs",
         ("bash",),
         '"bash",',
         1,
@@ -671,7 +671,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
     # so the entry names no predicate and is here as the written record of why the
     # line is safe: `check` requires such an entry to still match its line.
     Exemption(
-        "crates/ragent-config/src/tools.rs",
+        "crates/codemason-config/src/tools.rs",
         ("bash",),
         '/// let tools: ToolsConfig = serde_json::from_str(r#"{"aliases": '
         '{"bash": "Bash"}}"#)?;',
@@ -681,7 +681,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         (),
     ),
     Exemption(
-        "crates/ragent-config/src/tools.rs",
+        "crates/codemason-config/src/tools.rs",
         ("bash",),
         '/// assert_eq!(offenders[0].spelling, "bash");',
         1,
@@ -696,7 +696,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
     # comparison reads the FR-023 table through `Rename::after_of`, which the
     # surrounding lines already spell, so predicate (e) does not apply.
     Exemption(
-        "crates/ragent-agent/src/tool/alias_table.rs",
+        "crates/codemason-agent/src/tool/alias_table.rs",
         ("bash",),
         'if Rename::after_of(spelling).is_some() || Rename::after_of(target).is_some() {',
         1,
@@ -714,7 +714,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
     # predicate exists to catch. Copying `write.rs` into it to silence the
     # predicate would be the duplication `WriteTool` prevents.
     Exemption(
-        "crates/ragent-agent/src/tool/aliases.rs",
+        "crates/codemason-agent/src/tool/aliases.rs",
         (),
         "&ExtractedCoreToolAdapter::new(std::sync::Arc::new(write::WriteTool)),",
         1,
@@ -732,7 +732,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
     # unreviewed site would be. Silencing it here would make the self-test assert
     # the opposite of what it exists to assert.
     Exemption(
-        "crates/ragent-tools-core/src/__tool_rename_guard_selftest.rs",
+        "crates/codemason-tools-core/src/__tool_rename_guard_selftest.rs",
         ("bash",),
         'if tool == "bash" {',
         1,
@@ -750,8 +750,8 @@ EXEMPTIONS: tuple[Exemption, ...] = (
 # the Python module and in the crate test: the self-test asserts that *this* file
 # with *this* body is reported, so three spellings of it would be three things to
 # keep in step. The file is not checked in; `SELF_TEST_CASE` in
-# `crates/ragent-agent/tests/test_tool_rename_guard.rs` is the cargo-side caller.
-SELF_TEST_FIXTURE = "crates/ragent-tools-core/src/__tool_rename_guard_selftest.rs"
+# `crates/codemason-agent/tests/test_tool_rename_guard.rs` is the cargo-side caller.
+SELF_TEST_FIXTURE = "crates/codemason-tools-core/src/__tool_rename_guard_selftest.rs"
 
 # A seed that can be absent. An ``EXEMPTIONS`` entry keyed on a seeded line is an
 # audit record - "this retired literal is accounted for, and it silences nothing" -
@@ -777,13 +777,13 @@ SELF_TEST_SOURCE = (
 # self-check that every retired literal in these files is reviewed, and by
 # predicate (e) everywhere else.
 RESOLVER_FILES: dict[str, str] = {
-    "crates/ragent-agent/src/tool/alias_table.rs":
+    "crates/codemason-agent/src/tool/alias_table.rs":
         "the FR-015 inbound alias resolver and the FR-031 drop arm",
-    "crates/ragent-agent/src/session/dispatch.rs":
+    "crates/codemason-agent/src/session/dispatch.rs":
         "the dispatch pipeline's name resolution and did-you-mean hint",
-    "crates/ragent-config/src/permission.rs":
+    "crates/codemason-config/src/permission.rs":
         "`Permission::from`, the permission-vocabulary resolver (FR-028)",
-    "crates/ragent-tui/src/widgets/message_widget.rs":
+    "crates/codemason-tui/src/widgets/message_widget.rs":
         "the tool-label renderer that maps a stored name onto its label",
 }
 
@@ -793,7 +793,7 @@ RESOLVER_FILES: dict[str, str] = {
 # the shape does not, and a stale entry is reported rather than silently kept.
 SELF_MAPPING_ALLOW: dict[tuple[str, str], str] = {
     (
-        "crates/ragent-config/src/tools.rs",
+        "crates/codemason-config/src/tools.rs",
         '/// let tools: ToolsConfig = serde_json::from_str(r#"{"aliases": '
         '{"bash": "Bash"}}"#)?;',
     ): "doctest input for the FR-031 self-mapping/key refusal -- the entry the "
@@ -802,7 +802,7 @@ SELF_MAPPING_ALLOW: dict[tuple[str, str], str] = {
 
 # Text patterns for the predicates that are visible in source shape.
 _ALIAS_ROW_RE = re.compile(
-    r'(?:spelling|ragent_name|target|key|before|retired)\s*:\s*"([^"]*)"'
+    r'(?:spelling|codemason_name|target|key|before|retired)\s*:\s*"([^"]*)"'
 )
 _NAME_FN_RE = re.compile(r"fn\s+name\s*\(\s*&?\s*self\s*\)\s*->\s*&(?:'\w+\s+)?str\s*\{")
 _MATCH_ARM_RE = re.compile(r'"([^"]*)"\s*(?:=>|\|)')
@@ -964,16 +964,16 @@ def _crate_of(relative: str) -> str:
 
     Args:
         relative: A repository-relative path such as
-            ``crates/ragent-agent/src/tool/mod.rs``.
+            ``crates/codemason-agent/src/tool/mod.rs``.
 
     Returns:
-        ``"ragent-agent"`` for that path, or ``"ragent"`` for the root binary's
+        ``"codemason-agent"`` for that path, or ``"codemason"`` for the root binary's
         own ``src/`` tree.
     """
     parts = relative.split("/")
     if parts[0] == "crates" and len(parts) > 1:
         return parts[1]
-    return "ragent"
+    return "codemason"
 
 
 def _dependency_map(root: pathlib.Path) -> dict[str, set[str]]:
@@ -1035,7 +1035,7 @@ def _dependency_map(root: pathlib.Path) -> dict[str, set[str]]:
     # `root.glob("Cargo.toml")` matches only entries *below* root, unlike its
     # `crates/*/Cargo.toml` sibling. Without it the root binary's `src/` tree was
     # judged with no dependency edges at all, so a forwarder there was invisible
-    # and the composing test crate below `crates/ragent-agent/` was the only thing
+    # and the composing test crate below `crates/codemason-agent/` was the only thing
     # giving that package an edge.
     members: list[pathlib.Path] = []
     for pattern in ("crates/*/Cargo.toml", "Cargo.toml"):
@@ -1167,7 +1167,7 @@ def _looks_like_alias_line(code: str) -> bool:
     """Return ``True`` when ``code`` is a line of an alias table.
 
     Two shapes are an alias table row: a struct literal (a line carrying
-    ``spelling:``, ``ragent_name:``, ``before:`` or ``retired:``) and a pair entry
+    ``spelling:``, ``codemason_name:``, ``before:`` or ``retired:``) and a pair entry
     in an array of ``(&str, &str)`` rows - what a ``[(&str, &str); N]`` table
     writes, and what a fixture or a future flattened table uses. Nothing is
     scoped to a file, because a second table added to any file must be judged:
@@ -1183,7 +1183,7 @@ def _looks_like_alias_line(code: str) -> bool:
     Returns:
         ``True`` when the line should be read as an alias row.
     """
-    if any(field in code for field in ("spelling:", "ragent_name:", "before:", "retired:")):
+    if any(field in code for field in ("spelling:", "codemason_name:", "before:", "retired:")):
         return True
     return _is_pair_row(code)
 
@@ -1226,7 +1226,7 @@ def _is_pair_row(code: str) -> bool:
     # name. A table of two equal-*shaped* words - a synonym list, a language pair
     # - is some other table, and reporting it would drown the predicate, so the
     # two cases are held apart by their spelling: an alias row joins a provider
-    # spelling (which carries a capital or an underscore) to a lower-case ragent
+    # spelling (which carries a capital or an underscore) to a lower-case codemason
     # name, or the reverse.
     first, second = literals
     if first == second and _is_spelling(first):
@@ -1255,8 +1255,8 @@ def _alias_rows(source: _Source) -> list[tuple[int, str, str]]:
     """Return ``(line, spelling, target)`` for every alias row in ``source``.
 
     An alias row is a struct-literal line carrying both sides at once
-    (``spelling: "...", ragent_name: "..."``) or either side alone under a name
-    the alias code uses (``spelling:``, ``ragent_name:``, ``before:``,
+    (``spelling: "...", codemason_name: "..."``) or either side alone under a name
+    the alias code uses (``spelling:``, ``codemason_name:``, ``before:``,
     ``retired:``), or a ``("spelling", "target"),`` pair. Both sides land in one
     tuple so a value is judged as well as a key.
 
@@ -1283,7 +1283,7 @@ def _alias_rows(source: _Source) -> list[tuple[int, str, str]]:
             continue
         if len(found) == 1 and (
             "spelling:" in line
-            or "ragent_name:" in line
+            or "codemason_name:" in line
             or "before:" in line
             or "retired:" in line
         ):
@@ -1460,7 +1460,7 @@ _MACHINERY_WORDS = frozenset(
         "core",
         "extended",
         "vcs",
-        "ragent",
+        "codemason",
         "new",
         "arc",
         "super",
@@ -1832,7 +1832,7 @@ def check(
             # Here the shape is what is checked: a `default = ".."` serde
             # attribute naming one, and any literal inside a `fn default_*()`
             # body (which is where a defaulted value is written).
-            if relative.startswith("crates/ragent-config/src/"):
+            if relative.startswith("crates/codemason-config/src/"):
                 found_defaults = _DEFAULT_ATTR_RE.findall(code)
                 if source.in_default_fn[index]:
                     found_defaults.extend(

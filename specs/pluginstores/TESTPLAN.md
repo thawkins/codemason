@@ -24,13 +24,13 @@ and override paths.
 ## Prerequisites
 
 1. **Build the binary.** Run `cargo build` (debug is sufficient; allow up to 1000
-   seconds). Confirm `./target/debug/ragent --version` runs and reports the version.
+   seconds). Confirm `./target/debug/cdmn --version` runs and reports the version.
 2. **Configure a model.** Some read-only cases need the TUI but not the model; the
    "event loop stays responsive" checks need an in-progress turn, so configure a
    provider (or a local Ollama model) and confirm a short prompt responds.
 3. **Prepare a scratch root.** Create `~/scratch/pluginstores-tests/` and run every TUI
    session from inside it, so the project plugin store is
-   `~/scratch/pluginstores-tests/.ragent/plugins/`.
+   `~/scratch/pluginstores-tests/.codemason/plugins/`.
 4. **Stage the fixture plugins** (used as install targets and as installed-set members):
    copy the repository fixtures into the scratch root:
    - `~/scratch/pluginstores-tests/fixtures-src/codex-weather/` - Codex dialect
@@ -52,7 +52,7 @@ and override paths.
 6. **Install one fixture first**, so the installed-colour path has data: run the TUI and
    `/plugins add ~/scratch/pluginstores-tests/fixtures-src/codex-weather`, then
    `/plugins list` to confirm `codex-weather` is present in the store scan.
-7. **Preserve config.** Back up `~/scratch/pluginstores-tests/.ragent/ragent.json` (if it
+7. **Preserve config.** Back up `~/scratch/pluginstores-tests/.codemason/codemason.json` (if it
    exists) before editing it in TC-009, TC-014, and TC-017 so the temporary `stores`
    block can be reverted in Cleanup.
 8. **Confirm the compiled defaults are reachable.** For the default-endpoint cases the
@@ -271,7 +271,7 @@ serving an oversized index.
 - Step 4 the oversize index aborts the fetch and shows an inline error naming the size
   cause (FR-025).
 - In every case an explicit error line is shown instead of a blank list (FR-017), and
-  the ragent process does not panic or terminate (FR-025).
+  the codemason process does not panic or terminate (FR-025).
 
 ### TC-008 - In-flight fetch leaves the event loop responsive
 
@@ -299,13 +299,13 @@ in flight for a few seconds.
 
 **Requirement:** FR-019, FR-024
 
-**Preconditions:** `ragent.json` backed up (Prerequisite 7); `<CODEX_URL>` and an
+**Preconditions:** `codemason.json` backed up (Prerequisite 7); `<CODEX_URL>` and an
 `http://` URL available.
 
 **Steps:**
 1. With the `codex` store at `<CODEX_URL>` (https), restart, open `/plugins codex`; read
    the entries.
-2. `ESC`, edit `ragent.json` to set `plugins.stores.codex.url` to an `http://...` URL,
+2. `ESC`, edit `codemason.json` to set `plugins.stores.codex.url` to an `http://...` URL,
    restart, and open `/plugins codex`.
 3. Read the panel/message output.
 4. Restore `<CODEX_URL>`, restart.
@@ -321,7 +321,7 @@ in flight for a few seconds.
 
 **Requirement:** FR-022, FR-023
 
-**Preconditions:** `/plugins codex` open with the fixture index; `~/scratch/pluginstores-tests/.ragent/plugins/`
+**Preconditions:** `/plugins codex` open with the fixture index; `~/scratch/pluginstores-tests/.codemason/plugins/`
 contents noted before starting.
 
 **Steps:**
@@ -364,7 +364,7 @@ cache is enabled); `<CODEX_URL>` serves a changed index.
 
 **Requirement:** FR-019
 
-**Preconditions:** `ragent.json` editable; `plugins.enabled` currently `true`.
+**Preconditions:** `codemason.json` editable; `plugins.enabled` currently `true`.
 
 **Steps:**
 1. Set `plugins.enabled` to `false`, restart, and open `/plugins codex`.
@@ -382,13 +382,13 @@ cache is enabled); `<CODEX_URL>` serves a changed index.
 
 **Requirement:** FR-027, FR-029, FR-030, NFR-001, NFR-002
 
-**Preconditions:** `~/scratch/pluginstores-tests/.ragent/ragent.json` contains **no**
+**Preconditions:** `~/scratch/pluginstores-tests/.codemason/codemason.json` contains **no**
 `plugins.stores` block (or no `stores` key at all); outbound HTTPS access is available
 (Prerequisite 8); the default endpoints reported by `/plugins stores` (TC-015) are
 recorded.
 
 **Steps:**
-1. Confirm the config has no `plugins.stores` key: open `ragent.json` and inspect the
+1. Confirm the config has no `plugins.stores` key: open `codemason.json` and inspect the
    `plugins` block.
 2. Start the TUI from `~/scratch/pluginstores-tests/`.
 3. Type `/plugins codex` and press `ENTER`.
@@ -414,7 +414,7 @@ recorded.
 
 **Requirement:** FR-027, FR-028, FR-029, NFR-002
 
-**Preconditions:** `ragent.json` backed up (Prerequisite 7); both the default endpoints
+**Preconditions:** `codemason.json` backed up (Prerequisite 7); both the default endpoints
 and the fixture URLs (`<CODEX_URL>`, `<CLAUDE_URL>`) are reachable; the fixture index is
 served.
 
@@ -422,7 +422,7 @@ served.
 1. With no `stores` block, run `/plugins stores` and record the default endpoint for
    `codex`.
 2. Open `/plugins codex` and note the entries (default store) or the inline error.
-3. `ESC`, then edit `ragent.json` to add
+3. `ESC`, then edit `codemason.json` to add
    `"stores": { "codex": { "url": "<CODEX_URL>" } }` (no change to the default itself).
 4. Restart the TUI (a restart, **not** a rebuild).
 5. Run `/plugins stores` and confirm `codex` now reports `<CODEX_URL>` tagged as
@@ -446,7 +446,7 @@ served.
 
 **Requirement:** FR-031, NFR-001, NFR-002
 
-**Preconditions:** TUI running; `ragent.json` currently has exactly one store overridden
+**Preconditions:** TUI running; `codemason.json` currently has exactly one store overridden
 (for example `claude`) and the other left to the default.
 
 **Steps:**
@@ -455,7 +455,7 @@ served.
 3. Confirm it lists an entry for `codex` and an entry for `claude`.
 4. For each, read the effective endpoint URL and whether it is tagged `config` or
    `default`.
-5. Remove the `plugins.stores` block from `ragent.json`, restart the TUI, and repeat
+5. Remove the `plugins.stores` block from `codemason.json`, restart the TUI, and repeat
    steps 1-4.
 6. Confirm the output uses only ASCII characters.
 
@@ -476,7 +476,7 @@ served.
 
 **Requirement:** FR-032, FR-033, FR-034, FR-036, NFR-004
 
-**Preconditions:** `ragent.json` has **no** `plugins.stores` block; the fixture store
+**Preconditions:** `codemason.json` has **no** `plugins.stores` block; the fixture store
 index served at a local HTTPS host is reachable (Prerequisite 5); a temporary config is
 prepared so that the compiled default for one store is pointed at the fixture for the
 duration of this case (the default is only *observed*, never edited in the real config).
@@ -512,12 +512,12 @@ duration of this case (the default is only *observed*, never edited in the real 
 
 **Requirement:** FR-035
 
-**Preconditions:** `ragent.json` backed up (Prerequisite 7); the fixture index served at
+**Preconditions:** `codemason.json` backed up (Prerequisite 7); the fixture index served at
 `<CODEX_URL>` is reachable; the default endpoint for `codex` is recorded.
 
 **Steps:**
 1. With no `stores` block, open `/plugins codex` and note the entries (default store).
-2. `ESC`, then add `"stores": { "codex": { "url": "<CODEX_URL>" } }` to `ragent.json`.
+2. `ESC`, then add `"stores": { "codex": { "url": "<CODEX_URL>" } }` to `codemason.json`.
 3. Restart the TUI (restart, **not** rebuild).
 4. Open `/plugins codex` and compare the entries with the fixture index.
 5. Run `/plugins stores` and read the `codex` row.
@@ -535,7 +535,7 @@ duration of this case (the default is only *observed*, never edited in the real 
 
 **Requirement:** FR-036, FR-038, NFR-003
 
-**Preconditions:** `ragent.json` has no `plugins.stores` block; TUI running.
+**Preconditions:** `codemason.json` has no `plugins.stores` block; TUI running.
 
 **Steps:**
 1. Read the startup log for any configuration or endpoint warnings.
@@ -563,9 +563,9 @@ block.
 **Preconditions:** the automated suite is run offline; no store is reached.
 
 **Steps:**
-1. Run `cargo test -p ragent-plugins --test test_store_provider`.
+1. Run `cargo test -p codemason-plugins --test test_store_provider`.
 2. Read the assertions on the inline Codex and Claude marketplace documents.
-3. Run `cargo test -p ragent-plugins --test test_store_seam`.
+3. Run `cargo test -p codemason-plugins --test test_store_seam`.
 
 **Expected results:**
 - The Codex provider normalises a `local` path source into an installable
@@ -593,7 +593,7 @@ block.
 **Preconditions:** `git` is on `PATH`; the automated suite runs offline.
 
 **Steps:**
-1. Run `cargo test -p ragent-plugins --test test_store_git_source`.
+1. Run `cargo test -p codemason-plugins --test test_store_git_source`.
 2. Read the end-to-end install assertions against a local `file://` remote.
 
 **Expected results:**
@@ -630,13 +630,13 @@ block.
   `Language`, `Utility`, `Web`) and the `Utility`/`utility` collision keeps the first
   spelling the index declares (`Utility`), not one chosen by the result sort.
 
-Covered offline by `crates/ragent-tui/tests/test_plugin_store_filter.rs` (a shared-tag
-query returns its matches alphabetically), `crates/ragent-tui/tests/test_plugin_store_category_filter.rs`
+Covered offline by `crates/codemason-tui/tests/test_plugin_store_filter.rs` (a shared-tag
+query returns its matches alphabetically), `crates/codemason-tui/tests/test_plugin_store_category_filter.rs`
 and `.../_nav.rs`/`.../_mouse.rs`/`.../_acceptance.rs` (a category filter and `ALL`
 restore the sorted survivor order, the `Utility` spelling survives), and
-`crates/ragent-tui/tests/test_plugin_store_panel.rs` (the block cursor starts on the
+`crates/codemason-tui/tests/test_plugin_store_panel.rs` (the block cursor starts on the
 alphabetically first row) - the store analogue of
-`crates/ragent-connectors/tests/test_connector_descriptor.rs` for FR-046.
+`crates/codemason-connectors/tests/test_connector_descriptor.rs` for FR-046.
 
 ### TC-022 - Bottom search box filters and its clear button resets
 
@@ -662,7 +662,7 @@ alphabetically first row) - the store analogue of
 - A click on an already-empty query is a no-op; the panel body stays ASCII inside a
   Unicode box-drawing border.
 
-Covered offline by `crates/ragent-tui/tests/test_plugin_store_panel.rs`
+Covered offline by `crates/codemason-tui/tests/test_plugin_store_panel.rs`
 (`the_search_box_sits_on_the_bottom_edge_with_a_clear_button`,
 `the_search_box_field_reflects_the_live_query`,
 `the_search_box_clear_button_clears_the_filter_on_click`, and
@@ -671,12 +671,12 @@ Covered offline by `crates/ragent-tui/tests/test_plugin_store_panel.rs`
 ## Cleanup
 
 1. Remove the scratch tree: `rm -rf ~/scratch/pluginstores-tests/`.
-2. Restore `~/scratch/pluginstores-tests/.ragent/ragent.json` if it was backed up before
+2. Restore `~/scratch/pluginstores-tests/.codemason/codemason.json` if it was backed up before
    TC-009, TC-014, or TC-017; if the whole scratch tree is removed this is unnecessary.
 3. Confirm no `plugins.stores` block remains in any real project config used during
    testing.
 4. Stop any local HTTPS serving process started in Prerequisite 5.
-5. Confirm `~/scratch/pluginstores-tests/` (and its `.ragent/plugins/`) no longer exists.
+5. Confirm `~/scratch/pluginstores-tests/` (and its `.codemason/plugins/`) no longer exists.
 
 ### TC-023 - Marketplace navigator filters by marketplace and composes with category + search
 
@@ -715,15 +715,15 @@ marketplace), or the offline fixture index.
 - The title names the active marketplace; an entry with a blank marketplace appears only
   under `ALL`; no path installs anything or executes plugin JavaScript.
 
-Covered offline by `crates/ragent-tui/tests/test_plugin_store_category_filter.rs`
+Covered offline by `crates/codemason-tui/tests/test_plugin_store_category_filter.rs`
 (`the_marketplace_set_is_distinct_and_sorted_with_all_implied`,
 `the_category_marketplace_and_query_filters_compose`,
 `moving_the_marketplace_cursor_applies_on_the_same_call_and_clears_to_all`,
 `a_marketplace_the_new_index_no_longer_declares_is_dropped_to_all`),
-`crates/ragent-tui/tests/test_plugin_store_category_nav.rs`
+`crates/codemason-tui/tests/test_plugin_store_category_nav.rs`
 (`tab_cycles_focus_forward_through_the_three_panes`,
 `the_clear_key_clears_the_marketplace_when_that_pane_is_focused`), and
-`crates/ragent-tui/tests/test_plugin_store_category_mouse.rs`
+`crates/codemason-tui/tests/test_plugin_store_category_mouse.rs`
 (`left_click_on_a_marketplace_row_selects_applies_and_focuses_it`,
 `wheel_over_the_marketplace_navigator_scrolls_it_without_changing_the_filter`).
 
@@ -754,12 +754,12 @@ categories and marketplace labels, or the offline fixture index.
 - A category-less or loading index still shows a counted `ALL (0)` row (step 5).
 - Counting issues no network request, installs nothing, and executes no plugin JavaScript.
 
-Covered offline by `crates/ragent-tui/tests/test_plugin_store_category_filter.rs`
+Covered offline by `crates/codemason-tui/tests/test_plugin_store_category_filter.rs`
 (`each_navigator_row_shows_the_count_of_entries_under_it`,
 `the_marketplace_row_shows_the_count_of_entries_under_it`),
-`crates/ragent-tui/tests/test_plugin_store_panel.rs`
+`crates/codemason-tui/tests/test_plugin_store_panel.rs`
 (`the_navigator_rows_show_the_entry_count_beside_each_name`), and
-`crates/ragent-tui/tests/test_plugin_store_category_acceptance.rs` (TC-001 count
+`crates/codemason-tui/tests/test_plugin_store_category_acceptance.rs` (TC-001 count
 assertions).
 
 ### TC-025 - Each navigator carries a reversed-video title above its ALL row
@@ -788,11 +788,11 @@ assertions).
 - The header is plain ASCII text inside the Unicode border and issues no network
   request.
 
-Covered offline by `crates/ragent-tui/tests/test_plugin_store_panel.rs`
+Covered offline by `crates/codemason-tui/tests/test_plugin_store_panel.rs`
 (`each_navigator_has_a_reversed_video_title_above_its_all_row`); the navigator hit-test
 areas (`App::plugin_store_nav_area` / `App::plugin_store_marketplace_area`) are pinned to
 the row area below the header by the existing mouse tests
-(`crates/ragent-tui/tests/test_plugin_store_category_mouse.rs`) and the acceptance walk.
+(`crates/codemason-tui/tests/test_plugin_store_category_mouse.rs`) and the acceptance walk.
 
 ## T-035 - Readability pass on the browse panel
 
@@ -822,7 +822,7 @@ one entry already installed, and a 120x30 or larger terminal.
 - The title, footer, and search-box text is unchanged as words, so the existing title
   assertions still pass, and the body stays ASCII inside the Unicode border.
 
-Covered offline by `crates/ragent-tui/tests/test_plugin_store_panel.rs`
+Covered offline by `crates/codemason-tui/tests/test_plugin_store_panel.rs`
 (`the_cursor_row_carries_a_gutter_marker`,
 `alternate_result_rows_carry_a_band_background`,
 `an_installed_row_uses_the_installed_colour_and_marker`), with the existing panel, mouse,
@@ -831,7 +831,7 @@ keyboard, and acceptance suites pinning the unchanged behaviour.
 ## TC-036 - The `Installed` pseudo-category
 
 **Prerequisites:** a configured plugin store index, at least two plugins installed
-(`/plugins add ...` or pre-staged under `.ragent/plugins/`), and a 120x40 terminal.
+(`/plugins add ...` or pre-staged under `.codemason/plugins/`), and a 120x40 terminal.
 
 **Test data:** the ids of the plugins you installed, for example `codex-weather`.
 
@@ -859,6 +859,6 @@ keyboard, and acceptance suites pinning the unchanged behaviour.
   one such row exists).
 - Both panels show the same row in the same position, and selecting it installs nothing.
 
-Covered offline by `crates/ragent-tui/tests/test_plugin_store_installed_category.rs`, with
+Covered offline by `crates/codemason-tui/tests/test_plugin_store_installed_category.rs`, with
 the existing category-filter, keyboard, mouse, launch, and acceptance suites pinning the
 row offsets (FR-054).

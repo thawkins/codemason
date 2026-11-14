@@ -17,19 +17,19 @@ destructive-action checkpoints (FR-015), pre-loop snapshot + rollback
 (FR-018/FR-020), post-loop change summary (FR-019), and telemetry
 (FR-025).
 
-All work targets existing crates (`ragent-agent`, `ragent-config`,
-`ragent-types`, `ragent-tui`, `ragent-server`, `ragent-storage`). No new
+All work targets existing crates (`codemason-agent`, `codemason-config`,
+`codemason-types`, `codemason-tui`, `codemason-server`, `codemason-storage`). No new
 external dependencies (NFR-002).
 
 ## Architecture
 
 ```
-crates/ragent-tui/src/app/
+crates/codemason-tui/src/app/
 ├── slash.rs                  # + /loop dispatch (interactive + one-shot)
 └── loop_dialog.rs            # NEW: agent picker + goal form (Esc to cancel,
                              #  values preserved)
 
-crates/ragent-agent/src/
+crates/codemason-agent/src/
 ├── session/
 │   ├── processor.rs          # loop contract: budget gates, verification gate,
 │   │                         # stop dispatch, change summary publication
@@ -38,21 +38,21 @@ crates/ragent-agent/src/
 │                             #   checkpoints}, StopCondition enum, LoopState
 └── error.rs                  # + ErrorKind::{Recoverable, Unrecoverable}
 
-crates/ragent-config/src/
+crates/codemason-config/src/
 └── config.rs                 # + loop defaults: cost_limit, error_retry_allowance,
                               #   checkpoints default
 
-crates/ragent-types/src/
+crates/codemason-types/src/
 └── event/mod.rs              # + Event::LoopTerminated {status, iterations,
                               #   verification}, Event::LoopChangeSummary
 
-crates/ragent-storage/src/
+crates/codemason-storage/src/
 └── snapshots.rs              # + capture_pre_loop_snapshot(), rollback()
 
-crates/ragent-server/src/
+crates/codemason-server/src/
 └── routes/loop.rs            # NEW: POST /loop (FR-026)
 
-crates/ragent-telemetry/src/  # record_agent_loop wiring (exists)
+crates/codemason-telemetry/src/  # record_agent_loop wiring (exists)
 ```
 
 ### Data flow — one iteration
@@ -89,13 +89,13 @@ runs afterwards (FR-017).
 | ID | Title | Requirement | Effort | Priority | Status | Dependencies |
 |----|-------|-------------|--------|----------|--------|--------------|
 | T-001 | Create `session/loop_state.rs`: `LoopSpec` (agent, goal, verify_cmd, scope globs, read-only constraints, tool set, max_steps, cost_limit, checkpoints), `StopCondition` enum (`GoalAchieved`, `UnrecoverableError`, `BudgetExhausted`, `HumanIntervention`), `LoopState` tracker (step, token tally, consecutive-failure counter, stop flag) | FR-006, FR-013, FR-014 | M | Critical | completed | — |
-| T-002 | Add loop defaults to `ragent-config`: `cost_limit` (token budget), `error_retry_allowance` (default 3), checkpoint default (on); document `max_steps` default 25 | FR-013, FR-014, FR-015 | S | High | completed | — |
+| T-002 | Add loop defaults to `codemason-config`: `cost_limit` (token budget), `error_retry_allowance` (default 3), checkpoint default (on); document `max_steps` default 25 | FR-013, FR-014, FR-015 | S | High | completed | — |
 | T-003 | Insert pre-request budget gates in `SessionProcessor`: check step counter and token tally before each LLM request; on breach stop with `BudgetExhausted` and skip the request | FR-013, FR-014, FR-017 | M | Critical | completed | T-001, T-002 |
 | T-004 | Implement stop condition 1: no-tool-call response with no verification command terminates with `GoalAchieved` (status `completed`), publishes `Event::LoopTerminated`, records loop metrics | FR-010, FR-025 | S | Critical | completed | T-001 |
 | T-005 | Implement the verification gate: on first no-tool-call response, run the verification command; success -> `completed`, failure with steps remaining -> append failure output as observation and continue, failure without steps -> `budget_exhausted` | FR-007, FR-010 | M | Critical | completed | T-004 |
 | T-006 | Add `ErrorKind::{Recoverable, Unrecoverable}` classification: transport failure, permission hard-deny, panic, context overflow = unrecoverable; tool-level failures = recoverable by default | FR-011, FR-012 | M | Critical | completed | T-001 |
 | T-007 | Implement stop condition 2: unrecoverable errors terminate immediately (status `error`, no retry, reason surfaced); recoverable failures append error observations and terminate at the retry allowance | FR-011, FR-012 | M | Critical | completed | T-006 |
-| T-008 | Add `Event::LoopTerminated {session_id, status, iterations, verification, reason}` to `ragent-types::event`; guard `LoopState` so no stage executes after the stop flag is set | FR-010, FR-017 | S | Critical | completed | T-001 |
+| T-008 | Add `Event::LoopTerminated {session_id, status, iterations, verification, reason}` to `codemason-types::event`; guard `LoopState` so no stage executes after the stop flag is set | FR-010, FR-017 | S | Critical | completed | T-001 |
 | T-009 | Implement per-loop tool-set and scope restriction in the permission layer: calls outside the loop's tool set or scope return denial observations (scope violation, tool out of scope); read-only constraints deny writes to constrained paths | FR-008, FR-009, FR-021, FR-022 | M | Critical | completed | T-001 |
 | T-010 | Implement destructive-action checkpoints: mark destructive tool calls (delete, config write, dependency install, destructive git); with checkpoints on, force ask prompts even under allow rules and in auto-approve mode; prompt timeout = denial | FR-015, FR-024 | M | High | completed | T-009 |
 | T-011 | Implement human interrupt: `Esc` during a loop aborts at the next inter-stage safe point, stops with `HumanIntervention` (status `interrupted`), leaves the session persisted and resumable | FR-016 | M | High | completed | T-008 |
@@ -114,7 +114,7 @@ runs afterwards (FR-017).
 | T-024 | Tests: dialog + one-shot + telemetry — dialog fields populate/parse; empty goal rejected with error; one-shot starts with defaults; `record_agent_loop` recorded exactly once with the final iteration count | FR-001, FR-002, FR-003, FR-005, FR-025, NFR-003 | M | High | completed | T-014, T-015, T-017 |
 | T-025 | TUI: render `LoopTerminated` as a status-aware banner (`completed` / `error` / `budget exhausted` / `interrupted` + iteration count) and `LoopChangeSummary` as a diffstat line with a rollback offer prompt | FR-019, FR-020 | S | Medium | completed | T-008, T-012, T-013 |
 | T-026 | Documentation: `/loop` usage, goal format (success state / scope / constraints), stop conditions, budget + checkpoint tunables, rollback flow in `TUI-QUICKSTART.md` and loop module rustdoc | FR-006, NFR-004 | S | Medium | completed | T-015 |
-| T-027 | Full verification: `cargo fmt`, `cargo clippy`, targeted `cargo test -p ragent-agent -p ragent-config -p ragent-types -p ragent-tui -p ragent-server -p ragent-storage` with no regressions | NFR-001, NFR-002, NFR-003 | S | Critical | completed | T-001–T-026 |
+| T-027 | Full verification: `cargo fmt`, `cargo clippy`, targeted `cargo test -p codemason-agent -p codemason-config -p codemason-types -p codemason-tui -p codemason-server -p codemason-storage` with no regressions | NFR-001, NFR-002, NFR-003 | S | Critical | completed | T-001–T-026 |
 ## Risks & Mitigations
 
 | Risk | Likelihood | Impact | Mitigation |

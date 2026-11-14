@@ -1,18 +1,18 @@
-# ragent Project Scaffolding Manual
+# codemason Project Scaffolding Manual
 
-This guide explains how to use ragent's `/new` command to scaffold a
+This guide explains how to use codemason's `/new` command to scaffold a
 brand-new software project in the current directory. The command creates the
-directory layout ragent expects (`.ragent/`, `specs/`, `log/`, `.gitignore`,
+directory layout codemason expects (`.codemason/`, `specs/`, `log/`, `.gitignore`,
 `AGENTS.md`), generates a minimal, runnable "Hello, world" application for the
 selected language and application type, generates starter documentation
 (`README.md`, `QUICKSTART.md`, `STATS.md`, `docs/`), initialises a git
 repository with an initial commit, and optionally creates a remote repository
 on GitHub or GitLab and pushes.
 
-The same functionality is available as the `ragent new` CLI subcommand (and as
-`ragent run "/new ..."`), with identical flags and identical behaviour.
+The same functionality is available as the `codemason new` CLI subcommand (and as
+`codemason run "/new ..."`), with identical flags and identical behaviour.
 
-> **Scope:** the `/new` slash command, the `ragent new` CLI surface, flag
+> **Scope:** the `/new` slash command, the `codemason new` CLI surface, flag
 > validation, the empty-directory guard, language/type/stack support, remote
 > hosting setup, failure containment, and progress streaming. For spec
 > management commands, see `docs/howtos/spec.md`. For reverse-engineering an
@@ -29,9 +29,9 @@ Instead of manually creating files, running `git init`, setting up hosting,
 and writing boilerplate docs, `/new` automates the whole sequence:
 
 - **Validates the target directory** — refuses to scaffold anything that is
-  not empty (ragent's own artifacts `.ragent/`, `log/`, `target/` are
+  not empty (codemason's own artifacts `.codemason/`, `log/`, `target/` are
   ignored), so an existing project can never be clobbered.
-- **Creates the ragent workspace** — `.ragent/` (config placeholder and
+- **Creates the codemason workspace** — `.codemason/` (config placeholder and
   custom-agents directory), `specs/`, `log/` (gitignored), a pre-populated
   `.gitignore`, and an `AGENTS.md` project-guidelines stub.
 - **Generates a runnable hello-world artifact set** for the selected language
@@ -43,7 +43,7 @@ and writing boilerplate docs, `/new` automates the whole sequence:
 - **Generates starter documentation** — `README.md` (title, description,
   build/run instructions), `QUICKSTART.md` (prerequisites, exact run command,
   expected first output), `STATS.md` (timestamp, language, type, stack, file
-  count, ragent version), and a `docs/` folder.
+  count, codemason version), and a `docs/` folder.
 - **Initialises git** — `git init` plus an initial `Initial scaffold` commit
   on the current branch.
 - **Optionally creates hosting** — with `--github` or `--gitlab` the command
@@ -64,7 +64,7 @@ and writing boilerplate docs, `/new` automates the whole sequence:
 
 ## 2. Quick start
 
-Open a terminal in an **empty** directory and run ragent there:
+Open a terminal in an **empty** directory and run codemason there:
 
 ```text
 /new --language rust --type cmdline
@@ -141,7 +141,7 @@ example invocations (one minimal without hosting, one with a hosting flag).
 The accepted `--language` and `--type` value lists and the known-stack
 examples are derived from the scaffolder's internal registries (the language
 registry and the `STACK_RECIPES` table), so the help text cannot drift from
-what the command actually accepts. The `ragent new help` CLI surface prints
+what the command actually accepts. The `codemason new help` CLI surface prints
 the same page with binary-form usage lines.
 
 ### 3.3 Input rules
@@ -163,15 +163,15 @@ the same page with binary-form usage lines.
 
 ## 4. What the command generates
 
-### 4.1 ragent workspace (always)
+### 4.1 codemason workspace (always)
 
 | Path | Purpose |
 | ---- | ------- |
-| `.ragent/config.json` | Valid-JSON configuration placeholder (the live loader reads `.ragent/ragent.json`; this placeholder is informational) |
-| `.ragent/agents/README.md` | Placeholder for custom agent definitions (OASF JSON or Markdown) |
+| `.codemason/config.json` | Valid-JSON configuration placeholder (the live loader reads `.codemason/codemason.json`; this placeholder is informational) |
+| `.codemason/agents/README.md` | Placeholder for custom agent definitions (OASF JSON or Markdown) |
 | `specs/README.md` | Placeholder for project specifications (manage with `/spec`) |
 | `log/` | Runtime logs (created empty, gitignored) |
-| `.gitignore` | Language-specific build-artifact rules plus `.ragent/`, `log/`, `target/` |
+| `.gitignore` | Language-specific build-artifact rules plus `.codemason/`, `log/`, `target/` |
 | `AGENTS.md` | Minimal project-guidelines stub with the language's run/test commands |
 
 ### 4.2 Application artifacts (per language/type)
@@ -232,7 +232,7 @@ Rust-only:
 | ---- | ------- |
 | `README.md` | Project title (directory name), one-paragraph description, entry point / run / test instructions, project-layout table |
 | `QUICKSTART.md` | Prerequisites (toolchain pointer), the exact run command, expected first output (`Hello, world!`), next steps |
-| `STATS.md` | Generated timestamp (UTC), language, app type, stack (or none), generated-file count, ragent version |
+| `STATS.md` | Generated timestamp (UTC), language, app type, stack (or none), generated-file count, codemason version |
 | `docs/README.md` | Placeholder that materialises the `docs/` folder |
 
 All build/run instructions come from the same per-language recipe data that
@@ -244,8 +244,8 @@ generated project.
 ## 5. The empty-directory guard
 
 Before any file is written, `/new` inspects the current directory and refuses
-to scaffold when it contains anything beyond the ragent artifact allowlist
-(`.ragent/`, `log/`, `target/`). The refusal reports the offending entries
+to scaffold when it contains anything beyond the codemason artifact allowlist
+(`.codemason/`, `log/`, `target/`). The refusal reports the offending entries
 and writes nothing:
 
 ```text
@@ -266,7 +266,7 @@ offending list are suffixed with `/` to distinguish them from files.
 
 `--github` uses the same authentication chain as the `/github` tool family:
 the `GITHUB_TOKEN` environment variable first, then the
-`~/.ragent/github_token` file written by `/github login`, then the
+`~/.codemason/github_token` file written by `/github login`, then the
 authenticated `gh` CLI. Without any token the remote step fails with an auth
 message and the local scaffold is kept.
 
@@ -274,11 +274,11 @@ The `gh` fallback exists because `/github login` reuses the OAuth application
 the Copilot provider uses, and that application mints GitHub App tokens
 (`ghu_`) whose permissions do not include repository administration — GitHub
 rejects `POST /user/repos` with `403 Resource not accessible by integration`.
-When the stored token is such an app token and `gh` is authenticated, ragent
+When the stored token is such an app token and `gh` is authenticated, codemason
 uses the CLI credential (which carries `repo` scope) instead; an ordinary PAT
 or OAuth token (`ghp_`/`gho_`/`github_pat_`) is used unchanged, and a
 read-only app token is still used when no `gh` credential exists. Set
-`RAGENT_GITHUB_NO_GH_CLI=1` to disable the CLI fallback.
+`CODEMASON_GITHUB_NO_GH_CLI=1` to disable the CLI fallback.
 
 The flow: `GET /user` (resolve login) -> `POST /user/repos` (create a private
 repository named after the directory) -> `git remote add origin` -> `git push
@@ -287,8 +287,8 @@ repository named after the directory) -> `git remote add origin` -> `git push
 
 ### 6.2 GitLab
 
-`--gitlab` reads `GITLAB_TOKEN` (env) or `~/.ragent/gitlab_token`, and the
-instance base URL from `GITLAB_URL` (env) or `~/.ragent/gitlab_config.json`
+`--gitlab` reads `GITLAB_TOKEN` (env) or `~/.codemason/gitlab_token`, and the
+instance base URL from `GITLAB_URL` (env) or `~/.codemason/gitlab_config.json`
 (`instance_url`), defaulting to `https://gitlab.com`. The flow hits
 `GET /api/v4/user` and `POST /api/v4/projects` with `PRIVATE-TOKEN` auth; a
 path-taken validation error reuses the existing project as `origin`.
@@ -337,23 +337,23 @@ The same surface is available without the TUI:
 
 ```bash
 # Basic scaffolding
-ragent new --language rust --type cmdline
+codemason new --language rust --type cmdline
 
 # With a stack layer
-ragent new --language rust --type cmdline --stack axum
+codemason new --language rust --type cmdline --stack axum
 
 # With hosting
-ragent new --language rust --type cmdline --github
-ragent new --language python --type library --gitlab
+codemason new --language rust --type cmdline --github
+codemason new --language python --type library --gitlab
 
 # The one-shot prompt surface also dispatches /new
-ragent run "/new --language go --type cmdline"
+codemason run "/new --language go --type cmdline"
 
 # Usage page
-ragent new help
+codemason new help
 ```
 
-`ragent new --github --gitlab` is rejected at the argument-parsing layer.
+`codemason new --github --gitlab` is rejected at the argument-parsing layer.
 The CLI pipeline performs the same guard -> emit -> git -> remote sequence in
 the foreground and prints the same summary to stdout.
 
@@ -368,7 +368,7 @@ the foreground and prints the same summary to stdout.
 ```
 
 Generates a cargo project (`Cargo.toml`, `src/main.rs` printing
-`Hello, world!`), the ragent workspace, documentation, git init + initial
+`Hello, world!`), the codemason workspace, documentation, git init + initial
 commit, no remote.
 
 ### Example 2: Python library on GitLab
@@ -378,8 +378,8 @@ commit, no remote.
 ```
 
 Generates `pyproject.toml` + `src/<name>/__init__.py` with a public function,
-the ragent workspace, documentation, git init, then creates a private GitLab
-project and pushes. Requires `GITLAB_TOKEN` (or `~/.ragent/gitlab_token`).
+the codemason workspace, documentation, git init, then creates a private GitLab
+project and pushes. Requires `GITLAB_TOKEN` (or `~/.codemason/gitlab_token`).
 
 ### Example 3: Rust web service with axum
 
@@ -413,8 +413,8 @@ commit pushed.
 /spec plan first-feature "tokio + clap based CLI"
 ```
 
-A freshly scaffolded project is immediately ragent-friendly: `AGENTS.md`
-loads as project guidelines, `specs/` is the spec home, and `.ragent/` is
+A freshly scaffolded project is immediately codemason-friendly: `AGENTS.md`
+loads as project guidelines, `specs/` is the spec home, and `.codemason/` is
 ready for custom agents.
 
 ---
@@ -423,12 +423,12 @@ ready for custom agents.
 
 | Symptom | Cause | Fix |
 | ------- | ----- | ---- |
-| `directory is not empty: ...` | The guard found non-ragent entries in the cwd | Run `/new` in a truly empty directory (or a fresh `mkdir`) |
+| `directory is not empty: ...` | The guard found non-codemason entries in the cwd | Run `/new` in a truly empty directory (or a fresh `mkdir`) |
 | `[err]` + usage page after `/new` | Missing or invalid `--language` / `--type` | Supply both flags with registry values (see the lists in the usage page) |
 | `--github and --gitlab are mutually exclusive` | Both hosting flags supplied | Pick one |
-| `Remote: failed at github auth: ...` | No/malformed `GITHUB_TOKEN` or `~/.ragent/github_token` | Export the token or run `/github login`, then retry the remote flow |
-| `Remote: failed at gitlab auth: ...` | No/malformed `GITLAB_TOKEN` or `~/.ragent/gitlab_token` | Export the token or run `/gitlab setup`, then retry |
-| `Remote: failed at github repo create: ... Resource not accessible by integration` | The stored token is a GitHub App token (`ghu_`) that cannot create repositories, and no `gh` credential is available | Run `gh auth login` (ragent then uses the CLI token), or export a `GITHUB_TOKEN` PAT with `repo` scope |
+| `Remote: failed at github auth: ...` | No/malformed `GITHUB_TOKEN` or `~/.codemason/github_token` | Export the token or run `/github login`, then retry the remote flow |
+| `Remote: failed at gitlab auth: ...` | No/malformed `GITLAB_TOKEN` or `~/.codemason/gitlab_token` | Export the token or run `/gitlab setup`, then retry |
+| `Remote: failed at github repo create: ... Resource not accessible by integration` | The stored token is a GitHub App token (`ghu_`) that cannot create repositories, and no `gh` credential is available | Run `gh auth login` (codemason then uses the CLI token), or export a `GITHUB_TOKEN` PAT with `repo` scope |
 | `Remote: failed at github repo create: ...` | Hosting API rejected creation (network, permissions) | Check connectivity and token scopes; the existing-repo reuse path only triggers on name-taken |
 | Unknown stack warning in the summary | `--stack` name not in the language's stack registry | Check spelling; stacks are scoped per language |
 | Progress panel shows `[fail] writing project files` | Emission error (permissions, disk) | Fix the environment; earlier creations remain on disk and are reported |
@@ -451,6 +451,6 @@ counterpart for existing repositories:
 /spec reverse owner/repo --create my-clone
 ```
 
-The scaffolded `AGENTS.md`, `specs/`, and `.ragent/` layout are the same
-conventions ragent itself follows, so agents opening the new project pick it
+The scaffolded `AGENTS.md`, `specs/`, and `.codemason/` layout are the same
+conventions codemason itself follows, so agents opening the new project pick it
 up without configuration.

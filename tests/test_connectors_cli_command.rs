@@ -1,12 +1,12 @@
-//! Integration tests for the `ragent connectors` CLI parity surface
+//! Integration tests for the `codemason connectors` CLI parity surface
 //! (spec `connectors` T-014; FR-004, FR-006).
 //!
-//! Each test spawns the built `ragent` binary inside a fresh temp working
+//! Each test spawns the built `codemason` binary inside a fresh temp working
 //! directory with an isolated `XDG_CONFIG_HOME`, so the project store
-//! (`.ragent/connectors/`) and the user-global store are both contained. The
-//! tests assert the non-TUI output spelling (`ragent connectors ...` attribution
+//! (`.codemason/connectors/`) and the user-global store are both contained. The
+//! tests assert the non-TUI output spelling (`codemason connectors ...` attribution
 //! rather than `From: /connectors ...`) and that every subcommand routes to the
-//! shared `ragent-connectors` logic.
+//! shared `codemason-connectors` logic.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -28,7 +28,7 @@ impl Fixture {
         let temp = tempfile::tempdir().expect("tempdir");
         let prev = std::env::current_dir().expect("cwd");
         std::env::set_current_dir(temp.path()).expect("set cwd");
-        std::fs::create_dir_all(temp.path().join(".ragent")).expect(".ragent dir");
+        std::fs::create_dir_all(temp.path().join(".codemason")).expect(".codemason dir");
         Self {
             temp,
             prev,
@@ -40,20 +40,20 @@ impl Fixture {
         self.temp.path()
     }
 
-    /// Run `ragent` with `args` against this fixture's isolated environment.
-    fn ragent(&self, args: &[&str]) -> Output {
+    /// Run `codemason` with `args` against this fixture's isolated environment.
+    fn codemason(&self, args: &[&str]) -> Output {
         let config = self.temp.path().join("config");
         let home = self.temp.path().join("home");
         std::fs::create_dir_all(&config).expect("config dir");
         std::fs::create_dir_all(&home).expect("home dir");
-        Command::new(env!("CARGO_BIN_EXE_ragent"))
+        Command::new(env!("CARGO_BIN_EXE_cdmn"))
             .args(args)
             .env("XDG_CONFIG_HOME", &config)
             .env("HOME", &home)
             .env_remove("GITHUB_TOKEN")
             .env_remove("GITLAB_TOKEN")
             .output()
-            .expect("spawn ragent")
+            .expect("spawn codemason")
     }
 
     /// Write a minimal connector source directory (one expressible stdio server).
@@ -92,16 +92,16 @@ fn bare_and_help_print_the_usage_block() {
     let fx = Fixture::new();
 
     for args in [vec!["connectors"], vec!["connectors", "help"]] {
-        let out = fx.ragent(&args);
+        let out = fx.codemason(&args);
         assert!(out.status.success(), "usage must succeed: {args:?}");
         let text = stdout(&out);
         assert!(
-            text.contains("## ragent connectors command reference"),
+            text.contains("## codemason connectors command reference"),
             "usage must carry the CLI heading: {text}"
         );
         // The non-TUI surface spelling, not the TUI `From:` attribution.
         assert!(
-            text.contains("`ragent connectors list [--verbose] [--category <name>]`"),
+            text.contains("`codemason connectors list [--verbose] [--category <name>]`"),
             "usage must document the CLI row for list: {text}"
         );
         assert!(
@@ -120,9 +120,9 @@ fn bare_and_help_print_the_usage_block() {
 #[test]
 fn unknown_subcommand_renders_usage() {
     let fx = Fixture::new();
-    let text = stdout(&fx.ragent(&["connectors", "frobnicate"]));
+    let text = stdout(&fx.codemason(&["connectors", "frobnicate"]));
     assert!(
-        text.contains("## ragent connectors command reference"),
+        text.contains("## codemason connectors command reference"),
         "an unknown subcommand renders usage: {text}"
     );
 }
@@ -130,11 +130,11 @@ fn unknown_subcommand_renders_usage() {
 #[test]
 fn list_on_an_empty_store_reports_none_installed() {
     let fx = Fixture::new();
-    let out = fx.ragent(&["connectors", "list"]);
+    let out = fx.codemason(&["connectors", "list"]);
     assert!(out.status.success());
     let text = stdout(&out);
     assert!(
-        text.starts_with("ragent connectors list"),
+        text.starts_with("codemason connectors list"),
         "list uses the CLI attribution: {text}"
     );
     assert!(
@@ -149,9 +149,9 @@ fn list_creates_no_connector_store() {
     // FR-017 parity: a read-only listing changes no state and must not create
     // the connector store directory.
     let fx = Fixture::new();
-    let _ = fx.ragent(&["connectors", "list"]);
+    let _ = fx.codemason(&["connectors", "list"]);
     assert!(
-        !fx.path().join(".ragent/connectors").exists(),
+        !fx.path().join(".codemason/connectors").exists(),
         "listing must not create the connector store"
     );
 }
@@ -162,29 +162,29 @@ fn store_round_trip_uses_the_cli_surface_spelling() {
     let src = fx.write_connector_source("echo");
 
     // add (FR-011): installed enabled, recorded in the project store.
-    let out = fx.ragent(&["connectors", "add", src.to_str().expect("utf8 src")]);
+    let out = fx.codemason(&["connectors", "add", src.to_str().expect("utf8 src")]);
     assert!(out.status.success(), "add must succeed");
     let added = stdout(&out);
-    assert!(added.starts_with("ragent connectors add"), "{added}");
+    assert!(added.starts_with("codemason connectors add"), "{added}");
     assert!(
         added.contains("Installed connector `echo`"),
         "add reports the install: {added}"
     );
     assert!(
         fx.path()
-            .join(".ragent/connectors/echo/connector.json")
+            .join(".codemason/connectors/echo/connector.json")
             .exists(),
         "the connector must be copied into the project store"
     );
 
     // list shows it enabled (FR-011, FR-018).
-    let listed = stdout(&fx.ragent(&["connectors", "list"]));
-    assert!(listed.starts_with("ragent connectors list"), "{listed}");
+    let listed = stdout(&fx.codemason(&["connectors", "list"]));
+    assert!(listed.starts_with("codemason connectors list"), "{listed}");
     assert!(listed.contains("echo"), "{listed}");
     assert!(listed.contains("state enabled"), "{listed}");
 
     // `--category` filters (FR-041).
-    let filtered = stdout(&fx.ragent(&["connectors", "list", "--category", "developer"]));
+    let filtered = stdout(&fx.codemason(&["connectors", "list", "--category", "developer"]));
     assert!(
         filtered.contains("category developer (1 of 1)"),
         "{filtered}"
@@ -194,45 +194,48 @@ fn store_round_trip_uses_the_cli_surface_spelling() {
     // not an error (FR-041). The fixture store holds a second connector in the
     // `science` category so the value is accepted.
     let science_src = fx.write_categorised_connector_source("atom", "science");
-    let added = fx.ragent(&["connectors", "add", science_src.to_str().expect("utf8 src")]);
+    let added = fx.codemason(&["connectors", "add", science_src.to_str().expect("utf8 src")]);
     assert!(added.status.success(), "add must succeed");
-    let filtered_out = stdout(&fx.ragent(&["connectors", "list", "--category", "science"]));
+    let filtered_out = stdout(&fx.codemason(&["connectors", "list", "--category", "science"]));
     assert!(
         filtered_out.contains("category science (1 of 2)"),
         "{filtered_out}"
     );
     assert!(filtered_out.contains("atom"), "{filtered_out}");
 
-    let empty = stdout(&fx.ragent(&["connectors", "list", "--category", "developer"]));
+    let empty = stdout(&fx.codemason(&["connectors", "list", "--category", "developer"]));
     assert!(empty.contains("category developer (1 of 2)"), "{empty}");
     assert!(!empty.contains("atom"), "{empty}");
     assert!(!empty.contains("[err]"), "{empty}");
 
     // A category the store does not know is refused with an `[err]` row and
     // changes no state (FR-041).
-    let unknown = stdout(&fx.ragent(&["connectors", "list", "--category", "nosuch"]));
+    let unknown = stdout(&fx.codemason(&["connectors", "list", "--category", "nosuch"]));
     assert!(
         unknown.contains("[err] Unknown category `nosuch`."),
         "{unknown}"
     );
 
     // disable an enabled connector reports ok.
-    let disabled = stdout(&fx.ragent(&["connectors", "disable", "echo"]));
+    let disabled = stdout(&fx.codemason(&["connectors", "disable", "echo"]));
     assert!(
-        disabled.starts_with("ragent connectors disable"),
+        disabled.starts_with("codemason connectors disable"),
         "{disabled}"
     );
     assert!(disabled.contains("[ok]"), "{disabled}");
 
     // remove uninstalls it (FR-030).
-    let removed = stdout(&fx.ragent(&["connectors", "remove", "echo"]));
-    assert!(removed.starts_with("ragent connectors remove"), "{removed}");
+    let removed = stdout(&fx.codemason(&["connectors", "remove", "echo"]));
+    assert!(
+        removed.starts_with("codemason connectors remove"),
+        "{removed}"
+    );
     assert!(
         removed.contains("[ok] Removed connector `echo`"),
         "{removed}"
     );
     assert!(
-        !fx.path().join(".ragent/connectors/echo").exists(),
+        !fx.path().join(".codemason/connectors/echo").exists(),
         "remove deletes the connector directory"
     );
 }
@@ -240,23 +243,26 @@ fn store_round_trip_uses_the_cli_surface_spelling() {
 #[test]
 fn missing_id_is_reported_as_a_usage_error() {
     let fx = Fixture::new();
-    let out = fx.ragent(&["connectors", "enable"]);
+    let out = fx.codemason(&["connectors", "enable"]);
     assert!(
         out.status.success(),
         "a usage error is not a process failure"
     );
     let text = stdout(&out);
     assert!(text.contains("[err] Missing argument."), "{text}");
-    assert!(text.starts_with("ragent connectors enable"), "{text}");
+    assert!(text.starts_with("codemason connectors enable"), "{text}");
 }
 
 #[test]
 fn auth_on_an_unknown_connector_reports_the_unknown_id() {
     let fx = Fixture::new();
-    let out = fx.ragent(&["connectors", "auth", "ghost"]);
+    let out = fx.codemason(&["connectors", "auth", "ghost"]);
     assert!(out.status.success());
     let text = stdout(&out);
-    assert!(text.starts_with("ragent connectors auth ghost"), "{text}");
+    assert!(
+        text.starts_with("codemason connectors auth ghost"),
+        "{text}"
+    );
     assert!(
         text.contains("[err] connector auth: unknown connector id ghost"),
         "{text}"
@@ -268,8 +274,8 @@ fn stores_reports_the_effective_endpoint_and_its_source() {
     // FR-036 parity: with no `connectors.stores` override, the endpoint is
     // tagged `default` and names the compiled default URL.
     let fx = Fixture::new();
-    let text = stdout(&fx.ragent(&["connectors", "stores"]));
-    assert!(text.starts_with("ragent connectors stores"), "{text}");
+    let text = stdout(&fx.codemason(&["connectors", "stores"]));
+    assert!(text.starts_with("codemason connectors stores"), "{text}");
     assert!(
         text.contains("- claude: [default] https://"),
         "the store is tagged default with an https endpoint: {text}"
@@ -283,13 +289,13 @@ fn stores_reports_the_effective_endpoint_and_its_source() {
 #[test]
 fn stores_usage_documents_the_optional_check_flag() {
     let fx = Fixture::new();
-    let help = stdout(&fx.ragent(&["connectors", "help"]));
+    let help = stdout(&fx.codemason(&["connectors", "help"]));
     assert!(
-        help.contains("ragent connectors stores") && help.contains("--check"),
+        help.contains("codemason connectors stores") && help.contains("--check"),
         "the usage block must document the --check flag: {help}"
     );
 
-    let plain = stdout(&fx.ragent(&["connectors", "stores"]));
+    let plain = stdout(&fx.codemason(&["connectors", "stores"]));
     assert!(
         !plain.contains("available") && !plain.contains("unavailable"),
         "the plain report carries no probe suffix: {plain}"
@@ -303,18 +309,18 @@ fn master_switch_disables_the_subsystem_but_help_still_renders() {
     // usage.
     let fx = Fixture::new();
     std::fs::write(
-        fx.path().join(".ragent/ragent.json"),
+        fx.path().join(".codemason/codemason.json"),
         r#"{ "connectors": { "enabled": false } }"#,
     )
     .expect("config writable");
 
-    let listed = stdout(&fx.ragent(&["connectors", "list"]));
+    let listed = stdout(&fx.codemason(&["connectors", "list"]));
     assert!(listed.contains("[err]"), "{listed}");
     assert!(listed.contains("connectors.enabled = false"), "{listed}");
 
-    let help = stdout(&fx.ragent(&["connectors", "help"]));
+    let help = stdout(&fx.codemason(&["connectors", "help"]));
     assert!(
-        help.contains("## ragent connectors command reference"),
+        help.contains("## codemason connectors command reference"),
         "help still renders while disabled: {help}"
     );
 }
@@ -325,11 +331,11 @@ fn claude_points_at_the_tui_browser_and_names_the_non_interactive_equivalents() 
     // must not try to open it; `claude` describes the browser and names the
     // shell equivalents instead (FR-004 parity).
     let fx = Fixture::new();
-    let out = fx.ragent(&["connectors", "claude"]);
+    let out = fx.codemason(&["connectors", "claude"]);
     assert!(out.status.success(), "exit code: {:?}", out.status);
     let text = stdout(&out);
     assert!(
-        text.starts_with("ragent connectors claude"),
+        text.starts_with("codemason connectors claude"),
         "CLI spelling, not the TUI attribution: {text}"
     );
     assert!(
@@ -341,11 +347,11 @@ fn claude_points_at_the_tui_browser_and_names_the_non_interactive_equivalents() 
         "documents the --category launch filter: {text}"
     );
     assert!(
-        !text.contains("ragent connectors search"),
+        !text.contains("codemason connectors search"),
         "the redundant search subcommand is gone: {text}"
     );
     assert!(
-        text.contains("ragent connectors add"),
+        text.contains("codemason connectors add"),
         "names the non-interactive add: {text}"
     );
     // No catalogue listing is printed: the CLI never opens the panel.
@@ -358,9 +364,9 @@ fn claude_points_at_the_tui_browser_and_names_the_non_interactive_equivalents() 
 #[test]
 fn help_documents_the_claude_browser_subcommand() {
     let fx = Fixture::new();
-    let help = stdout(&fx.ragent(&["connectors", "help"]));
+    let help = stdout(&fx.codemason(&["connectors", "help"]));
     assert!(
-        help.contains("ragent connectors claude [query] [--category <name>] [--refresh]"),
+        help.contains("codemason connectors claude [query] [--category <name>] [--refresh]"),
         "the usage block documents the browser and its category filter: {help}"
     );
     assert!(

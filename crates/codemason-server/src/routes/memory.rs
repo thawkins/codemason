@@ -1,0 +1,464 @@
+//! Memory REST endpoints for the codemason HTTP server.
+//!
+//! Provides CRUD operations for SQLite-backed structured memories.
+//!
+//! # Endpoints
+//!
+//! | Method | Path | Description |
+//! |--------|------|-------------|
+//! | GET | `/memory/search` | Search structured memories (FTS5) |
+//! | POST | `/memory/store` | Store a new structured memory |
+//! | DELETE | `/memory/{id}` | Forget (delete) a structured memory |
+//! | GET | `/memory/visualisation` | Full visualisation bundle |
+//! | GET | `/memory/visualisation/graph` | Category relationship graph |
+//! | GET | `/memory/visualisation/tags` | Tag cloud |
+//! | GET | `/memory/visualisation/heatmap` | Access pattern heatmap |
+
+use axum::{
+    Json,
+    extract::{Path, Query, State},
+    http::StatusCode,
+    routing::{delete, get, post},
+};
+use codemason_agent::event::Event;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+use super::{AppState, error_response, internal_error_response, serialize_response};
+
+/// Upper bound on memories loaded for a visualisation response (F-L1).
+///
+/// The visualisation endpoints render the whole memory set, so the read is
+/// capped rather than unbounded; a very large store degrades to a truncated
+/// (still representative) view instead of an OOM.
+const MAX_VISUALISATION_MEMORIES: usize = 10_000;
+
+// -- Response types ---------------------------------------------------
+
+/// JSON representation of a structured memory (API response).
+#[derive(Serialize)]
+pub struct MemoryResponse {
+    /// Auto-generated row ID.
+    pub id: i64,
+    /// The memory content.
+    pub content: String,
+    /// Category (fact, pattern, preference, insight, error, workflow).
+    pub category: String,
+    /// Source of the memory.
+    pub source: String,
+    /// Confidence score (0.0-1.0).
+    pub confidence: f64,
+    /// Project this memory belongs to.
+    pub project: String,
+    /// Session that created this memory.
+    pub session_id: String,
+    /// ISO 8601 creation timestamp.
+    pub created_at: String,
+    /// ISO 8601 last-updated timestamp.
+    pub updated_at: String,
+    /// Number of times accessed in search results.
+    pub access_count: i64,
+    /// ISO 8601 timestamp of last access.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_accessed: Option<String>,
+    /// Tags attached to this memory.
+    pub tags: Vec<String>,
+}
+
+// -- Request types -----------------------------------------------------
+
+/// Request body for `POST /memory/store`.
+#[derive(Deserialize, Clone)]
+pub struct StoreMemoryRequest {
+    /// The memory content.
+    pub content: String,
+    /// Category: fact, pattern, preference, insight, error, workflow.
+    pub category: String,
+    /// Source identifier (e.g., "api", "auto-extract").
+    #[serde(default = "default_source")]
+    pub source: String,
+    /// Confidence score (0.0-1.0).
+    #[serde(default = "default_confidence")]
+    pub confidence: f64,
+    /// Project identifier.
+    #[serde(default)]
+    pub project: String,
+    /// Session ID.
+    #[serde(default)]
+    pub session_id: String,
+    /// Tags for categorisation.
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+fn default_source() -> String {
+    "api".to_string()
+}
+
+const fn default_confidence() -> f64 {
+    0.7
+}
+
+/// Query parameters for `GET /memory/search`.
+#[derive(Deserialize)]
+pub struct SearchMemoryQuery {
+    /// Search query string (FTS5).
+    pub q: String,
+    /// Optional comma-separated category filter.
+    pub categories: Option<String>,
+    /// Optional comma-separated tag filter.
+    pub tags: Option<String>,
+    /// Minimum confidence threshold (default: 0.0).
+    #[serde(default)]
+    pub min_confidence: f64,
+    /// Maximum results (default: 20).
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+const fn default_limit() -> usize {
+    20
+}
+
+// -- Helpers -----------------------------------------------------------
+
+/// Convert a `MemoryRow` and its tags into a JSON-friendly response.
+fn memory_row_to_response(
+    row: &codemason_agent::storage::MemoryRow,
+    tags: Vec<String>,
+) -> MemoryResponse {
+    MemoryResponse {
+        id: row.id,
+        content: row.content.clone(),
+        category: row.category.clone(),
+        source: row.source.clone(),
+        confidence: row.confidence,
+        project: row.project.clone(),
+        session_id: row.session_id.clone(),
+        created_at: row.created_at.clone(),
+        updated_at: row.updated_at.clone(),
+        access_count: row.access_count,
+        last_accessed: row.last_accessed.clone(),
+        tags,
+    }
+}
+
+// -- Handlers ----------------------------------------------------------
+
+/// `GET /memory/search` - search structured memories (FTS5).
+pub async fn search_memories(
+    State(state): State<AppState>,
+    Query(query): Query<SearchMemoryQuery>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let categories: Option<Vec<String>> = query
+        .categories
+        .as_ref()
+        .map(|c| c.split(',').map(|s| s.trim().to_string()).collect());
+    let tags: Option<Vec<String>> = query
+        .tags
+        .as_ref()
+        .map(|t| t.split(',').map(|s| s.trim().to_string()).collect());
+
+    // M-005: run the SQLite search off the async executor (FTS5 can be slow).
+    let storage = Arc::clone(&state.storage);
+    let q = query.q.clone();
+    let results = tokio::task::spawn_blocking(move || {
+        storage.search_memories(
+            &q,
+            categories.as_deref(),
+            tags.as_deref(),
+            query.limit,
+            query.min_confidence,
+        )
+    })
+    .await;
+
+    let results = match results {
+        Ok(r) => r,
+        Err(e) => {
+            return internal_error_response("search_memories (task)", e);
+        }
+    };
+
+    match results {
+        Ok(rows) => {
+            // M-002/M-005: batch the per-row tag lookups into a single query,
+            // run off the async executor.
+            let storage = Arc::clone(&state.storage);
+            let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
+            let responses: Vec<MemoryResponse> = match tokio::task::spawn_blocking(move || {
+                let tags_map = storage.get_memory_tags_batched(&ids);
+                tags_map.map(|tags| {
+                    rows.iter()
+                        .map(|row| {
+                            let tags: Vec<String> = tags.get(&row.id).cloned().unwrap_or_default();
+                            memory_row_to_response(row, tags)
+                        })
+                        .collect::<Vec<MemoryResponse>>()
+                })
+            })
+            .await
+            {
+                Ok(Ok(responses)) => responses,
+                Ok(Err(e)) => {
+                    // One storage failure must not silently blank every tag:
+                    // surface it (best-effort - keep serving the rows without
+                    // tags rather than failing the whole search).
+                    tracing::warn!("Batched tag fetch failed for memory search: {e}");
+                    Vec::new()
+                }
+                Err(e) => {
+                    tracing::warn!("Memory-search tag fetch task panicked: {e}");
+                    Vec::new()
+                }
+            };
+
+            state.event_bus.publish(Event::MemorySearched {
+                session_id: "api".to_string(),
+                query: query.q,
+                result_count: responses.len(),
+                mode: "fts".to_string(),
+            });
+
+            serialize_response(responses, "search_memories")
+        }
+        Err(e) => internal_error_response("search_memories", e),
+    }
+}
+
+/// `POST /memory/store` - store a new structured memory.
+pub async fn store_memory(
+    State(state): State<AppState>,
+    Json(body): Json<StoreMemoryRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    // Validate category
+    let valid_categories = [
+        "fact",
+        "pattern",
+        "preference",
+        "insight",
+        "error",
+        "workflow",
+    ];
+    if !valid_categories.contains(&body.category.as_str()) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "invalid category '{}': must be one of: {}",
+                body.category,
+                valid_categories.join(", ")
+            ),
+        );
+    }
+
+    // Validate confidence range
+    if !(0.0..=1.0).contains(&body.confidence) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "confidence must be between 0.0 and 1.0",
+        );
+    }
+
+    // M-005: run the SQLite write + reads off the async executor.
+    let storage = Arc::clone(&state.storage);
+    let body_for_write = body.clone();
+    let create_result = tokio::task::spawn_blocking(move || {
+        storage.create_memory(
+            &body_for_write.content,
+            &body_for_write.category,
+            &body_for_write.source,
+            body_for_write.confidence,
+            &body_for_write.project,
+            &body_for_write.session_id,
+            &body_for_write.tags,
+        )
+    })
+    .await;
+
+    let create_result = match create_result {
+        Ok(r) => r,
+        Err(e) => {
+            return internal_error_response("store_memory (task)", e);
+        }
+    };
+
+    match create_result {
+        Ok(id) => {
+            state.event_bus.publish(Event::MemoryStored {
+                session_id: body.session_id.clone(),
+                id,
+                category: body.category.clone(),
+            });
+
+            // Fetch the created memory to return the full response.
+            //
+            // ANTIPAT F-H2: this previously used `.ok().flatten()` and
+            // `.unwrap_or_default()`, so a storage failure after a successful
+            // write answered `201` with a silently degraded (empty) body.
+            // Failures are now logged and surfaced.
+            let storage = Arc::clone(&state.storage);
+            let fetch = tokio::task::spawn_blocking(move || {
+                let row = storage.get_memory(id).map_err(|e| e.to_string())?;
+                let tags = storage.get_memory_tags(id).map_err(|e| e.to_string())?;
+                Ok::<_, String>((row, tags))
+            })
+            .await;
+            let (row, tags) = match fetch {
+                Ok(Ok(pair)) => pair,
+                // `internal_error_response` is the single log site: it emits
+                // the context and the error at `error!`, so a `warn!` here
+                // would report the same failure twice at two levels.
+                Ok(Err(e)) => {
+                    return internal_error_response("store_memory (fetch-after-store)", e);
+                }
+                Err(e) => {
+                    return internal_error_response("store_memory (fetch-after-store task)", e);
+                }
+            };
+
+            match row {
+                Some(r) => {
+                    let body = match serde_json::to_value(memory_row_to_response(&r, tags)) {
+                        Ok(value) => value,
+                        Err(e) => {
+                            return internal_error_response("store_memory (serialise)", e);
+                        }
+                    };
+                    (StatusCode::CREATED, Json(body))
+                }
+                None => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))),
+            }
+        }
+        Err(e) => internal_error_response("store_memory", e),
+    }
+}
+
+/// `DELETE /memory/{id}` - forget (delete) a structured memory by ID.
+pub async fn forget_memory(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    // M-005: run the SQLite delete off the async executor. `delete_memory`
+    // itself reports whether a row was removed, so a separate existence
+    // pre-check (and its extra lock round-trip + TOCTOU window) is redundant.
+    let storage = Arc::clone(&state.storage);
+    let deleted = tokio::task::spawn_blocking(move || storage.delete_memory(id)).await;
+    match deleted {
+        Ok(Ok(true)) => {
+            state.event_bus.publish(Event::MemoryForgotten {
+                session_id: "api".to_string(),
+                count: 1,
+            });
+            (StatusCode::OK, Json(serde_json::json!({ "ok": true })))
+        }
+        Ok(Ok(false)) => error_response(StatusCode::NOT_FOUND, "memory not found"),
+        Ok(Err(e)) => internal_error_response("forget_memory", e),
+        Err(e) => internal_error_response("forget_memory (task)", e),
+    }
+}
+
+// -- Helpers ----------------------------------------------------------
+
+/// Register memory routes on an Axum router.
+pub fn memory_routes() -> axum::Router<AppState> {
+    axum::Router::new()
+        .route("/search", get(search_memories))
+        .route("/store", post(store_memory))
+        .route("/{id}", delete(forget_memory))
+        .route("/visualisation", get(get_visualisation))
+        .route("/visualisation/graph", get(get_visualisation_graph))
+        .route("/visualisation/tags", get(get_visualisation_tags))
+        .route("/visualisation/heatmap", get(get_visualisation_heatmap))
+}
+// - Visualisation endpoints --------------------------------------------------
+
+/// GET /memory/visualisation - Generate visualisation data for all memories.
+pub async fn get_visualisation(
+    State(state): State<AppState>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    // M-005: `generate_visualisation` runs blocking SQLite reads; off-load it.
+    let storage = Arc::clone(&state.storage);
+    match tokio::task::spawn_blocking(move || {
+        codemason_agent::memory::generate_visualisation(&storage)
+    })
+    .await
+    {
+        Ok(Ok(data)) => serialize_response(data, "visualisation"),
+        Ok(Err(e)) => internal_error_response("get_visualisation", e),
+        Err(e) => internal_error_response("get_visualisation (task)", e),
+    }
+}
+
+/// GET /memory/visualisation/graph - Memory category relationship graph.
+pub async fn get_visualisation_graph(
+    State(state): State<AppState>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    // FR-010: fetch memories and tags in batch queries rather than per-row.
+    // M-005: run the SQLite reads off the async executor.
+    let storage = Arc::clone(&state.storage);
+    let loaded = tokio::task::spawn_blocking(move || {
+        (
+            storage.list_memories("", MAX_VISUALISATION_MEMORIES),
+            storage.get_all_memory_tags(),
+        )
+    })
+    .await;
+
+    let (memories, all_tags) = match loaded {
+        Ok((Ok(m), Ok(t))) => (m, t),
+        Ok((Err(e), _)) | Ok((_, Err(e))) => {
+            return internal_error_response("get_visualisation_graph", e);
+        }
+        Err(e) => {
+            return internal_error_response("get_visualisation_graph (task)", e);
+        }
+    };
+    let graph = codemason_agent::memory::generate_graph(&memories, &all_tags);
+    serialize_response(graph, "graph")
+}
+
+/// GET /memory/visualisation/tags - Tag cloud.
+pub async fn get_visualisation_tags(
+    State(state): State<AppState>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    // FR-010: fetch memories and tags in batch queries rather than per-row.
+    // M-005: run the SQLite reads off the async executor.
+    let storage = Arc::clone(&state.storage);
+    let loaded = tokio::task::spawn_blocking(move || {
+        (
+            storage.list_memories("", MAX_VISUALISATION_MEMORIES),
+            storage.get_all_memory_tags(),
+        )
+    })
+    .await;
+
+    let (memories, all_tags) = match loaded {
+        Ok((Ok(m), Ok(t))) => (m, t),
+        Ok((Err(e), _)) | Ok((_, Err(e))) => {
+            return internal_error_response("get_visualisation_tags", e);
+        }
+        Err(e) => {
+            return internal_error_response("get_visualisation_tags (task)", e);
+        }
+    };
+    let cloud = codemason_agent::memory::generate_tag_cloud(&memories, &all_tags);
+    serialize_response(cloud, "tag_cloud")
+}
+
+/// GET /memory/visualisation/heatmap - Access pattern heatmap.
+pub async fn get_visualisation_heatmap(
+    State(state): State<AppState>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    // M-005: `list_memories("", MAX_VISUALISATION_MEMORIES)` is a blocking SQLite read; off-load it.
+    let storage = Arc::clone(&state.storage);
+    match tokio::task::spawn_blocking(move || storage.list_memories("", MAX_VISUALISATION_MEMORIES))
+        .await
+    {
+        Ok(Ok(memories)) => {
+            let heatmap = codemason_agent::memory::generate_heatmap(&memories);
+            serialize_response(heatmap, "heatmap")
+        }
+        Ok(Err(e)) => internal_error_response("get_visualisation_heatmap", e),
+        Err(e) => internal_error_response("get_visualisation_heatmap (task)", e),
+    }
+}

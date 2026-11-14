@@ -33,7 +33,7 @@ asked.
 
 ## 2. The change
 
-All of the FR-020 logic is inside `crates/ragent-llm/src/providers/wire/decode.rs`:
+All of the FR-020 logic is inside `crates/codemason-llm/src/providers/wire/decode.rs`:
 
 - **A per-response ledger.** `ToolCallAccumulator` holds
   `emitted_ids: Vec<String>` - every id it has emitted a start under in this
@@ -99,7 +99,7 @@ the task was executed; what T-011 added to it is the proof - see section 4 - and
 
 ## 4. Tests
 
-`crates/ragent-llm/tests/test_wire_decode.rs` (5 new cases):
+`crates/codemason-llm/tests/test_wire_decode.rs` (5 new cases):
 
 - `test_accumulator_rekeys_a_duplicate_call_id_and_keeps_the_first` - two index-keyed
   calls both announcing `call_dup`: the first start is `call_dup`, the second is
@@ -119,12 +119,12 @@ the task was executed; what T-011 added to it is the proof - see section 4 - and
   asserts exactly **two** warnings, each naming its own `duplicate_id`, with a
   message that says the call was re-keyed.
 
-`crates/ragent-llm/tests/test_openai_provider_extra.rs` (1 new) -
+`crates/codemason-llm/tests/test_openai_provider_extra.rs` (1 new) -
 `test_openai_chat_rekeys_two_calls_that_share_one_id`: the same collision through the
 real SSE parser and a local one-shot server, asserting two starts (`call_dup`,
 `openai_0_Read`), two deltas each carrying its own `path`, and two ends.
 
-`crates/ragent-llm/tests/test_azure_resource_anthropic.rs` (1 new) -
+`crates/codemason-llm/tests/test_azure_resource_anthropic.rs` (1 new) -
 `test_azure_anthropic_stream_uses_the_shared_accumulator_for_parallel_calls`: two
 parallel `tool_use` blocks with the same id through `AzureAnthropicClient` against a
 local server; starts are `toolu_dup` / `azure_resource_0_Grep`, and the interleaved
@@ -163,13 +163,13 @@ branch it never reaches is worse than no test.
 
 - `cargo fmt --all -- --check` - clean.
 - `cargo check --workspace --all-targets` - clean (46.7 s).
-- `cargo clippy -p ragent-llm --all-targets` - only the pre-existing 19
+- `cargo clippy -p codemason-llm --all-targets` - only the pre-existing 19
   `unnecessary structure name repetition` findings in `tool_cache.rs`; no finding in
   a file this task touched.
-- `cargo nextest run -p ragent-llm --no-fail-fast` - **636 passed**, 2 skipped,
+- `cargo nextest run -p codemason-llm --no-fail-fast` - **636 passed**, 2 skipped,
   0 failed (the five `test_wire_decode` collision cases, the OpenAI end-to-end case
   and the Azure Resource case among them).
-- `cargo test -p ragent-llm --doc` - 30 passed.
+- `cargo test -p codemason-llm --doc` - 30 passed.
 - Guard scripts `check-inline-tests`, `check-silent-errors`, `check-poison-locks`,
   `check-security-unwraps`, `check-shared-guards`, `check-test-env-isolation`,
   `check-dead-code-reasons`, `check-file-tool-containment`,

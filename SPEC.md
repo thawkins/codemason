@@ -1,6 +1,6 @@
 <div style="page-break-after: always; text-align: center; padding-top: 15em;">
 
-<h1 style="font-size: 3em; margin-bottom: 0.2em;">ragent</h1>
+<h1 style="font-size: 3em; margin-bottom: 0.2em;">codemason</h1>
 <h2 style="font-size: 1.5em; font-weight: normal; color: #555; margin-top: 0;">Technical Specification</h2>        <p style="margin-top: 4em; font-size: 1.1em;">        <strong>Version:</strong> 1.0.169</p>
         <p style="font-size: 1.1em;">
           <strong>Date:</strong> 2026-11-13
@@ -9,7 +9,7 @@
     <strong>Author:</strong> Tim Hawkins &lt;tim.thawkins@gmail.com&gt;
   </p>
 <p style="margin-top: 6em; font-size: 0.9em; color: #777;">
-    <a href="https://github.com/thawkins/ragent">github.com/thawkins/ragent</a>
+    <a href="https://github.com/thawkins/codemason">github.com/thawkins/codemason</a>
   </p>
 
 </div>
@@ -17,7 +17,7 @@
 
 ## Executive Summary
 
-Ragent is an open-source AI coding agent for the terminal, written entirely in
+Codemason is an open-source AI coding agent for the terminal, written entirely in
 Rust and distributed as a single statically-linked binary with zero external
 runtime dependencies. It orchestrates multiple LLM providers — Anthropic,
 OpenAI, GitHub Copilot, Google Gemini, Hugging Face, Ollama (local and cloud), xAI
@@ -28,7 +28,7 @@ provider-agnostic assistant that runs wherever a terminal does.
 
 ### What It Does
 
-Ragent bridges the gap between conversational AI and hands-on software
+Codemason bridges the gap between conversational AI and hands-on software
 engineering. An agent can read and write files, execute shell commands, search
 codebases, manage Git and GitHub workflows, query language servers, read PDF
 documents, and coordinate with other agents — all through a
@@ -38,7 +38,7 @@ gives the user full control over what the agent can and cannot do.
 
 ### How It Works
 
-At its core, ragent follows a **session → agent → tool** loop. A session
+At its core, codemason follows a **session → agent → tool** loop. A session
 processor manages the conversation with the LLM provider, the agent system
 defines personality and capabilities via profiles, and the tool registry
 dispatches execution requests. An asynchronous event bus (built on tokio)
@@ -62,7 +62,7 @@ graph LR
 
 | Capability | Summary |
 |-----------|---------|
-| **Multi-provider LLM** | Every provider registered in `ragent-llm` (`crates/ragent-llm/src/providers/`), with automatic model discovery, health monitoring, streaming, vision, and reasoning levels |
+| **Multi-provider LLM** | Every provider registered in `codemason-llm` (`crates/codemason-llm/src/providers/`), with automatic model discovery, health monitoring, streaming, vision, and reasoning levels |
 | **Terminal UI** | Full-screen ratatui interface with streaming markdown, syntax highlighting, slash commands, and image support |
 | **HTTP Server** | REST + SSE API (Axum) for headless operation and external integrations |
 | **Tool System** | Broad tool coverage across file ops, shell, search, GitHub, GitLab, code index, memory, teams, sub-agents, PDF, web, and MCP |
@@ -76,7 +76,7 @@ graph LR
 
 ### Who It's For
 
-Ragent is designed for software developers and teams who want an AI assistant
+Codemason is designed for software developers and teams who want an AI assistant
 that lives in their terminal, respects their security boundaries, and learns
 from their workflow over time. It is equally suited to interactive pair-programming
 sessions and headless CI/CD integration via its HTTP API.
@@ -98,7 +98,7 @@ sessions and headless CI/CD integration via its HTTP API.
 
 ### Project Status
 
-Ragent is in **beta**. The core architecture, tool system,
+Codemason is in **beta**. The core architecture, tool system,
 TUI, HTTP server, memory system, spec management, skills system, research system,
 multi-agent coordination, security layer, telemetry, code index semantic graph,
 plugin system, connector system (§19C), execution backends (§19D), the Agent
@@ -154,8 +154,8 @@ below documents the current state of all subsystems.
 - [19B. Durable Initiatives & Skill Management](#19b-durable-initiatives--skill-management)
 - [19C. Connector System (Claude-Connector-Equivalent Integrations over MCP)](#19c-connector-system-claude-connector-equivalent-integrations-over-mcp)
 - [19D. Execution Backends (`local` / `docker` / `podman` / `remote`)](#19d-execution-backends-local--docker--podman--remote)
-- [19E. Agent Client Protocol (`ragent-agent/src/acp/`)](#19e-agent-client-protocol-ragent-agentsrcacp)
-- [19F. Automation Service (`ragent-agent/src/automation/`)](#19f-automation-service-ragent-agentsrcautomation)
+- [19E. Agent Client Protocol (`codemason-agent/src/acp/`)](#19e-agent-client-protocol-codemason-agentsrcacp)
+- [19F. Automation Service (`codemason-agent/src/automation/`)](#19f-automation-service-codemason-agentsrcautomation)
 
 ### Part VII: Operations & Reference
 
@@ -199,7 +199,7 @@ below documents the current state of all subsystems.
 
 ## 1. Overview
 
-Ragent is an AI coding agent for the terminal, built in Rust. It provides multi-provider LLM orchestration, a built-in tool system, terminal UI, and client/server architecture — all compiled into a single statically-linked binary.
+Codemason is an AI coding agent for the terminal, built in Rust. It provides multi-provider LLM orchestration, a built-in tool system, terminal UI, and client/server architecture — all compiled into a single statically-linked binary.
 
 ### 1.1 Key Characteristics
 
@@ -207,7 +207,7 @@ Ragent is an AI coding agent for the terminal, built in Rust. It provides multi-
 |----------------|-------------|
 | **Single binary** | Statically linked, zero runtime dependencies beyond OS libraries |
 | **Multi-provider** | 13 first-class LLM provider IDs with auto-discovery and health checks |
-| **Tool-rich** | A tool registry grouped into permission categories; `ragent --dry-run --json run x` reports the live total (`mf_screenshot` is engine-gated, spec `openhands` FR-029) |
+| **Tool-rich** | A tool registry grouped into permission categories; `codemason --dry-run --json run x` reports the live total (`mf_screenshot` is engine-gated, spec `openhands` FR-029) |
 | **Local-first** | SQLite, Tantivy, and tree-sitter compiled in; no external services required |
 | **Streaming** | Real-time token, tool, and event streaming via TUI and HTTP SSE |
 | **Extensible** | Custom agents, skills, MCP servers, and provider modules |
@@ -234,28 +234,28 @@ Ragent is an AI coding agent for the terminal, built in Rust. It provides multi-
 
 ## 2. Architecture
 
-Ragent is organised as a Cargo workspace of focused crates. Each crate owns a
+Codemason is organised as a Cargo workspace of focused crates. Each crate owns a
 single concern, and the top-level `src/main.rs` wires them together behind a clap
 CLI.
 
 ```mermaid
 graph TB
     subgraph "Workspace Crates"
-        A[ragent-agent]
-        B[ragent-bench]
-        C[ragent-codeindex]
-        D[ragent-config]
-        E[ragent-llm]
-        G[ragent-server]
-        H[ragent-specs]
-        I[ragent-storage]
-        K[ragent-tools-core]
-        L[ragent-tools-extended]
-        M[ragent-tools-vcs]
-        N[ragent-tui]
-        O[ragent-types]
-        P[ragent-research]
-        S[ragent-surface]
+        A[codemason-agent]
+        B[codemason-bench]
+        C[codemason-codeindex]
+        D[codemason-config]
+        E[codemason-llm]
+        G[codemason-server]
+        H[codemason-specs]
+        I[codemason-storage]
+        K[codemason-tools-core]
+        L[codemason-tools-extended]
+        M[codemason-tools-vcs]
+        N[codemason-tui]
+        O[codemason-types]
+        P[codemason-research]
+        S[codemason-surface]
     end
 
     Q[src/main.rs CLI entry]
@@ -293,47 +293,47 @@ graph TB
 
 | Crate | Responsibility | Approx. `src/` Lines |
 |-------|----------------|---------------|
-| `ragent-types` | Shared IDs, events, messages, errors, sanitisation | ~8,000 |
-| `ragent-config` | Configuration loading, defaults, permission rules | ~8,900 |
-| `ragent-connectors` | Connector descriptors, store/ledger, catalogue providers, MCP bridge, `/connectors` surface | ~10,500 |
-| `ragent-storage` | SQLite persistence, snapshots, encrypted credentials | ~7,700 |
-| `ragent-llm` | Provider clients and model/provider registry | ~18,800 |
-| `ragent-tools-core` | File, shell, search, and utility tools | ~12,300 |
-| `ragent-tools-extended` | Memory, code index, PDF, web tools | ~29,900 |
-| `ragent-tools-vcs` | GitHub and GitLab tool surface | ~9,000 |
-| `ragent-agent` | Session processor, agent resolution, tool registry, memory, MCP; team runtime + the `team_*` tools (former `ragent-team` shim folded in) | ~77,300 |
-| `ragent-codeindex` | Tree-sitter parsing, SQLite/Tantivy index, file watcher | ~14,200 |
-| `ragent-server` | Axum HTTP routes and SSE streaming | ~6,100 |
-| `ragent-tui` | Ratatui terminal interface | ~72,300 |
-| `ragent-bench` | Criterion benchmarks shared between TUI and CLI | ~6,800 |
-| `ragent-specs` | Spec lifecycle management, SDD artifact generation, consistency validation, constitution parsing | ~9,100 |
-| `ragent-research` | Research types, gatherers, and plan-dep parser | ~39,000 |
-| `ragent-plugins` | Plugin discovery, dialect manifests, sandboxed JS runtime, lifecycle, skills/MCP/commands/agents/hooks bridges, `/plugins` surface | ~11,400 |
-| `ragent-surface` | Shared surface helpers for the plugin/connector families: attribution, subcommand tokeniser, store-dir resolution, harness step model, schema samples | ~1,200 |
-| `ragent-telemetry` | OpenTelemetry metrics export subsystem | ~6,400 |
-| `ragent-hyperresearch` | Deep-research engine: persistent vault, fetch/scholarly providers, claims, graph, MCP and HTTP surfaces | ~1,200 |
+| `codemason-types` | Shared IDs, events, messages, errors, sanitisation | ~8,000 |
+| `codemason-config` | Configuration loading, defaults, permission rules | ~8,900 |
+| `codemason-connectors` | Connector descriptors, store/ledger, catalogue providers, MCP bridge, `/connectors` surface | ~10,500 |
+| `codemason-storage` | SQLite persistence, snapshots, encrypted credentials | ~7,700 |
+| `codemason-llm` | Provider clients and model/provider registry | ~18,800 |
+| `codemason-tools-core` | File, shell, search, and utility tools | ~12,300 |
+| `codemason-tools-extended` | Memory, code index, PDF, web tools | ~29,900 |
+| `codemason-tools-vcs` | GitHub and GitLab tool surface | ~9,000 |
+| `codemason-agent` | Session processor, agent resolution, tool registry, memory, MCP; team runtime + the `team_*` tools (former `codemason-team` shim folded in) | ~77,300 |
+| `codemason-codeindex` | Tree-sitter parsing, SQLite/Tantivy index, file watcher | ~14,200 |
+| `codemason-server` | Axum HTTP routes and SSE streaming | ~6,100 |
+| `codemason-tui` | Ratatui terminal interface | ~72,300 |
+| `codemason-bench` | Criterion benchmarks shared between TUI and CLI | ~6,800 |
+| `codemason-specs` | Spec lifecycle management, SDD artifact generation, consistency validation, constitution parsing | ~9,100 |
+| `codemason-research` | Research types, gatherers, and plan-dep parser | ~39,000 |
+| `codemason-plugins` | Plugin discovery, dialect manifests, sandboxed JS runtime, lifecycle, skills/MCP/commands/agents/hooks bridges, `/plugins` surface | ~11,400 |
+| `codemason-surface` | Shared surface helpers for the plugin/connector families: attribution, subcommand tokeniser, store-dir resolution, harness step model, schema samples | ~1,200 |
+| `codemason-telemetry` | OpenTelemetry metrics export subsystem | ~6,400 |
+| `codemason-hyperresearch` | Deep-research engine: persistent vault, fetch/scholarly providers, claims, graph, MCP and HTTP surfaces | ~1,200 |
 
 ### 2.2 Crate Dependency Graph
 
 ```mermaid
 graph TD
-    T[ragent-types]
-    D[ragent-config]
-    S[ragent-storage]
-    L[ragent-llm]
-    TC[ragent-tools-core]
-    TE[ragent-tools-extended]
-    TV[ragent-tools-vcs]
-    A[ragent-agent]
-    CI[ragent-codeindex]
-    SV[ragent-server]
-    TU[ragent-tui]
-    SP[ragent-specs]
-    RS[ragent-research]
-    B[ragent-bench]
-    PL[ragent-plugins]
-    CN[ragent-connectors]
-    SU[ragent-surface]
+    T[codemason-types]
+    D[codemason-config]
+    S[codemason-storage]
+    L[codemason-llm]
+    TC[codemason-tools-core]
+    TE[codemason-tools-extended]
+    TV[codemason-tools-vcs]
+    A[codemason-agent]
+    CI[codemason-codeindex]
+    SV[codemason-server]
+    TU[codemason-tui]
+    SP[codemason-specs]
+    RS[codemason-research]
+    B[codemason-bench]
+    PL[codemason-plugins]
+    CN[codemason-connectors]
+    SU[codemason-surface]
 
     T --> D
     T --> S
@@ -374,13 +374,13 @@ graph TD
 **Figure 3:** Crate Dependency Graph — Inter-crate dependency relationships
 
 Per-crate `fn`-definition counts (lexical lower bounds, re-measured 2026-10-21):
-`ragent-tui` 6,054 · `ragent-agent` 4,630 · `ragent-tools-extended` 2,956 ·
-`ragent-research` 2,513 · `ragent-codeindex` 1,130 · `ragent-llm` 1,102 ·
-`ragent-tools-core` 1,001 · `ragent-plugins` 991 · `ragent-specs` 981 ·
-`ragent-tools-vcs` 941 · `ragent-connectors` 907 · `ragent-config` 787 ·
-`ragent-types` 590 · `ragent-storage` 585 · `ragent-telemetry` 550 ·
-`ragent-bench` 412 · `ragent-server` 363 · root `ragent` binary 159 ·
-`ragent-surface` 114 — 26,768 workspace-wide (8,985 in `src/`, 17,667 in
+`codemason-tui` 6,054 · `codemason-agent` 4,630 · `codemason-tools-extended` 2,956 ·
+`codemason-research` 2,513 · `codemason-codeindex` 1,130 · `codemason-llm` 1,102 ·
+`codemason-tools-core` 1,001 · `codemason-plugins` 991 · `codemason-specs` 981 ·
+`codemason-tools-vcs` 941 · `codemason-connectors` 907 · `codemason-config` 787 ·
+`codemason-types` 590 · `codemason-storage` 585 · `codemason-telemetry` 550 ·
+`codemason-bench` 412 · `codemason-server` 363 · root `codemason` binary 159 ·
+`codemason-surface` 114 — 26,768 workspace-wide (8,985 in `src/`, 17,667 in
 `tests/`, 66% test code).
 
 ### 2.3 Event Bus Flow
@@ -427,7 +427,7 @@ Key event types include:
 
 ### 3.1 LLM Providers
 
-Ragent supports multiple providers through a common trait interface. Providers
+Codemason supports multiple providers through a common trait interface. Providers
 are registered in a runtime registry, and the session processor selects one
 based on the active agent/model.
 
@@ -484,7 +484,7 @@ selects a downstream model based on request characteristics.)
 
 #### Ollama Cloud Provider
 
-- Endpoint configured via `OLLAMA_CLOUD_HOST` or `ragent.json`
+- Endpoint configured via `OLLAMA_CLOUD_HOST` or `codemason.json`
 - Dynamic model discovery against `/api/tags`
 - Supports vision models when the Ollama model reports `vision`
 
@@ -516,13 +516,13 @@ selects a downstream model based on request characteristics.)
 
 #### Azure Resource (File) Provider
 
-- Reads endpoint definitions from `azureresources.json` in `~/.config/ragent/` or `.ragent/`
+- Reads endpoint definitions from `azureresources.json` in `~/.config/codemason/` or `.codemason/`
 - Supports per-endpoint API keys, custom context windows, capability tags, thinking config
 - Can route to Anthropic Messages (`/anthropic/v1/messages`) or OpenAI (`/openai/v1/chat/completions`) API shape via `api_type`
 
 #### OpenRouter Provider
 
-- API key via `OPENROUTER_API_KEY` or `ragent auth openrouter <key>`
+- API key via `OPENROUTER_API_KEY` or `codemason auth openrouter <key>`
 - Single `GET /api/v1/models` discovery call returns all 100+ upstream models
 - OpenAI-compatible `POST /api/v1/chat/completions` streaming with tool-call and reasoning deltas
 - Per-model metadata (context window, pricing, vision/reasoning flags) mapped from discovery
@@ -553,10 +553,10 @@ profile, and `wire::profile_table::PROVIDER_WIRE` names the family of every
 registered provider id; `profile_for` is the one lookup the encoders, the
 accumulator, the parallel gate and the wire matrix share. There is no catch-all
 row: an id with no declared contract fails the coverage assertion in
-`crates/ragent-llm/tests/test_wire_profile_table.rs` at build time, so a
+`crates/codemason-llm/tests/test_wire_profile_table.rs` at build time, so a
 provider cannot join the build without stating its tool-calling terms.
 
-`ragent --wire-matrix` prints that contract per registered provider as one
+`codemason --wire-matrix` prints that contract per registered provider as one
 aligned ASCII table (ten columns - the provider id plus the nine fields, one row
 per id, sorted, no blank or `-` cell) and exits without contacting a provider or
 executing a tool; a registered id with no row is reported by name and exits
@@ -630,7 +630,7 @@ has a JSON schema, a permission category, and an async `execute` method.
 |------|---------|
 | `get_env` | Read non-sensitive environment variables |
 | `calculator` | Evaluate mathematical expressions |
-| `ragent_info` | Report the running ragent version, build time, git commit, compiler, and execution details (pid, parent pid, start time, uptime, executable, working directory, memory, thread count) |
+| `codemason_info` | Report the running codemason version, build time, git commit, compiler, and execution details (pid, parent pid, start time, uptime, executable, working directory, memory, thread count) |
 | `os_info` | Report read-only host OS/hardware introspection (OS identity and distro, CPU, GPU adapters and graphics-API versions, physical hardware, memory, uptime, process environment); also `/osinfo show` |
 | `tool_info` | Return a JSON-encoded dump of the tool registry (name, description, parameters schema, permission category, source, hidden state) |
 | `commands_info` | Return a JSON-encoded catalog of every slash command (trigger, description, subcommands, flags) including plugin-contributed commands |
@@ -658,7 +658,7 @@ has a JSON schema, a permission category, and an async `execute` method.
 | Initiatives / skills | `initiative`, `Skill` |
 | Interactive | `AskUserQuestion`, `think` |
 | Task management | `TaskCreate`, `TaskUpdate`, `TaskGet`, `TaskList` |
-| Utility | `get_env`, `calculator`, `ragent_info`, `os_info`, `tool_info`, `commands_info`, `autofix_status`, `autofix_add` |
+| Utility | `get_env`, `calculator`, `codemason_info`, `os_info`, `tool_info`, `commands_info`, `autofix_status`, `autofix_add` |
 
 #### Team Tools
 
@@ -708,7 +708,7 @@ Four rules apply to every provider and every turn, whichever surface drove it.
 
 **A provider declares its contract, it does not build tool JSON.** The nine
 profile fields in the section above are the contract
-(`ragent_llm::provider::wire::ToolWireProfile`), and one encoder each reads them:
+(`codemason_llm::provider::wire::ToolWireProfile`), and one encoder each reads them:
 `encode_tools` for the outbound definition list (its bytes are cached per
 `(ToolFormat, fingerprint)` and a cache hit is byte-identical to the miss),
 `encode_message` for a persisted message - a tool result lands in the profile's
@@ -721,7 +721,7 @@ is replayed in the next request and a fabricated one that changes shape between
 requests breaks result pairing. Two calls carrying the same id in one response
 are reconciled by occurrence order and left as two calls; neither is dropped.
 Tool-use argument JSON is decoded by one shared helper,
-`ragent_types::tool_args::decode_tool_arguments`, which accepts a JSON object, a
+`codemason_types::tool_args::decode_tool_arguments`, which accepts a JSON object, a
 JSON string that decodes to one, and empty or whitespace text (as `{}`), is
 called at most once per call per step, and is not called in the provider layer at
 all. A decode failure produces one refusal value
@@ -780,7 +780,7 @@ and nowhere else.
 ### 3.2.3 Tool Surface Agreement (FR-030, spec `uniformtools`)
 
 The registered tool surface is grouped into permission families (the `tools`
-section of `ragent --dry-run --json run x` reports the live total and per-family
+section of `codemason --dry-run --json run x` reports the live total and per-family
 counts), and every enumeration of it is checked against the registry rather than
 against a remembered number:
 
@@ -920,7 +920,7 @@ call's output, not a refusal.
   (the code index registers its ten tools only while enabled), so there is no
   per-family filter to configure.
 - **Permissions** — Per-agent permission rules merge with global config
-- **Custom prompts** — Markdown/OASF profiles in `~/.ragent/agents/` or `.ragent/agents/`
+- **Custom prompts** — Markdown/OASF profiles in `~/.codemason/agents/` or `.codemason/agents/`
 
 ### 3.3.1 Git Platform Integrations
 
@@ -1051,7 +1051,7 @@ precedence over sub-agent tasks. Covered by
 
 ### 3.9 Failure Capture: Panic Reports, Crash Dumps, and the stderr Spool
 
-Three complementary mechanisms cover the three ways a ragent process can die.
+Three complementary mechanisms cover the three ways a codemason process can die.
 
 | Failure | Captured by | Where the evidence lands |
 |---------|-------------|--------------------------|
@@ -1061,7 +1061,7 @@ Three complementary mechanisms cover the three ways a ragent process can die.
 
 **Stack overflows cannot be trapped in-process.** The Rust runtime prints
 `thread '...' has overflowed its stack` and calls `abort()`; nothing after that
-point runs. ragent therefore does not try. Instead, `src/crash_dump.rs` stamps
+point runs. codemason therefore does not try. Instead, `src/crash_dump.rs` stamps
 `log/panics/last-crash.json` at startup (pid, exe, args, cwd, thread,
 `status: running`, and a platform-specific core-dump retrieval hint), overwrites
 it with `clean exit` on a normal return, and — when the next start finds a
@@ -1075,7 +1075,7 @@ the macOS `/cores` convention. A clean exit never reports.
 default panic hook, `eprintln!`, and C-library diagnostics would be overwritten
 by the next frame. In TUI mode the binary replaces fd 2 with the write end of a
 pipe and drains it on a dedicated thread into
-`ragent_types::stderr_spool::Spool` (`SPOOL_MAX_LINES = 1000`); the TUI mirrors
+`codemason_types::stderr_spool::Spool` (`SPOOL_MAX_LINES = 1000`); the TUI mirrors
 each chunk into the log panel as `stderr: <line>`. The spool counts newlines per
 write and, once the 1000-line cap is exceeded, rewrites the file with only its
 newest 1000 lines — the rewrite is skipped entirely for a write containing no
@@ -1211,15 +1211,15 @@ shares one implementation.
 
 | Guard | Where it lives | What it rejects |
 |-------|----------------|-----------------|
-| `validate_team_name` | `ragent-agent::team::store` | anything outside `^[a-z0-9][a-z0-9-]{0,63}$`; called by `TeamStore::create`, `find_team_dir`, `find_team_dir_cached`, `team_cleanup`, and the `/team create`/`/team delete` slash commands |
-| Team-name slugify (`slugify_team_name`) | `ragent-agent::team::store` | blueprint/timestamp-derived names are slugified before use so generation can never produce an invalid name |
-| `is_safe_git_argument` | `ragent-plugins::add` | a `git+` ref or subpath that is not `[A-Za-z0-9._/-]+`, begins with `-`, or contains `..`; `git_run` also passes `--` before every positional |
-| `sanitize_declared_id` / `confined_dest_dir` | `ragent-plugins::manifest` / `add` | a manifest `id` that is not a single `Component::Normal` matching `[A-Za-z0-9._-]+` (no separators, no `..`, not absolute) |
-| `check_path_within_allowed_roots_cached` | `ragent-tools-core` | a `multi_edit` target outside the workspace — the same containment check `Edit`/`read`/`Write` apply |
+| `validate_team_name` | `codemason-agent::team::store` | anything outside `^[a-z0-9][a-z0-9-]{0,63}$`; called by `TeamStore::create`, `find_team_dir`, `find_team_dir_cached`, `team_cleanup`, and the `/team create`/`/team delete` slash commands |
+| Team-name slugify (`slugify_team_name`) | `codemason-agent::team::store` | blueprint/timestamp-derived names are slugified before use so generation can never produce an invalid name |
+| `is_safe_git_argument` | `codemason-plugins::add` | a `git+` ref or subpath that is not `[A-Za-z0-9._/-]+`, begins with `-`, or contains `..`; `git_run` also passes `--` before every positional |
+| `sanitize_declared_id` / `confined_dest_dir` | `codemason-plugins::manifest` / `add` | a manifest `id` that is not a single `Component::Normal` matching `[A-Za-z0-9._-]+` (no separators, no `..`, not absolute) |
+| `check_path_within_allowed_roots_cached` | `codemason-tools-core` | a `multi_edit` target outside the workspace — the same containment check `Edit`/`read`/`Write` apply |
 
 Two further classes are handled in place rather than by a helper:
 
-- **Blueprint seed execution** — every tool named by `.ragent/blueprints/teams/<bp>/task-seed.json`
+- **Blueprint seed execution** — every tool named by `.codemason/blueprints/teams/<bp>/task-seed.json`
   or `spawn-prompts.json` is dispatched through `dispatch_seed_tool`, which consults
   the session permission checker: a category that is not explicitly `Allow` (or
   `Ask`-with-no-checker) refuses the seed and reports why, so a repository-supplied
@@ -1234,25 +1234,25 @@ Each guard is a named helper or an explicit bound.
 
 | Guard | Where it lives | What it enforces |
 |-------|----------------|------------------|
-| `hook_approved` on `PreToolUseResult::Allow` | `ragent-agent::hooks` / `session::processor` | a `pre_tool_use` hook approval is distinguishable from "no hook"; it may satisfy an `Ask` but never an explicit `Deny`. Plugin-contributed `pre_tool_use` hooks are dropped by `merge_hook_configs` |
-| `unpack_archive_checked` | `ragent-agent::session::archive` | session-archive import rejects escaping entry paths and caps entries (10 000) and total decompressed bytes (512 MiB); `manifest.session_directory` is accepted only inside the working directory |
-| `exec_guard` (`is_allowed_fixture_program`) | `ragent-bench` | a benchmark fixture may only spawn an allowlisted toolchain program (bare name, no path, no shell) |
-| `index_file` containment | `ragent-codeindex` | the watcher-driven path canonicalises and refuses anything outside the project root, refuses symlinks, and enforces `max_file_size` |
-| Project-config privilege stripping | `ragent-config` | the cwd `.ragent/ragent.json` may not enable YOLO, remove a global deny rule, or widen `allowed_roots`/bash allow-lists |
-| `x-goog-api-key` header | `ragent-llm::providers::gemini` | the Gemini key is sent as a header, registered with the secret registry, and never interpolated into a logged URL |
-| `redirect::Policy::none()` | `ragent-llm::providers` | authenticated LLM requests do not follow redirects, so a non-standard auth header cannot be replayed cross-host |
-| `ResearchIo::template_path` -> `Option` | `ragent-research::io` | the `--template` name must be a single `[A-Za-z0-9_-]` component; an invalid name yields no template plus a warning |
-| `redact_config_secrets` | `ragent-server::routes` | `GET /config` (`get_config`) replaces every credential value before the response is returned |
-| `check_path_within_root` on `from_files` | `ragent-research` / `ragent-server` | research file seeds are canonicalised and rejected outside the project root |
-| ChaCha20-Poly1305 `v3:` credential store | `ragent-storage` | a per-install 0600 key file, an authenticated construction with a fresh nonce, and a hard error on a corrupt row (no empty-string downgrade) |
-| `sender_session_id` on `MailboxMessage` | `ragent-agent::team::mailbox` | the authenticated sender session id is recorded; a message claiming `from: "lead"` without one is rejected at the write boundary |
-| `tls-roots` OTLP transport | `ragent-telemetry` | the gRPC exporter is compiled with TLS, and a non-loopback `https://` endpoint is refused when TLS is unavailable |
-| Telemetry privilege stripping | `ragent-config` | telemetry enablement and endpoint overrides come from the user-global config only |
-| OTLP export health monitor | `ragent-telemetry` | every export outcome is classified and counted; 5 consecutive failures disable export instead of retrying a dead endpoint, and each failure surfaces as an `Agent Notice` with the masked endpoint |
-| Blocking OTLP exporter | `ragent-telemetry::subsystem::build_provider` | the OTLP exporter uses the blocking reqwest client (`reqwest-blocking-client`) under the default `PeriodicReader`, so an export needs no Tokio reactor and `flush` is safe from any thread |
-| Thread-aware TUI panic hook | `ragent-tui::run_tui` | terminal teardown runs only when the panicking thread is the UI thread, so a background-worker panic cannot destroy the alternate screen |
-| Safe-command allowlist + in-crate calculator | `ragent-tools-core` | the allowlist is read-only commands only, interpreters always go through the permission gate, banned tools are consulted first, and `calculator` evaluates arithmetic in-process (no `python3 -c`) |
-| VCS argument hardening | `ragent-tools-vcs` | `reject_option_like` on every ref/branch/tag/remote/path, `--` before positionals, `validate_clone_directory` confines the clone target, and a `gitlab:<host>` host is accepted only when it matches the configured instance |
+| `hook_approved` on `PreToolUseResult::Allow` | `codemason-agent::hooks` / `session::processor` | a `pre_tool_use` hook approval is distinguishable from "no hook"; it may satisfy an `Ask` but never an explicit `Deny`. Plugin-contributed `pre_tool_use` hooks are dropped by `merge_hook_configs` |
+| `unpack_archive_checked` | `codemason-agent::session::archive` | session-archive import rejects escaping entry paths and caps entries (10 000) and total decompressed bytes (512 MiB); `manifest.session_directory` is accepted only inside the working directory |
+| `exec_guard` (`is_allowed_fixture_program`) | `codemason-bench` | a benchmark fixture may only spawn an allowlisted toolchain program (bare name, no path, no shell) |
+| `index_file` containment | `codemason-codeindex` | the watcher-driven path canonicalises and refuses anything outside the project root, refuses symlinks, and enforces `max_file_size` |
+| Project-config privilege stripping | `codemason-config` | the cwd `.codemason/codemason.json` may not enable YOLO, remove a global deny rule, or widen `allowed_roots`/bash allow-lists |
+| `x-goog-api-key` header | `codemason-llm::providers::gemini` | the Gemini key is sent as a header, registered with the secret registry, and never interpolated into a logged URL |
+| `redirect::Policy::none()` | `codemason-llm::providers` | authenticated LLM requests do not follow redirects, so a non-standard auth header cannot be replayed cross-host |
+| `ResearchIo::template_path` -> `Option` | `codemason-research::io` | the `--template` name must be a single `[A-Za-z0-9_-]` component; an invalid name yields no template plus a warning |
+| `redact_config_secrets` | `codemason-server::routes` | `GET /config` (`get_config`) replaces every credential value before the response is returned |
+| `check_path_within_root` on `from_files` | `codemason-research` / `codemason-server` | research file seeds are canonicalised and rejected outside the project root |
+| ChaCha20-Poly1305 `v3:` credential store | `codemason-storage` | a per-install 0600 key file, an authenticated construction with a fresh nonce, and a hard error on a corrupt row (no empty-string downgrade) |
+| `sender_session_id` on `MailboxMessage` | `codemason-agent::team::mailbox` | the authenticated sender session id is recorded; a message claiming `from: "lead"` without one is rejected at the write boundary |
+| `tls-roots` OTLP transport | `codemason-telemetry` | the gRPC exporter is compiled with TLS, and a non-loopback `https://` endpoint is refused when TLS is unavailable |
+| Telemetry privilege stripping | `codemason-config` | telemetry enablement and endpoint overrides come from the user-global config only |
+| OTLP export health monitor | `codemason-telemetry` | every export outcome is classified and counted; 5 consecutive failures disable export instead of retrying a dead endpoint, and each failure surfaces as an `Agent Notice` with the masked endpoint |
+| Blocking OTLP exporter | `codemason-telemetry::subsystem::build_provider` | the OTLP exporter uses the blocking reqwest client (`reqwest-blocking-client`) under the default `PeriodicReader`, so an export needs no Tokio reactor and `flush` is safe from any thread |
+| Thread-aware TUI panic hook | `codemason-tui::run_tui` | terminal teardown runs only when the panicking thread is the UI thread, so a background-worker panic cannot destroy the alternate screen |
+| Safe-command allowlist + in-crate calculator | `codemason-tools-core` | the allowlist is read-only commands only, interpreters always go through the permission gate, banned tools are consulted first, and `calculator` evaluates arithmetic in-process (no `python3 -c`) |
+| VCS argument hardening | `codemason-tools-vcs` | `reject_option_like` on every ref/branch/tag/remote/path, `--` before positionals, `validate_clone_directory` confines the clone target, and a `gitlab:<host>` host is accepted only when it matches the configured instance |
 
 ### 4.6c Network and Secret Bounds
 
@@ -1261,25 +1261,25 @@ delay**, and **origin-scoped credential attachment**.
 
 | Guard | Where it lives | What it enforces |
 |-------|----------------|------------------|
-| `read_body_capped` / MCP body cap | `ragent-agent::mcp::http` | MCP HTTP responses are read under a fixed byte cap |
-| Benchmark download caps | `ragent-bench::data` | client timeout, streamed byte cap, pagination page/record budget, and `contained_join` for manifest `case_file`/`relative_path` |
-| `MAX_RETRY_AFTER` / `MAX_SSE_BUFFER_BYTES` / `MAX_ERROR_BODY_BYTES` | `ragent-llm::providers::http_client` | `Retry-After` is clamped to 30 s, the SSE accumulation buffer aborts the stream past 1 MiB, and error bodies are read under 64 KiB |
-| `MAX_TREE_REQUESTS` / `MAX_TREE_ENTRIES` / `MAX_JOB_PAGES` | `ragent-tools-vcs` | the GitHub tree walk and the GitLab jobs pagination are bounded |
-| `read_body_capped` / `MAX_FETCH_BODY_BYTES` / `MAX_CRAWL_PAGE_BYTES` | `ragent-tools-extended::masterfetch` | responses are streamed under a byte budget; `crawl_urls` is SSRF-validated at the tool boundary |
+| `read_body_capped` / MCP body cap | `codemason-agent::mcp::http` | MCP HTTP responses are read under a fixed byte cap |
+| Benchmark download caps | `codemason-bench::data` | client timeout, streamed byte cap, pagination page/record budget, and `contained_join` for manifest `case_file`/`relative_path` |
+| `MAX_RETRY_AFTER` / `MAX_SSE_BUFFER_BYTES` / `MAX_ERROR_BODY_BYTES` | `codemason-llm::providers::http_client` | `Retry-After` is clamped to 30 s, the SSE accumulation buffer aborts the stream past 1 MiB, and error bodies are read under 64 KiB |
+| `MAX_TREE_REQUESTS` / `MAX_TREE_ENTRIES` / `MAX_JOB_PAGES` | `codemason-tools-vcs` | the GitHub tree walk and the GitLab jobs pagination are bounded |
+| `read_body_capped` / `MAX_FETCH_BODY_BYTES` / `MAX_CRAWL_PAGE_BYTES` | `codemason-tools-extended::masterfetch` | responses are streamed under a byte budget; `crawl_urls` is SSRF-validated at the tool boundary |
 | Credential env seeding | binary startup | every credential env var is registered with the secret registry before any log can be written |
-| `redact_secrets` on tool output | `ragent-tools-core::bash`, `ragent-tools-vcs::github_actions` | bash partial/completed output and CI log excerpts are redacted before they reach the model or the session store |
-| `is_allowed_request_header` | `ragent-tools-extended::http_request` | only `accept`, `accept-language`, `content-type` and `user-agent` may be set; routing, hop-by-hop and credential headers are refused |
-| `mask_secret` | `ragent-tui::layout` | the provider-setup dialog masks the API key and the GitLab PAT |
-| `check_path_within_workspace` | `ragent-tools-extended::ToolContext` | `pdf_write` confines its output path |
-| `build_exclude_matcher` / `clear_index_dir` | `ragent-codeindex` | the configured exclusion globs are applied and the FTS recovery wipe refuses a symlinked directory |
-| Scratch-dir confinement (`bash_scratch_dir`, `restrict_to_owner`) | `ragent-tools-core::bash` | the wrapper script and `export -p` state file live in a 0700 directory as 0600 files |
-| `MAX_CANDIDATES_PER_REF` / `MAX_EDGES_PER_PASS` | `ragent-codeindex::graph::edges` | edge derivation carries a per-reference fan-out cap and a global edge budget |
-| `MAX_GAP_EXPANSION` / `MAX_CONTRADICTION_REQUIREMENTS` | `ragent-specs::validate` | numbering-gap expansion and contradiction detection are bounded |
-| `MAX_MESSAGE_BYTES` / `validate_hook_command` / `HOOK_TIMEOUT` | `ragent-agent::team` | mailbox messages are size-capped, team hook commands are validated, hooks time out at 30 s with a process-group kill, and feedback is capped |
-| `positive_duration_secs` / checked arithmetic | `ragent-types::cron` | `CronSchedule` returns `None` instead of panicking on an invariant violation and uses `checked_mul` / `saturating_mul` |
-| `SPOOL_MAX_BYTES` | `ragent-types::stderr_spool` | the spool enforces a byte ceiling on every write, including newline-free ones |
-| `split_bash_command` substitution depth | `ragent-agent::session::permissions` | a `;`/`&&` inside `$( ... )` does not split the command into a separately-judged sub-command |
-| `same_origin_as` | `ragent-tools-vcs::github` | the Bearer token is attached only when the resolved URL matches the configured API origin |
+| `redact_secrets` on tool output | `codemason-tools-core::bash`, `codemason-tools-vcs::github_actions` | bash partial/completed output and CI log excerpts are redacted before they reach the model or the session store |
+| `is_allowed_request_header` | `codemason-tools-extended::http_request` | only `accept`, `accept-language`, `content-type` and `user-agent` may be set; routing, hop-by-hop and credential headers are refused |
+| `mask_secret` | `codemason-tui::layout` | the provider-setup dialog masks the API key and the GitLab PAT |
+| `check_path_within_workspace` | `codemason-tools-extended::ToolContext` | `pdf_write` confines its output path |
+| `build_exclude_matcher` / `clear_index_dir` | `codemason-codeindex` | the configured exclusion globs are applied and the FTS recovery wipe refuses a symlinked directory |
+| Scratch-dir confinement (`bash_scratch_dir`, `restrict_to_owner`) | `codemason-tools-core::bash` | the wrapper script and `export -p` state file live in a 0700 directory as 0600 files |
+| `MAX_CANDIDATES_PER_REF` / `MAX_EDGES_PER_PASS` | `codemason-codeindex::graph::edges` | edge derivation carries a per-reference fan-out cap and a global edge budget |
+| `MAX_GAP_EXPANSION` / `MAX_CONTRADICTION_REQUIREMENTS` | `codemason-specs::validate` | numbering-gap expansion and contradiction detection are bounded |
+| `MAX_MESSAGE_BYTES` / `validate_hook_command` / `HOOK_TIMEOUT` | `codemason-agent::team` | mailbox messages are size-capped, team hook commands are validated, hooks time out at 30 s with a process-group kill, and feedback is capped |
+| `positive_duration_secs` / checked arithmetic | `codemason-types::cron` | `CronSchedule` returns `None` instead of panicking on an invariant violation and uses `checked_mul` / `saturating_mul` |
+| `SPOOL_MAX_BYTES` | `codemason-types::stderr_spool` | the spool enforces a byte ceiling on every write, including newline-free ones |
+| `split_bash_command` substitution depth | `codemason-agent::session::permissions` | a `;`/`&&` inside `$( ... )` does not split the command into a separately-judged sub-command |
+| `same_origin_as` | `codemason-tools-vcs::github` | the Bearer token is attached only when the resolved URL matches the configured API origin |
 
 ### 4.6d Defence in Depth
 
@@ -1288,35 +1288,35 @@ The same guard shapes at the remaining call sites: an explicit **cap/budget**, a
 
 | Guard | Where it lives | What it enforces |
 |-------|----------------|------------------|
-| `unpack_archive_checked` (`ARCHIVE_MAX_ENTRIES`, `ARCHIVE_MAX_TOTAL_BYTES`) | `ragent-agent::session::archive` | session-archive import refuses an entry-count or total-decompressed-size overrun and rejects an entry path that escapes the extraction directory |
-| `MAX_BENCH_SAMPLES` | `ragent-bench::model` | `--samples` is clamped to 100 before both the `Vec` pre-allocation and the generation loop |
-| `MAX_DOWNLOAD_BYTES` / `MAX_HUMANEVALPACK_PAGES` / `MAX_HUMANEVALPACK_ROWS` | `ragent-bench::data` | a dataset download is streamed under a 64 MiB cap and the pagination loop carries a page and row budget |
-| `base_url_override` run note | `ragent-bench::runner` | the resolved provider base URL is kept out of the shareable workbook and run-state sidecar |
-| `contained_join` | `ragent-bench::data` | manifest `case_file` and `relative_path` are joined inside the canonicalised data root |
-| read-then-check size | `ragent-codeindex::scanner` | the stored byte size is derived from the bytes actually read, closing the stat/read TOCTOU past `max_file_size` |
-| `build_exclude_matcher` | `ragent-codeindex::scanner` | `ScanConfig::extra_exclude_patterns` is compiled into a glob matcher and applied during the walk |
-| `clear_index_dir` symlink refusal | `ragent-codeindex::search` | `FtsIndex::open_or_create` refuses a symlinked index directory before the recovery wipe and surfaces deletion failures |
-| `BUILTIN_DENYLIST` merge | `ragent-config::dir_lists` | the built-in system-directory patterns are merged into the enforced denylist, not merely advertised |
-| parse-diagnostic redaction | `ragent-config::config`, `src/main.rs` | the echoed problematic source line is passed through `redact_secrets` before it is printed or logged |
-| `is_contained_relative_path` | `ragent-plugins::manifest` | `entry` / `main` / `server.entry` must be a contained relative path inside the plugin root |
-| `https_only_redirects` (shared) | `ragent-plugins::store_fetch` → `add` | the package download stops any non-`https` redirect |
-| `is_single_normal_component` | `ragent-plugins::marketplace` | the wrapper-directory name derived from the install source must be a single normal component |
-| `neutralise_fenced_body` | `ragent-research::document` | backtick runs are broken and `#### Source [#N]` / `**Sources:**` lines escaped before a fetched body enters a fenced synthesis prompt |
-| `mask_url_credentials` | `ragent-research::document` → `gather_log` | recorded gather-log URLs drop userinfo and query strings |
-| session-bound permission reply | `ragent-agent::session::permissions` | an `Event::PermissionReplied` is honoured only when its `session_id` matches the session awaiting the request |
-| `internal_error_response` | `ragent-server::routes` | internal error detail is logged; the client receives `internal server error` |
-| `SpecId` validating `Deserialize` | `ragent-specs::spec` | every deserialisation routes through `SpecId::new`, so a traversal id cannot be constructed |
-| `write_govcreate_spec` re-validation | `ragent-specs::commands` | the public write API validates the id before joining it into the output path |
-| `/spec create` / `/spec specify` name validation | `ragent-specs::commands` | an invalid spec name is a usage error |
-| char-boundary diff split | `ragent-storage::snapshot` | `apply_unified_diff` splits on the first char, so a multibyte diff line cannot panic |
-| `is_safe_memory_component` | `ragent-agent::team::config` | `resolve_memory_dir` rejects a multi-component or `..` agent name |
-| `CardinalityCache::resolve` sanitisation | `ragent-telemetry::cardinality` | values are passed through `sanitize_attr_value` inside `resolve` and a poisoned lock fails closed to the unknown bucket |
-| `parse_alog_run_id_yes` validation | `ragent-tui::app::helpers` | `/alog export` accepts only `[A-Za-z0-9_-]+` run ids |
-| log-window spool mode | `ragent-tui::app::session_ops` | the spool is created 0600 and the mode is re-asserted on every open |
-| `bash_scratch_dir` private fallback | `ragent-tools-core::bash` | a failed private-dir creation falls back to a process-private 0700 directory, never to shared temp |
-| tree-walk budget | `ragent-tools-vcs::github` | the GitHub recursive tree walk carries a `MAX_TREE_REQUESTS`/`MAX_TREE_ENTRIES` budget, matching the GitLab equivalent |
-| `redacted_event_debug` / SSE device-code masking | `ragent-server::sse` | credential-bearing events expose presence-only fields on the SSE stream and a redacted rendering for log sites |
-| `CrawlFetcher` SSRF contract | `ragent-tools-extended::masterfetch::crawl` | the SSRF obligation is stated on the trait and validated at the `mf_crawl` tool boundary |
+| `unpack_archive_checked` (`ARCHIVE_MAX_ENTRIES`, `ARCHIVE_MAX_TOTAL_BYTES`) | `codemason-agent::session::archive` | session-archive import refuses an entry-count or total-decompressed-size overrun and rejects an entry path that escapes the extraction directory |
+| `MAX_BENCH_SAMPLES` | `codemason-bench::model` | `--samples` is clamped to 100 before both the `Vec` pre-allocation and the generation loop |
+| `MAX_DOWNLOAD_BYTES` / `MAX_HUMANEVALPACK_PAGES` / `MAX_HUMANEVALPACK_ROWS` | `codemason-bench::data` | a dataset download is streamed under a 64 MiB cap and the pagination loop carries a page and row budget |
+| `base_url_override` run note | `codemason-bench::runner` | the resolved provider base URL is kept out of the shareable workbook and run-state sidecar |
+| `contained_join` | `codemason-bench::data` | manifest `case_file` and `relative_path` are joined inside the canonicalised data root |
+| read-then-check size | `codemason-codeindex::scanner` | the stored byte size is derived from the bytes actually read, closing the stat/read TOCTOU past `max_file_size` |
+| `build_exclude_matcher` | `codemason-codeindex::scanner` | `ScanConfig::extra_exclude_patterns` is compiled into a glob matcher and applied during the walk |
+| `clear_index_dir` symlink refusal | `codemason-codeindex::search` | `FtsIndex::open_or_create` refuses a symlinked index directory before the recovery wipe and surfaces deletion failures |
+| `BUILTIN_DENYLIST` merge | `codemason-config::dir_lists` | the built-in system-directory patterns are merged into the enforced denylist, not merely advertised |
+| parse-diagnostic redaction | `codemason-config::config`, `src/main.rs` | the echoed problematic source line is passed through `redact_secrets` before it is printed or logged |
+| `is_contained_relative_path` | `codemason-plugins::manifest` | `entry` / `main` / `server.entry` must be a contained relative path inside the plugin root |
+| `https_only_redirects` (shared) | `codemason-plugins::store_fetch` → `add` | the package download stops any non-`https` redirect |
+| `is_single_normal_component` | `codemason-plugins::marketplace` | the wrapper-directory name derived from the install source must be a single normal component |
+| `neutralise_fenced_body` | `codemason-research::document` | backtick runs are broken and `#### Source [#N]` / `**Sources:**` lines escaped before a fetched body enters a fenced synthesis prompt |
+| `mask_url_credentials` | `codemason-research::document` → `gather_log` | recorded gather-log URLs drop userinfo and query strings |
+| session-bound permission reply | `codemason-agent::session::permissions` | an `Event::PermissionReplied` is honoured only when its `session_id` matches the session awaiting the request |
+| `internal_error_response` | `codemason-server::routes` | internal error detail is logged; the client receives `internal server error` |
+| `SpecId` validating `Deserialize` | `codemason-specs::spec` | every deserialisation routes through `SpecId::new`, so a traversal id cannot be constructed |
+| `write_govcreate_spec` re-validation | `codemason-specs::commands` | the public write API validates the id before joining it into the output path |
+| `/spec create` / `/spec specify` name validation | `codemason-specs::commands` | an invalid spec name is a usage error |
+| char-boundary diff split | `codemason-storage::snapshot` | `apply_unified_diff` splits on the first char, so a multibyte diff line cannot panic |
+| `is_safe_memory_component` | `codemason-agent::team::config` | `resolve_memory_dir` rejects a multi-component or `..` agent name |
+| `CardinalityCache::resolve` sanitisation | `codemason-telemetry::cardinality` | values are passed through `sanitize_attr_value` inside `resolve` and a poisoned lock fails closed to the unknown bucket |
+| `parse_alog_run_id_yes` validation | `codemason-tui::app::helpers` | `/alog export` accepts only `[A-Za-z0-9_-]+` run ids |
+| log-window spool mode | `codemason-tui::app::session_ops` | the spool is created 0600 and the mode is re-asserted on every open |
+| `bash_scratch_dir` private fallback | `codemason-tools-core::bash` | a failed private-dir creation falls back to a process-private 0700 directory, never to shared temp |
+| tree-walk budget | `codemason-tools-vcs::github` | the GitHub recursive tree walk carries a `MAX_TREE_REQUESTS`/`MAX_TREE_ENTRIES` budget, matching the GitLab equivalent |
+| `redacted_event_debug` / SSE device-code masking | `codemason-server::sse` | credential-bearing events expose presence-only fields on the SSE stream and a redacted rendering for log sites |
+| `CrawlFetcher` SSRF contract | `codemason-tools-extended::masterfetch::crawl` | the SSRF obligation is stated on the trait and validated at the `mf_crawl` tool boundary |
 
 ### 4.6e Shared Guards and CI Gates
 
@@ -1324,8 +1324,8 @@ Every mitigation in 4.6a-4.6d is one of a small number of guard *shapes*. Each
 shape has a single implementation so a new call site cannot silently weaken it,
 and CI gates fail a build that reintroduces a class.
 
-**`ragent_types::guard`** (re-exported from the crate root, and as
-`ragent_tools_core::guard` for the tools crates) owns:
+**`codemason_types::guard`** (re-exported from the crate root, and as
+`codemason_tools_core::guard` for the tools crates) owns:
 
 | Helper | Enforces |
 |--------|----------|
@@ -1341,13 +1341,13 @@ and CI gates fail a build that reintroduces a class.
 | `cap_read(bytes, max)` | a UTF-8-boundary-safe prefix of a buffered read |
 
 Call-site-preserving adapters delegate to it:
-`ragent-tools-vcs::git::reject_option_like`,
-`ragent-plugins::add::is_safe_git_argument`, and
-`ragent-bench::data::contained_join`. Regression suite:
-`crates/ragent-types/tests/test_shared_guards.rs`.
+`codemason-tools-vcs::git::reject_option_like`,
+`codemason-plugins::add::is_safe_git_argument`, and
+`codemason-bench::data::contained_join`. Regression suite:
+`crates/codemason-types/tests/test_shared_guards.rs`.
 
-**One redaction implementation.** `ragent-agent`, `ragent-storage`, and
-`ragent-tools-core` re-export `ragent_types::sanitize` instead of holding a
+**One redaction implementation.** `codemason-agent`, `codemason-storage`, and
+`codemason-tools-core` re-export `codemason_types::sanitize` instead of holding a
 second secret registry, so a credential registered anywhere is masked
 everywhere: `GET /config`, telemetry attributes, log lines, SSE payloads, and
 tool output all call the same `redact_secrets`.
@@ -1357,7 +1357,7 @@ internal `DebugProxy` that reports credential-bearing fields
 (`CopilotDeviceFlowComplete.token`, `CopilotDeviceFlowStartResult.device_code`)
 as presence flags and then pipes the whole rendering through `redact_secrets`,
 so `tracing::debug!("{event:?}")` cannot print an OAuth credential. Regression
-suite: `crates/ragent-types/tests/test_unified_redaction.rs`.
+suite: `crates/codemason-types/tests/test_unified_redaction.rs`.
 
 **CI gates** (job `security-guards` in `.github/workflows/ci.yml`, and
 `pre-flight.sh`). Each gate has a `--self-test` that seeds a violation and
@@ -1365,7 +1365,7 @@ asserts the gate fails it:
 
 | Gate | Command | Fails when |
 |------|---------|-----------|
-| Redaction tests | `cargo test -p ragent-types --test all test_unified_redaction::` | a second registry or a leaking `Event` `Debug` appears |
+| Redaction tests | `cargo test -p codemason-types --test all test_unified_redaction::` | a second registry or a leaking `Event` `Debug` appears |
 | File-tool containment | `scripts/check-file-tool-containment.sh` | a registered file tool does not call the `allowed_roots`-aware `check_path_within_allowed_roots_cached` helper (a working-dir-only `check_path_within_root_cached` call fails the gate) |
 | Panic-free production paths | `scripts/check-security-unwraps.sh` | a file exceeds its `.unwrap()`/`.expect()` baseline in `scripts/security-unwrap-baseline.txt` |
 | One guard per rule | `scripts/check-shared-guards.sh` | a crate re-defines a shared guard or a second secret registry |
@@ -1393,27 +1393,27 @@ occurrence is rejected. An intentional call is exempted with a same-line
 
 | Guard | Where it lives | What it rejects |
 |-------|----------------|-----------------|
-| `git::reject_option_like` on every operand | `ragent-tools-vcs::git` | a leading-dash operand to any git tool, including the `git_checkout` branch/source, every `git_cherry_pick` commit, every `git_add` path, and the `git_remote` name/url |
-| `GitHubClient::validate_repo_segment` | `ragent-tools-vcs::github` | an `owner`/`repo` that is not `[A-Za-z0-9._~-]+`, so it cannot escape the request path |
-| `resolve_url` for `fetch_readme` | `ragent-tools-vcs::github` | a request to the public origin when a GitHub Enterprise `base_url` is configured, so the Bearer token goes only to the configured API |
-| `check_path_within_allowed_roots_cached` in every file tool | `ragent-tools-core` | a path outside both `working_dir` and the `allowed_roots` entries; `diff_files`, `file_info`, `Glob`, `open`, and `apply_patch` accept the same paths as every other file tool |
-| `masterfetch::http::read_body_capped` / `read_bytes_capped` | `ragent-tools-extended` | an unbounded response body from search/robots/youtube reads (16 MiB ceiling; 512 KiB for small text bodies) |
-| `write_govcreate_spec` target-folder containment | `ragent-specs::commands` | a `target-folder` that climbs out of the invoking root, checked lexically *before* any directory is created |
-| `merged_dir_lists_for` / `builtin_only_dir_lists` | `ragent-config::dir_lists` | a config-load failure keeps the mandatory built-in system-directory denylist instead of returning an empty one |
-| plugin `content_digest` | `ragent-plugins::add` | an install with no integrity record: a SHA-256 over the staged tree is recorded in the store ledger, so a substituted archive or checkout is detectable |
-| aggregate archive cap (`MAX_EXTRACTED_BYTES`) | `ragent-plugins::add` | a decompression bomb made of many just-under-the-per-entry-cap entries |
-| symlink refusal in `copy_dir_recursive` | `ragent-plugins::add` | a symlink inside a source directory is refused, not dereferenced and copied into the store |
-| `read_body_capped` on every provider error path | `ragent-llm` | an unbounded 4xx/5xx error body; malformed SSE frames are logged rather than silently dropped |
+| `git::reject_option_like` on every operand | `codemason-tools-vcs::git` | a leading-dash operand to any git tool, including the `git_checkout` branch/source, every `git_cherry_pick` commit, every `git_add` path, and the `git_remote` name/url |
+| `GitHubClient::validate_repo_segment` | `codemason-tools-vcs::github` | an `owner`/`repo` that is not `[A-Za-z0-9._~-]+`, so it cannot escape the request path |
+| `resolve_url` for `fetch_readme` | `codemason-tools-vcs::github` | a request to the public origin when a GitHub Enterprise `base_url` is configured, so the Bearer token goes only to the configured API |
+| `check_path_within_allowed_roots_cached` in every file tool | `codemason-tools-core` | a path outside both `working_dir` and the `allowed_roots` entries; `diff_files`, `file_info`, `Glob`, `open`, and `apply_patch` accept the same paths as every other file tool |
+| `masterfetch::http::read_body_capped` / `read_bytes_capped` | `codemason-tools-extended` | an unbounded response body from search/robots/youtube reads (16 MiB ceiling; 512 KiB for small text bodies) |
+| `write_govcreate_spec` target-folder containment | `codemason-specs::commands` | a `target-folder` that climbs out of the invoking root, checked lexically *before* any directory is created |
+| `merged_dir_lists_for` / `builtin_only_dir_lists` | `codemason-config::dir_lists` | a config-load failure keeps the mandatory built-in system-directory denylist instead of returning an empty one |
+| plugin `content_digest` | `codemason-plugins::add` | an install with no integrity record: a SHA-256 over the staged tree is recorded in the store ledger, so a substituted archive or checkout is detectable |
+| aggregate archive cap (`MAX_EXTRACTED_BYTES`) | `codemason-plugins::add` | a decompression bomb made of many just-under-the-per-entry-cap entries |
+| symlink refusal in `copy_dir_recursive` | `codemason-plugins::add` | a symlink inside a source directory is refused, not dereferenced and copied into the store |
+| `read_body_capped` on every provider error path | `codemason-llm` | an unbounded 4xx/5xx error body; malformed SSE frames are logged rather than silently dropped |
 
 **Redaction and file permissions.**
 
 - `Config` does not derive `Debug`; a hand-written impl renders a JSON form
-  routed through `ragent_types::sanitize::redact_secrets`, so an API key,
+  routed through `codemason_types::sanitize::redact_secrets`, so an API key,
   GitLab token, bot token, webhook URL, or client secret cannot be printed.
 - Crash markers, panic reports, and the stderr spool are created owner-only
   (`0o600`), and the `/bug-report` dump is written `0o600` too. The crash
   record's argv is redacted before serialisation, because
-  `ragent auth openai sk-...` would otherwise persist a live credential to a
+  `codemason auth openai sk-...` would otherwise persist a live credential to a
   world-readable file.
 
 **Failure reporting.**
@@ -1434,12 +1434,12 @@ occurrence is rejected. An intentional call is exempted with a same-line
   `InstrumentRegistry::noop()` builds from an explicit locally-owned provider
   rather than the process-global one, so a disabled subsystem cannot export.
 
-**Regression suites.** `crates/ragent-research/tests/test_search_retry_clamp.rs`,
-`crates/ragent-tools-vcs/tests/test_ms0_git_arg_guards.rs`,
-`crates/ragent-config/tests/test_ms0_config_guards.rs`,
-`crates/ragent-plugins/tests/test_add.rs`,
-`crates/ragent-specs/tests/test_govcreate_authoring.rs`,
-`crates/ragent-telemetry/tests/test_metric_toggles.rs` (all wired into the
+**Regression suites.** `crates/codemason-research/tests/test_search_retry_clamp.rs`,
+`crates/codemason-tools-vcs/tests/test_ms0_git_arg_guards.rs`,
+`crates/codemason-config/tests/test_ms0_config_guards.rs`,
+`crates/codemason-plugins/tests/test_add.rs`,
+`crates/codemason-specs/tests/test_govcreate_authoring.rs`,
+`crates/codemason-telemetry/tests/test_metric_toggles.rs` (all wired into the
 `ms0-regression` CI job).
 
 ### 4.6g Standards Gates
@@ -1466,7 +1466,7 @@ production code carry `// INVARIANT:` or `no-panic-ok` markers; see
 
 YOLO mode bypasses Layers 2, 3, and 6 of bash security and auto-approves all
 permissions. It is intended for trusted local environments and is persisted
-to `ragent.json`.
+to `codemason.json`.
 
 ```bash
 /yolo        # toggle in TUI
@@ -1537,13 +1537,13 @@ is a per-turn function of the run's own tool surface.
 
 ### 5.1 Configuration Sources
 
-Ragent loads configuration from (highest priority first):
+Codemason loads configuration from (highest priority first):
 
 1. `--config <PATH>` CLI argument (replaces the layered load below with that single file)
-2. `RAGENT_CONFIG_CONTENT` environment variable (inline JSON)
-3. `RAGENT_CONFIG` environment variable (path to a config file)
-4. `.ragent/ragent.json` in the working directory
-5. `~/.config/ragent/ragent.json`
+2. `CODEMASON_CONFIG_CONTENT` environment variable (inline JSON)
+3. `CODEMASON_CONFIG` environment variable (path to a config file)
+4. `.codemason/codemason.json` in the working directory
+5. `~/.config/codemason/codemason.json`
 6. Built-in defaults
 
 The format is compatible with OpenCode's `opencode.json`.
@@ -1619,7 +1619,7 @@ provider entry (`thinking`, `env`, `models`) still merges.
   },
   // Session-message retention (opt-in; the section is omitted entirely while
   // disabled). When enabled, messages older than `message_days` are deleted at
-  // startup and by `/db prune` / `ragent db prune`. Session rows are kept, so
+  // startup and by `/db prune` / `codemason db prune`. Session rows are kept, so
   // an expired transcript stays listed and resumable but reads back empty.
   // `message_days` must be >= 1: a zero-day window would empty the store on
   // every start and is rejected by `validate()`.
@@ -1631,8 +1631,8 @@ provider entry (`thinking`, `env`, `models`) still merges.
   },
   // Tool-name alias resolution (spec `uniformtools` FR-015). `aliases: true`
   // enables the built-in table of provider spellings; an object adds explicit
-  // `"<provider spelling>": "<ragent tool>"` entries on top of it. An entry
-  // naming a retired ragent spelling is a load error (FR-031). `expose_alias_names`
+  // `"<provider spelling>": "<codemason tool>"` entries on top of it. An entry
+  // naming a retired codemason spelling is a load error (FR-031). `expose_alias_names`
   // additionally advertises each spelling in the outbound tool list, and
   // `wire_trace` dumps each step's redacted request body under
   // `target/temp/wire-trace/` (FR-017). Omitted entirely while all off.
@@ -1679,7 +1679,7 @@ provider entry (`thinking`, `env`, `models`) still merges.
   "execution_backend": "podman",
   "backends": [
     { "id": "sandbox", "name": "Podman sandbox", "kind": "podman",
-      "image": "ghcr.io/yourorg/ragent-sandbox:latest", "workspace": "/projects",
+      "image": "ghcr.io/yourorg/codemason-sandbox:latest", "workspace": "/projects",
       "credentials": ["EXAMPLE_API_KEY"] }
   ],
   // LLM security analyzer (spec `openhands` FR-006, FR-017). Opt-in; a
@@ -1692,14 +1692,14 @@ provider entry (`thinking`, `env`, `models`) still merges.
   },
   // OpenAI-compatible inbound surface (spec `openhands` FR-012, FR-024, FR-032).
   // Omitted the /v1 endpoints stay behind the native bearer-token check. When
-  // `enabled` is true, a `token` (or the ambient `RAGENT_TOKEN`) is required or
+  // `enabled` is true, a `token` (or the ambient `CODEMASON_TOKEN`) is required or
   // the server refuses to start the surface (FR-032).
   "openai": {
     "enabled": true,
-    "token": "sk-ragent-local"
+    "token": "sk-codemason-local"
   },
   // GitHub Enterprise hosts and Auto-fix (spec SESSIONMENU FR-21). Global
-  // config only: a project's ragent.json cannot set `vcs`.
+  // config only: a project's codemason.json cannot set `vcs`.
   "vcs": {
     "github": {
       "hosts": [
@@ -1828,7 +1828,7 @@ Levels: `auto`, `off`, `low`, `medium`, `high`. `budget_tokens` is optional.
 
 ### 5.6 Message Retention (`storage.retention`)
 
-Ragent keeps the whole transcript forever unless the operator opts in to
+Codemason keeps the whole transcript forever unless the operator opts in to
 age-based expiry. The `storage` section makes that opt-in explicit:
 
 ```jsonc
@@ -1837,13 +1837,13 @@ age-based expiry. The `storage` section makes that opt-in explicit:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `retention.enabled` | `bool` | `false` | Run age-based expiry at startup and permit `/db prune` / `ragent db prune`. |
+| `retention.enabled` | `bool` | `false` | Run age-based expiry at startup and permit `/db prune` / `codemason db prune`. |
 | `retention.message_days` | `u32` | `14` | Window, in days, a message survives. Must be `>= 1`. |
 
 Rules:
 
 - **Off by default, and omitted while off.** With no `storage` section no
-  message is ever expired, and a `ragent.json` that never set it round-trips
+  message is ever expired, and a `codemason.json` that never set it round-trips
   byte-identically (`skip_serializing_if = StorageConfig::is_default`).
 - **A zero-day window is rejected** by `RetentionConfig::validate()`, because it
   would empty the store on every start - an error the operator can see beats a
@@ -1858,10 +1858,10 @@ Rules:
 - **`--dry-run` cannot disagree with the prune.** `Storage::count_messages_older_than`
   uses the same cutoff computation and the same predicate and deletes nothing.
 - **The file does not shrink.** `DELETE` returns pages to SQLite's freelist;
-  `ragent.db` keeps its size until a `VACUUM`, which requires exclusive access.
+  `codemason.db` keeps its size until a `VACUUM`, which requires exclusive access.
 
 Surfaces: the startup pass (on `spawn_blocking`, so it never stalls startup),
-`ragent db prune [--days N] [--dry-run]`, and `/db prune [--days N] [--dry-run]`
+`codemason db prune [--days N] [--dry-run]`, and `/db prune [--days N] [--dry-run]`
 in the TUI. A real TUI prune asks for confirmation and the dialog opens on `No`,
 so a stray `Enter` deletes nothing.
 
@@ -1898,7 +1898,7 @@ switch: turning telemetry on exports both.
 
 Rules:
 
-- **The endpoint is a base URL, and ragent resolves the signal path itself.**
+- **The endpoint is a base URL, and codemason resolves the signal path itself.**
   `otlp_http_signal_endpoint` appends `/v1/metrics` or `/v1/logs` (trailing
   slashes collapsed, query string and fragment preserved), keeps an existing
   base path (`https://gw.example.com/otel`), and returns a value that already
@@ -1907,7 +1907,7 @@ Rules:
   `opentelemetry-otlp`'s `with_endpoint` posts to it verbatim, which a stock
   collector answers with `404`.
 - **The logs signal composes, it does not redirect.** A
-  `tracing_subscriber::Layer` (`ragent_telemetry::logs::TracingLogsLayer`) is
+  `tracing_subscriber::Layer` (`codemason_telemetry::logs::TracingLogsLayer`) is
   installed beside the existing sinks, so the TUI log panel (or stderr in a
   headless run) keeps every event `--log-level` admits and only the remote
   export is filtered by `logs.level`.
@@ -1922,10 +1922,10 @@ Rules:
 - **Both signals are flushed and shut down together**, so the last records of a
   run are not lost in the batch buffer.
 - **Every exported body and attribute is guarded.** Bodies pass through
-  `ragent_types::sanitize::redact_secrets` (over 16 KiB truncated with a
+  `codemason_types::sanitize::redact_secrets` (over 16 KiB truncated with a
   `... [truncated]` marker) and attributes through the metric sensitive-data
   guard.
-- **Export failures are visible.** `ragent_telemetry::export_health` classifies
+- **Export failures are visible.** `codemason_telemetry::export_health` classifies
   every metric export outcome; the TUI turns each into an `Agent Notice` naming
   the consecutive-failure count, the reason and the masked endpoint, and five
   consecutive failures switch telemetry off (persisting `enabled: false`)
@@ -2039,7 +2039,7 @@ The TUI is a ratatui full-screen interface with these panels:
 | Teammate strip | One row of pills under the status bar, one per active teammate (status glyph, clipped name, focused highlight, `Alt+^v:cycle` hint); omitted when no team is active (spec `agentui` FR-027) |
 | Agents window | `Agents`-button popup listing the primary agent and an ancestor-indented sub-agent tree with status, elapsed time, step count, `[stop]`/`[x]` status glyphs, and a background-shell section; openable from the keyboard with `Alt+A` (the chord resolves to `InputAction::ToggleAgentsWindow` and calls the same `App::toggle_agents_window` the button click does, so both share one visibility path, one no-subject no-op and one redraw flag - spec `agentssetup` FR-022); keyboard-first: a block cursor (`Up`/`Down`/`PgUp`/`PgDn`) selects a row, `Space` toggles suspend/resume, `Del` arms the kill confirmation, `Enter` opens the row's output view, and clicking a row selects it; the FR-077 key legend sits in the footer (spec `agentui` FR-006..FR-016) |
 | Teams window | `Teams`-button popup listing the lead plus every teammate with focus markers, status words from `MemberStatus::display_label()`, model column (inherited global model suppressed), and claimed/done/sent/recv counters; the block cursor plus `Enter`/`Space`/`Del` drive focus, suspend and shutdown; clicking a teammate selects it (spec `agentui` FR-017..FR-026) |
-| Session sidebar | Left-hand list of every session: `+ New session`, `/ Search`, `Pinned`, then one section per project (launch project first; projects with no sessions are listed too). A project heading shows the project name, a chevron (`v` open, `>` collapsed) and `[github]` / `[gitlab]` when the remote is known. `Pinned` is always listed, even when nothing is pinned, and dragging a session row onto it pins that session. A blank, non-selectable line sits above `Pinned` and above each project heading (the cursor skips it). User sections (by name) follow `Pinned`. A session row shows the title, relative age, `#N` with the number of pull/merge requests the session has had (blue while one is bound, grey after unbinding; `#!N` when Auto-fix is paused waiting on the user; history in `session_request_history`, schema 12; a request still recorded as open is re-read from the forge at most once per 5 minutes, so the `PR/MRs` submenu shows `[merged]`/`[closed]` without Auto-fix), a branch marker `Y` with the count of pull/merge requests for the session's branch, and a right-aligned attention marker (`!` waiting, `*` running, `x` failed, `o` unread, including a persisted unread mark). Filter, per-project collapse, drag resize, `Alt+S` toggle, per-session, project-heading and multi-selection context menus (`m`, `Shift+F10`, right-click; section 6.1c); `v` or `Ctrl`+click selects sessions (marked `*`), `Esc` clears the selection; a project with no sessions whose directory no longer exists is not listed, nor is a parent folder (not a git repository, containing another project) with no open session unless ragent was launched in it; a project's remote is detected in the background the first time the sidebar is shown, without a session being opened in it; hidden below 100 columns (specs `MULTISESSION` M5, `projects`, `SESSIONMENU`) |
+| Session sidebar | Left-hand list of every session: `+ New session`, `/ Search`, `Pinned`, then one section per project (launch project first; projects with no sessions are listed too). A project heading shows the project name, a chevron (`v` open, `>` collapsed) and `[github]` / `[gitlab]` when the remote is known. `Pinned` is always listed, even when nothing is pinned, and dragging a session row onto it pins that session. A blank, non-selectable line sits above `Pinned` and above each project heading (the cursor skips it). User sections (by name) follow `Pinned`. A session row shows the title, relative age, `#N` with the number of pull/merge requests the session has had (blue while one is bound, grey after unbinding; `#!N` when Auto-fix is paused waiting on the user; history in `session_request_history`, schema 12; a request still recorded as open is re-read from the forge at most once per 5 minutes, so the `PR/MRs` submenu shows `[merged]`/`[closed]` without Auto-fix), a branch marker `Y` with the count of pull/merge requests for the session's branch, and a right-aligned attention marker (`!` waiting, `*` running, `x` failed, `o` unread, including a persisted unread mark). Filter, per-project collapse, drag resize, `Alt+S` toggle, per-session, project-heading and multi-selection context menus (`m`, `Shift+F10`, right-click; section 6.1c); `v` or `Ctrl`+click selects sessions (marked `*`), `Esc` clears the selection; a project with no sessions whose directory no longer exists is not listed, nor is a parent folder (not a git repository, containing another project) with no open session unless codemason was launched in it; a project's remote is detected in the background the first time the sidebar is shown, without a session being opened in it; hidden below 100 columns (specs `MULTISESSION` M5, `projects`, `SESSIONMENU`) |
 | Input | Command-line with slash-command autocomplete |
 | Permission dialog | Modal approval dialog with live countdown (120 s) |
 | Question dialog | Modal user question (free-text or multiple-choice) |
@@ -2056,13 +2056,13 @@ and their permission requests queue on them rather than opening a dialog.
 Each session carries its own directory, model, permission and question
 queues, and run state; focusing a session moves the TUI's working
 directory there, and the agent loop loads a session's own
-`.ragent/ragent.json` when its directory has one (`Config::load_for`).
+`.codemason/codemason.json` when its directory has one (`Config::load_for`).
 The open sessions are saved under the `tui.sessions.open` setting and
-reopened at startup (`ragent --new` skips this). Untitled sessions are
+reopened at startup (`codemason --new` skips this). Untitled sessions are
 titled from the first prompt. The `on_notification` hook trigger
 (Claude: `Notification`) fires when a background session starts waiting,
 finishes or fails. Each open project has its own services: code index
-(opened when its config enables indexing and it has a `.ragent` directory),
+(opened when its config enables indexing and it has a `.codemason` directory),
 specs, custom agents, plugin commands, and an MCP client with its own tool
 registry (user-global and plugin servers, stdio servers started in the
 project root; a project's own config still cannot add servers). A
@@ -2072,7 +2072,7 @@ and milestones: `docs/plans/MULTISESSION.md`.
 ### 6.1b Projects
 
 A project is a stored record (`projects` table, schema 6;
-`ragent_agent::project::Project`) with a display name, the canonical root of
+`codemason_agent::project::Project`) with a display name, the canonical root of
 its local checkout (`worktree`), an optional base provider/model, and an
 optional description of the remote the checkout came from. Every session
 belongs to one: `sessions.project_id` holds the project's id. A session is
@@ -2092,7 +2092,7 @@ on first use. Design and tasks: `specs/projects/PLAN.md`.
   the focused session; `/project model` changes the project.
 - **Session worktree.** `/session new --branch <branch>` (or `POST
   /sessions` with `project_id` and `branch`) creates a `git worktree` of the
-  project's repository under the ragent data directory
+  project's repository under the codemason data directory
   (`worktrees/<project>-<id>/<branch>`) and runs the session there. The
   branch is an existing local branch, else the remote's branch of that name
   (tracked), else a new branch from the remote's default branch (or `HEAD`).
@@ -2124,8 +2124,8 @@ on first use. Design and tasks: `specs/projects/PLAN.md`.
   leaves every other branch's last known count alone. The last known count is stored in
   `sessions.pr_count`; a failure leaves it unchanged. A GitLab token is only
   sent to the configured GitLab instance.
-- **Surfaces.** `/project`, `ragent project list|show|add|remove`,
-  `ragent session list [--project <name>] [--json]` (grouped by project),
+- **Surfaces.** `/project`, `codemason project list|show|add|remove`,
+  `codemason session list [--project <name>] [--json]` (grouped by project),
   and the `/projects` HTTP routes. Session archives record the project
   name, remote and branch; an imported session is attached to the project
   of the directory it is imported into.
@@ -2134,7 +2134,7 @@ on first use. Design and tasks: `specs/projects/PLAN.md`.
 
 Each session row in the sidebar has a context menu, opened with `m` or
 `Shift+F10` while the sidebar is focused, or by right-clicking the row
-(`crates/ragent-tui/src/session_menu.rs`). Items run with `Enter`, a click,
+(`crates/codemason-tui/src/session_menu.rs`). Items run with `Enter`, a click,
 or their accelerator letter; `Esc` closes a submenu, then the menu. Design
 and milestones: `docs/plans/SESSIONMENU.md`.
 
@@ -2158,7 +2158,7 @@ the project's menu. Greyed items cannot run now and do nothing.
 | Item | Key | Action |
 |------|-----|--------|
 | New session | `N` | Starts a session in the project; same as `n` on the heading |
-| New session on branch | `B` | Prefills `/session new --project <name> --branch <adjective>_<surname>`; same as `b`. The project is named by its stored name (quoted when it has spaces), or by its id when another project shares the name. The branch is a random name in Docker's container naming scheme (`crates/ragent-tui/src/branch_names.rs`, e.g. `focused_turing`) that is not already a local or remote branch, editable before `Enter` |
+| New session on branch | `B` | Prefills `/session new --project <name> --branch <adjective>_<surname>`; same as `b`. The project is named by its stored name (quoted when it has spaces), or by its id when another project shares the name. The branch is a random name in Docker's container naming scheme (`crates/codemason-tui/src/branch_names.rs`, e.g. `focused_turing`) that is not already a local or remote branch, editable before `Enter` |
 | Open in | | Submenu: opens the project's worktree in an editor, file manager or terminal |
 | Rename project | `R` | Prefills `/project rename --project <id> <name>` |
 | Properties... | `P` | Opens the project's Properties dialog (below) |
@@ -2168,7 +2168,7 @@ the project's menu. Greyed items cannot run now and do nothing.
 | Archive all (N) | `A` | Archives the N sessions listed under the heading (pinned and sectioned ones are not listed there); a running one is skipped and reported |
 | Delete all sessions (N) | `D` | One Yes/No question (default No) for all N, then deletes them as `Delete` does |
 
-**Project Properties.** A modal dialog (`crates/ragent-tui/src/project_properties.rs`)
+**Project Properties.** A modal dialog (`crates/codemason-tui/src/project_properties.rs`)
 with three settings; a setting left unset follows the global configuration.
 `Tab`/`Shift+Tab` (or `Up`/`Down`) move between fields, `Left`/`Right` step
 through a choice's enabled entries, `Space` opens its full list, `Enter`
@@ -2176,7 +2176,7 @@ saves all three and `Esc` discards.
 
 | Field | Stored | Unset |
 |-------|--------|-------|
-| Description | `projects.description` (schema 13), up to 80 characters; shown dim after the name on the heading, `ragent (AI coding agent)`, and shortened first when the sidebar is narrow | No parentheses |
+| Description | `projects.description` (schema 13), up to 80 characters; shown dim after the name on the heading, `codemason (AI coding agent)`, and shortened first when the sidebar is narrow | No parentheses |
 | Backend | `projects.execution_backend` (schema 13): `local`, `podman`, `docker` or `remote`. `podman`/`docker` are greyed out without the runtime on `PATH`, `remote` without a configured URL and key | The global `execution_backend` |
 | Model | `projects.provider_id` / `model_id`: any model of a configured provider | The global model (`selected_model`) |
 
@@ -2220,7 +2220,7 @@ that is neither github.com nor configured, or a GitLab host other than the
 configured instance, gets no API client. Wording follows the host: PR / `#`
 on GitHub, MR / `!` on GitLab.
 
-**Auto-fix** (`crates/ragent-agent/src/autofix.rs`). With Auto-fix on
+**Auto-fix** (`crates/codemason-agent/src/autofix.rs`). With Auto-fix on
 (default off; `vcs.autofix.default_on` turns it on for a session's first
 binding), one watcher task started with the TUI polls each bound, open
 request every `vcs.autofix.poll_secs` (default 60, minimum 30) and at once
@@ -2248,13 +2248,13 @@ rebinding or `/autofix off` during a poll wins.
 
 Each new item (job, conflict, comment) fires once per head commit; the
 items already acted on are stored in `autofix_events`, so a restart neither
-loses nor repeats a trigger, and a second ragent process that loses the
+loses nor repeats a trigger, and a second codemason process that loses the
 insert race does not wake the session again. Each kind with new items
 publishes `Event::AutofixTrigger { session_id, kind, summary, prompt }`. The
 TUI sends the prompt to the session as a user message, or queues it when
 the session is busy; a session that is not open is opened in the
 background. A background session is marked unread and the
-`on_notification` hook runs with `RAGENT_NOTIFICATION_KIND=autofix`. The
+`on_notification` hook runs with `CODEMASON_NOTIFICATION_KIND=autofix`. The
 prompt names the request, branch, commit and details, and tells the agent
 never to merge, force-push or resolve review threads; pushing still goes
 through the session's permission mode.
@@ -2279,7 +2279,7 @@ repository and does not use ETags.
 
 | Command | Description |
 |---------|-------------|
-| `/quit` / `/exit` | Exit ragent |
+| `/quit` / `/exit` | Exit codemason |
 | `/session` | Multiple sessions: `[list] \| list --all \| list --archived \| new [path] [--project <name>] [--branch <branch>] \| switch <id-or-title> \| close \| rename <title> \| pin \| archive \| unarchive <id-or-title> \| unread [id-or-title] \| fork [id-or-title] \| delete <id-or-title> \| section [<name> \| --none \| new <name> \| rename <name> \| delete [name]] \| help` (specs `MULTISESSION`, `projects`, `SESSIONMENU`) |
 | `/autofix` | Pull/merge request binding and Auto-fix: `[status] \| bind [number\|url] \| unbind \| on \| off \| help` (spec `SESSIONMENU`, section 6.1c) |
 | `/project` | Projects: `[show [name]] \| list \| add <path-or-url> \| rename <name> \| model <provider>/<model>\|current\|clear \| refresh \| prune \| remove <name> \| help` (spec `projects`) |
@@ -2312,8 +2312,8 @@ repository and does not use ETags.
 | `/spawn <agent> <prompt...>` | Launch a detached fire-and-forget background sub-agent from the input line (spec `spawnagent`); not listed by `list_agents`, not awaitable via `wait_agents`, its result never injected back into the chat |
 | `/autopilot on\|off` | Toggle autonomous mode |
 | `/spec create\|specify\|plan\|tasks\|update\|add\|feedback\|jtbd\|list\|search\|show\|validate\|status\|task\|impl\|coverage\|activate\|deactivate\|delete` | Spec lifecycle and SDD commands |
-| `/plugins list\|add\|remove\|enable\|disable\|test\|stores\|marketplace\|help` | Manage sandboxed Codex/Claude plugins; `/plugins list [--verbose]` opens an interactive panel (the plugin table pinned at the top - a fixed column heading and separator - above a scrollable block-cursor list, with the capability blocks listed at the end of the same body; `Up`/`Down`/`Home`/`End` move the cursor, `Space` toggles the highlighted plugin's enabled state (enable/disable, reporting the outcome on a feedback line), and `Esc` closes); `/plugins test` runs an isolated harness; `/plugins codex [query] [--category <name>] [--refresh]` and `/plugins claude [query] [--category <name>] [--refresh]` browse each store's official marketplace with a left-hand category navigator (`ALL` plus the distinct categories the fetched index declares) operated by keyboard and mouse, its own document shape normalised by that store's `StoreProvider`, and each row showing the plugin id, version, the marketplace it came from, and the description; `/plugins stores [--check]` reports each store's effective endpoint and its source, and with `--check` also contacts each store to report availability and plugin count; `/plugins marketplace show` lists the marketplaces configured for both stores in one section each (Codex, Claude) as a name/url/description table; `/plugins marketplace <codex|claude> add <source> [--force]|remove <name>|list` manages additional marketplaces (from an `owner/repo` slug, an SSH remote, an `https://` URL, or a local directory) in the user-global `plugins.stores.marketplaces`, which the two browse panels fetch and merge into the one panel; `/plugins add` accepts a `git+<https-url>#<ref>[:<subpath>]` git source; CLI parity via `ragent plugins` |
-| `/connectors list\|claude\|add\|remove\|enable\|disable\|connect\|disconnect\|auth\|test\|stores\|marketplace\|help` | Manage MCP-backed connectors (named integrations carrying a category, an auth shape, and one or more MCP servers); `/connectors claude [query] [--category <name>] [--refresh]` opens the interactive catalogue browser (the single catalogue surface), which merges the base catalogue endpoint and every marketplace added with `/connectors marketplace claude add`, shows each row's id, category, the marketplace it came from, and its description, and resolves blank descriptions from each entry's own repository manifest off-loop with a `loading details...` title hint; `/connectors marketplace show` lists the marketplaces configured for the Claude catalogue and `/connectors marketplace claude list\|add <source> [--force]\|remove <name>` manages them in the user-global `connectors.stores.marketplaces`; `/connectors test` runs an isolated connect-and-invoke harness; `/connectors stores [--check]` reports each catalogue endpoint's provenance; `/connectors add` accepts a catalogue id, a local directory, a local `.zip`/`.tar.gz`, or an `https://` package URL; CLI parity via `ragent connectors` (spec `connectors`, section 19C) |
+| `/plugins list\|add\|remove\|enable\|disable\|test\|stores\|marketplace\|help` | Manage sandboxed Codex/Claude plugins; `/plugins list [--verbose]` opens an interactive panel (the plugin table pinned at the top - a fixed column heading and separator - above a scrollable block-cursor list, with the capability blocks listed at the end of the same body; `Up`/`Down`/`Home`/`End` move the cursor, `Space` toggles the highlighted plugin's enabled state (enable/disable, reporting the outcome on a feedback line), and `Esc` closes); `/plugins test` runs an isolated harness; `/plugins codex [query] [--category <name>] [--refresh]` and `/plugins claude [query] [--category <name>] [--refresh]` browse each store's official marketplace with a left-hand category navigator (`ALL` plus the distinct categories the fetched index declares) operated by keyboard and mouse, its own document shape normalised by that store's `StoreProvider`, and each row showing the plugin id, version, the marketplace it came from, and the description; `/plugins stores [--check]` reports each store's effective endpoint and its source, and with `--check` also contacts each store to report availability and plugin count; `/plugins marketplace show` lists the marketplaces configured for both stores in one section each (Codex, Claude) as a name/url/description table; `/plugins marketplace <codex|claude> add <source> [--force]|remove <name>|list` manages additional marketplaces (from an `owner/repo` slug, an SSH remote, an `https://` URL, or a local directory) in the user-global `plugins.stores.marketplaces`, which the two browse panels fetch and merge into the one panel; `/plugins add` accepts a `git+<https-url>#<ref>[:<subpath>]` git source; CLI parity via `codemason plugins` |
+| `/connectors list\|claude\|add\|remove\|enable\|disable\|connect\|disconnect\|auth\|test\|stores\|marketplace\|help` | Manage MCP-backed connectors (named integrations carrying a category, an auth shape, and one or more MCP servers); `/connectors claude [query] [--category <name>] [--refresh]` opens the interactive catalogue browser (the single catalogue surface), which merges the base catalogue endpoint and every marketplace added with `/connectors marketplace claude add`, shows each row's id, category, the marketplace it came from, and its description, and resolves blank descriptions from each entry's own repository manifest off-loop with a `loading details...` title hint; `/connectors marketplace show` lists the marketplaces configured for the Claude catalogue and `/connectors marketplace claude list\|add <source> [--force]\|remove <name>` manages them in the user-global `connectors.stores.marketplaces`; `/connectors test` runs an isolated connect-and-invoke harness; `/connectors stores [--check]` reports each catalogue endpoint's provenance; `/connectors add` accepts a catalogue id, a local directory, a local `.zip`/`.tar.gz`, or an `https://` package URL; CLI parity via `codemason connectors` (spec `connectors`, section 19C) |
 | `/backend [<kind>]` | Open the execution-backend switcher (active backend + each backend's health) or switch to a kind/id directly; `/backend help`. See section 19D (spec `openhands` FR-008) |
 | `/security on\|off\|status\|revert\|help` | LLM security-analyzer mode (spec `openhands` FR-006, FR-017). `security-analyzer` is accepted as an alias. See section 19D.7 |
 | `/automation [list]\|runs <id>\|run <id>\|help` | Manage the automation service (spec `openhands` FR-013, FR-014, FR-018). See section 19F |
@@ -2325,9 +2325,9 @@ repository and does not use ETags.
 | `/osinfo show [--no-probe]\|help` | Read-only host OS/hardware report; routes through the `os_info` tool's collector/renderer (spec `osinfo`) |
 | `/research create\|list\|show\|search\|cluster\|archive\|delete\|update` | Research commands; `create` supports `--from-file`, `--from-url`, `--use-low-relevance`, `--papers`, `--oa-enable`/`--no-oa`, `--max-queries N`, `--max-concepts N`, `--max-findings N`, `--url-cloak`, `--age <SPAN>` |
 | `/config show` | Show resolved configuration |
-| `/config save` | Snapshot global `ragent.json` to `saves/` (atomic, timestamped) |
+| `/config save` | Snapshot global `codemason.json` to `saves/` (atomic, timestamped) |
 | `/config list` | Interactive picker to restore a saved backup |
-| `/init config` | Create a default `ragent.json` in the global config directory |
+| `/init config` | Create a default `codemason.json` in the global config directory |
 | `/startup` | Show per-stage startup timing instrumentation |
 | `/prompt help\|primary [agent]\|subagent [agent]\|list\|<agent>` | Read-only agent system-prompt inspector (no LLM call) |
 | `/telemetry help\|on\|off\|setup\|counters\|logs` | Manage OpenTelemetry metrics and log export |
@@ -2443,7 +2443,7 @@ Codex, `.claude-plugin/plugin.json` for Claude) tried first and a bare `plugin.j
 fallback. The provider transform (`transform_vendor_entry`) reads what the listing
 declares, including the entry's `interface.displayName`/`shortDescription`/
 `longDescription`, and leaves an absent version blank rather than fabricating a `0`. The
-enrichment (`ragent-plugins/src/store_enrich.rs`) is best-effort and never fatal (a
+enrichment (`codemason-plugins/src/store_enrich.rs`) is best-effort and never fatal (a
 missing manifest, a transport failure, non-JSON bytes, or an oversized body yields no
 update), runs on a bounded thread pool, caches each URL's result (including a negative
 result) across opens, and is injectable so the tests run offline. The title shows
@@ -2456,7 +2456,7 @@ order the store index declared the entries in or the order the configured market
 were merged (FR-050). The sort is applied when the index lands, before the filter is
 derived, so a free-text query and an active category both narrow an already-sorted set
 and the survivors keep their alphabetical order. One comparator is shared by every store
-surface (`compare_store_ids`/`sort_store_entries` in `ragent-plugins`), mirroring the
+surface (`compare_store_ids`/`sort_store_entries` in `codemason-plugins`), mirroring the
 connector system's `compare_connector_ids`. The navigator's category rows keep their own
 case-insensitive sort, and a case-insensitive category collision (for example `Utility`
 and `utility`) keeps the first spelling the index declares, so the result sort never
@@ -2477,7 +2477,7 @@ The permission dialog displays a live countdown:
 ### 7.1 Starting the Server
 
 ```bash
-ragent serve --addr 127.0.0.1:3000   # --addr defaults to 127.0.0.1:3000
+cdmn serve --addr 127.0.0.1:3000   # --addr defaults to 127.0.0.1:3000
 ```
 
 ### 7.2 REST Endpoints
@@ -2508,7 +2508,7 @@ ragent serve --addr 127.0.0.1:3000   # --addr defaults to 127.0.0.1:3000
 
 The full REST surface is described by an OpenAPI 3.1 document served at
 `GET /openapi.json`. The document is rendered from a single route table
-(`crates/ragent-server/src/routes/openapi.rs::ROUTES`) so it cannot drift from the
+(`crates/codemason-server/src/routes/openapi.rs::ROUTES`) so it cannot drift from the
 served routes; a companion integration test asserts the table and the router agree
 in both directions (it scrapes every `.route(...)`/`.nest(...)` literal from
 `src/routes/` and probes every documented parameterless `GET` through the live
@@ -2517,14 +2517,14 @@ router). Every protected operation declares the native bearer `security` scheme;
 runtime data or secrets.
 
 The same route table generates a dependency-free typed TypeScript client, checked
-in at `docs/openapi/ragent-client.d.ts` and reproduced by:
+in at `docs/openapi/codemason-client.d.ts` and reproduced by:
 
 ```bash
-ragent openapi              # print the OpenAPI 3.1 document
-ragent openapi --client     # print the generated typed TypeScript client
+cdmn openapi              # print the OpenAPI 3.1 document
+cdmn openapi --client     # print the generated typed TypeScript client
 ```
 
-For `ragent openapi`, tracing is routed to stderr so the machine-readable stdout
+For `codemason openapi`, tracing is routed to stderr so the machine-readable stdout
 stays clean.
 
 MCP servers configured with the `http` transport (`"type": "http"`, `"url"`)
@@ -2534,7 +2534,7 @@ transport (FR-025).
 A server entry's `"type"` is optional and defaults to `"stdio"`, matching the
 MCP convention every other client follows: a command-launched server may omit
 it, and a missing key loads rather than failing. The same default is applied on
-every path that parses a server definition — the `mcp` section of `ragent.json`,
+every path that parses a server definition — the `mcp` section of `codemason.json`,
 plugin `mcpServers` bridges, and connector `servers`/`remote` entries — so a
 definition that declares no transport is a stdio server everywhere. Serde still
 serializes an explicit `"type"`, so a config written back names its transport.
@@ -2559,15 +2559,15 @@ The server streams the following event types:
 The HTTP API uses Bearer token authentication:
 
 ```bash
-curl -H "Authorization: Bearer $RAGENT_TOKEN" ...
+curl -H "Authorization: Bearer $CODEMASON_TOKEN" ...
 ```
 
-`RAGENT_TOKEN` is read from the environment. If unset, the server may allow
+`CODEMASON_TOKEN` is read from the environment. If unset, the server may allow
 local requests without authentication depending on build configuration.
 
 The OpenAI-compatible surface (`/v1/models`, `/v1/chat/completions`) uses the
-same bearer token as the native API (FR-024) - ragent runs one server token. The
-`openai.token` config key (or the ambient `RAGENT_TOKEN`) supplies it. When the
+same bearer token as the native API (FR-024) - codemason runs one server token. The
+`openai.token` config key (or the ambient `CODEMASON_TOKEN`) supplies it. When the
 surface is explicitly enabled (`openai.enabled: true`) without a token, the
 server **refuses to start** rather than serve the surface unauthenticated
 (FR-032).
@@ -2738,7 +2738,7 @@ filtering is available via `/codeindex lang <language>`.
 
 | Tier | Storage | Use Case |
 |------|---------|----------|
-| **File blocks** | Markdown files in `.ragent/memory/` or `~/.ragent/memory/` | Long-form notes, patterns, preferences |
+| **File blocks** | Markdown files in `.codemason/memory/` or `~/.codemason/memory/` | Long-form notes, patterns, preferences |
 | **Structured store** | SQLite via `memory_store` / `memory_recall` | Facts, errors, workflows with tags/confidence |
 
 Recall over the structured store is full-text (SQLite FTS5); there is no
@@ -2782,7 +2782,7 @@ Extracted memories are tagged with category, confidence, and source.
 
 ### 10.1 Overview
 
-Ragent includes a built-in specification lifecycle for tracking features,
+Codemason includes a built-in specification lifecycle for tracking features,
 requirements, and implementation tasks.
 
 ### 10.2 Directory Layout
@@ -2871,7 +2871,7 @@ summarising the linked research output.
 
 ### 10.7 SDD Configuration Flags
 
-The following configuration flags in `ragent.json` under the `sdd` key control
+The following configuration flags in `codemason.json` under the `sdd` key control
 opt-in Spec-Driven Development capabilities:
 
 | Flag | Default | Purpose |
@@ -3017,10 +3017,10 @@ progress lines update a single in-place progress message.
 
 ### 11.1 Overview
 
-The `/research` slash command and `ragent research` CLI create structured
+The `/research` slash command and `codemason research` CLI create structured
 research items under `research/<name>/`. Each item contains captured sources
 (web pages, local files, prior specs) and one or more dated report documents
-(`RESEARCH-<YYYY-MM-DD>.md`; an item created by an older ragent keeps its
+(`RESEARCH-<YYYY-MM-DD>.md`; an item created by an older codemason keeps its
 legacy undated `RESEARCH.md`).
 
 ### 11.2 Source Gathering
@@ -3085,7 +3085,7 @@ the same gathering and synthesis pipeline. Supported modes are:
 
 `--max-concurrent-research-units N` caps the number of parallel
 researcher agents in `supervisor` and `competitive` modes. The default is
-5 and can be changed in `ragent.json` under `research.supervisor.max_concurrent_research_units`.
+5 and can be changed in `codemason.json` under `research.supervisor.max_concurrent_research_units`.
 
 `--summarization-model <provider:model>` selects a lightweight model for
 per-page webpage summaries. When omitted, the active default model is
@@ -3137,7 +3137,7 @@ Every report (`RESEARCH-<YYYY-MM-DD>.md`) contains:
   boundary - and otherwise a reduced-length version of the `## Summary`
   content capped at 80 characters, so the headline reflects the synthesis
   rather than the original prompt) plus an optional `invocation` line recording
-  the verbatim front-end command (`ragent research create ...` from the CLI,
+  the verbatim front-end command (`codemason research create ...` from the CLI,
   `/research ...` from the TUI, or a `POST /research` summary from the HTTP
   API) so the
   `/research update` command can replay the run
@@ -3193,7 +3193,7 @@ Every report (`RESEARCH-<YYYY-MM-DD>.md`) contains:
     `RESEARCH.md` / `CORPA.md` (`LEGACY_RESEARCH_FILE_NAME` /
     `LEGACY_CORPA_FILE_NAME`). No command joins a hardcoded file name; every
     read surface (`ResearchManager::{list, show_validated, set_status, search,
-    complete_gathering, write_document, continue_item}`, `ragent research open`
+    complete_gathering, write_document, continue_item}`, `codemason research open`
     and the TUI `/research open`) resolves the report first.
 
   When an LLM is configured, `/research create` also runs a concept-extraction
@@ -3210,7 +3210,7 @@ Every report (`RESEARCH-<YYYY-MM-DD>.md`) contains:
 
 ### 11.4.1 Diff Deck (`/research deck`)
 
-`/research deck <name>` (CLI: `ragent research deck <name>`, spec `diffdeck`)
+`/research deck <name>` (CLI: `codemason research deck <name>`, spec `diffdeck`)
 consumes an item's *series* of dated reports as a change narrative: it selects
 two of them, diffs them element by element, and writes a single Markdown slide
 deck. The deck is **deterministic and LLM-free** - a pure function of the two
@@ -3450,12 +3450,12 @@ ceiling; `--depth` therefore bounds web volume by default.
 
 ## 11A. Project Scaffolding (`/new`)
 
-The `/new` slash command (and the `ragent new` CLI subcommand / `ragent run
+The `/new` slash command (and the `codemason new` CLI subcommand / `codemason run
 "/new ..."` surface) scaffolds a new project in the current working
 directory (spec `newproj`). The pipeline is: flag validation (`--language`
 rust/python/go/typescript, `--type` library/cmdline/tui/gui/webapp, optional
 `--stack`, mutually exclusive `--github`/`--gitlab`) -> empty-directory
-guard (refuses non-empty targets; ragent artifacts `.ragent/`, `log/`,
+guard (refuses non-empty targets; codemason artifacts `.codemason/`, `log/`,
 `target/` are allowlisted) -> file emission with no silent overwrite
 (existing files are reported and left untouched) -> local git init + initial
 commit -> optional GitHub/GitLab remote create + push with failure
@@ -3464,8 +3464,8 @@ existing remote repository is reused instead of failing) -> summary report
 (created layout, generated files, language/type/stack, git outcome, remote
 status).
 
-Generated content: the ragent workspace (`.ragent/config.json`,
-`.ragent/agents/README.md`, `specs/README.md`, `log/`, language-specific
+Generated content: the codemason workspace (`.codemason/config.json`,
+`.codemason/agents/README.md`, `specs/README.md`, `log/`, language-specific
 `.gitignore`, `AGENTS.md` stub), a runnable hello-world artifact set from
 per-language recipes (`Cargo.toml`/`src/main.rs`, `pyproject.toml`/`main.py`,
 `go.mod`/`main.go`, `package.json`/`src/main.ts`; `library` types swap the
@@ -3482,7 +3482,7 @@ registries. See `docs/howtos/newproj.md` for the user manual.
 
 The TUI and CLI surfaces share one pipeline engine:
 `project_scaffold::plan_and_emit()` in
-`crates/ragent-tools-extended/src/project_scaffold/mod.rs` performs flag
+`crates/codemason-tools-extended/src/project_scaffold/mod.rs` performs flag
 validation, the empty-directory guard, file emission, stack overlay, and
 git init, returning the scaffold summary plus the stack note; each surface
 then attaches only its own git/hosting outcome lines to the streamed
@@ -3502,9 +3502,9 @@ progress. The GitHub and GitLab flows share a
 Custom agents can be defined in JSON using the Open Agentic Schema Framework
 (OASF):
 
-- `~/.ragent/agents/` — user-global (legacy location)
-- `~/.config/ragent/agents/` — user-global (XDG config location, higher priority)
-- `.ragent/agents/` — project-local (highest priority)
+- `~/.codemason/agents/` — user-global (legacy location)
+- `~/.config/codemason/agents/` — user-global (XDG config location, higher priority)
+- `.codemason/agents/` — project-local (highest priority)
 
 ### 11.2 Agent Schema
 
@@ -3515,7 +3515,7 @@ Custom agents can be defined in JSON using the Open Agentic Schema Framework
   "version": "1.0.0",
   "schema_version": "0.7.0",
   "modules": [{
-    "type": "ragent/agent/v1",
+    "type": "codemason/agent/v1",
     "payload": {
       "system_prompt": "You are a meticulous Rust reviewer...",
       "model": "anthropic:claude-sonnet-4-20250514",
@@ -3528,7 +3528,7 @@ Custom agents can be defined in JSON using the Open Agentic Schema Framework
 ```
 
 `version` and `schema_version` are required, and the record must carry exactly
-one `ragent/agent/v1` module whose `payload` holds the agent definition
+one `codemason/agent/v1` module whose `payload` holds the agent definition
 (`system_prompt`, `mode`, `max_steps`, `model`, `skills`, `permissions`, ...).
 
 ### 11.3 Template Variables
@@ -3568,7 +3568,7 @@ demand when the skill is invoked (`SkillRegistry::catalog()` for discovery,
 ### 12.2 Skill Locations
 
 - Bundled skills in `assets/skills/`
-- Custom skills in `~/.ragent/skills/` or `.ragent/skills/`
+- Custom skills in `~/.codemason/skills/` or `.codemason/skills/`
 - OpenSkills in `~/.agent/skills/`, `~/.agents/skills/`, and `~/.claude/skills/`
   (global), plus `.agent/skills/`, `.agents/skills/`, and `.claude/skills/`
   (project), each scanned for `<skill>/SKILL.md` under the
@@ -3669,7 +3669,7 @@ graph LR
 Mailbox writes are validated at the boundary: a message authored by the lead
 (the `team_shutdown_teammate` shutdown request, lead-to-teammate chat) must
 carry the lead session id (`MailboxMessage::with_sender_session`,
-SEC-ragent-team-003), so a lead-authored message pushed without one is rejected
+SEC-codemason-team-003), so a lead-authored message pushed without one is rejected
 at the write boundary rather than silently forwarded.
 
 ### 14.3 Team Tools
@@ -3754,9 +3754,9 @@ dependencies are completed.
 
 #### Blueprint Storage Locations
 
-- `~/.ragent/blueprints/teams/<name>/`
-- `~/.config/ragent/blueprints/teams/<name>/` (higher priority than the legacy location)
-- `.ragent/blueprints/teams/<name>/` (highest priority)
+- `~/.codemason/blueprints/teams/<name>/`
+- `~/.config/codemason/blueprints/teams/<name>/` (higher priority than the legacy location)
+- `.codemason/blueprints/teams/<name>/` (highest priority)
 
 #### Blueprint Directory Structure
 
@@ -4069,7 +4069,7 @@ saw only the *absence* of `output_file` and could not tell "the write failed and
 the only copy is in memory" from "this task has no report" - a model reading the
 first shape as the second `read`s a path that was never created and loses the
 findings when the text is truncated. Both surfaces now name the condition through
-one shared constant, `ragent_agent::tool::wait_agents::IN_MEMORY_REPORT_NOTE`:
+one shared constant, `codemason_agent::tool::wait_agents::IN_MEMORY_REPORT_NOTE`:
 
 - `list_agents` list rows print `-> [memory] <status> - report is <note>` where a
   persisted task prints `-> [file] Full report: <path>`, and the detail view
@@ -4130,7 +4130,7 @@ pinned by `::the_prompt_teaches_the_three_execution_contracts`,
 Every tool in the family (`new_agent`, `cancel_agent`, `list_agents`,
 `wait_agents`) and `bg` declares a closed parameter set
 (`additionalProperties: false`) and enforces it through one shared validator,
-`ragent_agent::tool::param_schema::validate_tool_input` (spec `agentssetup`
+`codemason_agent::tool::param_schema::validate_tool_input` (spec `agentssetup`
 FR-004, FR-038). A call carrying a property the schema does not declare is
 refused with an error naming every unknown key and listing the declared ones,
 instead of being silently ignored - a misspelled `backgound: true` no longer
@@ -4276,7 +4276,7 @@ failed rather than silently vanishing from the count. Covered by
 `Terminating` are not. Reaping (`drain_completed`), result injection, kill
 refusal, both wait tools and the TUI Agents panel all consult that one predicate,
 so a new status cannot be classified as finished on one path and live on another
-(`ragent_agent::tool::wait_agents::is_settled` is a thin delegate to it).
+(`codemason_agent::tool::wait_agents::is_settled` is a thin delegate to it).
 `drain_completed` previously treated anything that was not `Running` as settled,
 which injected a *suspended* or *terminating* task as an empty completion and then
 removed it from the registry - a later `resume_task` failed with "not found" and
@@ -4385,7 +4385,7 @@ token counters.
 
 ## 16A. Cron Scheduling
 
-Ragent supports scheduling agent runs with a cron-like system. Users can
+Codemason supports scheduling agent runs with a cron-like system. Users can
 schedule one-shot or repeating events, each with a designated agent type and an
 initial prompt. Events are persisted to SQLite and evaluated by a background
 scheduler while the TUI session is running.
@@ -4610,7 +4610,7 @@ host is detected in the git remote.
 
 ### 19.1 Discovery
 
-Ragent can discover MCP servers automatically. Known server types include:
+Codemason can discover MCP servers automatically. Known server types include:
 
 - `filesystem`
 - `git`
@@ -4624,7 +4624,7 @@ Ragent can discover MCP servers automatically. Known server types include:
 
 ### 19.2 Configuration
 
-MCP servers are configured in `ragent.json`:
+MCP servers are configured in `codemason.json`:
 
 ```jsonc
 {
@@ -4657,14 +4657,14 @@ configuration editing are supported via `/mcp` slash commands.
 #### 19.4.1 Server enable/disable state
 
 Whether an MCP server is actually started is a persisted, user-owned choice
-rather than an implicit side effect of being listed in `ragent.json`. The choice
+rather than an implicit side effect of being listed in `codemason.json`. The choice
 lives in a **global ledger** (`<global state dir>/mcp_state.json`) shared by the
 connect path, the permission gate, and the `/mcp` and `/plugins` surfaces:
 
 - A server id **absent** from the ledger is enabled, so a newly added server -
-  written into `ragent.json` or bridged from a plugin's `mcpServers` section -
+  written into `codemason.json` or bridged from a plugin's `mcpServers` section -
   starts enabled with no extra step.
-- `mcp.<id>.disabled: true` in `ragent.json` always disables the server (the
+- `mcp.<id>.disabled: true` in `codemason.json` always disables the server (the
   config flag is the harder switch), even if the ledger says otherwise.
 - A disabled server is registered with `McpStatus::Disabled` and **no child
   process is spawned**; `/mcp` still lists it and can re-enable it.
@@ -4680,7 +4680,7 @@ connect path, the permission gate, and the `/mcp` and `/plugins` surfaces:
 
 `/mcp remove <id>` is the destructive counterpart of connect/disconnect: it
 disconnects the server and deletes its entry from the `mcp` section of the
-**user-global** `ragent.json`, then clears the server's enable-ledger row so a
+**user-global** `codemason.json`, then clears the server's enable-ledger row so a
 re-added server starts enabled again rather than inheriting a stale disable. The
 session-side disconnect runs *before* the file write, so a failed write leaves
 the running state consistent with the file; a server that was not connected
@@ -4710,12 +4710,12 @@ connector-bridged id is accepted everywhere a plugin-bridged one is.
 #### 19.4.2 Transports, sessions, and startup reporting
 
 A server is reached over the transport its config declares. Only the bundled
-MongoDB server gets a default: ragent does **not** start a second copy of a
+MongoDB server gets a default: codemason does **not** start a second copy of a
 server it expects to be long-lived, so the shipped `mongodb` plugin, whose
 `mcp.json` declares no transport, is bridged to `McpTransport::Http` at
 `http://127.0.0.1:3000/mcp`. If a server is already listening there it is
 adopted; otherwise the HTTP endpoint (not a stdio child) is what the server is
-started as. Every other plugin entry and every `ragent.json` entry keeps the
+started as. Every other plugin entry and every `codemason.json` entry keeps the
 transport it declares (default `stdio`).
 
 The HTTP client performs the MCP `initialize` handshake before `tools/list` and
@@ -4736,7 +4736,7 @@ stdio pipes. Process teardown (`shutdown`) therefore SIGKILLs the *group*
 (`killpg`) after attempting the graceful rmcp `cancel()` — the kill is
 unconditional and ESRCH-safe, so a connection that `/mcp disable` already
 tore down needs no special-casing — and drains the connections map atomically
-so a second ragent instance starting at the same
+so a second codemason instance starting at the same
 time never reaps a child another instance is still using. Before spawning,
 `connect` sweeps `/proc` (Unix only) for **orphaned** earlier
 copies of the same `command` + `args` and SIGKILLs them, because an orphaned
@@ -4745,10 +4745,10 @@ also binds, API rate-limit slots, and memory. A process counts as orphaned only
 after being re-parented away from its spawner: `/proc/<pid>/stat` field 4
 (`Ppid`) equals `1`, or the parent is the per-user service manager
 (`systemd --user`, matched on `/proc/<parent>/comm` or argv[0]). A same-command
-process whose own parent is still alive belongs to a *running* ragent instance
+process whose own parent is still alive belongs to a *running* codemason instance
 and is never killed, so concurrent sessions sharing one MCP stdio command do
 not sever each other's pipes (`Transport closed`). Desktop sessions re-parent a
-dead ragent's launcher tree to the user manager rather than to init, so the
+dead codemason's launcher tree to the user manager rather than to init, so the
 `Ppid == 1` check alone missed exactly the orphans this sweep exists to reap.
 Matching is per process: any supervisor-reparented process whose own command
 line matches is swept, and its process group is signalled, so the launcher
@@ -4796,12 +4796,12 @@ removed (`ToolRegistry::remove_all`), so a multi-segment id like
 `mongodb.mongodb` (`mcp_mongodb_mongodb_*`) is recognised by prefix match
 rather than by its first `_`-segment, and disabling a server leaves no dead
 wrappers for the model to call. The registered name itself comes from one
-place, `McpToolWrapper::ragent_name_for`, which the wrapper constructor and the
+place, `McpToolWrapper::codemason_name_for`, which the wrapper constructor and the
 TUI both use.
 
 #### 19.4.3 Discovery-location report (`/mcp config`)
 
-`/mcp config` reports **where** ragent looks for MCP server definitions, how many
+`/mcp config` reports **where** codemason looks for MCP server definitions, how many
 it finds at each place, and the individual servers discovered. It is backed by
 `McpClient::discover_locations`, which returns a `Vec<McpDiscoveryLocation>`
 instead of the flat, de-duplicated server list `discover` yields. Each location
@@ -4809,8 +4809,8 @@ carries a label, the scanned path (absent for the `PATH` and npm-global rows),
 whether the path exists, and the definitions found there, before de-duplication.
 
 The scanned locations, in order, are: `PATH` (the known server executables),
-npm global `node_modules`, and each registry directory — the ragent-native
-`~/.config/ragent/servers/` first so its definitions win de-duplication, then
+npm global `node_modules`, and each registry directory — the codemason-native
+`~/.config/codemason/servers/` first so its definitions win de-duplication, then
 `~/.claude/mcp-servers/`, `~/.cline/mcp-servers/`, `~/.mcp/servers/`,
 `<config>/mcp/servers/`, and `<config>/claude/mcp-servers/`. The command renders
 a markdown table of every location (label, path with a `(missing)` marker for an
@@ -4819,7 +4819,7 @@ servers (id, the location it came from, its launch command, and the file that
 declares it). `discover` is
 unchanged: it flattens the location results and de-duplicates by id.
 
-The **declaring file** column is what tells a `ragent.json` entry apart from a
+The **declaring file** column is what tells a `codemason.json` entry apart from a
 bridged one before `/mcp remove` is run (§19.4.1a): a `PATH`/npm/registry
 discovery reports `-` (it has no definition file until it is adopted), while a
 plugin- or connector-bridged server reports the absolute path of the manifest
@@ -4902,7 +4902,7 @@ Registered under the `skill:manage` permission category.
 ## 19C. Connector System (Claude-Connector-Equivalent Integrations over MCP)
 
 Spec: `specs/connectors/` (`SPEC.md` FR-001..FR-041, NFR-001..003; `PLAN.md`
-T-001..T-021; `TESTPLAN.md`). Crate: `crates/ragent-connectors` (17th workspace
+T-001..T-021; `TESTPLAN.md`). Crate: `crates/codemason-connectors` (17th workspace
 crate).
 
 A **connector** is a named, user-facing integration (Google Drive, Slack,
@@ -4910,7 +4910,7 @@ GitHub, Git, Postgres, Puppeteer, and the wider community catalogue) that reache
 an external system through the **Model Context Protocol (MCP)**. A connector is
 a catalogue entry carrying a display name, a category, an authentication
 requirement, and one or more MCP servers; the MCP server remains the transport
-ragent already speaks (`McpClient`, §19). The connector system is therefore a
+codemason already speaks (`McpClient`, §19). The connector system is therefore a
 **catalogue and management layer** over machinery that already exists (the MCP
 client, the durable `mcp_state.json` enable ledger, and the encrypted credential
 store), adding the connector abstraction and one coherent surface.
@@ -4927,15 +4927,15 @@ as fatal). A malformed catalogue entry is skipped and counted, never fatal
 
 ### 19C.2 Store and enable ledger
 
-The connector store is discovered under `.ragent/connectors/` (project),
-falling back to `~/.config/ragent/connectors/` (user-global) (FR-001), with an
+The connector store is discovered under `.codemason/connectors/` (project),
+falling back to `~/.config/codemason/connectors/` (user-global) (FR-001), with an
 optional `connectors.store_dir` override. A connector install is
 **path-traversal-safe**: an archive member that escapes the store root (for
 example `../../escape.json`) is refused (FR-029), and a non-`https` package URL
 is refused (FR-028). A freshly installed connector is recorded **enabled** and
 is ready to use; `/connectors enable <id>` connects its servers now in a running
 session (FR-011). The durable enable state is the **existing**
-`ragent_agent::mcp::enable_state` ledger (`mcp_state.json`), so a connector
+`codemason_agent::mcp::enable_state` ledger (`mcp_state.json`), so a connector
 disabled once stays disabled everywhere and the connector crate adds no second
 enable file (FR-018). `remove` is refused while the connector is enabled
 (FR-030), and a duplicate connector id is refused (FR-027).
@@ -4945,7 +4945,7 @@ enable file (FR-018). `remove` is refused while the connector is enabled
 A catalogue index is fetched over `https` under a byte cap, a per-fetch
 wall-clock timeout, and a TTL cache (FR-024, FR-031). Each catalogue is
 normalised through a `ConnectorProvider` shaped like
-`ragent_plugins::store_provider::StoreProvider` (tolerant per-entry skip with a
+`codemason_plugins::store_provider::StoreProvider` (tolerant per-entry skip with a
 `skipped` counter), so the browser domain stays catalogue-agnostic. A compiled
 default Claude connector-catalogue endpoint constant and a pure, offline
 provenance resolver (FR-034..FR-038, NFR-001..003) mirror the plugin store's
@@ -4983,7 +4983,7 @@ credential must be resolved from an environment variable.
 ### 19C.6 The `/connectors` command family
 
 Thirteen subcommands, dispatched through
-`crates/ragent-tui/src/app/connector.rs`, registered in `SLASH_COMMANDS`, and
+`crates/codemason-tui/src/app/connector.rs`, registered in `SLASH_COMMANDS`, and
 listed in the command catalog and the `/` autocomplete menu (seeded from the
 crate's `CONNECTOR_SUBCOMMANDS` token list so the menu cannot drift from the
 usage block) (FR-004):
@@ -5020,9 +5020,9 @@ connector's canonical id before the lifecycle call.
 
 The TUI drives a single published lifecycle session. `src/main.rs` resolves the
 enabled connectors through the bridge into the same background connect loop that
-starts the configured `ragent.json` and plugin-contributed servers, then
+starts the configured `codemason.json` and plugin-contributed servers, then
 publishes a `ConnectorSession` and its status snapshot on the session processor
-(type-erased, so `ragent-agent` does not depend on `ragent-connectors`).
+(type-erased, so `codemason-agent` does not depend on `codemason-connectors`).
 `/connectors enable|disable|connect|disconnect` drives that session and
 reconciles the MCP tool registry afterwards, and `/connectors list` takes its
 per-server tool counts from the live MCP client, so a bridged server that
@@ -5030,7 +5030,7 @@ connected after startup reports a real count (T-008).
 
 ### 19C.7 Catalogue browser (`/connectors claude`)
 
-A modal overlay in `crates/ragent-tui/src/layout.rs`, wearing the same design
+A modal overlay in `crates/codemason-tui/src/layout.rs`, wearing the same design
 language as the plugin-store panel (spec `connectors` FR-047): a calm slate accent
 frame capped at 140x41; a structured title line (catalogue name badge, accent
 counts, and the active `search`/`category`/`marketplace` filters; a
@@ -5072,8 +5072,8 @@ the catalogue label for the base endpoint), rendered in the browse row.
 
 After the catalogue lands, each entry whose `source` is a `github.com` `git+`
 source has its **blank** description resolved from its own repository manifest off
-the event loop (`crates/ragent-connectors/src/catalogue_enrich.rs`, ported from
-`ragent_plugins::store_enrich`): the raw URL
+the event loop (`crates/codemason-connectors/src/catalogue_enrich.rs`, ported from
+`codemason_plugins::store_enrich`): the raw URL
 `https://raw.githubusercontent.com/<owner>/<repo>/<ref>/<subpath>/connector.json`
 is fetched (with `.claude-plugin/connector.json` tried after it) through a
 bounded thread pool, best-effort and never fatal, cached per URL, and behind the
@@ -5084,7 +5084,7 @@ manage the `connectors.stores.marketplaces` array in the user-global config
 
 ### 19C.8 Configuration
 
-The `connectors` block in `ragent.json` (§5.2) controls the master switch
+The `connectors` block in `codemason.json` (§5.2) controls the master switch
 (`connectors.enabled`, default `true`), the store directory override, the
 catalogue endpoints and shared fetch budgets (`timeout_ms`, `max_index_bytes`,
 `cache_ttl_secs`), and the non-secret credential-name mapping. The section
@@ -5095,11 +5095,11 @@ is disabled (FR-021).
 
 ### 19C.9 CLI parity
 
-The same operations are available from a shell via the `ragent connectors <sub>`
+The same operations are available from a shell via the `codemason connectors <sub>`
 CLI parity surface (`src/connectors.rs`), mirroring `src/plugins.rs`: the
 session-free subcommands, the management subcommands (over an ephemeral
 lifecycle session), and the `test` harness. The report is re-spelled for the CLI
-surface (`From: /connectors X` -> `ragent connectors X`).
+surface (`From: /connectors X` -> `codemason connectors X`).
 
 ---
 
@@ -5107,7 +5107,7 @@ surface (`From: /connectors X` -> `ragent connectors X`).
 
 A pluggable execution backend selects **where** a session's tool invocations run
 (spec `openhands` FR-001, FR-019, FR-020, FR-026, FR-031, FR-035). The backend
-dispatch leaf is `crates/ragent-agent/src/backend/`; the agent loop, LLM
+dispatch leaf is `crates/codemason-agent/src/backend/`; the agent loop, LLM
 providers, tool registry, permission system, and event bus are unchanged by the
 choice - only the tool-execution leaf routes through the `ExecutionBackend`
 trait.
@@ -5125,12 +5125,12 @@ resolves to `local`, the host adapter that runs the tool exactly as before
 each tool call into it with `<runtime> exec`:
 
 ```text
-<podman|docker> run -d --name ragent-sandbox-<hash> \
-        -v ragent-sandbox-vol-<hash>:/projects -w /projects \
+<podman|docker> run -d --name codemason-sandbox-<hash> \
+        -v codemason-sandbox-vol-<hash>:/projects -w /projects \
         <image> sleep infinity
 ```
 
-- **Runtime detection (FR-026).** `crates/ragent-agent/src/backend/detection.rs`
+- **Runtime detection (FR-026).** `crates/codemason-agent/src/backend/detection.rs`
   probes `PATH` for `podman`/`docker` and never spawns a process. `podman` is the
   default container runtime when none is specified; a container backend is only
   offered when a runtime is present.
@@ -5154,11 +5154,11 @@ dir)` so a session's container is provisioned once and reused (FR-009).
 
 ### 19D.3 Remote backend (T-003)
 
-`RemoteBackend` drives a **second ragent server** over its REST+SSE API instead of
+`RemoteBackend` drives a **second codemason server** over its REST+SSE API instead of
 running tools locally (FR-021). The transport, stream decoder, and remote-session
-cache live in `crates/ragent-agent/src/backend/remote.rs`; the session-level bridge
+cache live in `crates/codemason-agent/src/backend/remote.rs`; the session-level bridge
 that mirrors the remote stream onto the local bus lives in
-`crates/ragent-agent/src/session/remote_dispatch.rs`.
+`crates/codemason-agent/src/session/remote_dispatch.rs`.
 
 - **Turn flow.** The processor opens (or reuses) a remote session at
   `POST <url>/sessions` with the local working directory, posts the prompt to
@@ -5187,9 +5187,9 @@ that mirrors the remote stream onto the local bus lives in
 ### 19D.4 Sandbox secret injection (T-006; FR-010, FR-023)
 
 A `docker`/`podman`/`remote` descriptor may list `credentials` - non-secret
-*names* stored in the encrypted credential store (`crates/ragent-storage`, the
+*names* stored in the encrypted credential store (`crates/codemason-storage`, the
 same store `/auth` writes to). The value is resolved **at spawn time** and never
-carried in `ragent.json`:
+carried in `codemason.json`:
 
 - **Container (FR-010).** Each named value is resolved when the sandbox is
   provisioned and injected as a container environment variable
@@ -5211,7 +5211,7 @@ carried in `ragent.json`:
   provisions a fresh container environment while preserving the workspace.
 
 The credential store enters the backend through the `SecretResolver` trait
-(`crates/ragent-agent/src/backend/secrets.rs`): the production
+(`crates/codemason-agent/src/backend/secrets.rs`): the production
 `StorageSecretResolver` reads the encrypted SQLite store, and `MapSecretResolver`
 is the in-memory test seam. `resolve_backend_with_secrets` wires the store into
 the container and remote adapters; a backend built without a store fails a
@@ -5219,7 +5219,7 @@ spawn that names a credential rather than starting without it.
 
 ### 19D.5 Durable backend registry (T-004; FR-004, FR-030)
 
-`crates/ragent-agent/src/backend/registry.rs` exposes every configured execution
+`crates/codemason-agent/src/backend/registry.rs` exposes every configured execution
 backend as a durable registry entry. The **config file is the durable record**;
 the registry is its resolved read model, rebuilt from [`Config`] on demand, so no
 separate store can drift from the configured backends. Each
@@ -5259,7 +5259,7 @@ separate store can drift from the configured backends. Each
 The registry is consumed by the TUI backend surface (T-005, FR-008) to show the
 active backend and the health of every registered backend.
 
-The TUI surface is the `/backend` family (`crates/ragent-tui/src/app/backend_panel.rs`,
+The TUI surface is the `/backend` family (`crates/codemason-tui/src/app/backend_panel.rs`,
 `App::handle_backend_command`): with no argument (or `show`/`list`) it opens an
 interactive switcher panel that renders the active backend and a health row for
 every registered backend, and the status bar's second line opens with
@@ -5275,14 +5275,14 @@ over the registry rather than a second source of truth.
 
 The security analyzer is an opt-in permission mode (`security_analyzer.enabled`,
 or the TUI `/security on` / `security-analyzer` alias, which persists the flag).
-Instead of deciding a proposed tool action from the static rules alone, ragent
+Instead of deciding a proposed tool action from the static rules alone, codemason
 asks a model for an `allow` / `ask` / `deny` verdict with a rationale, published
 as `Event::SecurityVerdict` *before* the action is permitted or refused (FR-017)
 so the user sees the reasoning.
 
-- **Tightening-only (FR-006).** `crates/ragent-agent/src/security/mod.rs` builds a
+- **Tightening-only (FR-006).** `crates/codemason-agent/src/security/mod.rs` builds a
   no-tools analyzer request and parses the verdict (`parse_verdict`); the decision
-  is applied at the permission gate (`crates/ragent-agent/src/session/permissions.rs`):
+  is applied at the permission gate (`crates/codemason-agent/src/session/permissions.rs`):
   an analyzer `deny` is a hard denial reported to the model, an analyzer `allow` can
   satisfy a bare `Ask` (no explicit policy rule) but never overrides an explicit
   policy `Deny` or a forced destructive-action checkpoint, and an analyzer `ask` -
@@ -5320,19 +5320,19 @@ that fail on any host, with or without a container runtime.
 - **The security decision is upstream of the backend (FR-002, FR-037).** The
   permission check, the file-path containment guard, the always-allowed
   codeindex hardwiring, and the 7-layer bash validator all run in the session
-  tool-dispatch path (`crates/ragent-agent/src/session/`) *before* the leaf is
+  tool-dispatch path (`crates/codemason-agent/src/session/`) *before* the leaf is
   handed to an `ExecutionBackend`. The trait carries no permission or approval
   token (`BackendToolCall { tool, input, ctx }`), so a backend can only run an
   already-approved call - selection changes *where* a tool runs, never *whether*
   it is allowed (assumption A1).
 - **Sandbox bash is gated by the canonical host validator (FR-002, FR-037).**
   `ContainerBackend::execute_tool` calls
-  `ragent_tools_core::bash::validate_shell_command` on every `Bash` call before
+  `codemason_tools_core::bash::validate_shell_command` on every `Bash` call before
   it provisions or touches a container, so a banned tool, a denied command name,
   a denied pattern, a directory escape, or an obfuscated command is rejected with
   the tool never executing on the host. The refusal precedes provisioning, so it
   is identical with or without a runtime present. Covered by
-  `crates/ragent-agent/tests/test_hardening_invariants.rs`.
+  `crates/codemason-agent/tests/test_hardening_invariants.rs`.
 - **A sandbox cannot reach the host working directory (FR-035).** The workspace
   is a container-managed named volume mounted at `/projects`, never a host bind
   mount; the host working directory is only an input to the sandbox *name hash*,
@@ -5342,14 +5342,14 @@ that fail on any host, with or without a container runtime.
   container is touched
   (`test_container_backend.rs::container_file_tools_reject_paths_outside_the_workspace`).
 - **No secret reaches a rendered surface (FR-035).** A resolved credential value
-  is registered with the shared redaction registry (`ragent-types::sanitize`) at
+  is registered with the shared redaction registry (`codemason-types::sanitize`) at
   resolution time; `RemoteBackend`'s hand-written `Debug` renders the bearer key
   as `[REDACTED]`; the secret-free backend `ConnectionDescriptor` records key
   *presence* and credential *names* only; the OpenAPI document declares the
   `bearerAuth` scheme with no value; `GET /config` redacts every credential-keyed
   field by shape. Covered by `test_hardening_invariants.rs`,
   `test_backend_registry.rs`, `test_sandbox_secrets.rs`, `test_openapi_document.rs`,
-  and `ragent-server`'s `test_config_redaction.rs`.
+  and `codemason-server`'s `test_config_redaction.rs`.
 - **The OpenAI-compatible surface inherits the native auth and never bypasses
   permissions (FR-024, FR-038).** `openai_routes()` is merged into the
   auth-protected router, so `/v1/models` and `/v1/chat/completions` require the
@@ -5357,26 +5357,26 @@ that fail on any host, with or without a container runtime.
   a tool that needs confirmation raises the ordinary prompt
   (`test_openai_surface.rs`).
 - **Refuse to serve unauthenticated (FR-032).** When `openai.enabled` is true and
-  no token resolves from `openai.token` or the ambient `RAGENT_TOKEN`, `ragent
+  no token resolves from `openai.token` or the ambient `CODEMASON_TOKEN`, `codemason
   serve` refuses to start the surface with a non-zero exit and an actionable
   message rather than serving it unauthenticated (`src/main.rs`, the `Serve` arm).
   Covered by `tests/test_serve_openai_gate.rs`.
 
-## 19E. Agent Client Protocol (`ragent-agent/src/acp/`)
+## 19E. Agent Client Protocol (`codemason-agent/src/acp/`)
 
-ragent speaks ACP (Agent Client Protocol) in both directions (spec `openhands`
+codemason speaks ACP (Agent Client Protocol) in both directions (spec `openhands`
 FR-015, FR-022, FR-028, FR-036).
 
 ### 19E.1 ACP client (T-007; FR-015, FR-022, FR-036)
 
-`crates/ragent-agent/src/acp/mod.rs` drives an external coding agent (Claude
+`crates/codemason-agent/src/acp/mod.rs` drives an external coding agent (Claude
 Code, Codex, Gemini CLI, or a custom ACP server) as a **subprocess** that speaks
 JSON-RPC 2.0 over its stdin/stdout. `AcpClient::spawn` starts the command (the
 child is `kill_on_drop`), `initialize` and `session/new` perform the handshake,
 and `session/prompt` relays one turn, rendering each streamed `session/update`
 through a callback. A turn dispatched to an ACP agent is relayed to it instead of
-a local ragent LLM provider (FR-022); the bridge from `AcpUpdate`s onto the local
-event bus lives in `crates/ragent-agent/src/session/acp_dispatch.rs`.
+a local codemason LLM provider (FR-022); the bridge from `AcpUpdate`s onto the local
+event bus lives in `crates/codemason-agent/src/session/acp_dispatch.rs`.
 
 Failure handling is first-class (FR-036): a non-zero exit, a malformed stdout
 frame, a JSON-RPC error reply, or a silent subprocess that outlives its turn
@@ -5385,22 +5385,22 @@ the `acp.agents` registry plus an optional `acp.default_agent`.
 
 ### 19E.2 ACP server on stdio (T-008; FR-022, FR-028)
 
-`crates/ragent-agent/src/acp/server.rs` is the mirror image: it **serves** an
-ACP-capable editor (Zed, VS Code, JetBrains) over JSON-RPC on ragent's own
-stdin/stdout. Each editor session maps onto a local ragent session, and the
+`crates/codemason-agent/src/acp/server.rs` is the mirror image: it **serves** an
+ACP-capable editor (Zed, VS Code, JetBrains) over JSON-RPC on codemason's own
+stdin/stdout. Each editor session maps onto a local codemason session, and the
 session's agent-loop events are streamed back as ACP `session/update`
 notifications (FR-022):
 
 | Request            | Behaviour                                                                                    |
 | ------------------ | -------------------------------------------------------------------------------------------- |
 | `initialize`       | Negotiates the ACP protocol version (`1`).                                                     |
-| `session/new`      | Opens a local ragent session rooted at the editor's `cwd` (or the process working dir).        |
-| `session/prompt`   | Runs one ragent turn, streaming `agent_message_chunk` / `agent_thought_chunk` / `tool_call` / `tool_call_update` updates, then replies with the mapped `stopReason`. |
+| `session/new`      | Opens a local codemason session rooted at the editor's `cwd` (or the process working dir).        |
+| `session/prompt`   | Runs one codemason turn, streaming `agent_message_chunk` / `agent_thought_chunk` / `tool_call` / `tool_call_update` updates, then replies with the mapped `stopReason`. |
 | `session/cancel`   | Raises the turn's cancellation flag.                                                           |
 
 **Feature-gated and disabled by default (FR-028).** The endpoint compiles only
 behind the `acp-server` Cargo feature and runs only when `acp.server_enabled` is
-`true` in the configuration. It is reachable only through the `ragent acp-server`
+`true` in the configuration. It is reachable only through the `codemason acp-server`
 subcommand; when either gate is closed the command prints a diagnostic and exits
 with a usage error (code 2) rather than serving. A malformed request frame is
 skipped (never tears the connection down) and an unknown request method gets a
@@ -5409,12 +5409,12 @@ resolving `server_agent` -> `default_agent` -> the top-level `defaultAgent`.
 
 ```bash
 cargo build --features acp-server
-ragent acp-server
+cdmn acp-server
 ```
 
 ---
 
-## 19F. Automation Service (`ragent-agent/src/automation/`)
+## 19F. Automation Service (`codemason-agent/src/automation/`)
 
 The automation service turns a named, schedulable or webhook-triggered agent run
 into a durable, backend-confined unit with run history (spec `openhands` T-016;
@@ -5423,8 +5423,8 @@ cron schedule grammar rather than replacing either (assumption A6).
 
 ### 19F.1 Definitions and triggers
 
-An automation is declared under the `automation` block in `ragent.json`
-(`crates/ragent-config/src/automation.rs`, `AutomationConfig`). The service is
+An automation is declared under the `automation` block in `codemason.json`
+(`crates/codemason-config/src/automation.rs`, `AutomationConfig`). The service is
 inert unless the block sets `enabled: true` (`Config::automation_enabled`), so a
 project that never opted in starts no scheduler and accepts no webhook. Each
 `AutomationDefinition` carries an id, an agent, a prompt template (with
@@ -5438,17 +5438,17 @@ dispatch targets:
 
 ### 19F.2 Webhook ingress, scheduler, and run history
 
-- **Webhook ingress (FR-013).** `crates/ragent-server/src/routes/automation.rs`
+- **Webhook ingress (FR-013).** `crates/codemason-server/src/routes/automation.rs`
   registers `POST /auto/{id}` as a **public** route (like `/health`), because an
   external system such as a GitHub webhook has no bearer token. The request body
   is compacted to JSON and supplied to the run as prompt context.
 - **Scheduler (FR-014).** `AutomationService::spawn_scheduler` ticks every
   `scheduler_tick_secs`, enqueues a run when a schedule automation's due time
   passes (skipping one whose previous run is still in flight), and advances its
-  next-due time with `CronSchedule::advance_next_due`. The TUI (`ragent-tui`)
-  and `ragent serve` each start one scheduler when the config enables the
+  next-due time with `CronSchedule::advance_next_due`. The TUI (`codemason-tui`)
+  and `codemason serve` each start one scheduler when the config enables the
   service.
-- **Run history (FR-018).** `ragent-storage`'s `automation_runs` table records
+- **Run history (FR-018).** `codemason-storage`'s `automation_runs` table records
   one row per run (`Storage::insert_automation_run` / `finish_automation_run` /
   `list_automation_runs` / `prune_automation_runs`). A terminal run captures the
   automation id, trigger kind, start/end times, outcome, selected backend, and
@@ -5460,14 +5460,14 @@ A run executes only in its configured execution backend. `AutomationService`
 installs the selected descriptor as a per-session override
 (`register_session_backend`) before the run's first turn; the session loop
 applies it (`apply_session_backend_override` in
-`crates/ragent-agent/src/session/loop_steps.rs` and
+`crates/codemason-agent/src/session/loop_steps.rs` and
 `remote_dispatch.rs`), so a container/remote run is routed there and a relay
 failure never silently re-runs it on the host (FR-031). No part of the run
 executes outside the selected backend.
 
 ### 19F.4 Third-party dispatch (FR-013)
 
-`crates/ragent-agent/src/automation/dispatch.rs` builds a provider-shaped payload
+`crates/codemason-agent/src/automation/dispatch.rs` builds a provider-shaped payload
 (`payload_for`) for each `DispatchTarget` and POSTs it on run completion. The
 supported kinds are `slack`, `github`, `linear`, `notion`, and `webhook` (a
 generic JSON POST). A target names its credential's environment variable
@@ -5479,9 +5479,9 @@ generic JSON POST). A target names its credential's environment variable
 | Surface | Command / path |
 | ------- | -------------- |
 | TUI | `/automation [list]`, `/automation runs <id>`, `/automation run <id>`, `/automation help` |
-| CLI | `ragent automation list\|runs <id>\|run <id>\|help` |
+| CLI | `codemason automation list\|runs <id>\|run <id>\|help` |
 | HTTP | `POST /auto/{id}` (public), `GET /automation`, `GET /automation/runs/{id}`, `POST /automation/{id}/run` (bearer) |
-| OpenAPI | The three admin routes and the webhook route are in the route table (`crates/ragent-server/src/routes/openapi.rs`) |
+| OpenAPI | The three admin routes and the webhook route are in the route table (`crates/codemason-server/src/routes/openapi.rs`) |
 
 See `docs/howtos/slashcommands/automation.md` for the full manual.
 
@@ -5533,7 +5533,7 @@ wall-clock duration.
 
 ### 21.3 Dry-Run Readiness Report
 
-The `ragent --dry-run` / `ragent config check` flow builds a
+The `codemason --dry-run` / `codemason config check` flow builds a
 `ReadinessReport` by loading and merging configuration, resolving provider/model
 auth state, discovering skills via the skill catalog, enumerating visible tools,
 and performing lightweight MCP connectivity checks — all without invoking the
@@ -5545,7 +5545,7 @@ examples.
 
 `cargo`'s default autotest discovery turns each top-level `tests/*.rs` file into
 its own binary. At this workspace's scale that was ~948 integration binaries and
-~948 link steps per full `cargo test`. Every crate (and the root `ragent`
+~948 link steps per full `cargo test`. Every crate (and the root `codemason`
 package) therefore sets `autotests = false` and declares exactly one integration
 target:
 
@@ -5586,14 +5586,14 @@ Three consequences are part of the contract:
 - **`crate::` in a `#[path]`-included source module resolves at the binary
   root**, not at the crate under test. Where a child includes `src/foo.rs` that
   refers to `crate::bar`, `tests/all.rs` re-exports `bar` (the shims at the top
-  of `crates/ragent-agent/tests/all.rs` are the pattern) rather than duplicating
+  of `crates/codemason-agent/tests/all.rs` are the pattern) rather than duplicating
   the module.
 - **Tests must not write into the repository.** Three write paths were made
   injectable so a test run leaves the working tree byte-identical: the research
   vault root is explicit `AppState::research_root` state (production passes
-  `<working dir>/research`, tests pass `target/temp/ragent-server-research/`),
+  `<working dir>/research`, tests pass `target/temp/codemason-server-research/`),
   `session::history::set_subagent_log_root` redirects diverted `wait_agents`
-  batches, and `ragent_tui::app::set_log_root_override` /
+  batches, and `codemason_tui::app::set_log_root_override` /
   `use_scratch_log_root_for_tests` redirect the TUI log-window spools. All three
   are `#[doc(hidden)]` `OnceLock` setters — production never calls them, so the
   shipped defaults (`<working dir>/log`, `<working dir>/research`) are unchanged.
@@ -5624,7 +5624,7 @@ All documentation markdown files are located in `docs/` except for these root fi
 
 ## Appendix C: Project Contact & Repository
 
-- **Repository:** https://github.com/thawkins/ragent
+- **Repository:** https://github.com/thawkins/codemason
 - **License:** MIT
 - **Author:** Tim Hawkins
 
@@ -5632,14 +5632,14 @@ All documentation markdown files are located in `docs/` except for these root fi
 
 ## Research Configuration
 
-The `/research create` synthesis prompt (in `crates/ragent-research/src/analysis.rs`)
-honours several optional `ragent.json` keys under a top-level `research` object.
+The `/research create` synthesis prompt (in `crates/codemason-research/src/analysis.rs`)
+honours several optional `codemason.json` keys under a top-level `research` object.
 All are opt-in and default to the legacy behaviour, so existing
 configurations continue to work unchanged.
 
 The synthesis prompt builder also has few-shot exemplar and persona knobs
 (`SynthesisPromptConfig.few_shot_examples`, `SynthesisPromptConfig.persona`),
-but these are not `ragent.json` keys: `ResearchConfig` has no `few_shot` or
+but these are not `codemason.json` keys: `ResearchConfig` has no `few_shot` or
 `analysis_persona` field, so such keys are ignored.
 
 ### `research.models.*` (string, optional)
@@ -5670,7 +5670,7 @@ wins over this value.
 
 Appends a deterministic quality scorecard to every run's `RESEARCH.md`
 (FR-015). A per-run `--evaluate` on the TUI `/research create` command turns it
-on for one run; the `ragent research create` CLI has no `--evaluate` flag, so
+on for one run; the `codemason research create` CLI has no `--evaluate` flag, so
 this key is how CLI runs enable it.
 
 ### Example stanza
@@ -5697,11 +5697,11 @@ this key is how CLI runs enable it.
 
 The prompt-builder knobs (`SynthesisPromptConfig.few_shot_examples`,
 `SynthesisPromptConfig.persona`) and the `LlmAnalysisEngine::with_persona`
-builder are implemented in `crates/ragent-research/src/analysis.rs`. Model
+builder are implemented in `crates/codemason-research/src/analysis.rs`. Model
 overrides, supervisor concurrency, and evaluation are propagated from
 `ResearchRunRequest` through `build_session_config` in
-`crates/ragent-research/src/run_request.rs` to the engine phases. The
-`ragent.json` `research.*` keys are read via `Config::merge` in
-`crates/ragent-config/src/config.rs` and propagated through
+`crates/codemason-research/src/run_request.rs` to the engine phases. The
+`codemason.json` `research.*` keys are read via `Config::merge` in
+`crates/codemason-config/src/config.rs` and propagated through
 `build_session_config` so CLI/TUI defaults match the config file. Callers can
 still override per run with the corresponding flags.

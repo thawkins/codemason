@@ -46,11 +46,11 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
       - name: Test (nextest)
-        # `ragent-tools-extended/test-ssrf-bypass` compiles in the loopback
+        # `codemason-tools-extended/test-ssrf-bypass` compiles in the loopback
         # escape hatch the fetch/crawl integration tests need. It is off by
         # default and never enabled for a release build, so the shipped SSRF
         # guard cannot be disabled by an environment variable.
-        run: cargo nextest run --workspace --features ragent-tools-extended/test-ssrf-bypass --profile ci --no-fail-fast
+        run: cargo nextest run --workspace --features codemason-tools-extended/test-ssrf-bypass --profile ci --no-fail-fast
       - name: Test (doc tests - nextest does not run these)
         run: cargo test --workspace --doc
 
@@ -164,9 +164,9 @@ jobs:
       - name: Verify no retired tool spelling survives as a literal (FR-027, NFR-008(e))
         run: bash scripts/check-tool-rename.sh
       - name: Verify the shared guard regression suite
-        run: 'cargo nextest run -p ragent-types -E "test(test_shared_guards::)"'
+        run: 'cargo nextest run -p codemason-types -E "test(test_shared_guards::)"'
       - name: Verify the unified redaction regression suite
-        run: 'cargo nextest run -p ragent-types -E "test(test_unified_redaction::)"'
+        run: 'cargo nextest run -p codemason-types -E "test(test_unified_redaction::)"'
 
   ms0-regression:
     name: ANTIPAT M0 regression suites
@@ -183,19 +183,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       - name: Shared guard unit tests
-        run: 'cargo nextest run -p ragent-types -E "test(test_shared_guards::)"'
+        run: 'cargo nextest run -p codemason-types -E "test(test_shared_guards::)"'
       - name: Unified redaction tests
-        run: 'cargo nextest run -p ragent-types -E "test(test_unified_redaction::)"'
+        run: 'cargo nextest run -p codemason-types -E "test(test_unified_redaction::)"'
       - name: Research retry-clamp tests (ANTIPAT M0.2)
-        run: 'cargo nextest run -p ragent-research -E "test(test_search_retry_clamp::)"'
+        run: 'cargo nextest run -p codemason-research -E "test(test_search_retry_clamp::)"'
       - name: Git argv-injection guard tests (ANTIPAT M0.3)
-        run: 'cargo nextest run -p ragent-tools-vcs -E "test(test_ms0_git_arg_guards::)"'
+        run: 'cargo nextest run -p codemason-tools-vcs -E "test(test_ms0_git_arg_guards::)"'
       - name: Config redaction + denylist tests (ANTIPAT M0.8)
-        run: 'cargo nextest run -p ragent-config -E "test(test_ms0_config_guards::)"'
+        run: 'cargo nextest run -p codemason-config -E "test(test_ms0_config_guards::)"'
       - name: Plugin integrity tests (ANTIPAT M0.6)
-        run: 'cargo nextest run -p ragent-plugins -E "test(test_add::)"'
+        run: 'cargo nextest run -p codemason-plugins -E "test(test_add::)"'
       - name: Spec containment tests (ANTIPAT M0.7)
-        run: 'cargo nextest run -p ragent-specs -E "test(test_govcreate_authoring::)"'
+        run: 'cargo nextest run -p codemason-specs -E "test(test_govcreate_authoring::)"'
       # ANTIPAT M0.5: the `send_channel_message` tool (and its `test_channels.rs`
       # suite) was deleted in 1.0.130, so the SSRF cover for this milestone now
       # lives in the masterfetch validator suite, the two legacy egress tools'
@@ -205,9 +205,9 @@ jobs:
       # in, which stays off unless a test sets the environment variable in its
       # own process, so the rejection assertions still run against the default.
       - name: SSRF + capped body-reader tests (ANTIPAT M0.5)
-        run: 'cargo nextest run -p ragent-tools-extended --features test-ssrf-bypass -E "test(test_mf_security::) + test(test_legacy_web_ssrf::) + test(test_mf_supplement::)"'
+        run: 'cargo nextest run -p codemason-tools-extended --features test-ssrf-bypass -E "test(test_mf_security::) + test(test_legacy_web_ssrf::) + test(test_mf_supplement::)"'
       - name: Telemetry toggle tests (ANTIPAT M0.15)
-        run: 'cargo nextest run -p ragent-telemetry --features telemetry -E "test(test_metric_toggles::)"'
+        run: 'cargo nextest run -p codemason-telemetry --features telemetry -E "test(test_metric_toggles::)"'
 
   clippy:
     name: Clippy

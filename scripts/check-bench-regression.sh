@@ -27,7 +27,7 @@ BASELINE_NAME="main"
 
 if [[ ! -d "${CRITERION_DIR}" ]]; then
     echo "check-bench-regression: no criterion results directory found at ${CRITERION_DIR}" >&2
-    echo "run: cargo bench -p ragent-bench --bench agent_loop -- --save-baseline ${BASELINE_NAME}" >&2
+    echo "run: cargo bench -p codemason-bench --bench agent_loop -- --save-baseline ${BASELINE_NAME}" >&2
     exit 2
 fi
 
@@ -36,7 +36,7 @@ fi
 # used. We parse the "change" median from the latest report.
 echo "check-bench-regression: running agent_loop bench vs baseline '${BASELINE_NAME}' (threshold ${THRESHOLD}%)"
 
-if ! cargo bench -p ragent-bench --bench agent_loop -- --baseline "${BASELINE_NAME}" --warm-up-time 0.2 --measurement-time 1.0 2>/dev/null; then
+if ! cargo bench -p codemason-bench --bench agent_loop -- --baseline "${BASELINE_NAME}" --warm-up-time 0.2 --measurement-time 1.0 2>/dev/null; then
     echo "check-bench-regression: bench run failed" >&2
     exit 1
 fi

@@ -9,7 +9,7 @@
     {
       "id": "main",
       "transport": "stdio",
-      "command": "ragent-fixture-missing-command",
+      "command": "codemason-fixture-missing-command",
       "args": []
     }
   ]

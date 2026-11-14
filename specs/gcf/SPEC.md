@@ -3,7 +3,7 @@ status: draft
 audit:
   - { time: 1789202834, from: "none", to: "draft", actor: "system" }
 ---
-# GCF Protocol Integration for ragent
+# GCF Protocol Integration for codemason
 
 ## Context
 
@@ -25,13 +25,13 @@ observation content (`pdf_read`, `office_read`/`libreoffice_*`,
 single LLM-view choke point reduces token cost for every turn that carries a
 tool result, without changing tool implementations or the TUI rendering.
 
-This spec defines how ragent integrates GCF support:
+This spec defines how codemason integrates GCF support:
 
-- a persistent config setting in `ragent.json` (section `gcf.enabled`),
+- a persistent config setting in `codemason.json` (section `gcf.enabled`),
   defaulting to **off** when absent;
 - a `/gcf` slash command (`on`, `off`, `show`, `help`) in the TUI;
 - an encoding hook at the LLM-view choke point
-  (`tool_result_content_for_llm` in `crates/ragent-agent/src/session/history.rs`)
+  (`tool_result_content_for_llm` in `crates/codemason-agent/src/session/history.rs`)
   that GCF-encodes eligible JSON tool results when the feature is enabled.
 
 ## Goals
@@ -39,7 +39,7 @@ This spec defines how ragent integrates GCF support:
 - **G1** — GCF encoding is a persistent, config-gated runtime feature: no
   `gcf` section in the config file means the feature is OFF.
 - **G2** — The `/gcf on|off` toggle persists the choice to the config file
-  from which ragent loaded its config, and applies it to the live session.
+  from which codemason loaded its config, and applies it to the live session.
 - **G3** — When enabled, JSON-dense tool results are encoded with the GCF
   generic profile before the LLM sees them; TUI display, activity log, memory
   extraction, hooks, and compaction still see the raw JSON.
@@ -79,7 +79,7 @@ mixes templates the dominant template is listed first.
 
 ### FR-001 — GCF config section with default-off (ubiquitous + state-driven)
 
-**[Ubiquitous]** The `Config` struct (`crates/ragent-config`) **shall** expose
+**[Ubiquitous]** The `Config` struct (`crates/codemason-config`) **shall** expose
 `pub gcf: GcfConfig`, where `GcfConfig` contains `pub enabled: bool` with
 `Default` = `false`, deserialised with `#[serde(default)]`.
 
@@ -96,13 +96,13 @@ configs.
 
 **[Event-driven]** WHEN `/gcf on` or `/gcf off` completes successfully, the
 system **shall** write `gcf.enabled` (`true` / `false` respectively) to the
-config file ragent was loaded from (project `.ragent/ragent.json` when
+config file codemason was loaded from (project `.codemason/codemason.json` when
 applicable, else the global config), reusing `Config::save_to_source()`,
 and **shall** invalidate the in-process config cache so the next load
 observes the new value.
 
 **[State-driven]** WHILE the persisted `gcf.enabled` value has not been
-changed by any later command, a ragent restart **shall** restore the same
+changed by any later command, a codemason restart **shall** restore the same
 effective GCF state as before the restart.
 
 **[State-driven]** WHEN `Config::save_to_source()` fails, the in-memory
@@ -113,7 +113,7 @@ existing `/codeindex` behaviour).
 ### FR-003 — `/gcf` slash command surface (ubiquitous + optional)
 
 **[Ubiquitous]** The TUI **shall** register a `gcf` entry in `SLASH_COMMANDS`
-(`crates/ragent-tui/src/app/state.rs`) with description
+(`crates/codemason-tui/src/app/state.rs`) with description
 `Toggle GCF encoding of tool results: /gcf on|off|show|help`, and
 `get_command_suggestions` **shall** return `on`, `off`, `show`, `help` for the
 `gcf` trigger so autocomplete offers every subcommand.
@@ -146,7 +146,7 @@ state or the config file.
 **[Event-driven]** WHEN a tool execution completes with a result observation
 and GCF is enabled, the system **shall** pass the observation through the
 encoding hook at `tool_result_content_for_llm`
-(`crates/ragent-agent/src/session/history.rs`), which:
+(`crates/codemason-agent/src/session/history.rs`), which:
 
 1. applies to both the live dispatch path and the session replay path, so
    persisted history rendered for the LLM is encoded with the same rules;
@@ -179,7 +179,7 @@ observation:
 
 **[State-driven]** WHILE GCF is enabled, the assembled system prompt **shall**
 include a short `## GCF Encoding Primer` section (added alongside the
-existing conditional sections in `crates/ragent-agent/src/agent/mod.rs`)
+existing conditional sections in `crates/codemason-agent/src/agent/mod.rs`)
 explaining: the GCF block marker, the generic profile grammar (headers, pipe
 rows, scalar grammar), that GCF blocks are lossless encodings of JSON, and
 that the LLM should read them as structured data.
@@ -208,9 +208,9 @@ same actionable diagnostics rather than guessing intent.
 ### FR-009 — Config-file portability (state-driven)
 
 **[State-driven]** WHILE a config file with `gcf.enabled: true` is used by a
-ragent build, the GCF state and `/gcf` toggle behaviour **shall** operate
+codemason build, the GCF state and `/gcf` toggle behaviour **shall** operate
 identically regardless of whether the config file came from the project
-directory (`.ragent/ragent.json`) or the global user config, and `/gcf on`
+directory (`.codemason/codemason.json`) or the global user config, and `/gcf on`
 **shall** write the setting back to the same source the config was loaded
 from.
 
@@ -218,7 +218,7 @@ from.
 
 ## Acceptance Criteria
 
-- AC-1: With no `gcf` section in `ragent.json`, `/gcf show` reports OFF and
+- AC-1: With no `gcf` section in `codemason.json`, `/gcf show` reports OFF and
   tool results are never encoded (FR-001, FR-002).
 - AC-2: `/gcf on` persists `gcf.enabled: true` to the loaded config source and
   survives restart; `/gcf off` persists `false` (FR-002, FR-003, FR-009).
@@ -240,14 +240,14 @@ from.
 ## Verification Approach
 
 - Config default-off: serde round-trip + fresh-load tests in
-  `crates/ragent-config/tests/test_gcf_config.rs` (implementation-level).
-- Toggle persistence: TUI dispatch tests in `crates/ragent-tui/tests/`
+  `crates/codemason-config/tests/test_gcf_config.rs` (implementation-level).
+- Toggle persistence: TUI dispatch tests in `crates/codemason-tui/tests/`
   mirroring `test_codeindex_toggle_persistence.rs`, plus manual TESTPLAN
   steps below.
 - Encoder hook: unit tests for JSON-threshold, size-margin, fallback, and
-  round-trip decode in `crates/ragent-agent/tests/`.
+  round-trip decode in `crates/codemason-agent/tests/`.
 - Primer presence: system-prompt assembly tests in
-  `crates/ragent-agent/tests/test_builtin_agents.rs` pattern.
+  `crates/codemason-agent/tests/test_builtin_agents.rs` pattern.
 - Manual end-to-end verification via TESTPLAN.md.
 
 ---
@@ -258,5 +258,5 @@ from.
   whether a labelled-block wrapper is provided) at implementation start; if
   the crate's published API differs from the README, adapt FR-004's block
   wrapper to the crate's canonical output form.
-- OQ-2: Whether `/gcf` should also be available in non-TUI runs (CLI `ragent
+- OQ-2: Whether `/gcf` should also be available in non-TUI runs (CLI `codemason
   run`); v1 scope is TUI-only, consistent with other config toggles.

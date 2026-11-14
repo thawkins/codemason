@@ -1,10 +1,10 @@
 {
   "pid": 264467,
-  "exe": "/home/thawkins/Projects/ragent/target/debug/ragent",
+  "exe": "/home/thawkins/Projects/codemason/target/debug/cdmn",
   "args": [
-    "/home/thawkins/Projects/ragent/target/debug/ragent"
+    "/home/thawkins/Projects/codemason/target/debug/cdmn"
   ],
-  "cwd": "/home/thawkins/Projects/ragent/scripts",
+  "cwd": "/home/thawkins/Projects/codemason/scripts",
   "status": "clean exit",
   "thread": "main",
   "updated_at": "2026-10-14T02:19:33.994689894+00:00",

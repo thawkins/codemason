@@ -1,5 +1,5 @@
-# Build environment configuration for ragent.
-# No special environment variables are required; ragent is pure Rust and
+# Build environment configuration for codemason.
+# No special environment variables are required; codemason is pure Rust and
 # does not use bindgen or LLVM.
 
 # Incremental compilation is disabled workspace-wide. sccache (set via

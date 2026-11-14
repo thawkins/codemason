@@ -55,6 +55,6 @@ The extra token is ignored; the same reset dialog opens.
 
 - `/provider` - add or reconfigure providers
 - `/model` - pick a model after re-configuring
-- `ragent auth` - CLI provider authentication configuration
+- `codemason auth` - CLI provider authentication configuration
 - Credentials are stored encrypted in the SQLite storage layer (see
-  `ragent-storage`)
+  `codemason-storage`)

@@ -1,0 +1,566 @@
+//! HTTP client configuration for LLM providers.
+//!
+//! This module provides a centralized way to configure HTTP clients with
+//! appropriate settings for concurrent sub-agent execution, including:
+//! - Connection pool limits to prevent HTTP/2 race conditions
+//! - Request/response timeouts
+//! - HTTP/2 configuration
+//! - Retry logic with exponential backoff
+
+use std::sync::OnceLock;
+use std::time::Duration;
+
+use anyhow::Result;
+use reqwest::Client;
+use tracing::warn;
+
+/// Maximum connections per host.
+const MAX_IDLE_PER_HOST: usize = 8;
+
+/// Connection timeout in seconds.
+const CONNECT_TIMEOUT_SECS: u64 = 30;
+
+/// Request timeout in seconds.
+const REQUEST_TIMEOUT_SECS: u64 = 120;
+
+/// Idle per-chunk timeout applied to every streaming provider's `stream.next()`
+/// so a mid-stream stall cannot hang the agent forever (C-004). Providers that
+/// deliberately wait longer between chunks (e.g. a reasoning model thinking for
+/// over a minute before its first token) rely on the *initial* response not
+/// timing out here because this helper only guards each *subsequent* chunk once
+/// the stream is already producing data.
+///
+/// This guards the budget *between* already-flowing chunks. It is deliberately
+/// shorter than [`DEFAULT_STREAM_TIMEOUT_SECS`] (the first-byte budget): once a
+/// stream has started producing data, a long gap means a genuine stall, so a
+/// tight per-chunk guard surfaces it early. Before the first byte, the model
+/// may legitimately spend a long time thinking (especially reasoning models
+/// with large prompts), so the first-byte budget is the more generous
+/// [`DEFAULT_STREAM_TIMEOUT_SECS`].
+pub const STREAM_CHUNK_IDLE_TIMEOUT_SECS: u64 = 120;
+
+/// Default first-byte (whole-request) timeout for providers that wrap the chat
+/// POST in a `tokio::time::timeout` and let callers override it via
+/// `ChatRequest::stream_timeout_secs`.
+///
+/// This is the budget from sending the request until the first response byte
+/// arrives. It is intentionally larger than
+/// [`STREAM_CHUNK_IDLE_TIMEOUT_SECS`] because a reasoning model may think for
+/// several minutes before emitting its first token, whereas an inter-chunk gap
+/// of the same length would indicate a genuine mid-stream stall.
+///
+/// Used by copilot, ollama, ollama_cloud and openrouter; the remaining
+/// providers rely solely on the per-chunk guard above.
+pub const DEFAULT_STREAM_TIMEOUT_SECS: u64 = 600;
+
+/// Decode a stream chunk onto a growing `String`, buffering any incomplete
+/// trailing multibyte character so it can be completed by the next chunk.
+///
+/// Decoding each TCP chunk independently with `from_utf8_lossy` corrupts any
+/// multibyte character split across a chunk boundary by substituting U+FFFD
+/// (FUNC-033). This keeps the incomplete tail in `pending` (a byte buffer) and
+/// only appends the valid prefix to `out`.
+///
+/// Invalid bytes are consumed as *ill-formed sequences* per the UTF-8 spec:
+/// `Utf8Error::error_len()` reports how many bytes after `valid_up_to` are a
+/// definitively bad sequence, which we flush lossily. `error_len() == None`
+/// means the tail is *incomplete* rather than invalid, so we keep it in
+/// `pending` and wait for more bytes - regardless of how long `pending` has
+/// grown. A pure length-based flush (e.g. `pending.len() >= 4`) can corrupt a
+/// valid character whose head was appended to a buffer that already contained
+/// garbage.
+pub fn append_stream_chunk(out: &mut String, pending: &mut Vec<u8>, chunk: &[u8]) {
+    pending.extend_from_slice(chunk);
+    // Prefix length of `pending` consumed so far. Draining once after the
+    // loop avoids an O(n) memmove per bad-byte sequence in a noisy stream.
+    let mut consumed = 0usize;
+    loop {
+        match std::str::from_utf8(&pending[consumed..]) {
+            Ok(s) => {
+                out.push_str(s);
+                pending.clear();
+                return;
+            }
+            Err(e) => {
+                let valid = e.valid_up_to();
+                // Push the valid prefix. It is guaranteed valid UTF-8 by the
+                // slice above, so push the `str` directly rather than routing
+                // through `String::from_utf8_lossy` (which allocates).
+                if valid > 0 {
+                    // SAFETY-free: the slice [consumed..consumed+valid] is
+                    // exactly the valid prefix `from_utf8` just measured.
+                    if let Ok(s) = std::str::from_utf8(&pending[consumed..consumed + valid]) {
+                        out.push_str(s);
+                    }
+                }
+                consumed += valid;
+                match e.error_len() {
+                    // Ill-formed sequence of `bad` bytes following the valid
+                    // prefix: emit one U+FFFD and skip the bad bytes, then
+                    // re-check the remainder (it may contain another error).
+                    Some(bad) => {
+                        out.push('\u{FFFD}');
+                        consumed += bad;
+                    }
+                    // Incomplete tail: hold it in `pending` for the next chunk.
+                    None => {
+                        pending.drain(..consumed);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Yield one complete line (without the trailing `\n`) from an SSE / NDJSON
+/// accumulation `buffer`, consuming it in place.
+///
+/// Unlike `buffer = buffer[pos + 1..].to_string()` (which re-allocates and
+/// copies the entire unconsumed remainder on every line - quadratic for long
+/// streams), this drains the consumed prefix in place so the remaining bytes
+/// are reused without an allocation per line (C-003).
+///
+/// Returns `None` when no complete line is present yet.
+pub fn take_sse_line(buffer: &mut String) -> Option<String> {
+    let newline_pos = buffer.find('\n')?;
+    let line = buffer[..newline_pos].to_string();
+    buffer.drain(..=newline_pos);
+    Some(line)
+}
+
+/// Maximum bytes of unconsumed SSE data held in an accumulation buffer.
+///
+/// SEC-codemason-llm-004 (SECTASKS T-028): the per-chunk idle timeout only fires
+/// when *no* chunk arrives, so an endpoint that dribbles bytes forever without
+/// ever emitting a newline grows the buffer without bound. 1 MiB is orders of
+/// magnitude above any legitimate SSE frame.
+pub const MAX_SSE_BUFFER_BYTES: usize = 1024 * 1024;
+
+/// Whether the accumulation buffer has exceeded [`MAX_SSE_BUFFER_BYTES`].
+///
+/// Callers check this after each `append_stream_chunk` and fail the stream when
+/// it returns `true`, rather than letting a hostile endpoint pin memory.
+#[must_use]
+pub fn sse_buffer_exceeded(buffer: &str) -> bool {
+    buffer.len() > MAX_SSE_BUFFER_BYTES
+}
+
+/// Append a chunk to an SSE accumulation buffer, returning `false` when the
+/// buffer is now over [`MAX_SSE_BUFFER_BYTES`].
+///
+/// SEC-codemason-llm-004 (SECTASKS T-028).
+pub fn append_stream_chunk_capped(buffer: &mut String, chunk: &str) -> bool {
+    buffer.push_str(chunk);
+    !sse_buffer_exceeded(buffer)
+}
+
+/// Append a raw network chunk and enforce the accumulation cap in one step.
+///
+/// This is the shape nine provider stream loops used to spell out by hand:
+/// [`append_stream_chunk`] to decode the bytes, then a
+/// [`sse_buffer_exceeded`] check that logs and fails the stream. Folding the
+/// two together means the cap and its warning can no longer be omitted from
+/// one provider while being present in the other eight - which is exactly how
+/// the copies drifted (some said "SSE buffer", Gemini said "stream buffer").
+///
+/// # Arguments
+///
+/// * `buffer` - the decoded text accumulated so far.
+/// * `pending` - the partial multi-byte UTF-8 bytes carried between chunks.
+/// * `chunk` - the raw bytes just read from the socket.
+/// * `provider_label` - the provider name used in the warning field, e.g.
+///   `"Anthropic"`.
+///
+/// # Returns
+///
+/// `Ok(())` when the buffer is within [`MAX_SSE_BUFFER_BYTES`], or an
+/// [`anyhow::Error`] whose message is the exact text the stream should emit as
+/// its terminal `StreamEvent::Error`, after the capped state has been logged at
+/// `warn!`.
+///
+/// # Errors
+///
+/// Returns an error when the accumulation buffer exceeds the cap without
+/// producing a complete frame.
+pub fn append_chunk_guarded(
+    buffer: &mut String,
+    pending: &mut Vec<u8>,
+    chunk: &[u8],
+    provider_label: &str,
+) -> anyhow::Result<()> {
+    append_stream_chunk(buffer, pending, chunk);
+    if !sse_buffer_exceeded(buffer) {
+        return Ok(());
+    }
+    tracing::warn!(
+        provider = provider_label,
+        limit = MAX_SSE_BUFFER_BYTES,
+        "SSE accumulation buffer exceeded the cap; aborting the stream"
+    );
+    Err(anyhow::anyhow!(
+        "SSE buffer exceeded {} bytes without a complete frame",
+        MAX_SSE_BUFFER_BYTES
+    ))
+}
+
+/// Maximum bytes read from an error/response body before formatting.
+///
+/// SEC-codemason-llm-005 (SECTASKS T-028): a hostile endpoint can return an
+/// enormous 4xx/5xx body which was previously buffered in full by
+/// `response.text()`. 64 KiB is far more than any diagnostic needs.
+pub const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
+
+/// Maximum bytes of a malformed stream frame included in a diagnostic log.
+///
+/// SEC-codemason-llm-020 (SECTASKS T-028): a malformed SSE/stream frame is
+/// attacker- or model-controlled and can be arbitrarily large and can carry
+/// secrets. Diagnostics log only a redacted, length-capped prefix.
+pub const MAX_FRAME_LOG_BYTES: usize = 512;
+
+/// Redact secrets from a raw stream frame and cap it for logging.
+///
+/// SEC-codemason-llm-020 (SECTASKS T-028): the frame is passed through
+/// [`codemason_types::sanitize::redact_secrets`] so any registered credential is
+/// masked, then truncated to [`MAX_FRAME_LOG_BYTES`] on a UTF-8 boundary. Use
+/// this for every `frame = %...` / `line = %...` tracing field that logs raw
+/// stream data.
+#[must_use]
+pub fn redact_frame(frame: &str) -> String {
+    let redacted = codemason_types::sanitize::redact_secrets(frame);
+    codemason_types::strutil::truncate_bytes_no_ellipsis(&redacted, MAX_FRAME_LOG_BYTES)
+}
+
+/// Maximum `Retry-After` delay honoured from a response header.
+///
+/// SEC-codemason-llm-003 (SECTASKS T-028): an endpoint answering `429` with
+/// `Retry-After: 315360000` previously parked the request for the lifetime of
+/// the process. The single source of truth is
+/// [`codemason_types::guard::MAX_RETRY_AFTER`]; this name is kept for callers.
+pub const MAX_RETRY_AFTER: Duration = codemason_types::guard::MAX_RETRY_AFTER;
+
+/// Read a response body into a string, capped at `limit` bytes.
+///
+/// Returns the (possibly truncated) body. A read error is formatted into the
+/// returned string so the diagnostic is preserved (FUNC-034).
+///
+/// SEC-codemason-llm-005 (SECTASKS T-028): the body is streamed with
+/// [`reqwest::Response::chunk`] and only the first `limit` bytes are buffered,
+/// so a hostile endpoint cannot make the process allocate an arbitrarily large
+/// error body before it is truncated. Bytes are decoded with
+/// `String::from_utf8_lossy` to tolerate a truncation mid-multibyte-character.
+pub async fn read_body_capped(mut response: reqwest::Response, limit: usize) -> String {
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        if buf.len() >= limit {
+            break;
+        }
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                let remaining = limit - buf.len();
+                let take = remaining.min(chunk.len());
+                buf.extend_from_slice(&chunk[..take]);
+            }
+            Ok(None) => break,
+            Err(e) => return format!("<body read failed: {e}>"),
+        }
+    }
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+/// Creates a properly configured HTTP client for LLM provider communication.
+///
+/// The client is configured with:
+/// - Connection pool limits to prevent HTTP/2 race conditions
+/// - Timeouts for connection establishment and requests
+/// - TCP keep-alive for long-running connections
+/// - **No redirect following** (SEC-codemason-llm-002 / SECTASKS T-013):
+///   reqwest strips only `Authorization`/`Cookie` on a cross-host hop, so a
+///   hostile endpoint answering an authenticated request with a `302` would
+///   otherwise re-issue it to the attacker with `x-api-key`/`api-key`/
+///   `x-amz-security-token` still attached. Provider APIs do not legitimately
+///   redirect authenticated calls, so refusing to follow is
+///   behaviour-preserving.
+///
+/// # Errors
+///
+/// Returns an error if the HTTP client builder fails.
+///
+/// # Examples
+///
+/// ```
+/// use codemason_llm::provider::http_client::create_http_client;
+///
+/// let client = create_http_client();
+/// ```
+#[must_use]
+pub fn create_http_client() -> Client {
+    static CACHED: OnceLock<Client> = OnceLock::new();
+    CACHED
+        .get_or_init(|| {
+            Client::builder()
+                .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
+                .pool_idle_timeout(Duration::from_secs(90))
+                .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
+                .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+                .tcp_keepalive(Duration::from_mins(1))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap_or_else(|e| {
+                    warn!(error = %e, "Failed to build HTTP client with custom settings, using defaults");
+                    Client::new()
+                })
+        })
+        .clone()
+}
+
+/// Creates an HTTP client for streaming LLM responses.
+///
+/// Similar to [`create_http_client`] but **without** a global request timeout.
+/// Streaming responses can run for minutes; the per-chunk timeout is managed
+/// by each provider individually (via `tokio::time::timeout` on each chunk).
+/// The global reqwest timeout would otherwise kill long-running streams after
+/// 120 seconds, causing "error decoding response body" failures.
+///
+/// Redirects are likewise refused (SEC-codemason-llm-002 / SECTASKS T-013), so an
+/// authenticated streaming call can never be re-issued at an attacker host.
+#[must_use]
+pub fn create_streaming_http_client() -> Client {
+    static CACHED: OnceLock<Client> = OnceLock::new();
+    CACHED
+        .get_or_init(|| {
+            Client::builder()
+                .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
+                .pool_idle_timeout(Duration::from_secs(90))
+                .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
+                .tcp_keepalive(Duration::from_mins(1))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap_or_else(|e| {
+                    warn!(error = %e, "Failed to build streaming HTTP client, using defaults");
+                    Client::new()
+                })
+        })
+        .clone()
+}
+
+/// Compute the exponential backoff delay for retry attempt `attempt`.
+///
+/// Schedule: 0.5s, 1s, 2s, 4s, 8s (doubles per attempt, capped at 8s).
+fn backoff_delay(attempt: u32) -> Duration {
+    Duration::from_millis(500_u64.saturating_mul(1_u64 << attempt.min(4)))
+}
+
+/// Executes an HTTP request with retry logic for transient failures.
+///
+/// Retries on:
+/// - 5xx server errors
+/// - 429 Too Many Requests (rate limited) - respects `Retry-After` header
+/// - Connection errors
+/// - Timeout errors
+///
+/// Uses exponential backoff: 0.5s, 1s, 2s, 4s, 8s (doubles per attempt,
+/// capped at 8s) for 5xx and transient errors.
+/// For 429 responses, uses the `Retry-After` header value when present and the
+/// same backoff schedule otherwise.
+///
+/// # Errors
+///
+/// Returns an error if all retries are exhausted or the error is not retryable.
+///
+/// # Examples
+///
+/// ```no_run
+/// use codemason_llm::provider::http_client::execute_with_retry;
+/// use reqwest::Client;
+///
+/// async fn example() -> anyhow::Result<reqwest::Response> {
+///     let client = Client::new();
+///     let response = execute_with_retry(
+///         || async {
+///             client.get("https://api.example.com/data").send().await
+///         },
+///         4,
+///     ).await?;
+///     Ok(response)
+/// }
+/// ```
+///
+/// # Errors
+///
+/// Returns an error if all retries are exhausted or the error is not retryable.
+pub async fn execute_with_retry<F, Fut>(
+    request_fn: F,
+    max_retries: u32,
+) -> Result<reqwest::Response>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<reqwest::Response, reqwest::Error>>,
+{
+    let mut last_error = None;
+
+    for attempt in 0..=max_retries {
+        match request_fn().await {
+            Ok(response) => {
+                let status = response.status();
+
+                // Check if we should retry based on status code
+                if status.is_server_error() && attempt < max_retries {
+                    // FUNC-034: include a body-read failure in the diagnostic
+                    // instead of discarding it.
+                    let body = read_body_capped(response, MAX_ERROR_BODY_BYTES).await;
+                    last_error = Some(anyhow::anyhow!(
+                        "HTTP {} (attempt {}): {}",
+                        status,
+                        attempt + 1,
+                        body
+                    ));
+                    // Exponential backoff for 5xx
+                    let delay = backoff_delay(attempt);
+                    tracing::debug!(
+                        attempt = attempt + 1,
+                        max_retries = max_retries,
+                        delay_ms = delay.as_millis() as u64,
+                        status = %status,
+                        "Retrying HTTP request after server error"
+                    );
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+
+                // Special-case 429 Too Many Requests as retryable
+                if status == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < max_retries {
+                    let retry_after = parse_retry_after(response.headers());
+                    // FUNC-034: include a body-read failure in the diagnostic.
+                    let body = read_body_capped(response, MAX_ERROR_BODY_BYTES).await;
+                    last_error = Some(anyhow::anyhow!(
+                        "HTTP 429 Rate limited (attempt {}): {}",
+                        attempt + 1,
+                        body
+                    ));
+                    let delay = retry_after.unwrap_or_else(|| backoff_delay(attempt));
+                    tracing::warn!(
+                        attempt = attempt + 1,
+                        max_retries = max_retries,
+                        delay_secs = delay.as_secs(),
+                        retry_after_header = ?retry_after,
+                        "Retrying HTTP request after rate limit (429)"
+                    );
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+
+                // For other client errors, don't retry
+                if status.is_client_error() {
+                    // FUNC-034: include a body-read failure in the diagnostic.
+                    let body = read_body_capped(response, MAX_ERROR_BODY_BYTES).await;
+                    return Err(anyhow::anyhow!("HTTP {} (not retryable): {}", status, body));
+                }
+
+                return Ok(response);
+            }
+            Err(e) if is_retryable_error(&e) && attempt < max_retries => {
+                last_error = Some(anyhow::anyhow!("Request failed: {}", e));
+                let delay = backoff_delay(attempt);
+                // SEC: log a classified summary rather than the raw reqwest error
+                // Display, which can embed the request URL and (for body errors)
+                // the response payload.
+                tracing::debug!(
+                    attempt = attempt + 1,
+                    max_retries = max_retries,
+                    delay_ms = delay.as_millis() as u64,
+                    is_timeout = e.is_timeout(),
+                    is_connect = e.is_connect(),
+                    status = e.status().map(|s| s.as_u16()),
+                    "Retrying HTTP request after transient failure"
+                );
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("Request failed (not retryable): {}", e));
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("All retries exhausted")))
+}
+
+/// Parse the `Retry-After` header from an HTTP response.
+///
+/// Supports both:
+/// - `Retry-After: <seconds>` (integer delay in seconds)
+/// - `Retry-After: <http-date>` (RFC 7231 date, ignored and falls back to default)
+///
+/// Returns `None` if the header is missing or cannot be parsed as seconds.
+fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    let value = headers.get("retry-after")?;
+    let value_str = value.to_str().ok()?;
+
+    // Try parsing as integer seconds first.
+    //
+    // SEC-codemason-llm-003 (SECTASKS T-028): clamp to `MAX_RETRY_AFTER`. A remote
+    // endpoint that answers `429` with a huge `Retry-After` must not be able to
+    // park this process's LLM call for years. The shared guard also floors the
+    // delay at one second, so `Retry-After: 0` cannot burn every retry at once.
+    if let Ok(seconds) = value_str.parse::<u64>() {
+        return Some(codemason_types::guard::clamp_retry_after(
+            Duration::from_secs(seconds),
+        ));
+    }
+
+    // Try parsing as HTTP date (e.g. "Wed, 21 Oct 2025 07:28:00 GMT").
+    // Full HTTP-date parsing is deliberately omitted: this is a non-hot retry
+    // path, and a missing/unparseable header already falls back to the caller's
+    // default exponential backoff (`DEFAULT_STREAM_TIMEOUT_SECS`-bounded), which
+    // is the correct conservative behaviour. Adding chrono-based parsing here
+    // would only shave one backoff step in a rare case.
+    tracing::debug!(
+        retry_after = %value_str,
+        "Retry-After header is HTTP-date, using default backoff"
+    );
+    None
+}
+
+/// Determines if an error is retryable.
+///
+/// Retryable errors include:
+/// - Connection errors
+/// - Timeout errors
+/// - HTTP/2 protocol errors
+/// - Body/decode errors (e.g. truncated response)
+fn is_retryable_error(error: &reqwest::Error) -> bool {
+    if error.is_timeout() {
+        return true;
+    }
+
+    if error.is_connect() {
+        return true;
+    }
+
+    // Body decoding errors are transient (truncated response, broken encoding)
+    if error.is_body() || error.is_decode() {
+        return true;
+    }
+
+    // Check for HTTP/2 protocol errors or other transient failures in the source chain
+    if let Some(source) = error.source() {
+        let source_str = source.to_string().to_lowercase();
+        if source_str.contains("http2")
+            || source_str.contains("h2")
+            || source_str.contains("connection reset")
+            || source_str.contains("broken pipe")
+        {
+            return true;
+        }
+    }
+
+    // Check status code if available
+    if let Some(status) = error.status() {
+        return status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS;
+    }
+
+    false
+}
+
+use std::error::Error;

@@ -1,8 +1,8 @@
-# PLAN: Hyperresearch integration for ragent /research
+# PLAN: Hyperresearch integration for codemason /research
 
 ## Overview
 
-This plan implements the `hyperresearch` specification by extending the existing `ragent-research` crate with tiered pipelines, a persistent source vault, adversarial audit steps, contradiction tracking, open-access recovery, and resumable run manifests. It reuses the existing `mf_search` infrastructure and SQLite storage.
+This plan implements the `hyperresearch` specification by extending the existing `codemason-research` crate with tiered pipelines, a persistent source vault, adversarial audit steps, contradiction tracking, open-access recovery, and resumable run manifests. It reuses the existing `mf_search` infrastructure and SQLite storage.
 
 ## Architecture
 
@@ -61,11 +61,11 @@ ResearchOrchestrator
 | Parallel subagent pipeline exceeds context budget | Each step is a separate subagent invocation with a minimal prompt and vault references, mirroring Hyperresearch's skill-per-phase approach. |
 | Unpaywall API rate limits | Require user-supplied `contact_email`; cache responses; fall back to Europe PMC. |
 | Cite-checker false positives | Make the gate user-approvable and log the exact source span that failed verification. |
-| SQLite vault contention | Use the existing `ragent-storage` connection pool and WAL mode. |
+| SQLite vault contention | Use the existing `codemason-storage` connection pool and WAL mode. |
 | Default-to-full tier causes unexpectedly long runs | Document the default in help text; allow `--tier light` for quick runs; respect autopilot timeout limits. |
 
 ## Success criteria
 
 - All acceptance criteria in `SPEC.md` pass during manual test execution.
-- `cargo check -p ragent-research` succeeds.
-- `cargo test -p ragent-research` passes for automated unit tests added as part of implementation.
+- `cargo check -p codemason-research` succeeds.
+- `cargo test -p codemason-research` passes for automated unit tests added as part of implementation.

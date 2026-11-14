@@ -37,7 +37,7 @@ default.
 
 ### Current `RESEARCH.md` structure
 
-`assemble_document` in `crates/ragent-research/src/document.rs` emits these
+`assemble_document` in `crates/codemason-research/src/document.rs` emits these
 sections in order:
 
 1. `# Title: <title>`
@@ -65,7 +65,7 @@ sections in order:
 
 ### Existing output formats
 
-`OutputFormat` in `crates/ragent-research/src/run_config.rs` already supports
+`OutputFormat` in `crates/codemason-research/src/run_config.rs` already supports
 `Report`, `ExecutiveSummary`, `ComparisonTable`, and `SourceBibliography`.
 Each format is selected at run time and drives both the synthesis prompt
 (`analysis.rs`) and the document assembler (`document.rs`).
@@ -213,7 +213,7 @@ receive updated doc comments explaining the IMRaD section order and which
 
 ### NFR-003 — No regressions
 
-Running `cargo test -p ragent-research` and `cargo clippy -p ragent-research`
+Running `cargo test -p codemason-research` and `cargo clippy -p codemason-research`
 after implementation **shall** produce no new test failures or warnings compared
 to the baseline.
 

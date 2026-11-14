@@ -9,18 +9,18 @@ status: draft
 ## Scope
 
 This document describes the manual verification of the `openrouter` LLM
-provider in ragent: model discovery against the live OpenRouter catalog,
-secure token storage via `ragent auth`, chat/streaming/tool-use parity with
+provider in codemason: model discovery against the live OpenRouter catalog,
+secure token storage via `codemason auth`, chat/streaming/tool-use parity with
 `ollama_cloud`, thinking/reasoning-level behaviour, configuration overrides,
 and failure/safety paths (missing key, network loss, key redaction, no chat
 retry).
 
 ## Prerequisites
 
-1. Build ragent from source with the OpenRouter provider implementation:
+1. Build codemason from source with the OpenRouter provider implementation:
    ```bash
    cargo build --release
-   # Binary at target/release/ragent
+   # Binary at target/release/cdmn
    ```
 2. Have an OpenRouter API key available:
    - Create one at <https://openrouter.ai/settings/keys>.
@@ -28,7 +28,7 @@ retry).
 3. Internet access is required for live tests (TC-001, TC-002, TC-003,
    TC-004, TC-005, TC-007, TC-010). Tests marked offline (TC-006, TC-008,
    TC-009, TC-011) must also pass without connectivity.
-4. A disposable terminal profile: set `RAGENT_HOME` (or work in a scratch
+4. A disposable terminal profile: set `CODEMASON_HOME` (or work in a scratch
    project directory) so the credential store and session SQLite files
    created by these tests do not pollute the operator's normal state.
 5. A second, invalid key (e.g. `sk-or-v1-invalid-000...000`) reserved for
@@ -45,17 +45,17 @@ retry).
 ### TC-001 — Model discovery with no stored key
 
 **Requirements:** FR-007, FR-008, FR-022, FR-026
-**Title:** `ragent models openrouter` lists the public catalog without credentials
+**Title:** `codemason models openrouter` lists the public catalog without credentials
 
 **Preconditions:**
-- ragent built; no key stored; `OPENROUTER_API_KEY` unset
+- codemason built; no key stored; `OPENROUTER_API_KEY` unset
   (`env | grep OPENROUTER` returns nothing).
 - Internet reachable.
 
 **Steps:**
 1. Run:
    ```bash
-   ragent models openrouter
+   codemason models openrouter
    ```
 2. Observe the first lines of output and the total model count.
 3. Confirm none of the lines contain an API key and that the remediation
@@ -68,11 +68,11 @@ retry).
   form `  openrouter/<id padded> <display name>`, sorted by model id.
 - Extensive catalog returned (hundreds of entries, including
   `anthropic/claude-sonnet-4`).
-- A hint such as `Run 'ragent auth openrouter <key>' or set
+- A hint such as `Run 'codemason auth openrouter <key>' or set
   OPENROUTER_API_KEY.` is shown because no key is configured.
 - Exit code 0.
 
-### TC-002 — Secure token storage via `ragent auth`
+### TC-002 — Secure token storage via `codemason auth`
 
 **Requirements:** FR-004, FR-006
 **Title:** stored key wins over environment and enables chat
@@ -84,23 +84,23 @@ retry).
 **Steps:**
 1. Store the key:
    ```bash
-   ragent auth openrouter sk-or-v1-<real-key>
+   codemason auth openrouter sk-or-v1-<real-key>
    ```
 2. Confirm the command output does **not** echo the full key.
-3. Verify the stored credential is retrievable only through ragent:
+3. Verify the stored credential is retrievable only through codemason:
    ```bash
-   ragent models openrouter
+   codemason models openrouter
    ```
 4. Grep the config/root directory for plaintext leakage:
    ```bash
-   grep -r "sk-or-v1-<real-key>" ~/.local/share/ragent/ .ragent/ 2>/dev/null
+   grep -r "sk-or-v1-<real-key>" ~/.local/share/codemason/ .codemason/ 2>/dev/null
    ```
 
 **Test data to enter:** a real OpenRouter key (`sk-or-v1-…`) as the `<key>`
-argument of `ragent auth`.
+argument of `codemason auth`.
 
 **Expected results:**
-- `ragent auth` prints a confirmation (e.g. "Stored API key") that names the
+- `codemason auth` prints a confirmation (e.g. "Stored API key") that names the
   provider but never prints the key.
 - The `models` command no longer shows the "key required" hint.
 - The grep finds no plaintext match in config files (stored credential must
@@ -118,7 +118,7 @@ argument of `ragent auth`.
 **Steps:**
 1. Start:
    ```bash
-   ragent
+   codemason
    ```
 2. Press the provider-cycle key repeatedly until the provider widget shows
    **`OpenRouter`**.
@@ -185,7 +185,7 @@ then Off.
 **Preconditions:**
 - TC-003 environment; key stored; model set to
   `openrouter/anthropic/claude-sonnet-4` (a tool-capable model).
-- Working directory is the ragent repo (file tools available).
+- Working directory is the codemason repo (file tools available).
 
 **Steps:**
 1. In the TUI, send exactly:
@@ -217,7 +217,7 @@ then Off.
 **Steps:**
 1. Run a one-shot chat:
    ```bash
-   ragent run --no-tui --model openrouter/anthropic/claude-sonnet-4 "ping"
+   codemason run --no-tui --model openrouter/anthropic/claude-sonnet-4 "ping"
    ```
 2. Read the error output.
 3. Set a bogus environment variable style to double-check precedence
@@ -228,7 +228,7 @@ then Off.
 **Expected results:**
 - The run fails before any HTTP call with an error naming the provider:
   `OpenRouter requires an API key.`
-- The error/motd suggests remediation (`ragent auth openrouter <key>` or
+- The error/motd suggests remediation (`codemason auth openrouter <key>` or
   setting `OPENROUTER_API_KEY`).
 - No partial stream output, no panic/backtrace, exit code nonzero.
 
@@ -239,8 +239,8 @@ then Off.
 
 **Preconditions:**
 - No stored credential for `openrouter` (fresh profile or
-  `ragent auth openrouter --clear` if that subcommand exists — otherwise use
-  a fresh `RAGENT_HOME`).
+  `codemason auth openrouter --clear` if that subcommand exists — otherwise use
+  a fresh `CODEMASON_HOME`).
 
 **Steps:**
 1. Export the real key:
@@ -249,8 +249,8 @@ then Off.
    ```
 2. Run:
    ```bash
-   ragent models openrouter
-   ragent run --no-tui --model openrouter/google/gemini-2.0-flash-001 "Say OK"
+   codemason models openrouter
+   codemason run --no-tui --model openrouter/google/gemini-2.0-flash-001 "Say OK"
    ```
 3. Unset the variable (`unset OPENROUTER_API_KEY`).
 
@@ -258,7 +258,7 @@ then Off.
 
 **Expected results:**
 - Both commands succeed with the env var only (no stored credential).
-- `ragent run` returns a short reply containing `OK`.
+- `codemason run` returns a short reply containing `OK`.
 - Precedence check (informational): when both a stored key and an env var
   exist, behavior remains stable between restarts (stored wins per FR-004).
 
@@ -275,7 +275,7 @@ then Off.
 1. Run a chat that will fail at the provider (keep the real key stored but
    request a nonexistent model):
    ```bash
-   ragent run --no-tui --log-level debug \
+   codemason run --no-tui --log-level debug \
      --model openrouter/nonexistent-vendor/nonexistent-model "ping" 2>&1 | tee target/temp/or-redact.log
    ```
    (create `target/temp` if missing)
@@ -302,13 +302,13 @@ from earlier tests.
 **Preconditions:**
 - Fresh profile with the **invalid** key stored:
   ```bash
-  ragent auth openrouter sk-or-v1-invalid-0000000000000000000000000000
+  codemason auth openrouter sk-or-v1-invalid-0000000000000000000000000000
   ```
 
 **Steps:**
 1. Run:
    ```bash
-   ragent run --no-tui --model openrouter/google/gemini-2.0-flash-001 "ping"
+   codemason run --no-tui --model openrouter/google/gemini-2.0-flash-001 "ping"
    ```
 2. Read the error message and exit code.
 3. Repeat inside the TUI: set the provider to OpenRouter, pick a model, send
@@ -340,7 +340,7 @@ from earlier tests.
   ```
   (serve on `http://127.0.0.1:8999`; any static-file server plus a JSON
   file works).
-- `.ragent/ragent.json` in the test project with:
+- `.codemason/codemason.json` in the test project with:
   ```json
   { "provider": { "openrouter": { "api": { "base_url": "http://127.0.0.1:8999/" } } } }
   ```
@@ -349,12 +349,12 @@ from earlier tests.
 1. Start the stub server on port 8999.
 2. Run:
    ```bash
-   ragent models openrouter
+   codemason models openrouter
    ```
 3. Confirm the output lists exactly `openrouter/test/test-model` with the
    name `Test Model`.
 4. Stop the stub server.
-5. Run `ragent models openrouter` again.
+5. Run `codemason models openrouter` again.
 
 **Test data to enter:** the JSON fixture above; the base_url override.
 
@@ -382,7 +382,7 @@ from earlier tests.
 
 **Steps:**
 1. Start the stub with the combined fixture.
-2. Run `ragent models openrouter`.
+2. Run `codemason models openrouter`.
 3. Compare displayed context windows, names, and the total count against the
    fixture.
 
@@ -411,7 +411,7 @@ OpenAI-compatible schema
 1. Point `base_url` at the stub; store a dummy key.
 2. Run:
    ```bash
-   ragent run --no-tui --model openrouter/test/test-model "ping"
+   codemason run --no-tui --model openrouter/test/test-model "ping"
    ```
 3. Inspect the stub's POST counter and captured body.
 4. Optionally, cross-check the body shape against OpenRouter's documented
@@ -433,14 +433,14 @@ OpenAI-compatible schema
 
 1. Stop any stub HTTP server started for TC-010/TC-011/TC-012.
 2. Remove test credentials from profiles used:
-   - `ragent auth openrouter` has no dedicated remove subcommand in scope —
-     delete the test `RAGENT_HOME`/profile directory or wipe the SQLite
+   - `codemason auth openrouter` has no dedicated remove subcommand in scope —
+     delete the test `CODEMASON_HOME`/profile directory or wipe the SQLite
      credential store row for provider `openrouter` manually.
 3. Unset `OPENROUTER_API_KEY` in shells used for testing
    (`unset OPENROUTER_API_KEY`) or close them.
-4. Delete scratch project directories and `.ragent/ragent.json` overrides
+4. Delete scratch project directories and `.codemason/codemason.json` overrides
    created for the base-URL tests.
 5. Remove captured artifacts: `target/temp/or-redact.log` and any stub
    server logs. `target/` contents are git-ignored and disposable.
-6. Re-run `ragent models openrouter` once with the real environment to
+6. Re-run `codemason models openrouter` once with the real environment to
    confirm normal (operator) state is intact and no test artifacts remain.

@@ -8,7 +8,7 @@
 FR-008). An execution backend selects **where** a session's tool invocations
 actually run: `local` runs tools on the host exactly as before (the default),
 `docker`/`podman` run them inside a sandbox container, and `remote` drives a
-second ragent server over its REST+SSE API.
+second codemason server over its REST+SSE API.
 
 With no argument the command opens an interactive **switcher panel** that shows
 the active backend and the health of *every* registered backend. Each row carries
@@ -41,7 +41,7 @@ the message input field stays locked.
 | `/backend` | Open the switcher panel listing the active backend and every registered backend's health |
 | `/backend show` / `/backend list` | Alias of `/backend` |
 | `/backend <kind>` | Switch directly to a backend kind (`local`, `docker`, `podman`, `remote`) |
-| `/backend <id>` | Switch directly to a backend by its registered id (from `backends` in `ragent.json`) |
+| `/backend <id>` | Switch directly to a backend by its registered id (from `backends` in `codemason.json`) |
 | `/backend help` | Print the usage table (no state change) |
 
 ## Panel keys
@@ -70,7 +70,7 @@ each frame.
 ## Persistence
 
 A successful switch writes `execution_backend: "<kind>"` into the loaded config
-file (the project-local `.ragent/ragent.json` when one was loaded, otherwise the
+file (the project-local `.codemason/codemason.json` when one was loaded, otherwise the
 global config). The per-turn config cache is invalidated so the next turn
 resolves and dispatches through the new backend.
 

@@ -11,12 +11,12 @@ Spec: `uniformtools` FR-032. Status: completed.
 The source file and all three test files existed on disk and were tracked by git,
 but none of them were reachable from the build:
 
-- `crates/ragent-types/src/lib.rs` had **no `pub mod tool_bridge;`**, so the whole
+- `crates/codemason-types/src/lib.rs` had **no `pub mod tool_bridge;`**, so the whole
   rule file was dead: not compiled, not linted, and invisible to every call site.
-- `crates/ragent-types/tests/all.rs`, `crates/ragent-agent/tests/all.rs` and
-  `crates/ragent-plugins/tests/all.rs` had **no `#[path]` line** for their
+- `crates/codemason-types/tests/all.rs`, `crates/codemason-agent/tests/all.rs` and
+  `crates/codemason-plugins/tests/all.rs` had **no `#[path]` line** for their
   `test_fr032_*` file, so none of the 16 cases had ever compiled either.
-- `McpToolWrapper` had no `ragent_prefix_for`, `bridge_server_tools` did not exist,
+- `McpToolWrapper` had no `codemason_prefix_for`, `bridge_server_tools` did not exist,
   and `register_plugin_tools` did no FR-032 check at all.
 
 This is the fifth instance of the same class this spec has hit (T-012's `tool_args.rs`,
@@ -30,13 +30,13 @@ wrappers (or its collision check) itself and consulted nothing.
 
 ## What was added
 
-### `crates/ragent-types/src/tool_bridge.rs` (new, 403 lines)
+### `crates/codemason-types/src/tool_bridge.rs` (new, 403 lines)
 
-The rule lives in `ragent-types` because three call sites in two crates ask it and
-`ragent-plugins` cannot depend on `ragent-agent` (the dependency runs the other
-way). `ragent-types` already owns the FR-023 table, so it is the leaf crate both
-already depend on; `ragent-plugins`' `Cargo.toml` gained the direct
-`ragent-types` dependency it had previously reached only transitively.
+The rule lives in `codemason-types` because three call sites in two crates ask it and
+`codemason-plugins` cannot depend on `codemason-agent` (the dependency runs the other
+way). `codemason-types` already owns the FR-023 table, so it is the leaf crate both
+already depend on; `codemason-plugins`' `Cargo.toml` gained the direct
+`codemason-types` dependency it had previously reached only transitively.
 
 | Item | Purpose |
 |---|---|
@@ -66,12 +66,12 @@ as the backstop FR-032 calls it: a bridge that passed the advertised name throug
 unchanged surfaces it verbatim, and then the arm fires with the useful sentence
 ("`bash` was retired; spell it `Bash`") instead of the generic namespacing one.
 
-### `crates/ragent-agent/src/tool/mcp_tool.rs`
+### `crates/codemason-agent/src/tool/mcp_tool.rs`
 
-- `McpToolWrapper::ragent_name_for` now delegates to `mcp_tool_name`, so the
+- `McpToolWrapper::codemason_name_for` now delegates to `mcp_tool_name`, so the
   wrapper, the TUI's stale-server scan and the FR-032 check cannot disagree.
-- `McpToolWrapper::ragent_prefix_for` is the new prefix accessor (the TUI used
-  `ragent_name_for(id, "")` to reach it before, which is a name that must never be
+- `McpToolWrapper::codemason_prefix_for` is the new prefix accessor (the TUI used
+  `codemason_name_for(id, "")` to reach it before, which is a name that must never be
   registered).
 - `BridgedServerTools` + `bridge_server_tools` - the single MCP bridge: it splits a
   server's advertised tools into wrappers and refusals and reports the refusals
@@ -87,8 +87,8 @@ unchanged surfaces it verbatim, and then the arm fires with the useful sentence
 | Call site | Before | After |
 |---|---|---|
 | `SessionProcessor::set_mcp_client` | built wrappers itself | `bridge_server_tools` per connected server |
-| TUI `App::register_mcp_tools` | built wrappers itself | `bridge_server_tools`; stale scan uses `ragent_prefix_for` |
-| TUI `App::tool_source` | reached the prefix via `ragent_name_for(&server.id, "")` | `ragent_prefix_for`, so the `/tools` source column and the stale scan cannot disagree either |
+| TUI `App::register_mcp_tools` | built wrappers itself | `bridge_server_tools`; stale scan uses `codemason_prefix_for` |
+| TUI `App::tool_source` | reached the prefix via `codemason_name_for(&server.id, "")` | `codemason_prefix_for`, so the `/tools` source column and the stale scan cannot disagree either |
 | `PluginManager::register_plugin_tools` | collision check only | also `check_dynamic_bridge` per contributed name, refusals collected and reported once |
 
 Connector servers need no separate call site: a connector's servers are bridged as
@@ -113,8 +113,8 @@ do not exist in this build - a `SKILL.md` `allowed-tools` list *restricts* the
 registry (FR-029) - so `check_dynamic_bridge` takes the prefix as a parameter and
 no unused `skill_` constant is declared.
 
-`plugin_tool_name` in `ragent-plugins/src/tool_adapter.rs` now delegates to the
-`ragent-types` implementation too, so the name the crate registers and the name
+`plugin_tool_name` in `codemason-plugins/src/tool_adapter.rs` now delegates to the
+`codemason-types` implementation too, so the name the crate registers and the name
 FR-032 approves are one derivation.
 
 ## Reported once, never fatal
@@ -133,8 +133,8 @@ stale entries:
 
 ## Tests
 
-`crates/ragent-types/tests/test_fr032_dynamic_bridge.rs` (9 cases, registered in
-`crates/ragent-types/tests/all.rs`):
+`crates/codemason-types/tests/test_fr032_dynamic_bridge.rs` (9 cases, registered in
+`crates/codemason-types/tests/all.rs`):
 
 1. `mcp_tool_names_are_always_namespaced_under_the_server`
 2. `plugin_tool_names_are_always_namespaced_under_the_plugin`
@@ -146,7 +146,7 @@ stale entries:
 8. `source_labels_name_the_kind_and_the_id`
 9. `a_refusal_is_reported_once_per_source_and_name`
 
-`crates/ragent-agent/tests/test_fr032_bridge_containment.rs` (5 cases, all
+`crates/codemason-agent/tests/test_fr032_bridge_containment.rs` (5 cases, all
 `#[serial]` because the ledger is process-wide and the consolidated `--test all`
 binary shares one process):
 
@@ -156,13 +156,13 @@ binary shares one process):
 4. `a_reconnect_reports_the_same_refusal_once`
 5. `the_wrapper_reports_the_same_prefix_the_bridge_checks`
 
-`crates/ragent-plugins/tests/test_fr032_plugin_bridge.rs` (2 cases, through the real
+`crates/codemason-plugins/tests/test_fr032_plugin_bridge.rs` (2 cases, through the real
 `PluginManager::register_plugin_tools` path):
 
 1. `a_plugin_tool_named_after_a_retired_spelling_registers_under_its_namespace`
 2. `no_plugin_tool_can_be_registered_under_any_retired_spelling`
 
-Total: 16 new cases. `crates/ragent-agent/tests/test_nfr006_rename_cost.rs` gained
+Total: 16 new cases. `crates/codemason-agent/tests/test_nfr006_rename_cost.rs` gained
 two `TABLE_READERS` entries for the new `tool_bridge.rs` reads (module import +
 `check_dynamic_bridge`), each with a written reason: the check runs once per
 bridged tool at registration, and with a namespaced name the lookup cannot match at
@@ -189,15 +189,15 @@ file.
 
 - `cargo fmt --check` - clean.
 - `cargo check --workspace --all-targets` - clean, no warnings.
-- `cargo clippy` on `ragent-types`, `ragent-plugins`, `ragent-agent`, `ragent-tui`
+- `cargo clippy` on `codemason-types`, `codemason-plugins`, `codemason-agent`, `codemason-tui`
   with `--all-targets` - no findings in the touched files (only the pre-existing
   `pub(crate)`-in-private-module noise elsewhere in the workspace).
-- `ragent-types --test all` 427 passed; `--doc` 46 passed / 2 ignored.
-- `ragent-plugins --test all` 494 passed.
-- `ragent-connectors --test all` 369 passed.
-- `ragent-agent --test all` 1724 passed / 1 ignored (103 s); `test_mcp_tool_wrapper::`
+- `codemason-types --test all` 427 passed; `--doc` 46 passed / 2 ignored.
+- `codemason-plugins --test all` 494 passed.
+- `codemason-connectors --test all` 369 passed.
+- `codemason-agent --test all` 1724 passed / 1 ignored (103 s); `test_mcp_tool_wrapper::`
   17 passed and `test_nfr006_rename_cost::` 6 passed under it.
-- `ragent-tui --test all mcp` 48 passed. The full `ragent-tui --test all` run is
+- `codemason-tui --test all mcp` 48 passed. The full `codemason-tui --test all` run is
   3648 passed / **3 failed**, and those 3 are pre-existing at HEAD and unrelated to
   this change: the `Alt+T` -> `ToggleTasksPanel` input-mapping trio
   (`test_input_more::alt_toggle_keys_map_to_actions`,
@@ -205,7 +205,7 @@ file.
   `test_memory_panel::test_toggle_memory_mutually_excludes_tasks_panel`). The TUI
   code path this task touched (`register_mcp_tools`) is covered by the 48-case MCP
   selection, which is green.
-- `ragent run --dry-run` still reports **148 visible tools** across 21 families, so
+- `codemason run --dry-run` still reports **148 visible tools** across 21 families, so
   FR-030's count is untouched.
 - Eight guard scripts pass: `check-inline-tests`, `check-file-tool-containment`,
   `check-shared-guards`, `check-silent-errors`, `check-security-unwraps`,
@@ -219,4 +219,4 @@ once per connect, a plugin its declarations once per load, and the TUI's
 housekeeping pass re-registers only to repair a stale server. Nothing on the
 dispatch path calls `check_dynamic_bridge`. This is why the two new
 `TABLE_READERS` entries pass the NFR-006 guard's *dispatch-tree* assertion as well:
-`ragent-types` is not a dispatch tree, and the reads are registration-time.
+`codemason-types` is not a dispatch tree, and the reads are registration-time.

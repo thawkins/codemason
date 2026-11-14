@@ -2,7 +2,7 @@
 # Optional real-stack baseline runner for Milestone A-003.
 #
 # Runs three representative `/research create` topics through the actual
-# `ragent` binary, captures wall-clock time, and records peak RSS when
+# `codemason` binary, captures wall-clock time, and records peak RSS when
 # `/usr/bin/time -v` is available. The script is safe to run manually:
 # it exits early if no provider key is configured.
 #
@@ -14,13 +14,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-RAGENT_BIN="${PROJECT_ROOT}/target/release/ragent"
+CODEMASON_BIN="${PROJECT_ROOT}/target/release/cdmn"
 REPORT_DIR="${PROJECT_ROOT}/target/temp"
 REPORT="${REPORT_DIR}/research_baseline_real_stack_report.md"
 
-if [[ ! -f "$RAGENT_BIN" ]]; then
+if [[ ! -f "$CODEMASON_BIN" ]]; then
     echo "Building release binary..."
-    cargo build --release -p ragent
+    cargo build --release -p codemason
 fi
 
 # Detect at least one known provider key.
@@ -48,10 +48,10 @@ topics=(
 for topic in "${topics[@]}"; do
     safe_name=$(echo "$topic" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-')
     # Delete any prior run so we measure a fresh create.
-    "$RAGENT_BIN" research delete "$safe_name" --yes 2>/dev/null || true
+    "$CODEMASON_BIN" research delete "$safe_name" --yes 2>/dev/null || true
 
     start=$(date +%s.%N)
-    if /usr/bin/time -v "$RAGENT_BIN" research create --no-tui --topic "$topic" "$safe_name" 2>"${REPORT_DIR}/${safe_name}.time"; then
+    if /usr/bin/time -v "$CODEMASON_BIN" research create --no-tui --topic "$topic" "$safe_name" 2>"${REPORT_DIR}/${safe_name}.time"; then
         elapsed=$(awk "BEGIN {print $(date +%s.%N) - $start}")
         peak_rss=$(grep 'Maximum resident set size' "${REPORT_DIR}/${safe_name}.time" | awk '{print $6}')
         sources=$(grep -c '^- ' "research/${safe_name}/sources/web-"*.md 2>/dev/null || echo 0)

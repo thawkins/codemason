@@ -1,13 +1,13 @@
-# ragent Tools Reference — Index
+# codemason Tools Reference — Index
 
-The tools available to ragent agents, organised by category. Each category has
+The tools available to codemason agents, organised by category. Each category has
 its own document with per-tool arguments, required flags, typical values, and
 worked examples.
 
 > **Scope:** Tool names, parameter schemas, and usage patterns for every
 > registered tool plus the dynamic `mcp_tool`. This is the canonical place for the
 > tool count: the default build registers 152 tools at v1.0.169, and
-> `ragent --dry-run --json run x` reports the live figure (the `total` item of its
+> `codemason --dry-run --json run x` reports the live figure (the `total` item of its
 > `tools` section, followed by one item per permission category). `mf_screenshot`
 > adds one when a drivable headless browser engine is present. For TUI
 > workflow see `docs/howtos/tutorial.md`. For team coordination see
@@ -40,7 +40,7 @@ worked examples.
 | 21 | [interactive.md](interactive.md) |
 | 22 | [utility.md](utility.md) |
 
-Every listed tool is advertised to the model whenever ragent's tool registry
+Every listed tool is advertised to the model whenever codemason's tool registry
 registers it; `mf_screenshot` is the one conditional entry (a drivable headless
 browser engine must be present).
 

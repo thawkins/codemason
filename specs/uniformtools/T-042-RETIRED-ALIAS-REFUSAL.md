@@ -22,17 +22,17 @@ spellings of one tool"), and the resolver must never consult a `before` entry.
 
 ## What was built
 
-### The table moved to `ragent-types`
+### The table moved to `codemason-types`
 
-`crates/ragent-types/src/tool_rename.rs` now holds `TOOL_RENAMES: [Rename; 13]` and the
+`crates/codemason-types/src/tool_rename.rs` now holds `TOOL_RENAMES: [Rename; 13]` and the
 `Rename` helpers, plus a new `Rename::is_rename_spelling` (either column). The move was
-forced by the dependency graph: `ragent-config` must read the table at load time and
-already sits *below* `ragent-agent`, which depends on it, so a table in `ragent-agent`
-could not be read without a cycle. `crates/ragent-agent/src/tool/rename.rs` became a
+forced by the dependency graph: `codemason-config` must read the table at load time and
+already sits *below* `codemason-agent`, which depends on it, so a table in `codemason-agent`
+could not be read without a cycle. `crates/codemason-agent/src/tool/rename.rs` became a
 re-export shim, so every migration site, guard and test path
-(`ragent_agent::tool::rename::{Rename, TOOL_RENAMES}`) is unchanged.
+(`codemason_agent::tool::rename::{Rename, TOOL_RENAMES}`) is unchanged.
 
-### The load-time refusal (`crates/ragent-config/src/tools.rs`)
+### The load-time refusal (`crates/codemason-config/src/tools.rs`)
 
 - `ToolsConfig::validate_alias_spellings() -> Vec<RetiredAliasSpelling>` returns every
   offending entry, not the first: a table copied from an old `--dry-run` dump carries
@@ -48,16 +48,16 @@ re-export shim, so every migration site, guard and test path
   it as a no-op (D7). That distinction is why the check is a rename-table lookup and not a
   `key == value` test.
 - The check runs in `Config::parse_file` (which serves the global file, the project file
-  and `RAGENT_CONFIG`) and again on the `RAGENT_CONFIG_CONTENT` route, where `label` names
+  and `CODEMASON_CONFIG`) and again on the `CODEMASON_CONFIG_CONTENT` route, where `label` names
   the environment variable instead of a path.
 - It deliberately lives outside `AliasesConfig::deserialize`: a deserialiser cannot name
   the file it is reading, and keeping the shape check pure keeps
   `serde_json::from_str::<ToolsConfig>` usable in a test that must inspect a rejected
   entry.
 
-### The readiness path carries the same check (`crates/ragent-agent/src/dry_run.rs`)
+### The readiness path carries the same check (`crates/codemason-agent/src/dry_run.rs`)
 
-`ragent run --dry-run` parses the same files the real loader reads, through its own
+`codemason run --dry-run` parses the same files the real loader reads, through its own
 `parse_config_str`. Left alone it would report `Config loaded` for a file the next real
 load rejects, so the readiness path calls the same
 `ToolsConfig::validate_alias_spellings` and renders the same sentences. Two cases pin it:
@@ -65,7 +65,7 @@ a project config carrying `"bash": "Bash"` blocks the config section (exit 1) wi
 spelling and its replacement in the item message, and a project config carrying an
 unregistered target still loads.
 
-### The resolver half (`crates/ragent-agent/src/tool/alias_table.rs`)
+### The resolver half (`crates/codemason-agent/src/tool/alias_table.rs`)
 
 - `AliasTable::from_aliases` skips an entry whose key **or** target is a retired spelling.
   From a file this arm is unreachable (the loader refused the entry first), and that is
@@ -89,8 +89,8 @@ unregistered target still loads.
 
 ## Tests
 
-`crates/ragent-config/tests/test_retired_alias_spelling.rs` (11 cases, registered in
-`tests/all.rs`). Every case drives the real loader through `RAGENT_CONFIG` - the uncached
+`crates/codemason-config/tests/test_retired_alias_spelling.rs` (11 cases, registered in
+`tests/all.rs`). Every case drives the real loader through `CODEMASON_CONFIG` - the uncached
 path - so no cwd change and no project file is involved; the guard restores the
 environment on drop, and each case is `#[serial]`.
 
@@ -105,10 +105,10 @@ environment on drop, and each case is `#[serial]`.
 | `test_an_unregistered_alias_target_is_not_a_load_error` | FR-031's third clause: kept, not refused |
 | `test_the_self_mapping_of_an_untouched_spelling_is_accepted` | `think -> think` is not a rename problem |
 | `test_both_boolean_forms_are_accepted` | `true` / `false` carry no spelling |
-| `test_the_inline_environment_route_is_refused_and_names_itself` | `RAGENT_CONFIG_CONTENT` is refused and names itself |
+| `test_the_inline_environment_route_is_refused_and_names_itself` | `CODEMASON_CONFIG_CONTENT` is refused and names itself |
 | `test_every_pair_in_the_rename_table_is_refused_as_key_and_as_target` | the check reads the table: every `before` in both columns, every `after` self-mapped |
 
-Four cases appended to `crates/ragent-agent/tests/test_tool_alias_table.rs` (the in-memory
+Four cases appended to `crates/codemason-agent/tests/test_tool_alias_table.rs` (the in-memory
 half): `test_resolver_never_consults_a_retired_spelling_from_the_table` (every pair, both
 columns, so the case grows with the table), plus the once-only-report / refused-when-used
 pair and a "a resolved target is never reported as unresolved" control. The two ledger
@@ -141,7 +141,7 @@ keeps the older mtime and lets cargo reuse the broken object file), then re-run 
 - `clippy::used_underscore_binding` rejects holding the `TempDir` as `_temp` and then
   reading it in `path()`; the guard stores it as `temp`.
 - The escape-hatch audit's purity predicate walks named source files, so moving the table
-  meant adding `crates/ragent-types/src/tool_rename.rs` to that list - otherwise the guard
+  meant adding `crates/codemason-types/src/tool_rename.rs` to that list - otherwise the guard
   would have kept asserting purity over a shim and stopped covering the real table.
 
 ## What was found, not written, when this task was picked up
@@ -150,18 +150,18 @@ Most of the task had already landed in the tree without its registrations, and
 two pieces were missing outright. Reporting that honestly matters more than the
 line count, so it is written down rather than implied:
 
-- **Already in the tree:** `crates/ragent-types/src/tool_rename.rs` (the table and
-  its helpers), the `ragent_agent::tool::rename` shim,
+- **Already in the tree:** `crates/codemason-types/src/tool_rename.rs` (the table and
+  its helpers), the `codemason_agent::tool::rename` shim,
   `ToolsConfig::validate_alias_spellings` with `RetiredAliasSpelling`,
   `AliasTable::from_aliases`' retired-entry arm, `unresolved_targets`,
   `report_unresolved_targets_once` and `reset_unresolved_targets_for_test`, its
   call from `session/loop_steps.rs`, and the four resolver-side cases in
-  `crates/ragent-agent/tests/test_tool_alias_table.rs`.
+  `crates/codemason-agent/tests/test_tool_alias_table.rs`.
 - **Missing:** `Config::parse_file` never called the validator and the
-  `RAGENT_CONFIG_CONTENT` route never called it either - so FR-031's load-time
+  `CODEMASON_CONFIG_CONTENT` route never called it either - so FR-031's load-time
   guarantee did not exist, and the eleven cases in
-  `crates/ragent-config/tests/test_retired_alias_spelling.rs` were **dead**:
-  the file had no `#[path]` line in `crates/ragent-config/tests/all.rs`, so the
+  `crates/codemason-config/tests/test_retired_alias_spelling.rs` were **dead**:
+  the file had no `#[path]` line in `crates/codemason-config/tests/all.rs`, so the
   consolidated target ran none of them. This is the sixth orphan-module defect in
   this spec (T-046 counted five) and the first one where the orphan was the
   deliverable itself.
@@ -174,12 +174,12 @@ line count, so it is written down rather than implied:
 ### The loader calls the check, twice
 
 `Config::reject_retired_alias_spellings(tools, label)` is a new `pub` associated
-function on `Config` in `crates/ragent-config/src/config.rs`, called from
+function on `Config` in `crates/codemason-config/src/config.rs`, called from
 `Config::parse_file` (which serves the global file, the project file and
-`RAGENT_CONFIG`) and from the `RAGENT_CONFIG_CONTENT` route. It renders
+`CODEMASON_CONFIG`) and from the `CODEMASON_CONFIG_CONTENT` route. It renders
 
 ```
-Invalid config in <label>: N `tools.aliases` entries name a renamed ragent tool
+Invalid config in <label>: N `tools.aliases` entries name a renamed codemason tool
 spelling, which FR-031 forbids:
   - <RetiredAliasSpelling::reason()>       (one line per offender)
 ```
@@ -189,26 +189,26 @@ copied from an old `--dry-run` dump carries several, and fixing them one reload
 at a time is the failure mode the single message exists to avoid.
 
 It is `pub` rather than `pub(crate)` because the readiness path lives in
-`ragent-agent`; the first draft was `pub(crate)` and `ragent-agent` failed to
+`codemason-agent`; the first draft was `pub(crate)` and `codemason-agent` failed to
 compile with `E0624` (`private associated function`). That is the correct
 direction of the seam: the *policy* (which entries are refused) stays in
-`ragent-config`, and the *rendering* is one function both callers share rather
+`codemason-config`, and the *rendering* is one function both callers share rather
 than two copies of the same sentence.
 
-### The readiness path agrees (`crates/ragent-agent/src/dry_run.rs`)
+### The readiness path agrees (`crates/codemason-agent/src/dry_run.rs`)
 
 `parse_config_str` now runs the same check after the shape parse and maps the
-error to the item message, so `ragent run --dry-run` cannot report `Config
+error to the item message, so `codemason run --dry-run` cannot report `Config
 loaded` for a file the real load refuses.
 
 ### The test file is registered
 
-`crates/ragent-config/tests/all.rs` gained
+`crates/codemason-config/tests/all.rs` gained
 `#[path = "test_retired_alias_spelling.rs"] mod test_retired_alias_spelling;`.
 Without it the eleven cases compiled into nothing; with it they run as
 `test_retired_alias_spelling::<fn>`.
 
-### Two readiness cases (`crates/ragent-agent/tests/test_dry_run_extra.rs`)
+### Two readiness cases (`crates/codemason-agent/tests/test_dry_run_extra.rs`)
 
 `test_project_config_with_a_retired_alias_spelling_is_blocked` (config section
 BLOCKED, exit 1, the item message names `bash` and `Bash`) and
@@ -230,8 +230,8 @@ the older mtime and lets cargo reuse the broken object file).
    `parse_file` failed **five** loader cases: the retired source key, the retired
    target, the "every offending entry" case, and both self-mapping cases. The one
    case that still passed is the inline route's - which is proof 2's subject.
-   (`md5sum -c`: `crates/ragent-config/src/config.rs: OK`.)
-2. Removing the call from the `RAGENT_CONFIG_CONTENT` route failed
+   (`md5sum -c`: `crates/codemason-config/src/config.rs: OK`.)
+2. Removing the call from the `CODEMASON_CONFIG_CONTENT` route failed
    `test_the_inline_environment_route_is_refused_and_names_itself` with "the
    inline route must be refused like any other configuration". The two call sites
    are not redundant: proof 1 does not red it and proof 2 does not red proof 1's
@@ -248,15 +248,15 @@ the older mtime and lets cargo reuse the broken object file).
 ## Verification
 
 - `cargo fmt --all -- --check` clean.
-- `cargo clippy -p ragent-config -p ragent-agent --all-targets`: **no finding in
+- `cargo clippy -p codemason-config -p codemason-agent --all-targets`: **no finding in
   any touched file** (the warnings reported are the pre-existing
   `pub(crate) ... inside private module` family and `unnecessary structure name
   repetition` in crates/files this task did not open).
-- `cargo nextest run -p ragent-config`: **436 passed / 0 failed** (the eleven
+- `cargo nextest run -p codemason-config`: **436 passed / 0 failed** (the eleven
   cases now run; the crate was 425 before).
-- `cargo nextest run -p ragent-agent`: **2103 passed / 0 failed / 1 skipped**
+- `cargo nextest run -p codemason-agent`: **2103 passed / 0 failed / 1 skipped**
   (two new dry-run cases; 2101 before).
-- `cargo test -p ragent-config --doc`: 8 passed.
+- `cargo test -p codemason-config --doc`: 8 passed.
 - All twelve `scripts/check-*.sh` guards pass except `check-bench-regression`,
   which reports `no criterion results directory found at target/criterion` -
   it needs a bench run first and asserts nothing about this change.
@@ -268,7 +268,7 @@ the older mtime and lets cargo reuse the broken object file).
   prints `0 tests run` rather than an error, which reads like success. After
   adding a test file, run the filter and check the count is what you wrote.
 - **`pub(crate)` stops at the crate boundary even for a `#[doc(hidden)]`
-  helper.** The dry-run path is in `ragent-agent`, so the shared renderer had to
+  helper.** The dry-run path is in `codemason-agent`, so the shared renderer had to
   be `pub`.
 - `awk 'length > 101'` on `CHANGELOG.md` is worth running before finishing; the
   file has older long lines, so check the block you wrote rather than the file.

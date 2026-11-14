@@ -1,6 +1,6 @@
 # Custom Agents
 
-ragent supports custom agent definitions in two formats:
+codemason supports custom agent definitions in two formats:
 
 1. **Agent Profiles** (`.md`) — Markdown files with JSON frontmatter. The
    markdown body IS the system prompt. Simple and self-documenting.
@@ -38,13 +38,13 @@ becomes the system prompt.
 1. Create the agents directory:
 
    ```bash
-   mkdir -p .ragent/agents
+   mkdir -p .codemason/agents
    ```
 
 2. Create a profile:
 
    ```bash
-   cat > .ragent/agents/my-agent.md << 'EOF'
+   cat > .codemason/agents/my-agent.md << 'EOF'
    ---
    {
      "name": "my-agent",
@@ -59,7 +59,7 @@ becomes the system prompt.
    EOF
    ```
 
-3. Start ragent — your agent loads automatically. Use `/agents` to verify.
+3. Start codemason — your agent loads automatically. Use `/agents` to verify.
 
 ---
 
@@ -71,52 +71,52 @@ For full OASF compatibility or when you need the structured envelope format.
 
    ```bash
    # User-global (available in every project)
-   mkdir -p ~/.ragent/agents
+   mkdir -p ~/.codemason/agents
 
    # Project-local (this project only, takes priority)
-   mkdir -p .ragent/agents
+   mkdir -p .codemason/agents
    ```
 
-2. Create and customise your own profile. ragent ships no sample JSON tree, so
+2. Create and customise your own profile. codemason ships no sample JSON tree, so
    start from the minimal OASF document in
    [Minimal OASF Agent (.json)](#minimal-oasf-agent-json) below:
 
    ```bash
-   cat > ~/.ragent/agents/my-agent.json <<'EOF'
+   cat > ~/.codemason/agents/my-agent.json <<'EOF'
    {
      "name": "my-agent",
      "description": "My custom agent",
      "version": "1.0.0",
      "schema_version": "0.7.0",
      "modules": [{
-       "type": "ragent/agent/v1",
+       "type": "codemason/agent/v1",
        "payload": { "system_prompt": "You are a helpful AI agent.", "mode": "primary" }
      }]
    }
    EOF
-   $EDITOR ~/.ragent/agents/my-agent.json
+   $EDITOR ~/.codemason/agents/my-agent.json
    ```
 
-3. Start ragent — your agent loads automatically. Use `/agents` to verify it
+3. Start codemason — your agent loads automatically. Use `/agents` to verify it
    appeared, or `/agent` to pick it from the interactive list.
 
 ---
 
 ## Discovery Paths
 
-ragent searches three directories at startup:
+codemason searches three directories at startup:
 
 | Priority | Directory | Scope |
 |----------|-----------|-------|
-| Lowest | `~/.ragent/agents/` | All projects (user-global, legacy location) |
-| Middle | `~/.config/ragent/agents/` | All projects (XDG user-config) |
-| Highest | `[PROJECT]/.ragent/agents/` | This project only |
+| Lowest | `~/.codemason/agents/` | All projects (user-global, legacy location) |
+| Middle | `~/.config/codemason/agents/` | All projects (XDG user-config) |
+| Highest | `[PROJECT]/.codemason/agents/` | This project only |
 
 The **project directory** is the nearest ancestor of the current working
-directory that contains a `.ragent/agents/` subdirectory. When the same agent
+directory that contains a `.codemason/agents/` subdirectory. When the same agent
 `name` appears in several directories, the definition from the
 higher-priority (closest) directory wins: project-local overrides
-`~/.config/ragent/agents/`, which overrides `~/.ragent/agents/`.
+`~/.config/codemason/agents/`, which overrides `~/.codemason/agents/`.
 
 Subdirectories are searched recursively. Both `.md` (profile) and `.json`
 (OASF) files are loaded.
@@ -169,8 +169,8 @@ the OASF `system_prompt` field.
 ## OASF Schema Reference (.json)
 
 Each custom agent is a JSON file containing one OASF record. The top-level
-fields follow the OASF envelope; ragent-specific configuration lives inside
-the `ragent/agent/v1` module payload.
+fields follow the OASF envelope; codemason-specific configuration lives inside
+the `codemason/agent/v1` module payload.
 
 ### Top-Level Fields
 
@@ -185,9 +185,9 @@ the `ragent/agent/v1` module payload.
 | `skills` | object[] | | OASF skill taxonomy annotations (informational only). |
 | `domains` | object[] | | OASF domain taxonomy annotations (informational only). |
 | `locators` | object[] | | Source/artifact locators (informational only). |
-| `modules` | object[] | ✅ | Must contain at least one entry with `"type": "ragent/agent/v1"`. |
+| `modules` | object[] | ✅ | Must contain at least one entry with `"type": "codemason/agent/v1"`. |
 
-### `ragent/agent/v1` Payload Fields
+### `codemason/agent/v1` Payload Fields
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -201,7 +201,7 @@ the `ragent/agent/v1` module payload.
 | `memory` | string | `"none"` | Persistent memory scope: `"none"`, `"user"`, or `"project"`. See [Persistent Memory](#persistent-memory). |
 | `permissions` | object[] | default ruleset | [Permission rules](#permission-rules). Omit to inherit the default ruleset. |
 | `options` | object | `{}` | Provider-specific options passed through verbatim (e.g. `{"max_tokens": 4096}`). |
-| `skills` | string[] | `[]` | Ragent skill names preloaded for this agent (e.g. `"simplify"`). |
+| `skills` | string[] | `[]` | Codemason skill names preloaded for this agent (e.g. `"simplify"`). |
 | `thinking` | object | *inherit* | Extended-thinking config (`{"enabled": true, "level": "high", "budget_tokens": 16000}`). Omit to inherit the provider/model default. |
 
 ---
@@ -306,7 +306,7 @@ startup in the log panel and in `/agents → Diagnostics`).
 
 | Condition | Error |
 |-----------|-------|
-| No `ragent/agent/v1` module | `missing required module type 'ragent/agent/v1'` |
+| No `codemason/agent/v1` module | `missing required module type 'codemason/agent/v1'` |
 
 ---
 
@@ -322,12 +322,12 @@ their system prompt at spawn time.
 | Scope | Directory | Use Case |
 |-------|-----------|----------|
 | `"none"` | *(disabled)* | Default. No memory directory. |
-| `"user"` | `~/.ragent/agent-memory/<agent-name>/` | User-global memory shared across all projects. |
-| `"project"` | `.ragent/agent-memory/<agent-name>/` | Project-local memory specific to the repository. |
+| `"user"` | `~/.codemason/agent-memory/<agent-name>/` | User-global memory shared across all projects. |
+| `"project"` | `.codemason/agent-memory/<agent-name>/` | Project-local memory specific to the repository. |
 
 ### How It Works
 
-1. **At spawn** — If memory is enabled, ragent reads `MEMORY.md` from the
+1. **At spawn** — If memory is enabled, codemason reads `MEMORY.md` from the
    agent's memory directory and injects the first 200 lines (or 25 KB) into the
    system prompt.
 2. **During execution** — The agent can read/write files in its memory directory
@@ -429,7 +429,7 @@ Report only high-signal issues with file paths and concrete fixes.
   "version": "1.0.0",
   "schema_version": "0.7.0",
   "modules": [{
-    "type": "ragent/agent/v1",
+    "type": "codemason/agent/v1",
     "payload": {
       "system_prompt": "You are a helpful AI agent.\nWorking directory: {{WORKING_DIR}}\n\n{{AGENTS_MD}}",
       "mode": "primary",
@@ -449,7 +449,7 @@ Read-only OWASP-focused reviewer:
   "version": "1.0.0",
   "schema_version": "0.7.0",
   "modules": [{
-    "type": "ragent/agent/v1",
+    "type": "codemason/agent/v1",
     "payload": {
       "system_prompt": "You are a security-focused code reviewer...\n{{WORKING_DIR}}\n{{AGENTS_MD}}",
       "mode": "primary",
@@ -466,9 +466,9 @@ Read-only OWASP-focused reviewer:
 ```
 
 The two profiles above (`Minimal OASF Agent`, `Security Reviewer Profile`) are
-complete, ready-to-use files: write either to `.ragent/agents/<name>.json` (or
-`.md`) and ragent loads it at the next start. Project-local `.ragent/agents/`
-takes priority over `~/.ragent/agents/` for a name clash.
+complete, ready-to-use files: write either to `.codemason/agents/<name>.json` (or
+`.md`) and codemason loads it at the next start. Project-local `.codemason/agents/`
+takes priority over `~/.codemason/agents/` for a name clash.
 
 ---
 
@@ -488,9 +488,9 @@ using either the `agent_type` or `profile` key:
 ]
 ```
 
-When ragent spawns the teammate, it resolves `"security-reviewer"` via the
+When codemason spawns the teammate, it resolves `"security-reviewer"` via the
 same discovery pipeline — loading the `.md` or `.json` agent definition from
-`.ragent/agents/`. The profile's system prompt, permissions, model, and other
+`.codemason/agents/`. The profile's system prompt, permissions, model, and other
 settings are applied to the spawned teammate.
 
 > **Tip:** `"profile"` is an alias for `"agent_type"`. Both work identically
@@ -501,12 +501,12 @@ settings are applied to the spawned teammate.
 
 ## Built-in agent presets
 
-ragent ships with the following built-in agent presets. Custom agents
-loaded from `.ragent/agents/` or `~/.ragent/agents/` extend this list.
+codemason ships with the following built-in agent presets. Custom agents
+loaded from `.codemason/agents/` or `~/.codemason/agents/` extend this list.
 
 Each preset has a dedicated system prompt that shapes the agent's
 behaviour, expertise, and coding conventions. The prompts are defined
-in `crates/ragent-agent/src/agent/mod.rs` (`create_builtin_agents`).
+in `crates/codemason-agent/src/agent/mod.rs` (`create_builtin_agents`).
 
 > **Note:** The built-in agent list was significantly expanded in
 > v1.0.40+ to include domain-specific specialists. All are available
@@ -824,7 +824,7 @@ prose).
 
 ```text
 /agent documenter
-Generate a README.md for the crates/ragent-research crate that
+Generate a README.md for the crates/codemason-research crate that
 includes installation, quick start, configuration, and architecture
 overview
 ```
@@ -984,13 +984,13 @@ breakages. It has full tool access including shell execution.
 **Example:**
 
 ```text
-Run the test suite for the ragent-codeindex crate and fix any
+Run the test suite for the codemason-codeindex crate and fix any
 compilation errors that come up
 ```
 
 The model would spawn this as:
 ```json
-{"agent": "build", "task": "Run cargo test -p ragent-codeindex and fix any compilation errors"}
+{"agent": "build", "task": "Run cargo test -p codemason-codeindex and fix any compilation errors"}
 ```
 
 ---

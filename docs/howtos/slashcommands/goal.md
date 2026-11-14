@@ -42,7 +42,7 @@ Unknown subcommands print `Usage: /goal set|clear|show|test|help`.
 The example goal from the usage block; prints a confirmation.
 
 ```
-/goal set Remove all compiler warnings in crates/ragent-config
+/goal set Remove all compiler warnings in crates/codemason-config
 ```
 Sets a custom goal description and prints the confirmation.
 
@@ -80,4 +80,4 @@ Prints `No goal is currently set to test.`
 ## Related
 
 - `/loop` - the goal-driven agentic loop with verification gates
-- Goal conditions are defined by `GoalCondition` in the `ragent-agent` crate
+- Goal conditions are defined by `GoalCondition` in the `codemason-agent` crate

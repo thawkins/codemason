@@ -7,7 +7,7 @@
       "version": "0.3.0",
       "description": "Todo list helpers",
       "category": "Productivity",
-      "source": "https://raw.githubusercontent.com/thawkins/ragent/main/assets/plugins/fixtures/claude-todo",
+      "source": "https://raw.githubusercontent.com/thawkins/codemason/main/assets/plugins/fixtures/claude-todo",
       "dialect": "claude",
       "tags": ["todo"]
     },

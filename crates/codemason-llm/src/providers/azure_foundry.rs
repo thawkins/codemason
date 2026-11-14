@@ -1,0 +1,276 @@
+//! Microsoft Azure AI Foundry provider implementation.
+//!
+//! Azure AI Foundry provides OpenAI-compatible chat completions via a single
+//! REST endpoint. Authentication uses the `api-key` header (Azure convention)
+//! or `Authorization: Bearer` as a fallback. Model discovery is supported via
+//! the `/openai/models?api-version=2024-10-21` endpoint (Azure OpenAI Service
+//! compatible).
+//!
+//! # Configuration
+//!
+//! Set `AZURE_AI_FOUNDRY_API_KEY` as the API key, and optionally set
+//! `AZURE_AI_FOUNDRY_BASE` for a custom endpoint. The endpoint can also be
+//! configured via `codemason.json` under `provider.azure_foundry.base_url`.
+
+use anyhow::{Context, Result, bail};
+use serde::Deserialize;
+use serde_json::Value;
+use std::collections::HashMap;
+
+use crate::llm::LlmClient;
+use crate::provider::http_client::{MAX_ERROR_BODY_BYTES, read_body_capped};
+use crate::provider::openai::OpenAiClient;
+use crate::provider::wire::trace;
+use crate::{ModelInfo, Provider};
+
+const DEFAULT_AZURE_FOUNDRY_HOST: &str = "https://services.ai.azure.com";
+
+/// Fallback context window (tokens) reported for a discovered model that does
+/// not declare one (ANTIPAT M6.10: name the default so it is greppable).
+const DEFAULT_DISCOVERED_CONTEXT_WINDOW: usize = 128_000;
+
+/// Provider implementation for Microsoft Azure AI Foundry.
+pub struct AzureFoundryProvider;
+
+impl AzureFoundryProvider {
+    const ENDPOINT_OPTION_KEY: &'static str = "endpoint_url";
+    const DEFAULT_ENV_ENDPOINT_KEY: &'static str = "AZURE_AI_FOUNDRY_BASE";
+}
+
+#[async_trait::async_trait]
+impl Provider for AzureFoundryProvider {
+    fn id(&self) -> &'static str {
+        "azure_foundry"
+    }
+
+    fn name(&self) -> &'static str {
+        "Azure AI Foundry"
+    }
+
+    fn as_any_static(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn default_models(&self) -> Vec<ModelInfo> {
+        Vec::new()
+    }
+
+    /// Discover available models from the Azure AI Foundry endpoint.
+    async fn discover_models(&self) -> Result<Vec<ModelInfo>> {
+        let api_key = codemason_config::credential_env::provider_credential_env("azure_foundry")
+            .context("Azure AI Foundry model discovery requires AZURE_AI_FOUNDRY_API_KEY")?;
+        let base_url = super::env_key::provider_env_base_url("azure_foundry")
+            .unwrap_or_else(|| DEFAULT_AZURE_FOUNDRY_HOST.to_string());
+        let models = discover_azure_foundry_models(&api_key, &base_url)
+            .await
+            .with_context(|| "Azure AI Foundry model discovery failed")?;
+        Ok(models)
+    }
+
+    async fn create_client(
+        &self,
+        api_key: &str,
+        base_url: Option<&str>,
+        options: &HashMap<String, Value>,
+    ) -> Result<Box<dyn LlmClient>> {
+        // ANTIPAT 3.6: register the credential with the shared redaction
+        // registry so any text passed through `redact_secrets` masks it.
+        codemason_types::sanitize::register_secret(api_key);
+        let env_endpoint =
+            codemason_config::credential_env::read_config_env(Self::DEFAULT_ENV_ENDPOINT_KEY);
+        let configured_endpoint = options
+            .get(Self::ENDPOINT_OPTION_KEY)
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty());
+        // SEC-codemason-llm-005: config-sourced `configured_endpoint`/`base_url`
+        // are validated with the same scheme/host check as the env value.
+        let candidate = configured_endpoint.or(base_url).or(env_endpoint.as_deref());
+        let resolved_base = super::base_url::resolve_validated_base_url(
+            "azure_foundry",
+            candidate,
+            DEFAULT_AZURE_FOUNDRY_HOST,
+        );
+
+        let client = AzureFoundryClient::new(api_key, &resolved_base);
+        tracing::info!(chat_endpoint = %format!("{}/openai/v1/chat/completions", resolved_base), models_endpoint = %format!("{}/openai/v1/models", resolved_base), "Azure AI Foundry provider connected");
+        Ok(Box::new(client))
+    }
+}
+
+/// HTTP client for Azure AI Foundry.
+///
+/// Wraps the OpenAI-compatible client but sends the `api-key` header
+/// (Azure convention) instead of the standard `Authorization: Bearer`.
+pub(crate) struct AzureFoundryClient {
+    api_key: String,
+    base_url: String,
+    inner: OpenAiClient,
+}
+
+impl AzureFoundryClient {
+    pub(crate) fn new(api_key: &str, base_url: &str) -> Self {
+        let base = base_url.trim_end_matches('/').to_string();
+        Self {
+            api_key: api_key.to_string(),
+            base_url: base.clone(),
+            inner: OpenAiClient::new(api_key, &base),
+        }
+    }
+}
+
+/// Standalone function to discover Azure AI Foundry models.
+///
+/// Used by the TUI for dynamic model discovery without needing to construct
+/// a full client.
+pub async fn discover_azure_foundry_models(
+    api_key: &str,
+    base_url: &str,
+) -> Result<Vec<ModelInfo>> {
+    let base = base_url.trim_end_matches('/').to_string();
+    // Use the Azure OpenAI Service /models endpoint with api-version
+    let url = format!("{}/openai/models?api-version=2024-10-21", base);
+    let response = crate::provider::http_client::create_http_client()
+        .get(&url)
+        .header("api-key", api_key)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .inspect_err(|e| {
+            tracing::warn!(provider = "azure_foundry", url = %url, error = %e, "model discovery failed");
+        })
+        .with_context(|| format!("Failed to connect to Azure AI Foundry at {url}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        // ANTIPAT 3.1/3.2: capped error-body read.
+        let body = read_body_capped(response, MAX_ERROR_BODY_BYTES).await;
+        // SEC: redact the provider error body before surfacing it.
+        bail!(
+            "Azure AI Foundry API returned status {status}: {}",
+            codemason_types::sanitize::redact_secrets(&body)
+        );
+    }
+
+    let data: AzureFoundryModelsResponse = response
+        .json()
+        .await
+        .context("Failed to parse Azure AI Foundry models response")?;
+
+    let models: Vec<ModelInfo> = data
+        .data
+        .into_iter()
+        .map(|m| {
+            let supports_tools =
+                m.id.starts_with("gpt-4") || m.id == "o1" || m.id.starts_with("o3");
+            let supports_vision = m.id.contains("o1") || m.id.contains("4o");
+            let supports_reasoning = m.id == "o1" || m.id.starts_with("o3");
+
+            ModelInfo {
+                id: m.id.clone(),
+                provider_id: "azure_foundry".to_string(),
+                name: m.id.clone(),
+                cost: codemason_config::Cost {
+                    input: 0.0,
+                    output: 0.0,
+                },
+                capabilities: codemason_config::Capabilities {
+                    reasoning: supports_reasoning,
+                    streaming: true,
+                    vision: supports_vision,
+                    tool_use: supports_tools,
+                    thinking_levels: if supports_reasoning {
+                        crate::provider::thinking::openai_thinking_levels_for_model(&m.id)
+                    } else {
+                        Vec::new()
+                    },
+                },
+                context_window: DEFAULT_DISCOVERED_CONTEXT_WINDOW,
+                max_output: None,
+                request_multiplier: None,
+                thinking_config: None,
+            }
+        })
+        .collect();
+
+    Ok(models)
+}
+
+#[async_trait::async_trait]
+impl LlmClient for AzureFoundryClient {
+    async fn chat(
+        &self,
+        request: crate::llm::ChatRequest,
+    ) -> Result<std::pin::Pin<Box<dyn futures::Stream<Item = crate::llm::StreamEvent> + Send>>>
+    {
+        // Azure AI Foundry uses the OpenAI-compatible endpoint but with api-key header.
+        // We override the request to use api-key instead of Authorization: Bearer.
+        let url = if self.base_url.contains(".openai.azure.com") {
+            if self.base_url.ends_with("/openai") {
+                format!("{}/v1/chat/completions", self.base_url)
+            } else {
+                format!("{}/openai/v1/chat/completions", self.base_url)
+            }
+        } else {
+            format!("{}/openai/v1/chat/completions", self.base_url)
+        };
+        let body = self.inner.build_request_body(&request);
+        trace::record_body(&request, &body);
+        // PERF-061: serialise once into a reference-counted `Bytes` so each
+        // retry attempt clones only the refcount instead of copying the whole
+        // request payload (up to 5 attempts per request).
+        let body_bytes = bytes::Bytes::from(
+            serde_json::to_vec(&body).context("serialise Azure Foundry request body")?,
+        );
+
+        tracing::info!(
+            provider = "azure_foundry",
+            endpoint = %url,
+            model = %request.model,
+            "Sending chat request"
+        );
+
+        // RETRY POLICY (ANTIPAT 3.4): a chat POST is a *billed* completion
+        // request, so it is sent exactly once. Automatically retrying it (as the
+        // previous `execute_with_retry(..., 4)` wrapper did) can double-bill the
+        // same completion. Only idempotent GETs may be retried, and any such
+        // retry must go through `http_client::execute_with_retry` so backoff is
+        // shared.
+        //
+        // H2: reuse the inner OpenAI client's HTTP client (which itself is a
+        // clone of the process-global cached streaming client) instead of
+        // creating another streaming client inside the hot chat() path.
+        let client = self.inner.http_client();
+        let url_for_error = url.clone();
+        let response = client
+            .post(&url)
+            .header("api-key", &self.api_key)
+            .header("content-type", "application/json")
+            .body(body_bytes)
+            .send()
+            .await
+            .inspect_err(|e| {
+                tracing::warn!(provider = "azure_foundry", url = %url_for_error, error = %e, "chat request failed");
+            })
+            .with_context(|| format!("Failed to send request to Azure AI Foundry at {url_for_error}"))?;
+
+        // Reuse the OpenAI SSE stream parser since the response format is identical
+        Ok(self.inner.parse_sse_stream(response))
+    }
+}
+
+/// Response from the Azure AI Foundry `/models` endpoint.
+#[derive(Debug, Deserialize)]
+struct AzureFoundryModelsResponse {
+    data: Vec<AzureFoundryModelEntry>,
+}
+
+/// A single model entry in the Azure AI Foundry model list.
+#[derive(Debug, Deserialize)]
+struct AzureFoundryModelEntry {
+    id: String,
+    /// The Azure Foundry API returns an `object` discriminator (e.g. `"model"`).
+    ///
+    /// Currently unused; kept as a documented field in case stricter schema
+    /// validation or filtering is added later.
+    #[allow(dead_code)]
+    object: String,
+}

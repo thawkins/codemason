@@ -1,0 +1,45 @@
+[package]
+autotests = false
+name = "codemason-plugins"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Plugin system for codemason: discovery, descriptor model, sandboxed runtime, and lifecycle (spec `plugins`)"
+
+[features]
+default = []
+
+[dependencies]
+codemason-config = { path = "../codemason-config" }
+codemason-surface = { path = "../codemason-surface" }
+codemason-tools-core = { path = "../codemason-tools-core" }
+codemason-types = { path = "../codemason-types" }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = { workspace = true }
+tracing = "0.1"
+zip = { workspace = true }
+flate2 = "1"
+tar = "0.4"
+reqwest = { workspace = true, features = ["blocking"] }
+rquickjs = "0.14"
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+[dev-dependencies]
+codemason-config = { path = "../codemason-config" }
+zip = { workspace = true }
+flate2 = "1"
+tar = "0.4"
+tempfile = "3.5"
+
+[lints]
+workspace = true
+
+[[test]]
+name = "all"
+path = "tests/all.rs"

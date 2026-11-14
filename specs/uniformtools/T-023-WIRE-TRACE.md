@@ -1,7 +1,7 @@
 # T-023 - `tools.wire_trace`: the redacted payload dump
 
 Spec `uniformtools`, task T-023. Requirement FR-017, validated by TESTPLAN case
-TC-018. Config key defined by T-020 (`crates/ragent-config/src/tools.rs`).
+TC-018. Config key defined by T-020 (`crates/codemason-config/src/tools.rs`).
 
 ## 1. What FR-017 asks for
 
@@ -20,7 +20,7 @@ Four obligations, one of which is easy to miss:
 2. **`<session>-<step>` naming** - one file per step of a turn, so a retried
    send (a second request on the wire) is visible as its own file.
 3. **Every credential redacted, through the existing sanitizer** - the shared
-   `ragent_types::sanitize` primitives, not a new redactor that could drift.
+   `codemason_types::sanitize` primitives, not a new redactor that could drift.
 4. **Inert when absent or `false`** - which TC-018 step 2 states strongly: *no
    trace directory is created, and no files are written into the scratch project
    by the run*. "Inert" therefore means "returns before touching the
@@ -31,15 +31,15 @@ the file holds no non-ASCII byte, and `grep -c 'sk-' <file>` prints `0`.
 
 ## 2. State found
 
-`crates/ragent-llm/src/providers/wire/trace.rs` already existed (282 lines,
+`crates/codemason-llm/src/providers/wire/trace.rs` already existed (282 lines,
 dated before this task) but nothing used it:
 
-- `grep -rn 'record_body' crates/ragent-llm/src/` matched **only the
+- `grep -rn 'record_body' crates/codemason-llm/src/` matched **only the
   definition** - no provider called it, so the trace never produced a file.
-- `grep -rn 'wire_trace' crates/ragent-agent/src/` matched **nothing** - the
+- `grep -rn 'wire_trace' crates/codemason-agent/src/` matched **nothing** - the
   agent loop never set the switch, so the facility was permanently inert even
   with `"tools": { "wire_trace": true }` in the config.
-- `crates/ragent-llm/tests/test_wire_trace.rs` existed but its
+- `crates/codemason-llm/tests/test_wire_trace.rs` existed but its
   `test_agent_loop_sets_the_switch_from_config` and
   `test_every_provider_records_its_body` cases were red (the failures the T-003,
   T-004, T-008, T-012, T-022 records all list as "T-023's"), and its
@@ -51,7 +51,7 @@ So the task was: finish the wiring, then make the tests actually test.
 
 ## 3. What was built
 
-### `crates/ragent-llm/src/providers/wire/trace.rs` (295 lines)
+### `crates/codemason-llm/src/providers/wire/trace.rs` (295 lines)
 
 - `ENABLED: AtomicBool` (default `false`), `set_enabled`, `is_enabled` - the
   process-wide switch. The body only exists inside each provider's
@@ -89,7 +89,7 @@ So the task was: finish the wiring, then make the tests actually test.
      legitimately declares a property called `token`, and masking that object
      would destroy the very document the trace exists to show.
   2. `redact_matched_values` (new) - runs
-     `ragent_types::sanitize::redact_secrets` over every string and replaces
+     `codemason_types::sanitize::redact_secrets` over every string and replaces
      only the matched span.
 - `escape_non_ascii` - rewrites every non-ASCII `char` as one or more `\uXXXX`
   escapes. A non-ASCII character can only appear inside a JSON string literal,
@@ -99,7 +99,7 @@ So the task was: finish the wiring, then make the tests actually test.
 
 ### Why pass 2 is `redact_secrets`, not `redact_json_value`
 
-`ragent_types::sanitize::redact_json_value` walks a value and replaces a whole
+`codemason_types::sanitize::redact_json_value` walks a value and replaces a whole
 string *value* that matches. That is right for a log field and wrong for a
 request body: a provider's `system` prompt or a tool description legitimately
 contains a line like `curl -H 'Authorization: Bearer ...'` or `api_key=...`
@@ -129,7 +129,7 @@ reason is recorded at the guard rather than left to inference:
 - `router_client` delegates to a downstream client, whose own `chat` records.
   Recording the router's wrapper as well would write two files for one send.
 
-### `crates/ragent-agent/src/session/loop_steps.rs`
+### `crates/codemason-agent/src/session/loop_steps.rs`
 
 `prepare_client` sets the switch once per turn from the turn's resolved config
 (`trace::set_enabled(session_config.tools.wire_trace)`), after
@@ -140,7 +140,7 @@ nothing.
 
 ## 4. Tests
 
-`crates/ragent-llm/tests/test_wire_trace.rs` - 8 cases, all green. The switch
+`crates/codemason-llm/tests/test_wire_trace.rs` - 8 cases, all green. The switch
 and the root are process-wide, so every case takes `crate::global_env_lock()`
 (the consolidated binary's one lock), points the root at
 `target/temp/wire-trace-tests/`, and gives its session a unique id so a run
@@ -191,17 +191,17 @@ stale object:
 ## 6. Verification
 
 - `cargo fmt --all -- --check` - clean.
-- `cargo clippy -p ragent-llm -p ragent-agent --all-targets` - no finding in a
+- `cargo clippy -p codemason-llm -p codemason-agent --all-targets` - no finding in a
   touched file (19 pre-existing `unnecessary structure name repetition` in
   `tool_cache.rs`, and the pre-existing `pub(crate) ... inside private module`
   set elsewhere).
-- `cargo nextest run -p ragent-llm --no-fail-fast` - 619 passed, 2 failed,
+- `cargo nextest run -p codemason-llm --no-fail-fast` - 619 passed, 2 failed,
   2 skipped. Both failures are the pre-existing FR-006 / FR-019 source guards
   T-006 and T-010 own: `bedrock.rs:473` still writes the hand-built
   `"tool_result"` literal (present before this task - it is the Bespoke-Messages
   encoder T-006 deletes), and `gemini.rs` still recovers a tool name by
   splitting the id.
-- `cargo nextest run -p ragent-agent --no-fail-fast` - 2101 passed, 1 skipped.
+- `cargo nextest run -p codemason-agent --no-fail-fast` - 2101 passed, 1 skipped.
 - `scripts/check-*.sh` - eleven PASS; `check-bench-regression` exits 2 because
   `target/criterion` does not exist (a missing bench baseline, not a finding).
 

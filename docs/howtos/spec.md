@@ -1,6 +1,6 @@
-# ragent Spec Management Manual
+# codemason Spec Management Manual
 
-This guide explains how to use ragent's built-in spec management system to
+This guide explains how to use codemason's built-in spec management system to
 perform specification-driven design and planning. The `/spec` command family
 lets you create EARS-notation specifications, generate implementation plans,
 validate compliance, manage lifecycle status, and drive implementation — all
@@ -8,7 +8,7 @@ from the interactive TUI.
 
 The commands are exposed via the `/spec` slash command family (TUI) and the
 `spec_*` LLM tools (`spec_read`, `spec_list`, `spec_search`, `spec_coverage`,
-`spec_task_update`); the spec lifecycle is managed by the `ragent-specs`
+`spec_task_update`); the spec lifecycle is managed by the `codemason-specs`
 crate.
 
 > **Scope:** `/spec` slash commands, EARS requirements notation, the SDD
@@ -69,7 +69,7 @@ compliance, and orchestrate implementation.
 
 ## 2. Quick start
 
-Open ragent and create your first spec:
+Open codemason and create your first spec:
 
 ```text
 /spec create websocket Add a real-time collaborative editing feature using WebSockets
@@ -163,7 +163,7 @@ Invalid IDs: `WebSocket` (uppercase), `api.v2` (dots)
 ## 4. The EARS notation
 
 EARS (Easy Approach to Requirements Syntax) is a structured template for
-writing unambiguous requirements. ragent's spec system uses five EARS template
+writing unambiguous requirements. codemason's spec system uses five EARS template
 types:
 
 | Template | Pattern | Use case |
@@ -257,7 +257,7 @@ requirement is ambiguous.
 After reviewing and resolving clarification markers, use `/spec plan` to
 generate the implementation plan.
 
-When `sdd.branch_per_spec` is enabled in `ragent.json`, this command also
+When `sdd.branch_per_spec` is enabled in `codemason.json`, this command also
 creates a `spec/<specname>` git branch.
 
 ```text
@@ -401,8 +401,8 @@ the full transition graph.
 The same command runs from the shell, for scripts and batch transitions:
 
 ```bash
-ragent spec status websocket              # prints "websocket: draft" and the allowed transitions
-ragent spec status websocket in_review    # prints "websocket: draft -> in_review"
+codemason spec status websocket              # prints "websocket: draft" and the allowed transitions
+codemason spec status websocket in_review    # prints "websocket: draft -> in_review"
 ```
 
 It uses the same code and SDD gates as the TUI command, records `cli` as the
@@ -596,7 +596,7 @@ corpus or unusable model output stops before writing anything and names the
 cause; and an existing spec directory refuses unless `--force` was passed.
 
 The same pipeline is available from the shell as
-`ragent spec govcreate <specid> <content-ref> <target-folder> [flags]` — it
+`codemason spec govcreate <specid> <content-ref> <target-folder> [flags]` — it
 shares the TUI parser, resolves the model from `--model` or the stored
 `selected_model` (neither configured -> exit 2), prints the staged progress and
 final report to stdout, and exits non-zero on failure.
@@ -876,7 +876,7 @@ Both regenerate `PLAN.md`, but they differ:
 
 ## 9. SDD configuration
 
-SDD capabilities are gated by configuration flags in `ragent.json` under the
+SDD capabilities are gated by configuration flags in `codemason.json` under the
 `sdd` key. All flags default to `false` (opt-in).
 
 ```json
@@ -1029,7 +1029,7 @@ creates a two-way linkage:
 
 ### Configuration
 
-The `sdd.research_artifacts` flag in `ragent.json` enables this feature:
+The `sdd.research_artifacts` flag in `codemason.json` enables this feature:
 
 ```json
 {
@@ -1329,16 +1329,16 @@ coding agent can read and track specs without slash commands:
 | `invalid transition` | Trying to skip a lifecycle stage (or reopen a spec from a status that does not allow it) | Follow the transition graph in section 6; `implemented` may reopen to `in_progress` |
 | `/spec list` prints every spec | An unknown flag or status used to be ignored | Fixed: an unknown flag or status is an error naming the valid values. Check the spelling |
 | `/spec status` printed `from X to X` | The status was read after the transition | Fixed: it now reports the transition performed |
-| A requirement or dependency named `-` | Older ragent wrote dash placeholders that read back as names | Fixed: dash placeholders read back as "none". Update the task once to rewrite the row |
+| A requirement or dependency named `-` | Older codemason wrote dash placeholders that read back as names | Fixed: dash placeholders read back as "none". Update the task once to rewrite the row |
 | `blocked by clarification markers` | Unresolved `[NEEDS CLARIFICATION]` markers | Edit `SPEC.md` to resolve markers, then re-validate |
 | `blocked by unchecked gates` | Phase -1 gate checkboxes not checked | Edit `PLAN.md` to check all gate checkboxes |
 | `no tasks found` | `PLAN.md` missing or has no task table | Run `/spec plan` or `/spec create` to generate a plan |
 | `/spec impl` produces no output | No pending tasks or all tasks completed | Run `/spec impl --dry-run` to check task status |
 | Branch not created | Not a git repo or branch already exists | The spec is still created; check `git branch` |
-| `data-model.md` not generated | `sdd.data_model` not enabled | Enable the flag in `ragent.json` |
-| `contracts/` not generated | `sdd.contracts` not enabled | Enable the flag in `ragent.json` |
+| `data-model.md` not generated | `sdd.data_model` not enabled | Enable the flag in `codemason.json` |
+| `contracts/` not generated | `sdd.contracts` not enabled | Enable the flag in `codemason.json` |
 | JTBD overwrites existing file | `--force` not specified | Re-run with `--force` to overwrite |
-| Feedback not surfaced in plan | `sdd.feedback_loop` not enabled | Enable the flag in `ragent.json` |
+| Feedback not surfaced in plan | `sdd.feedback_loop` not enabled | Enable the flag in `codemason.json` |
 
 ---
 

@@ -1,14 +1,14 @@
 # Introduction and Overview
 
-## What is ragent?
+## What is codemason?
 
-ragent is an AI coding agent designed for the terminal, built entirely in Rust. Inspired by [OpenCode](https://github.com/anomalyco/opencode), ragent provides developers with a powerful tool for automating coding tasks through natural language interactions. It combines multi-provider LLM orchestration, a comprehensive tool system, and a terminal-based user interface to deliver a seamless coding experience.
+codemason is an AI coding agent designed for the terminal, built entirely in Rust. Inspired by [OpenCode](https://github.com/anomalyco/opencode), codemason provides developers with a powerful tool for automating coding tasks through natural language interactions. It combines multi-provider LLM orchestration, a comprehensive tool system, and a terminal-based user interface to deliver a seamless coding experience.
 
-Unlike traditional development tools, ragent operates as an intelligent assistant that understands your codebase context and can perform complex tasks ranging from code explanation and refactoring to bug detection and feature implementation.
+Unlike traditional development tools, codemason operates as an intelligent assistant that understands your codebase context and can perform complex tasks ranging from code explanation and refactoring to bug detection and feature implementation.
 
 ## Main Features
 
-ragent offers a rich set of features designed to enhance developer productivity:
+codemason offers a rich set of features designed to enhance developer productivity:
 
 ### Multi-Provider LLM Support
 - Native integration with Anthropic, OpenAI, GitHub Copilot, and Ollama
@@ -42,7 +42,7 @@ ragent offers a rich set of features designed to enhance developer productivity:
 
 ## Target Audience
 
-ragent is designed for:
+codemason is designed for:
 
 - **Professional Developers**: Seeking to automate repetitive coding tasks and accelerate development workflows
 - **Technical Leads**: Who need tools to review codebases, assess architectural decisions, and coordinate team efforts
@@ -50,24 +50,24 @@ ragent is designed for:
 - **Students and Educators**: Interested in learning modern coding practices and exploring AI-assisted development
 - **Open Source Contributors**: Who want to contribute to projects more efficiently with AI-powered insights
 
-Whether you're building web applications, system software, or data processing pipelines, ragent adapts to your specific domain and workflow preferences.
+Whether you're building web applications, system software, or data processing pipelines, codemason adapts to your specific domain and workflow preferences.
 
 ## Key Benefits
 
 ### Enhanced Productivity
-ragent eliminates the manual effort required for routine coding tasks, allowing developers to focus on high-value creative and strategic work. Its ability to understand complex codebases means less time spent on context switching and more time building features.
+codemason eliminates the manual effort required for routine coding tasks, allowing developers to focus on high-value creative and strategic work. Its ability to understand complex codebases means less time spent on context switching and more time building features.
 
 ### Improved Code Quality
-With built-in code review capabilities and architectural analysis tools, ragent helps identify potential issues before they become problems. Its systematic approach to code examination ensures consistent quality standards.
+With built-in code review capabilities and architectural analysis tools, codemason helps identify potential issues before they become problems. Its systematic approach to code examination ensures consistent quality standards.
 
 ### Accelerated Learning
-For newcomers to a codebase or technology stack, ragent serves as an intelligent tutor that can explain concepts, demonstrate best practices, and provide guided exploration of complex systems.
+For newcomers to a codebase or technology stack, codemason serves as an intelligent tutor that can explain concepts, demonstrate best practices, and provide guided exploration of complex systems.
 
 ### Reduced Cognitive Load
-By handling the mechanical aspects of coding, ragent frees mental resources for problem-solving and innovation. Developers can think at a higher level while the agent manages implementation details.
+By handling the mechanical aspects of coding, codemason frees mental resources for problem-solving and innovation. Developers can think at a higher level while the agent manages implementation details.
 
 ### Flexible Integration
-Whether used interactively through the terminal UI or programmatically via the HTTP API, ragent integrates seamlessly into existing development workflows without imposing rigid constraints.
+Whether used interactively through the terminal UI or programmatically via the HTTP API, codemason integrates seamlessly into existing development workflows without imposing rigid constraints.
 
 ## Document Structure and Navigation
 
@@ -77,7 +77,7 @@ The documentation lives in these places:
 - [docs/howtos/](../howtos/tutorial.md) - task guides, starting with the tutorial; [configuration](../howtos/config.md), [permissions](../howtos/permissions.md) and [teams](../howtos/teams.md) are there too
 - [docs/howtos/tools/INDEX.md](../howtos/tools/INDEX.md) - per-tool reference
 - [docs/howtos/slashcommands/](../howtos/slashcommands/) - per-command reference
-- [docs/openapi/ragent-client.d.ts](../openapi/ragent-client.d.ts) - HTTP API client types
+- [docs/openapi/codemason-client.d.ts](../openapi/codemason-client.d.ts) - HTTP API client types
 - [SPEC.md](../../SPEC.md) - architecture and the specification of every subsystem
 
-For immediate assistance, the integrated `/help` command within ragent provides context-sensitive guidance tailored to your current session and configuration.
+For immediate assistance, the integrated `/help` command within codemason provides context-sensitive guidance tailored to your current session and configuration.

@@ -6,7 +6,7 @@ This plan implements the Zoey Gap specification in **7 incremental milestones**.
 Each milestone delivers a standalone, testable feature set that builds on the
 previous one, culminating in a full voice-first companion orchestration product.
 
-**Architecture principle:** leverage existing ragent subsystems wherever
+**Architecture principle:** leverage existing codemason subsystems wherever
 possible. New code is additive — new config fields, new tools, new agent
 types, new HTTP routes — not replacements for existing infrastructure.
 
@@ -32,7 +32,7 @@ types, new HTTP routes — not replacements for existing infrastructure.
 | ------ | ------------------------------------------------------- | ------------ | ------ | ---------- | ------------ |
 | T-001  | Add `voice` config block to `Config` struct              | FR-005       | S      | Critical   | —            |
 | T-002  | Implement `VoiceConfig` with STT/TTS backend selection   | FR-005       | S      | Critical   | T-001        |
-| T-003  | Create `ragent-voice` crate skeleton                     | FR-005       | S      | Critical   | T-002        |
+| T-003  | Create `codemason-voice` crate skeleton                     | FR-005       | S      | Critical   | T-002        |
 | T-004  | Implement `SttBackend` trait + local subprocess backend  | FR-001       | M      | Critical   | T-003        |
 | T-005  | Implement `TtsBackend` trait + local subprocess backend  | FR-002       | M      | Critical   | T-003        |
 | T-006  | Implement OpenAI-compatible STT backend                  | FR-005       | M      | High       | T-004        |
@@ -75,7 +75,7 @@ types, new HTTP routes — not replacements for existing infrastructure.
 | T-043  | Send coordinator/companion responses back via Telegram     | FR-015       | S      | Medium     | T-042        |
 | T-044  | Add voice relay: Telegram voice message → STT → coordinator | FR-015       | L      | Low        | T-042, T-008 |
 | T-045  | Integration test: Telegram → coordinator → response cycle  | FR-015       | M      | Medium     | T-043        |
-| T-046  | Add `ragent companion` CLI subcommand / `--coordinator` flag | FR-021       | S   | High       | T-021        |
+| T-046  | Add `codemason companion` CLI subcommand / `--coordinator` flag | FR-021       | S   | High       | T-021        |
 | T-047  | End-to-end integration test: voice → coordinator → companion → voice output | FR-001, FR-007, FR-013, FR-002 | L | Critical | T-017, T-029 |
 | T-048  | Performance benchmark: voice round-trip latency             | NFR-001      | M      | Medium     | T-047        |
 | T-049  | Performance benchmark: coordinator routing overhead         | NFR-004      | S      | Medium     | T-023        |
@@ -88,15 +88,15 @@ types, new HTTP routes — not replacements for existing infrastructure.
 
 ### Milestone 1 — Voice I/O Foundation
 
-**Goal:** Users can talk to ragent and hear responses. Text mode continues to
+**Goal:** Users can talk to codemason and hear responses. Text mode continues to
 work unchanged.
 
 **Tasks:** T-001 through T-017
 
-**Deliverable:** A `ragent-voice` crate with configurable STT/TTS backends,
+**Deliverable:** A `codemason-voice` crate with configurable STT/TTS backends,
 voice/text mode toggling, streaming TTS playback, and graceful degradation.
 
-**Testable outcome:** Start ragent with `--voice` flag, speak a prompt, hear the
+**Testable outcome:** Start codemason with `--voice` flag, speak a prompt, hear the
 spoken response. Toggle voice off with a keyboard shortcut and continue in text
 mode.
 
@@ -107,7 +107,7 @@ mode.
   API.
 - Audio I/O uses a lightweight cross-platform library (e.g. `cpal` for capture,
   `rodio` for playback) or shelling out to `arecord`/`aplay`/`ffmpeg`.
-- Voice config lives in `ragent.json` under a new `voice` block:
+- Voice config lives in `codemason.json` under a new `voice` block:
 
 ```json
 {
@@ -131,7 +131,7 @@ delegation, an extended `infer_agent_type` classifier that considers registered
 companions, and a companion registry built from loaded custom agent definitions.
 
 **Testable outcome:** Create a custom agent (e.g. `researcher.json`), start
-ragent with `--agent coordinator`, type a research request, and verify the
+codemason with `--agent coordinator`, type a research request, and verify the
 coordinator delegates to the `researcher` companion via `team_spawn`.
 
 ### Milestone 3 — Companion Lifecycle & Skills
@@ -190,7 +190,7 @@ including voice messages.
 routes them to the coordinator, and sends responses back. Voice messages are
 transcribed via STT before routing.
 
-**Testable outcome:** Configure a Telegram bot in `ragent.json`, send a text
+**Testable outcome:** Configure a Telegram bot in `codemason.json`, send a text
 message from Telegram, receive a response. Send a voice message and receive a
 transcribed + processed response.
 
@@ -201,11 +201,11 @@ complete.
 
 **Tasks:** T-046 through T-051
 
-**Deliverable:** `ragent companion` CLI subcommand, end-to-end integration test
+**Deliverable:** `codemason companion` CLI subcommand, end-to-end integration test
 (voice → coordinator → companion → voice output), performance benchmarks, and
 updated documentation.
 
-**Testable outcome:** Run `ragent companion`, speak a request, hear the
+**Testable outcome:** Run `codemason companion`, speak a request, hear the
 coordinator delegate to a companion, hear the companion's result spoken back.
 Benchmarks confirm <3s voice latency and <200ms routing overhead.
 
@@ -260,10 +260,10 @@ M7 (Polish)                 [depends on all]
 
 This plan introduces one new workspace crate:
 
-- **`ragent-voice`** — STT/TTS backend abstractions, audio capture/playback,
+- **`codemason-voice`** — STT/TTS backend abstractions, audio capture/playback,
   voice mode management, and voice session state persistence.
 
-The crate follows the existing workspace pattern: `crates/ragent-voice/` with
-`Cargo.toml`, `src/lib.rs`, and `tests/`. It depends on `ragent-config` (for
-`VoiceConfig`), `ragent-types` (for events), and optionally `ragent-agent`
+The crate follows the existing workspace pattern: `crates/codemason-voice/` with
+`Cargo.toml`, `src/lib.rs`, and `tests/`. It depends on `codemason-config` (for
+`VoiceConfig`), `codemason-types` (for events), and optionally `codemason-agent`
 (for session integration).

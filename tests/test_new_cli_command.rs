@@ -1,8 +1,8 @@
 //! Integration tests for the FR-013 CLI parity surface (spec `newproj`
-//! T-012): `ragent new …` and the `ragent run "/new …"` interception must
+//! T-012): `codemason new …` and the `codemason run "/new …"` interception must
 //! behave identically to the TUI `/new` slash command.
 //!
-//! Each test spawns the built `ragent` binary inside a fresh empty tempdir
+//! Each test spawns the built `codemason` binary inside a fresh empty tempdir
 //! (via [`std::env::set_current_dir`] in the test process) and asserts on
 //! exit codes, stdout/stderr, and the resulting file tree. Hosting flags are
 //! never exercised here with network credentials: the child environment has
@@ -31,14 +31,14 @@ impl Drop for CwdGuard {
     }
 }
 
-/// Build a `ragent` invocation for `args` that cannot touch the developer's
+/// Build a `codemason` invocation for `args` that cannot touch the developer's
 /// real global state.
 ///
-/// `ragent` opens `~/.config/ragent/ragent.db` on every startup that reaches
-/// [`Storage::open`], including the `ragent new` paths exercised here - the
+/// `codemason` opens `~/.config/codemason/codemason.db` on every startup that reaches
+/// [`Storage::open`], including the `codemason new` paths exercised here - the
 /// command itself never reads the database, but the binary opens it before
 /// dispatch. Without an isolated root, every child in this file (and every
-/// concurrently running ragent on the machine) contends for the one shared
+/// concurrently running codemason on the machine) contends for the one shared
 /// database file, and `PRAGMA journal_mode=WAL` on a contended rollback-journal
 /// database fails with `Error code 5: database is locked`. That is not this
 /// test's subject; a private `XDG_CONFIG_HOME`/`HOME` per invocation removes the
@@ -46,25 +46,25 @@ impl Drop for CwdGuard {
 ///
 /// Hosting credentials are stripped so no test can reach the network; a hosting
 /// invocation fails contained at the auth step instead (FR-010).
-fn ragent_command(root: &Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_ragent"));
+fn codemason_command(root: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cdmn"));
     command
         .env("XDG_CONFIG_HOME", root.join("config"))
         .env("HOME", root.join("home"))
         .env_remove("GITHUB_TOKEN")
         .env_remove("GITLAB_TOKEN")
         .env_remove("GITLAB_URL")
-        .env("RAGENT_GITHUB_NO_GH_CLI", "1");
+        .env("CODEMASON_GITHUB_NO_GH_CLI", "1");
     command
 }
 
-/// Run `ragent` with `args` inside a fresh empty tempdir.
+/// Run `codemason` with `args` inside a fresh empty tempdir.
 ///
 /// The private `XDG_CONFIG_HOME`/`HOME` live in a *sibling* of the working
-/// directory, never inside it: `ragent new` refuses to scaffold into a
+/// directory, never inside it: `codemason new` refuses to scaffold into a
 /// non-empty directory, so anything the harness creates beside `cwd` would
 /// itself trip the guard this file tests.
-fn ragent_in_empty_cwd(args: &[&str]) -> (PathBuf, Output) {
+fn codemason_in_empty_cwd(args: &[&str]) -> (PathBuf, Output) {
     let _lock = cwd_lock();
     let temp = tempfile::tempdir().expect("tempdir");
     let cwd = temp.path().join("cwd");
@@ -75,10 +75,10 @@ fn ragent_in_empty_cwd(args: &[&str]) -> (PathBuf, Output) {
     std::env::set_current_dir(&cwd).expect("set cwd");
     let _guard = CwdGuard { prev };
 
-    let output = ragent_command(&state)
+    let output = codemason_command(&state)
         .args(args)
         .output()
-        .expect("spawn ragent");
+        .expect("spawn codemason");
     // Keep the tempdir alive until after assertions by leaking it; the test
     // process is short-lived and the tree is small.
     std::mem::forget(temp);
@@ -102,10 +102,10 @@ fn assert_exists(dir: &Path, rel: &str) {
 
 #[test]
 fn test_new_cli_bare_invocation_prints_usage_and_registry_values() {
-    let (_dir, out) = ragent_in_empty_cwd(&["new"]);
+    let (_dir, out) = codemason_in_empty_cwd(&["new"]);
     assert!(
         out.status.success(),
-        "bare `ragent new` shows usage, stderr: {}",
+        "bare `codemason new` shows usage, stderr: {}",
         stderr(&out)
     );
     let text = stdout(&out);
@@ -119,10 +119,10 @@ fn test_new_cli_bare_invocation_prints_usage_and_registry_values() {
 
 #[test]
 fn test_new_cli_help_word_prints_detailed_help_page() {
-    // FR-018: `ragent new help` prints the dedicated help page — purpose,
+    // FR-018: `codemason new help` prints the dedicated help page — purpose,
     // per-argument docs with optionality/values/omitted defaults, and two
     // worked examples (one minimal, one with a hosting flag).
-    let (dir, out) = ragent_in_empty_cwd(&["new", "help"]);
+    let (dir, out) = codemason_in_empty_cwd(&["new", "help"]);
     assert!(
         out.status.success(),
         "help exits 0, stderr: {}",
@@ -140,15 +140,15 @@ fn test_new_cli_help_word_prints_detailed_help_page() {
     assert!(text.contains("rust: axum, warp, raylib, gtk4, ratatui"));
     // Worked examples in the binary surface spelling.
     assert!(text.contains("Worked examples:"), "FR-018 examples: {text}");
-    assert!(text.contains("ragent new --language rust --type cmdline"));
-    assert!(text.contains("ragent new --language python --type library --gitlab"));
+    assert!(text.contains("codemason new --language rust --type cmdline"));
+    assert!(text.contains("codemason new --language python --type library --gitlab"));
     // Zero file mutations: help never scaffolds.
     assert!(!dir.join("Cargo.toml").exists());
 }
 
 #[test]
 fn test_new_cli_missing_required_flags_fails_with_usage() {
-    let (_dir, out) = ragent_in_empty_cwd(&["new", "--language", "rust"]);
+    let (_dir, out) = codemason_in_empty_cwd(&["new", "--language", "rust"]);
     assert_eq!(
         out.status.code(),
         Some(2),
@@ -160,10 +160,10 @@ fn test_new_cli_missing_required_flags_fails_with_usage() {
 
 #[test]
 fn test_new_cli_unknown_language_value_fails_before_any_writes() {
-    let (dir, out) = ragent_in_empty_cwd(&["new", "--language", "cobol", "--type", "cmdline"]);
+    let (dir, out) = codemason_in_empty_cwd(&["new", "--language", "cobol", "--type", "cmdline"]);
     assert_eq!(out.status.code(), Some(2));
     assert!(stderr(&out).contains("unknown --language value 'cobol'"));
-    // FR-003: validation aborts with zero file mutations (only the ragent
+    // FR-003: validation aborts with zero file mutations (only the codemason
     // config bootstrap may exist).
     assert!(!dir.join("Cargo.toml").exists());
     assert!(!dir.join("src").exists());
@@ -171,7 +171,7 @@ fn test_new_cli_unknown_language_value_fails_before_any_writes() {
 
 #[test]
 fn test_new_cli_hosting_conflict_aborts_without_scaffolding() {
-    let (dir, out) = ragent_in_empty_cwd(&[
+    let (dir, out) = codemason_in_empty_cwd(&[
         "new",
         "--language",
         "rust",
@@ -203,10 +203,10 @@ fn test_new_cli_non_empty_directory_refused() {
     let _guard = CwdGuard { prev };
     std::fs::write(cwd.join("BLOCKER.txt"), "keep out").expect("write blocker");
 
-    let out = ragent_command(&state)
+    let out = codemason_command(&state)
         .args(["new", "--language", "rust", "--type", "cmdline"])
         .output()
-        .expect("spawn ragent");
+        .expect("spawn codemason");
 
     assert_eq!(
         out.status.code(),
@@ -223,9 +223,9 @@ fn test_new_cli_non_empty_directory_refused() {
 
 #[test]
 fn test_new_cli_scaffolds_go_library_per_tc013() {
-    // TESTPLAN TC-013: `ragent run "/new --language go --type library"`
+    // TESTPLAN TC-013: `codemason run "/new --language go --type library"`
     // parity via the dedicated CLI surface.
-    let (dir, out) = ragent_in_empty_cwd(&["new", "--language", "go", "--type", "library"]);
+    let (dir, out) = codemason_in_empty_cwd(&["new", "--language", "go", "--type", "library"]);
     assert!(
         out.status.success(),
         "scaffold should succeed, stderr: {}",
@@ -242,8 +242,8 @@ fn test_new_cli_scaffolds_go_library_per_tc013() {
         "library type must not emit a main.go binary entry"
     );
 
-    // FR-004 ragent workspace layout.
-    assert_exists(&dir, ".ragent/agents/README.md");
+    // FR-004 codemason workspace layout.
+    assert_exists(&dir, ".codemason/agents/README.md");
     assert_exists(&dir, "specs/README.md");
     assert_exists(&dir, ".gitignore");
     assert_exists(&dir, "AGENTS.md");
@@ -268,9 +268,9 @@ fn test_new_cli_scaffolds_go_library_per_tc013() {
 
 #[test]
 fn test_run_prompt_new_interception_matches_cli_surface() {
-    // FR-013: `ragent run "/new …"` reaches the same behaviour.
+    // FR-013: `codemason run "/new …"` reaches the same behaviour.
     let (dir, out) =
-        ragent_in_empty_cwd(&["run", "/new --language rust --type cmdline", "--no-tui"]);
+        codemason_in_empty_cwd(&["run", "/new --language rust --type cmdline", "--no-tui"]);
     assert!(
         out.status.success(),
         "run-intercepted scaffold should succeed, stderr: {}",
@@ -288,7 +288,7 @@ fn test_run_prompt_new_interception_matches_cli_surface() {
 
 #[test]
 fn test_run_prompt_new_validation_error_is_contained() {
-    let (dir, out) = ragent_in_empty_cwd(&["run", "/new --language rust", "--no-tui"]);
+    let (dir, out) = codemason_in_empty_cwd(&["run", "/new --language rust", "--no-tui"]);
     assert_eq!(
         out.status.code(),
         Some(2),

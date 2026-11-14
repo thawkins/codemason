@@ -5,10 +5,10 @@ status: draft
 
 ## Overview
 
-This specification defines a mechanism that lets ragent preprocess a user prompt
+This specification defines a mechanism that lets codemason preprocess a user prompt
 through one or more prompt-optimization methodologies before the prompt is sent
 to the active LLM.  The system re-uses and extends the existing
-`ragent-prompt_opt` crate, which currently provides 12 template-based or
+`codemason-prompt_opt` crate, which currently provides 12 template-based or
 LLM-driven optimization frameworks such as CO-STAR, CRISPE, Chain-of-Thought,
 DRAW, RISE, O1-STYLE, Meta Prompting, VARI, Q*, and platform adapters for OpenAI,
 Claude, and Microsoft.
@@ -21,7 +21,7 @@ next agent turn.
 
 ## Background
 
-The `ragent-prompt_opt` crate already exposes:
+The `codemason-prompt_opt` crate already exposes:
 
 - `OptMethod` — an enum with 12 optimization frameworks.
 - `Completer` — an async trait abstracting a single LLM completion.
@@ -47,7 +47,7 @@ main agent loop.
 ### FR-002 — Framework registry (ubiquitous)
 
 The preprocessor shall support at least the 12 frameworks already defined by
-`ragent-prompt_opt`: CO-STAR, CRISPE, Chain-of-Thought, DRAW, RISE, O1-STYLE,
+`codemason-prompt_opt`: CO-STAR, CRISPE, Chain-of-Thought, DRAW, RISE, O1-STYLE,
 Meta Prompting, VARI, Q*, OpenAI, Claude, and Microsoft.
 
 ### FR-003 — Framework selection by name (ubiquitous)
@@ -79,7 +79,7 @@ the next, and return the final prompt.
 ### FR-007 — Default framework configuration (state-driven)
 
 IF the user has configured a default optimization framework in
-`ragent.json`, the preprocessor shall use that framework automatically for
+`codemason.json`, the preprocessor shall use that framework automatically for
 every incoming prompt unless the user explicitly overrides it.
 
 ### FR-008 — Per-message override (event-driven)
@@ -95,7 +95,7 @@ command, the preprocessor shall pass the raw input through unchanged.
 
 ### FR-010 — Configuration schema extension (ubiquitous)
 
-The `ragent.json` configuration schema shall include a `prompt_opt` block that
+The `codemason.json` configuration schema shall include a `prompt_opt` block that
 specifies `enabled`, `default_method`, `mode` (`template` or `llm`), and an
 optional ordered list of `methods`.
 

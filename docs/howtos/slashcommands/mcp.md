@@ -6,19 +6,19 @@
 `/mcp` reports the state of Model Context Protocol servers, launches discovery,
 and switches servers on or off. The bare form (the `status` token lands in the
 same arm) prints a server table from the current config and runtime state;
-`/mcp config` reports *where* ragent looks for MCP server definitions and what
+`/mcp config` reports *where* codemason looks for MCP server definitions and what
 it finds at each place; `/mcp discover` scans for available servers and opens an
 interactive selection dialog; `/mcp connect <id>` and `/mcp disconnect <id>`
 enable or disable a named server live.
 
 Whether a server is actually started is durable, user-owned state - it is not
-just a side effect of being listed in `ragent.json`. The choice is persisted in
+just a side effect of being listed in `codemason.json`. The choice is persisted in
 a **global ledger** (`<global state dir>/mcp_state.json`) so a server disabled
 once stays disabled in every project, and so a plugin-contributed server (which
-has no entry in `ragent.json` at all) can still be turned off. A server id
+has no entry in `codemason.json` at all) can still be turned off. A server id
 **absent** from the ledger is enabled, so a newly added server - written into
-`ragent.json` or bridged from a plugin's `mcpServers` section - starts enabled
-with no extra step. A `mcp.<id>.disabled: true` entry in `ragent.json` always
+`codemason.json` or bridged from a plugin's `mcpServers` section - starts enabled
+with no extra step. A `mcp.<id>.disabled: true` entry in `codemason.json` always
 disables the server, whatever the ledger says.
 
 Only `config`, `discover`, `connect <id>`, `disconnect <id>`, and `help` are
@@ -46,7 +46,7 @@ inventory with the registry name each tool is callable under
 | --- | --- |
 | `/mcp` | Print the MCP server table |
 | `/mcp status` | Same as the bare form |
-| `/mcp config` | Report every location ragent scans for MCP definitions, the count found at each, and the servers discovered |
+| `/mcp config` | Report every location codemason scans for MCP definitions, the count found at each, and the servers discovered |
 | `/mcp discover` | Run `McpClient::discover()` and open the interactive dialog |
 | `/mcp connect <id>` | Enable `<id>`, connect it live, and register its tools now |
 | `/mcp disconnect <id>` | Disable `<id>`, disconnect it live; the choice persists globally |
@@ -97,7 +97,7 @@ Bare form (`From: /mcp`, `MCP Servers:`):
 
 - With no servers configured, an advisory line suggests running
   `/mcp discover` to scan for available servers and then adding them to the
-  `mcp` section of `ragent.json` to activate them; enabled plugins that declare
+  `mcp` section of `codemason.json` to activate them; enabled plugins that declare
   an `mcpServers` section are bridged automatically.
 - Otherwise one line per server: the server id padded to a fixed width, its
   `enabled yes/no` state, and a status glyph (rendered as an emoji in the
@@ -108,9 +108,9 @@ Bare form (`From: /mcp`, `MCP Servers:`):
 - A footer listing the subcommands:
   `/mcp config`, `/mcp discover`, `/mcp connect <id>`, `/mcp disconnect <id>`.
 
-`/mcp config` produces a discovery-location report: a table of every place ragent
-looks for MCP server definitions - the ragent-native
-`~/.config/ragent/servers/` directory first (so its definitions win
+`/mcp config` produces a discovery-location report: a table of every place codemason
+looks for MCP server definitions - the codemason-native
+`~/.config/codemason/servers/` directory first (so its definitions win
 de-duplication), then npm global `node_modules`, `PATH`, and the
 Claude/Cline/legacy/XDG registry directories - showing the path (an absent
 directory is marked `(missing)`) and the number of definitions found at each,
@@ -120,8 +120,8 @@ reported per location. Backed by `McpClient::discover_locations`, which returns
 the per-location results before the flat list `/mcp discover` de-duplicates.
 
 The display list is built from the same merged server set the connect path uses
-(`ragent_agent::plugin::plugin_mcp_servers`), so plugin-contributed servers
-appear here alongside the ones in `ragent.json`, and the live status is read
+(`codemason_agent::plugin::plugin_mcp_servers`), so plugin-contributed servers
+appear here alongside the ones in `codemason.json`, and the live status is read
 from the session's MCP client.
 
 `/mcp discover` produces no transcript output; it opens an interactive
@@ -130,7 +130,7 @@ under a block cursor: `Up`/`Down` (or `k`/`j`, `Home`/`End`) move the cursor and
 the list scrolls (with a scrollbar) to keep it visible, `Space` toggles the
 highlighted server's enabled state, and `Esc` closes the dialog. Each row carries
 an `[x]`/`[ ]` enabled marker. Toggling a server on adds a `mcp.<id>` entry to
-the project `.ragent/ragent.json` when one is missing (or lifts a
+the project `.codemason/codemason.json` when one is missing (or lifts a
 `disabled: true` override), applies the choice to the global ledger, and connects
 it live when the MCP client is running; toggling it off disables it in the ledger
 and disconnects it. A feedback line reports each toggle.
@@ -152,8 +152,8 @@ and disconnects it. A feedback line reports each toggle.
 ## Related
 
 - `mcp_tool` - the chat tool for calling MCP server tools
-- `/reload mcp` - rescan MCP configuration after editing `ragent.json`
-- `mcp` section in `ragent.json` - server definitions; `mcp.<id>.disabled` is the
+- `/reload mcp` - rescan MCP configuration after editing `codemason.json`
+- `mcp` section in `codemason.json` - server definitions; `mcp.<id>.disabled` is the
   hard override that always wins over the ledger
 - `/plugins list --mcp` - the live per-server tool inventory and registry names
 - `/doctor` - includes MCP connectivity in its diagnostics

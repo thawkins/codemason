@@ -25,22 +25,22 @@ One line each, in `TOOL_RENAMES` order:
 
 | # | Tool type | File | `before` -> `after` |
 |---|---|---|---|
-| 1 | `aliases::AskUserTool` | `crates/ragent-agent/src/tool/aliases.rs` | `ask_user` -> `AskUserQuestion` |
-| 2 | `bash::BashTool` | `crates/ragent-tools-core/src/bash.rs` | `bash` -> `Bash` |
-| 3 | `edit::EditTool` | `crates/ragent-tools-core/src/edit.rs` | `edit` -> `Edit` |
-| 4 | `plan::PlanEnterTool` | `crates/ragent-agent/src/tool/plan.rs` | `plan_enter` -> `EnterPlanMode` |
-| 5 | `plan::PlanExitTool` | `crates/ragent-agent/src/tool/plan.rs` | `plan_exit` -> `ExitPlanMode` |
-| 6 | `glob::GlobTool` | `crates/ragent-tools-core/src/glob.rs` | `glob` -> `Glob` |
-| 7 | `grep::GrepTool` | `crates/ragent-tools-core/src/grep.rs` | `grep` -> `Grep` |
-| 8 | `skill_manage::SkillManageTool` | `crates/ragent-agent/src/tool/skill_manage.rs` | `skill_manage` -> `Skill` |
-| 9 | `task::TaskCreateTool` | `crates/ragent-tools-extended/src/task.rs` | `task_create` -> `TaskCreate` |
-| 10 | `task::TaskGetTool` | `crates/ragent-tools-extended/src/task.rs` | `task_get` -> `TaskGet` |
-| 11 | `task::TaskListTool` | `crates/ragent-tools-extended/src/task.rs` | `task_list` -> `TaskList` |
-| 12 | `task::TaskUpdateTool` | `crates/ragent-tools-extended/src/task.rs` | `task_update` -> `TaskUpdate` |
-| 13 | `write::WriteTool` | `crates/ragent-tools-core/src/write.rs` | `write` -> `Write` |
+| 1 | `aliases::AskUserTool` | `crates/codemason-agent/src/tool/aliases.rs` | `ask_user` -> `AskUserQuestion` |
+| 2 | `bash::BashTool` | `crates/codemason-tools-core/src/bash.rs` | `bash` -> `Bash` |
+| 3 | `edit::EditTool` | `crates/codemason-tools-core/src/edit.rs` | `edit` -> `Edit` |
+| 4 | `plan::PlanEnterTool` | `crates/codemason-agent/src/tool/plan.rs` | `plan_enter` -> `EnterPlanMode` |
+| 5 | `plan::PlanExitTool` | `crates/codemason-agent/src/tool/plan.rs` | `plan_exit` -> `ExitPlanMode` |
+| 6 | `glob::GlobTool` | `crates/codemason-tools-core/src/glob.rs` | `glob` -> `Glob` |
+| 7 | `grep::GrepTool` | `crates/codemason-tools-core/src/grep.rs` | `grep` -> `Grep` |
+| 8 | `skill_manage::SkillManageTool` | `crates/codemason-agent/src/tool/skill_manage.rs` | `skill_manage` -> `Skill` |
+| 9 | `task::TaskCreateTool` | `crates/codemason-tools-extended/src/task.rs` | `task_create` -> `TaskCreate` |
+| 10 | `task::TaskGetTool` | `crates/codemason-tools-extended/src/task.rs` | `task_get` -> `TaskGet` |
+| 11 | `task::TaskListTool` | `crates/codemason-tools-extended/src/task.rs` | `task_list` -> `TaskList` |
+| 12 | `task::TaskUpdateTool` | `crates/codemason-tools-extended/src/task.rs` | `task_update` -> `TaskUpdate` |
+| 13 | `write::WriteTool` | `crates/codemason-tools-core/src/write.rs` | `write` -> `Write` |
 
-Five live in `ragent-tools-core`, four in `ragent-tools-extended`, four in
-`ragent-agent`. Every one is the `&'static str` returned by `fn name(&self)` -
+Five live in `codemason-tools-core`, four in `codemason-tools-extended`, four in
+`codemason-agent`. Every one is the `&'static str` returned by `fn name(&self)` -
 `&str` still, borrowed, compared directly (NFR-006). Nothing in this change adds
 a lookup, an allocation or a table read to a dispatch path.
 
@@ -55,7 +55,7 @@ The task says "change `Tool::name()` **and the registry key**". The second half
 needs no edit, and that is a fact about the registry worth recording:
 
 ```rust
-// crates/ragent-tools-core/src/lib.rs:510, crates/ragent-agent/src/tool/mod.rs:1405
+// crates/codemason-tools-core/src/lib.rs:510, crates/codemason-agent/src/tool/mod.rs:1405
 pub fn register(&self, tool: Arc<dyn Tool>) {
     tools.insert(tool.name().to_string(), tool);   // <- key == name()
 }
@@ -63,8 +63,8 @@ pub fn register(&self, tool: Arc<dyn Tool>) {
 
 Every registration path in the tree keys on `tool.name()`. There is no
 `register_with(name, tool)`, no `insert("bash", ...)` literal, and the four
-registries (`ragent-tools-core`, `ragent-tools-extended`, `ragent-tools-vcs`,
-`ragent-agent`) share the pattern, which is why the rename could not produce the
+registries (`codemason-tools-core`, `codemason-tools-extended`, `codemason-tools-vcs`,
+`codemason-agent`) share the pattern, which is why the rename could not produce the
 half-renamed state T-046's case 4 detects *from the registration side*.
 
 What the sentence does catch is the adapter. `register_extracted_core_tools`
@@ -82,7 +82,7 @@ the tree *wrong* rather than merely stale (a guard that no longer guards, a rout
 that no longer routes, a summary that falls through to the raw dump). All of it
 is in the same change, per FR-034.
 
-### Agent guards (`crates/ragent-agent/src/session/`)
+### Agent guards (`crates/codemason-agent/src/session/`)
 
 | Site | Before | After |
 |---|---|---|
@@ -108,14 +108,14 @@ where "migrate the literal" was not enough and the test had to change shape; the
 case in `tests/test_session_text_helpers.rs` now also asserts the retired
 spelling is *not* auto-approved, so the prefix cannot come back unnoticed.
 
-### Configuration (`crates/ragent-config/src/config.rs`)
+### Configuration (`crates/codemason-config/src/config.rs`)
 
 `tool_family_names("plan")` returned `["plan_enter", "plan_exit"]`, so
 `/tools plan on` hid and then re-showed two names that no longer existed, and the
 TUI's `test_slash_tools_plan_on_shows_plan_tools` caught it - the "off" half
 passed vacuously (neither name was visible anyway) and the "on" half failed.
 
-### TUI (`crates/ragent-tui/src/`)
+### TUI (`crates/codemason-tui/src/`)
 
 `message_widget.rs` holds 28 arms keyed on a tool name: the input summaries, the
 result summaries, `tool_inline_diff`, the two `canonical_tool_name` alias targets
@@ -160,7 +160,7 @@ stale are worth naming because each was passing for the wrong reason:
 
 ### The FR-023 invariant test flipped
 
-`crates/ragent-agent/tests/test_tool_rename_table.rs` asserted, for the
+`crates/codemason-agent/tests/test_tool_rename_table.rs` asserted, for the
 pre-rename tree, that every `before` **is** registered and every `after` **is
 not**. T-030's record said T-031 must flip both in the same change, and this task
 did:
@@ -197,7 +197,7 @@ the rename:
   `edits-*.jsonl` edit-log label;
 - the `/bash` slash-command trigger in `command_catalog.rs` / `state.rs` /
   `slash.rs` (a command, not a tool);
-- `"bash"` in `ragent-connectors`'s descriptor and `toolchain.rs`'s
+- `"bash"` in `codemason-connectors`'s descriptor and `toolchain.rs`'s
   `LanguageRuntime::many(&["bash"])` (a runtime, not a tool);
 - `team/classify.rs`'s keyword table (the verb "write");
 - the FR-023 table itself and the guard's own fixtures.
@@ -232,8 +232,8 @@ mtime and cargo reuses the broken object file), the filtered suite run, the file
 restored from a `cp -p` backup and verified by `md5sum`:
 
 ```
-2907aeb4add000925f9df16346834f8d  crates/ragent-tools-core/src/write.rs
-3c8f950ecb5c9996ae9de467300b8901  crates/ragent-agent/src/session/permissions.rs
+2907aeb4add000925f9df16346834f8d  crates/codemason-tools-core/src/write.rs
+3c8f950ecb5c9996ae9de467300b8901  crates/codemason-agent/src/session/permissions.rs
 ```
 
 | # | Break | Failed cases |
@@ -262,29 +262,29 @@ old spelling" nor the "lost the new one" case can pass unnoticed.
 | Check | Result |
 |---|---|
 | `cargo fmt --all -- --check` | clean |
-| `cargo check -p ragent-tools-core -p ragent-tools-extended -p ragent-agent --all-targets` | clean |
-| `cargo check --workspace --all-targets --exclude ragent-llm` | clean (the `ragent-llm` exclusion is a pre-existing `cannot find type ChatContent` in `tests/inline/anthropic_tests.rs`, unmodified since `d6abcd4a`) |
-| `cargo test -p ragent-agent --test all` | 1679 passed, 1 ignored |
-| `cargo test -p ragent-tools-core --test all` | 394 passed |
-| `cargo test -p ragent-tools-extended --test all` | 1806 passed, 11 ignored |
-| `cargo test -p ragent-config --test all` | 417 passed |
-| `cargo test -p ragent-specs --test all` | 432 passed |
-| `cargo test -p ragent-server --test all` | 192 passed |
-| `cargo test -p ragent-research --test all` | 471 passed |
-| `cargo test -p ragent-storage --test all` | 346 passed |
-| `cargo test -p ragent-types --test all` | 418 passed |
-| `cargo test -p ragent-tools-vcs --test all` | 397 passed |
-| `cargo test -p ragent-codeindex --test all` | 447 passed, 2 ignored |
-| `cargo test -p ragent-telemetry --test all` | 231 passed |
-| `cargo test -p ragent-tools-core --doc` | 5 passed |
-| `cargo test -p ragent-llm --doc` | 30 passed |
-| `cargo test -p ragent --test all` | 44 passed |
-| `cargo test -p ragent-tui --test all` | 3715 passed, 3 failed - the pre-existing Alt+T tasks-panel trio (`test_input_more::alt_toggle_keys_map_to_actions`, `test_input_queue_menu_binding::test_other_alt_keys_are_unaffected`, `test_memory_panel::test_toggle_memory_mutually_excludes_tasks_panel`), reproduced with `event_handler.rs` restored to `HEAD` |
-| `cargo clippy -p ragent-tools-core -p ragent-tools-extended -p ragent-agent --all-targets` | no new warning (only the pre-existing `pub(crate)`-in-private-module set) |
+| `cargo check -p codemason-tools-core -p codemason-tools-extended -p codemason-agent --all-targets` | clean |
+| `cargo check --workspace --all-targets --exclude codemason-llm` | clean (the `codemason-llm` exclusion is a pre-existing `cannot find type ChatContent` in `tests/inline/anthropic_tests.rs`, unmodified since `d6abcd4a`) |
+| `cargo test -p codemason-agent --test all` | 1679 passed, 1 ignored |
+| `cargo test -p codemason-tools-core --test all` | 394 passed |
+| `cargo test -p codemason-tools-extended --test all` | 1806 passed, 11 ignored |
+| `cargo test -p codemason-config --test all` | 417 passed |
+| `cargo test -p codemason-specs --test all` | 432 passed |
+| `cargo test -p codemason-server --test all` | 192 passed |
+| `cargo test -p codemason-research --test all` | 471 passed |
+| `cargo test -p codemason-storage --test all` | 346 passed |
+| `cargo test -p codemason-types --test all` | 418 passed |
+| `cargo test -p codemason-tools-vcs --test all` | 397 passed |
+| `cargo test -p codemason-codeindex --test all` | 447 passed, 2 ignored |
+| `cargo test -p codemason-telemetry --test all` | 231 passed |
+| `cargo test -p codemason-tools-core --doc` | 5 passed |
+| `cargo test -p codemason-llm --doc` | 30 passed |
+| `cargo test -p codemason --test all` | 44 passed |
+| `cargo test -p codemason-tui --test all` | 3715 passed, 3 failed - the pre-existing Alt+T tasks-panel trio (`test_input_more::alt_toggle_keys_map_to_actions`, `test_input_queue_menu_binding::test_other_alt_keys_are_unaffected`, `test_memory_panel::test_toggle_memory_mutually_excludes_tasks_panel`), reproduced with `event_handler.rs` restored to `HEAD` |
+| `cargo clippy -p codemason-tools-core -p codemason-tools-extended -p codemason-agent --all-targets` | no new warning (only the pre-existing `pub(crate)`-in-private-module set) |
 | `scripts/check-inline-tests.sh`, `check-dead-code-reasons.sh`, `check-test-env-isolation.sh`, `check-silent-errors.sh`, `check-security-unwraps.sh`, `check-poison-locks.sh`, `check-shared-guards.sh`, `check-file-tool-containment.sh` | all PASS |
 | `scripts/check-tool-rename.sh` | FAIL on 28 lines - T-033's exemption list, not this task's sites (section 5) |
 
-`cargo test -p ragent-llm --test all` shows 5 failures. Four are pre-existing and
+`cargo test -p codemason-llm --test all` shows 5 failures. Four are pre-existing and
 belong to other tasks: `test_wire_trace::test_agent_loop_sets_the_switch_from_config`
 (T-023's `set_enabled` call) and `test_wire_trace::test_every_provider_records_its_body`
 (T-023's per-provider recording), plus two source scans in `test_wire_decode.rs` /
@@ -330,15 +330,15 @@ of those files is touched here, and the same five fail with the rename reverted.
   `[Unreleased]`).
 - `specs/uniformtools/TESTPLAN.md` - TC-019 step 8 now states the post-rename
   polarity, so the manual case cannot be run against the wrong expectation.
-- `crates/ragent-agent/tests/test_tool_rename_table.rs` - module doc rewritten
+- `crates/codemason-agent/tests/test_tool_rename_table.rs` - module doc rewritten
   for the post-rename state, so the next reader does not "restore" the old
   polarity.
 - Two doctests that asserted the old name were fixed rather than left to fail:
-  `crates/ragent-tools-core/src/lib.rs`'s `create_core_registry` example
+  `crates/codemason-tools-core/src/lib.rs`'s `create_core_registry` example
   (`assert!(registry.contains("Bash"))`) and
-  `crates/ragent-agent/src/tool/mod.rs`'s `list()` example
+  `crates/codemason-agent/src/tool/mod.rs`'s `list()` example
   (`names.contains(&"Bash".to_string())`).
 
-`crates/ragent-tools-core/DOCS.md`'s `create_core_registry` bullet still lists the
+`crates/codemason-tools-core/DOCS.md`'s `create_core_registry` bullet still lists the
 lowercase spellings. That is documentation, not source, so it is T-039's scope
 and is recorded there rather than fixed here.

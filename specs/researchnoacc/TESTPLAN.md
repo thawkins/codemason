@@ -6,7 +6,7 @@ audit:
 # Research scholarly-engine exclusion — Manual Test Plan
 
 This is a **manual** test plan for spec `researchnoacc`. It is executed by a
-human operator against a built `ragent` binary. It contains no automated test
+human operator against a built `codemason` binary. It contains no automated test
 code.
 
 Coverage: `mf_search` engine exclusion (FR-001, FR-002, FR-003, FR-007, FR-008,
@@ -19,17 +19,17 @@ quality gates (NFR-002).
 
 1. Build the current binary:
    - `cargo build` (debug is sufficient; allow up to 1000 seconds).
-   - Confirm `./target/debug/ragent --version` runs.
+   - Confirm `./target/debug/cdmn --version` runs.
 2. Confirm the default engine set: `openalex` and `wikipedia` are keyless and
    always present. Optionally configure a web engine by adding a
    `langsearch_api_key` (or `tavily_api_key` / `serper_api_key`) to
-   `.ragent/ragent.json`; a keyless-only run (openalex + wikipedia) is
+   `.codemason/codemason.json`; a keyless-only run (openalex + wikipedia) is
    acceptable for most cases.
-3. Confirm `OPENALEX_EMAIL` is set (or `openalex_email` in `ragent.json`) so the
+3. Confirm `OPENALEX_EMAIL` is set (or `openalex_email` in `codemason.json`) so the
    OpenAlex polite pool responds reliably; this makes "engine was queried vs
    skipped" observations easier.
 4. Ensure network access to `api.openalex.org` and `en.wikipedia.org`.
-5. Start with `ragent.json` **without** `research.exclude_academic_engines` so
+5. Start with `codemason.json` **without** `research.exclude_academic_engines` so
    the default-off path is exercised first.
 6. Locate the research run log directory (default `logs/research/`) so produced
    `RESEARCH.md` and gather logs can be inspected.
@@ -46,7 +46,7 @@ reachable.
 
 **Steps:**
 
-1. Launch the TUI: run `./target/debug/ragent` and press Enter at the prompt.
+1. Launch the TUI: run `./target/debug/cdmn` and press Enter at the prompt.
 2. In the message input, type exactly:
    `Use the mf_search tool with query "rust async runtime" and exclude_engines ["openalex"]. Show me the engine list in the metadata.`
 3. Send the message (Enter).
@@ -149,12 +149,12 @@ reachable.
 
 **Covers:** FR-004, FR-006, FR-010, FR-015, NFR-001.
 
-**Preconditions:** A `.ragent/ragent.json` with `research.exclude_academic_engines`
+**Preconditions:** A `.codemason/codemason.json` with `research.exclude_academic_engines`
 absent (default off). Sufficient time for a research run.
 
 **Steps:**
 
-1. Launch the TUI: `./target/debug/ragent`.
+1. Launch the TUI: `./target/debug/cdmn`.
 2. Type a leading slash to open command completion; enter the research-create
    flow by typing exactly:
    `/research create`
@@ -211,19 +211,19 @@ absent (default off). Sufficient time for a research run.
 - OpenAlex results participate in ranking, confirming the default path was not
   changed.
 
-### TC-007 — Config-only exclusion via `ragent.json`
+### TC-007 — Config-only exclusion via `codemason.json`
 
 **Covers:** FR-012.
 
-**Preconditions:** Ability to edit `.ragent/ragent.json`.
+**Preconditions:** Ability to edit `.codemason/codemason.json`.
 
 **Steps:**
 
 1. Quit the TUI (if running).
-2. Edit `.ragent/ragent.json` and add:
+2. Edit `.codemason/codemason.json` and add:
    `"research": { "exclude_academic_engines": true }`
    (merge into the existing `research` object if present).
-3. Relaunch `./target/debug/ragent`.
+3. Relaunch `./target/debug/cdmn`.
 4. Run a research creation **without** `--no-papers`, exactly:
    `/research create cfgtest "Rust async concurrency patterns"`.
 5. Answer the clarification gate if it appears.
@@ -249,7 +249,7 @@ absent (default off). Sufficient time for a research run.
 
 **Covers:** FR-012 (precedence).
 
-**Preconditions:** `.ragent/ragent.json` with
+**Preconditions:** `.codemason/codemason.json` with
 `research.exclude_academic_engines` either absent or `false`.
 
 **Steps:**
@@ -298,12 +298,12 @@ absent (default off). Sufficient time for a research run.
 
 **Covers:** FR-009.
 
-**Preconditions:** A running server: `./target/debug/ragent serve --port 9100`.
+**Preconditions:** A running server: `./target/debug/cdmn serve --port 9100`.
 An HTTP client available.
 
 **Steps:**
 
-1. In a terminal, start the server: `./target/debug/ragent serve --port 9100`.
+1. In a terminal, start the server: `./target/debug/cdmn serve --port 9100`.
 2. Submit a research request that sets the scholarly-exclusion field (field name
    `no_scholarly`), for example:
    `curl -s -X POST http://127.0.0.1:9100/research -H 'Content-Type: application/json' -d '{"topic":"srvtest","question":"Rust async concurrency patterns","no_scholarly":true}'`
@@ -332,17 +332,17 @@ An HTTP client available.
 **Steps:**
 
 1. In a shell, run:
-   `./target/debug/ragent research create --help`
+   `./target/debug/cdmn research create --help`
 2. Confirm the help text lists `--no-papers`.
 3. Run a short research creation from the CLI:
-   `./target/debug/ragent research create clitest "Rust async concurrency patterns" --no-papers`
+   `./target/debug/cdmn research create clitest "Rust async concurrency patterns" --no-papers`
    and press Enter; allow it to complete or interrupt after the gather phase
    starts.
 4. Inspect the gather log for `openalex` dispatch lines.
 
 **Test data:**
 
-- Command: `ragent research create clitest "Rust async concurrency patterns" --no-papers`
+- Command: `codemason research create clitest "Rust async concurrency patterns" --no-papers`
 
 **Expected results:**
 
@@ -357,7 +357,7 @@ An HTTP client available.
 
 **Steps:**
 
-1. Launch `./target/debug/ragent`.
+1. Launch `./target/debug/cdmn`.
 2. Type `/research create ` (with a trailing space) and read the completion
    dropdown and any inline help.
 3. Run the TUI help for research (for example type `/research` and read the help
@@ -381,9 +381,9 @@ An HTTP client available.
 1. From the workspace root, run `cargo fmt --check` and confirm it reports no
    diffs.
 2. Run `cargo clippy` for the touched crates
-   (`-p ragent-tools-extended -p ragent-research -p ragent-server -p ragent-tui`)
+   (`-p codemason-tools-extended -p codemason-research -p codemason-server -p codemason-tui`)
    and confirm no new warnings.
-3. Run `cargo test -p ragent-tools-extended -p ragent-research` (and the server
+3. Run `cargo test -p codemason-tools-extended -p codemason-research` (and the server
    tests) and confirm all pass.
 
 **Test data:** none.
@@ -396,7 +396,7 @@ An HTTP client available.
 
 ## Cleanup
 
-1. Remove any test additions from `.ragent/ragent.json`:
+1. Remove any test additions from `.codemason/codemason.json`:
    `research.exclude_academic_engines`, and any temporary `langsearch_api_key`
    / `tavily_api_key` / `serper_api_key` added for testing, unless they are to be
    kept.
@@ -405,6 +405,6 @@ An HTTP client available.
    `override2`, `srvtest`, `srvtest2`, `clitest`, and their `RESEARCH.md` /
    gather-log artefacts under `logs/research/`.
 3. Stop the server started in TC-010 (Ctrl+C in its terminal).
-4. If the test created `.ragent/agents/` or other scratch files, remove them.
+4. If the test created `.codemason/agents/` or other scratch files, remove them.
 5. Re-run `cargo fmt --check` once more if any source edits were made during
    manual testing.

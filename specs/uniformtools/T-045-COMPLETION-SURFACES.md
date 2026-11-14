@@ -18,18 +18,18 @@ Two things were true before any edit, and both change what the task had to do.
 **1. Both test files existed, were tracked by git, and had never compiled.** That is
 the same orphan-file class the previous five tasks in this spec kept hitting
 (`tool_args.rs`, `allowed_tools.rs`, `tool_bridge.rs`, `test_tool_rename_guard.rs`,
-`test_nfr006_rename_cost.rs`). `crates/ragent-agent/tests/test_fr033_completion_sources.rs`
-and `crates/ragent-tui/tests/test_fr033_completion_surfaces.rs` were registered in
+`test_nfr006_rename_cost.rs`). `crates/codemason-agent/tests/test_fr033_completion_sources.rs`
+and `crates/codemason-tui/tests/test_fr033_completion_surfaces.rs` were registered in
 neither `tests/all.rs`, so none of the 10 cases had ever run. Two edits fixed it:
 
 | File | Edit |
 |---|---|
-| `crates/ragent-agent/tests/all.rs` | `#[path = "test_fr033_completion_sources.rs"] mod ...;` after `test_fr032_bridge_containment` |
-| `crates/ragent-tui/tests/all.rs` | `#[path = "test_fr033_completion_surfaces.rs"] mod ...;` after `test_force_cleanup_modal` |
+| `crates/codemason-agent/tests/all.rs` | `#[path = "test_fr033_completion_sources.rs"] mod ...;` after `test_fr032_bridge_containment` |
+| `crates/codemason-tui/tests/all.rs` | `#[path = "test_fr033_completion_surfaces.rs"] mod ...;` after `test_force_cleanup_modal` |
 
 **2. The `/tools` visibility switches still exist**, and both the handler and
 `TOOLS_SUBS` accept all seven. An earlier draft of this record described them as
-removed; they are not, and `crates/ragent-tui/tests/test_tools_visibility_command.rs`
+removed; they are not, and `crates/codemason-tui/tests/test_tools_visibility_command.rs`
 (5 cases) exercises the toggles. The real defect is narrower and is exactly the class
 FR-033 is written against.
 
@@ -39,8 +39,8 @@ Four hand-written copies of one `/tools` form list existed, and they disagreed:
 
 | Reader | Offered before | Handler accepted |
 |---|---|---|
-| `get_command_suggestions` (`crates/ragent-tui/src/app/slash.rs`) | list, github, gitlab, teams, agents, plan, codeindex, masterfetch, help | list, show, github, gitlab, teams, agents, plan, codeindex, masterfetch, help |
-| `get_parameter_hint` (`crates/ragent-tui/src/app/session_ops.rs`) | `[list\|help\|github\|gitlab\|teams\|agents\|plan\|codeindex] [on\|off]` | - |
+| `get_command_suggestions` (`crates/codemason-tui/src/app/slash.rs`) | list, github, gitlab, teams, agents, plan, codeindex, masterfetch, help | list, show, github, gitlab, teams, agents, plan, codeindex, masterfetch, help |
+| `get_parameter_hint` (`crates/codemason-tui/src/app/session_ops.rs`) | `[list\|help\|github\|gitlab\|teams\|agents\|plan\|codeindex] [on\|off]` | - |
 | the `/tools` dispatch arm | - | the ten words above, plus `--help`/`-h`/`usage` |
 | `command_catalog::TOOLS_SUBS` (`commands_info`) | list, show, + the seven switches, help | - |
 
@@ -76,14 +76,14 @@ One further consolidation, because FR-033 asks for one catalogue and the pool ha
 `suggest_tool_name` lived twice, once as `session::dispatch::suggest_tool_name` and
 once inline as `processor::unknown_tool_error`, each with its own ranking and its own
 `edit_distance`. Both now read the new
-`crates/ragent-agent/src/session/tool_suggestion.rs`
+`crates/codemason-agent/src/session/tool_suggestion.rs`
 (`suggest_tool_name` + one `edit_distance`); `dispatch::suggest_tool_name` is a
 one-line re-export so no call site or test path moved.
 
 ## The property the guard states, and why it drives a foreign registry
 
 10 cases, split where T-037 split the FR-030 guard: four surfaces are reachable from
-`ragent-agent`, the menu is a TUI render path.
+`codemason-agent`, the menu is a TUI render path.
 
 | # | Case | File | Surface |
 |---|---|---|---|
@@ -153,22 +153,22 @@ and it fails, so the clause is enforced rather than merely written down.
 Restored file digests (`md5sum`), all matching the pre-proof copies:
 
 ```
-b687cc40c13882fe3dc97e282730c30a  crates/ragent-tui/src/app/slash.rs
-d31e6ddec7d042c0e210c314a2dd1c59  crates/ragent-tui/src/app/session_ops.rs
-9d92315328b70060b07b88b417bf56eb  crates/ragent-agent/src/tool/tool_info.rs
-f0f6746f9f26012bebda70e0325311a1  crates/ragent-agent/src/dry_run.rs
-71ae9b1f1d7f1fe4dfe2601ad367ef68  crates/ragent-agent/src/session/tool_suggestion.rs
+b687cc40c13882fe3dc97e282730c30a  crates/codemason-tui/src/app/slash.rs
+d31e6ddec7d042c0e210c314a2dd1c59  crates/codemason-tui/src/app/session_ops.rs
+9d92315328b70060b07b88b417bf56eb  crates/codemason-agent/src/tool/tool_info.rs
+f0f6746f9f26012bebda70e0325311a1  crates/codemason-agent/src/dry_run.rs
+71ae9b1f1d7f1fe4dfe2601ad367ef68  crates/codemason-agent/src/session/tool_suggestion.rs
 ```
 
 ## Verification
 
 - `cargo fmt --check` clean.
-- `cargo clippy -p ragent-agent -p ragent-tui --all-targets`: no finding in a touched
+- `cargo clippy -p codemason-agent -p codemason-tui --all-targets`: no finding in a touched
   file (only the pre-existing `redundant_pub_crate` and
   `unnecessary_structure_name_repetition` noise elsewhere in the workspace).
-- `cargo test -p ragent-agent --test all`: **1730 passed, 0 failed, 1 ignored**
+- `cargo test -p codemason-agent --test all`: **1730 passed, 0 failed, 1 ignored**
   (was 1724 before this task's 6 cases were registered).
-- `cargo test -p ragent-tui --test all`: **3652 passed, 3 failed** - the three
+- `cargo test -p codemason-tui --test all`: **3652 passed, 3 failed** - the three
   pre-existing `Alt+T` -> `ToggleTasksPanel` failures
   (`test_input_more::alt_toggle_keys_map_to_actions`,
   `test_input_queue_menu_binding::test_other_alt_keys_are_unaffected`,
@@ -178,14 +178,14 @@ f0f6746f9f26012bebda70e0325311a1  crates/ragent-agent/src/dry_run.rs
   `check-shared-guards`, `check-silent-errors`, `check-security-unwraps`,
   `check-poison-locks`, `check-dead-code-reasons`, `check-test-env-isolation`,
   `check-tool-rename`.
-- FR-030 unchanged: `ragent run --dry-run "hello"` reports **148 visible tools across
+- FR-030 unchanged: `codemason run --dry-run "hello"` reports **148 visible tools across
   21 families** (`agent` 4, `bash` 3, `team` 19, ...).
 
 ## Outstanding, deliberately not fixed here
 
 Registering the two FR-033 files exposed a neighbour with the same problem:
-`crates/ragent-agent/tests/test_fr030_surface_agreement.rs` and
-`crates/ragent-tui/tests/test_fr030_surface_agreement.rs` are tracked and unregistered
+`crates/codemason-agent/tests/test_fr030_surface_agreement.rs` and
+`crates/codemason-tui/tests/test_fr030_surface_agreement.rs` are tracked and unregistered
 too, so T-037's guard has never run either. Registering the agent half fails to compile
 - `isolated_dry_run()` there builds `DryRunInputs` without the `hidden_tools` field the
 struct has required since the visibility work landed - so it is a repair, not a

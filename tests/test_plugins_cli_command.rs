@@ -1,12 +1,12 @@
-//! Integration tests for the `ragent plugins` CLI parity surface
+//! Integration tests for the `codemason plugins` CLI parity surface
 //! (spec `plugins` T-017; FR-021).
 //!
-//! Each test spawns the built `ragent` binary inside a fresh temp working
+//! Each test spawns the built `codemason` binary inside a fresh temp working
 //! directory with an isolated `XDG_CONFIG_HOME`, so the project store
-//! (`.ragent/plugins/`) and the user-global store are both contained. The tests
-//! assert the non-TUI output spelling (`ragent plugins …` attribution rather
+//! (`.codemason/plugins/`) and the user-global store are both contained. The tests
+//! assert the non-TUI output spelling (`codemason plugins …` attribution rather
 //! than `From: /plugins …`), that every subcommand routes to the shared
-//! `ragent-plugins` logic, and that the store round-trip works end to end.
+//! `codemason-plugins` logic, and that the store round-trip works end to end.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -39,20 +39,20 @@ impl Fixture {
         self.temp.path()
     }
 
-    /// Run `ragent` with `args` against this fixture's isolated environment.
-    fn ragent(&self, args: &[&str]) -> Output {
+    /// Run `codemason` with `args` against this fixture's isolated environment.
+    fn codemason(&self, args: &[&str]) -> Output {
         let config = self.temp.path().join("config");
         let home = self.temp.path().join("home");
         std::fs::create_dir_all(&config).expect("config dir");
         std::fs::create_dir_all(&home).expect("home dir");
-        Command::new(env!("CARGO_BIN_EXE_ragent"))
+        Command::new(env!("CARGO_BIN_EXE_cdmn"))
             .args(args)
             .env("XDG_CONFIG_HOME", &config)
             .env("HOME", &home)
             .env_remove("GITHUB_TOKEN")
             .env_remove("GITLAB_TOKEN")
             .output()
-            .expect("spawn ragent")
+            .expect("spawn codemason")
     }
 }
 
@@ -76,7 +76,7 @@ fn write_codex_plugin(dir: &Path, id: &str) {
     .expect("manifest");
     std::fs::write(
         dir.join("index.js"),
-        "ragent.register_tool({ name: \"ping\", description: \"Ping\", \
+        "codemason.register_tool({ name: \"ping\", description: \"Ping\", \
          parameters: { type: \"object\" }, handler: function(){ return \"pong\"; } });",
     )
     .expect("entry");
@@ -87,16 +87,16 @@ fn bare_and_help_print_the_usage_block() {
     let fx = Fixture::new();
 
     for args in [vec!["plugins"], vec!["plugins", "help"]] {
-        let out = fx.ragent(&args);
+        let out = fx.codemason(&args);
         assert!(out.status.success(), "usage must succeed: {args:?}");
         let text = stdout(&out);
         assert!(
-            text.contains("## ragent plugins command reference"),
+            text.contains("## codemason plugins command reference"),
             "usage must carry the CLI heading: {text}"
         );
         // The non-TUI surface spelling, not the TUI `From:` attribution.
         assert!(
-            text.contains("`ragent plugins list [--verbose]`"),
+            text.contains("`codemason plugins list [--verbose]`"),
             "usage must document the CLI row for list: {text}"
         );
         assert!(
@@ -109,11 +109,11 @@ fn bare_and_help_print_the_usage_block() {
 #[test]
 fn list_on_an_empty_store_reports_none_discovered() {
     let fx = Fixture::new();
-    let out = fx.ragent(&["plugins", "list"]);
+    let out = fx.codemason(&["plugins", "list"]);
     assert!(out.status.success());
     let text = stdout(&out);
     assert!(
-        text.starts_with("ragent plugins list"),
+        text.starts_with("codemason plugins list"),
         "list uses the CLI attribution: {text}"
     );
     assert!(
@@ -131,29 +131,29 @@ fn store_round_trip_uses_the_cli_surface_spelling() {
     write_codex_plugin(&src, "codex-weather");
 
     // add
-    let out = fx.ragent(&["plugins", "add", src.to_str().expect("utf8 src")]);
+    let out = fx.codemason(&["plugins", "add", src.to_str().expect("utf8 src")]);
     assert!(out.status.success(), "add must succeed");
     let added = stdout(&out);
-    assert!(added.starts_with("ragent plugins add"), "{added}");
+    assert!(added.starts_with("codemason plugins add"), "{added}");
     assert!(
         added.contains("[ok] Installed plugin `codex-weather`"),
         "{added}"
     );
     assert!(
         fx.path()
-            .join(".ragent/plugins/codex-weather/codex-plugin.json")
+            .join(".codemason/plugins/codex-weather/codex-plugin.json")
             .exists(),
         "the plugin must be copied into the project store"
     );
 
     // list shows it enabled (FR-007): add records the enable flag
-    let listed = stdout(&fx.ragent(&["plugins", "list"]));
+    let listed = stdout(&fx.codemason(&["plugins", "list"]));
     assert!(listed.contains("codex-weather"), "{listed}");
     assert!(listed.contains("enabled"), "{listed}");
 
     // enable loads it and reports the contributions (FR-011)
-    let enabled = stdout(&fx.ragent(&["plugins", "enable", "codex-weather"]));
-    assert!(enabled.starts_with("ragent plugins enable"), "{enabled}");
+    let enabled = stdout(&fx.codemason(&["plugins", "enable", "codex-weather"]));
+    assert!(enabled.starts_with("codemason plugins enable"), "{enabled}");
     assert!(enabled.contains("[ok]"), "{enabled}");
     assert!(
         enabled.contains("registered 1 tool(s)"),
@@ -161,7 +161,7 @@ fn store_round_trip_uses_the_cli_surface_spelling() {
     );
 
     // verbose list names the registered tool (FR-009, FR-022)
-    let verbose = stdout(&fx.ragent(&["plugins", "list", "--verbose"]));
+    let verbose = stdout(&fx.codemason(&["plugins", "list", "--verbose"]));
     assert!(
         verbose.contains("plugin_codex-weather_ping"),
         "verbose list names the registry tool: {verbose}"
@@ -169,8 +169,8 @@ fn store_round_trip_uses_the_cli_surface_spelling() {
     assert!(verbose.contains("Telemetry:"), "{verbose}");
 
     // test drives the isolated harness (FR-013)
-    let tested = stdout(&fx.ragent(&["plugins", "test", "codex-weather"]));
-    assert!(tested.starts_with("ragent plugins test"), "{tested}");
+    let tested = stdout(&fx.codemason(&["plugins", "test", "codex-weather"]));
+    assert!(tested.starts_with("codemason plugins test"), "{tested}");
     assert!(tested.contains("[ ok ]"), "{tested}");
     assert!(
         tested.contains("live session untouched"),
@@ -178,19 +178,22 @@ fn store_round_trip_uses_the_cli_surface_spelling() {
     );
 
     // disable unloads it (FR-012)
-    let disabled = stdout(&fx.ragent(&["plugins", "disable", "codex-weather"]));
-    assert!(disabled.starts_with("ragent plugins disable"), "{disabled}");
+    let disabled = stdout(&fx.codemason(&["plugins", "disable", "codex-weather"]));
+    assert!(
+        disabled.starts_with("codemason plugins disable"),
+        "{disabled}"
+    );
     assert!(disabled.contains("deregistered"), "{disabled}");
 
     // remove uninstalls it (FR-010)
-    let removed = stdout(&fx.ragent(&["plugins", "remove", "codex-weather"]));
-    assert!(removed.starts_with("ragent plugins remove"), "{removed}");
+    let removed = stdout(&fx.codemason(&["plugins", "remove", "codex-weather"]));
+    assert!(removed.starts_with("codemason plugins remove"), "{removed}");
     assert!(
         removed.contains("[ok] Removed plugin `codex-weather`"),
         "{removed}"
     );
     assert!(
-        !fx.path().join(".ragent/plugins/codex-weather").exists(),
+        !fx.path().join(".codemason/plugins/codex-weather").exists(),
         "remove deletes the plugin directory"
     );
 }
@@ -198,7 +201,7 @@ fn store_round_trip_uses_the_cli_surface_spelling() {
 #[test]
 fn missing_plugin_id_is_reported_as_usage_error() {
     let fx = Fixture::new();
-    let out = fx.ragent(&["plugins", "enable"]);
+    let out = fx.codemason(&["plugins", "enable"]);
     assert!(
         out.status.success(),
         "a usage error is not a process failure"
@@ -212,13 +215,13 @@ fn missing_plugin_id_is_reported_as_usage_error() {
 
 #[test]
 fn stores_reports_each_effective_endpoint_and_its_source() {
-    // FR-031 parity: `ragent plugins stores` lists both stores. With no
+    // FR-031 parity: `codemason plugins stores` lists both stores. With no
     // `plugins.stores` block, each is tagged `default` and names its compiled
     // default endpoint.
     let fx = Fixture::new();
-    let text = stdout(&fx.ragent(&["plugins", "stores"]));
+    let text = stdout(&fx.codemason(&["plugins", "stores"]));
 
-    assert!(text.contains("ragent plugins"), "{text}");
+    assert!(text.contains("codemason plugins"), "{text}");
     for token in ["codex", "claude"] {
         assert!(
             text.contains(&format!("- {token}: [default] https://")),
@@ -228,14 +231,14 @@ fn stores_reports_each_effective_endpoint_and_its_source() {
 
     // An override present in the project config tags that store `config` and
     // names the configured URL, while the other keeps its default.
-    std::fs::create_dir_all(fx.path().join(".ragent")).expect(".ragent dir");
+    std::fs::create_dir_all(fx.path().join(".codemason")).expect(".codemason dir");
     std::fs::write(
-        fx.path().join(".ragent/ragent.json"),
+        fx.path().join(".codemason/codemason.json"),
         r#"{ "plugins": { "stores": { "codex": { "url": "https://cfg.example/codex.json" } } } }"#,
     )
     .expect("config writable");
 
-    let overridden = stdout(&fx.ragent(&["plugins", "stores"]));
+    let overridden = stdout(&fx.codemason(&["plugins", "stores"]));
     assert!(
         overridden.contains("- codex: [config] https://cfg.example/codex.json"),
         "an override must be tagged config: {overridden}"
@@ -253,13 +256,13 @@ fn stores_usage_documents_the_optional_check_flag() {
     // availability marker), so the plain report is unchanged.
     let fx = Fixture::new();
 
-    let help = stdout(&fx.ragent(&["plugins", "help"]));
+    let help = stdout(&fx.codemason(&["plugins", "help"]));
     assert!(
-        help.contains("ragent plugins stores") && help.contains("--check"),
+        help.contains("codemason plugins stores") && help.contains("--check"),
         "the usage block must document the --check flag: {help}"
     );
 
-    let plain = stdout(&fx.ragent(&["plugins", "stores"]));
+    let plain = stdout(&fx.codemason(&["plugins", "stores"]));
     assert!(
         plain.contains("- codex: [default] https://")
             && plain.contains("- claude: [default] https://"),
@@ -278,9 +281,12 @@ fn marketplace_show_lists_each_store_section_with_a_name_url_description_row() {
     // description). With no `plugins.stores` block both rows tag the compiled
     // default endpoint.
     let fx = Fixture::new();
-    let text = stdout(&fx.ragent(&["plugins", "marketplace", "show"]));
+    let text = stdout(&fx.codemason(&["plugins", "marketplace", "show"]));
 
-    assert!(text.contains("ragent plugins marketplace show"), "{text}");
+    assert!(
+        text.contains("codemason plugins marketplace show"),
+        "{text}"
+    );
     assert!(text.contains("## Codex marketplace"), "{text}");
     assert!(text.contains("## Claude marketplace"), "{text}");
     for (token, host) in [
@@ -299,14 +305,14 @@ fn marketplace_show_lists_each_store_section_with_a_name_url_description_row() {
 
     // A `plugins.stores.codex.url` override names the configured URL with a
     // `(config)` description tag; the unconfigured store keeps its default.
-    std::fs::create_dir_all(fx.path().join(".ragent")).expect(".ragent dir");
+    std::fs::create_dir_all(fx.path().join(".codemason")).expect(".codemason dir");
     std::fs::write(
-        fx.path().join(".ragent/ragent.json"),
+        fx.path().join(".codemason/codemason.json"),
         r#"{ "plugins": { "stores": { "codex": { "url": "https://cfg.example/codex.json" } } } }"#,
     )
     .expect("config writable");
 
-    let overridden = stdout(&fx.ragent(&["plugins", "marketplace", "show"]));
+    let overridden = stdout(&fx.codemason(&["plugins", "marketplace", "show"]));
     assert!(
         overridden.contains("codex | https://cfg.example/codex.json")
             && overridden.contains("Codex plugin marketplace (config)"),
@@ -320,16 +326,16 @@ fn marketplace_show_lists_each_store_section_with_a_name_url_description_row() {
 
 #[test]
 fn bare_marketplace_and_unknown_sub_subcommand_render_usage() {
-    // `ragent plugins marketplace` is only valid with an explicit `show`
+    // `codemason plugins marketplace` is only valid with an explicit `show`
     // sub-subcommand; a bare or unknown tail renders the usage block.
     let fx = Fixture::new();
     for args in [
         &["plugins", "marketplace"][..],
         &["plugins", "marketplace", "bogus"][..],
     ] {
-        let text = stdout(&fx.ragent(args));
+        let text = stdout(&fx.codemason(args));
         assert!(
-            text.contains("## ragent plugins command reference"),
+            text.contains("## codemason plugins command reference"),
             "`{args:?}` must render usage: {text}"
         );
         assert!(
@@ -342,9 +348,9 @@ fn bare_marketplace_and_unknown_sub_subcommand_render_usage() {
 #[test]
 fn unknown_subcommand_renders_usage() {
     let fx = Fixture::new();
-    let text = stdout(&fx.ragent(&["plugins", "frobnicate"]));
+    let text = stdout(&fx.codemason(&["plugins", "frobnicate"]));
     assert!(
-        text.contains("## ragent plugins command reference"),
+        text.contains("## codemason plugins command reference"),
         "an unknown subcommand renders usage: {text}"
     );
 }
@@ -355,27 +361,27 @@ fn master_switch_disables_the_subsystem() {
     // CLI reports the disabled subsystem and changes no state; `help` still
     // prints usage.
     let fx = Fixture::new();
-    std::fs::create_dir_all(fx.path().join(".ragent")).expect(".ragent dir");
+    std::fs::create_dir_all(fx.path().join(".codemason")).expect(".codemason dir");
     std::fs::write(
-        fx.path().join(".ragent/ragent.json"),
+        fx.path().join(".codemason/codemason.json"),
         r#"{ "plugins": { "enabled": false } }"#,
     )
     .expect("config writable");
 
-    let listed = stdout(&fx.ragent(&["plugins", "list"]));
+    let listed = stdout(&fx.codemason(&["plugins", "list"]));
     assert!(listed.contains("[err]"), "{listed}");
     assert!(listed.contains("plugins.enabled = false"), "{listed}");
 
-    let enabled = stdout(&fx.ragent(&["plugins", "enable", "ghost"]));
+    let enabled = stdout(&fx.codemason(&["plugins", "enable", "ghost"]));
     assert!(enabled.contains("[err]"), "{enabled}");
 
-    let help = stdout(&fx.ragent(&["plugins", "help"]));
+    let help = stdout(&fx.codemason(&["plugins", "help"]));
     assert!(
-        help.contains("## ragent plugins command reference"),
+        help.contains("## codemason plugins command reference"),
         "help still renders while disabled: {help}"
     );
     assert!(
-        !fx.path().join(".ragent/plugins").exists(),
+        !fx.path().join(".codemason/plugins").exists(),
         "the disabled subsystem creates no store directory"
     );
 }

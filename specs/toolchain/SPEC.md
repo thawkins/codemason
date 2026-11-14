@@ -11,7 +11,7 @@ audit:
 
 ## Overview
 
-The code index (`ragent-codeindex::scanner`) maintains `SUPPORTED_LANGUAGES`, a
+The code index (`codemason-codeindex::scanner`) maintains `SUPPORTED_LANGUAGES`, a
 50-entry list of language identifiers it can parse (50 canonical entries
 including dialect/header aliases such as `tsx`, `jsx`, `c_header`,
 `cpp_header`). The entries split naturally into two groups:
@@ -25,7 +25,7 @@ including dialect/header aliases such as `tsx`, `jsx`, `c_header`,
   `terraform`, `openscad`, `cmake`, `gradle`, `gradle_kts`, `maven`, `nix`,
   `hcl`).
 
-Today there is no way to see, from inside ragent, which of these runtimes are
+Today there is no way to see, from inside codemason, which of these runtimes are
 actually installed on the local machine and at what version. This spec defines
 a new read-only slash command, `/toolchain`, that walks
 `SUPPORTED_LANGUAGES`, and for each non-data entry determines the runtime
@@ -57,16 +57,16 @@ Out of scope:
 
 Key types and APIs the implementation will use:
 
-- `ragent_codeindex::scanner::SUPPORTED_LANGUAGES` — the canonical
+- `codemason_codeindex::scanner::SUPPORTED_LANGUAGES` — the canonical
   `&[&str]` list of 50 language ids. The toolchain report must derive its
   language set from this const (no second hard-coded list), so the two can
   never drift.
-- New module `crates/ragent-tui/src/app/toolchain.rs` (or equivalent) holding:
+- New module `crates/codemason-tui/src/app/toolchain.rs` (or equivalent) holding:
   - the language → runtime mapping const,
   - the probe helpers (`presence` via PATH lookup, `version` via
     `<tool> <version-flag>` with a timeout),
   - the report renderer (text table + JSON).
-- Slash-command plumbing in `crates/ragent-tui/src/app/slash.rs`:
+- Slash-command plumbing in `crates/codemason-tui/src/app/slash.rs`:
   - a `"toolchain" => self.handle_toolchain_command(args)` arm in
     `execute_slash_command_inner`,
   - a `"toolchain"` entry in `get_command_suggestions` for autocomplete.
@@ -120,7 +120,7 @@ and the status bar SHALL read `toolchain: help`.
 ### FR-004 — Walk the supported-language list (Event-driven)
 
 WHEN the user submits `/toolchain list`, the system SHALL iterate
-`ragent_codeindex::scanner::SUPPORTED_LANGUAGES` in list order and emit one
+`codemason_codeindex::scanner::SUPPORTED_LANGUAGES` in list order and emit one
 report row per entry. The language set SHALL be derived from the const at
 runtime; the implementation SHALL NOT maintain a second hard-coded language
 list.
@@ -303,4 +303,4 @@ interpolated into a spawned command line.
 - `/toolchain list nosuchlang` warns and lists valid ids.
 - `/toolchain list --json` emits valid JSON with an entry per application
   language.
-- No ragent state is modified by any `/toolchain` invocation.
+- No codemason state is modified by any `/toolchain` invocation.

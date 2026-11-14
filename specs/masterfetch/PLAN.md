@@ -7,7 +7,7 @@
 
 This plan implements the masterfetch specification
 (`specs/masterfetch/SPEC.md`): the integration of six Hound web-access tools
-into ragent as native Rust tools in the `crates/ragent-tools-extended` crate.
+into codemason as native Rust tools in the `crates/codemason-tools-extended` crate.
 The work involves:
 
 1. A shared HTTP client module with SSRF protection and URL validation.
@@ -24,7 +24,7 @@ The work involves:
 12. A keyless multi-engine web search (DuckDuckGo + Brave minimum).
 13. Six tool structs implementing the `Tool` trait.
 14. Registration in `create_extended_registry()`.
-15. A `masterfetch` tool-visibility switch in `ragent-config`.
+15. A `masterfetch` tool-visibility switch in `codemason-config`.
 16. Unit and integration tests.
 
 No MCP server, Python, Node.js, or browser engine is involved. The tools run
@@ -33,7 +33,7 @@ in HTTP-only mode with graceful degradation for anti-bot-protected pages.
 ## Architecture
 
 ```
-crates/ragent-tools-extended/src/
+crates/codemason-tools-extended/src/
 ├── masterfetch/
 │   ├── mod.rs              # Module root, re-exports, shared types
 │   ├── http.rs             # Shared reqwest::Client, USER_AGENT, SSRF guard
@@ -66,7 +66,7 @@ crates/ragent-tools-extended/src/
 │       └── version.rs      # mf_version
 └── lib.rs                  # + masterfetch module, + registration in create_extended_registry()
 
-crates/ragent-config/src/config.rs  # + masterfetch visibility switch
+crates/codemason-config/src/config.rs  # + masterfetch visibility switch
 ```
 
 ### Data flow
@@ -163,7 +163,7 @@ Crawl report (all pages) + metadata → ToolOutput { content, metadata }
 | T-022 | Implement `mf_crawl` tool — validate start URL, sitemap or BFS discovery, best-first crawl with content-adaptive extraction, per-page signals, caps enforcement, format crawl report as text | FR-011, FR-012, FR-013, FR-014, FR-022, FR-025, FR-026, FR-028 | L | High | completed | T-019 |
 | T-023 | Implement `mf_screenshot` tool — return honest error: browser engine not available in integrated Rust runtime, suggest `mf_fetch` for text content | FR-015, FR-022, FR-026 | S | Medium | completed | T-001 |
 | T-024 | Implement `mf_cache_clear` tool — clear expired or all cache entries, return purged count | FR-016, FR-022, FR-026 | S | Medium | completed | T-011 |
-| T-025 | Implement `mf_version` tool — return masterfetch integration version + ragent version + tool set description | FR-017, FR-022, FR-026 | S | Low | completed | T-001 |
+| T-025 | Implement `mf_version` tool — return masterfetch integration version + codemason version + tool set description | FR-017, FR-022, FR-026 | S | Low | completed | T-001 |
 | T-026 | Register all six `mf_*` tools in `create_extended_registry()` and add `pub mod masterfetch` to `lib.rs` | FR-020 | S | Critical | completed | T-020–T-025 |
 | T-027 | Add `masterfetch` tool-visibility switch to `ToolVisibilityConfig`, `ToolVisibilitySpecified`, `iter_switches()`, `tool_family_names()`, `Default` (true), `Serialize`/`Deserialize`, and `merge()` | FR-021 | M | High | completed | T-026 |
 | T-028 | Write unit tests for `masterfetch::security` — every SSRF bypass vector (private IPs, alternate notations, localhost, cloud metadata, DNS rebinding, backslash, blocked schemes, bracketed hosts, IPv4-mapped IPv6) | FR-019, NFR-003 | M | Critical | completed | T-002 |
@@ -178,12 +178,12 @@ Crawl report (all pages) + metadata → ToolOutput { content, metadata }
 | T-037 | Write integration test verifying all six `mf_*` tools are registered in `create_extended_registry()` | FR-020, NFR-003 | S | Critical | completed | T-026 |
 | T-038 | Write integration test verifying `masterfetch` visibility switch hides/shows all six tools via `effective_hidden_tools()` | FR-021, NFR-003 | S | High | completed | T-027 |
 | T-039 | Write integration test verifying network tools return `"web"` and cache/version tools return `"system"` from `permission_category()` | FR-022, NFR-003 | S | High | completed | T-026 |
-| T-040 | Run `cargo test -p ragent-tools-extended`, `cargo test -p ragent-config`, `cargo clippy`, and `cargo fmt --check` to confirm no regressions | NFR-001, NFR-002 | S | Critical | completed | T-028–T-039 |
+| T-040 | Run `cargo test -p codemason-tools-extended`, `cargo test -p codemason-config`, `cargo clippy`, and `cargo fmt --check` to confirm no regressions | NFR-001, NFR-002 | S | Critical | completed | T-028–T-039 |
 ## Task detail
 
 ### T-001 — Module structure and shared types
 
-Create `crates/ragent-tools-extended/src/masterfetch/mod.rs`. Define the shared
+Create `crates/codemason-tools-extended/src/masterfetch/mod.rs`. Define the shared
 types that mirror Hound's `ResponseModel`, `SearchResult`, and `CrawlPage`:
 
 ```rust
@@ -237,7 +237,7 @@ pub struct SearchResult {
 }
 ```
 
-Add `pub mod masterfetch;` to `crates/ragent-tools-extended/src/lib.rs`.
+Add `pub mod masterfetch;` to `crates/codemason-tools-extended/src/lib.rs`.
 
 ### T-002 — Security module
 
@@ -279,7 +279,7 @@ pub fn build_client(timeout_secs: u64) -> Result<reqwest::Client> {
 }
 ```
 
-`USER_AGENT` is `"ragent/{version} (masterfetch)"`. The client is shared across
+`USER_AGENT` is `"codemason/{version} (masterfetch)"`. The client is shared across
 all `mf_*` tools to reuse connection pooling.
 
 ### T-005 — Content extractor
@@ -299,7 +299,7 @@ all `mf_*` tools to reuse connection pooling.
 4. If `format=html`, return the cleaned HTML (noise tags stripped).
 
 This mirrors Hound's `extractor.py` chain (trafilatura → markdownify → raw
-text) but uses ragent's existing extraction crates.
+text) but uses codemason's existing extraction crates.
 
 ### T-008 — Envelope signals
 
@@ -346,10 +346,10 @@ text) but uses ragent's existing extraction crates.
   exceeded.
 - `clear_expired`: deletes entries past TTL.
 - `clear_all`: deletes all entries.
-- Cache directory: `~/.ragent/masterfetch_cache/` (reuses ragent's home
+- Cache directory: `~/.codemason/masterfetch_cache/` (reuses codemason's home
   directory pattern).
 
-If `rusqlite` is not in the workspace, check if `ragent-storage` exposes a
+If `rusqlite` is not in the workspace, check if `codemason-storage` exposes a
 reusable SQLite connection. If not, add `rusqlite` as a dependency (it is a
 common, lightweight, pure-Rust SQLite binding).
 
@@ -443,10 +443,10 @@ Update `Serialize` (increment count), `Default`, `Deserialize`, and the
 | Risk | Mitigation |
 |------|------------|
 | Search engine HTML scraping is fragile (SERP markup changes) | Parsers are forgiving: return empty results on parse failure, not errors. Backends are circuit-broken. Multiple backends provide redundancy. |
-| DuckDuckGo / Brave rate-limit or block the ragent IP | Multiple backends run in parallel; a blocked backend is reported in `engine_blocked` and the others carry. Future: add more backends (mojeek, yandex). |
+| DuckDuckGo / Brave rate-limit or block the codemason IP | Multiple backends run in parallel; a blocked backend is reported in `engine_blocked` and the others carry. Future: add more backends (mojeek, yandex). |
 | No anti-bot bypass means `mf_fetch` fails on Cloudflare-protected sites | Graceful degradation: `content_ok=false` with `next_action` suggesting alternative sources. This is an explicit design constraint (FR-015, out-of-scope). |
-| `readability-rs` extraction quality differs from trafilatura | `readability-rs` is already used by ragent's `webfetch` with good results. `html2text` fallback covers edge cases. |
-| SQLite dependency (`rusqlite`) may not be in workspace | Check `ragent-storage` for existing SQLite usage. If unavailable, add `rusqlite` (lightweight, widely used, pure-Rust binding). |
+| `readability-rs` extraction quality differs from trafilatura | `readability-rs` is already used by codemason's `webfetch` with good results. `html2text` fallback covers edge cases. |
+| SQLite dependency (`rusqlite`) may not be in workspace | Check `codemason-storage` for existing SQLite usage. If unavailable, add `rusqlite` (lightweight, widely used, pure-Rust binding). |
 | BM25 focus filter performance on very large pages | Block-based processing is O(n) in the number of blocks. Pages are already chunked to 40K chars by `max_content_chars`. |
 | `masterfetch` switch default `true` changes existing user config | `true` matches codeindex precedent; tools are hidden only if explicitly disabled. |
 | Name collision: `crawl/` module vs `mf_crawl` tool, `search/` module vs `mf_search` tool | Tool files are `crawl_tool.rs` and `search_tool.rs`; modules are `crawl/` and `search/`. |

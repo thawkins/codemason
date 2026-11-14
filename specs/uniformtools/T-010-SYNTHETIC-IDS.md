@@ -35,13 +35,13 @@ landing): `ToolCallAccumulator::new(profile, provider)`, `synthetic_id`'s
 `<provider>_<counter>_<name>` format with its `tracing::debug!`, `defer(name,
 args)`, the deletion of `fallback_id`, and the deletion of the `split('_')`
 name-recovery in `wire/encode.rs`. `gemini.rs` minted nothing. `cargo nextest run
--p ragent-llm` at HEAD was **631 passed / 1 failed**, the failure being this
+-p codemason-llm` at HEAD was **631 passed / 1 failed**, the failure being this
 task's own guard case
 `test_wire_decode::test_no_module_invents_a_tool_call_id_or_recovers_a_name_from_one`,
 which named exactly one defect:
 
 ```
-crates/ragent-llm/src/providers/ollama_cloud.rs still mints its own tool-call id
+crates/codemason-llm/src/providers/ollama_cloud.rs still mints its own tool-call id
 with `_tc_{`; the synthetic id FR-019 asks for is `<provider>_<counter>_<name>`
 ```
 
@@ -118,7 +118,7 @@ supplies real ids or already let the accumulator mint.
 
 ## 4. Tests
 
-`crates/ragent-llm/tests/test_wire_decode.rs`:
+`crates/codemason-llm/tests/test_wire_decode.rs`:
 
 - `test_accumulator_synthesises_provider_counter_name_ids_for_unnamed_calls`
   (already present): `openai_0_read`, the same id on the call's delta and end,
@@ -138,7 +138,7 @@ supplies real ids or already let the accumulator mint.
   `CallId(format!("unnamed_` - a name-shaped *key* reaches the consumer as the
   call id whenever the accumulator has to mint over it, so it is the same defect.
 
-`crates/ragent-llm/tests/inline/ollama_cloud_tests.rs` (new):
+`crates/codemason-llm/tests/inline/ollama_cloud_tests.rs` (new):
 
 - `test_cloud_chat_synthesises_an_id_for_a_tool_call_that_has_none` drives the
   real native `/api/chat` stream with two id-less `tool_calls` frames and asserts
@@ -148,14 +148,14 @@ supplies real ids or already let the accumulator mint.
   the `done:true` frame always follows the streaming ones and would mint `_1_`
   even if the streaming arm folded - the case would pass by luck.
 
-`crates/ragent-llm/tests/test_gemini_tool_calls.rs` (new):
+`crates/codemason-llm/tests/test_gemini_tool_calls.rs` (new):
 
 - `test_gemini_unnamed_calls_get_distinct_provider_counter_name_ids` drives the
   real Gemini SSE stream with two `functionCall` parts in one frame and asserts
   `gemini_0_read_file` / `gemini_1_read_file` with `a.rs` and `b.rs` each present
   once.
 
-`crates/ragent-llm/tests/test_wire_encode_message.rs` (unchanged, re-read):
+`crates/codemason-llm/tests/test_wire_encode_message.rs` (unchanged, re-read):
 
 - `test_a_gemini_result_never_recovers_a_tool_name_by_splitting_the_id` asserts
   the absence of the derivation: an orphan id yields an empty name, and the same
@@ -177,15 +177,15 @@ Each applied, observed to fail the named case, restored byte-identically from
 
 - `cargo fmt --all -- --check` - clean.
 - `cargo check --workspace --all-targets` - clean (1m 16s).
-- `cargo clippy -p ragent-llm --all-targets` - no finding in a touched file; the
+- `cargo clippy -p codemason-llm --all-targets` - no finding in a touched file; the
   19 `unnecessary structure name repetition` warnings in `tool_cache.rs` and the
-  one `let` binding in `ragent-storage/src/storage.rs:1709` are pre-existing.
-- `cargo nextest run -p ragent-llm -p ragent-agent --no-fail-fast` - **2751
-  passed, 3 skipped, 0 failed** (`ragent-llm` 634, the file having been 632 at
+  one `let` binding in `codemason-storage/src/storage.rs:1709` are pre-existing.
+- `cargo nextest run -p codemason-llm -p codemason-agent --no-fail-fast` - **2751
+  passed, 3 skipped, 0 failed** (`codemason-llm` 634, the file having been 632 at
   HEAD; the two new stream cases plus the T-009 cases are included).
-- `cargo test -p ragent-llm --doc` - 30 passed.
+- `cargo test -p codemason-llm --doc` - 30 passed.
 - `cargo test --workspace --doc` - 55 passed, 5 failed, all five pre-existing
-  compile failures in `ragent-agent` doc examples (`Arc` not imported in
+  compile failures in `codemason-agent` doc examples (`Arc` not imported in
   `read_git_status`, `export_session_archive`/`import_session_archive` argument
   drift, `ToolContext` missing `allowed_roots`/`canonical_cache`, and
   `team::plan_gate_denial`), none of which this task touches.

@@ -1,6 +1,6 @@
 # How-To: LLM Security Analyzer
 
-ragent normally decides whether a tool call may run from its **static permission
+codemason normally decides whether a tool call may run from its **static permission
 rules** alone: the allow/deny/ask ruleset, the file and directory guards, and the
 7-layer bash validator. The LLM security analyzer adds an optional second opinion:
 a model is shown each proposed tool action and returns an `allow` / `ask` / `deny`
@@ -56,9 +56,9 @@ static rules remain the authority - the analyzer can only make the outcome stric
 or escalate to a prompt.
 
 **OpenHands parity note.** The OpenHands source exposes this as an
-`--llm-approve` flag and a `SecurityAnalyzer` interface. ragent implements the same
+`--llm-approve` flag and a `SecurityAnalyzer` interface. codemason implements the same
 capability as a config-gated permission mode with a `/security` TUI surface; there
-is no `--llm-approve` CLI flag. ragent already ships the static permission rules and
+is no `--llm-approve` CLI flag. codemason already ships the static permission rules and
 the 7-layer bash validation that the analyzer layers on top of.
 
 ---
@@ -71,7 +71,7 @@ The analyzer is off by default. Enable it either from the TUI:
 /security on
 ```
 
-or by adding the config block to `ragent.json`:
+or by adding the config block to `codemason.json`:
 
 ```jsonc
 {
@@ -109,7 +109,7 @@ destructive, secret-exposing, or security-disabling action.
 
 The analyzer is a **tightening-only** layer. Its verdict is combined with the
 static decision as follows (implemented at the permission gate in
-`crates/ragent-agent/src/session/permissions.rs`):
+`crates/codemason-agent/src/session/permissions.rs`):
 
 - **`deny` is a hard denial (FR-006).** The action does not run. The rationale is
   returned to the model as the tool result - text like

@@ -1,7 +1,7 @@
 ---
 status: draft
 ---
-# PLAN: Open Deep Research feature-gap integration into ragent
+# PLAN: Open Deep Research feature-gap integration into codemason
 
 ## Overview
 
@@ -24,7 +24,7 @@ This plan implements the requirements defined in `specs/opendeepresearch/SPEC.md
 | T-011 | Implement comparison-table synthesis and dedicated `comparison-table` format rendering | FR-006, FR-014, FR-016 | L | Critical | completed | T-010 |
 | T-012 | Add per-page webpage summarization using `--summarization-model` | FR-002, FR-003, FR-010 | M | High | completed | none |
 | T-013 | Persist summarized sources to the research vault with original URL and timestamp | FR-003, FR-004, FR-018 | S | High | completed | T-012 |
-| T-014 | Support distinct `research_model`, `compression_model`, and `final_report_model` in `ragent.json` and CLI | FR-002, FR-013 | M | Medium | completed | T-002 |
+| T-014 | Support distinct `research_model`, `compression_model`, and `final_report_model` in `codemason.json` and CLI | FR-002, FR-013 | M | Medium | completed | T-002 |
 | T-015 | Add self-evaluation prompt/scorecard for quality, relevance, groundedness, completeness, structure | FR-008, FR-015, FR-019 | L | Medium | completed | T-011 |
 | T-016 | Add `--evaluate` CLI flag and `research.evaluate.enabled` config | FR-015 | S | Medium | completed | T-015 |
 | T-017 | Update TUI slash-command completer for `/research --mode` and new flags | FR-001, FR-012, FR-014 | S | Medium | completed | T-001 |

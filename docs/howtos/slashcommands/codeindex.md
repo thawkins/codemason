@@ -6,8 +6,8 @@
 
 `/codeindex` controls the codebase indexing subsystem: tree-sitter parsing into
 a SQLite store, Tantivy full-text search, the file watcher, and the semantic
-code graph (FR-015). Enablement persists to `.ragent/ragent.json`; the index
-itself lives under `.ragent/codeindex`. Most report subcommands are read-only
+code graph (FR-015). Enablement persists to `.codemason/codemason.json`; the index
+itself lives under `.codemason/codeindex`. Most report subcommands are read-only
 and never trigger a scan; only `reindex` and `rebuild` do background work.
 Graph queries require a graph dataset, which is built on demand with
 `/codeindex graph build`.
@@ -43,7 +43,7 @@ Notes:
 
 | Form | Description |
 | ---- | ----------- |
-| `/codeindex on` (alias `enable`) | Enable the code index, persist the setting, open/create the index at `.ragent/codeindex`, and start the file watcher (which performs an initial full reindex). |
+| `/codeindex on` (alias `enable`) | Enable the code index, persist the setting, open/create the index at `.codemason/codeindex`, and start the file watcher (which performs an initial full reindex). |
 | `/codeindex off` (alias `disable`) | Stop the watcher and drop the in-memory index and stats cache. |
 | `/codeindex show` (aliases `status`, bare) | Print the full status report (see Output). Non-blocking: never waits on the store lock. |
 | `/codeindex reindex` | Kick a background re-scan of the codebase. Requires an active index. |

@@ -74,4 +74,4 @@ No completed LLM responses yet for this session.
 
 - `/about`  -  application version info
 - `/startup`  -  startup timing report
-- Model costs are configured per model in `ragent.json`
+- Model costs are configured per model in `codemason.json`

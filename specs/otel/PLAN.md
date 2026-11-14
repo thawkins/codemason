@@ -6,19 +6,19 @@ otel
 
 ## Objective
 
-Add an OpenTelemetry metrics export subsystem to ragent so the agent harness can
+Add an OpenTelemetry metrics export subsystem to codemason so the agent harness can
 stream usage, performance, cost, and effectiveness metrics to a designated OTLP
-endpoint. The work introduces a new `ragent-telemetry` crate, a
+endpoint. The work introduces a new `codemason-telemetry` crate, a
 `telemetry.otel` configuration schema, a curated metric catalog, and
 instrumentation hooks wired into the session processor, LLM provider layer, tool
 execution path, coordinator, and permission system.
 
 ## Approach
 
-1. Create a `ragent-telemetry` crate with a `TelemetrySubsystem` that owns the
+1. Create a `codemason-telemetry` crate with a `TelemetrySubsystem` that owns the
    `SdkMeterProvider`, instrument registry, and OTLP exporter. Gate it behind a
    `telemetry` Cargo feature.
-2. Add a `TelemetryConfig` / `OtelConfig` schema to `ragent-config` under
+2. Add a `TelemetryConfig` / `OtelConfig` schema to `codemason-config` under
    `telemetry.otel`. Map the legacy `ExperimentalFlags.open_telemetry` flag as a
    deprecated alias.
 3. Build an instrument registry that constructs all metrics from the catalog
@@ -53,8 +53,8 @@ execution path, coordinator, and permission system.
 
 | ID | Title | Requirement | Effort | Priority | Status | Dependencies |
 |----|-------|-------------|--------|----------|--------|--------------|
-| T-001 | Create `ragent-telemetry` crate scaffold and add to workspace | FR-001, NFR-001, NFR-006 | S | Critical | completed | — |
-| T-002 | Add `telemetry.otel` config schema to `ragent-config` | FR-002 | M | Critical | completed | — |
+| T-001 | Create `codemason-telemetry` crate scaffold and add to workspace | FR-001, NFR-001, NFR-006 | S | Critical | completed | — |
+| T-002 | Add `telemetry.otel` config schema to `codemason-config` | FR-002 | M | Critical | completed | — |
 | T-003 | Implement `TelemetrySubsystem` with `SdkMeterProvider` and no-op fallback | FR-021, FR-022, NFR-002 | L | Critical | completed | T-001, T-002 |
 | T-004 | Implement OTLP/HTTP exporter wiring | FR-005, FR-023 | M | Critical | completed | T-003 |
 | T-005 | Implement OTLP/gRPC exporter wiring | FR-005, FR-024 | M | High | completed | T-003 |
@@ -92,7 +92,7 @@ execution path, coordinator, and permission system.
 
 ### Milestone 1 — Crate and config foundation (T-001, T-002, T-019, T-029)
 
-The `ragent-telemetry` crate exists in the workspace, the `telemetry.otel`
+The `codemason-telemetry` crate exists in the workspace, the `telemetry.otel`
 config schema is parsed, and the legacy flag is mapped. Unit tests for config
 parsing pass.
 
@@ -130,7 +130,7 @@ status moves from `draft` to `implemented`.
 
 ### Milestone 8 - OTLP logs signal (T-040..T-045)
 
-The `tracing` events ragent already emits are shipped to the same collector as
+The `tracing` events codemason already emits are shipped to the same collector as
 the metrics when `telemetry.otel.logs.enabled` is set.
 
 | Task | Description | Requirements | Size | Priority | Status | Depends On |
@@ -144,7 +144,7 @@ the metrics when `telemetry.otel.logs.enabled` is set.
 
 ## Definition of Done
 
-- `cargo check -p ragent-telemetry` and `cargo test -p ragent-telemetry` pass
+- `cargo check -p codemason-telemetry` and `cargo test -p codemason-telemetry` pass
   with the `telemetry` feature enabled.
 - `cargo check` (default features, no `telemetry`) still passes and produces
   zero OTEL-related warnings.

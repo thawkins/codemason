@@ -14,14 +14,14 @@ automated test code.
 ## Prerequisites
 
 1. **Build the binary.** Run `cargo build` (debug is sufficient; allow up to 1000 seconds).
-   Confirm `./target/debug/ragent --version` runs and reports the current version.
+   Confirm `./target/debug/cdmn --version` runs and reports the current version.
 2. **Configure an LLM provider.** Cases that invoke a connector tool from the agent loop
    need a model. Set the API key for your configured provider in the environment, or point
-   ragent at a local Ollama model. Confirm a plain `ragent run "say hello"` returns a
+   codemason at a local Ollama model. Confirm a plain `codemason run "say hello"` returns a
    response.
 3. **Prepare a scratch root.** Create `~/scratch/connectors-tests/` and run every TUI
    session from inside it, so the project connector store is
-   `~/scratch/connectors-tests/.ragent/connectors/`.
+   `~/scratch/connectors-tests/.codemason/connectors/`.
 4. **Stage the fixture connectors** as *add sources* (do not pre-install them). Each fixture
    is a directory containing a `connector.json` manifest. The canonical artifacts are the
    repository fixtures under `assets/connectors/fixtures/`; copy each directory into
@@ -38,7 +38,7 @@ automated test code.
    - `~/scratch/connectors-tests/fixtures-src/bad-server/` - one stdio server whose command
      does not exist, so the connect fails.
    - `~/scratch/connectors-tests/fixtures-src/unsupported/` - a directory whose manifest
-     declares a transport ragent does not speak (for example `"type": "grpc"`).
+     declares a transport codemason does not speak (for example `"type": "grpc"`).
    - `~/scratch/connectors-tests/fixtures-src/duplicate/` - a directory whose manifest uses
      the id `echo`.
 5. **Provide the local MCP server** the `echo` fixture launches. The staged fixtures ship
@@ -60,7 +60,7 @@ automated test code.
    (one entry whose path is `../../escape.json`) into
    `~/scratch/connectors-tests/fixtures-src/` to exercise archive path-traversal
    protection.
-9. **Preserve config.** Back up `~/scratch/connectors-tests/.ragent/ragent.json` (if it
+9. **Preserve config.** Back up `~/scratch/connectors-tests/.codemason/codemason.json` (if it
    exists) and `<state dir>/mcp_state.json` before starting, so temporary flags and ledger
    entries can be reverted in Cleanup.
 10. **Record the compiled default endpoint.** Before any config edit, note the endpoint the
@@ -83,7 +83,7 @@ automated test code.
 
 **Requirement:** FR-004, FR-006, FR-017
 
-**Preconditions:** ragent TUI running from `~/scratch/connectors-tests/`.
+**Preconditions:** codemason TUI running from `~/scratch/connectors-tests/`.
 
 **Steps:**
 1. Type `/connectors ` (with a trailing space) into the message input and observe the
@@ -123,7 +123,7 @@ real MCP server path; the project connector store empty.
 3. Approve any permission prompt shown.
 4. Read the report line in the message window.
 5. In a second terminal, run
-   `ls -R ~/scratch/connectors-tests/.ragent/connectors/` and open the installed manifest
+   `ls -R ~/scratch/connectors-tests/.codemason/connectors/` and open the installed manifest
    with your editor.
 6. Back in the TUI, type `/connectors list` and press `Enter`.
 7. Press `Alt+M` to open the MCP panel (or type `/mcp` and press `Enter`) and confirm no
@@ -188,7 +188,7 @@ staged.
 - Step 1 is refused with an id-collision message naming `echo`; no file changes.
 - Step 2 is refused with a message naming the rejected `http` scheme.
 - Step 3 is refused with a message naming the rejected archive entry `../../escape.json`; no
-  file is written outside `~/scratch/connectors-tests/.ragent/connectors/`.
+  file is written outside `~/scratch/connectors-tests/.codemason/connectors/`.
 - Step 4 finds no new file outside the connector store.
 
 ### TC-005 - Catalogue browsing (`claude`) and add-by-id
@@ -196,7 +196,7 @@ staged.
 **Requirement:** FR-010, FR-011, FR-024, FR-025, FR-031
 
 **Preconditions:** TUI running; the fixture catalogue served over HTTPS and its URL set in
-`connectors.stores.community.url` in `ragent.json`; TUI restarted after the config edit.
+`connectors.stores.community.url` in `codemason.json`; TUI restarted after the config edit.
 
 **Steps:**
 1. Type `/connectors claude echo` and press `Enter`; read the panel rows, then `Esc` to close.
@@ -318,7 +318,7 @@ the same way); a configured LLM provider.
 5. Read the report line.
 6. In a second terminal, open the encrypted credential store file for the current user and
    confirm `test-token-12345` does **not** appear in plaintext anywhere under
-   `~/scratch/connectors-tests/` or in `ragent.json`.
+   `~/scratch/connectors-tests/` or in `codemason.json`.
 7. Type `/connectors list` and press `Enter`; read the `needs-token` row again.
 8. Type `/connectors enable needs-token` and press `Enter`; read the report.
 
@@ -354,7 +354,7 @@ the same way); a configured LLM provider.
 **Expected results:**
 - Step 1 reports `bad-server` as `errored` with a connection-failure cause naming the
   missing command.
-- Step 2 shows the TUI still responsive; ragent did not crash or hang.
+- Step 2 shows the TUI still responsive; codemason did not crash or hang.
 - Step 3 shows the `bad-server` row with state `errored`.
 - Step 4's harness reports `[fail]` on the connect step with the cause and makes no change
   to the live session.
@@ -406,21 +406,21 @@ the same way); a configured LLM provider.
 **Requirement:** FR-033
 
 **Preconditions:** TUI running; `echo` installed and enabled; the global `mcp` ledger and
-`ragent.json` inspected to confirm no `echo.echo` key exists.
+`codemason.json` inspected to confirm no `echo.echo` key exists.
 
 **Steps:**
-1. Open `~/scratch/connectors-tests/.ragent/ragent.json` in your editor and add an MCP
+1. Open `~/scratch/connectors-tests/.codemason/codemason.json` in your editor and add an MCP
    server whose key is exactly `echo.echo` with a valid `command`.
 2. Restart the TUI.
 3. Type `/connectors enable echo` and press `Enter`; read the report.
 4. Type `/mcp` and press `Enter`; check which server owns the `echo.echo` id.
 
-**Test data:** the `ragent.json` `mcp` key `echo.echo`.
+**Test data:** the `codemason.json` `mcp` key `echo.echo`.
 
 **Expected results:**
 - Step 3 rejects the connector's server registration with a collision message naming
-  `echo.echo`; the pre-existing `ragent.json` server is not overwritten.
-- Step 4 shows the `ragent.json` server still owns the id.
+  `echo.echo`; the pre-existing `codemason.json` server is not overwritten.
+- Step 4 shows the `codemason.json` server still owns the id.
 
 ### TC-014 - Remove refuses while enabled
 
@@ -433,7 +433,7 @@ the same way); a configured LLM provider.
 2. Type `/connectors disable echo` and press `Enter`; read the report.
 3. Type `/connectors remove echo` and press `Enter`; read the report.
 4. In a second terminal, confirm
-   `~/scratch/connectors-tests/.ragent/connectors/echo/` no longer exists.
+   `~/scratch/connectors-tests/.codemason/connectors/echo/` no longer exists.
 
 **Test data:** the subcommand argument `echo`.
 
@@ -450,7 +450,7 @@ the same way); a configured LLM provider.
 **Preconditions:** TUI running; `echo` installed.
 
 **Steps:**
-1. Open `~/scratch/connectors-tests/.ragent/ragent.json` in your editor and add:
+1. Open `~/scratch/connectors-tests/.codemason/codemason.json` in your editor and add:
    `{ "connectors": { "enabled": false } }`.
 2. Restart the TUI.
 3. Type `/connectors list` and press `Enter`; read the report.
@@ -469,10 +469,10 @@ the same way); a configured LLM provider.
 - Step 7 still lists the compiled default Claude marketplace (tagged `default`) with no
   `disabled` report: the `marketplace` reports are pure config reads dispatched before the
   master switch (FR-042). Covered by
-  `crates/ragent-connectors/tests/test_connector_commands.rs`
+  `crates/codemason-connectors/tests/test_connector_commands.rs`
   (`marketplace_reports_stay_available_while_the_subsystem_is_disabled`).
 
-### TC-016 - `ragent connectors` CLI parity
+### TC-016 - `codemason connectors` CLI parity
 
 **Requirement:** FR-004, FR-006, FR-041
 
@@ -481,13 +481,13 @@ catalogue URL configured; the category-tagged fixtures from Prerequisite 12 inst
 
 **Steps:**
 1. In a terminal at `~/scratch/connectors-tests/`, run
-   `./target/debug/ragent connectors help` and read the output.
-2. Run `./target/debug/ragent connectors list` and read the output.
-3. Run `./target/debug/ragent connectors enable echo` and read the output.
-4. Run `./target/debug/ragent connectors disable echo` and read the output.
+   `./target/debug/cdmn connectors help` and read the output.
+2. Run `./target/debug/cdmn connectors list` and read the output.
+3. Run `./target/debug/cdmn connectors enable echo` and read the output.
+4. Run `./target/debug/cdmn connectors disable echo` and read the output.
 5. Compare the `help` output word-for-word with the TUI `/connectors help` output captured in
    TC-001.
-6. Run `./target/debug/ragent connectors list --category developer` and read the output.
+6. Run `./target/debug/cdmn connectors list --category developer` and read the output.
 
 **Test data:** the CLI subcommands and their arguments above.
 
@@ -547,7 +547,7 @@ not exist (`two-server-bad/`).
 **Requirement:** FR-034, FR-036, FR-037
 
 **Preconditions:** TUI running from `~/scratch/connectors-tests/`; no `connectors` block in
-`ragent.json` and no `connectors.stores` entry anywhere in the config; outbound HTTPS
+`codemason.json` and no `connectors.stores` entry anywhere in the config; outbound HTTPS
 available for the `--check` step.
 
 **Steps:**
@@ -579,7 +579,7 @@ available for the `--check` step.
 **Preconditions:** TUI running; the fixture catalogue (Prerequisite 6) available over HTTPS.
 
 **Steps:**
-1. Open `~/scratch/connectors-tests/.ragent/ragent.json` and add:
+1. Open `~/scratch/connectors-tests/.codemason/codemason.json` and add:
 
    ```jsonc
    {
@@ -650,7 +650,7 @@ binary already built once (no rebuild during this case).
 **Steps:**
 1. With a configured Claude override pointing at the fixture catalogue, run
    `/connectors stores` and note the endpoint and tag.
-2. Without rebuilding, edit `ragent.json` to remove the override; close and relaunch the
+2. Without rebuilding, edit `codemason.json` to remove the override; close and relaunch the
    TUI.
 3. Run `/connectors stores` and note the endpoint and tag.
 4. Run `/connectors stores` again immediately (no config change, same launch) and confirm the
@@ -707,7 +707,7 @@ the connector browser open.
 1. Run `/connectors list --category developer` and read the rows and the reported filter.
 2. Run `/connectors list --category ALL` and read the rows and the reported filter.
 3. Run `/connectors list --category nosuch` and read the output.
-4. Run `ragent connectors list --category data` from a second terminal and read the output.
+4. Run `codemason connectors list --category data` from a second terminal and read the output.
 5. Run `/connectors claude echo --category productivity` and then
    `/connectors claude echo --category developer`, reading each panel's rows and title
    (closing each panel with `Esc`).
@@ -731,7 +731,7 @@ value `nosuch`.
 
 **Requirement:** FR-042, FR-043
 
-**Preconditions:** TUI running; the user-global `~/.config/ragent/ragent.json` backed up.
+**Preconditions:** TUI running; the user-global `~/.config/codemason/codemason.json` backed up.
 Start a local HTTPS endpoint serving a small second catalogue fixture (two entries, one with
 an id that collides with the base catalogue).
 
@@ -763,9 +763,9 @@ an id that collides with the base catalogue).
 - Step 6 reports `[ok]` and the entry is gone from the config; removing a name that is not
   configured reports `[err]` and changes nothing.
 
-Covered offline by `crates/ragent-connectors/tests/test_marketplace_show.rs` (the
+Covered offline by `crates/codemason-connectors/tests/test_marketplace_show.rs` (the
 `show`/`list` renderers and the parse ladder) and
-`crates/ragent-connectors/tests/test_marketplace_ops.rs` (the source resolver and the
+`crates/codemason-connectors/tests/test_marketplace_ops.rs` (the source resolver and the
 user-global config splice).
 
 ### TC-026 - The browse panel merges every configured marketplace
@@ -792,9 +792,9 @@ from TC-025 both resolvable (the second added through `/connectors marketplace c
   skipped marketplace; the base rows are unaffected.
 - Step 4 shows only the base catalogue's rows again.
 
-Covered offline by `crates/ragent-connectors/tests/test_marketplace_merge.rs` (the
+Covered offline by `crates/codemason-connectors/tests/test_marketplace_merge.rs` (the
 `fetch_all_catalogues` merge, first-occurrence-wins dedup, and per-row attribution) and
-`crates/ragent-tui/tests/test_connector_catalogue_marketplace_warning.rs` (the refused
+`crates/codemason-tui/tests/test_connector_catalogue_marketplace_warning.rs` (the refused
 added marketplace surfaces as a `warn` message-window line while the base rows survive).
 
 ### TC-027 - Catalogue description enrichment fills blank descriptions off-loop
@@ -821,9 +821,9 @@ path; the injectable enrichment seam is exercised offline by the unit tests (NFR
 - Step 4 leaves that entry's blank fields untouched; no failure is fatal, and the rest of
   the enrichment completes.
 
-Covered offline by `crates/ragent-connectors/tests/test_catalogue_enrich.rs` (the
+Covered offline by `crates/codemason-connectors/tests/test_catalogue_enrich.rs` (the
 `catalogue_manifest_urls` derivation and its git-ref/scheme guards, the per-URL cache, and
-`enrich_into`) and `crates/ragent-tui/tests/test_connector_catalogue_enrich.rs` (the
+`enrich_into`) and `crates/codemason-tui/tests/test_connector_catalogue_enrich.rs` (the
 off-loop worker, the `loading details...` hint, and the stale-generation discard).
 
 ### TC-028 - The browse panel pins a dark-on-light column-heading row
@@ -850,9 +850,9 @@ enough entries (more than the panel height) to force the result list to scroll.
 - Step 4 changes nothing: the heading row is outside the cached result-list area, so a click
   or wheel on it moves no cursor and scrolls nothing.
 
-Covered offline by `crates/ragent-tui/tests/test_connector_catalogue_panel.rs` (the heading
+Covered offline by `crates/codemason-tui/tests/test_connector_catalogue_panel.rs` (the heading
 renders above the rows, aligned with its columns, dark-on-light, and stays pinned when the
-rows scroll) and `crates/ragent-tui/tests/test_connector_catalogue_mouse.rs` (a click or
+rows scroll) and `crates/codemason-tui/tests/test_connector_catalogue_mouse.rs` (a click or
 wheel on the heading row is inert).
 
 ### TC-029 - Connector lists render alphabetically by id, filtered or not
@@ -879,11 +879,11 @@ in scan order (for example `zeta`, `alpha`, and `slack`) with `alpha`/`zeta` cat
   the already-sorted set to `alpha` then `zeta` (the `slack` row absent).
 - Step 4 lists its matches alphabetically by id.
 
-Covered offline by `crates/ragent-connectors/tests/test_connector_descriptor.rs`
+Covered offline by `crates/codemason-connectors/tests/test_connector_descriptor.rs`
 (`sort_connectors`/`compare_connector_ids` order by id, case-insensitively with a byte
-tiebreak), `crates/ragent-connectors/tests/test_connector_browse.rs` (the browser sorts on
+tiebreak), `crates/codemason-connectors/tests/test_connector_browse.rs` (the browser sorts on
 load and a category filter keeps the sorted order), and
-`crates/ragent-connectors/tests/test_connector_management.rs` (the `list` and `search`
+`crates/codemason-connectors/tests/test_connector_management.rs` (the `list` and `search`
 reports render rows alphabetically, filtered or not).
 
 ### TC-030 - The browse panel matches the plugin-store design language
@@ -915,32 +915,32 @@ category and more than one marketplace, with at least one connector already inst
   the focused pane's cursor filled.
 - Step 4 wipes the query and restores the full result set.
 
-Covered offline by `crates/ragent-tui/tests/test_connector_catalogue_panel.rs` (accent frame,
+Covered offline by `crates/codemason-tui/tests/test_connector_catalogue_panel.rs` (accent frame,
 two titled navigator panes, `Name (N)` counts, the `Installed` pseudo-category, the bottom
 search box and its clear button, the zebra band reaching the right edge, and the
 description-to-edge row template) and
-`crates/ragent-tui/tests/test_connector_catalogue_mouse.rs` (marketplace click/wheel/focus,
+`crates/codemason-tui/tests/test_connector_catalogue_mouse.rs` (marketplace click/wheel/focus,
 the inert title bands, and the three-pane `Tab`/`BackTab` cycle), with the pure state
-asserted by `crates/ragent-connectors/tests/test_connector_browse.rs`.
+asserted by `crates/codemason-connectors/tests/test_connector_browse.rs`.
 
 ## Cleanup
 
 1. Disable every enabled connector: for each id shown by `/connectors list` (or
-   `ragent connectors list`), run `/connectors disable <id>` (or
-   `ragent connectors disable <id>`).
+   `codemason connectors list`), run `/connectors disable <id>` (or
+   `codemason connectors disable <id>`).
 2. Remove the installed connectors: run `/connectors remove <id>` for each id, then confirm
-   `~/scratch/connectors-tests/.ragent/connectors/` is empty or absent.
-3. Restore configuration: if you edited `~/scratch/connectors-tests/.ragent/ragent.json`
+   `~/scratch/connectors-tests/.codemason/connectors/` is empty or absent.
+3. Restore configuration: if you edited `~/scratch/connectors-tests/.codemason/codemason.json`
    during TC-005, TC-006, TC-013, TC-015, TC-020, TC-021, TC-022, or TC-025..TC-027,
    restore it from the backup made in Prerequisite 9, or delete the temporary `connectors`
    block, the temporary `connectors.stores.community.url` entry, every temporary
    `connectors.stores.claude.url` override, and every `connectors.stores.marketplaces`
-   entry; restore the user-global `~/.config/ragent/ragent.json` from its backup.
+   entry; restore the user-global `~/.config/codemason/codemason.json` from its backup.
 4. Restore the shared MCP ledger: restore `<state dir>/mcp_state.json` from the backup made
    in Prerequisite 9, or manually remove the `echo.echo`, `two-server.*`, and
    `echo.echo` collision entries added during the tests.
 5. Stop any local HTTPS endpoint started for the fixture catalogue.
 6. Delete the scratch tree: `rm -rf ~/scratch/connectors-tests/`.
-7. Confirm `git status` in the ragent repository is clean for any file the tests may have
+7. Confirm `git status` in the codemason repository is clean for any file the tests may have
    touched (the tests are designed to write only under the scratch root and the global state
    directory).

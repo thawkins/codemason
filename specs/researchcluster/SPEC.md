@@ -96,7 +96,7 @@ The generated `CONCEPTS.md` shall use clear markdown headings and bullet points 
 The cluster command shall complete within the standard LLM call timeout used by the research system.
 
 **NFR-002 (Ubiquitous)**
-Source-document loading shall respect existing ragent file-size and context-window limits.
+Source-document loading shall respect existing codemason file-size and context-window limits.
 
 ## Glossary
 

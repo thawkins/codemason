@@ -13,7 +13,7 @@ and never injected back into the parent session's message stream.
 
 ## Prerequisites
 
-- A debug build of ragent: `cargo build`.
+- A debug build of codemason: `cargo build`.
 - A configured LLM provider (any) with a working API key. Ollama (local) is
   acceptable and avoids provider spend.
 - A scratch working directory (e.g. `target/temp/spawnagent-tests/`)
@@ -26,7 +26,7 @@ and never injected back into the parent session's message stream.
   echo "# Scratch — /spawn test bed" > README.md
   ```
 
-- Launch ragent from that directory and pick a cheap/fast model.
+- Launch codemason from that directory and pick a cheap/fast model.
 
 ## Test Cases
 
@@ -131,17 +131,17 @@ is defined. Do NOT wait for it."
 
 ## Regression Checks
 
-- `cargo test -p ragent-agent` — all pre-existing `new_agent` /
+- `cargo test -p codemason-agent` — all pre-existing `new_agent` /
   `wait_agents` / `list_agents` tests still pass (the non-detached path is
   unchanged).
-- `cargo test -p ragent-tui --test test_slash_commands` — all 190 tests
+- `cargo test -p codemason-tui --test test_slash_commands` — all 190 tests
   pass, including the 5 new `/spawn` cases.
-- The cron scheduler (`/cron list`, `ragent_cron` runs) still executes its
+- The cron scheduler (`/cron list`, `codemason_cron` runs) still executes its
   background sub-agents successfully (cron does not use `spawn_detached`).
 
 ## Cleanup
 
 ```bash
-cd /home/thawkins/Projects/ragent
+cd /home/thawkins/Projects/codemason
 rm -rf target/temp/spawnagent-tests
 ```

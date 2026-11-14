@@ -1,6 +1,6 @@
 # How-To: Lifecycle Hooks
 
-ragent hooks let you run shell commands at key points in the session lifecycle.
+codemason hooks let you run shell commands at key points in the session lifecycle.
 This guide covers the two mechanisms for controlling tool execution:
 **PreToolUse** and **PostToolUse** hooks.
 
@@ -23,7 +23,7 @@ This guide covers the two mechanisms for controlling tool execution:
 
 ## Configuration
 
-Hooks are defined in the `hooks` array of `ragent.json`:
+Hooks are defined in the `hooks` array of `codemason.json`:
 
 ```json
 {
@@ -57,7 +57,7 @@ at load time with a log warning — no startup error surfaces to the user.
 ### Tool names in a `matcher` use the current spellings
 
 The `matcher` names tools by their **current** spelling. The rename (spec
-`uniformtools` FR-023) retired thirteen ragent spellings in favour of the Claude
+`uniformtools` FR-023) retired thirteen codemason spellings in favour of the Claude
 Code ones, so a matcher written before it may name a name this build no longer
 registers:
 
@@ -76,7 +76,7 @@ once per stale part) and a guard (`bash(git commit:*)` reports the bare name;
 The matcher is **not** rewritten for you. The configuration file belongs to its
 author, and a load-time rewrite would leave the text on disk disagreeing with
 the session that is running — worse than a warning, because the next reader would
-believe the file. Fix the spelling in `ragent.json` when you see the warning.
+believe the file. Fix the spelling in `codemason.json` when you see the warning.
 
 A spelling that was never renamed (`read`, `think`, `Grep`) is silent, and so is
 a hook with no `matcher` at all.
@@ -95,7 +95,7 @@ Two mechanisms control tool execution, and they work side by side:
 
 ### JSON-Decision Protocol
 
-When the hook exits with code **0**, ragent parses stdout as JSON. The
+When the hook exits with code **0**, codemason parses stdout as JSON. The
 following decisions are recognised:
 
 | stdout JSON                                          | Effect                                              |
@@ -131,7 +131,7 @@ echo '{"modified_input": {"path": "/sandbox/src/main.rs"}}'
 
 ### Exit-Code Convention
 
-When the hook exits with a **non-zero** status code, ragent interprets the
+When the hook exits with a **non-zero** status code, codemason interprets the
 exit code **before** parsing stdout JSON:
 
 | Exit code | Behaviour                                                                 |
@@ -146,7 +146,7 @@ exit code **before** parsing stdout JSON:
 ```sh
 #!/bin/sh
 # Block all Bash commands that contain "rm -rf"
-if echo "$RAGENT_TOOL_INPUT" | grep -q "rm -rf"; then
+if echo "$CODEMASON_TOOL_INPUT" | grep -q "rm -rf"; then
   echo "Blocked: destructive command detected" >&2
   exit 2
 fi
@@ -159,7 +159,7 @@ echo '{"decision": "allow"}'
 ```sh
 #!/bin/sh
 # Warn when a Write call targets a path outside src/
-if echo "$RAGENT_TOOL_INPUT" | grep -qv '"path":.*"src/'; then
+if echo "$CODEMASON_TOOL_INPUT" | grep -qv '"path":.*"src/'; then
   echo "Warning: write outside src/ directory" >&2
   exit 1
 fi
@@ -223,7 +223,7 @@ tool's output, warn about the result, or flag it as policy-violated.
 
 ### Modified Output
 
-When a PostToolUse hook exits with code 0 and writes JSON to stdout, ragent
+When a PostToolUse hook exits with code 0 and writes JSON to stdout, codemason
 looks for a `modified_output` field:
 
 ```json
@@ -243,7 +243,7 @@ output content.
 ```sh
 #!/bin/sh
 # Read the original output from the environment variable
-OUTPUT="$RAGENT_TOOL_OUTPUT"
+OUTPUT="$CODEMASON_TOOL_OUTPUT"
 # Redact API keys (simplified example)
 REDACTED=$(echo "$OUTPUT" | sed 's/sk-[a-zA-Z0-9]*/[REDACTED]/g')
 # Return modified output
@@ -255,7 +255,7 @@ echo "{\"modified_output\": {\"content\": \"$REDACTED\"}}"
 ```sh
 #!/bin/sh
 # Check if the tool output contains sensitive data
-if echo "$RAGENT_TOOL_OUTPUT" | grep -q "password"; then
+if echo "$CODEMASON_TOOL_OUTPUT" | grep -q "password"; then
   echo "Flagged: output contains potential password" >&2
   exit 2
 fi
@@ -266,7 +266,7 @@ exit 0
 
 ## Other Hook Triggers
 
-In addition to `pre_tool_use` and `post_tool_use`, ragent supports these
+In addition to `pre_tool_use` and `post_tool_use`, codemason supports these
 triggers:
 
 | Trigger                | Description                                              |
@@ -280,7 +280,7 @@ triggers:
 | `on_compaction`        | Fired when context compaction is performed.              |
 
 These triggers fire asynchronously — errors are logged but never fatal. The
-`RAGENT_ERROR` environment variable is set for `on_error` hooks.
+`CODEMASON_ERROR` environment variable is set for `on_error` hooks.
 
 ---
 
@@ -290,39 +290,39 @@ All hooks receive these environment variables:
 
 | Variable             | Description                                          |
 |----------------------|------------------------------------------------------|
-| `RAGENT_TRIGGER`     | The trigger name (e.g. `pre_tool_use`)               |
-| `RAGENT_WORKING_DIR` | The session working directory                        |
+| `CODEMASON_TRIGGER`     | The trigger name (e.g. `pre_tool_use`)               |
+| `CODEMASON_WORKING_DIR` | The session working directory                        |
 
 `on_error` hooks additionally receive:
 
 | Variable             | Description                                          |
 |----------------------|------------------------------------------------------|
-| `RAGENT_ERROR`       | The error message                                    |
+| `CODEMASON_ERROR`       | The error message                                    |
 
 PreToolUse hooks additionally receive:
 
 | Variable             | Description                                          |
 |----------------------|------------------------------------------------------|
-| `RAGENT_TOOL_NAME`   | The name of the tool being invoked                   |
-| `RAGENT_TOOL_INPUT`  | JSON string of the tool arguments                    |
+| `CODEMASON_TOOL_NAME`   | The name of the tool being invoked                   |
+| `CODEMASON_TOOL_INPUT`  | JSON string of the tool arguments                    |
 
 PostToolUse hooks additionally receive:
 
 | Variable              | Description                                          |
 |-----------------------|------------------------------------------------------|
-| `RAGENT_TOOL_NAME`    | The name of the tool that was invoked                |
-| `RAGENT_TOOL_INPUT`   | JSON string of the tool arguments                    |
-| `RAGENT_TOOL_OUTPUT`  | JSON string of the tool output                       |
-| `RAGENT_TOOL_SUCCESS` | `"true"` or `"false"`                                |
+| `CODEMASON_TOOL_NAME`    | The name of the tool that was invoked                |
+| `CODEMASON_TOOL_INPUT`   | JSON string of the tool arguments                    |
+| `CODEMASON_TOOL_OUTPUT`  | JSON string of the tool output                       |
+| `CODEMASON_TOOL_SUCCESS` | `"true"` or `"false"`                                |
 
 Turn and compaction triggers additionally receive:
 
 | Variable                        | Description                                    |
 |---------------------------------|------------------------------------------------|
-| `RAGENT_TURN_NUMBER`            | Current agent turn/iteration number (`on_turn_start`, `on_turn_end`) |
-| `RAGENT_COMPACTION_REASON`      | Why compaction fired (`on_compaction`)         |
-| `RAGENT_COMPACTION_TOKENS_BEFORE` | Token count before compaction (`on_compaction`) |
-| `RAGENT_COMPACTION_TOKENS_AFTER`  | Token count after compaction (`on_compaction`)  |
+| `CODEMASON_TURN_NUMBER`            | Current agent turn/iteration number (`on_turn_start`, `on_turn_end`) |
+| `CODEMASON_COMPACTION_REASON`      | Why compaction fired (`on_compaction`)         |
+| `CODEMASON_COMPACTION_TOKENS_BEFORE` | Token count before compaction (`on_compaction`) |
+| `CODEMASON_COMPACTION_TOKENS_AFTER`  | Token count after compaction (`on_compaction`)  |
 
 A **plugin-contributed** hook (see
 [`plugins.md`](plugins.md) section 9.6) additionally receives:
@@ -330,12 +330,12 @@ A **plugin-contributed** hook (see
 | Variable              | Description                                          |
 |-----------------------|------------------------------------------------------|
 | `CLAUDE_PLUGIN_ROOT`  | The declaring plugin's root, so a command can resolve `${CLAUDE_PLUGIN_ROOT}/...` |
-| `CLAUDE_PROJECT_DIR`  | Alias of `RAGENT_WORKING_DIR`, for Claude-dialect scripts |
+| `CLAUDE_PROJECT_DIR`  | Alias of `CODEMASON_WORKING_DIR`, for Claude-dialect scripts |
 
 and the event as JSON on **stdin** (the Claude hook protocol shape:
 `hook_event_name`, `cwd`, `session_id`, and — for the tool-scoped triggers —
 `tool_name`, `tool_input`, `tool_response`, `tool_success`). A hook declared in
-`ragent.json` keeps the environment-only contract (no stdin payload).
+`codemason.json` keeps the environment-only contract (no stdin payload).
 
 ---
 
@@ -358,7 +358,7 @@ always blocks cannot spin the session.
 
 ## Complete Example
 
-Here is a `ragent.json` snippet that configures both PreToolUse and
+Here is a `codemason.json` snippet that configures both PreToolUse and
 PostToolUse hooks:
 
 ```json
@@ -366,26 +366,26 @@ PostToolUse hooks:
   "hooks": [
     {
       "trigger": "pre_tool_use",
-      "command": ".ragent/hooks/pre-tool-use.sh",
+      "command": ".codemason/hooks/pre-tool-use.sh",
       "timeout_secs": 10
     },
     {
       "trigger": "post_tool_use",
-      "command": ".ragent/hooks/post-tool-use.sh",
+      "command": ".codemason/hooks/post-tool-use.sh",
       "timeout_secs": 10
     }
   ]
 }
 ```
 
-**`.ragent/hooks/pre-tool-use.sh`:**
+**`.codemason/hooks/pre-tool-use.sh`:**
 
 ```sh
 #!/bin/sh
 # PreToolUse hook: enforce security policies
 
-TOOL="$RAGENT_TOOL_NAME"
-INPUT="$RAGENT_TOOL_INPUT"
+TOOL="$CODEMASON_TOOL_NAME"
+INPUT="$CODEMASON_TOOL_INPUT"
 
 # Block Bash commands that contain "rm -rf /"
 if [ "$TOOL" = "Bash" ] && echo "$INPUT" | grep -q "rm -rf /"; then
@@ -403,13 +403,13 @@ fi
 echo '{"decision": "allow"}'
 ```
 
-**`.ragent/hooks/post-tool-use.sh`:**
+**`.codemason/hooks/post-tool-use.sh`:**
 
 ```sh
 #!/bin/sh
 # PostToolUse hook: audit tool results
 
-OUTPUT="$RAGENT_TOOL_OUTPUT"
+OUTPUT="$CODEMASON_TOOL_OUTPUT"
 
 # Flag outputs that contain potential secrets
 if echo "$OUTPUT" | grep -qE "(sk-[a-zA-Z0-9]{20,}|AKIA[A-Z0-9]{16})"; then

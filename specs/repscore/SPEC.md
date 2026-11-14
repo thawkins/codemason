@@ -33,7 +33,7 @@ curated table via the configuration layer.
 ### Existing relevance scoring
 
 `compute_relevance_label` in
-`crates/ragent-research/src/web_gatherer/relevance.rs` returns a human-readable
+`crates/codemason-research/src/web_gatherer/relevance.rs` returns a human-readable
 label (`Very high`, `High`, `Medium-high`, `Medium`, `Low`, `Very low`) and a
 boolean `retained` flag. The label is derived from the ratio of query terms that
 appear in the title, snippet, and URL. The boolean flag is used in
@@ -51,9 +51,9 @@ label as a new field and a new numeric score.
 The implementation uses three sources of reputation data, in order of
 preference:
 
-1. **Project-local override file** — `.ragent/reputation.json` or the path set
+1. **Project-local override file** — `.codemason/reputation.json` or the path set
    in config (`research.reputation.override_path`).
-2. **User-global override file** — `~/.config/ragent/reputation.json`.
+2. **User-global override file** — `~/.config/codemason/reputation.json`.
 3. **Bundled curated table** — a conservative default list compiled into the
    binary, covering the most common high-trust and known-low-trust domain
    patterns.
@@ -227,7 +227,7 @@ and retention behaviour **shall** remain unchanged.
 
 ### In scope
 
-- New `reputation` module in `crates/ragent-research`.
+- New `reputation` module in `crates/codemason-research`.
 - Bundled curated domain tier table.
 - Override-file loading and merging logic.
 - Integration of reputation lookup into `compute_relevance_label` or a new
@@ -262,7 +262,7 @@ and retention behaviour **shall** remain unchanged.
 ## Related Work
 
 - Existing `WebGatherer` and `compute_relevance_label` in
-  `crates/ragent-research/src/web_gatherer/relevance.rs`.
-- `Source::Web` definition in `crates/ragent-research/src/source.rs`.
-- Configuration parsing in `crates/ragent-config`.
+  `crates/codemason-research/src/web_gatherer/relevance.rs`.
+- `Source::Web` definition in `crates/codemason-research/src/source.rs`.
+- Configuration parsing in `crates/codemason-config`.
 - `--use-low-relevance` flag and the `keep_low_relevance` gatherer option.

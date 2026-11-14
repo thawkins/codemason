@@ -22,7 +22,7 @@ in this build; see the limitations note below.
 /router weights      Show the routing weight table
 /router boundaries   Show the tier boundary thresholds
 /router tiers        Show the configured tier membership
-/router reload       Re-read router settings from ragent.json
+/router reload       Re-read router settings from codemason.json
 /router help         Show the help table
 ```
 
@@ -38,7 +38,7 @@ in this build; see the limitations note below.
 | `/router weights` | Prints the per-dimension weights used by the classifier |
 | `/router boundaries` | Prints the tier boundary thresholds used to map composite scores to tiers |
 | `/router tiers` | Prints the tier membership lists (fast/standard/deep and so on) |
-| `/router reload` | Re-reads `.ragent/ragent.json` (falling back to the global config directory), parses `provider.router` into the router configuration, and resets the current tier |
+| `/router reload` | Re-reads `.codemason/codemason.json` (falling back to the global config directory), parses `provider.router` into the router configuration, and resets the current tier |
 | `/router help` | Prints the help table |
 
 Any other subcommand prints the unknown-subcommand warning.
@@ -64,7 +64,7 @@ Lists which models belong to each tier under the loaded configuration.
 ```
 /router reload
 ```
-Re-reads `.ragent/ragent.json` after you edited the `provider.router` section,
+Re-reads `.codemason/codemason.json` after you edited the `provider.router` section,
 so the new weights and boundaries take effect without restarting the TUI.
 
 ## Output
@@ -86,13 +86,13 @@ so the new weights and boundaries take effect without restarting the TUI.
   to the unknown-subcommand warning.
 - Per-dimension weight overrides and boundary thresholds cannot be changed from
   the command line. Edit `provider.router.weights` and
-  `provider.router.boundaries` in `ragent.json`, then run `/router reload`.
+  `provider.router.boundaries` in `codemason.json`, then run `/router reload`.
 - `/router on` and `/router off` set an in-session flag only; they do not
-  persist to `ragent.json`.
+  persist to `codemason.json`.
 
 ## Related
 
 - `/model` - pick models; with the `router` provider the setup dialog seeds tiers
 - `/provider` - configure the router's concrete backing providers
-- `provider.router.weights` / `provider.router.boundaries` in `ragent.json` -
+- `provider.router.weights` / `provider.router.boundaries` in `codemason.json` -
   the configuration-file surface for weight and boundary tuning

@@ -1,4 +1,4 @@
-# cargo-audit configuration for ragent.
+# cargo-audit configuration for codemason.
 # Kept in sync with deny.toml: only advisories that still apply to the current
 # dependency tree are listed here, so a re-introduced vulnerable crate is never
 # silently masked.

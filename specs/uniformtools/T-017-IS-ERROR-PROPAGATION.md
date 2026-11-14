@@ -32,7 +32,7 @@ missing was narrower and worse than a missing test.
 | 3 | **Local Ollama marks nothing.** `build_openai_messages` cannot call the OpenAI carrier for Ollama because the dialect adds a `tool_name` key (`OpenAiCompatSpec::tool_result_name`), so the messages went out with `is_error` **dropped entirely** - no flag, no prefix. A failed `Read` reached the model looking exactly like a successful one, on one provider, with no test covering it. | `openai_compat.rs` |
 | 4 | `OpenAiCompatSpec::ollama_cloud` speaks the native `/api/chat` shape and never reaches the encoder's OpenAI carrier, so its marking was already correct at the `OLLAMA_NATIVE` arm. | `ollama_cloud.rs` |
 | 5 | Nothing stated *which* profile's `supports_is_error` a format's messages obey. `format_profile()` answers the question for **definitions**; for five of six formats it is also the right answer for messages, and for HuggingFace it is right by coincidence (both formats it could concern are non-native). | `tool_cache.rs` |
-| 6 | `test_tool_input_error::is_error_is_derived_from_the_status_type` was a **negative** scan (two wrong spellings absent). A converter that wrote `is_error: false` everywhere would have passed it while making every failure look successful. | `ragent-agent/tests` |
+| 6 | `test_tool_input_error::is_error_is_derived_from_the_status_type` was a **negative** scan (two wrong spellings absent). A converter that wrote `is_error: false` everywhere would have passed it while making every failure look successful. | `codemason-agent/tests` |
 
 Row 3 is the reason this task was not a test-only task.
 
@@ -117,7 +117,7 @@ names in the calls it is answered with from drifting apart.
 
 ## 4. Tests
 
-`crates/ragent-llm/tests/test_tool_result_error_marking.rs` (registered in
+`crates/codemason-llm/tests/test_tool_result_error_marking.rs` (registered in
 `tests/all.rs`), seven cases:
 
 1. `test_every_format_takes_the_marking_rule_from_its_declared_profile` - per
@@ -145,7 +145,7 @@ names in the calls it is answered with from drifting apart.
    carries one successful and one failed result; the failed one is
    `ERROR: No such file` and the successful one is still `alpha`.
 
-`crates/ragent-agent/tests/test_tool_input_error.rs` gained the **positive half**
+`crates/codemason-agent/tests/test_tool_input_error.rs` gained the **positive half**
 the existing negative scan lacked:
 `every_history_converter_forwards_the_record_status_to_the_wire_flag` asserts
 each converter contains its derivation
@@ -213,18 +213,18 @@ signal to check `md5sum -c` and the mtime, not evidence.
 
 - `cargo fmt --all -- --check` clean.
 - `cargo check --workspace --all-targets` clean (1m 17s).
-- `cargo nextest run -p ragent-llm --no-fail-fast`: **648 run, 648 passed,
+- `cargo nextest run -p codemason-llm --no-fail-fast`: **648 run, 648 passed,
   2 skipped**; the touched files' own cases 7/7 and `test_wire_encode_message`
   38/38.
-- `cargo nextest run -p ragent-agent --no-fail-fast`: **2152 run, 2147 passed,
+- `cargo nextest run -p codemason-agent --no-fail-fast`: **2152 run, 2147 passed,
   5 failed, 1 skipped**. All five failures are the pre-existing
   `test_tool_rename_guard::` group (the T-047 predicate-(g) hit at
-  `crates/ragent-agent/src/tool/aliases.rs:118`, unrelated to this task); the
+  `crates/codemason-agent/src/tool/aliases.rs:118`, unrelated to this task); the
   `test_tool_input_error::` module is 9/9.
-- `cargo clippy -p ragent-llm --all-targets`: only the pre-existing 25
+- `cargo clippy -p codemason-llm --all-targets`: only the pre-existing 25
   `unnecessary structure name repetition` warnings on `ToolFormat::` paths in
   `tool_cache.rs` (the same lint the file already carried before this task) and
-  the pre-existing `ragent-storage` let-binding. No warning originates in a line
+  the pre-existing `codemason-storage` let-binding. No warning originates in a line
   this task added except members of that existing group.
 - Guard scripts: 11 of 13 pass. `check-bench-regression` exits 2 for a missing
   `target/criterion`, and `check-tool-rename` exits 1 on the same T-047 hit -

@@ -1,6 +1,6 @@
-//! ragent CLI binary.
+//! codemason CLI binary.
 //!
-//! Entry point for the ragent terminal AI coding agent. Parses CLI arguments,
+//! Entry point for the codemason terminal AI coding agent. Parses CLI arguments,
 //! loads configuration, initialises storage and the event bus, and dispatches
 //! to the requested sub-command (TUI, headless run, HTTP server, session
 //! management, auth, or config display).
@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-use ragent_agent::{
+use codemason_agent::{
     Config, ModelInfo, StartupTimings, agent,
     event::EventBus,
     permission::PermissionChecker,
@@ -27,7 +27,7 @@ use ragent_agent::{
     telemetry::{ShutdownGuard, TelemetrySubsystem, TracingLogsLayer},
     tool,
 };
-use ragent_connectors::{ConnectorSession, store_dirs};
+use codemason_connectors::{ConnectorSession, store_dirs};
 
 mod cli;
 mod cli_out;
@@ -47,12 +47,12 @@ mod acp_server;
 /// Top-level CLI arguments parsed by clap.
 #[derive(Parser)]
 #[command(
-    name = "ragent",
+    name = "cdmn",
     about = "A Rust AI coding agent for the terminal",
     disable_version_flag = true
 )]
 struct Cli {
-    /// Print the ragent version and exit
+    /// Print the codemason version and exit
     #[arg(long, short = 'V')]
     version: bool,
 
@@ -84,7 +84,7 @@ struct Cli {
     log_level: String,
 
     /// Start a fresh TUI session instead of reopening the sessions that were
-    /// open when ragent last exited
+    /// open when codemason last exited
     #[arg(long = "new")]
     new_session: bool,
 
@@ -137,7 +137,7 @@ enum Commands {
     /// Start HTTP server only
     Serve {
         /// Address to bind to
-        #[arg(long, default_value = ragent_server::DEFAULT_LISTEN_ADDR)]
+        #[arg(long, default_value = codemason_server::DEFAULT_LISTEN_ADDR)]
         addr: String,
     },
     /// Run a small orchestration example (demonstrates multi-agent coordinator)
@@ -274,9 +274,9 @@ enum Commands {
     },
 }
 
-/// CLI dispatcher for the flattened `ragent new ...` form: rebuilds the
+/// CLI dispatcher for the flattened `codemason new ...` form: rebuilds the
 /// `/new` token list from the parsed [`cli::ScaffoldArgs`] and reuses the
-/// `ragent new scaffold ...` handler, keeping both spellings on one path.
+/// `codemason new scaffold ...` handler, keeping both spellings on one path.
 fn dispatch_new_command(scaffold: cli::ScaffoldArgs) -> Result<()> {
     cli::handle_new_command(cli::NewCommands::Scaffold(scaffold))
 }
@@ -374,7 +374,7 @@ enum DbCommands {
     ///
     /// Deleting rows returns their pages to SQLite's freelist; the file does
     /// not shrink until a `VACUUM`, which needs exclusive access. Stop every
-    /// other ragent process first.
+    /// other codemason process first.
     Prune {
         /// Retention window in days (default: `storage.retention.message_days`)
         #[arg(long)]
@@ -385,13 +385,13 @@ enum DbCommands {
     },
 }
 
-/// Return the global-state directory for ragent (`~/.config/ragent/`).
+/// Return the global-state directory for codemason (`~/.config/codemason/`).
 ///
-/// All ragent global state - databases, logs, history, tokens - lives under
-/// this single root. Supersedes the legacy `~/.local/share/ragent/` location.
+/// All codemason global state - databases, logs, history, tokens - lives under
+/// this single root. Supersedes the legacy `~/.local/share/codemason/` location.
 fn data_dir() -> PathBuf {
-    ragent_config::user_dirs::global_state_dir()
-        .unwrap_or_else(|| PathBuf::from(".").join("ragent"))
+    codemason_config::user_dirs::global_state_dir()
+        .unwrap_or_else(|| PathBuf::from(".").join("codemason"))
 }
 
 /// Return the process working directory, falling back to `.` when the OS
@@ -403,9 +403,9 @@ fn working_dir() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-/// Print the ragent ASCII art startup banner to stdout.
+/// Print the codemason ASCII art startup banner to stdout.
 fn print_banner() {
-    for line in ragent_tui::logo::LOGO {
+    for line in codemason_tui::logo::LOGO {
         cliprintln!("{line}");
     }
     cliprintln!(
@@ -423,12 +423,12 @@ async fn run_dry_run_and_exit(
     agent_name: &str,
     model_override: Option<&str>,
     json_output: bool,
-    provider_registry: Arc<ragent_agent::provider::ProviderRegistry>,
-    tool_registry: Arc<ragent_agent::tool::ToolRegistry>,
+    provider_registry: Arc<codemason_agent::provider::ProviderRegistry>,
+    tool_registry: Arc<codemason_agent::tool::ToolRegistry>,
 ) {
     let config_path = config_path.map(PathBuf::from);
     let working_dir = crate::working_dir();
-    let inputs = ragent_agent::dry_run::DryRunInputs {
+    let inputs = codemason_agent::dry_run::DryRunInputs {
         config_path,
         agent_name: agent_name.to_string(),
         model_override: model_override.map(std::string::ToString::to_string),
@@ -437,7 +437,7 @@ async fn run_dry_run_and_exit(
         working_dir,
     };
 
-    let (report, exit_code) = ragent_agent::dry_run::run_dry_run(inputs).await;
+    let (report, exit_code) = codemason_agent::dry_run::run_dry_run(inputs).await;
 
     if json_output {
         match report.to_json() {
@@ -463,12 +463,12 @@ async fn async_main() -> Result<()> {
     let working_dir = crate::working_dir();
 
     // `--version` / `-V` is answered before any side effect: no panic hook, no
-    // crash marker, no previous-crash warning, no TUI. Running `ragent -V` on a
+    // crash marker, no previous-crash warning, no TUI. Running `codemason -V` on a
     // fresh checkout must print the version and exit cleanly, not stamp a
     // session marker the next start would report as an unclean exit.
     let cli = Cli::parse();
     if cli.version {
-        cliprintln!("ragent {}", env!("CARGO_PKG_VERSION"));
+        cliprintln!("codemason {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
 
@@ -492,7 +492,7 @@ async fn async_main() -> Result<()> {
     match crash_dump::previous_unclean_exit(&working_dir) {
         Ok(Some(prev)) => {
             cliprintln_err!(
-                "warning: previous ragent session (pid {}, started {}) exited without unwinding \
+                "warning: previous codemason session (pid {}, started {}) exited without unwinding \
                  - check log/panics/last-crash.json and other panic reports",
                 prev.pid,
                 prev.updated_at
@@ -515,10 +515,10 @@ async fn async_main() -> Result<()> {
     startup.record("CLI parse", t0.elapsed());
 
     if cli.no_git_context {
-        ragent_agent::agent::disable_git_prompt_context();
+        codemason_agent::agent::disable_git_prompt_context();
     }
     if cli.no_readme_context {
-        ragent_agent::agent::disable_readme_prompt_context();
+        codemason_agent::agent::disable_readme_prompt_context();
     }
 
     // Initialize tracing.
@@ -547,7 +547,7 @@ async fn async_main() -> Result<()> {
         // and escape sequences before echoing it to the terminal.
         cliprintln_err!(
             "warning: invalid log level '{}' - falling back to 'warn'",
-            ragent_types::sanitize_terminal::sanitize_terminal(&cli.log_level)
+            codemason_types::sanitize_terminal::sanitize_terminal(&cli.log_level)
         );
         EnvFilter::new("warn")
     });
@@ -594,10 +594,10 @@ async fn async_main() -> Result<()> {
     let tui_log_rx = if tui_will_run {
         use tracing_subscriber::layer::SubscriberExt as _;
         use tracing_subscriber::util::SubscriberInitExt as _;
-        let (tx, rx) = ragent_tui::tracing_layer::tui_log_channel(512);
+        let (tx, rx) = codemason_tui::tracing_layer::tui_log_channel(512);
         tracing_subscriber::registry()
             .with(filter)
-            .with(ragent_tui::tracing_layer::TuiTracingLayer::new(tx))
+            .with(codemason_tui::tracing_layer::TuiTracingLayer::new(tx))
             .with(logs_layer)
             .init();
         Some(rx)
@@ -645,7 +645,7 @@ async fn async_main() -> Result<()> {
         // SEC-078: `--config <path>` is untrusted argv; neutralise control
         // characters before the path is echoed to the terminal.
         let raw_path = path.display().to_string();
-        let safe_path = ragent_types::sanitize_terminal::sanitize_terminal(&raw_path);
+        let safe_path = codemason_types::sanitize_terminal::sanitize_terminal(&raw_path);
         let content = std::fs::read_to_string(&path)
             .map_err(|e| anyhow::anyhow!("Failed to read config file '{safe_path}': {e}"))?;
 
@@ -656,13 +656,13 @@ async fn async_main() -> Result<()> {
                 .lines()
                 .nth(line.saturating_sub(1))
                 .unwrap_or("<line not found>");
-            // SEC-ragent-config-007 (SECTASKS T-061): the echoed source line can
+            // SEC-codemason-config-007 (SECTASKS T-061): the echoed source line can
             // contain a credential; redact it before it reaches the terminal/log.
-            let problematic_line = ragent_types::sanitize::redact_secrets(problematic_line);
+            let problematic_line = codemason_types::sanitize::redact_secrets(problematic_line);
             // SEC-078: the echoed source line is untrusted file content; strip
             // control characters and escape sequences before printing.
             let problematic_line =
-                ragent_types::sanitize_terminal::sanitize_terminal(&problematic_line);
+                codemason_types::sanitize_terminal::sanitize_terminal(&problematic_line);
 
             anyhow::anyhow!(
                 "Failed to parse config file '{safe_path}':\n\
@@ -682,9 +682,9 @@ async fn async_main() -> Result<()> {
         })?;
         // The explicit file is the only config this process loaded, so a
         // runtime-flag toggle (`/yolo`, Alt+Y) must write back to it; the
-        // user-global `ragent.json` is never read in `--config` mode and a write
+        // user-global `codemason.json` is never read in `--config` mode and a write
         // there would never round-trip (the "/yolo does not persist" report).
-        ragent_config::Config::set_config_write_target(Some(path.clone()));
+        codemason_config::Config::set_config_write_target(Some(path.clone()));
         parsed.config_paths.push(path);
         parsed
     } else {
@@ -701,7 +701,7 @@ async fn async_main() -> Result<()> {
     // silent fall back to those defaults (a config that fails to parse, or a
     // global file that lost the key). Logging the effective flag state at
     // startup makes such a fallback attributable instead of invisible.
-    ragent_config::sync_runtime_flags(&config);
+    codemason_config::sync_runtime_flags(&config);
     tracing::info!(
         yolo = config.yolo,
         edit_log = config.edit_log,
@@ -714,7 +714,7 @@ async fn async_main() -> Result<()> {
     let auto_extract_config = config.memory.auto_extract.clone();
 
     // Initialize storage
-    let db_path = data_dir().join("ragent.db");
+    let db_path = data_dir().join("codemason.db");
     tracing::info!(db_path = %db_path.display(), "Opening database");
     let t0 = Instant::now();
     let storage = Arc::new(Storage::open(&db_path)?);
@@ -789,7 +789,7 @@ async fn async_main() -> Result<()> {
 
     // Also seed from well-known environment variables.
     //
-    // SEC-ragent-types-004 (SECTASKS T-046): the GitLab / GitHub / Tavily
+    // SEC-codemason-types-004 (SECTASKS T-046): the GitLab / GitHub / Tavily
     // credentials the tools accept from the environment were never
     // registered, so a token echoed by a failing command could reach the log or
     // the SSE stream in cleartext - the pattern layer does not know
@@ -823,10 +823,10 @@ async fn async_main() -> Result<()> {
         // The HTTP server's own bearer token: read at startup below, and until now
         // registered nowhere, so an echo of it survived redaction (audit medium
         // finding).
-        "RAGENT_TOKEN",
+        "CODEMASON_TOKEN",
     ] {
         if let Ok(val) = std::env::var(var) {
-            ragent_agent::sanitize::register_secret(&val);
+            codemason_agent::sanitize::register_secret(&val);
         }
     }
     startup.record("Secret registry seed", t0.elapsed());
@@ -842,16 +842,16 @@ async fn async_main() -> Result<()> {
     // concrete providers at chat time.
     if let Some(router_provider) = provider_registry
         .get_as_any("router")
-        .and_then(|p| p.downcast_ref::<ragent_llm::providers::router::RouterProvider>())
+        .and_then(|p| p.downcast_ref::<codemason_llm::providers::router::RouterProvider>())
     {
         router_provider.set_registry(Arc::clone(&provider_registry));
         router_provider.set_storage(Arc::clone(&storage));
     }
     // Attach storage to the OpenRouter provider so chat clients can resolve
-    // the encrypted credential stored via `ragent auth openrouter <key>`.
+    // the encrypted credential stored via `codemason auth openrouter <key>`.
     if let Some(openrouter_provider) = provider_registry
         .get_as_any("openrouter")
-        .and_then(|p| p.downcast_ref::<ragent_llm::providers::openrouter::OpenRouterProvider>())
+        .and_then(|p| p.downcast_ref::<codemason_llm::providers::openrouter::OpenRouterProvider>())
     {
         openrouter_provider.set_storage(Arc::clone(&storage));
     }
@@ -928,9 +928,9 @@ async fn async_main() -> Result<()> {
     // A ShutdownGuard keeps the provider alive for the process lifetime and
     // flushes pending metrics on normal or panic exit paths.
     //
-    // SEC-ragent-telemetry-002 (SECTASKS T-020): enablement and endpoint come
+    // SEC-codemason-telemetry-002 (SECTASKS T-020): enablement and endpoint come
     // from user-owned configuration only. The repository-local
-    // `.ragent/ragent.json` is merged through `Config::merge_project`, which
+    // `.codemason/codemason.json` is merged through `Config::merge_project`, which
     // drops its `telemetry` block entirely, so a cloned project cannot turn
     // telemetry on or point the OTLP endpoint at an attacker host.
     let t0 = Instant::now();
@@ -969,9 +969,10 @@ async fn async_main() -> Result<()> {
     // also wired into the session processor below, the shared-instance guard
     // flushes the actual provider rather than a disabled clone.
     let _telemetry_guard = ShutdownGuard::new(Arc::clone(&telemetry));
-    // Export every agent-loop profiler scope as `ragent.profile.duration`
+    // Export every agent-loop profiler scope as `codemason.profile.duration`
     // (tagged with its profiler bucket) while OTel export is enabled.
-    ragent_agent::session::profiler::agent_loop_profiler().attach_telemetry(Arc::clone(&telemetry));
+    codemason_agent::session::profiler::agent_loop_profiler()
+        .attach_telemetry(Arc::clone(&telemetry));
     startup.record("Telemetry init", t0.elapsed());
 
     // Create session manager and processor
@@ -1026,20 +1027,20 @@ async fn async_main() -> Result<()> {
         active_loop_interrupts: parking_lot::RwLock::new(std::collections::HashMap::new()),
         active_loop_captures: tokio::sync::RwLock::new(std::collections::HashMap::new()),
         last_message_end_reason: std::sync::RwLock::new(std::collections::HashMap::new()),
-        pending_verdicts: ragent_agent::session::pending::PendingVerdicts::new(),
+        pending_verdicts: codemason_agent::session::pending::PendingVerdicts::new(),
     });
     tracing::info!(auto_approve = cli.yes, "Session processor initialized");
     startup.record("Session manager & processor", t0.elapsed());
 
     let t0 = Instant::now();
     if auto_extract_config.enabled {
-        let extraction_engine = Arc::new(ragent_agent::memory::ExtractionEngine::new(
+        let extraction_engine = Arc::new(codemason_agent::memory::ExtractionEngine::new(
             auto_extract_config,
         ));
         let _ = session_processor.extraction_engine.set(extraction_engine); // INTENTIONAL: OnceLock set race is benign
     }
     // Create AgentManager and wire it into the processor (breaks circular dep via OnceLock)
-    let agent_manager = Arc::new(ragent_agent::task::AgentManager::new(
+    let agent_manager = Arc::new(codemason_agent::task::AgentManager::new(
         event_bus.clone(),
         session_processor.clone(),
         max_background_agents,
@@ -1049,7 +1050,7 @@ async fn async_main() -> Result<()> {
     tracing::debug!(max_background_agents, "Agent manager initialized");
 
     // Wire the background task service into the processor (M3).
-    let bg_service = Arc::new(ragent_agent::background::BackgroundTaskService::new(
+    let bg_service = Arc::new(codemason_agent::background::BackgroundTaskService::new(
         Arc::clone(&storage),
         event_bus.clone(),
     ));
@@ -1080,7 +1081,7 @@ async fn async_main() -> Result<()> {
     let (mcp_configs, connector_session) = {
         let working_dir = crate::working_dir();
         let guard = config.read().await;
-        let mut merged = ragent_agent::plugin::plugin_mcp_servers(&working_dir, &guard.mcp);
+        let mut merged = codemason_agent::plugin::plugin_mcp_servers(&working_dir, &guard.mcp);
         let connector_session = merge_connector_bridge(&working_dir, &guard, &mut merged);
         (merged, connector_session)
     };
@@ -1097,7 +1098,9 @@ async fn async_main() -> Result<()> {
         // report and the tool registry all read it, and the first server's
         // connect can block for seconds. The client is shared, so connecting
         // through a second handle still publishes every server the caller sees.
-        let shared_client = Arc::new(tokio::sync::RwLock::new(ragent_agent::mcp::McpClient::new()));
+        let shared_client = Arc::new(tokio::sync::RwLock::new(
+            codemason_agent::mcp::McpClient::new(),
+        ));
         sp.set_mcp_client(Arc::clone(&shared_client)).await;
         // Hand the live session its lifecycle owner before the connect loop
         // publishes any status: `/connectors enable|connect` drives this
@@ -1114,15 +1117,15 @@ async fn async_main() -> Result<()> {
             sp.set_connector_session(session).await;
         }
         tokio::spawn(async move {
-            let ledger = ragent_agent::mcp::McpEnableLedger::load();
+            let ledger = codemason_agent::mcp::McpEnableLedger::load();
             let mut mcp_connected = 0u32;
             for (id, cfg) in mcp_configs {
-                // A server switched off in the ledger (or in ragent.json) is
+                // A server switched off in the ledger (or in codemason.json) is
                 // registered as disabled so `/mcp` can still list it and offer
                 // to re-enable it, but no child process is spawned.
-                if !ragent_agent::mcp::is_server_enabled(&cfg, &ledger, &id) {
+                if !codemason_agent::mcp::is_server_enabled(&cfg, &ledger, &id) {
                     shared_client.write().await.register_disabled(&id, cfg);
-                    bus.publish(ragent_agent::event::Event::McpServerEnabledChanged {
+                    bus.publish(codemason_agent::event::Event::McpServerEnabledChanged {
                         server_id: id,
                         enabled: false,
                     });
@@ -1145,7 +1148,7 @@ async fn async_main() -> Result<()> {
                 drop(mcp_client);
                 // Publish per-server status so the TUI (`/mcp`) reflects the
                 // real connection state instead of assuming `disabled`.
-                bus.publish(ragent_agent::event::Event::McpStatusChanged {
+                bus.publish(codemason_agent::event::Event::McpStatusChanged {
                     server_id: id,
                     status,
                 });
@@ -1161,7 +1164,7 @@ async fn async_main() -> Result<()> {
             // per-server startup report, once the write lock (which the loop held
             // across every connect) is free. It does not wake `adopt_mcp_client_state`
             // for its own sake, but the next housekeeping pass runs it too.
-            bus.publish(ragent_agent::event::Event::McpStatusChanged {
+            bus.publish(codemason_agent::event::Event::McpStatusChanged {
                 server_id: String::new(),
                 status: "initialized".to_string(),
             });
@@ -1173,7 +1176,7 @@ async fn async_main() -> Result<()> {
     let specs_root = crate::working_dir().join("specs");
     let _ = session_processor // INTENTIONAL: fallible wiring/persistence call; the in-memory state is authoritative
         .spec_manager
-        .set(Arc::new(ragent_specs::SpecManager::new(&specs_root)));
+        .set(Arc::new(codemason_specs::SpecManager::new(&specs_root)));
     startup.record("Spec manager init", t0.elapsed());
     if cli.dry_run {
         run_dry_run_and_exit(
@@ -1190,7 +1193,7 @@ async fn async_main() -> Result<()> {
     // Wire the activity-log store into the session processor.
     //
     // The handle is set unconditionally; recording is gated at each call site
-    // by `ragent_config::activity_log::is_enabled()` so `/alog off` suppresses
+    // by `codemason_config::activity_log::is_enabled()` so `/alog off` suppresses
     // writes without unwiring the handle. A failure to open the log is
     // non-fatal - the agent loop simply skips recording (best-effort).
     //
@@ -1203,11 +1206,11 @@ async fn async_main() -> Result<()> {
     //
     // This is intentionally placed *after* the `dry_run` early-return so a
     // readiness check does not open (or create) the activity-log database.
-    let alog_path = ragent_agent::storage::ActivityLog::default_path(&db_path);
+    let alog_path = codemason_agent::storage::ActivityLog::default_path(&db_path);
     {
         let sp = Arc::clone(&session_processor);
         tokio::task::spawn_blocking(move || {
-            match ragent_agent::storage::ActivityLog::open(&alog_path) {
+            match codemason_agent::storage::ActivityLog::open(&alog_path) {
                 Ok(log) => {
                     sp.set_activity_log(Arc::new(log));
                     // PERF-040: start the single background writer that batches
@@ -1250,7 +1253,7 @@ async fn async_main() -> Result<()> {
                     provider_registry.as_ref(),
                 );
 
-                tracing::info!("Starting ragent interactive mode (plain)");
+                tracing::info!("Starting codemason interactive mode (plain)");
                 let dir = std::fs::canonicalize(".")?;
                 let session = session_manager.create_session(dir)?;
                 let reader = tokio::io::BufReader::new(tokio::io::stdin());
@@ -1285,7 +1288,7 @@ async fn async_main() -> Result<()> {
                 // `run_tui`'s future is large; box it so it is heap-allocated
                 // rather than inlined into this caller's future
                 // (clippy::large_futures).
-                Box::pin(ragent_tui::run_tui(
+                Box::pin(codemason_tui::run_tui(
                     event_bus,
                     storage,
                     provider_registry,
@@ -1293,11 +1296,12 @@ async fn async_main() -> Result<()> {
                     (*resolved_agent).clone(),
                     cli.log,
                     if cli.new_session {
-                        ragent_tui::StartupSession::New
+                        codemason_tui::StartupSession::New
                     } else {
-                        ragent_tui::StartupSession::Restore
+                        codemason_tui::StartupSession::Restore
                     },
-                    tui_log_rx.unwrap_or_else(|| ragent_tui::tracing_layer::tui_log_channel(1).1),
+                    tui_log_rx
+                        .unwrap_or_else(|| codemason_tui::tracing_layer::tui_log_channel(1).1),
                     db_path.clone(),
                     config.read().await.config_paths.clone(),
                     startup,
@@ -1308,7 +1312,7 @@ async fn async_main() -> Result<()> {
         }
         Some(Commands::Run { prompt }) => {
             // FR-013 CLI parity: a `/new` prompt is executed by the same
-            // scaffold engine as `ragent new`, not sent to the LLM. The
+            // scaffold engine as `codemason new`, not sent to the LLM. The
             // scaffolder is a deterministic local operation; there is no
             // agent turn to run.
             let trimmed = prompt.trim();
@@ -1335,9 +1339,10 @@ async fn async_main() -> Result<()> {
                 } else {
                     // SEC-077: the bang command must pass the same 7-layer bash
                     // validation the `Bash` tool applies; otherwise
-                    // `ragent run "!<cmd>"` bypassed every guard (banned tools,
+                    // `codemason run "!<cmd>"` bypassed every guard (banned tools,
                     // directory escape, denied patterns, obfuscation).
-                    if let Err(e) = ragent_tools_core::bash::validate_shell_command(cmd, &dir).await
+                    if let Err(e) =
+                        codemason_tools_core::bash::validate_shell_command(cmd, &dir).await
                     {
                         cliprintln_err!("command rejected: {e}");
                         std::process::exit(2);
@@ -1354,7 +1359,7 @@ async fn async_main() -> Result<()> {
                     })
                     .await
                     .map_err(|e| anyhow::anyhow!("bang command task failed: {e}"))?;
-                    ragent_agent::bang_command::bang_command_prompt_from_output(cmd, &output)
+                    codemason_agent::bang_command::bang_command_prompt_from_output(cmd, &output)
                 }
             } else {
                 prompt.clone()
@@ -1385,7 +1390,7 @@ async fn async_main() -> Result<()> {
                     std::process::exit(1);
                 }
             }
-            // Tear down MCP connections so the stdio server children ragent
+            // Tear down MCP connections so the stdio server children codemason
             // spawned are killed before this short-lived process exits.
             session_processor.shutdown_mcp().await;
         }
@@ -1393,9 +1398,9 @@ async fn async_main() -> Result<()> {
             tracing::info!(address = %addr, "Starting HTTP server");
             // FR-012, FR-024, FR-032: when the OpenAI-compatible surface is
             // explicitly enabled, its bearer token must be configured. The token
-            // is the server's one bearer token (FR-024) - ragent does not run a
+            // is the server's one bearer token (FR-024) - codemason does not run a
             // second credential - resolved from `openai.token` then the ambient
-            // `RAGENT_TOKEN`, instead of the ephemeral generated one. When the
+            // `CODEMASON_TOKEN`, instead of the ephemeral generated one. When the
             // surface is enabled without one, refuse to start rather than serve
             // it unauthenticated (FR-032).
             let (openai_enabled, openai_token) = {
@@ -1405,7 +1410,7 @@ async fn async_main() -> Result<()> {
                     // Route the ambient fallback through the canonical
                     // credential reader so blank/whitespace handling matches
                     // the rest of the workspace (audit T-111).
-                    ragent_config::credential_env::read_credential_env("RAGENT_TOKEN")
+                    codemason_config::credential_env::read_credential_env("CODEMASON_TOKEN")
                 });
                 (enabled, token)
             };
@@ -1415,7 +1420,7 @@ async fn async_main() -> Result<()> {
                     None => anyhow::bail!(
                         "the OpenAI-compatible surface is enabled (openai.enabled: true) \
                          but no bearer token is configured; set `openai.token` or \
-                         RAGENT_TOKEN, or disable the surface"
+                         CODEMASON_TOKEN, or disable the surface"
                     ),
                 }
             } else if let Some(token) = openai_token {
@@ -1434,7 +1439,7 @@ async fn async_main() -> Result<()> {
                 guard.automation_config()
             };
             let _automation_scheduler = if automation_config.is_enabled() {
-                let service = Arc::new(ragent_agent::automation::AutomationService::new(
+                let service = Arc::new(codemason_agent::automation::AutomationService::new(
                     Arc::clone(&session_processor),
                     automation_config,
                     crate::working_dir(),
@@ -1443,9 +1448,10 @@ async fn async_main() -> Result<()> {
             } else {
                 None
             };
-            let orchestrator_registry = ragent_agent::orchestrator::AgentRegistry::new();
-            let coordinator = ragent_agent::orchestrator::Coordinator::new(orchestrator_registry);
-            let state = ragent_server::routes::AppState {
+            let orchestrator_registry = codemason_agent::orchestrator::AgentRegistry::new();
+            let coordinator =
+                codemason_agent::orchestrator::Coordinator::new(orchestrator_registry);
+            let state = codemason_server::routes::AppState {
                 event_bus,
                 config,
                 storage,
@@ -1456,18 +1462,18 @@ async fn async_main() -> Result<()> {
                 research_runs: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
                 research_root: Arc::new(crate::working_dir().join("research")),
                 worktree_root: Arc::new(
-                    ragent_agent::project::worktree::default_worktree_root()
-                        .unwrap_or_else(|| crate::working_dir().join(".ragent/worktrees")),
+                    codemason_agent::project::worktree::default_worktree_root()
+                        .unwrap_or_else(|| crate::working_dir().join(".codemason/worktrees")),
                 ),
             };
-            ragent_server::start_server(&addr, state).await?;
+            codemason_server::start_server(&addr, state).await?;
         }
         Some(Commands::Orchestrate) => {
             tracing::info!("Starting orchestration example");
             cli::run_orchestration_example().await?;
         }
         Some(Commands::Project { command }) => {
-            use ragent_agent::project::{ProjectManager, report};
+            use codemason_agent::project::{ProjectManager, report};
             let github_hosts = config.read().await.vcs.github.hosts.clone();
             let manager = ProjectManager::new(Arc::clone(&storage), Arc::clone(&event_bus))
                 .with_github_hosts(github_hosts);
@@ -1505,7 +1511,7 @@ async fn async_main() -> Result<()> {
         }
         Some(Commands::Session { command }) => match command {
             SessionCommands::List { project, json } => {
-                use ragent_agent::project::report;
+                use codemason_agent::project::report;
                 let mut stdout = std::io::stdout().lock();
                 if json {
                     let listing = report::grouped_sessions_json(&storage, project.as_deref())?;
@@ -1526,15 +1532,16 @@ async fn async_main() -> Result<()> {
                 tracing::info!(session_id = %id, "Resuming session");
                 print_banner();
                 // See the `run_tui` call above: box the large future.
-                Box::pin(ragent_tui::run_tui(
+                Box::pin(codemason_tui::run_tui(
                     event_bus,
                     storage,
                     provider_registry,
                     session_processor,
                     (*resolved_agent).clone(),
                     cli.log,
-                    ragent_tui::StartupSession::Resume(id),
-                    tui_log_rx.unwrap_or_else(|| ragent_tui::tracing_layer::tui_log_channel(1).1),
+                    codemason_tui::StartupSession::Resume(id),
+                    tui_log_rx
+                        .unwrap_or_else(|| codemason_tui::tracing_layer::tui_log_channel(1).1),
                     db_path.clone(),
                     config.read().await.config_paths.clone(),
                     startup,
@@ -1550,7 +1557,7 @@ async fn async_main() -> Result<()> {
                 no_loop_state,
                 include_cost: _,
             } => {
-                use ragent_agent::session::archive::{ArchiveConfig, export_session_archive};
+                use codemason_agent::session::archive::{ArchiveConfig, export_session_archive};
                 use std::path::Path;
 
                 let config = ArchiveConfig {
@@ -1571,13 +1578,13 @@ async fn async_main() -> Result<()> {
                         )?;
                     }
                     Err(e) => {
-                        cliprintln_err!("ragent session export: {e}");
+                        cliprintln_err!("codemason session export: {e}");
                         std::process::exit(1);
                     }
                 }
             }
             SessionCommands::Import { file } => {
-                use ragent_agent::session::archive::{ImportConfig, import_session_archive};
+                use codemason_agent::session::archive::{ImportConfig, import_session_archive};
                 use std::path::Path;
 
                 let archive_path = Path::new(&file);
@@ -1602,7 +1609,7 @@ async fn async_main() -> Result<()> {
                         )?;
                     }
                     Err(e) => {
-                        cliprintln_err!("ragent session import: {e}");
+                        cliprintln_err!("codemason session import: {e}");
                         std::process::exit(1);
                     }
                 }
@@ -1612,7 +1619,7 @@ async fn async_main() -> Result<()> {
             DbCommands::Prune { days, dry_run } => {
                 let days = match days {
                     Some(0) => {
-                        cliprintln_err!("ragent db prune: --days must be at least 1");
+                        cliprintln_err!("codemason db prune: --days must be at least 1");
                         std::process::exit(2);
                     }
                     Some(days) => days,
@@ -1636,7 +1643,7 @@ async fn async_main() -> Result<()> {
                     writeln!(
                         std::io::stdout(),
                         "The database file does not shrink until a VACUUM, which needs \
-                         exclusive access - stop every other ragent process first."
+                         exclusive access - stop every other codemason process first."
                     )?;
                 }
             }
@@ -1653,7 +1660,7 @@ async fn async_main() -> Result<()> {
             // not `Send`, so it must not be held across the `.await` calls
             // below (a `future_not_send` error otherwise). The buffer is
             // flushed to a single stdout lock once all awaits are done, so a
-            // piped consumer such as `ragent models | head` still sees a single
+            // piped consumer such as `codemason models | head` still sees a single
             // writer.
             use std::fmt::Write as _;
             let mut out = String::new();
@@ -1664,14 +1671,16 @@ async fn async_main() -> Result<()> {
                     .flatten()
                     .filter(|k| !k.is_empty())
                     .or_else(|| {
-                        ragent_config::credential_env::read_credential_env("OLLAMA_CLOUD_API_KEY")
+                        codemason_config::credential_env::read_credential_env(
+                            "OLLAMA_CLOUD_API_KEY",
+                        )
                     })
                     .or_else(|| {
-                        ragent_config::credential_env::read_credential_env("OLLAMA_API_KEY")
+                        codemason_config::credential_env::read_credential_env("OLLAMA_API_KEY")
                     })
                     .unwrap_or_default();
 
-                match ragent_agent::provider::ollama_cloud::list_ollama_cloud_models(
+                match codemason_agent::provider::ollama_cloud::list_ollama_cloud_models(
                     &api_key,
                     ollama_url.as_deref(),
                 )
@@ -1688,7 +1697,7 @@ async fn async_main() -> Result<()> {
                         if api_key.is_empty() {
                             writeln!(
                                 out,
-                                "\nNote: Chat requires an API key. Run `ragent auth \
+                                "\nNote: Chat requires an API key. Run `codemason auth \
                                  ollama_cloud <key>` or set OLLAMA_API_KEY."
                             )?;
                         }
@@ -1704,7 +1713,7 @@ async fn async_main() -> Result<()> {
                     .flatten()
                     .filter(|k| !k.is_empty())
                     .or_else(|| {
-                        ragent_config::credential_env::read_credential_env("OPENROUTER_API_KEY")
+                        codemason_config::credential_env::read_credential_env("OPENROUTER_API_KEY")
                     })
                     .unwrap_or_default();
 
@@ -1721,7 +1730,7 @@ async fn async_main() -> Result<()> {
                             if api_key.is_empty() {
                                 writeln!(
                                     out,
-                                    "\nNote: Chat requires an API key. Run `ragent auth \
+                                    "\nNote: Chat requires an API key. Run `codemason auth \
                                      openrouter <key>` or set OPENROUTER_API_KEY."
                                 )?;
                             }
@@ -1734,7 +1743,7 @@ async fn async_main() -> Result<()> {
                     writeln!(out, "OpenRouter provider is not registered.")?;
                 }
             } else if filter.as_deref() == Some("ollama") || ollama_url.is_some() {
-                match ragent_agent::provider::ollama::list_ollama_models(ollama_url.as_deref())
+                match codemason_agent::provider::ollama::list_ollama_models(ollama_url.as_deref())
                     .await
                 {
                     Ok(models) if models.is_empty() => {
@@ -1784,7 +1793,7 @@ async fn async_main() -> Result<()> {
                 }
             }
             // Flush stdout before the runtime is shut down so a closed pipe
-            // (e.g. `ragent models | head`) cannot race the print and turn into
+            // (e.g. `codemason models | head`) cannot race the print and turn into
             // a `Broken pipe` panic (see the note on `main`'s bounded shutdown).
             // The `write_io_log` helper classifies EPIPE as benign and logs it at
             // `debug` rather than propagating a
@@ -1866,7 +1875,7 @@ Use the TUI Memory panel (Alt+M or /memory) to browse entries."
                     },
                 ) else {
                     cliprintln_err!(
-                        "ragent spec govcreate: no model configured \
+                        "codemason spec govcreate: no model configured \
                          - pass --model provider/model or set one via /model in the TUI"
                     );
                     std::process::exit(2);
@@ -1910,10 +1919,11 @@ Use the TUI Memory panel (Alt+M or /memory) to browse entries."
             // serves. Synchronous stdout writes only.
             let mut stdout = std::io::stdout().lock();
             if client {
-                stdout.write_all(ragent_server::routes::openapi::typescript_client().as_bytes())?;
+                stdout
+                    .write_all(codemason_server::routes::openapi::typescript_client().as_bytes())?;
             } else {
                 let doc =
-                    serde_json::to_string_pretty(&ragent_server::routes::openapi::document())?;
+                    serde_json::to_string_pretty(&codemason_server::routes::openapi::document())?;
                 stdout.write_all(doc.as_bytes())?;
                 stdout.write_all(b"\n")?;
             }
@@ -1954,7 +1964,7 @@ Use the TUI Memory panel (Alt+M or /memory) to browse entries."
 /// server set the existing background connect loop will start, so a connector's
 /// tools surface as the ordinary `mcp_<server>_<tool>` tools of the shared
 /// client (FR-020) without a second connection path. A bridged id that collides
-/// with a configured `ragent.json` server (or another connector's server) is
+/// with a configured `codemason.json` server (or another connector's server) is
 /// refused by the bridge and reported rather than silently overwriting (FR-033).
 ///
 /// The bridge itself never connects; the returned [`ConnectorSession`] is the
@@ -1964,8 +1974,8 @@ Use the TUI Memory panel (Alt+M or /memory) to browse entries."
 /// lifetime: dropping it would drop every connection it owns.
 fn merge_connector_bridge(
     working_dir: &std::path::Path,
-    config: &ragent_agent::Config,
-    merged: &mut Vec<(String, ragent_agent::McpServerConfig)>,
+    config: &codemason_agent::Config,
+    merged: &mut Vec<(String, codemason_agent::McpServerConfig)>,
 ) -> Option<ConnectorSession> {
     let connectors = config.connectors.clone().unwrap_or_default();
     if !connectors.is_enabled() {
@@ -1974,7 +1984,7 @@ fn merge_connector_bridge(
 
     let dirs = store_dirs(working_dir, connectors.store_dir.as_deref());
     let configured_ids: Vec<&str> = merged.iter().map(|(id, _)| id.as_str()).collect();
-    let plan = ragent_connectors::scanned_bridge(&dirs, configured_ids);
+    let plan = codemason_connectors::scanned_bridge(&dirs, configured_ids);
     for refused in &plan.refused {
         // FR-033: a refused bridged id is dropped with a one-line cause, never
         // silently overwriting the server it collides with.
@@ -2006,7 +2016,7 @@ const MAIN_THREAD_STACK_BYTES: usize = 32 * 1024 * 1024;
 /// Process entry point: run [`main_body`] on an explicitly sized OS thread.
 ///
 /// The Windows MSVC linker gives the main thread a 1 MiB stack reserve while
-/// Linux grows the main thread stack to the ~8 MiB rlimit, so ragent aborted
+/// Linux grows the main thread stack to the ~8 MiB rlimit, so codemason aborted
 /// at startup on Windows with "thread '<main>' has overflowed its stack".
 /// Spawning the program body on its own thread with an explicit large stack
 /// gives every platform the same headroom; a panic payload raised on that
@@ -2014,7 +2024,7 @@ const MAIN_THREAD_STACK_BYTES: usize = 32 * 1024 * 1024;
 /// the 101 exit code are unchanged.
 fn main() -> Result<()> {
     std::thread::Builder::new()
-        .name("ragent-main".to_string())
+        .name("codemason-main".to_string())
         .stack_size(MAIN_THREAD_STACK_BYTES)
         .spawn(main_body)
         .map_err(|e| anyhow::anyhow!("failed to spawn program body thread: {e}"))?
@@ -2064,7 +2074,7 @@ fn main_body() -> Result<()> {
     if let Err(e) = &result
         && stderr_spool::is_active()
     {
-        cliprintln!("ragent: {e}");
+        cliprintln!("codemason: {e}");
     }
     result
 }

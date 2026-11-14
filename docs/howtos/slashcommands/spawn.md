@@ -26,7 +26,7 @@ want its reply body back in the conversation.
 
 - `<agent>` — any agent name `/agent` accepts: built-ins
   (`general`, `explore`, `build`, `plan`, `code-review`, ...) and custom
-  agents loaded from `.ragent/agents/` or the user-level directory.
+  agents loaded from `.codemason/agents/` or the user-level directory.
   Resolution is case-insensitive; hidden built-ins resolve only by exact,
   case-sensitive name.
 - `<prompt...>` — the full task text. It is passed to the sub-agent as its

@@ -1,4 +1,4 @@
-# cargo-nextest configuration for the ragent workspace.
+# cargo-nextest configuration for the codemason workspace.
 #
 # `cargo nextest run` replaces `cargo test` for the workspace's test runs; see
 # AGENTS-LANGUAGE.md ("Test Commands") for the command forms and TOOLCHAIN.md
@@ -13,7 +13,7 @@
 # two tests.
 #
 #   cargo nextest run                                  # everything
-#   cargo nextest run -p ragent-agent                  # one crate
+#   cargo nextest run -p codemason-agent                  # one crate
 #   cargo nextest run -E 'test(test_unified_dispatch::)'   # filter a module
 #   cargo nextest run --workspace --no-fail-fast       # CI shape
 #   cargo nextest list                                 # what would run
@@ -32,7 +32,7 @@ dir = "target/nextest"
 # final summary - a single 14k-test run is too long to scroll back through.
 failure-output = "immediate-final"
 # A test that exceeds the slow-timeout period is killed. The period is above
-# the slowest legitimate case (the full `ragent-agent` loop suites finish in
+# the slowest legitimate case (the full `codemason-agent` loop suites finish in
 # seconds, and an unanswered permission prompt is held for 120 s before its own
 # verdict), so a termination here means a genuine hang, not a slow machine.
 slow-timeout = { period = "150s", terminate-after = 1 }
@@ -64,7 +64,7 @@ path = "junit.xml"
 [test-groups]
 # The sandbox cases - `test_sandbox_secrets` and `test_container_backend` -
 # start real containers from a name derived from the workspace path
-# (`ragent-sandbox-<hash>`), so two of them running at once collide on that name
+# (`codemason-sandbox-<hash>`), so two of them running at once collide on that name
 # and the loser fails with "the container name ... is already in use". They share
 # one group so the exclusion covers the cross-file collision too; serialising
 # them is the only form that holds across processes, because a file-local lock
@@ -74,7 +74,7 @@ test-group-sandbox = { max-threads = 1 }
 # The tool-rename guard tests invoke `scripts/check_tool_rename.py` against the
 # whole checked-in tree. Most now scan a scratch copy under `target/temp/`, but
 # two still seed into the checkout: `--self-test` writes its fixture into
-# `crates/ragent-tools-core/src/`, and the `tests/` scope probe is checked for a
+# `crates/codemason-tools-core/src/`, and the `tests/` scope probe is checked for a
 # moment too. With one thread they no longer scan the tree while a sibling's
 # fixture is on disk.
 tool-rename-guard = { max-threads = 1 }

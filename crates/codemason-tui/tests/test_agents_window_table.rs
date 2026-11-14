@@ -1,0 +1,1393 @@
+//! Tests for the Agents table body (spec `agentui` T-003).
+//!
+//! Covers the column header (FR-009), the primary row (FR-010), the
+//! ancestor-indented sub-agent tree (FR-011), sub-agent row content (FR-012),
+//! the `[C]` / `[T]` badges and their derivation (FR-013, FR-062), the status
+//! presentation (FR-014), the pinned `[stop]` / `[x]` control columns (FR-015),
+//! the background shell section (FR-016), the single glyph source (NFR-003) and
+//! character-safe truncation (NFR-004).
+//!
+//! Every case drives the real public render entry point through a ratatui
+//! `TestBackend` and reads the painted buffer back, so no renderer logic is
+//! re-implemented here (NFR-001).
+
+mod support;
+
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier};
+
+use codemason_agent::agent::oasf::OasfAgentRecord;
+use codemason_agent::agent::{AgentInfo, CustomAgentDef};
+use codemason_agent::task::{ReportStatus, TaskEntry, TaskStatus};
+use codemason_agent::team::{MemberStatus, TeamMember};
+use codemason_tui::App;
+use codemason_tui::layout_active_agents::{columns, glyphs};
+use support::make_app;
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+/// Render `app` with the Agents window open and return the drawn buffer.
+fn render(app: &mut App, width: u16, height: u16) -> Buffer {
+    app.show_agents_window = true;
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).expect("create test terminal");
+    terminal
+        .draw(|frame| codemason_tui::layout::render(frame, app))
+        .expect("render frame");
+    terminal.backend().buffer().clone()
+}
+
+/// Build a [`TaskEntry`] for the Agents table.
+fn task(
+    id: &str,
+    parent: &str,
+    child: &str,
+    agent: &str,
+    status: TaskStatus,
+    background: bool,
+) -> TaskEntry {
+    TaskEntry {
+        id: id.to_string(),
+        parent_session_id: parent.to_string(),
+        child_session_id: child.to_string(),
+        agent_name: agent.to_string(),
+        task_prompt: "prompt".to_string(),
+        background,
+        detached: false,
+        status,
+        result: None,
+        error: None,
+        created_at: chrono::Utc::now(),
+        completed_at: None,
+        reported: false,
+        waiter_count: 0,
+        output_file: None,
+        report_status: ReportStatus::default(),
+        time_bound_secs: None,
+    }
+}
+
+/// Build a [`TaskEntry`] for a detached (fire-and-forget) task (FR-020).
+///
+/// A detached run is also a background run, so the helper sets both flags the
+/// way the task registry does: the row must distinguish them from the flags,
+/// not from an assumption about which one implies which.
+fn detached_task(id: &str, parent: &str, child: &str, agent: &str) -> TaskEntry {
+    TaskEntry {
+        detached: true,
+        ..task(id, parent, child, agent, TaskStatus::Running, true)
+    }
+}
+
+/// Build a background shell task view.
+fn bg_task(id: &str, command: &str, status: &str) -> codemason_tui::app::BgTaskView {
+    codemason_tui::app::BgTaskView {
+        id: id.to_string(),
+        session_id: "s1".to_string(),
+        command: command.to_string(),
+        status: status.to_string(),
+        created_at: chrono::Utc::now(),
+        completed_at: None,
+    }
+}
+
+/// An app whose primary session is `s1` and whose agent is `general`.
+fn app_with_primary() -> App {
+    let mut app = make_app();
+    app.session.session_id = Some("s1".to_string());
+    app.session.agent_name = "general".to_string();
+    app
+}
+
+/// Flatten one painted row of `area` into a string.
+fn row_text(buffer: &Buffer, area: Rect, offset: u16) -> String {
+    let y = area.y.saturating_add(offset);
+    let mut out = String::new();
+    for x in area.x..area.x.saturating_add(area.width) {
+        match buffer.cell((x, y)) {
+            Some(cell) => out.push_str(cell.symbol()),
+            None => out.push('?'),
+        }
+    }
+    out
+}
+
+/// The painted style of the cell at column `col` (`0`-based, relative to the
+/// table area) of row `offset` inside `area`.
+fn cell_at(buffer: &Buffer, area: Rect, offset: u16, col: u16) -> ratatui::buffer::Cell {
+    buffer
+        .cell((area.x.saturating_add(col), area.y.saturating_add(offset)))
+        .cloned()
+        .unwrap_or_else(|| panic!("cell ({col}, {offset}) outside the buffer"))
+}
+
+/// The painted foreground colour at column `col` of row `offset`.
+fn fg_at(buffer: &Buffer, area: Rect, offset: u16, col: u16) -> Color {
+    cell_at(buffer, area, offset, col).fg
+}
+
+/// The index of `needle` inside the first `area.width` columns of row `offset`,
+/// if the row paints it.
+fn find_in_row(buffer: &Buffer, area: Rect, offset: u16, needle: &str) -> Option<usize> {
+    row_text(buffer, area, offset).find(needle)
+}
+
+/// The index of the first painted row (inside the table area) that contains
+/// `needle`.
+fn find_row(buffer: &Buffer, area: Rect, needle: &str) -> Option<u16> {
+    (0..area.height).find(|offset| find_in_row(buffer, area, *offset, needle).is_some())
+}
+
+/// Register a custom agent definition named `name` on `app`.
+fn add_custom_agent(app: &mut App, name: &str) {
+    app.custom_agent_defs.push(CustomAgentDef {
+        record: OasfAgentRecord {
+            name: name.to_string(),
+            description: "custom".to_string(),
+            version: "1.0.0".to_string(),
+            schema_version: "0.7.0".to_string(),
+            authors: Vec::new(),
+            created_at: None,
+            skills: Vec::new(),
+            domains: Vec::new(),
+            locators: Vec::new(),
+            modules: Vec::new(),
+        },
+        source_path: PathBuf::from(format!("/agents/{name}.json")),
+        agent_info: Arc::new(AgentInfo::new(name, "custom agent")),
+        is_project_local: true,
+    });
+}
+
+// -- FR-009: header ---------------------------------------------------------
+
+/// The first line of the table is a dimmed header naming every column in the
+/// documented left-to-right order (FR-009).
+#[test]
+fn test_agents_header_names_every_column_dimmed_and_in_order() {
+    let mut app = app_with_primary();
+    let buffer = render(&mut app, 160, 44);
+    let area = app.active_agents_area;
+    let header = row_text(&buffer, area, 0);
+
+    let columns_in_order = [
+        "id",
+        "name",
+        "type",
+        "elapsed",
+        "steps",
+        glyphs::STOP,
+        glyphs::KILL,
+    ];
+    let mut last = 0usize;
+    for column in columns_in_order {
+        let at = header
+            .find(column)
+            .unwrap_or_else(|| panic!("{column:?} missing from the header row: {header:?}"));
+        assert!(
+            at >= last,
+            "{column:?} is out of order in the header row: {header:?}"
+        );
+        last = at;
+    }
+
+    // The header is dimmed hint-coloured, not normal row text.
+    let hint = codemason_tui::theme::colors::HINT;
+    for column in columns_in_order {
+        let at = header.find(column).expect("column present") as u16;
+        let cell = cell_at(&buffer, area, 0, at);
+        assert_eq!(cell.fg, hint, "{column:?} must use the hint colour");
+        assert!(
+            cell.modifier.contains(Modifier::DIM),
+            "{column:?} must be dimmed: {cell:?}"
+        );
+    }
+}
+
+// -- FR-010: primary row ----------------------------------------------------
+
+/// Row 1 is the primary agent: a green `*`, the literal `lead`, the agent name
+/// in bold green, `primary`, a `-` elapsed value and the live tool-call count,
+/// with no action controls (FR-010).
+#[test]
+fn test_primary_row_carries_marker_identity_and_live_step_count() {
+    let mut app = app_with_primary();
+    app.event_bus.increment_tool_calls("s1");
+    app.event_bus.increment_tool_calls("s1");
+    app.event_bus.increment_tool_calls("s1");
+    let buffer = render(&mut app, 160, 44);
+    let area = app.active_agents_area;
+    let row = row_text(&buffer, area, 1);
+
+    assert!(
+        row[columns::CONTENT_X..].starts_with('*'),
+        "the primary marker is a green `*`: {row:?}"
+    );
+    assert_eq!(
+        cell_at(&buffer, area, 1, columns::CONTENT_X as u16).fg,
+        Color::Green,
+        "the primary marker must be green"
+    );
+    assert_eq!(
+        row.find("lead"),
+        Some(columns::CONTENT_X + columns::MARKER_W),
+        "the id column reads the literal `lead`: {row:?}"
+    );
+
+    let name_col = (columns::CONTENT_X + columns::MARKER_W + columns::ID_W + columns::GAP_W) as u16;
+    let name_cell = cell_at(&buffer, area, 1, name_col);
+    assert_eq!(name_cell.fg, Color::Green, "the agent name is green");
+    assert!(
+        name_cell.modifier.contains(Modifier::BOLD),
+        "the agent name is bold: {name_cell:?}"
+    );
+    assert!(
+        row[name_col as usize..].starts_with("general"),
+        "the configured agent name paints in the name column: {row:?}"
+    );
+
+    let type_x =
+        columns::CONTENT_X + columns::MARKER_W + columns::ID_W + columns::GAP_W + columns::LABEL_W;
+    let elapsed_x = type_x + columns::TYPE_W;
+    let steps_x = elapsed_x + columns::ELAPSED_W + columns::GAP_W;
+    assert_eq!(
+        row.get(type_x..elapsed_x).map(str::trim),
+        Some("primary"),
+        "the type column reads the literal `primary`: {row:?}"
+    );
+    assert_eq!(
+        row.get(elapsed_x..elapsed_x + columns::ELAPSED_W)
+            .map(str::trim),
+        Some("-"),
+        "the elapsed column reads `-`: {row:?}"
+    );
+    assert_eq!(
+        row.get(steps_x..steps_x + columns::STEPS_W).map(str::trim),
+        Some("3"),
+        "the steps column paints the primary session's live tool-call count: {row:?}"
+    );
+    assert!(
+        !row.contains(glyphs::STOP) && !row.contains(glyphs::KILL),
+        "the primary row carries no action controls: {row:?}"
+    );
+}
+
+// -- FR-011: tree indentation ----------------------------------------------
+
+/// Each sub-agent row is indented by one two-column segment per ancestor and
+/// prefixed with the last-child or non-last-child branch glyph (FR-011).
+#[test]
+fn test_subagent_rows_indent_two_columns_per_ancestor() {
+    let mut app = app_with_primary();
+    // Two siblings under the primary session, then a grandchild under the
+    // first sibling and a great-grandchild under that.
+    app.active_tasks.push(task(
+        "alpha-0001",
+        "s1",
+        "s2",
+        "explore",
+        TaskStatus::Running,
+        true,
+    ));
+    app.active_tasks.push(task(
+        "beta-0002",
+        "s1",
+        "s3",
+        "build",
+        TaskStatus::Running,
+        true,
+    ));
+    app.active_tasks.push(task(
+        "gamma-0003",
+        "s2",
+        "s4",
+        "explore",
+        TaskStatus::Running,
+        true,
+    ));
+    app.active_tasks.push(task(
+        "delta-0004",
+        "s4",
+        "s5",
+        "explore",
+        TaskStatus::Running,
+        true,
+    ));
+
+    let buffer = render(&mut app, 160, 44);
+    let area = app.active_agents_area;
+    let label_x = (columns::CONTENT_X + columns::MARKER_W + columns::ID_W + columns::GAP_W) as u16;
+
+    // Depth 0 siblings: the non-last one keeps the branch open, the last one
+    // closes it.
+    let alpha = find_row(&buffer, area, "alpha-0001").expect("first sibling paints");
+    let beta = find_row(&buffer, area, "beta-0002").expect("second sibling paints");
+    let alpha_row = row_text(&buffer, area, alpha);
+    let beta_row = row_text(&buffer, area, beta);
+    assert!(
+        alpha_row[label_x as usize..].starts_with(glyphs::BRANCH_MID),
+        "a non-last child paints the mid branch glyph: {alpha_row:?}"
+    );
+    assert!(
+        beta_row[label_x as usize..].starts_with(glyphs::BRANCH_LAST),
+        "the last child paints the closing branch glyph: {beta_row:?}"
+    );
+
+    // Depth 1 under a non-last parent: one trunk segment then the branch glyph.
+    let gamma = find_row(&buffer, area, "gamma-0003").expect("grandchild paints");
+    let gamma_row = row_text(&buffer, area, gamma);
+    let gamma_label = &gamma_row[label_x as usize..];
+    assert!(
+        gamma_label.starts_with(glyphs::TRUNK),
+        "the grandchild keeps the parent trunk segment: {gamma_row:?}"
+    );
+    assert!(
+        gamma_label[glyphs::TRUNK.len()..].starts_with(glyphs::BRANCH_LAST),
+        "the grandchild draws its own branch glyph after the trunk: {gamma_row:?}"
+    );
+
+    // Depth 2: the non-last grandparent keeps its trunk, the last-child parent
+    // contributes a blank segment, then the child's own branch glyph.
+    let delta = find_row(&buffer, area, "delta-0004").expect("great-grandchild paints");
+    let delta_row = row_text(&buffer, area, delta);
+    let delta_label = &delta_row[label_x as usize..];
+    assert!(
+        delta_label.starts_with(glyphs::TRUNK),
+        "the non-last grandparent keeps its trunk segment: {delta_row:?}"
+    );
+    assert!(
+        delta_label[glyphs::TRUNK.len()..].starts_with(glyphs::TRUNK_BLANK),
+        "a last-child ancestor contributes a blank two-column segment: {delta_row:?}"
+    );
+    assert!(
+        delta_label[2 * glyphs::TRUNK.len()..].starts_with(glyphs::BRANCH_LAST),
+        "the great-grandchild draws its own branch glyph: {delta_row:?}"
+    );
+
+    // One two-column segment per ancestor: depth 2 starts its glyphs 4 columns
+    // in, depth 1 starts 2 columns in.
+    assert_eq!(
+        ancestor_segment_width(&alpha_row, label_x),
+        0,
+        "a depth-0 row carries no ancestor segment: {alpha_row:?}"
+    );
+    assert_eq!(
+        ancestor_segment_width(&gamma_row, label_x),
+        glyphs::TRUNK.len(),
+        "a depth-1 row carries exactly one ancestor segment: {gamma_row:?}"
+    );
+    assert_eq!(
+        ancestor_segment_width(&delta_row, label_x),
+        2 * glyphs::TRUNK.len(),
+        "a depth-2 row carries exactly two ancestor segments: {delta_row:?}"
+    );
+}
+
+/// The number of two-column ancestor segments painted before the branch glyph.
+fn ancestor_segment_width(row: &str, label_x: u16) -> usize {
+    let label = &row[label_x as usize..];
+    let mut offset = 0usize;
+    let mut rest = label;
+    while rest.starts_with(glyphs::TRUNK) || rest.starts_with(glyphs::TRUNK_BLANK) {
+        let step = if rest.starts_with(glyphs::TRUNK) {
+            glyphs::TRUNK.len()
+        } else {
+            glyphs::TRUNK_BLANK.len()
+        };
+        rest = &rest[step..];
+        offset += step;
+    }
+    offset
+}
+
+// -- FR-012: sub-agent row content ----------------------------------------
+
+/// A sub-agent row paints a status dot, the last 8 characters of the task id,
+/// the agent name (at most 32 columns), `bg` / `fg`, a compact elapsed time and
+/// the child session's live tool-call count (FR-012).
+#[test]
+fn test_subagent_row_paints_dot_short_id_label_type_elapsed_and_steps() {
+    let mut app = app_with_primary();
+    app.active_tasks.push(task(
+        "zzzzzzzz-explore-abcd1234",
+        "s1",
+        "s2",
+        "explore",
+        TaskStatus::Running,
+        true,
+    ));
+    app.active_tasks.push(task(
+        "zzzzzzzz-planner-efgh5678",
+        "s1",
+        "s3",
+        "planner",
+        TaskStatus::Running,
+        false,
+    ));
+    app.event_bus.increment_tool_calls("s2");
+    app.event_bus.increment_tool_calls("s2");
+    app.event_bus.increment_tool_calls("s2");
+    app.event_bus.increment_tool_calls("s2");
+
+    let buffer = render(&mut app, 160, 44);
+    let area = app.active_agents_area;
+
+    let id_x = (columns::CONTENT_X + columns::MARKER_W) as u16;
+    let label_x = (columns::CONTENT_X + columns::MARKER_W + columns::ID_W + columns::GAP_W) as u16;
+    let type_x = label_x + columns::LABEL_W as u16;
+    let elapsed_x = type_x + columns::TYPE_W as u16;
+    let steps_x = elapsed_x + (columns::ELAPSED_W + columns::GAP_W) as u16;
+
+    let bg_row = find_row(&buffer, area, "abcd1234").expect("the bg row paints the short id");
+    let bg_text = row_text(&buffer, area, bg_row);
+    assert!(
+        bg_text[columns::CONTENT_X..].starts_with(glyphs::ROW_DOT),
+        "a sub-agent row starts with the status dot: {bg_text:?}"
+    );
+    assert_eq!(
+        fg_at(&buffer, area, bg_row, columns::CONTENT_X as u16),
+        Color::Yellow,
+        "a running row's dot is yellow"
+    );
+    assert!(
+        bg_text[id_x as usize..].starts_with("abcd1234"),
+        "the id column paints the last 8 characters of the task id: {bg_text:?}"
+    );
+    assert!(
+        !bg_text[id_x as usize..label_x as usize].contains("zzzzzzzz"),
+        "the id column never paints the full task id: {bg_text:?}"
+    );
+
+    let steps_cell = row_text(&buffer, area, bg_row);
+    let steps_slice: String = steps_cell
+        .chars()
+        .skip(steps_x as usize)
+        .take(columns::STEPS_W)
+        .collect();
+    assert_eq!(
+        steps_slice.trim(),
+        "4",
+        "the steps column paints the child session's live tool-call count: {bg_text:?}"
+    );
+
+    let elapsed_slice: String = steps_cell
+        .chars()
+        .skip(elapsed_x as usize)
+        .take(columns::ELAPSED_W)
+        .collect();
+    assert!(
+        elapsed_slice.trim().ends_with('s'),
+        "the elapsed column paints a compact duration: {bg_text:?}"
+    );
+
+    // The type column reads `bg` for a background task and `fg` otherwise.
+    let type_slice: String = bg_text
+        .chars()
+        .skip(type_x as usize)
+        .take(columns::TYPE_W)
+        .collect();
+    assert_eq!(type_slice.trim(), "bg", "a background task reads `bg`");
+    let fg_row = find_row(&buffer, area, "efgh5678").expect("the fg row paints");
+    let fg_text = row_text(&buffer, area, fg_row);
+    let fg_type: String = fg_text
+        .chars()
+        .skip(type_x as usize)
+        .take(columns::TYPE_W)
+        .collect();
+    assert_eq!(fg_type.trim(), "fg", "a foreground task reads `fg`");
+}
+
+/// The agent-label column never exceeds 32 display columns, whatever badges and
+/// a long identifier are appended, so the type column is never pushed out
+/// (FR-012, FR-013).
+#[test]
+fn test_agent_label_never_exceeds_thirty_two_columns() {
+    let long_agent = "a-very-long-custom-agent-name-for-testing";
+    let mut app = app_with_primary();
+    add_custom_agent(&mut app, long_agent);
+    app.active_tasks.push(task(
+        "a-very-long-custom-agent-name-for-testing-0123456789abcdef",
+        "s1",
+        "s2",
+        long_agent,
+        TaskStatus::Suspended,
+        true,
+    ));
+    let mut member = TeamMember::new("watcher", "tm-001", long_agent);
+    member.session_id = Some("s2".to_string());
+    member.status = MemberStatus::Working;
+    app.session.team_members.push(member);
+
+    let buffer = render(&mut app, 200, 50);
+    let area = app.active_agents_area;
+    let label_x = columns::CONTENT_X + columns::MARKER_W + columns::ID_W + columns::GAP_W;
+    let type_x = label_x + columns::LABEL_W;
+
+    // Every non-header row is checked: the label slot is exactly the documented
+    // width, so nothing can spill past it.
+    let row = (1..area.height)
+        .find(|offset| {
+            let text = row_text(&buffer, area, *offset);
+            text.contains(glyphs::BADGE_CUSTOM) && text.contains(glyphs::BADGE_TEAM)
+        })
+        .unwrap_or_else(|| panic!("the badly-labelled row must paint both badges"));
+    let text = row_text(&buffer, area, row);
+    let label: String = text.chars().skip(label_x).take(columns::LABEL_W).collect();
+    assert!(
+        label.contains(glyphs::BADGE_CUSTOM) && label.contains(glyphs::BADGE_TEAM),
+        "both badges stay inside the 32-column label: {label:?}"
+    );
+    assert!(
+        label.contains(glyphs::STATUS_SUSPENDED.trim()),
+        "the status suffix also stays inside the label: {label:?}"
+    );
+    let type_slice: String = text.chars().skip(type_x).take(columns::TYPE_W).collect();
+    assert_eq!(
+        type_slice.trim(),
+        "bg",
+        "the type column is not pushed out by an over-long label: {text:?}"
+    );
+    let stop_at = find_in_row(&buffer, area, row, glyphs::STOP);
+    assert_eq!(
+        stop_at, None,
+        "a suspended row paints the resume glyph, not [stop]: {text:?}"
+    );
+    assert_eq!(
+        find_in_row(&buffer, area, row, glyphs::KILL),
+        Some(columns::CONTENT_X + columns::KILL_X),
+        "the control column keeps its pinned position: {text:?}"
+    );
+}
+
+// -- FR-013 / FR-062: badges ----------------------------------------------
+
+/// The `[C]` badge follows the loaded custom agent definitions and the `[T]`
+/// badge follows the current members' sessions (FR-013, FR-062).
+#[test]
+fn test_badges_follow_the_current_custom_agents_and_members() {
+    let mut app = app_with_primary();
+    app.active_tasks.push(task(
+        "first-0001",
+        "s1",
+        "s2",
+        "explore",
+        TaskStatus::Running,
+        true,
+    ));
+    app.active_tasks.push(task(
+        "second-0002",
+        "s1",
+        "s3",
+        "explore",
+        TaskStatus::Running,
+        true,
+    ));
+
+    // No custom definitions and no team: no badges paint.
+    let buffer = render(&mut app, 160, 44);
+    let area = app.active_agents_area;
+    let row = find_row(&buffer, area, "first-0001").expect("row paints");
+    let plain = row_text(&buffer, area, row);
+    assert!(
+        !plain.contains(glyphs::BADGE_CUSTOM) && !plain.contains(glyphs::BADGE_TEAM),
+        "no badge without a custom agent or a team: {plain:?}"
+    );
+
+    // A custom definition named `explore` badges both rows with `[C]`.
+    add_custom_agent(&mut app, "explore");
+    let buffer = render(&mut app, 160, 44);
+    let area = app.active_agents_area;
+    let row = find_row(&buffer, area, "first-0001").expect("row paints");
+    let custom = row_text(&buffer, area, row);
+    assert!(
+        custom.contains(glyphs::BADGE_CUSTOM),
+        "a row whose agent is a custom definition carries [C]: {custom:?}"
+    );
+    assert!(
+        !custom.contains(glyphs::BADGE_TEAM),
+        "no teammate badge without a team member: {custom:?}"
+    );
+
+    // A member whose session is the second task's child session badges only
+    // that row, proving the set is re-derived from the members (FR-062).
+    let mut member = TeamMember::new("reviewer", "tm-001", "explore");
+    member.session_id = Some("s3".to_string());
+    member.status = MemberStatus::Working;
+    app.session.team_members.push(member);
+    let buffer = render(&mut app, 160, 44);
+    let area = app.active_agents_area;
+    let first = find_row(&buffer, area, "first-0001").expect("first row paints");
+    let second = find_row(&buffer, area, "second-0002").expect("second row paints");
+    let first_text = row_text(&buffer, area, first);
+    let second_text = row_text(&buffer, area, second);
+    assert!(
+        first_text.contains(glyphs::BADGE_CUSTOM) && !first_text.contains(glyphs::BADGE_TEAM),
+        "the non-member row carries only [C]: {first_text:?}"
+    );
+    assert!(
+        second_text.contains(glyphs::BADGE_CUSTOM) && second_text.contains(glyphs::BADGE_TEAM),
+        "the member row carries both [C] and [T]: {second_text:?}"
+    );
+
+    // Dropping the member removes the badge again.
+    app.session.team_members.clear();
+    let buffer = render(&mut app, 160, 44);
+    let area = app.active_agents_area;
+    let second = find_row(&buffer, area, "second-0002").expect("second row paints");
+    assert!(
+        !row_text(&buffer, area, second).contains(glyphs::BADGE_TEAM),
+        "the [T] badge tracks the live member list"
+    );
+}
+
+// -- FR-014: status presentation ------------------------------------------
+
+/// Running rows are yellow, suspended rows dark grey with a ` [||]` suffix and
+/// terminating rows red with a ` ...` suffix (FR-014).
+#[test]
+fn test_row_status_colours_and_suffixes() {
+    let mut app = app_with_primary();
+    app.active_tasks.push(task(
+        "run-0001",
+        "s1",
+        "s2",
+        "explore",
+        TaskStatus::Running,
+        true,
+    ));
+    app.active_tasks.push(task(
+        "susp-0002",
+        "s1",
+        "s3",
+        "explore",
+        TaskStatus::Suspended,
+        true,
+    ));
+    app.active_tasks.push(task(
+        "term-0003",
+        "s1",
+        "s4",
+        "explore",
+        TaskStatus::Terminating,
+        true,
+    ));
+
+    let buffer = render(&mut app, 160, 44);
+    let area = app.active_agents_area;
+    let label_x = (columns::CONTENT_X + columns::MARKER_W + columns::ID_W + columns::GAP_W) as u16;
+
+    let running = find_row(&buffer, area, "run-0001").expect("running row paints");
+    assert_eq!(
+        fg_at(&buffer, area, running, label_x),
+        Color::Yellow,
+        "a running row's label is yellow"
+    );
+    let running_text = row_text(&buffer, area, running);
+    assert!(
+        !running_text.contains(glyphs::STATUS_SUSPENDED)
+            && !running_text.contains(glyphs::STATUS_TERMINATING),
+        "a running row carries no status suffix: {running_text:?}"
+    );
+
+    let suspended = find_row(&buffer, area, "susp-0002").expect("suspended row paints");
+    assert_eq!(
+        fg_at(&buffer, area, suspended, label_x),
+        Color::DarkGray,
+        "a suspended row's label is dark grey"
+    );
+    let suspended_text = row_text(&buffer, area, suspended);
+    assert!(
+        suspended_text.contains(glyphs::STATUS_SUSPENDED),
+        "a suspended row paints the ` [||]` suffix: {suspended_text:?}"
+    );
+
+    let terminating = find_row(&buffer, area, "term-0003").expect("terminating row paints");
+    assert_eq!(
+        fg_at(&buffer, area, terminating, label_x),
+        Color::Red,
+        "a terminating row's label is red"
+    );
+    let terminating_text = row_text(&buffer, area, terminating);
+    assert!(
+        terminating_text.contains(glyphs::STATUS_TERMINATING),
+        "a terminating row paints the ` ...` suffix: {terminating_text:?}"
+    );
+}
+
+// -- FR-015: control columns ----------------------------------------------
+
+/// A live row paints the six-column `[stop]` control at column 70 and the
+/// four-column `[x]` control at column 77 of the table area, for the agent rows
+/// and the background shell rows alike (FR-015).
+#[test]
+fn test_live_rows_pin_stop_and_kill_to_the_documented_columns() {
+    let mut app = app_with_primary();
+    app.active_tasks.push(task(
+        "run-0001",
+        "s1",
+        "s2",
+        "explore",
+        TaskStatus::Running,
+        true,
+    ));
+    app.bg_tasks.push(bg_task("bg-0001", "sleep 30", "running"));
+
+    let buffer = render(&mut app, 160, 44);
+    let area = app.active_agents_area;
+
+    for needle in ["run-0001", "bg-0001"] {
+        let row = find_row(&buffer, area, needle).expect("row paints");
+        let text = row_text(&buffer, area, row);
+        let stop_at = find_in_row(&buffer, area, row, glyphs::STOP)
+            .unwrap_or_else(|| panic!("{needle}: the [stop] control must paint: {text:?}"));
+        assert_eq!(
+            stop_at,
+            columns::CONTENT_X + columns::STOP_X,
+            "{needle}: [stop] must start at column {} behind the margin: {text:?}",
+            columns::CONTENT_X + columns::STOP_X
+        );
+        let kill_at = find_in_row(&buffer, area, row, glyphs::KILL)
+            .unwrap_or_else(|| panic!("{needle}: the [x] control must paint: {text:?}"));
+        assert_eq!(
+            kill_at,
+            columns::CONTENT_X + columns::KILL_X,
+            "{needle}: [x] must start at column {}: {text:?}",
+            columns::CONTENT_X + columns::KILL_X
+        );
+    }
+}
+
+// (The old `test_control_hit_rects_match_the_painted_controls` was removed:
+// the hit-rect state vectors are gone; its replacement,
+// `test_render_publishes_row_maps_and_the_subagent_cursor_list`, pins the
+// same alignment invariant against the published cursor row maps.)
+
+/// A suspended row replaces the `[stop]` glyph with `>` without moving `[x]`
+/// (FR-015).
+#[test]
+fn test_suspended_row_paints_the_resume_glyph_in_the_stop_column() {
+    let mut app = app_with_primary();
+    app.active_tasks.push(task(
+        "susp-0001",
+        "s1",
+        "s2",
+        "explore",
+        TaskStatus::Suspended,
+        true,
+    ));
+    let buffer = render(&mut app, 160, 44);
+    let area = app.active_agents_area;
+    let row = find_row(&buffer, area, "susp-0001").expect("row paints");
+    let text = row_text(&buffer, area, row);
+
+    assert!(
+        !text.contains(glyphs::STOP),
+        "a suspended row drops the [stop] label: {text:?}"
+    );
+    let cell = cell_at(
+        &buffer,
+        area,
+        row,
+        (columns::CONTENT_X + columns::STOP_X) as u16,
+    );
+    assert_eq!(
+        cell.symbol(),
+        glyphs::RESUME,
+        "the resume glyph paints at the [stop] column: {text:?}"
+    );
+    assert_eq!(cell.fg, Color::Green, "the resume glyph is green");
+    assert_eq!(
+        find_in_row(&buffer, area, row, glyphs::KILL),
+        Some(columns::CONTENT_X + columns::KILL_X),
+        "the [x] control stays at its pinned column: {text:?}"
+    );
+}
+
+/// A no-cursor render publishes the sub-agent row map: every painted row
+/// carries its click key (empty on the header, primary and background rows,
+/// the task id on a sub-agent row), and the keyboard cursor's ordinal list is
+/// exactly the sub-agent slice of it (the old hit-rect vectors are gone -
+/// the cursor reads these vectors instead).
+#[test]
+fn test_render_publishes_row_maps_and_the_subagent_cursor_list() {
+    let mut app = app_with_primary();
+    app.active_tasks.push(task(
+        "run-0001",
+        "s1",
+        "s2",
+        "explore",
+        TaskStatus::Running,
+        true,
+    ));
+    app.active_tasks.push(task(
+        "done-0002",
+        "s1",
+        "s3",
+        "explore",
+        TaskStatus::Completed,
+        true,
+    ));
+    app.bg_tasks.push(bg_task("bg-0001", "sleep 30", "running"));
+    app.bg_tasks.push(bg_task("bg-0002", "true", "completed"));
+
+    let buffer = render(&mut app, 160, 44);
+    let area = app.active_agents_area;
+
+    // The row map is index-aligned with the painted rows: header, primary,
+    // two sub-agent rows, background heading and two background rows.
+    assert_eq!(
+        app.agents_row_task_ids.len(),
+        7,
+        "one row key per painted row"
+    );
+    assert_eq!(app.agents_row_task_ids[0], "", "the header opens nothing");
+    assert_eq!(
+        app.agents_row_task_ids[1], "primary",
+        "the primary row keeps its sentinel key"
+    );
+    assert_eq!(app.agents_row_task_ids[2], "run-0001");
+    assert_eq!(app.agents_row_task_ids[3], "done-0002");
+    assert_eq!(
+        app.agents_row_task_ids[4], "",
+        "the background heading opens nothing"
+    );
+    assert_eq!(
+        app.agents_row_task_ids[5], "",
+        "a background row is not cursorable"
+    );
+    assert_eq!(app.agents_row_task_ids[6], "");
+
+    // The cursor ordinal list covers sub-agent rows only, in paint order.
+    assert_eq!(
+        app.agents_subagent_task_ids,
+        vec!["run-0001".to_string(), "done-0002".to_string()],
+        "the cursor range must name the sub-agent rows in paint order"
+    );
+
+    // A rendered (but cursor-less) frame paints the controls on the live rows.
+    for needle in ["run-0001", "bg-0001"] {
+        let row = find_row(&buffer, area, needle).expect("row paints");
+        let text = row_text(&buffer, area, row);
+        assert_eq!(
+            find_in_row(&buffer, area, row, glyphs::STOP),
+            Some(columns::CONTENT_X + columns::STOP_X),
+            "{needle}: [stop] must start at column {}: {text:?}",
+            columns::CONTENT_X + columns::STOP_X
+        );
+        assert_eq!(
+            find_in_row(&buffer, area, row, glyphs::KILL),
+            Some(columns::CONTENT_X + columns::KILL_X),
+            "{needle}: [x] must start at column {}: {text:?}",
+            columns::CONTENT_X + columns::KILL_X
+        );
+    }
+
+    // A completed task paints no controls on its row.
+    let done_row = find_row(&buffer, area, "done-0002").expect("completed row paints");
+    let done_text = row_text(&buffer, area, done_row);
+    assert!(
+        !done_text.contains(glyphs::STOP) && !done_text.contains(glyphs::KILL),
+        "a terminal row carries no action controls: {done_text:?}"
+    );
+}
+
+// -- FR-016: background shell section -------------------------------------
+
+/// A ` Background shell tasks ` heading precedes one row per background task,
+/// carrying a status dot, the short identifier, the command, `bg`, the elapsed
+/// time and both controls while the task is live (FR-016).
+#[test]
+fn test_background_shell_section_lists_each_task_with_controls() {
+    let mut app = app_with_primary();
+    app.active_tasks.push(task(
+        "run-0001",
+        "s1",
+        "s2",
+        "explore",
+        TaskStatus::Running,
+        true,
+    ));
+    app.bg_tasks
+        .push(bg_task("cc112233", "cargo build --release", "running"));
+    app.bg_tasks.push(bg_task("dd445566", "ls", "completed"));
+
+    let buffer = render(&mut app, 160, 44);
+    let area = app.active_agents_area;
+    let heading = find_row(&buffer, area, glyphs::BG_HEADING)
+        .unwrap_or_else(|| panic!("the background shell heading must paint"));
+    let agent_row = find_row(&buffer, area, "run-0001").expect("the agent row paints");
+    assert!(
+        heading > agent_row,
+        "the background section follows the sub-agent rows: heading {heading}, agent row {agent_row}"
+    );
+
+    let running = find_row(&buffer, area, "cc112233").expect("the running bg row paints");
+    assert_eq!(
+        running,
+        heading + 1,
+        "the first background row sits directly under the heading"
+    );
+    let running_text = row_text(&buffer, area, running);
+    assert!(
+        running_text[columns::CONTENT_X..].starts_with(glyphs::ROW_DOT),
+        "a background row starts with the status dot: {running_text:?}"
+    );
+    assert!(
+        running_text.contains("cargo build --release"),
+        "the row paints the command: {running_text:?}"
+    );
+    assert!(
+        running_text.contains(glyphs::STOP) && running_text.contains(glyphs::KILL),
+        "a live background row paints both controls: {running_text:?}"
+    );
+    let type_x =
+        columns::CONTENT_X + columns::MARKER_W + columns::ID_W + columns::GAP_W + columns::LABEL_W;
+    let type_slice: String = running_text
+        .chars()
+        .skip(type_x)
+        .take(columns::TYPE_W)
+        .collect();
+    assert_eq!(
+        type_slice.trim(),
+        "bg",
+        "a background row reads `bg` in the type column: {running_text:?}"
+    );
+
+    // The completed row paints no controls.
+    let completed = find_row(&buffer, area, "dd445566").expect("the completed bg row paints");
+    let completed_text = row_text(&buffer, area, completed);
+    assert!(
+        !completed_text.contains(glyphs::STOP) && !completed_text.contains(glyphs::KILL),
+        "a finished background row paints no controls: {completed_text:?}"
+    );
+    assert!(
+        completed_text.contains("ls"),
+        "the finished row still paints its command: {completed_text:?}"
+    );
+}
+
+/// A long background command is truncated inside its column, on a character
+/// boundary, leaving the type and control columns in place (FR-016, NFR-004).
+#[test]
+fn test_long_background_command_truncates_within_its_column() {
+    let mut app = app_with_primary();
+    let long_command = "cargo build --release --workspace --all-targets --features everything";
+    assert!(long_command.chars().count() > columns::BG_COMMAND_MAX_W);
+    app.bg_tasks
+        .push(bg_task("ee778899", long_command, "running"));
+
+    let buffer = render(&mut app, 200, 50);
+    let area = app.active_agents_area;
+    let row = find_row(&buffer, area, "ee778899").expect("the bg row paints");
+    let text = row_text(&buffer, area, row);
+
+    assert!(
+        !text.contains(long_command),
+        "an over-long command is never painted in full: {text:?}"
+    );
+    let label_x = columns::CONTENT_X + columns::MARKER_W + columns::ID_W + columns::GAP_W;
+    let command: String = text.chars().skip(label_x).take(columns::LABEL_W).collect();
+    assert!(
+        long_command.starts_with(command.trim_end_matches('.')),
+        "the truncation keeps a prefix of the command: {command:?}"
+    );
+    assert!(
+        command.chars().count() <= columns::LABEL_W.min(columns::BG_COMMAND_MAX_W),
+        "the painted command stays inside its column budget: {command:?}"
+    );
+    let type_x = label_x + columns::LABEL_W;
+    let type_slice: String = text.chars().skip(type_x).take(columns::TYPE_W).collect();
+    assert_eq!(
+        type_slice.trim(),
+        "bg",
+        "the type column survives an over-long command: {text:?}"
+    );
+    assert_eq!(
+        find_in_row(&buffer, area, row, glyphs::STOP),
+        Some(columns::CONTENT_X + columns::STOP_X),
+        "the [stop] control keeps its pinned column: {text:?}"
+    );
+}
+
+// -- NFR-003: single glyph source ----------------------------------------
+
+/// Every glyph the table paints comes from the module's glyph set, so a change
+/// cannot leave the header and the rows disagreeing (NFR-003).
+#[test]
+fn test_painted_glyphs_come_from_the_module_glyph_set() {
+    let mut app = app_with_primary();
+    app.active_tasks.push(task(
+        "run-0001",
+        "s1",
+        "s2",
+        "explore",
+        TaskStatus::Running,
+        true,
+    ));
+    app.active_tasks.push(task(
+        "susp-0002",
+        "s1",
+        "s3",
+        "explore",
+        TaskStatus::Suspended,
+        true,
+    ));
+    app.active_tasks.push(task(
+        "term-0003",
+        "s1",
+        "s4",
+        "explore",
+        TaskStatus::Terminating,
+        true,
+    ));
+    app.bg_tasks.push(bg_task("bg-0001", "sleep 30", "running"));
+
+    let buffer = render(&mut app, 160, 44);
+    let area = app.active_agents_area;
+    let painted: String = (0..area.height)
+        .map(|offset| row_text(&buffer, area, offset))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    for glyph in [
+        glyphs::PRIMARY.trim_end(),
+        glyphs::ROW_DOT.trim_end(),
+        glyphs::BRANCH_LAST.trim_end(),
+        glyphs::STOP,
+        glyphs::KILL,
+        glyphs::RESUME,
+        glyphs::STATUS_SUSPENDED.trim(),
+        glyphs::STATUS_TERMINATING.trim(),
+        glyphs::BG_HEADING.trim(),
+    ] {
+        assert!(
+            painted.contains(glyph),
+            "the row set must paint the {glyph:?} glyph from the module glyph set"
+        );
+    }
+
+    // The header and the rows must share the control glyphs verbatim.
+    let header = row_text(&buffer, area, 0);
+    assert!(
+        header.contains(glyphs::STOP) && header.contains(glyphs::KILL),
+        "the header names the control columns with the painted glyphs: {header:?}"
+    );
+}
+
+// -- NFR-004: character-safe truncation ----------------------------------
+
+/// A multi-byte identifier and command truncate on a character boundary without
+/// panicking or splitting a sequence (NFR-004).
+#[test]
+fn test_multibyte_identifiers_truncate_on_a_character_boundary() {
+    let mut app = app_with_primary();
+    let wide_agent = "a\u{e9}\u{4e2d}\u{6587}".repeat(12);
+    app.active_tasks.push(task(
+        "task-\u{4e2d}\u{6587}\u{e9}",
+        "s1",
+        "s2",
+        &wide_agent,
+        TaskStatus::Running,
+        true,
+    ));
+    app.bg_tasks.push(bg_task(
+        "bg-\u{4e2d}\u{6587}",
+        &"\u{4e2d}\u{6587}\u{e9}".repeat(40),
+        "running",
+    ));
+
+    // The render must not panic and must stay inside the table area.
+    let buffer = render(&mut app, 160, 44);
+    let area = app.active_agents_area;
+    for offset in 0..area.height {
+        let text = row_text(&buffer, area, offset);
+        assert!(
+            !text.contains('\u{fffd}') && !text.contains('?'),
+            "row {offset} must not paint a broken character: {text:?}"
+        );
+    }
+
+    // The label column is still exactly `LABEL_W` wide, so nothing split.
+    let label_x = columns::CONTENT_X + columns::MARKER_W + columns::ID_W + columns::GAP_W;
+    let row = find_row(&buffer, area, glyphs::BG_HEADING)
+        .map_or(area.height - 1, |heading| heading.saturating_add(1));
+    let text = row_text(&buffer, area, row);
+    let label: String = text.chars().skip(label_x).take(columns::LABEL_W).collect();
+    assert!(
+        label.chars().count() <= columns::LABEL_W,
+        "the label column stays within its budget: {label:?}"
+    );
+}
+
+// -- FR-020: the row paints the real execution contract --------------------
+
+/// The type column paints the row's execution contract from the registry entry
+/// its own row holds, never from a hard-coded default (FR-020).
+///
+/// Detached runs also set `background`, so a renderer that inferred the badge
+/// from `background` would paint `bg` for both and the panel would misreport
+/// the one contract that has no other visible trace.
+#[test]
+fn test_type_column_paints_the_execution_contract() {
+    let mut app = app_with_primary();
+    app.active_tasks.push(task(
+        "fg111111",
+        "s1",
+        "child-fg",
+        "explore",
+        TaskStatus::Running,
+        false,
+    ));
+    app.active_tasks.push(task(
+        "bg222222",
+        "s1",
+        "child-bg",
+        "explore",
+        TaskStatus::Running,
+        true,
+    ));
+    app.active_tasks
+        .push(detached_task("dt333333", "s1", "child-dt", "explore"));
+
+    let buffer = render(&mut app, 200, 50);
+    let area = app.active_agents_area;
+    let label_x = columns::CONTENT_X + columns::MARKER_W + columns::ID_W + columns::GAP_W;
+    let type_x = label_x + columns::LABEL_W;
+
+    for (short, expected) in [
+        ("fg111111", glyphs::CONTRACT_FOREGROUND),
+        ("bg222222", glyphs::CONTRACT_BACKGROUND),
+        ("dt333333", glyphs::CONTRACT_DETACHED),
+    ] {
+        let row = find_row(&buffer, area, short).unwrap_or_else(|| panic!("{short} row paints"));
+        let text = row_text(&buffer, area, row);
+        let painted: String = text.chars().skip(type_x).take(columns::TYPE_W).collect();
+        assert_eq!(
+            painted.trim(),
+            expected,
+            "the type column derives the contract from the registry entry: {text:?}"
+        );
+    }
+}
+
+/// The detached badge fits the type column, so it can never push the elapsed
+/// time and step columns out of their pinned positions (FR-020, FR-012).
+#[test]
+fn test_detached_badge_fits_the_type_column() {
+    assert!(
+        glyphs::CONTRACT_DETACHED.chars().count() < columns::TYPE_W,
+        "the `detached` contract is narrower than its column so it leaves a \
+         separating column: {:?} vs {}",
+        glyphs::CONTRACT_DETACHED,
+        columns::TYPE_W
+    );
+
+    let mut app = app_with_primary();
+    app.active_tasks
+        .push(detached_task("dt999999", "s1", "child-dt9", "explore"));
+    let buffer = render(&mut app, 200, 50);
+    let area = app.active_agents_area;
+    let label_x = columns::CONTENT_X + columns::MARKER_W + columns::ID_W + columns::GAP_W;
+    let type_x = label_x + columns::LABEL_W;
+    let elapsed_x = type_x + columns::TYPE_W;
+
+    let row = find_row(&buffer, area, "dt999999").expect("the detached row paints");
+    let text = row_text(&buffer, area, row);
+    let elapsed: String = text
+        .chars()
+        .skip(elapsed_x)
+        .take(columns::ELAPSED_W)
+        .collect();
+    assert!(
+        elapsed.trim().ends_with('s'),
+        "the elapsed column keeps its pinned position after a detached badge: {text:?}"
+    );
+}
+
+// -- FR-012: waiter visibility in the Agents panel (T-014) --------------------
+
+/// FR-012: a live row held by in-flight `wait_agents` callers paints how many.
+#[test]
+fn an_awaited_live_row_paints_its_waiter_count() {
+    let mut app = app_with_primary();
+    let mut entry = task(
+        "w0000001",
+        "s1",
+        "child-w1",
+        "explore",
+        TaskStatus::Running,
+        true,
+    );
+    entry.waiter_count = 2;
+    app.active_tasks.push(entry);
+
+    let buffer = render(&mut app, 200, 50);
+    let area = app.active_agents_area;
+    let row = find_row(&buffer, area, "w0000001").expect("the awaited row paints");
+    let text = row_text(&buffer, area, row);
+
+    assert!(
+        text.contains("[w2]"),
+        "the row must name both waiters: {text:?}"
+    );
+}
+
+/// FR-012: the waiter marker is painted only when the count is greater than
+/// zero - a row nobody awaits carries no `[w0]`.
+#[test]
+fn an_unawaited_row_paints_no_waiter_marker() {
+    let mut app = app_with_primary();
+    app.active_tasks.push(task(
+        "w0000002",
+        "s1",
+        "child-w2",
+        "explore",
+        TaskStatus::Running,
+        true,
+    ));
+
+    let buffer = render(&mut app, 200, 50);
+    let area = app.active_agents_area;
+    let row = find_row(&buffer, area, "w0000002").expect("the row paints");
+    let text = row_text(&buffer, area, row);
+
+    assert!(
+        !text.contains("[w"),
+        "an unawaited row must paint no waiter marker: {text:?}"
+    );
+}
+
+/// FR-012: a suspended row is still live, so a wait queued on it stays visible.
+#[test]
+fn a_suspended_awaited_row_still_paints_its_waiters() {
+    let mut app = app_with_primary();
+    let mut entry = task(
+        "w0000003",
+        "s1",
+        "child-w3",
+        "explore",
+        TaskStatus::Suspended,
+        true,
+    );
+    entry.waiter_count = 1;
+    app.active_tasks.push(entry);
+
+    let buffer = render(&mut app, 200, 50);
+    let area = app.active_agents_area;
+    let row = find_row(&buffer, area, "w0000003").expect("the suspended row paints");
+    let text = row_text(&buffer, area, row);
+
+    assert!(
+        text.contains("[w1]"),
+        "a parked task's queued waiter must stay visible: {text:?}"
+    );
+    assert!(
+        text.contains(glyphs::STATUS_SUSPENDED.trim()),
+        "the suspension suffix must survive alongside the waiter marker: {text:?}"
+    );
+}
+
+/// FR-012: the waiter marker must not push the pinned `[stop]` / `[x]` columns.
+#[test]
+fn the_waiter_marker_does_not_move_the_pinned_controls() {
+    let mut app = app_with_primary();
+    let mut entry = task(
+        "w0000004",
+        "s1",
+        "child-w4",
+        "explore",
+        TaskStatus::Running,
+        true,
+    );
+    entry.waiter_count = 12;
+    app.active_tasks.push(entry);
+
+    let buffer = render(&mut app, 200, 50);
+    let area = app.active_agents_area;
+    let row = find_row(&buffer, area, "w0000004").expect("the row paints");
+
+    let stop_x = u16::try_from(columns::CONTENT_X + columns::STOP_X).expect("stop column");
+    let kill_x = u16::try_from(columns::CONTENT_X + columns::KILL_X).expect("kill column");
+    let stop: String = (0..u16::try_from(columns::STOP_W).expect("stop width"))
+        .map(|i| {
+            buffer
+                .cell((area.x + stop_x + i, area.y + row))
+                .map(|c| c.symbol().to_string())
+                .unwrap_or_default()
+        })
+        .collect();
+    assert_eq!(
+        stop,
+        glyphs::STOP,
+        "the [stop] control must stay pinned after a waiter marker"
+    );
+    let kill: String = (0..u16::try_from(columns::KILL_W).expect("kill width"))
+        .map(|i| {
+            buffer
+                .cell((area.x + kill_x + i, area.y + row))
+                .map(|c| c.symbol().to_string())
+                .unwrap_or_default()
+        })
+        .collect();
+    assert_eq!(
+        kill.trim_end(),
+        glyphs::KILL,
+        "the [x] control must stay pinned after a waiter marker"
+    );
+}
+
+// -- FR-026: empty state -----------------------------------------------------
+
+/// With no sub-agent, background-shell task or history row the hint paints
+/// directly beneath the primary row (FR-026).
+///
+/// The panel always opens, so this is the state an operator sees on a fresh
+/// session: a lone primary row would read as a rendering fault.
+#[test]
+fn test_agents_empty_state_paints_the_hint_beneath_the_primary_row() {
+    let mut app = app_with_primary();
+    let buffer = render(&mut app, 170, 44);
+    let area = app.active_agents_area;
+
+    let header_y = find_row(&buffer, area, "id").expect("header row");
+    let hint_y = find_row(&buffer, area, glyphs::EMPTY_HINT).expect("empty-state hint row");
+    assert_eq!(
+        hint_y,
+        header_y + 2,
+        "the empty-state hint must sit directly beneath the primary row (FR-026)"
+    );
+    let hint_x =
+        u16::try_from(find_in_row(&buffer, area, hint_y, glyphs::EMPTY_HINT).expect("hint column"))
+            .expect("hint column fits");
+    let hint_cell = cell_at(&buffer, area, hint_y, hint_x);
+    assert_eq!(
+        hint_cell.fg,
+        codemason_tui::theme::colors::HINT,
+        "the hint must use the hint colour (FR-026)"
+    );
+    assert!(
+        hint_cell.modifier.contains(Modifier::DIM),
+        "the hint must be dimmed like the Teams empty state (FR-026)"
+    );
+}
+
+/// The hint disappears as soon as a sub-agent, background task or history row
+/// exists (FR-026).
+#[test]
+fn test_agents_empty_state_hint_is_absent_with_rows() {
+    let mut app = app_with_primary();
+    app.active_tasks
+        .push(task("t1", "s1", "c1", "explore", TaskStatus::Running, true));
+    let buffer = render(&mut app, 170, 44);
+    let area = app.active_agents_area;
+
+    assert_eq!(
+        find_row(&buffer, area, glyphs::EMPTY_HINT),
+        None,
+        "the empty-state hint must not paint while rows exist (FR-026)"
+    );
+}

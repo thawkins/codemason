@@ -9,7 +9,7 @@ routeui
 Add a TUI-driven configuration flow for the `router` virtual provider so users
 can create a router cluster from already-configured providers, assign
 provider/model pairs to the four router buckets, and persist the result to
-`ragent.json` without hand-editing JSON.
+`codemason.json` without hand-editing JSON.
 
 ## Approach
 
@@ -34,7 +34,7 @@ provider/model pairs to the four router buckets, and persist the result to
   initial implementation may show only `default_models()` and skip dynamic
   discovery for the router flow.
 - Recursive router-to-router assignments must be explicitly filtered in the UI.
-- Saving `ragent.json` currently happens through `ragent_config`; the panel will
+- Saving `codemason.json` currently happens through `codemason_config`; the panel will
   call the same path to avoid introducing a second persistence mechanism.
 
 ## Tasks
@@ -49,7 +49,7 @@ provider/model pairs to the four router buckets, and persist the result to
 | T-006 | Render the four tier bucket columns | FR-006, FR-019 | M | High | completed | T-004 |
 | T-007 | Implement provider/model selection and bucket assignment input handling | FR-007, FR-012 | M | Critical | completed | T-005, T-006 |
 | T-008 | Implement model picker for a selected provider in the router flow | FR-018 | M | High | completed | T-005 |
-| T-009 | Implement save/cancel logic and `ragent.json` persistence | FR-008, FR-009, FR-014 | M | Critical | completed | T-004 |
+| T-009 | Implement save/cancel logic and `codemason.json` persistence | FR-008, FR-009, FR-014 | M | Critical | completed | T-004 |
 | T-010 | Preserve existing classifier weights and boundaries on save | FR-026 | S | High | completed | T-009 |
 | T-011 | Add validation: reject recursive router assignments | FR-024 | S | High | completed | T-007 |
 | T-012 | Add validation: require at least one non-empty tier | FR-025 | S | High | completed | T-009 |
@@ -78,7 +78,7 @@ buckets on the right, and a model picker for the selected provider.
 ### Milestone 3 — Assignment and persistence (T-007, T-009, T-010, T-011, T-012, T-015)
 
 Users can assign models to buckets, validate the cluster, save to
-`ragent.json`, and the system preserves existing classifier settings.
+`codemason.json`, and the system preserves existing classifier settings.
 
 ### Milestone 4 — Visualisation and polish (T-013, T-014, T-016, T-017)
 
@@ -92,7 +92,7 @@ Unit and integration tests pass, the spec moves from `draft` to
 
 ## Definition of Done
 
-- `cargo check -p ragent-tui` and `cargo test -p ragent-tui` pass.
+- `cargo check -p codemason-tui` and `cargo test -p codemason-tui` pass.
 - All acceptance criteria 1–7 are demonstrated by manual or automated test
   evidence.
 - The spec status is moved from `draft` to `implemented` with audit metadata.

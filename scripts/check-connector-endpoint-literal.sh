@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # CI guard (spec `connectors` T-019; FR-038, NFR-001): the compiled default
 # Claude connector-catalogue endpoint must be declared exactly once, as a single
-# public constant in `ragent_connectors::store_index`, and no other production
+# public constant in `codemason_connectors::store_index`, and no other production
 # module may carry a second copy of that literal.
 #
 # This is the shell counterpart of the Rust regression test
 # `the_default_endpoint_literal_appears_only_in_the_catalogue_registry`
-# (crates/ragent-connectors/tests/test_connector_store_index.rs). It mirrors the
+# (crates/codemason-connectors/tests/test_connector_store_index.rs). It mirrors the
 # plugin-store default-endpoint discipline (spec `pluginstores` NFR-001).
 #
 # Scope: production source only (`crates/*/src/**/*.rs` and `src/**/*.rs`). A
@@ -24,7 +24,7 @@ cd "$ROOT"
 # The one literal that must have a single production home.
 LITERAL="https://api.anthropic.com/api/directory/servers"
 # The single module allowed to declare it (FR-038, NFR-001).
-CANONICAL="crates/ragent-connectors/src/store_index.rs"
+CANONICAL="crates/codemason-connectors/src/store_index.rs"
 # The single declaration form the canonical module must use (FR-034, NFR-001).
 DECLARATION="pub const DEFAULT_CLAUDE_CATALOGUE_URL"
 
@@ -81,7 +81,7 @@ run_checks() {
 if [ "${1:-}" = "--self-test" ]; then
     # Seed a second copy of the literal in a real production module; the guard
     # must fail, and the clean tree must pass once the seed is removed.
-    seed="crates/ragent-connectors/src/__selftest_dupe_endpoint.rs"
+    seed="crates/codemason-connectors/src/__selftest_dupe_endpoint.rs"
     printf '//! Self-test fixture for scripts/check-connector-endpoint-literal.sh.\npub const DUPE: &str = "%s";\n' "$LITERAL" > "$seed"
     set +e
     run_checks >/dev/null 2>&1

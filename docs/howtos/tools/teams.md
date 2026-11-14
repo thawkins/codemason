@@ -43,9 +43,9 @@ every teammate's spawn prompt with the specific request details.
 | Argument | Type | Required | Description | Typical value |
 |----------|------|----------|-------------|---------------|
 | `blueprint` | string | yes | Team template | `"code-review"` |
-| `context` | string | yes | Task details: target files, what to do, where to write output | `"Review crates/ragent-server for security issues. Write findings to docs/COMPLIANCE.md"` |
+| `context` | string | yes | Task details: target files, what to do, where to write output | `"Review crates/codemason-server for security issues. Write findings to docs/COMPLIANCE.md"` |
 | `name` | string | no | Team name (lowercase, hyphens OK); generated from the blueprint and a timestamp when omitted | `"review-2026-09"` |
-| `project_local` | boolean | no | Store the team under `[PROJECT]/.ragent/teams/` (default `true`); `false` uses the global teams directory | `true` |
+| `project_local` | boolean | no | Store the team under `[PROJECT]/.codemason/teams/` (default `true`); `false` uses the global teams directory | `true` |
 | `seed_only` | boolean | no | Apply the blueprint to an existing team instead of creating one (used by `/team create`; default `false`) | `false` |
 
 **Workflow:** `team_create` -> `team_wait` (blocks until all teammates idle)

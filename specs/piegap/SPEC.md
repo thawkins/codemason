@@ -12,26 +12,26 @@ audit:
 ## Overview
 
 The [pie](https://github.com/c4pt0r/pie) project is a Rust-based terminal AI
-coding agent with several features that ragent does not currently implement.
+coding agent with several features that codemason does not currently implement.
 This specification identifies the substantively different features in pie that
-are absent from ragent (not merely renamed or functionally equivalent), and
+are absent from codemason (not merely renamed or functionally equivalent), and
 defines requirements for porting each one as a **standalone, independently
 selectable** module so that each feature can be built, tested, and activated in
 isolation.
 
 ### Gap Analysis Method
 
-Each pie feature was compared against ragent's codebase using source-file
-inspection and code-index search. Features already present in ragent under a
+Each pie feature was compared against codemason's codebase using source-file
+inspection and code-index search. Features already present in codemason under a
 different name but with equivalent behaviour (e.g., clipboard image paste,
 `@file` mentions, thinking-level control, cost tracking, cron scheduling,
 context compaction, conversation/session search, permission system, MCP client)
 were excluded. Only features that are **absent** or **substantively different**
-in ragent are listed below.
+in codemason are listed below.
 
 ### Identified Gaps
 
-| #    | Feature                                                      | pie location                          | ragent status                         |
+| #    | Feature                                                      | pie location                          | codemason status                         |
 | ---- | ------------------------------------------------------------ | ------------------------------------- | ------------------------------------- |
 | G-01 | Dynamic trigger rules (natural-language event automation)    | `triggers/dynamic.rs`               | Absent                                |
 | G-02 | MCP notification push events (server-pushed trigger sources) | `triggers/mcp_notification_hook.rs` | Absent                                |
@@ -68,7 +68,7 @@ with a fresh context.
 
 - Rules shall be fire-once by default with an option for repeating.
 - Rules shall persist alongside the active session and restore on resume.
-- The poll interval shall be configurable via `ragent.json`.
+- The poll interval shall be configurable via `codemason.json`.
 - Rule output shall not interrupt the main chat unless `promote_to_chat` is
   explicitly requested.
 - The system shall provide `/triggers` slash commands to list, enable,
@@ -138,7 +138,7 @@ diagnostic dump file containing a snapshot of the current session state
 the session transcript.
 
 - The dump shall be redacted to strip well-known secret patterns.
-- The output file shall be written under the ragent data directory.
+- The output file shall be written under the codemason data directory.
 - The system shall report the file path to the user.
 
 The bug report should be placed into the "log" folder in the root project directory
@@ -190,7 +190,7 @@ descriptor requires it.
 
 ### FR-013 (Optional) — Browser-Based Web UI
 
-**If** the user runs `ragent web`, the system **shall** start a loopback-only
+**If** the user runs `codemason web`, the system **shall** start a loopback-only
 HTTP server that serves a browser-based interface with the same run-control
 semantics as the TUI (serialized turns, queued prompts, abort, feed output).
 
@@ -227,19 +227,19 @@ hooks feature shall not be required to also enable triggers, loops, or LSP.
 
 ### FR-017 (Unwanted) — No Regression of Existing Features
 
-The system **shall not** alter the behaviour of existing ragent features
+The system **shall not** alter the behaviour of existing codemason features
 (cron, compaction, permission system, MCP client, code index, memory, teams,
 research, skills, prompt optimization) when a gap feature is disabled.
 
 ### FR-018 (Ubiquitous) — Configuration Discovery
 
 Each gap feature that requires user configuration shall read its configuration
-from `ragent.json` (or `ragent.jsonc`) in the standard `.ragent/` directory,
-with fallback to `~/.config/ragent/config.json`, following the existing ragent
+from `codemason.json` (or `codemason.jsonc`) in the standard `.codemason/` directory,
+with fallback to `~/.config/codemason/config.json`, following the existing codemason
 configuration discovery pattern.
 
 ### FR-019 (Ubiquitous) — Test Coverage
 
 Each gap feature shall include tests located in the `tests/` directory of the
-implementing crate, following ragent's test organization conventions. Tests
+implementing crate, following codemason's test organization conventions. Tests
 shall not hit real provider APIs.

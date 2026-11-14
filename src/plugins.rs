@@ -1,12 +1,12 @@
-//! `ragent plugins` CLI parity surface (spec `plugins` T-017; FR-021).
+//! `codemason plugins` CLI parity surface (spec `plugins` T-017; FR-021).
 //!
 //! Mirrors the TUI `/plugins` slash family so the plugin store can be managed
-//! from a shell without launching the TUI: `ragent plugins <sub> [args...]` for
+//! from a shell without launching the TUI: `codemason plugins <sub> [args...]` for
 //! the nine subcommands (`list`, `add`, `remove`, `enable`, `disable`, `test`,
 //! `stores`, `marketplace`, `help`). The parse-and-run logic lives entirely in the
-//! `ragent-plugins` crate ([`ragent_plugins::run_store_command`],
-//! [`ragent_plugins::run_control_command`], [`ragent_plugins::run_test_command`],
-//! [`ragent_plugins::render_stores_report`], [`render_help`]); this module
+//! `codemason-plugins` crate ([`codemason_plugins::run_store_command`],
+//! [`codemason_plugins::run_control_command`], [`codemason_plugins::run_test_command`],
+//! [`codemason_plugins::render_stores_report`], [`render_help`]); this module
 //! supplies only the CLI-side glue:
 //!
 //! - the argument vector is joined and split into a subcommand token and the
@@ -16,8 +16,8 @@
 //!   `SLASH_COMMANDS` triggers so collision rejection (FR-024) matches the live
 //!   TUI surface;
 //! - reports print to stdout, with the `From: /plugins ...` TUI attribution
-//!   header replaced by a plain `ragent plugins ...` line and the `## /plugins`
-//!   usage title rewritten to `## ragent plugins` (FR-021: plain text for the
+//!   header replaced by a plain `codemason plugins ...` line and the `## /plugins`
+//!   usage title rewritten to `## codemason plugins` (FR-021: plain text for the
 //!   non-TUI surface).
 //!
 //! ## `!Send` sandbox contexts
@@ -31,12 +31,12 @@
 use anyhow::Result;
 
 use crate::cli_out::{cliprint, cliprintln};
-use ragent_plugins::{PLUGIN_SUBCOMMANDS, render_help, run_plugin_subcommand, subcommand_of};
+use codemason_plugins::{PLUGIN_SUBCOMMANDS, render_help, run_plugin_subcommand, subcommand_of};
 
-/// Render the `ragent plugins` help block from the shared
-/// [`ragent_plugins::render_help`] body.
+/// Render the `codemason plugins` help block from the shared
+/// [`codemason_plugins::render_help`] body.
 ///
-/// Delegates to the `ragent-plugins` crate rather than hand-copying the usage
+/// Delegates to the `codemason-plugins` crate rather than hand-copying the usage
 /// table (see `ANTIPAT.md` M3.10), then rewrites the TUI attribution/heading
 /// for the non-TUI surface.
 #[must_use]
@@ -44,7 +44,7 @@ fn cli_usage() -> String {
     cli_body(&render_help("help"))
 }
 
-/// Entry point for `ragent plugins <args...>`, invoked from the CLI dispatcher.
+/// Entry point for `codemason plugins <args...>`, invoked from the CLI dispatcher.
 ///
 /// `args` is everything after the `plugins` verb (may be empty). Prints the
 /// report for the requested subcommand to stdout and returns `Ok(())`; refusal
@@ -58,7 +58,7 @@ pub fn run_cli(args: &[String]) -> Result<()> {
     let joined = args.join(" ");
     let text = joined.trim();
 
-    // A bare `ragent plugins` renders usage (FR-014 parity).
+    // A bare `codemason plugins` renders usage (FR-014 parity).
     if text.is_empty() {
         cliprintln!("{}", cli_usage());
         return Ok(());
@@ -74,7 +74,7 @@ pub fn run_cli(args: &[String]) -> Result<()> {
     // `/plugins marketplace` is only recognised with a valid sub-subcommand
     // (`show`, or `<codex|claude> add|remove|list`); anything else renders the
     // usage block.
-    if sub == "marketplace" && !ragent_plugins::marketplace_command_requested(rest) {
+    if sub == "marketplace" && !codemason_plugins::marketplace_command_requested(rest) {
         cliprintln!("{}", cli_usage());
         return Ok(());
     }
@@ -94,7 +94,7 @@ pub fn run_cli(args: &[String]) -> Result<()> {
     // `async_main`. Hand the whole subcommand off to a dedicated OS thread so the
     // blocking client lives and dies outside any async runtime. The other
     // subcommands are cheap local operations and run inline.
-    let report = if sub == "stores" && ragent_plugins::stores_check_requested(rest) {
+    let report = if sub == "stores" && codemason_plugins::stores_check_requested(rest) {
         let workdir = workdir.clone();
         let sub_owned = sub.to_string();
         let rest_owned = rest.to_string();
@@ -124,13 +124,13 @@ fn run_plugin_subcommand_offline(
     sub: &str,
     rest: &str,
 ) -> Option<String> {
-    let registry = ragent_agent::tool::create_default_registry();
+    let registry = codemason_agent::tool::create_default_registry();
     run_plugin_subcommand(
         workdir,
         sub,
         rest,
         registry.list().into_iter().collect(),
-        ragent_tui::app::SLASH_COMMANDS
+        codemason_tui::app::SLASH_COMMANDS
             .iter()
             .map(|c| c.trigger.to_string())
             .collect(),
@@ -139,9 +139,9 @@ fn run_plugin_subcommand_offline(
 }
 
 /// Rewrite a shared `/plugins` report for the CLI surface (FR-021): the TUI
-/// `From: /plugins ...` attribution becomes `ragent plugins ...`, the
-/// `## /plugins` usage heading becomes `## ragent plugins`, and the usage-table
-/// rows swap the `/plugins` trigger for `ragent plugins`. The body is
+/// `From: /plugins ...` attribution becomes `codemason plugins ...`, the
+/// `## /plugins` usage heading becomes `## codemason plugins`, and the usage-table
+/// rows swap the `/plugins` trigger for `codemason plugins`. The body is
 /// otherwise printed verbatim so both surfaces stay in step.
 #[must_use]
 fn cli_body(report: &str) -> String {

@@ -1,12 +1,12 @@
-# ragent — Agent Loop & Orchestrator Internals
+# codemason — Agent Loop & Orchestrator Internals
 
-This document is a component-by-component map of ragent's **agent loop** (the
+This document is a component-by-component map of codemason's **agent loop** (the
 `SessionProcessor` that drives a single user message through LLM streaming and
 tool execution) and the **orchestrator** (the multi-agent coordination layer).
 Every entry annotates the file and line range where the component lives, so you
 can jump straight to the code.
 
-All paths are relative to `crates/ragent-agent/src/` unless stated otherwise.
+All paths are relative to `crates/codemason-agent/src/` unless stated otherwise.
 
 ---
 
@@ -232,7 +232,7 @@ When the LLM returned no tool calls:
 - Each tool call is `tokio::spawn`ed — `processor.rs:1129`:
   1. Publish `ToolCallStart` — `processor.rs:1132`
   2. Run **pre-tool-use hooks** (`hooks/mod.rs:225`) — `processor.rs:1137`
-  3. Acquire a tool permit (`ragent_types::resource`) — `processor.rs:1204`
+  3. Acquire a tool permit (`codemason_types::resource`) — `processor.rs:1204`
   4. Resolve + execute the tool — `processor.rs:1210`
   5. Permission gate via `check_permission_with_prompt`
      (`session/permissions.rs:189`); bash sub-commands split and checked
@@ -346,7 +346,7 @@ with a per-session step counter.
 | Item | Location |
 | ---- | -------- |
 | Re-export | `event/mod.rs:8` |
-| `EventBus` struct | `crates/ragent-types/src/event/mod.rs:850` |
+| `EventBus` struct | `crates/codemason-types/src/event/mod.rs:850` |
 | `EventBus::new` | `event/mod.rs:1034` |
 | `set_step` / `current_step` | `event/mod.rs:1046` / `1062` |
 | `subscribe` | `event/mod.rs:1082` |
@@ -380,7 +380,7 @@ Key events the loop emits: `MessageStart`, `ToolsSent`, `RequestStarted`,
 ### 7.2 Permissions (`session/permissions.rs` + `permission/mod.rs`)
 
 - `permission/mod.rs:17` re-exports the canonical types from
-  `ragent_config::permission` and `ragent_types::permission`.
+  `codemason_config::permission` and `codemason_types::permission`.
 - `check_permission_with_prompt` — `session/permissions.rs:189`
 - bash splitting / resource extraction helpers imported in `processor.rs:39-41`.
 
@@ -500,7 +500,7 @@ them with `codeindex_search` or `grep -n`.
 | build_turn_chat_messages | `build_turn_chat_messages` (`session/loop_steps.rs`) |
 | call_llm_step | `call_llm_step` (`session/loop_steps.rs`) |
 | Storage bridge | `SessionProcessor::storage_op` (`session/processor.rs`) |
-| Event bus | `EventBus` (`crates/ragent-types/src/event/mod.rs`) |
+| Event bus | `EventBus` (`crates/codemason-types/src/event/mod.rs`) |
 | Compaction runner | `compact` (`compaction/runner.rs`) |
 | Emergency compaction | `emergency_compact` (`compaction/runner.rs`) |
 | Token estimator | `RequestTokenTracker`, `estimate_request_tokens` (`compaction/estimator.rs`) |
@@ -528,43 +528,43 @@ test in the crate's `tests/` directory (or a bench) behind them.
 | PERF-038 | M1 | Agent per-turn hot path | `compaction/runner.rs`, `compaction/serializer.rs`, `compaction/prompt.rs` | shipped |
 | PERF-039 | M1 | Agent per-turn hot path | `agent/mod.rs`, `session/prompt_builders.rs` | shipped |
 | PERF-040 | M1 | Agent per-turn hot path | `session/processor.rs`, `src/main.rs` | shipped |
-| PERF-041 | M2 | TUI render loop | `ragent-tui/src/layout.rs` | shipped |
-| PERF-042 | M2 | TUI render loop | `ragent-tui/src/layout.rs` | shipped |
-| PERF-043 | M2 | TUI render loop | `ragent-tui/src/layout.rs` | shipped |
-| PERF-044 | M2 | TUI render loop | `ragent-tui/src/lib.rs` | shipped |
-| PERF-045 | M2 | TUI render loop | `ragent-tui/src/lib.rs` | shipped |
-| PERF-046 | M2 | TUI render loop | `ragent-tui/src/layout.rs` | shipped |
-| PERF-047 | M2 | TUI render loop | `ragent-tui/src/widgets/message_widget.rs` | shipped |
+| PERF-041 | M2 | TUI render loop | `codemason-tui/src/layout.rs` | shipped |
+| PERF-042 | M2 | TUI render loop | `codemason-tui/src/layout.rs` | shipped |
+| PERF-043 | M2 | TUI render loop | `codemason-tui/src/layout.rs` | shipped |
+| PERF-044 | M2 | TUI render loop | `codemason-tui/src/lib.rs` | shipped |
+| PERF-045 | M2 | TUI render loop | `codemason-tui/src/lib.rs` | shipped |
+| PERF-046 | M2 | TUI render loop | `codemason-tui/src/layout.rs` | shipped |
+| PERF-047 | M2 | TUI render loop | `codemason-tui/src/widgets/message_widget.rs` | shipped |
 | PERF-048 | M2 | TUI render loop | `layout.rs`, `layout_statusbar.rs` | shipped |
-| PERF-049 | M3 | Async runtime hygiene | `ragent-research/src/gather_log.rs` | shipped |
-| PERF-050 | M3 | Async runtime hygiene | `ragent-research/src/gather_log.rs` | shipped |
-| PERF-051 | M3 | Async runtime hygiene | `ragent-agent/src/reference/fuzzy.rs` | shipped |
-| PERF-052 | M3 | Async runtime hygiene | `ragent-tools-core/src/glob.rs` | shipped |
-| PERF-053 | M3 | Async runtime hygiene | `ragent-tools-core/src/read.rs` | shipped |
-| PERF-054 | M3 | Async runtime hygiene | `ragent-types/src/event/mod.rs` | shipped |
-| PERF-055 | M3 | Async runtime hygiene | `ragent-types/src/sanitize.rs` | shipped |
-| PERF-056 | M3 | Async runtime hygiene | `ragent-server/src/routes/mod.rs` | shipped |
-| PERF-057 | M4 | Network & resource reuse | `ragent-tools-vcs/src/git/mod.rs` | shipped |
+| PERF-049 | M3 | Async runtime hygiene | `codemason-research/src/gather_log.rs` | shipped |
+| PERF-050 | M3 | Async runtime hygiene | `codemason-research/src/gather_log.rs` | shipped |
+| PERF-051 | M3 | Async runtime hygiene | `codemason-agent/src/reference/fuzzy.rs` | shipped |
+| PERF-052 | M3 | Async runtime hygiene | `codemason-tools-core/src/glob.rs` | shipped |
+| PERF-053 | M3 | Async runtime hygiene | `codemason-tools-core/src/read.rs` | shipped |
+| PERF-054 | M3 | Async runtime hygiene | `codemason-types/src/event/mod.rs` | shipped |
+| PERF-055 | M3 | Async runtime hygiene | `codemason-types/src/sanitize.rs` | shipped |
+| PERF-056 | M3 | Async runtime hygiene | `codemason-server/src/routes/mod.rs` | shipped |
+| PERF-057 | M4 | Network & resource reuse | `codemason-tools-vcs/src/git/mod.rs` | shipped |
 | PERF-058 | M4 | Network & resource reuse | `github/client.rs`, `gitlab/client.rs`, auth modules | shipped |
 | PERF-059 | M4 | Network & resource reuse | `github/auth.rs`, `gitlab/client.rs` | shipped |
-| PERF-060 | M4 | Network & resource reuse | `ragent-llm/src/providers/copilot.rs` | shipped |
-| PERF-061 | M4 | Network & resource reuse | `ragent-llm/src/providers/azure_foundry.rs` | shipped |
-| PERF-062 | M4 | Network & resource reuse | `ragent-llm/src/providers/ollama_cloud.rs` | shipped |
+| PERF-060 | M4 | Network & resource reuse | `codemason-llm/src/providers/copilot.rs` | shipped |
+| PERF-061 | M4 | Network & resource reuse | `codemason-llm/src/providers/azure_foundry.rs` | shipped |
+| PERF-062 | M4 | Network & resource reuse | `codemason-llm/src/providers/ollama_cloud.rs` | shipped |
 | PERF-063 | M4 | Network & resource reuse | 12 streaming providers (Appendix B) | shipped |
 | PERF-064 | M5 | Regex hoisting | `masterfetch/metadata.rs`, `masterfetch/youtube.rs` | shipped |
-| PERF-065 | M5 | Regex hoisting | `ragent-research/src/web_date.rs` | shipped |
+| PERF-065 | M5 | Regex hoisting | `codemason-research/src/web_date.rs` | shipped |
 | PERF-066 | M5 | Regex hoisting | `clarify.rs`, `planner.rs`, `cluster.rs`, `topic.rs`, `document.rs` | shipped |
-| PERF-067 | M5 | Regex hoisting | `ragent-agent/src/template/mod.rs` | shipped |
+| PERF-067 | M5 | Regex hoisting | `codemason-agent/src/template/mod.rs` | shipped |
 | PERF-068 | M5 | Regex hoisting | `web_gatherer/relevance.rs` | shipped |
-| PERF-069 | M6 | Data layer | `ragent-storage/src/storage.rs` | shipped |
-| PERF-070 | M6 | Data layer | `ragent-storage/src/snapshot.rs` | shipped |
+| PERF-069 | M6 | Data layer | `codemason-storage/src/storage.rs` | shipped |
+| PERF-070 | M6 | Data layer | `codemason-storage/src/snapshot.rs` | shipped |
 | PERF-071 | M6 | Data layer | `activity_log.rs`, `storage.rs` | shipped |
-| PERF-072 | M6 | Data layer | `ragent-codeindex/src/store.rs` | shipped |
-| PERF-073 | M6 | Data layer | `ragent-codeindex/src/store.rs` | shipped |
-| PERF-074 | M6 | Data layer | `ragent-codeindex/src/store.rs` | shipped |
-| PERF-075 | M6 | Data layer | `ragent-codeindex/src/search.rs` | shipped |
-| PERF-076 | M6 | Data layer | `ragent-agent/src/mcp/mod.rs` | shipped |
-| PERF-077 | M6 | Data layer | `ragent-research/src/web_gatherer.rs` | shipped |
+| PERF-072 | M6 | Data layer | `codemason-codeindex/src/store.rs` | shipped |
+| PERF-073 | M6 | Data layer | `codemason-codeindex/src/store.rs` | shipped |
+| PERF-074 | M6 | Data layer | `codemason-codeindex/src/store.rs` | shipped |
+| PERF-075 | M6 | Data layer | `codemason-codeindex/src/search.rs` | shipped |
+| PERF-076 | M6 | Data layer | `codemason-agent/src/mcp/mod.rs` | shipped |
+| PERF-077 | M6 | Data layer | `codemason-research/src/web_gatherer.rs` | shipped |
 | PERF-078 | M7 | Guardrails | `scripts/check-perf-regression.sh` (not created) | open |
 | PERF-079 | M7 | Guardrails | `crates/*/benches/` | shipped |
 | PERF-080 | M7 | Guardrails | hasher policy (Appendix C sites) | shipped |
@@ -582,7 +582,7 @@ Notes:
   token costs, the background activity-log writer, and the single-copy TUI
   viewers are all described in §5.1 and §5.3 above.
 - **PERF-078/079** are the guardrail pair. PERF-079 shipped: the benches
-  under `crates/ragent-agent/benches/` cover the M1 turn-loop targets
+  under `crates/codemason-agent/benches/` cover the M1 turn-loop targets
   (`turn_loop`, `hot_paths`, `m3_hot_paths`, `agent_loop`). PERF-078 is open:
   `scripts/check-perf-regression.sh` was never added; the only regression
   script is `scripts/check-bench-regression.sh`, which covers `agent_loop`

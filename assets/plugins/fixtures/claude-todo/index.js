@@ -5,7 +5,7 @@
 // The lifecycle merges the manifest declaration with the runtime registration
 // by name, keeping the manifest metadata and the runtime handler.
 
-ragent.register_tool({
+codemason.register_tool({
   name: "add_todo",
   description: "Add an item to the plugin's todo list",
   parameters: {
@@ -21,7 +21,7 @@ ragent.register_tool({
   }
 });
 
-ragent.register_command({
+codemason.register_command({
   name: "todo-add",
   description: "Add a todo item",
   usage: "/todo-add <text>",

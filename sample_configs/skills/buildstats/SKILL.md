@@ -118,7 +118,7 @@ the step records failure if either fails.
 tests_impl() {
   local rc=0
   cargo nextest run --workspace \
-    --features ragent-tools-extended/test-ssrf-bypass \
+    --features codemason-tools-extended/test-ssrf-bypass \
     --profile ci --no-fail-fast || rc=1
   cargo test --workspace --doc || rc=1
   return "$rc"
@@ -153,11 +153,11 @@ run_step coverage 'cargo llvm-cov --workspace --all-targets' coverage_impl
 
 Confirm the schema (`jq '.data[0].totals' target/buildstats/coverage.json`)
 before aggregating. Lines are grouped by crate directory under `crates/`;
-anything else (the root `src/` binary) is labelled `ragent(bin)`.
+anything else (the root `src/` binary) is labelled `codemason(bin)`.
 
 ```bash
 jq -r '
-  def crate_of: (capture("crates/(?<c>[^/]+)/")?.c) // "ragent(bin)";
+  def crate_of: (capture("crates/(?<c>[^/]+)/")?.c) // "codemason(bin)";
   .data[0].files
   | map({c: (.filename | crate_of),
          lc: .summary.lines.count, lv: .summary.lines.covered})

@@ -1,0 +1,5811 @@
+//! Session, team, and miscellaneous operations for the TUI.
+use std::collections::BTreeSet;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, LockResult, MutexGuard};
+
+use ratatui::layout::Rect;
+
+use codemason_agent::team::{Mailbox, MessageType, TeamStore};
+use codemason_agent::{
+    event::Event,
+    mcp::discovery::DiscoveredMcpServer,
+    message::{Message, MessagePart, Role},
+    session::processor::estimate_tool_definition_bytes,
+};
+use codemason_connectors::{CatalogueBrowser, CataloguePane, CategoryFilter};
+use codemason_llm::provider::tool_cache::{ToolFormat, cached_tools};
+use codemason_plugins::{
+    FetchLimits, StoreDirs, StoreEndpoint, StoreError, StoreIndex, StoreIndexFetcher, StoreKind,
+    add, add_error_report, add_report, installed_ids, marketplace_name_for, probe_stores,
+    render_stores_report_with_probes, store_and_config,
+};
+use codemason_tools_core::{Tool, ToolContext};
+
+// Prompt optimization templates
+
+// State types from app/state.rs
+use crate::app::state::{
+    App, ConnectorBrowseStatus, ConnectorCatalogueInstallResult, ConnectorCatalogueResult,
+    ConnectorEnrichResult, ContextAction, ContextPartitionSnapshot, FileMenuEntry, FileMenuState,
+    LlmRequestStat, LlmStatsSummary, LogEntry, LogLevel, OutputViewState, OutputViewTarget,
+    PluginStoreBrowser, PluginStoreFetchResult, PluginStoreInstallResult, ProviderSetupStep,
+    QueuedInput, ScreenMode, ScrollbarDragPane, SelectionPane, StoreEnrichResult, StorePane,
+    TextSelection, atomic_config_update, is_image_path, percent_decode_path,
+    save_clipboard_image_to_temp,
+};
+
+// Helpers
+use crate::app::helpers::{MentionSpan, short_id, short_session_id};
+
+// Re-export status types from theme
+use crate::theme::{StatusCategory, StatusMessage};
+
+/// Recover from a poisoned mutex, logging the incident and returning the
+/// guarded value so the caller can keep running.
+// reason: only consumed inside this crate (session_ops) - `pub` here never escapes the crate.
+#[allow(unreachable_pub)]
+pub fn recover_poisoned<'a, T>(
+    result: LockResult<MutexGuard<'a, T>>,
+    name: &str,
+) -> MutexGuard<'a, T> {
+    match result {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            // Recovered poisoning is a `warn`: the guard is recovered and
+            // execution continues, matching `bash_lists.rs` and `bg.rs`.
+            tracing::warn!("{name} mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    }
+}
+
+/// Push one enrichment message onto the shared queue, recovering a poisoned lock
+/// (FR-025).
+///
+/// The off-loop enrichment worker calls this for each resolved update and once for
+/// the terminal [`StoreEnrichResult::Finished`]; the UI thread drains the queue in
+/// [`App::poll_store_enrichment`].
+fn push_enrich_result(slot: &std::sync::Mutex<Vec<StoreEnrichResult>>, message: StoreEnrichResult) {
+    push_enrich(slot, "store_enrich_result", message);
+}
+
+/// Push one catalogue-enrichment message onto the shared queue, recovering a
+/// poisoned lock (spec `connectors` FR-044).
+///
+/// The off-loop enrichment worker calls this for each resolved update and once for
+/// the terminal [`ConnectorEnrichResult::Finished`]; the UI thread drains the queue
+/// in [`App::poll_connector_enrichment`].
+fn push_connector_enrich_result(
+    slot: &std::sync::Mutex<Vec<ConnectorEnrichResult>>,
+    message: ConnectorEnrichResult,
+) {
+    push_enrich(slot, "connector_enrich_result", message);
+}
+
+/// Append one enrichment message to `slot`, recovering a poisoned lock.
+///
+/// The one shared body behind [`push_enrich_result`] and
+/// [`push_connector_enrich_result`], so the two panels' queues cannot diverge on
+/// the poisoned-lock discipline.
+fn push_enrich<T>(slot: &std::sync::Mutex<Vec<T>>, name: &str, message: T) {
+    recover_poisoned(slot.lock(), name).push(message);
+}
+
+/// Run one plugin-store install through the existing `add` entry point and map
+/// its result to a TUI report (spec `pluginstores` T-009; FR-006, FR-024,
+/// FR-025).
+///
+/// The store-supplied `source` is forwarded verbatim: `add(force = false)`
+/// applies its own HTTPS, traversal, and size guards, so a store entry receives
+/// no elevated trust (FR-024). The success report names the installed id and
+/// dialect (FR-006); every [`AddError`] becomes the `[err]` report naming the
+/// cause (FR-025). Never panics.
+fn run_plugin_store_install(
+    dirs: &StoreDirs,
+    workdir: &std::path::Path,
+    kind: StoreKind,
+    id: &str,
+    source: &str,
+) -> PluginStoreInstallResult {
+    match add(dirs, workdir, source, false) {
+        Ok(outcome) => PluginStoreInstallResult {
+            kind,
+            id: outcome.parsed.descriptor.id.clone(),
+            notice: format!("installed {}", outcome.parsed.descriptor.id),
+            report: add_report(&outcome),
+            succeeded: true,
+        },
+        Err(err) => PluginStoreInstallResult {
+            kind,
+            id: id.to_string(),
+            notice: format!("install failed: {err}"),
+            report: add_error_report(&err),
+            succeeded: false,
+        },
+    }
+}
+
+/// Run one connector-catalogue install through the shared `add` entry point and
+/// map its result to a TUI report.
+///
+/// The catalogue-id install path resolves the descriptor from the live catalogue
+/// (the same fetch `search` uses), so the store is written exactly as
+/// `/connectors add <id>` would write it: the collision guard applies and the
+/// connector is recorded **enabled**. The success report names the installed id
+/// and its enabled posture; every refusal becomes the `[err]` report naming the
+/// cause. Never panics.
+fn run_connector_catalogue_install(
+    dirs: &codemason_connectors::StoreDirs,
+    workdir: &std::path::Path,
+    config: &codemason_config::ConnectorsConfig,
+    id: &str,
+) -> ConnectorCatalogueInstallResult {
+    // A catalogue fetch failure is surfaced as a fetch error, not silently
+    // folded into "the catalogue holds no connector with this id" (which an
+    // empty catalogue would otherwise cause).
+    let catalogue = match codemason_connectors::fetch_catalogue_descriptors_network(config) {
+        Ok(catalogue) => catalogue,
+        Err(err) => {
+            let detail = format!("could not fetch the connector catalogue: {err}");
+            return ConnectorCatalogueInstallResult {
+                id: id.to_string(),
+                notice: format!("install failed: {detail}"),
+                report: format!("[err] {detail}"),
+                succeeded: false,
+            };
+        }
+    };
+    match codemason_connectors::add(dirs, workdir, id, false, &catalogue) {
+        Ok(outcome) => ConnectorCatalogueInstallResult {
+            id: outcome.descriptor.id.as_str().to_string(),
+            notice: format!("installed {id}"),
+            report: codemason_connectors::browse_install_report(id, &outcome),
+            succeeded: true,
+        },
+        Err(err) => ConnectorCatalogueInstallResult {
+            id: id.to_string(),
+            notice: format!("install failed: {err}"),
+            report: format!("[err] {err}"),
+            succeeded: false,
+        },
+    }
+}
+
+/// Disk/SQLite-backed context partitions computed off the UI thread
+/// (T-013/FR-015).
+///
+/// Performs exactly the I/O-bound work behind the Context panel's system
+/// prompt, skills, memory and AGENTS.md partitions: skill-registry loading,
+/// AGENTS.md discovery, structured-memory reads and the system-prompt
+/// assembly. Runs on `tokio::task::spawn_blocking` from
+/// [`App::schedule_context_snapshot_refresh`]; the synchronous
+/// [`App::context_partition_snapshot`] fallback uses the same helper so the
+/// two paths can never disagree.
+fn compute_disk_context_partitions(
+    working_dir: &std::path::Path,
+    agent: &codemason_agent::agent::AgentInfo,
+    storage: &codemason_agent::storage::Storage,
+    config: &codemason_agent::Config,
+    session_processor: &codemason_agent::session::processor::SessionProcessor,
+) -> DiskContextPartitions {
+    // C-001: the skill registry is mtime-cached on the processor, so this
+    // only touches the skills directories when they change.
+    let skills = session_processor.skill_registry(working_dir, &config.skill_dirs);
+    let memory_config = config.memory.clone();
+    let prompt = codemason_agent::agent::build_system_prompt_with_storage_and_memory_and_config(
+        agent,
+        working_dir,
+        "",
+        skills.as_ref(),
+        None,
+        None,
+        None,
+        Some(storage),
+        Some(&memory_config),
+        None,
+        Some(config),
+    );
+    let (agents_md, _) =
+        codemason_agent::agent::collect_agents_md_content_with_discovery(working_dir);
+    let memory = codemason_agent::agent::build_memory_prompt_section(
+        working_dir,
+        Some(storage),
+        Some(&config.memory),
+    );
+    let skills_section = skills
+        .as_ref()
+        .map(|registry| codemason_agent::agent::skills_prompt_section(registry, agent))
+        .unwrap_or_default();
+    DiskContextPartitions {
+        system_prompt: bytes_to_tokens(prompt.len()),
+        skills: bytes_to_tokens(skills_section.len()),
+        memory: bytes_to_tokens(memory.len()),
+        agents_md: bytes_to_tokens(agents_md.len()),
+    }
+}
+
+/// The disk/SQLite-backed subset of context partitions returned by
+/// [`compute_disk_context_partitions`].
+struct DiskContextPartitions {
+    system_prompt: u64,
+    skills: u64,
+    memory: u64,
+    agents_md: u64,
+}
+
+impl DiskContextPartitions {
+    fn into_snapshot(
+        self,
+        tool_catalog_tokens: u64,
+        tool_metadata_tokens: u64,
+        history_tokens: u64,
+        history_message_count: usize,
+        context_window_tokens: Option<usize>,
+        last_input_tokens: u64,
+    ) -> ContextPartitionSnapshot {
+        ContextPartitionSnapshot {
+            system_prompt_tokens: self.system_prompt,
+            tool_catalog_tokens,
+            tool_metadata_tokens,
+            history_tokens,
+            history_message_count,
+            skills_tokens: self.skills,
+            memory_tokens: self.memory,
+            agents_md_tokens: self.agents_md,
+            context_window_tokens,
+            last_input_tokens,
+        }
+    }
+}
+
+/// Approximate token count from a UTF-8 byte length (contextpanel FR-005..FR-012).
+///
+/// The context panel's partition estimates are byte-based (serialised JSON
+/// lengths of the system prompt, tool catalog, wire envelope and history).
+/// They are converted to token estimates with the standard ~4-bytes-per-token
+/// heuristic for mixed English/code/JSON content so the panel percentages are
+/// directly comparable with the provider-reported prompt tokens the status
+/// bar's `ctx:` indicator shows from the last `TokenUsage` event.
+const BYTES_PER_TOKEN: u64 = 4;
+
+#[inline]
+fn bytes_to_tokens(bytes: usize) -> u64 {
+    bytes as u64 / BYTES_PER_TOKEN
+}
+
+/// Validate a discovered MCP server executable before it is persisted into a
+/// project `codemason.json`.
+///
+/// SEC-082: discovery accepts a server definition from a scanned config file
+/// and, on enable, writes its `command`/`args` into the project config that the
+/// MCP stdio launcher later spawns. Without vetting, a malicious definition
+/// could persist an empty path, a path containing control characters, or a path
+/// carrying shell metacharacters (`; & | $ \` ( ) < > ^ %`) intended to be
+/// interpreted by a shell. This rejects those shapes and, on Unix, requires the
+/// target to exist and be executable.
+///
+/// # Errors
+///
+/// Returns a human-readable reason when `p` is empty, contains a control
+/// character or shell metacharacter, or (on Unix) does not exist or lacks the
+/// execute bit.
+fn validate_executable(p: &std::path::Path) -> Result<(), String> {
+    let s = p.to_string_lossy();
+    if s.trim().is_empty() {
+        return Err("discovered MCP server has an empty executable path".to_string());
+    }
+    if s.chars().any(char::is_control) {
+        return Err(format!(
+            "discovered MCP server executable '{}' contains a control character",
+            s.escape_debug()
+        ));
+    }
+    const SHELL_METACHARS: &[char] = &[';', '&', '|', '$', '`', '(', ')', '<', '>', '^', '%'];
+    if let Some(bad) = s.chars().find(|c| SHELL_METACHARS.contains(c)) {
+        return Err(format!(
+            "discovered MCP server executable '{s}' contains shell metacharacter '{bad}'"
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let meta = std::fs::metadata(p).map_err(|e| {
+            format!("discovered MCP server executable '{s}' is not accessible: {e}")
+        })?;
+        if !meta.is_file() {
+            return Err(format!(
+                "discovered MCP server executable '{s}' is not a regular file"
+            ));
+        }
+        if meta.permissions().mode() & 0o111 == 0 {
+            return Err(format!(
+                "discovered MCP server executable '{s}' is not executable"
+            ));
+        }
+    }
+    Ok(())
+}
+
+impl App {
+    /// Clone the current agent info, apply the selected model/thinking settings,
+    /// and inject the role-mode system prompt addition when active.
+    pub(crate) fn prepare_agent_for_dispatch(&self) -> codemason_agent::agent::AgentInfo {
+        let mut agent = self.session.agent_info.clone();
+        self.apply_selected_model_and_thinking(&mut agent);
+        if let Some(ref mode) = self.session.role_mode {
+            let addition = mode.system_prompt_addition();
+            if !addition.is_empty() {
+                let existing = agent.prompt.clone().unwrap_or_default();
+                agent.prompt = Some(Arc::from(format!("{existing}\n\n{addition}")));
+            }
+        }
+        agent
+    }
+
+    pub(crate) fn ollama_cloud_api_key(&self) -> Option<String> {
+        self.storage
+            .get_provider_auth("ollama_cloud")
+            .ok()
+            .flatten()
+            .filter(|k| !k.is_empty())
+            .or_else(|| codemason_config::credential_env::read_credential_env("OLLAMA_API_KEY"))
+    }
+
+    /// Compute the token size of the visible toolset catalog.
+    ///
+    /// FR-006: returns the token estimate for every tool currently exposed
+    /// to the model (name + description + parameter schema), using the same
+    /// shared estimator as the agent request-size path so the panel stays in
+    /// sync with what the LLM actually receives. The estimator yields a byte
+    /// count which is converted to tokens via [`BYTES_PER_TOKEN`] because
+    /// exact tokenisation depends on the active provider.
+    pub fn tool_catalog_token_count(&self) -> u64 {
+        let defs = self.session_processor.tool_registry.definitions();
+        bytes_to_tokens(estimate_tool_definition_bytes(&defs) as usize)
+    }
+
+    /// Return the provider id of the model that will serve the next request.
+    ///
+    /// Mirrors the resolution order used by
+    /// [`App::apply_selected_model_and_thinking`]: the user's selected model
+    /// wins, then the agent's pinned/unpinned model, then the first provider
+    /// in the registry that advertises a default model.
+    fn active_provider_id(&self) -> Option<String> {
+        if let Some(model_str) = self.session.selected_model.as_deref()
+            && let Some((provider, _)) = model_str.split_once('/')
+        {
+            return Some(provider.to_string());
+        }
+        if let Some(model) = &self.session.agent_info.model {
+            return Some(model.provider_id.clone());
+        }
+        codemason_agent::agent::resolve_default_model(
+            &self.session.agent_info,
+            &self.provider_registry,
+        )
+        .map(|m| m.provider_id)
+    }
+
+    /// Resolve the LLM tool wire format for a provider id.
+    ///
+    /// Providers that share an OpenAI-compatible envelope (including the
+    /// router, which forwards to a concrete backend) map to
+    /// [`ToolFormat::OpenAi`]; Anthropic, Gemini, Bedrock, HuggingFace and the
+    /// Responses API use their own shapes (a Responses session measured with the
+    /// chat envelope would report the wrong per-tool overhead, FR-007).
+    fn tool_format_for_provider(provider_id: &str) -> ToolFormat {
+        match provider_id {
+            "anthropic" => ToolFormat::Anthropic,
+            "gemini" => ToolFormat::Gemini,
+            "bedrock" => ToolFormat::Bedrock,
+            "huggingface" => ToolFormat::HuggingFace,
+            "openai_responses" => ToolFormat::OpenAiResponses,
+            _ => ToolFormat::OpenAi,
+        }
+    }
+
+    /// Compute the token size of the toolset metadata/wrapper overhead.
+    ///
+    /// FR-007: measures the extra per-tool bytes the provider wire envelope
+    /// adds beyond the raw tool definitions - JSON envelope keys (e.g.
+    /// `"type":"function","input_schema":`), wrapper objects, and list
+    /// separators. The estimate is derived from the same shared provider tool
+    /// serialisation cache the LLM clients use (`codemason_llm`'s `tool_cache`),
+    /// so it always reflects what is actually sent on the wire for the active
+    /// provider's format. Computed as the serialised wire byte length minus
+    /// the raw definition bytes from [`App::tool_catalog_token_count`],
+    /// saturating at zero; converted to tokens via [`BYTES_PER_TOKEN`] like
+    /// the rest of the context panel.
+    pub fn tool_metadata_token_count(&self) -> u64 {
+        let defs = self.session_processor.tool_registry.definitions();
+        let catalog_bytes = estimate_tool_definition_bytes(&defs);
+        let format = Self::tool_format_for_provider(
+            self.active_provider_id()
+                .unwrap_or_else(|| "openai".into())
+                .as_str(),
+        );
+        let wire_bytes = cached_tools(format, &defs).byte_len as u64;
+        bytes_to_tokens(wire_bytes.saturating_sub(catalog_bytes) as usize)
+    }
+
+    /// Compute the token size of the conversation history held in the active
+    /// session.
+    ///
+    /// FR-008: sums the same per-message byte accounting used by the agent
+    /// request-size estimator (`estimate_request_bytes_with_tool_bytes`):
+    /// role label length + a fixed ~40-byte per-message JSON overhead plus
+    /// each content part - text, reasoning, tool-call identifier/input and
+    /// tool-result output. The byte total is converted with the
+    /// [`BYTES_PER_TOKEN`] heuristic so the estimate is comparable with
+    /// provider-reported prompt tokens.
+    pub fn conversation_history_token_count(&self) -> u64 {
+        bytes_to_tokens(
+            self.session
+                .messages
+                .iter()
+                .map(|msg| {
+                    let content_len: usize = msg
+                        .parts
+                        .iter()
+                        .map(|part| match part {
+                            MessagePart::Text { text } => text.len(),
+                            MessagePart::Reasoning { text, .. } => text.len(),
+                            MessagePart::ToolCall { call_id, state, .. } => {
+                                call_id.len()
+                                    + state.input.to_string().len()
+                                    + state.output.as_ref().map_or(0, |v| v.to_string().len())
+                                    + state.error.as_ref().map_or(0, String::len)
+                            }
+                            MessagePart::Image(_) => 0,
+                        })
+                        .sum();
+                    msg.role.to_string().len() + content_len + 40
+                })
+                .sum::<usize>(),
+        )
+    }
+
+    /// Return the number of messages currently held in the active session's
+    /// conversation history (FR-008).
+    pub fn conversation_message_count(&self) -> usize {
+        self.session.messages.len()
+    }
+
+    /// Compute the token size of the assembled system prompt.
+    ///
+    /// FR-005: returns an estimated token size of the system prompt the agent
+    /// loop would assemble for the next turn - base agent prompt, project
+    /// context (working directory, AGENTS.md, git status, README), memory
+    /// injections and the skills catalog. The file tree is intentionally
+    /// omitted (empty) because it is rendered from the TUI's own cached
+    /// snapshot and the builder only appends a non-empty tree; the estimate
+    /// therefore tracks the stable prompt core. The assembled prompt's byte
+    /// length is converted to tokens via [`BYTES_PER_TOKEN`].
+    pub fn system_prompt_token_count(&self) -> u64 {
+        let working_dir = self.cwd_path.clone();
+        let config = self.current_config();
+        let memory_config = config.memory.clone();
+        let skills = self
+            .session_processor
+            .skill_registry(&working_dir, &config.skill_dirs);
+        let agent = self.prepare_agent_for_dispatch();
+        let prompt = codemason_agent::agent::build_system_prompt_with_storage_and_memory_and_config(
+            &agent,
+            &working_dir,
+            "",
+            skills.as_ref(),
+            None,
+            None,
+            None,
+            Some(&self.storage),
+            Some(&memory_config),
+            None,
+            Some(&config),
+        );
+        bytes_to_tokens(prompt.len())
+    }
+
+    /// Compute the token size of the project-guideline (`AGENTS.md`) block
+    /// the system prompt carries.
+    ///
+    /// FR-009: this is a sub-partition of the assembled system prompt (see
+    /// [`App::system_prompt_token_count`]), surfaced separately so the panel
+    /// can show where the prompt's weight comes from. Uses the same
+    /// discovery-and-load precedence as the prompt builder.
+    pub fn agents_md_token_count(&self) -> u64 {
+        let working_dir = self.cwd_path.clone();
+        let (content, _) =
+            codemason_agent::agent::collect_agents_md_content_with_discovery(&working_dir);
+        bytes_to_tokens(content.len())
+    }
+
+    /// Compute the token size of the memory injections the system prompt
+    /// carries (structured memories, MEMORY.md blocks, project analysis).
+    ///
+    /// FR-009: sub-partition of the assembled system prompt; the same
+    /// section builder the agent loop passes through `spawn_blocking` is
+    /// measured here synchronously.
+    pub fn memory_injection_token_count(&self) -> u64 {
+        let working_dir = self.cwd_path.clone();
+        let config = self.current_config();
+        bytes_to_tokens(
+            codemason_agent::agent::build_memory_prompt_section(
+                &working_dir,
+                Some(&self.storage),
+                Some(&config.memory),
+            )
+            .len(),
+        )
+    }
+
+    /// Compute the token size of the skills context injected into the system
+    /// prompt.
+    ///
+    /// FR-009: sub-partition of the assembled system prompt, measured via the
+    /// shared [`codemason_agent::agent::skills_prompt_section`] formatter so it
+    /// can never drift from what the model actually receives. Zero when no
+    /// agent-invocable skills resolve for the active agent.
+    pub fn skills_token_count(&self) -> u64 {
+        let working_dir = self.cwd_path.clone();
+        let config = self.current_config();
+        let Some(registry) = self
+            .session_processor
+            .skill_registry(&working_dir, &config.skill_dirs)
+        else {
+            return 0;
+        };
+        let agent = self.session.agent_info.clone();
+        bytes_to_tokens(codemason_agent::agent::skills_prompt_section(&registry, &agent).len())
+    }
+
+    /// Return the context-window capacity (tokens) of the model that will
+    /// serve the next request.
+    ///
+    /// FR-010/FR-011: resolves the active model the same way as
+    /// [`App::active_provider_id`] (selected model, then agent model, then
+    /// the first registry default) and queries the provider registry's
+    /// static catalog for its context window. Falls back to the cached
+    /// context window recorded during model selection for dynamically
+    /// discovered models that the registry does not list. Returns `None`
+    /// when the provider does not advertise a limit - the panel shows
+    /// "unknown" percentages rather than guessing (FR-011).
+    pub fn active_context_window_tokens(&self) -> Option<usize> {
+        if let Some(model_str) = self.session.selected_model.as_deref()
+            && let Some((provider_id, model_id)) = model_str.split_once('/')
+            && let Some(window) = self
+                .provider_registry
+                .resolve_model(provider_id, model_id)
+                .map(|m| m.context_window)
+                .filter(|w| *w > 0)
+        {
+            return Some(window);
+        }
+        if let Some(model) = &self.session.agent_info.model
+            && let Some(window) = self
+                .provider_registry
+                .resolve_model(&model.provider_id, &model.model_id)
+                .map(|m| m.context_window)
+                .filter(|w| *w > 0)
+        {
+            return Some(window);
+        }
+        self.session.selected_model_ctx_window.filter(|w| *w > 0)
+    }
+
+    /// Collect a snapshot of every context partition for the Context panel.
+    ///
+    /// FR-012: gathers all top-level partitions (system prompt, tool catalog,
+    /// tool metadata wrapper, conversation history), the sub-partition
+    /// breakdown of the system prompt (skills, memory, AGENTS.md) and the
+    /// model's context-window capacity (FR-010/FR-011) in one call so the
+    /// panel renders from a consistent instant.
+    ///
+    /// T-013/FR-015: disk- and SQLite-backed partitions (system prompt build,
+    /// AGENTS.md discovery, memory section, skill registry) make this
+    /// unsuitable for per-frame renders on the UI thread. The panel render
+    /// path uses the cached snapshot from [`crate::app::SessionView::context_snapshot_cache`]
+    /// instead; this method is the synchronous fallback (first frame) and the
+    /// reference implementation the blocking refresh task mirrors via
+    /// [`compute_disk_context_partitions`].
+    pub fn context_partition_snapshot(&self) -> ContextPartitionSnapshot {
+        let working_dir = self.cwd_path.clone();
+        let config = self.current_config();
+        // Pre-compute the UI-thread-safe partitions (registry caches only)
+        // before handing the disk/SQLite-bound work to the shared helper.
+        let history_tokens = self.conversation_history_token_count();
+        let history_message_count = self.conversation_message_count();
+        let tool_catalog_tokens = self.tool_catalog_token_count();
+        let tool_metadata_tokens = self.tool_metadata_token_count();
+        let context_window_tokens = self.active_context_window_tokens();
+        let last_input_tokens = self.session.last_input_tokens;
+
+        let disk = compute_disk_context_partitions(
+            &working_dir,
+            &self.prepare_agent_for_dispatch(),
+            &self.storage,
+            &config,
+            &self.session_processor,
+        );
+        disk.into_snapshot(
+            tool_catalog_tokens,
+            tool_metadata_tokens,
+            history_tokens,
+            history_message_count,
+            context_window_tokens,
+            last_input_tokens,
+        )
+    }
+
+    /// Schedule a background refresh of the Context panel snapshot.
+    ///
+    /// T-013/FR-015: the disk- and SQLite-bound partition computations never
+    /// run on the UI thread. This spawns [`compute_disk_context_partitions`]
+    /// on `tokio::task::spawn_blocking`, combining its result with the
+    /// UI-thread-safe partitions captured here. Calls are coalesced: while a
+    /// refresh is in flight, further scheduling is a no-op. The finished
+    /// snapshot is deposited into [`crate::app::SessionView::context_snapshot_result`] and
+    /// adopted by [`App::poll_context_snapshot_refresh`] on a later frame.
+    pub fn schedule_context_snapshot_refresh(&mut self) {
+        // Only schedule when the panel is actually open: the snapshot exists
+        // purely for the panel render, and skipping while closed also keeps
+        // non-TUI code paths that poll without a tokio reactor (unit tests,
+        // headless flows) from reaching `spawn_blocking` needlessly.
+        if self.session.context_refresh_inflight || !self.show_context_panel {
+            return;
+        }
+        self.session.context_refresh_inflight = true;
+
+        let working_dir = self.cwd_path.clone();
+        let agent = self.prepare_agent_for_dispatch();
+        let storage = Arc::clone(&self.storage);
+        let session_processor = Arc::clone(&self.session_processor);
+        // Cheap, cache-backed partitions captured on the UI thread.
+        let history_tokens = self.conversation_history_token_count();
+        let history_message_count = self.conversation_message_count();
+        let tool_catalog_tokens = self.tool_catalog_token_count();
+        let tool_metadata_tokens = self.tool_metadata_token_count();
+        let context_window_tokens = self.active_context_window_tokens();
+        let last_input_tokens = self.session.last_input_tokens;
+        let result_slot = Arc::clone(&self.session.context_snapshot_result);
+        let config_dir = self.cwd_path.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let config = match codemason_agent::Config::load_for(&config_dir) {
+                Ok(cfg) => cfg,
+                Err(_) => codemason_agent::Config::default(),
+            };
+            let disk = compute_disk_context_partitions(
+                &working_dir,
+                &agent,
+                &storage,
+                &config,
+                &session_processor,
+            );
+            let snapshot = disk.into_snapshot(
+                tool_catalog_tokens,
+                tool_metadata_tokens,
+                history_tokens,
+                history_message_count,
+                context_window_tokens,
+                last_input_tokens,
+            );
+            if let Ok(mut guard) = result_slot.lock() {
+                *guard = Some(snapshot);
+            } else {
+                tracing::warn!("context_snapshot_result mutex poisoned, snapshot dropped");
+            }
+        });
+    }
+
+    /// Adopt a completed background context snapshot, if one has landed.
+    ///
+    /// T-013/FR-015: called from the TUI main loop every frame. Drains
+    /// [`crate::app::SessionView::context_snapshot_result`], stores the snapshot in the render
+    /// cache, clears the in-flight latch and flags a redraw.
+    ///
+    /// Stale-snapshot guard: when the conversation history size has changed
+    /// since the snapshot was scheduled (e.g. `/compact` replaced `messages`
+    /// while the blocking task was running, or `load_session` resumed a
+    /// different session), the snapshot reflects the pre-mutation state and
+    /// would corrupt the Context panel. We drop it and immediately schedule a
+    /// fresh refresh so the panel tracks the current history without waiting
+    /// for the next event.
+    pub fn poll_context_snapshot_refresh(&mut self) {
+        let deposited = {
+            let mut guard = recover_poisoned(
+                self.session.context_snapshot_result.lock(),
+                "context_snapshot_result",
+            );
+            guard.take()
+        };
+        let Some(snapshot) = deposited else {
+            return;
+        };
+        if snapshot.history_message_count != self.conversation_message_count() {
+            tracing::debug!(
+                scheduled = snapshot.history_message_count,
+                current = self.conversation_message_count(),
+                "dropping stale context snapshot - history changed mid-refresh"
+            );
+            self.session.context_refresh_inflight = false;
+            self.schedule_context_snapshot_refresh();
+            return;
+        }
+        self.session.context_snapshot_cache = Some(snapshot);
+        self.session.context_refresh_inflight = false;
+        self.needs_redraw = true;
+    }
+
+    /// Snapshot for the Context panel render: the cached background result
+    /// when available, else the synchronous computation as a first-frame
+    /// fallback (the async refresh then replaces it with identical values).
+    pub fn context_effective_snapshot(&self) -> ContextPartitionSnapshot {
+        if let Some(snapshot) = &self.session.context_snapshot_cache {
+            return *snapshot;
+        }
+        self.context_partition_snapshot()
+    }
+
+    pub(crate) fn should_auto_compact_before_send(&self) -> bool {
+        if self.session.auto_compact_in_progress
+            || self.session.auto_compact_failed
+            || self.session.pending_send_after_compact.is_some()
+        {
+            return false;
+        }
+        if self.session.session_id.is_none()
+            || self.session.messages.is_empty()
+            || self.session.last_input_tokens == 0
+        {
+            return false;
+        }
+        let Some(context_window) = self.selected_model_context_window() else {
+            return false;
+        };
+
+        // Use the shared estimator logic so the TUI pre-send check matches the
+        // agent/server path. The threshold is a fraction of the model's context
+        // window (default 70%), which makes the trigger independent of the
+        // model's absolute context size.
+        let threshold = codemason_agent::compaction::compaction_threshold(
+            context_window,
+            0,
+            self.current_config().compaction.buffer,
+            self.current_config().compaction.threshold,
+        ) as u64;
+        self.session.last_input_tokens > threshold
+    }
+
+    /// Start manual compaction (the `/compact` / `/compress` slash commands)
+    /// and warn when it cannot start (no active session or no messages).
+    /// Shared so both command arms log identically.
+    pub(crate) fn start_compaction_or_warn(&mut self) {
+        if !self.start_compaction(false) {
+            tracing::warn!("compaction did not start (no active session or no messages)");
+        }
+    }
+
+    /// Begin compaction of the active session's history. `auto_triggered`
+    /// marks the threshold-driven path, which blocks the next send until the
+    /// compacted history is applied.
+    pub(crate) fn start_compaction(&mut self, auto_triggered: bool) -> bool {
+        let Some(sid) = self.session.session_id.clone() else {
+            self.status = "[warn] No active session to compact".to_string();
+            return false;
+        };
+        if self.session.messages.is_empty() {
+            self.status = "[warn] No messages to compact".to_string();
+            return false;
+        }
+        self.start_provider_compaction_for_session(&sid, auto_triggered)
+    }
+
+    /// Run a shell command (input started with `!`) and render its output in
+    /// the chat panel, then dispatch the output to the model for review.
+    ///
+    /// The command is executed through [`codemason_tools_core::bash::BashTool`]
+    /// so it passes through the same 7-layer security model (safe-command
+    /// whitelist, banned/denied patterns, directory-escape prevention, syntax
+    /// validation, obfuscation detection, and user allow/deny lists) and the
+    /// default 120-second timeout used by the regular `Bash` tool. This keeps
+    /// bang commands (`! ...`) from bypassing codemason's shell protections.
+    pub(crate) fn dispatch_bang_command(&mut self, raw: String) {
+        // Strip the leading `!` and trim surrounding whitespace.
+        let command = raw.strip_prefix('!').unwrap_or(&raw).trim().to_string();
+        if command.is_empty() {
+            self.status = "[warn] Empty shell command".to_string();
+            return;
+        }
+
+        self.session.auto_compact_failed = false;
+        let Some(sid) = self.session.session_id.clone() else {
+            self.status = "[warn] No active session".to_string();
+            return;
+        };
+
+        // Show the command in the chat as a user message.
+        let display_text = format!("$ {command}");
+        let msg = Message::user_text(&sid, &display_text);
+        self.session.messages.push(msg);
+        self.session.last_prompt = raw.clone();
+        // T-010/FR-013: user message added; refresh the Context panel so the
+        // history message count stays current while the panel is open.
+        self.schedule_context_snapshot_refresh();
+        self.add_to_history(raw.clone());
+        self.session.input.clear();
+        self.session.input_cursor = 0;
+        self.file_menu = None;
+        self.set_status_working("running command");
+        self.session.stream_in_bytes = 0;
+        self.session.stream_out_bytes = 0;
+        // R-10: trim messages to bound memory.
+        self.trim_messages_if_needed();
+
+        self.push_log_no_agent(LogLevel::Info, format!("bang command: {command}"));
+
+        let agent = self.prepare_agent_for_dispatch();
+        let command_for_prompt = command.clone();
+        let processor = self.session_processor.clone();
+        let event_bus = self.event_bus.clone();
+        let flag = Arc::new(AtomicBool::new(false));
+        self.session.cancel_flag = Some(flag.clone());
+
+        // Build a minimal tool context so the validated `Bash` tool can run
+        // the command with the same security and timeout as a normal tool call.
+        let working_dir = self.cwd_path.clone();
+        let tool_ctx = ToolContext {
+            session_id: sid.clone(),
+            working_dir: working_dir.clone(),
+            event_bus: event_bus.clone(),
+            read_timestamps: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+            canonical_cache: Arc::new(codemason_tools_core::CanonicalPathCache::new()),
+            allowed_roots: vec![working_dir], // Default to working_dir for bang commands
+        };
+
+        tokio::spawn(async move {
+            let input = serde_json::json!({"command": command, "timeout": 120});
+            let combined = match codemason_tools_core::bash::BashTool
+                .execute(input, &tool_ctx)
+                .await
+            {
+                Ok(out) => out.content,
+                Err(e) => format!("failed to execute command: {e}"),
+            };
+
+            // Render the shell command output in the chat panel so the user
+            // can see what the command produced before the model reviews it.
+            event_bus.publish(Event::AgentNotice {
+                session_id: sid.clone(),
+                message: format!("```\n{combined}\n```"),
+            });
+
+            let prompt = codemason_agent::bang_command::build_bang_command_prompt(
+                &command_for_prompt,
+                &combined,
+            );
+
+            if let Err(e) = processor.process_message(&sid, &prompt, &agent, flag).await {
+                // A user-visible failure: at `debug` it was invisible at the
+                // default level, so `!cmd` output could be lost silently.
+                tracing::warn!(error = %e, "Failed to process bang command output");
+            }
+        });
+    }
+
+    pub(crate) fn dispatch_user_message(
+        &mut self,
+        text: String,
+        image_paths: Vec<std::path::PathBuf>,
+    ) {
+        self.session.auto_compact_failed = false;
+        let Some(sid) = self.session.session_id.clone() else {
+            self.status = "[warn] No active session".to_string();
+            return;
+        };
+
+        let display_text = if image_paths.is_empty() {
+            text.clone()
+        } else {
+            let names: Vec<String> = image_paths
+                .iter()
+                .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(String::from))
+                .collect();
+            format!("[attach {}] {}", names.join(", "), text)
+        };
+        let msg = Message::user_text(&sid, &display_text);
+        self.session.messages.push(msg);
+        self.session.last_prompt = text.clone();
+        // T-010/FR-013: user message added; refresh the Context panel so the
+        // history message count stays current while the panel is open.
+        self.schedule_context_snapshot_refresh();
+        self.add_to_history(text.clone());
+        self.session.input.clear();
+        self.session.input_cursor = 0;
+        self.file_menu = None;
+        self.set_status_working("processing");
+        self.session.stream_in_bytes = 0;
+        self.session.stream_out_bytes = 0;
+        // R-10: trim messages to bound memory.
+        self.trim_messages_if_needed();
+        let refs = codemason_agent::reference::parse::parse_refs(&text);
+        let has_refs = !refs.is_empty();
+        if has_refs {
+            let ref_names: Vec<String> = refs.iter().map(|r| r.raw.clone()).collect();
+            self.push_log_no_agent(
+                LogLevel::Info,
+                format!("resolving refs: {}", ref_names.join(", ")),
+            );
+        }
+
+        let truncated = crate::app::helpers::truncate_to_char_boundary(&text, 120);
+        let model_tag = if let Some(ref model_str) = self.session.selected_model {
+            format!(" [{}]", model_str)
+        } else {
+            String::new()
+        };
+        self.push_log_no_agent(
+            LogLevel::Info,
+            format!("prompt sent{}: {}", model_tag, truncated),
+        );
+
+        let agent = self.prepare_agent_for_dispatch();
+
+        let processor = self.session_processor.clone();
+        let flag = Arc::new(AtomicBool::new(false));
+        self.session.cancel_flag = Some(flag.clone());
+        // `@` references resolve against the focused session's directory.
+        let ref_root = self.cwd_path.clone();
+        tokio::spawn(async move {
+            let final_text = if has_refs {
+                let wd = ref_root;
+                match codemason_agent::reference::resolve::resolve_all_refs(&text, &wd).await {
+                    Ok((resolved, _)) => resolved,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "ref resolution failed, using original text");
+                        text.clone()
+                    }
+                }
+            } else {
+                text.clone()
+            };
+
+            if image_paths.is_empty() {
+                if let Err(e) = processor
+                    .process_message(&sid, &final_text, &agent, flag)
+                    .await
+                {
+                    tracing::error!(error = %e, "Failed to process message");
+                }
+            } else {
+                let mut parts: Vec<codemason_agent::message::MessagePart> = image_paths
+                    .into_iter()
+                    .filter(|p| p.exists())
+                    .map(|p| {
+                        let mime = if p
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .map(|e| e.eq_ignore_ascii_case("png"))
+                            .unwrap_or(false)
+                        {
+                            "image/png"
+                        } else if p
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .map(|e| e.eq_ignore_ascii_case("gif"))
+                            .unwrap_or(false)
+                        {
+                            "image/gif"
+                        } else {
+                            "image/jpeg"
+                        };
+                        codemason_agent::message::MessagePart::Image(Box::new(
+                            codemason_agent::message::ImageData {
+                                mime_type: mime.to_string(),
+                                path: p,
+                            },
+                        ))
+                    })
+                    .collect();
+                parts.push(codemason_agent::message::MessagePart::Text { text: final_text });
+                let user_msg = codemason_agent::message::Message::new(
+                    &sid,
+                    codemason_agent::message::Role::User,
+                    parts,
+                );
+                if let Err(e) = processor
+                    .process_user_message(&sid, user_msg, &agent, flag)
+                    .await
+                {
+                    tracing::error!(error = %e, "Failed to process message with images");
+                }
+            }
+        });
+    }
+
+    /// Set the status line to a working/in-progress message and record it in history.
+    pub(crate) fn set_status_working(&mut self, message: impl Into<String>) {
+        let msg = message.into();
+        self.status = StatusCategory::Working.format(&msg);
+        self.status_history.push(StatusMessage::working(msg));
+        self.needs_redraw = true;
+    }
+
+    /// Return whether user input is currently blocked (agent is processing,
+    /// compression is running, or a post-compact send is pending).
+    ///
+    /// This is the "busy" gate: while a turn is executing a plain message is
+    /// still accepted (FR-002) but slash commands, bang commands, and
+    /// teammate-targeted messages are refused (FR-017).
+    pub(crate) fn is_input_blocked(&self) -> bool {
+        self.session.is_processing
+            || self.session.compact_in_progress
+            || self.session.auto_compact_in_progress
+            || self.session.pending_send_after_compact.is_some()
+    }
+
+    /// Return whether the input field is genuinely locked, as opposed to merely
+    /// busy because the primary agent is executing.
+    ///
+    /// While the primary agent executes the input field stays editable and
+    /// renders its unlocked border (FR-002, FR-011, FR-012). Input is only
+    /// locked when an overlay would swallow keystrokes (a modal dialog, picker,
+    /// or full-screen view) or while a compaction run owns the turn.
+    pub(crate) fn is_input_locked(&self) -> bool {
+        !self.session.permission_queue.is_empty()
+            || !self.session.question_queue.is_empty()
+            || self.provider_setup.is_some()
+            || self.mcp_discover.is_some()
+            || self.plugins_list.is_some()
+            || self.loop_setup.is_some()
+            || self.session.pending_forcecleanup.is_some()
+            || self.session.pending_rollback.is_some()
+            || self.session.plan_approval_pending.is_some()
+            || self.pending_memory_delete.is_some()
+            || self.pending_router_save.is_some()
+            || self.session.pending_stop_confirm
+            // The destructive row-action confirmation dialog (spec `agentui`
+            // T-009) is likewise a modal overlay: every key routes to it, so
+            // no character may reach the input buffer while it is open.
+            || self.row_action_confirm.is_some()
+            || self.output_view.is_some()
+            || self.memory_view.is_some()
+            || self.research_view.is_some()
+            || self.config_save_picker.is_some()
+            || self.history_picker.is_some()
+            || self.context_menu.is_some()
+            || self.show_shortcuts
+            || self.session.compact_in_progress
+            || self.session.auto_compact_in_progress
+            || self.session.pending_send_after_compact.is_some()
+            // The queue-control menu (ALT-Q) is a modal overlay that swallows
+            // every keystroke, so it must never let a character reach the input
+            // buffer (spec `inputqueue` FR-031). The per-key interception lives
+            // in `input::handle_key`; this entry keeps the guard layer and the
+            // locked-border render consistent with the other modals.
+            || self.queue_menu_open
+            // The `Clear the input queue?` confirmation dialog is likewise a modal
+            // overlay that swallows every keystroke (spec `inputqueue` FR-035).
+            || self.queue_clear_confirm_open
+            // The single-button notice dialog is a modal overlay too: it swallows
+            // every keystroke and only closes on `Enter`/`Esc`, so no character
+            // may reach the input buffer while it is open.
+            || self.notice_open
+            // The queue-entry panel (ALT-Q `Show` row) is a modal overlay too:
+            // every key is routed to it, so no character may reach the input
+            // buffer while it is open.
+            || self.queue_show_open
+            // The plugin-store browse panel is a modal overlay that swallows
+            // every keystroke and places the keyboard focus in its own search
+            // field, so the message input field and the input queue stay locked
+            // while it is open (spec `pluginstores` FR-015).
+            || self.plugin_store.is_some()
+            // The `/backend` switcher panel (spec `openhands` FR-008) is a modal
+            // overlay: every key routes to it, so no character may reach the
+            // input buffer while it is open.
+            || self.backend_panel.is_some()
+    }
+
+    /// Return the number of Unicode code points currently in the input buffer.
+    pub fn input_len_chars(&self) -> usize {
+        self.session.input.chars().count()
+    }
+
+    /// Return the number of messages currently waiting in the input queue
+    /// (spec `inputqueue` FR-001).
+    pub fn input_queue_len(&self) -> usize {
+        self.session.input_queue.len()
+    }
+
+    /// Labels for the four queue-control menu rows, in fixed order: `Next`,
+    /// `Stop`/`Resume`, `Clear`, `Show` (spec `inputqueue` FR-021, FR-023,
+    /// FR-026).
+    ///
+    /// The halt row reads `Stop` while a turn is in flight and `Resume` once it
+    /// has stopped (FR-026). The render path in `crate::layout` and the action
+    /// dispatch both read this one source, so the painted label can never
+    /// disagree with what selecting the row does.
+    pub fn queue_menu_labels(&self) -> [&'static str; 4] {
+        ["Next", self.queue_menu_halt_label(), "Clear", "Show"]
+    }
+
+    /// Whether the given queue-control menu row can be selected.
+    ///
+    /// Only the `Next` row is conditional: it is non-selectable while the input
+    /// queue is empty (FR-023). `Stop`/`Resume`, `Clear`, and `Show` are always
+    /// selectable, so the keyboard navigation skips only the dead `Next` row.
+    pub fn queue_menu_row_selectable(&self, row: usize) -> bool {
+        if row == crate::app::QUEUE_MENU_ROW_NEXT {
+            return self.input_queue_len() > 0;
+        }
+        row < crate::app::QUEUE_MENU_ROWS
+    }
+
+    /// Move the queue-control menu highlight up one row, skipping non-selectable
+    /// rows (spec `inputqueue` FR-023). A no-op at the top row.
+    pub fn queue_menu_move_up(&mut self) {
+        let mut row = self.queue_menu_selected;
+        while row > 0 {
+            row -= 1;
+            if self.queue_menu_row_selectable(row) {
+                self.queue_menu_selected = row;
+                self.needs_redraw = true;
+                return;
+            }
+        }
+    }
+
+    /// Move the queue-control menu highlight down one row, skipping
+    /// non-selectable rows (spec `inputqueue` FR-023). A no-op at the bottom row.
+    pub fn queue_menu_move_down(&mut self) {
+        let mut row = self.queue_menu_selected;
+        while row + 1 < crate::app::QUEUE_MENU_ROWS {
+            row += 1;
+            if self.queue_menu_row_selectable(row) {
+                self.queue_menu_selected = row;
+                self.needs_redraw = true;
+                return;
+            }
+        }
+    }
+
+    /// Close the queue-control menu and reset its highlight.
+    ///
+    /// The single place the menu's open flag and selection are cleared, so every
+    /// dismiss path (Esc, activating a row, or opening the entry panel) leaves
+    /// the same state (FR-022, FR-032).
+    pub(crate) fn close_queue_menu(&mut self) {
+        self.queue_menu_open = false;
+        self.queue_menu_selected = 0;
+    }
+
+    /// Activate the highlighted queue-control menu row (spec `inputqueue`
+    /// FR-024, FR-025, FR-027, FR-028, and the `Show` row).
+    ///
+    /// `Enter` dispatches to the row-specific action: `Next` runs the oldest
+    /// entry, the halt row stops or resumes the agent, `Clear` opens the
+    /// confirmation dialog, and `Show` opens the queue-entry panel. A
+    /// non-selectable row (the empty-queue `Next`) is a no-op, so a stray
+    /// `Enter` can never act on a dead row (FR-023).
+    pub async fn queue_menu_activate_selected(&mut self) {
+        if !self.queue_menu_row_selectable(self.queue_menu_selected) {
+            return;
+        }
+        match self.queue_menu_selected {
+            crate::app::QUEUE_MENU_ROW_NEXT => self.queue_menu_select_next().await,
+            crate::app::QUEUE_MENU_ROW_HALT => self.queue_menu_select_halt(),
+            crate::app::QUEUE_MENU_ROW_CLEAR => self.queue_menu_select_clear(),
+            crate::app::QUEUE_MENU_ROW_SHOW => self.queue_show_open_panel(),
+            _ => {}
+        }
+    }
+
+    /// Open the scrollable queue-entry panel (spec `inputqueue` `Show` row).
+    ///
+    /// Closes the queue-control menu and shows every queued entry oldest-first
+    /// so the user can reorder or delete entries without leaving the chat
+    /// screen. The queue itself, the input buffer, the staged attachments, and
+    /// the running turn are all left untouched; only `Esc` dismisses the panel.
+    pub fn queue_show_open_panel(&mut self) {
+        self.close_queue_menu();
+        self.queue_show_open = true;
+        self.queue_show_selected = 0;
+        self.needs_redraw = true;
+    }
+
+    /// Dismiss the queue-entry panel (spec `inputqueue` `Show` row).
+    ///
+    /// `Esc` is the only key that closes the panel; the highlighted index is
+    /// reset so the next open starts at the oldest entry.
+    pub fn queue_show_close(&mut self) {
+        self.queue_show_open = false;
+        self.queue_show_selected = 0;
+        self.needs_redraw = true;
+    }
+
+    /// Move the queue-entry panel highlight up one entry. A no-op at the first
+    /// entry. The panel is scrolled to keep the highlight visible by the render
+    /// pass, which keeps the selected entry on screen.
+    pub fn queue_show_move_up(&mut self) {
+        if self.queue_show_selected > 0 {
+            self.queue_show_selected -= 1;
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Move the queue-entry panel highlight down one entry. A no-op at the last
+    /// entry. The changed selection is painted on the next frame.
+    pub fn queue_show_move_down(&mut self) {
+        if self.queue_show_selected + 1 < self.session.input_queue.len() {
+            self.queue_show_selected += 1;
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Move the highlighted queue entry one step toward the front of the queue
+    /// (spec `inputqueue` `Show` row, `Enter`).
+    ///
+    /// The entry at `index` is swapped with the one at `index - 1` so it runs
+    /// sooner; a no-op at the front entry. The highlight follows the moved entry
+    /// so a second `Enter` advances it again. FIFO order is preserved for every
+    /// other entry.
+    pub fn queue_show_promote_selected(&mut self) {
+        let index = self.queue_show_selected;
+        if index == 0 || index >= self.session.input_queue.len() {
+            return;
+        }
+        self.session.input_queue.swap(index, index - 1);
+        self.queue_show_selected = index - 1;
+        self.needs_redraw = true;
+    }
+
+    /// Remove the highlighted queue entry (spec `inputqueue` `Show` row, `Del`).
+    ///
+    /// The entry is dropped from the queue; the highlight stays within range and
+    /// the queue counter repaints on the next frame. A no-op on an empty queue.
+    pub fn queue_show_delete_selected(&mut self) {
+        let index = self.queue_show_selected;
+        if index >= self.session.input_queue.len() {
+            return;
+        }
+        if let Some(entry) = self.session.input_queue.remove(index) {
+            let text = crate::app::helpers::truncate_to_char_boundary(&entry.text, 120);
+            self.push_log_no_agent(
+                LogLevel::Info,
+                format!("queue: deleted queued entry: {text}"),
+            );
+        }
+        self.queue_show_selected = self
+            .queue_show_selected
+            .min(self.session.input_queue.len().saturating_sub(1));
+        if self.session.input_queue.is_empty() {
+            // An empty queue has nothing left to show, so the panel closes
+            // itself (the counter also disappears).
+            self.queue_show_open = false;
+            self.queue_show_selected = 0;
+        }
+        self.needs_redraw = true;
+    }
+
+    /// The label for the queue-control menu's second row: `Stop` while a turn is
+    /// executing, `Resume` once the agent has stopped (spec `inputqueue` FR-026).
+    pub fn queue_menu_halt_label(&self) -> &'static str {
+        if self.is_input_blocked() {
+            "Stop"
+        } else {
+            "Resume"
+        }
+    }
+
+    /// Empty the input queue.
+    ///
+    /// Called wherever the TUI session is reset (session switch/resume, new
+    /// session creation, and process teardown) so a queued message never
+    /// crosses a session boundary (NFR-005). The queue is never persisted, so
+    /// no save is needed here.
+    pub fn clear_input_queue(&mut self) {
+        // A pending queue-control `Next` is meaningless once the queue is
+        // emptied, so drop it with the entries (FR-024).
+        self.session.queue_next_pending = false;
+        // The queue-entry panel has nothing left to list once the queue is
+        // emptied, so it closes with the entries.
+        self.queue_show_open = false;
+        self.queue_show_selected = 0;
+        if self.session.input_queue.is_empty() {
+            return;
+        }
+        self.session.input_queue.clear();
+        // The prompt's queue counter disappears once the queue is empty, so the
+        // change must be painted on the next frame (NFR-003).
+        self.needs_redraw = true;
+    }
+
+    /// Open the plugin-store browse panel for `kind`, pre-filling the search
+    /// field from `prefill` and recording a `--refresh` request (spec
+    /// `pluginstores` FR-007, FR-012, FR-020, FR-021).
+    ///
+    /// The unfiltered launch: equivalent to
+    /// [`Self::open_plugin_store_category`] with the `ALL` category, kept as the
+    /// common entry point so callers that name no category need not spell out the
+    /// filter.
+    pub fn open_plugin_store(&mut self, kind: StoreKind, prefill: &str, refresh: bool) {
+        self.open_plugin_store_category(kind, prefill, refresh, CategoryFilter::all());
+    }
+
+    /// Open the plugin-store browse panel for `kind`, pre-filling the search
+    /// field from `prefill`, recording a `--refresh` request, and holding an
+    /// optional `--category` filter until the index lands (spec `pluginstores`
+    /// FR-007, FR-012, FR-020, FR-021; `catnav` FR-022).
+    ///
+    /// Both `/plugins codex` and `/plugins claude` drive the same browser,
+    /// parameterised only by store (A2). The panel opens in the `Loading` state
+    /// and its index fetch is started off-loop ([`Self::spawn_plugin_store_fetch`])
+    /// so the event loop and any in-progress agent turn keep animating (FR-007,
+    /// FR-016, FR-026). Opening the panel installs nothing and touches no input
+    /// state (FR-022); while it is open the input field and the queue are locked
+    /// (FR-015).
+    ///
+    /// `category` is the filter parsed from a `--category <name>` launch
+    /// (`CategoryFilter::all()` when absent). It is applied once the fetch lands,
+    /// against the categories the fetched index actually declares
+    /// ([`App::poll_plugin_store_result`]), so an unknown name is reported inline
+    /// rather than leaving a silently empty panel (FR-022).
+    ///
+    /// The installed-plugin-id set is derived once from the store scan on open
+    /// (T-007, FR-005, A5) so the renderer can colour already-present rows.
+    pub fn open_plugin_store_category(
+        &mut self,
+        kind: StoreKind,
+        prefill: &str,
+        refresh: bool,
+        category: CategoryFilter,
+    ) {
+        let installed = self.derive_installed_set();
+        let mut browser = PluginStoreBrowser::new(kind, prefill, refresh);
+        browser.set_installed(installed);
+        browser.set_pending_category(category);
+        self.plugin_store = Some(browser);
+        self.needs_redraw = true;
+        self.spawn_plugin_store_fetch(kind);
+    }
+
+    /// Start the store-index fetch for `kind` off the event loop (spec
+    /// `pluginstores` T-008; FR-007, FR-016, FR-026).
+    ///
+    /// Resolves the effective endpoint (configured override, else the compiled
+    /// default; T-015, FR-027..FR-029) and the fetch budgets from config on the
+    /// UI thread, then hands the blocking `reqwest` download to the TUI's
+    /// background path so the event loop never stalls. The parsed index (or the
+    /// contained [`StoreError`]) is delivered back through the
+    /// [`App::plugin_store_result`] slot and applied by
+    /// [`App::poll_plugin_store_result`] on a later frame, so the panel renders
+    /// its loading row until the result lands (FR-016).
+    ///
+    /// A refused endpoint (non-`https` or malformed, FR-024) is surfaced
+    /// immediately as the panel's inline error state instead of spawning, and
+    /// the fetch is skipped entirely when no async reactor is available. No path
+    /// panics (FR-025).
+    pub(crate) fn spawn_plugin_store_fetch(&mut self, kind: StoreKind) {
+        let (_dirs, plugins) = store_and_config(&self.cwd_path);
+        let stores = plugins.stores_or_default();
+        self.spawn_plugin_store_fetch_with_stores(kind, &stores);
+    }
+
+    /// Install an injectable store-index fetch seam (spec `pluginstores` T-019;
+    /// FR-037).
+    ///
+    /// Replaces the production HTTPS fetcher with an alternative implementation
+    /// (typically an offline [`codemason_plugins::FixtureStoreFetcher`]) so the
+    /// store-browser launch and fetch paths can be driven against fixture index
+    /// bytes with no network access (FR-037, NFR-003). The seam is
+    /// production-transparent: unless a test calls this, the browser keeps the
+    /// default HTTPS fetcher set at construction and the live launch path is
+    /// unchanged.
+    pub fn set_plugin_store_fetcher(&mut self, fetcher: Arc<dyn StoreIndexFetcher>) {
+        self.plugin_store_fetcher = fetcher;
+    }
+
+    /// [`Self::spawn_plugin_store_fetch`] with the store budget/endpoint block
+    /// supplied by the caller, so the resolution and refusal paths are testable
+    /// without reading a real config file (FR-024, FR-027..FR-029).
+    pub fn spawn_plugin_store_fetch_with_stores(
+        &mut self,
+        kind: StoreKind,
+        stores: &codemason_config::PluginStoresConfig,
+    ) {
+        // The store's base endpoint (config override or compiled default) is the
+        // primary marketplace: a refused base (non-https or malformed, FR-024) is
+        // reported as the panel's inline error with no fetch attempted. Added
+        // marketplaces (FR-048) are then appended; a refused added URL is skipped
+        // (one bad added URL does not blind the whole store).
+        if let Err(err) = kind.effective_endpoint_with_source(stores) {
+            self.plugin_store_failed(kind, err.to_string());
+            return;
+        }
+        let (endpoints, _refused) = kind.effective_endpoints_with_source(stores);
+        if endpoints.is_empty() {
+            return;
+        }
+        let limits = FetchLimits::from(stores);
+        // Resolve each endpoint's marketplace display name on the UI thread, so the
+        // browse row can name the marketplace a plugin came from (FR-048) and the
+        // off-loop fetch closure needs nothing from `stores`. The base endpoint (a
+        // config override or the compiled default) resolves to the store label; an
+        // added marketplace resolves to the name it was added under.
+        let endpoints: Vec<(StoreEndpoint, String)> = endpoints
+            .into_iter()
+            .map(|(endpoint, _source)| {
+                let marketplace = marketplace_name_for(kind, stores, &endpoint);
+                (endpoint, marketplace)
+            })
+            .collect();
+        let slot = Arc::clone(&self.plugin_store_result);
+        let fetcher = Arc::clone(&self.plugin_store_fetcher);
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn_blocking(move || {
+                let mut merged = StoreIndex::default();
+                let mut first_error: Option<StoreError> = None;
+                for (endpoint, marketplace) in &endpoints {
+                    match fetcher.fetch_index(kind, endpoint, &limits) {
+                        Ok(mut index) => {
+                            // Attribute every row to the marketplace it came from,
+                            // so a merged multi-marketplace panel names each source
+                            // (FR-048).
+                            for entry in &mut index.entries {
+                                entry.marketplace = marketplace.clone();
+                            }
+                            merged.store = merged.store.or(index.store);
+                            merged.skipped += index.skipped;
+                            merged.entries.extend(index.entries);
+                        }
+                        Err(err) => {
+                            if first_error.is_none() {
+                                first_error = Some(err);
+                            }
+                        }
+                    }
+                }
+                // A single-marketplace store keeps the exact prior behaviour: a
+                // failure is the panel's inline error. When at least one marketplace
+                // answered, the merged result is delivered even if another failed.
+                let outcome = if merged.entries.is_empty()
+                    && merged.store.is_none()
+                    && let Some(err) = first_error
+                {
+                    Err(err)
+                } else {
+                    Self::dedup_store_entries(&mut merged.entries);
+                    Ok(merged)
+                };
+                Self::deposit_plugin_store_result(&slot, kind, outcome);
+            });
+        } else {
+            // Without an async reactor (headless/unit-test contexts) the fetch
+            // cannot run off-loop, so it is not attempted at all: running it
+            // inline would block the caller and violate FR-016/FR-026. The panel
+            // stays in its loading state.
+            tracing::debug!(
+                store = kind.token(),
+                "plugin-store fetch skipped: no async runtime available"
+            );
+        }
+    }
+
+    /// Store one fetch outcome in the shared delivery slot, recovering a
+    /// poisoned lock (FR-025).
+    fn deposit_plugin_store_result(
+        slot: &std::sync::Mutex<Option<PluginStoreFetchResult>>,
+        kind: StoreKind,
+        outcome: Result<StoreIndex, StoreError>,
+    ) {
+        *recover_poisoned(slot.lock(), "plugin_store_result") =
+            Some(PluginStoreFetchResult { kind, outcome });
+    }
+
+    /// Drop entries whose id was already seen, keeping the first occurrence, so a
+    /// plugin listed by more than one marketplace (e.g. a plugin added from a
+    /// community marketplace that is also in the store default) appears once in
+    /// the merged result set (FR-048).
+    fn dedup_store_entries(entries: &mut Vec<codemason_plugins::StoreEntry>) {
+        // Ordering is irrelevant (`retain` already preserves first-occurrence
+        // order), so a `HashSet` gives O(1) membership where a `BTreeSet` paid
+        // O(log n) per insert.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        entries.retain(|entry| seen.insert(entry.id.clone()));
+    }
+
+    /// Drain a completed off-loop store-index fetch and apply it to the open
+    /// panel (spec `pluginstores` T-008; FR-013, FR-016, FR-017).
+    ///
+    /// Called each housekeeping frame. A result whose store no longer matches the
+    /// open browser (the panel was closed or re-opened for the other store) is
+    /// discarded, so a late arrival can never fill the wrong panel. On success
+    /// the entries are installed (deriving the `Ready`/`Empty` status, FR-017);
+    /// on failure the contained [`StoreError`] is rendered as the inline error
+    /// detail (FR-013). No path panics (FR-025).
+    pub fn poll_plugin_store_result(&mut self) {
+        let result = {
+            let mut guard =
+                recover_poisoned(self.plugin_store_result.lock(), "plugin_store_result");
+            guard.take()
+        };
+        let Some(result) = result else {
+            return;
+        };
+        let open_kind = self.plugin_store.as_ref().map(|b| b.kind);
+        if open_kind != Some(result.kind) {
+            // Stale: the panel is closed or showing the other store (FR-007).
+            return;
+        }
+        match result.outcome {
+            Ok(index) => {
+                if let Some(browser) = self.plugin_store.as_mut() {
+                    browser.set_index(index);
+                    // A `--category <name>` launch is validated against the
+                    // categories the fetched index actually declares, so an unknown
+                    // name is reported in the footer rather than leaving the panel
+                    // silently empty (spec `catnav` FR-022).
+                    browser.apply_pending_category();
+                }
+                // Now that the index is loaded, enrich each entry from its own
+                // manifest off-loop, since the marketplace index usually omits the
+                // version and (for Codex) the description entirely (FR-048).
+                self.start_store_enrichment(result.kind);
+            }
+            Err(err) => self.plugin_store_failed(result.kind, err.panel_detail(result.kind)),
+        }
+        self.needs_redraw = true;
+    }
+
+    /// Start the off-loop manifest-metadata enrichment of the index now loaded in
+    /// the open browser (spec `pluginstores` FR-048).
+    ///
+    /// Snapshots the loaded entries on the UI thread, bumps the enrichment
+    /// generation so any in-flight worker's messages are discarded, marks the panel
+    /// [`PluginStoreBrowser::enriching`], and hands the per-entry manifest lookups to
+    /// the TUI's background path ([`App::store_manifest_source`]) so the event loop
+    /// never stalls (FR-016, FR-026). Each resolved update is pushed onto
+    /// [`App::store_enrich_result`] and drained by [`App::poll_store_enrichment`].
+    ///
+    /// A no-op when no panel is open for `kind`, when the panel is loading or
+    /// failed, or when no async reactor is available (headless/unit-test contexts);
+    /// no path panics.
+    pub(crate) fn start_store_enrichment(&mut self, kind: StoreKind) {
+        let entries = match self.plugin_store.as_ref() {
+            Some(browser) if browser.kind == kind => {
+                if matches!(browser.status, crate::app::PluginStoreStatus::Ready) {
+                    browser.all.clone()
+                } else {
+                    return;
+                }
+            }
+            _ => return,
+        };
+        let generation = self
+            .store_enrich_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        if let Some(browser) = self.plugin_store.as_mut()
+            && browser.kind == kind
+        {
+            browser.enriching = true;
+        }
+        self.needs_redraw = true;
+
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            // Without an async reactor the enrichment cannot run off-loop; running
+            // it inline would block the caller (FR-016/FR-026), so it is skipped and
+            // the panel simply keeps whatever the index declared.
+            tracing::debug!(
+                store = kind.token(),
+                "store enrichment skipped: no async runtime available"
+            );
+            if let Some(browser) = self.plugin_store.as_mut()
+                && browser.kind == kind
+            {
+                browser.finish_enrichment();
+            }
+            self.needs_redraw = true;
+            return;
+        };
+
+        let source = Arc::clone(&self.store_manifest_source);
+        let slot = Arc::clone(&self.store_enrich_result);
+        handle.spawn_blocking(move || {
+            let sink = |update: codemason_plugins::ManifestUpdate| {
+                push_enrich_result(
+                    &slot,
+                    StoreEnrichResult::Update {
+                        generation,
+                        kind,
+                        update,
+                    },
+                );
+            };
+            codemason_plugins::enrich_into(&entries, kind, source.as_ref(), &sink);
+            push_enrich_result(&slot, StoreEnrichResult::Finished { generation, kind });
+        });
+    }
+
+    /// Install an injectable manifest-metadata source (spec `pluginstores` FR-048).
+    ///
+    /// Replaces the production HTTPS source with an alternative implementation, so
+    /// the enrichment path can be driven against in-memory metadata with no network
+    /// access (NFR-003). Mirrors [`App::set_plugin_store_fetcher`].
+    pub fn set_manifest_source(&mut self, source: Arc<dyn codemason_plugins::ManifestSource>) {
+        self.store_manifest_source = source;
+    }
+
+    /// Drain the completed manifest-enrichment messages and apply them to the open
+    /// panel (spec `pluginstores` FR-048).
+    ///
+    /// Called each housekeeping frame. An update whose generation or store no
+    /// longer matches the open browser (the panel was closed, switched stores, or
+    /// re-fetched) is discarded, so a late arrival can never fill the wrong panel. A
+    /// terminal [`StoreEnrichResult::Finished`] clears the title's loading hint. No
+    /// path panics.
+    pub fn poll_store_enrichment(&mut self) {
+        let drained = {
+            let mut guard =
+                recover_poisoned(self.store_enrich_result.lock(), "store_enrich_result");
+            std::mem::take(&mut *guard)
+        };
+        if drained.is_empty() {
+            return;
+        }
+        let current = self
+            .store_enrich_generation
+            .load(std::sync::atomic::Ordering::SeqCst);
+        let open_kind = self.plugin_store.as_ref().map(|b| b.kind);
+        let mut changed = false;
+        for message in drained {
+            match message {
+                StoreEnrichResult::Update {
+                    generation,
+                    kind,
+                    update,
+                } => {
+                    if generation == current && open_kind == Some(kind) {
+                        if let Some(browser) = self.plugin_store.as_mut() {
+                            browser.apply_manifest_update(update);
+                        }
+                        changed = true;
+                    }
+                }
+                StoreEnrichResult::Finished { generation, kind } => {
+                    if generation == current && open_kind == Some(kind) {
+                        if let Some(browser) = self.plugin_store.as_mut() {
+                            browser.finish_enrichment();
+                        }
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if changed {
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Apply an inline failure detail to the open browser for `kind` (FR-013).
+    ///
+    /// A no-op when the panel is closed or showing the other store, so a
+    /// late/foreign failure never corrupts an unrelated panel.
+    fn plugin_store_failed(&mut self, kind: StoreKind, detail: String) {
+        if let Some(browser) = self.plugin_store.as_mut()
+            && browser.kind == kind
+        {
+            browser.set_failed(detail);
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Re-derive the panel's installed-plugin-id set from the store scan
+    /// (T-007, FR-005).
+    ///
+    /// Called on open and (by a later task) after an install commits, so a newly
+    /// installed row re-colours without keeping a second install registry (A5).
+    /// A no-op when no panel is open.
+    pub fn refresh_plugin_store_installed(&mut self) {
+        if self.plugin_store.is_none() {
+            return;
+        }
+        let installed = self.derive_installed_set();
+        if let Some(browser) = self.plugin_store.as_mut() {
+            browser.set_installed(installed);
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Derive the installed-plugin-id set for the current working directory from
+    /// the plugin store scan (FR-005, A5). Never fails: an absent or unreadable
+    /// store scans as empty.
+    fn derive_installed_set(&self) -> BTreeSet<String> {
+        let (dirs, _config) = store_and_config(&self.cwd_path);
+        installed_ids(dirs)
+    }
+
+    /// Handle `ENTER` on the highlighted plugin-store result (spec `pluginstores`
+    /// FR-006, FR-011, FR-014, FR-022).
+    ///
+    /// A highlighted result whose id is already in the store scan is refused
+    /// with an already-installed notice and nothing is written (FR-014). A
+    /// not-installed result starts the off-loop install of its `source` through
+    /// the existing `codemason_plugins::add(force = false)` entry point (FR-006,
+    /// FR-024), which the poll later drains to report the installed id/dialect
+    /// and re-derive the installed set so the row re-colours (FR-011). An empty
+    /// result set records a neutral notice and installs nothing (FR-022). No path
+    /// panics (FR-025).
+    ///
+    /// Installing is only ever reached from this explicit `ENTER`: opening,
+    /// typing, and moving never call it, so nothing is installed without a
+    /// deliberate key press (FR-022).
+    pub fn plugin_store_install_selected(&mut self) {
+        let Some(browser) = self.plugin_store.as_mut() else {
+            return;
+        };
+        let Some(entry) = browser.selected() else {
+            browser.last_install = Some("no result highlighted".to_string());
+            self.needs_redraw = true;
+            return;
+        };
+        let id = entry.id.clone();
+        if browser.is_installed(&id) {
+            // FR-014: a re-install is refused; nothing is written.
+            browser.last_install = Some(format!("plugin {id} is already installed"));
+            self.needs_redraw = true;
+            return;
+        }
+        let source = entry.source.clone();
+        let kind = browser.kind;
+        browser.last_install = Some(format!("installing {id}..."));
+        self.needs_redraw = true;
+        self.spawn_plugin_store_install(kind, id, source);
+    }
+
+    /// Start the install of `source` off the event loop (spec `pluginstores`
+    /// T-009; FR-006, FR-011, FR-024, FR-025, FR-026).
+    ///
+    /// Resolves the plugin store directories from the same config the store scan
+    /// uses, then hands the blocking `codemason_plugins::add(force = false)` call to
+    /// a worker thread so the TUI event loop and any agent turn keep animating
+    /// while the download/extract/commit runs (FR-026). The store-supplied
+    /// `source` is passed through unchanged, so it receives no elevated trust:
+    /// the existing HTTPS, traversal, and size guards still apply (FR-024).
+    ///
+    /// The worker turns the [`AddOutcome`]/[`AddError`] into a
+    /// [`PluginStoreInstallResult`] (success report naming the installed id and
+    /// dialect, or the `[err]` report naming the cause) and deposits it in
+    /// [`App::plugin_store_install_result`] for
+    /// [`App::poll_plugin_store_install_result`]. When no worker thread can be
+    /// spawned the install runs inline so the action still completes; the
+    /// installed set is then re-derived immediately. No path panics (FR-025).
+    fn spawn_plugin_store_install(&mut self, kind: StoreKind, id: String, source: String) {
+        let (dirs, _config) = store_and_config(&self.cwd_path);
+        let workdir = self.cwd_path.clone();
+        let slot = Arc::clone(&self.plugin_store_install_result);
+
+        let worker_id = id.clone();
+        let worker_dirs = dirs.clone();
+        let worker_workdir = workdir.clone();
+        let worker_source = source.clone();
+        let spawn = std::thread::Builder::new()
+            .name("plugin-store-install".to_owned())
+            .spawn(move || {
+                let result = run_plugin_store_install(
+                    &worker_dirs,
+                    &worker_workdir,
+                    kind,
+                    &worker_id,
+                    &worker_source,
+                );
+                Self::deposit_plugin_store_install_result(&slot, result);
+            });
+
+        match spawn {
+            Ok(handle) => {
+                // The worker owns the install now and deposits its result for
+                // the next poll to drain.
+                drop(handle);
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "plugin-store install worker spawn failed; running inline");
+                let result = run_plugin_store_install(&dirs, &workdir, kind, &id, &source);
+                if result.succeeded {
+                    self.refresh_plugin_store_installed();
+                }
+                self.apply_plugin_store_install_result(result);
+            }
+        }
+    }
+
+    /// Store one install outcome in the shared delivery slot, recovering a
+    /// poisoned lock (FR-025).
+    fn deposit_plugin_store_install_result(
+        slot: &std::sync::Mutex<Option<PluginStoreInstallResult>>,
+        result: PluginStoreInstallResult,
+    ) {
+        *recover_poisoned(slot.lock(), "plugin_store_install_result") = Some(result);
+    }
+
+    /// Drain a completed off-loop install and apply it (spec `pluginstores`
+    /// T-009; FR-006, FR-011, FR-014, FR-025).
+    ///
+    /// Called each housekeeping frame. A result whose store no longer matches the
+    /// open browser (the panel was closed or re-opened for the other store) is
+    /// still reported to the message window - the install already happened - but
+    /// never touches a different store's panel. On success the installed set is
+    /// re-derived so the newly installed row re-colours (FR-011). No path panics.
+    pub fn poll_plugin_store_install_result(&mut self) {
+        let result = {
+            let mut guard = recover_poisoned(
+                self.plugin_store_install_result.lock(),
+                "plugin_store_install_result",
+            );
+            guard.take()
+        };
+        let Some(result) = result else {
+            return;
+        };
+        if result.succeeded {
+            self.refresh_plugin_store_installed();
+        }
+        self.apply_plugin_store_install_result(result);
+    }
+
+    /// Apply one install result: record the panel-footer notice when the panel
+    /// still belongs to the same store, and append the report to the message
+    /// window (FR-006, FR-011, FR-025).
+    fn apply_plugin_store_install_result(&mut self, result: PluginStoreInstallResult) {
+        if let Some(browser) = self.plugin_store.as_mut()
+            && browser.kind == result.kind
+        {
+            browser.last_install = Some(result.notice);
+        }
+        self.append_assistant_text(&result.report);
+        self.needs_redraw = true;
+    }
+
+    /// Start the off-loop `/plugins stores --check` availability probe (spec
+    /// `pluginstores` FR-031 `--check`).
+    ///
+    /// Resolves the store block and spawns a plain OS thread that contacts each
+    /// store endpoint through the same injectable [`StoreIndexFetcher`] seam the
+    /// browser uses, then deposits the fully rendered report into
+    /// [`App::plugin_store_probe_result`] for
+    /// [`App::poll_plugin_store_probe_result`] to append. The event loop never
+    /// stalls on the network probe.
+    ///
+    /// A bare `std::thread` (not `tokio::task::spawn_blocking`) is required: the
+    /// probe builds a `reqwest::blocking::Client`, whose internal tokio runtime
+    /// panics on drop inside a blocking-pool worker. No path panics.
+    pub fn begin_plugin_store_probe(&mut self) {
+        let (_dirs, plugins) = store_and_config(&self.cwd_path);
+        let stores = plugins.stores_or_default();
+        let slot = Arc::clone(&self.plugin_store_probe_result);
+        let fetcher = Arc::clone(&self.plugin_store_fetcher);
+        // Run the probe on a plain OS thread, never `spawn_blocking`.
+        // `fetch_index` builds a `reqwest::blocking::Client`, which spins up and
+        // drops its own internal tokio runtime; dropping a runtime inside a
+        // blocking-pool worker (which runs inside the reactor's blocking region)
+        // panics with "Cannot drop a runtime in a context where blocking is not
+        // allowed". A bare `std::thread` has no runtime context, so the client's
+        // runtime is created and torn down cleanly.
+        std::thread::spawn(move || {
+            // SEC-codemason-tui-001 follow-up (SECTASKS T-057): the probe thread
+            // must never take the process down. A panic here (a fetcher bug, an
+            // unexpected error path) would abort a background thread silently
+            // and leave the probe slot empty forever, so the report is built
+            // under `catch_unwind` and a failure is surfaced in the slot.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let probes = probe_stores(&stores, fetcher.as_ref());
+                render_stores_report_with_probes(&stores, Some(&probes))
+            }));
+            let report = match result {
+                Ok(report) => report,
+                Err(_) => {
+                    "From: /plugins stores\n\n[err] store probe failed unexpectedly".to_string()
+                }
+            };
+            *recover_poisoned(slot.lock(), "plugin_store_probe_result") = Some(report);
+        });
+    }
+
+    /// Drain a completed off-loop `/plugins stores --check` probe and append its
+    /// report to the message window (spec `pluginstores` FR-031 `--check`).
+    ///
+    /// Called each housekeeping frame, mirroring
+    /// [`App::poll_websearch_test_result`]. No path panics (FR-025).
+    pub fn poll_plugin_store_probe_result(&mut self) {
+        let report = {
+            let mut guard = recover_poisoned(
+                self.plugin_store_probe_result.lock(),
+                "plugin_store_probe_result",
+            );
+            guard.take()
+        };
+        let Some(report) = report else {
+            return;
+        };
+        self.append_assistant_text(&report);
+        self.status = "plugins: store check complete".to_string();
+        self.needs_redraw = true;
+    }
+
+    /// Close the plugin-store browse panel and drop its state (FR-012).
+    ///
+    /// This is the only place the browser is cleared, so every close path
+    /// leaves the input field, the staged attachments, the queue, and the
+    /// running turn exactly as they were (FR-012).
+    pub fn close_plugin_store(&mut self) {
+        if self.plugin_store.take().is_some() {
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Handle the shared `Backspace` / `Esc` query-editing key while the panel
+    /// is open (spec `pluginstores` FR-009).
+    ///
+    /// Removes the last query character and returns `true` when the query is
+    /// non-empty; when it is already empty, dismisses the panel (FR-012) and
+    /// returns `false`.
+    pub fn plugin_store_edit_or_close(&mut self) -> bool {
+        let Some(browser) = self.plugin_store.as_mut() else {
+            return false;
+        };
+        if browser.backspace() {
+            self.needs_redraw = true;
+            true
+        } else {
+            self.close_plugin_store();
+            false
+        }
+    }
+
+    /// Append a typed character to the panel's search query (FR-008).
+    pub fn plugin_store_push_char(&mut self, c: char) {
+        if let Some(browser) = self.plugin_store.as_mut() {
+            browser.push_char(c);
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Move the panel's block cursor up one result (FR-010).
+    pub fn plugin_store_move_up(&mut self) {
+        if let Some(browser) = self.plugin_store.as_mut() {
+            browser.move_up();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Move the panel's block cursor down one result (FR-010).
+    pub fn plugin_store_move_down(&mut self) {
+        if let Some(browser) = self.plugin_store.as_mut() {
+            browser.move_down();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Whether the category navigator currently holds keyboard focus
+    /// (spec `catnav` FR-009; `pluginstores` FR-052).
+    ///
+    /// `false` when no panel is open or a pane other than the category navigator
+    /// holds focus.
+    #[must_use]
+    pub fn plugin_store_nav_focused(&self) -> bool {
+        self.plugin_store
+            .as_ref()
+            .is_some_and(|browser| browser.focus == StorePane::Categories)
+    }
+
+    /// Whether the marketplace navigator currently holds keyboard focus
+    /// (spec `pluginstores` FR-052).
+    ///
+    /// `false` when no panel is open or a pane other than the marketplace
+    /// navigator holds focus.
+    #[must_use]
+    pub fn plugin_store_marketplace_focused(&self) -> bool {
+        self.plugin_store
+            .as_ref()
+            .is_some_and(|browser| browser.focus == StorePane::Marketplaces)
+    }
+
+    /// Cycle focus forward through the three panes, `Results` -> `Categories` ->
+    /// `Marketplaces` -> `Results` (spec `pluginstores` FR-052).
+    ///
+    /// A no-op when no panel is open. The focused pane's cursor is rendered
+    /// distinctly and subsequent `Up`/`Down` route to that pane.
+    pub fn plugin_store_focus_next(&mut self) {
+        if let Some(browser) = self.plugin_store.as_mut() {
+            browser.focus = browser.focus.next();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Cycle focus backward through the three panes (`BackTab`), the reverse of
+    /// [`Self::plugin_store_focus_next`] (spec `pluginstores` FR-052).
+    pub fn plugin_store_focus_prev(&mut self) {
+        if let Some(browser) = self.plugin_store.as_mut() {
+            browser.focus = browser.focus.previous();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Move the category cursor up one navigator row while the navigator holds
+    /// focus, applying the newly highlighted category (spec `catnav` FR-008).
+    pub fn plugin_store_category_move_up(&mut self) {
+        if let Some(browser) = self.plugin_store.as_mut() {
+            browser.category_move_up();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Move the category cursor down one navigator row while the navigator holds
+    /// focus, applying the newly highlighted category (spec `catnav` FR-007).
+    pub fn plugin_store_category_move_down(&mut self) {
+        if let Some(browser) = self.plugin_store.as_mut() {
+            browser.category_move_down();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Apply the highlighted category and move keyboard focus to the result list
+    /// (spec `catnav` FR-010).
+    ///
+    /// Installing is deliberately not reachable here: `ENTER` over the navigator
+    /// only applies the category and transfers focus, so nothing is written to
+    /// the store (FR-024).
+    pub fn plugin_store_category_confirm(&mut self) {
+        if let Some(browser) = self.plugin_store.as_mut() {
+            browser.category_confirm();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Clear the category filter to `ALL` and re-derive the visible results
+    /// (spec `catnav` FR-015).
+    ///
+    /// A no-op when no panel is open; issues no network request and installs
+    /// nothing (FR-014, FR-024).
+    pub fn plugin_store_clear_category(&mut self) {
+        if let Some(browser) = self.plugin_store.as_mut() {
+            browser.category_clear();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Move the marketplace cursor up one row while the marketplace navigator
+    /// holds focus, applying the newly highlighted marketplace (FR-052).
+    pub fn plugin_store_marketplace_move_up(&mut self) {
+        if let Some(browser) = self.plugin_store.as_mut() {
+            browser.marketplace_move_up();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Move the marketplace cursor down one row while the marketplace navigator
+    /// holds focus, applying the newly highlighted marketplace (FR-052).
+    pub fn plugin_store_marketplace_move_down(&mut self) {
+        if let Some(browser) = self.plugin_store.as_mut() {
+            browser.marketplace_move_down();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Apply the highlighted marketplace and move keyboard focus to the result
+    /// list (FR-052).
+    ///
+    /// Installing is deliberately not reachable here: `ENTER` over the marketplace
+    /// navigator only applies the marketplace and transfers focus.
+    pub fn plugin_store_marketplace_confirm(&mut self) {
+        if let Some(browser) = self.plugin_store.as_mut() {
+            browser.marketplace_confirm();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Clear the marketplace filter to `ALL` and re-derive the visible results
+    /// (FR-052).
+    ///
+    /// A no-op when no panel is open; issues no network request and installs
+    /// nothing.
+    pub fn plugin_store_clear_marketplace(&mut self) {
+        if let Some(browser) = self.plugin_store.as_mut() {
+            browser.marketplace_clear();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Clear the live search filter, re-deriving the visible result set (spec
+    /// `pluginstores` FR-004).
+    ///
+    /// Wired to the search box's `[x] clear` button and to the panel's own query
+    /// editor. An already-empty query is a no-op (so a stray click on the button
+    /// does not repaint); clearing a non-empty query re-applies the filter and
+    /// requests a redraw so the full result set returns immediately.
+    pub fn plugin_store_clear_search(&mut self) {
+        if let Some(browser) = self.plugin_store.as_mut()
+            && !browser.query.is_empty()
+        {
+            browser.set_query(String::new());
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Open the connector-catalogue browse panel for `/connectors claude`,
+    /// pre-filling the search field from `prefill` and pre-selecting the
+    /// `category` filter.
+    ///
+    /// Mirrors [`Self::open_plugin_store`]: the panel opens in the `Loading`
+    /// state and its catalogue fetch is started off-loop, so the event loop and
+    /// any in-progress agent turn keep animating. Opening the panel installs
+    /// nothing; while it is open the input field and the queue are locked.
+    ///
+    /// The installed-connector-id set is derived once from the store scan on open
+    /// so the renderer can colour already-present rows.
+    ///
+    /// `category` is applied once the fetch lands, against the categories the
+    /// fetched catalogue actually declares (FR-041): a category the launch named
+    /// that the catalogue turns out not to carry is refused inline by
+    /// [`Self::poll_connector_catalogue_result`] rather than leaving a silently
+    /// empty panel.
+    pub fn open_connector_catalogue(
+        &mut self,
+        prefill: &str,
+        category: CategoryFilter,
+        refresh: bool,
+    ) {
+        let installed = self.derive_installed_connector_set();
+        let mut browser = CatalogueBrowser::new(prefill, refresh);
+        browser.set_installed(installed);
+        browser.set_pending_category(category);
+        self.connector_store = Some(browser);
+        self.needs_redraw = true;
+        self.spawn_connector_catalogue_fetch();
+    }
+
+    /// Start the connector-catalogue fetch off the event loop.
+    ///
+    /// The fetch is blocking (`reqwest::blocking` builds and drops its own tokio
+    /// runtime), so it runs on a plain OS thread rather than
+    /// `tokio::task::spawn_blocking`: dropping a runtime inside a blocking-pool
+    /// worker panics with "Cannot drop a runtime in a context where blocking is
+    /// not allowed". The descriptors (or the contained cause) are delivered back
+    /// through [`App::connector_catalogue_result`] and applied by
+    /// [`App::poll_connector_catalogue_result`] on a later frame, so the panel
+    /// renders its loading row until the result lands.
+    pub(crate) fn spawn_connector_catalogue_fetch(&mut self) {
+        let (dirs, config) = codemason_connectors::store_and_config(&self.cwd_path);
+        if !config.is_enabled() {
+            // A disabled subsystem is inert: no catalogue fetch is attempted.
+            self.connector_catalogue_failed("connectors.enabled = false".to_string());
+            return;
+        }
+        let slot = Arc::clone(&self.connector_catalogue_result);
+        std::thread::spawn(move || {
+            let outcome = codemason_connectors::search_installable_catalogue_full(&config, &dirs);
+            let result = match outcome {
+                Ok(full) => ConnectorCatalogueResult {
+                    outcome: Ok(full.descriptors),
+                    skipped: full.skipped,
+                    refused_marketplace: full.refused_marketplace,
+                },
+                Err(cause) => ConnectorCatalogueResult {
+                    outcome: Err(cause),
+                    skipped: 0,
+                    refused_marketplace: None,
+                },
+            };
+            *recover_poisoned(slot.lock(), "connector_catalogue_result") = Some(result);
+        });
+    }
+
+    /// Drain a completed off-loop connector-catalogue fetch and apply it.
+    ///
+    /// A no-op when no panel is open, so a late result never fills a closed
+    /// browser.
+    ///
+    /// After the entries land, a category named at launch is applied (FR-041):
+    /// [`CatalogueBrowser::set_entries`] derives the real category set from the
+    /// fetched catalogue, so a launch category the catalogue does not carry is
+    /// refused here and reported in the panel footer rather than leaving the
+    /// panel silently empty.
+    ///
+    /// A marketplace URL the `https` guard refused during the merge (FR-043)
+    /// never blinds the panel; it is surfaced here as a warning line in the
+    /// message window so the dropped marketplace is visible rather than silent.
+    pub fn poll_connector_catalogue_result(&mut self) {
+        let result = {
+            let mut guard = recover_poisoned(
+                self.connector_catalogue_result.lock(),
+                "connector_catalogue_result",
+            );
+            guard.take()
+        };
+        let Some(result) = result else {
+            return;
+        };
+        if let Some(refused) = result.refused_marketplace {
+            self.push_log_no_agent(
+                LogLevel::Warn,
+                format!("a configured connector marketplace was skipped: {refused}"),
+            );
+        }
+        if self.connector_store.is_none() {
+            return;
+        }
+        match result.outcome {
+            Ok(entries) => {
+                if let Some(browser) = self.connector_store.as_mut() {
+                    browser.set_entries(entries, result.skipped);
+                    browser.apply_pending_category();
+                }
+                // Now that the catalogue is loaded, enrich each entry's blank
+                // description from its repository manifest off-loop (FR-044).
+                self.start_catalogue_enrichment();
+            }
+            Err(cause) => self.connector_catalogue_failed(cause),
+        }
+        self.needs_redraw = true;
+    }
+
+    /// Start the off-loop manifest-description enrichment of the catalogue now
+    /// loaded in the open browser (spec `connectors` FR-044).
+    ///
+    /// Snapshots the loaded entries on the UI thread, bumps the enrichment
+    /// generation so any in-flight worker's messages are discarded, marks the panel
+    /// [`CatalogueBrowser::enriching`], and hands the per-entry manifest lookups to
+    /// the TUI's background path ([`App::catalogue_manifest_source`]) so the event
+    /// loop never stalls. Each resolved update is pushed onto
+    /// [`App::connector_enrich_result`] and drained by
+    /// [`App::poll_connector_enrichment`].
+    ///
+    /// A no-op when no panel is open, when the panel is loading or failed, or when
+    /// no async reactor is available (headless/unit-test contexts); no path panics.
+    pub(crate) fn start_catalogue_enrichment(&mut self) {
+        let entries = match self.connector_store.as_ref() {
+            Some(browser) if matches!(browser.status, ConnectorBrowseStatus::Ready) => {
+                browser.all.clone()
+            }
+            _ => return,
+        };
+        let generation = self
+            .connector_enrich_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        if let Some(browser) = self.connector_store.as_mut() {
+            browser.enriching = true;
+        }
+        self.needs_redraw = true;
+
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            // Without an async reactor the enrichment cannot run off-loop; running
+            // it inline would block the caller, so it is skipped and the panel keeps
+            // whatever the catalogue declared.
+            tracing::debug!("connector-catalogue enrichment skipped: no async runtime available");
+            if let Some(browser) = self.connector_store.as_mut() {
+                browser.finish_enrichment();
+            }
+            self.needs_redraw = true;
+            return;
+        };
+
+        let source = Arc::clone(&self.catalogue_manifest_source);
+        let slot = Arc::clone(&self.connector_enrich_result);
+        handle.spawn_blocking(move || {
+            let sink = |update: codemason_connectors::catalogue_enrich::ManifestUpdate| {
+                push_connector_enrich_result(
+                    &slot,
+                    ConnectorEnrichResult::Update { generation, update },
+                );
+            };
+            codemason_connectors::catalogue_enrich::enrich_catalogue_into(
+                &entries,
+                source.as_ref(),
+                &sink,
+            );
+            push_connector_enrich_result(&slot, ConnectorEnrichResult::Finished { generation });
+        });
+    }
+
+    /// Install an injectable catalogue manifest-metadata source (spec `connectors`
+    /// FR-044).
+    ///
+    /// Replaces the production HTTPS source with an alternative implementation, so
+    /// the enrichment path can be driven against in-memory metadata with no network
+    /// access (NFR-003). Mirrors [`App::set_manifest_source`].
+    pub fn set_catalogue_manifest_source(
+        &mut self,
+        source: Arc<dyn codemason_connectors::catalogue_enrich::ManifestSource>,
+    ) {
+        self.catalogue_manifest_source = source;
+    }
+
+    /// Drain the completed catalogue manifest-enrichment messages and apply them to
+    /// the open panel (spec `connectors` FR-044).
+    ///
+    /// Called each housekeeping frame. An update whose generation no longer matches
+    /// the open browser (the panel was closed, or re-fetched) is discarded, so a late
+    /// arrival can never fill the wrong panel. A terminal
+    /// [`ConnectorEnrichResult::Finished`] clears the title's loading hint. No path
+    /// panics.
+    pub fn poll_connector_enrichment(&mut self) {
+        let drained = {
+            let mut guard = recover_poisoned(
+                self.connector_enrich_result.lock(),
+                "connector_enrich_result",
+            );
+            std::mem::take(&mut *guard)
+        };
+        if drained.is_empty() {
+            return;
+        }
+        let current = self
+            .connector_enrich_generation
+            .load(std::sync::atomic::Ordering::SeqCst);
+        let mut changed = false;
+        for message in drained {
+            match message {
+                ConnectorEnrichResult::Update { generation, update } => {
+                    if generation == current {
+                        if let Some(browser) = self.connector_store.as_mut() {
+                            browser.apply_manifest_update(update);
+                        }
+                        changed = true;
+                    }
+                }
+                ConnectorEnrichResult::Finished { generation } => {
+                    if generation == current {
+                        if let Some(browser) = self.connector_store.as_mut() {
+                            browser.finish_enrichment();
+                        }
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if changed {
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Apply an inline failure detail to the open connector-catalogue browser.
+    ///
+    /// A no-op when the panel is closed, so a late failure never corrupts an
+    /// unrelated panel.
+    fn connector_catalogue_failed(&mut self, detail: String) {
+        if let Some(browser) = self.connector_store.as_mut() {
+            browser.set_failed(detail);
+            browser.finish_enrichment();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Derive the installed-connector-id set for the current working directory
+    /// from the connector store scan. Never fails: an absent or unreadable store
+    /// scans as empty.
+    fn derive_installed_connector_set(&self) -> BTreeSet<String> {
+        let (dirs, _config) = codemason_connectors::store_and_config(&self.cwd_path);
+        codemason_connectors::scan_dirs(&dirs)
+            .into_iter()
+            .filter_map(|connector| connector.outcome.ok())
+            .map(|descriptor| descriptor.id.as_str().to_string())
+            .collect()
+    }
+
+    /// Re-derive the panel's installed-connector-id set from the store scan.
+    ///
+    /// Called after an install commits so a newly installed row re-colours. A
+    /// no-op when no panel is open.
+    pub fn refresh_connector_catalogue_installed(&mut self) {
+        if self.connector_store.is_none() {
+            return;
+        }
+        let installed = self.derive_installed_connector_set();
+        if let Some(browser) = self.connector_store.as_mut() {
+            browser.set_installed(installed);
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Handle `ENTER` on the highlighted connector-catalogue result.
+    ///
+    /// A highlighted result whose id is already in the store scan is refused
+    /// with an already-installed notice and nothing is written. A not-installed
+    /// result starts the off-loop install of the catalogue id, which the poll
+    /// later drains to report the installed id and re-derive the installed set so
+    /// the row re-colours. An empty result set records a neutral notice and
+    /// installs nothing. No path panics.
+    ///
+    /// Installing is only ever reached from this explicit `ENTER`: opening,
+    /// typing, and moving never call it, so nothing is installed without a
+    /// deliberate key press.
+    pub fn connector_catalogue_install_selected(&mut self) {
+        let Some(browser) = self.connector_store.as_mut() else {
+            return;
+        };
+        let Some(entry) = browser.selected() else {
+            browser.last_install = Some("no result highlighted".to_string());
+            self.needs_redraw = true;
+            return;
+        };
+        let id = entry.id.as_str().to_string();
+        if browser.is_installed(&id) {
+            browser.last_install = Some(format!("connector {id} is already installed"));
+            self.needs_redraw = true;
+            return;
+        }
+        browser.last_install = Some(format!("installing {id}..."));
+        self.needs_redraw = true;
+        self.spawn_connector_catalogue_install(id);
+    }
+
+    /// Start the install of catalogued connector `id` off the event loop.
+    ///
+    /// The catalogue-id install reuses the shared [`codemason_connectors::add`]
+    /// entry point, which applies its own collision guard and records the
+    /// connector **disabled**; no MCP server is contacted. The worker turns the
+    /// outcome into a [`ConnectorCatalogueInstallResult`] and deposits it for
+    /// [`App::poll_connector_catalogue_install_result`]. When no worker thread can
+    /// be spawned the install runs inline so the action still completes. No path
+    /// panics.
+    fn spawn_connector_catalogue_install(&mut self, id: String) {
+        let (dirs, config) = codemason_connectors::store_and_config(&self.cwd_path);
+        let workdir = self.cwd_path.clone();
+        let slot = Arc::clone(&self.connector_catalogue_install_result);
+
+        let worker_id = id.clone();
+        let worker_dirs = dirs.clone();
+        let worker_workdir = workdir.clone();
+        let worker_config = config.clone();
+        let spawn = std::thread::Builder::new()
+            .name("connector-catalogue-install".to_owned())
+            .spawn(move || {
+                let result = run_connector_catalogue_install(
+                    &worker_dirs,
+                    &worker_workdir,
+                    &worker_config,
+                    &worker_id,
+                );
+                *recover_poisoned(slot.lock(), "connector_catalogue_install_result") = Some(result);
+            });
+
+        match spawn {
+            Ok(handle) => {
+                // The worker owns the install now and deposits its result for
+                // the next poll to drain.
+                drop(handle);
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "connector-catalogue install worker spawn failed; running inline");
+                let result = run_connector_catalogue_install(&dirs, &workdir, &config, &id);
+                if result.succeeded {
+                    self.refresh_connector_catalogue_installed();
+                }
+                self.apply_connector_catalogue_install_result(result);
+            }
+        }
+    }
+
+    /// Drain a completed off-loop install and apply it.
+    pub fn poll_connector_catalogue_install_result(&mut self) {
+        let result = {
+            let mut guard = recover_poisoned(
+                self.connector_catalogue_install_result.lock(),
+                "connector_catalogue_install_result",
+            );
+            guard.take()
+        };
+        let Some(result) = result else {
+            return;
+        };
+        if result.succeeded {
+            self.refresh_connector_catalogue_installed();
+        }
+        self.apply_connector_catalogue_install_result(result);
+    }
+
+    /// Apply one install result: record the panel-footer notice, and append the
+    /// report to the message window.
+    fn apply_connector_catalogue_install_result(
+        &mut self,
+        result: ConnectorCatalogueInstallResult,
+    ) {
+        if let Some(browser) = self.connector_store.as_mut() {
+            browser.last_install = Some(result.notice);
+        }
+        self.append_assistant_text(&result.report);
+        self.needs_redraw = true;
+    }
+
+    /// Handle the shared `Backspace` / `Esc` query-editing key while the
+    /// connector-catalogue panel is open.
+    ///
+    /// Removes the last query character and returns `true` when the query is
+    /// non-empty; when it is already empty, dismisses the panel and returns
+    /// `false`.
+    pub fn connector_catalogue_edit_or_close(&mut self) -> bool {
+        let Some(browser) = self.connector_store.as_mut() else {
+            return false;
+        };
+        if browser.backspace() {
+            self.needs_redraw = true;
+            true
+        } else {
+            self.close_connector_catalogue();
+            false
+        }
+    }
+
+    /// Append a typed character to the connector-catalogue panel's search query.
+    pub fn connector_catalogue_push_char(&mut self, c: char) {
+        if let Some(browser) = self.connector_store.as_mut() {
+            browser.push_char(c);
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Move the connector-catalogue panel's block cursor up one result.
+    pub fn connector_catalogue_move_up(&mut self) {
+        if let Some(browser) = self.connector_store.as_mut() {
+            browser.move_up();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Move the connector-catalogue panel's block cursor down one result.
+    pub fn connector_catalogue_move_down(&mut self) {
+        if let Some(browser) = self.connector_store.as_mut() {
+            browser.move_down();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Whether the connector-catalogue panel's category navigator currently
+    /// holds keyboard focus.
+    ///
+    /// `false` when no panel is open or another pane holds focus.
+    #[must_use]
+    pub fn connector_catalogue_nav_focused(&self) -> bool {
+        self.connector_store
+            .as_ref()
+            .is_some_and(|browser| browser.focus == CataloguePane::Categories)
+    }
+
+    /// Whether the connector-catalogue panel's marketplace navigator currently
+    /// holds keyboard focus.
+    ///
+    /// `false` when no panel is open or another pane holds focus.
+    #[must_use]
+    pub fn connector_catalogue_marketplace_focused(&self) -> bool {
+        self.connector_store
+            .as_ref()
+            .is_some_and(|browser| browser.focus == CataloguePane::Marketplaces)
+    }
+
+    /// Cycle focus forward through the connector-catalogue panel's three panes,
+    /// `Results` -> `Categories` -> `Marketplaces` -> `Results`.
+    ///
+    /// A no-op when no panel is open. The focused pane's cursor is rendered
+    /// distinctly and subsequent `Up`/`Down` route to that pane.
+    pub fn connector_catalogue_focus_next(&mut self) {
+        if let Some(browser) = self.connector_store.as_mut() {
+            browser.focus_next();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Cycle focus backward through the three panes (`BackTab`), the reverse of
+    /// [`Self::connector_catalogue_focus_next`].
+    pub fn connector_catalogue_focus_prev(&mut self) {
+        if let Some(browser) = self.connector_store.as_mut() {
+            browser.focus_prev();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Move the marketplace cursor up one row while the marketplace navigator
+    /// holds focus, applying the newly highlighted marketplace.
+    pub fn connector_catalogue_marketplace_move_up(&mut self) {
+        if let Some(browser) = self.connector_store.as_mut() {
+            browser.marketplace_move_up();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Move the marketplace cursor down one row while the marketplace navigator
+    /// holds focus, applying the newly highlighted marketplace.
+    pub fn connector_catalogue_marketplace_move_down(&mut self) {
+        if let Some(browser) = self.connector_store.as_mut() {
+            browser.marketplace_move_down();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Apply the highlighted marketplace and move keyboard focus to the result
+    /// list.
+    pub fn connector_catalogue_marketplace_confirm(&mut self) {
+        if let Some(browser) = self.connector_store.as_mut() {
+            browser.marketplace_confirm();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Clear the connector-catalogue panel's marketplace filter to `ALL` and
+    /// re-derive the visible results.
+    ///
+    /// A no-op when no panel is open; issues no network request and installs
+    /// nothing.
+    pub fn connector_catalogue_clear_marketplace(&mut self) {
+        if let Some(browser) = self.connector_store.as_mut() {
+            browser.marketplace_clear();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Clear the connector-catalogue panel's live search filter, re-deriving the
+    /// visible result set.
+    ///
+    /// Wired to the bottom search box's `[x] clear` button. An already-empty query
+    /// is a no-op (so a stray click on the button does not repaint); clearing a
+    /// non-empty query re-applies the filter and requests a redraw so the full
+    /// result set returns immediately.
+    pub fn connector_catalogue_clear_search(&mut self) {
+        if let Some(browser) = self.connector_store.as_mut()
+            && !browser.query.is_empty()
+        {
+            browser.set_query(String::new());
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Move the connector-catalogue panel's category cursor up one navigator row
+    /// while the navigator holds focus, applying the newly highlighted category.
+    pub fn connector_catalogue_category_move_up(&mut self) {
+        if let Some(browser) = self.connector_store.as_mut() {
+            browser.category_move_up();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Move the connector-catalogue panel's category cursor down one navigator
+    /// row while the navigator holds focus, applying the newly highlighted
+    /// category.
+    pub fn connector_catalogue_category_move_down(&mut self) {
+        if let Some(browser) = self.connector_store.as_mut() {
+            browser.category_move_down();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Apply the highlighted category and move keyboard focus to the result
+    /// list.
+    ///
+    /// Installing is deliberately not reachable here: `ENTER` over the navigator
+    /// only applies the category and transfers focus, so nothing is written to
+    /// the store.
+    pub fn connector_catalogue_category_confirm(&mut self) {
+        if let Some(browser) = self.connector_store.as_mut() {
+            browser.category_confirm();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Clear the connector-catalogue panel's category filter to `ALL` and
+    /// re-derive the visible results.
+    ///
+    /// A no-op when no panel is open; issues no network request and installs
+    /// nothing.
+    pub fn connector_catalogue_clear_category(&mut self) {
+        if let Some(browser) = self.connector_store.as_mut() {
+            browser.category_clear();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Advance the connector-catalogue panel to the next category filter.
+    ///
+    /// The cycle runs over the categories the fetched catalogue actually
+    /// declares (FR-039) and then back to the `ALL` sentinel (FR-040): the
+    /// browser's own [`CategoryFilterState`] enumerates them, so the panel and
+    /// the `/connectors list` report can never disagree about which categories
+    /// exist. A catalogue with a single category still cycles back to `ALL`, so
+    /// the filter can always be cleared. Every step re-derives the visible rows
+    /// and repaints on the next frame; nothing is enabled, connected, or
+    /// installed.
+    ///
+    /// This is the textual-report cycling helper kept for callers that want the
+    /// category stepping without the navigator's row semantics; the panel
+    /// itself applies a category through the category cursor
+    /// ([`Self::connector_catalogue_category_move_up`] and friends).
+    pub fn connector_catalogue_next_category(&mut self) {
+        let Some(browser) = self.connector_store.as_mut() else {
+            return;
+        };
+        let mut order: Vec<CategoryFilter> = Vec::new();
+        order.push(CategoryFilter::all());
+        order.extend(
+            browser
+                .categories()
+                .categories()
+                .iter()
+                .map(|name| CategoryFilter::of(name)),
+        );
+        let current = browser.categories().filter().label().to_ascii_lowercase();
+        let next = order
+            .iter()
+            .position(|filter| filter.label().to_ascii_lowercase() == current)
+            .map_or(0, |index| (index + 1) % order.len());
+        browser.categories_mut().select(order[next].clone());
+        browser.sync_category_cursor_from_filter();
+        browser.reapply_filter();
+        self.needs_redraw = true;
+    }
+
+    /// Close the connector-catalogue browse panel.
+    pub fn close_connector_catalogue(&mut self) {
+        if self.connector_store.take().is_some() {
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Append a message to the input queue (spec `inputqueue` FR-005).
+    ///
+    /// Called when the user presses Enter with non-empty input while the
+    /// primary agent is executing. The entry is appended to the tail so
+    /// submission order is preserved (FR-001, FR-019); the input field only
+    /// loses its text on success. Entries are added to the input history at
+    /// submission time (FR-003) rather than when they are dispatched.
+    ///
+    /// Returns the untouched [`QueuedInput`] as `Err` when the queue is already
+    /// at capacity (FR-004): the submission is rejected, a status message
+    /// explains why, and the caller can restore the typed text and staged
+    /// attachments so the user does not lose the message. The capacity comes
+    /// from [`App::input_queue_capacity`] (FR-015).
+    ///
+    /// A successful enqueue also echoes a `queued (N in queue)` notice into the
+    /// log panel (FR-014), where `N` is the depth *after* the append.
+    pub(crate) fn enqueue_input(
+        &mut self,
+        text: String,
+        image_paths: Vec<std::path::PathBuf>,
+    ) -> Result<(), QueuedInput> {
+        if self.session.input_queue.len() >= self.input_queue_capacity {
+            self.status = format!(
+                "queue full (max {}) - wait for the current turn to finish",
+                self.input_queue_capacity
+            );
+            return Err(QueuedInput { text, image_paths });
+        }
+        // History is updated at entry time, before execution (FR-003).
+        self.add_to_history(text.clone());
+        self.session.input.clear();
+        self.session.input_cursor = 0;
+        self.session.history_index = None;
+        self.file_menu = None;
+        // A queued slash command (FR-017 amendment) must also dismiss the
+        // completion menu, otherwise it would float over a field it no longer
+        // belongs to once the entry runs.
+        self.slash_menu = None;
+        self.session
+            .input_queue
+            .push_back(QueuedInput { text, image_paths });
+        // FR-014: echo the enqueue into the log panel with the post-enqueue depth.
+        self.push_log_no_agent(
+            LogLevel::Info,
+            format!("queued ({} in queue)", self.session.input_queue.len()),
+        );
+        // The counter renders the new length on the next frame (NFR-003).
+        self.needs_redraw = true;
+        Ok(())
+    }
+
+    /// Pop the oldest queued entry and dispatch it as the next user turn
+    /// (spec `inputqueue` FR-006, FR-007, FR-019).
+    ///
+    /// Called at the turn boundaries (`MessageEnd` with a non-cancelled finish
+    /// reason, and `AgentError`) once the finishing handler has cleared
+    /// `is_processing`. Entries are popped from the head so FIFO order is never
+    /// violated (FR-019) and the drain reuses [`App::dispatch_user_message`],
+    /// which spawns the turn asynchronously so the UI thread is not blocked
+    /// (NFR-004). The counter reflects the decremented length on the next frame
+    /// (FR-008).
+    ///
+    /// FR-016 (T-008): dispatch is guarded against processing/compaction
+    /// overlap. The queue is left untouched - deferring to the next safe turn
+    /// boundary - while the primary agent is still executing (`is_processing`)
+    /// or a compaction run owns the turn (`compact_in_progress`,
+    /// `auto_compact_in_progress`, or `pending_send_after_compact`). The check
+    /// lives here rather than in the callers so every drain path
+    /// (`MessageEnd`, `AgentError`, and the queue-control `Next` selection)
+    /// shares one boundary guard and no path can dispatch over a live turn.
+    ///
+    /// A dispatch runs when either the queue is non-empty (the ordinary
+    /// turn-boundary drain) or a queue-control `Next` selection is pending
+    /// (FR-024). The pending flag is consumed first, so `Next` fires exactly once
+    /// instead of re-arming at every later boundary. A `Next`-triggered dispatch
+    /// preserves whatever draft the user is editing, so selecting the row never
+    /// mutates the editable input buffer (FR-031).
+    pub async fn advance_input_queue(&mut self) {
+        // FR-017 amendment: a queued *synchronous* slash command never sets
+        // `is_processing`, so no `MessageEnd`/`AgentError` boundary follows it and
+        // the rest of the queue would otherwise stall behind it. Drain in a loop
+        // so consecutive command entries run back-to-back; the boundary guard at
+        // the top of each pass stops the moment an entry leaves the turn busy.
+        loop {
+            let next_pending = self.session.queue_next_pending;
+            self.session.queue_next_pending = false;
+            if self.session.session_id.is_none()
+                || self.session.is_processing
+                || self.session.compact_in_progress
+                || self.session.auto_compact_in_progress
+                || self.session.pending_send_after_compact.is_some()
+            {
+                // FR-030: a `Next` that cannot dispatch yet stays pending and is
+                // retried at the next safe turn boundary instead of being lost.
+                self.session.queue_next_pending = next_pending;
+                return;
+            }
+            if !next_pending && self.session.input_queue.is_empty() {
+                return;
+            }
+            let Some(entry) = self.session.input_queue.pop_front() else {
+                return;
+            };
+            // FR-008: the counter decrements, so the field must repaint next frame.
+            self.needs_redraw = true;
+            if next_pending {
+                // FR-031: a menu `Next` dispatch must not mutate the editable buffer,
+                // so snapshot the live draft and restore it once the queued entry has
+                // been handed to the (asynchronous) dispatch path. `Next` runs exactly
+                // one entry, so the drain ends here.
+                let saved_input = std::mem::take(&mut self.session.input);
+                let saved_cursor = self.session.input_cursor;
+                let saved_anchor = self.session.kb_select_anchor;
+                self.dispatch_queued_input(entry.text, entry.image_paths)
+                    .await;
+                self.session.input = saved_input;
+                self.session.input_cursor = saved_cursor;
+                self.session.kb_select_anchor = saved_anchor;
+                return;
+            }
+            // A plain message starts an asynchronous turn that sets `is_processing`,
+            // so it ends the drain; a synchronous slash command leaves the boundary
+            // free and the loop continues with the next queued entry.
+            if self
+                .dispatch_queued_input(entry.text, entry.image_paths)
+                .await
+            {
+                return;
+            }
+        }
+    }
+
+    /// Dispatch one queued entry, routing a slash command back through the
+    /// slash-command executor instead of the chat path (spec `inputqueue`
+    /// FR-017 amendment).
+    ///
+    /// A queued plain message runs as a user turn via
+    /// [`App::dispatch_user_message`]; a queued entry whose text begins with `/`
+    /// is a slash command and is handed to [`App::execute_slash_command`] exactly
+    /// as a freshly typed one, so a queued `/status`, `/agent`, or `/spec ...`
+    /// behaves identically to typing it at a free boundary. This is the single
+    /// place the two entry kinds diverge.
+    ///
+    /// Returns `true` when a chat turn was started (a plain message, which leaves
+    /// the boundary busy and ends the drain) and `false` when a synchronous slash
+    /// command ran and left the boundary free for the next queued entry.
+    async fn dispatch_queued_input(
+        &mut self,
+        text: String,
+        image_paths: Vec<std::path::PathBuf>,
+    ) -> bool {
+        if text.starts_with('/') {
+            self.execute_slash_command(&text).await;
+            false
+        } else {
+            self.dispatch_user_message(text, image_paths);
+            true
+        }
+    }
+
+    /// Select the queue-control menu's `Next` row (spec `inputqueue` FR-024,
+    /// FR-029, FR-030, NFR-006).
+    ///
+    /// Stops the running turn exactly as `InputAction::CancelAgent` does (FR-024)
+    /// and dispatches the oldest queued entry. A live turn cannot be dispatched
+    /// over (FR-016), so while the agent is executing the dispatch is *deferred*:
+    /// the selection is recorded in [`crate::app::SessionView::queue_next_pending`] and runs at the
+    /// turn boundary the cancel opens, never overlapping the running turn (FR-029,
+    /// FR-030). The deferral reuses the shared asynchronous dispatch path, so the
+    /// UI thread is never blocked (NFR-006). The menu closes and the change paints
+    /// on the next frame.
+    ///
+    /// When no turn is executing there is nothing to cancel, so the oldest entry
+    /// dispatches immediately. Selecting `Next` never mutates the input buffer or
+    /// the staged attachments (FR-031).
+    ///
+    /// Public so the T-019 integration tests can drive the row directly, mirroring
+    /// [`App::queue_menu_select_halt`]. The Up/Down/Enter menu key handling that
+    /// invokes it is added by the menu key-handling task; it is not part of this
+    /// action.
+    pub async fn queue_menu_select_next(&mut self) {
+        if self.session.input_queue.is_empty() {
+            // FR-023: the `Next` row is non-selectable with an empty queue, so
+            // this is only reachable defensively; report and close.
+            self.status = "queue: nothing to run - the queue is empty".to_string();
+            self.close_queue_menu();
+            self.needs_redraw = true;
+            return;
+        }
+        // FR-030: never dispatch over a compaction run or a post-compact send.
+        // There is no live turn to cancel in that window, so refuse with a status
+        // message rather than deferring an entry that no boundary would pick up.
+        if self.session.compact_in_progress
+            || self.session.auto_compact_in_progress
+            || self.session.pending_send_after_compact.is_some()
+        {
+            self.status = "queue: next deferred - compaction in progress".to_string();
+            self.push_log_no_agent(
+                LogLevel::Warn,
+                "queue: Next deferred - compaction owns the turn (FR-030)".to_string(),
+            );
+            self.close_queue_menu();
+            self.needs_redraw = true;
+            return;
+        }
+        if self.session.is_processing {
+            // FR-024/FR-029: stop the running turn exactly like `CancelAgent`.
+            // The queue is untouched - halt never advances it - so the oldest
+            // entry survives into the resumed turn.
+            self.halt_turn_like_cancel_agent();
+            // FR-030: the live turn cannot be dispatched over, so defer the run
+            // of the oldest entry to the turn boundary the cancel opens.
+            self.session.queue_next_pending = true;
+            self.status = "queue: stopping turn - running the next queued entry".to_string();
+            self.push_log_no_agent(
+                LogLevel::Info,
+                "queue: Next - halting turn, dispatching oldest queued entry at the boundary"
+                    .to_string(),
+            );
+        } else {
+            // Nothing to stop, so the oldest entry runs straight away on the
+            // shared asynchronous path (FR-024, NFR-006). The same pending flag
+            // drives it so the editable draft is preserved (FR-031).
+            let text = self
+                .session
+                .input_queue
+                .front()
+                .map(|e| crate::app::helpers::truncate_to_char_boundary(&e.text, 120))
+                .unwrap_or_default();
+            self.push_log_no_agent(
+                LogLevel::Info,
+                format!("queue: Next - dispatching oldest queued entry: {text}"),
+            );
+            self.session.queue_next_pending = true;
+            self.advance_input_queue().await;
+        }
+        self.close_queue_menu();
+        self.needs_redraw = true;
+    }
+
+    /// Select the queue-control menu's halt row (spec `inputqueue` FR-025,
+    /// FR-026, FR-027, FR-029, NFR-008).
+    ///
+    /// While a turn is executing (`is_input_blocked`) this performs exactly the
+    /// `InputAction::CancelAgent` behaviour and leaves the queue untouched, so
+    /// halting never advances it (FR-025, FR-029). Once the agent has stopped the
+    /// same row is labelled `Resume` (FR-026) and selecting it resumes the
+    /// interrupted work instead (FR-027). Either way the menu closes and the
+    /// change paints on the next frame (NFR-008).
+    ///
+    /// Public so the T-019 integration tests can drive the row directly, mirroring
+    /// [`App::advance_input_queue`]. The Up/Down/Enter menu key handling that
+    /// invokes it is added by the menu key-handling task; it is not part of this
+    /// action.
+    pub fn queue_menu_select_halt(&mut self) {
+        if self.is_input_blocked() {
+            // The halt row performs exactly the `CancelAgent` behaviour.
+            self.halt_turn_like_cancel_agent();
+        } else {
+            // FR-027: the agent is already stopped, so the row resumes the
+            // interrupted work instead of halting.
+            if !self.session.agent_halted {
+                self.status = "Nothing to resume - agent was not halted".to_string();
+            } else if !self.dispatch_resume_continuation() {
+                self.status = "No active session".to_string();
+            }
+        }
+        self.close_queue_menu();
+        self.needs_redraw = true;
+    }
+
+    /// Halt the running turn exactly as `InputAction::CancelAgent` does: ask a
+    /// live govcreate run to cancel at its next stage boundary, then set the
+    /// turn cancel flag. Shared by the queue-control `Next` and halt rows so the
+    /// two stay in step with the cancel path.
+    fn halt_turn_like_cancel_agent(&mut self) {
+        if self.govcreate_run_active() {
+            self.poll_govcreate_cancel();
+        }
+        self.halt_running_agent();
+    }
+
+    /// Resume a halted agent: clear the halted flag, append the continuation
+    /// user turn, and dispatch it asynchronously on the shared processor (the
+    /// behaviour `/resume` and the queue-control `Resume` row both present).
+    ///
+    /// Returns `false` without side effects when there is no active session, so
+    /// the caller can report `No active session`.
+    pub(crate) fn dispatch_resume_continuation(&mut self) -> bool {
+        let Some(sid) = self.session.session_id.clone() else {
+            return false;
+        };
+        self.session.agent_halted = false;
+        let resume_text = "You were previously interrupted by the user. Continue the task from where you left off.";
+        self.session
+            .messages
+            .push(Message::user_text(&sid, resume_text));
+        self.set_status_working("processing");
+        self.push_log_no_agent(LogLevel::Info, "Resuming halted agent".to_string());
+
+        let mut agent = self.session.agent_info.clone();
+        self.apply_selected_model_and_thinking(&mut agent);
+
+        let processor = self.session_processor.clone();
+        let flag = Arc::new(AtomicBool::new(false));
+        self.session.cancel_flag = Some(flag.clone());
+        tokio::spawn(async move {
+            if let Err(e) = processor
+                .process_message(&sid, resume_text, &agent, flag)
+                .await
+            {
+                // Resume failures surface to the user through the status line,
+                // so they must be visible at the default log level too.
+                tracing::warn!(error = %e, "Failed to resume agent");
+            }
+        });
+        true
+    }
+
+    /// Select the queue-control menu's `Clear` row (spec `inputqueue` FR-028,
+    /// FR-033, NFR-008).
+    ///
+    /// Selecting `Clear` never empties the queue directly: it closes the menu and
+    /// opens the `Clear the input queue?` confirmation dialog instead (FR-033).
+    /// The queue is emptied only after the user confirms with `Yes` (FR-028,
+    /// FR-037), so this action deliberately leaves the queue, the input buffer,
+    /// the staged attachments, and the running turn untouched. The dialog paints
+    /// on the next frame because the redraw flag is set (NFR-008).
+    ///
+    /// The dialog's default selection is reset to `No` every time it opens so a
+    /// stray `Enter` cannot empty the queue (FR-034).
+    ///
+    /// Public so the T-019 integration tests can drive the row directly, mirroring
+    /// [`App::queue_menu_select_halt`]. The Up/Down/Enter menu key handling that
+    /// invokes it is added by the menu key-handling task; it is not part of this
+    /// action.
+    pub fn queue_menu_select_clear(&mut self) {
+        self.close_queue_menu();
+        self.queue_clear_confirm_open = true;
+        self.queue_clear_confirm_selected = crate::app::QUEUE_CLEAR_CONFIRM_NO;
+        self.needs_redraw = true;
+    }
+
+    /// Flip the `Clear the input queue?` dialog selection between `Yes` and
+    /// `No` (spec `inputqueue` FR-034, FR-035, NFR-011).
+    ///
+    /// The dialog has exactly two options, so any horizontal move (`Left` /
+    /// `Right` / `Tab` / `BackTab`) simply toggles the current selection. The
+    /// redraw flag is set so the change paints on the next frame.
+    pub fn queue_clear_confirm_toggle(&mut self) {
+        self.queue_clear_confirm_selected = if self.queue_clear_confirm_is_yes() {
+            crate::app::QUEUE_CLEAR_CONFIRM_NO
+        } else {
+            crate::app::QUEUE_CLEAR_CONFIRM_YES
+        };
+        self.needs_redraw = true;
+    }
+
+    /// Whether the `Clear the input queue?` dialog currently has `Yes`
+    /// selected (spec `inputqueue` FR-037).
+    #[must_use]
+    pub fn queue_clear_confirm_is_yes(&self) -> bool {
+        self.queue_clear_confirm_selected == crate::app::QUEUE_CLEAR_CONFIRM_YES
+    }
+
+    /// Open the `Clear this project's memory?` confirmation dialog.
+    ///
+    /// Invoked by `/memory clear`. It only arms the dialog - no memory is
+    /// removed until the user picks `Yes`. The default selection is reset to
+    /// `No` every time it opens so a stray `Enter` cannot clear memory.
+    pub fn open_memory_clear_confirm(&mut self) {
+        self.memory_clear_confirm_open = true;
+        self.memory_clear_confirm_selected = crate::app::MEMORY_CLEAR_CONFIRM_NO;
+        self.needs_redraw = true;
+    }
+
+    /// Flip the `Clear this project's memory?` dialog selection between `Yes`
+    /// and `No`.
+    ///
+    /// The dialog has exactly two options, so any horizontal move (`Left` /
+    /// `Right` / `Tab` / `BackTab`) simply toggles the current selection. The
+    /// redraw flag is set so the change paints on the next frame.
+    pub fn memory_clear_confirm_toggle(&mut self) {
+        self.memory_clear_confirm_selected = if self.memory_clear_confirm_is_yes() {
+            crate::app::MEMORY_CLEAR_CONFIRM_NO
+        } else {
+            crate::app::MEMORY_CLEAR_CONFIRM_YES
+        };
+        self.needs_redraw = true;
+    }
+
+    /// Whether the `Clear this project's memory?` dialog currently has `Yes`
+    /// selected.
+    #[must_use]
+    pub fn memory_clear_confirm_is_yes(&self) -> bool {
+        self.memory_clear_confirm_selected == crate::app::MEMORY_CLEAR_CONFIRM_YES
+    }
+
+    /// Close the `Clear this project's memory?` confirmation dialog, resetting
+    /// the selection to `No`.
+    pub(crate) fn close_memory_clear_confirm(&mut self) {
+        self.memory_clear_confirm_open = false;
+        self.memory_clear_confirm_selected = crate::app::MEMORY_CLEAR_CONFIRM_NO;
+        self.needs_redraw = true;
+    }
+
+    /// Open the `Prune messages older than N days?` confirmation dialog.
+    ///
+    /// Invoked by `/db prune` when `--dry-run` is absent. It only arms the
+    /// dialog and records the window it will apply - nothing is deleted until
+    /// the user picks `Yes`. The default selection is reset to `No` every time
+    /// it opens so a stray `Enter` cannot delete messages.
+    pub fn open_db_prune_confirm(&mut self, days: u32) {
+        self.db_prune_confirm_open = true;
+        self.db_prune_confirm_selected = crate::app::DB_PRUNE_CONFIRM_NO;
+        self.db_prune_confirm_days = Some(days);
+        self.needs_redraw = true;
+    }
+
+    /// Flip the `Prune messages older than N days?` dialog selection between
+    /// `Yes` and `No`.
+    ///
+    /// The dialog has exactly two options, so any horizontal move (`Left` /
+    /// `Right` / `Tab` / `BackTab`) simply toggles the current selection.
+    pub fn db_prune_confirm_toggle(&mut self) {
+        self.db_prune_confirm_selected = if self.db_prune_confirm_is_yes() {
+            crate::app::DB_PRUNE_CONFIRM_NO
+        } else {
+            crate::app::DB_PRUNE_CONFIRM_YES
+        };
+        self.needs_redraw = true;
+    }
+
+    /// Whether the `Prune messages older than N days?` dialog currently has
+    /// `Yes` selected.
+    #[must_use]
+    pub fn db_prune_confirm_is_yes(&self) -> bool {
+        self.db_prune_confirm_selected == crate::app::DB_PRUNE_CONFIRM_YES
+    }
+
+    /// Close the `Prune messages older than N days?` confirmation dialog,
+    /// resetting the selection to `No` and forgetting the armed window.
+    pub(crate) fn close_db_prune_confirm(&mut self) {
+        self.db_prune_confirm_open = false;
+        self.db_prune_confirm_selected = crate::app::DB_PRUNE_CONFIRM_NO;
+        self.db_prune_confirm_days = None;
+        self.needs_redraw = true;
+    }
+
+    /// Apply the prune the armed `/db prune` dialog was confirmed for.
+    ///
+    /// The window comes from [`Self::db_prune_confirm_days`] - the value the
+    /// dialog title named - so the confirmed action cannot apply a different
+    /// window from the one the user read. The outcome is reported in the chat
+    /// transcript.
+    pub(crate) fn run_confirmed_db_prune(&mut self) {
+        let Some(days) = self.db_prune_confirm_days else {
+            // Nothing armed; a confirmation with no window is a no-op rather
+            // than a guess at a default that could delete far more than the
+            // user expected.
+            return;
+        };
+        self.prune_messages(days);
+    }
+
+    /// Delete messages older than `days`, reporting the outcome in the chat.
+    ///
+    /// Shared by `/db prune` (immediately, when `--dry-run` is given, the count
+    /// is reported instead) and the confirmed dialog.
+    pub(crate) fn prune_messages(&mut self, days: u32) {
+        let window = match chrono::Duration::try_days(i64::from(days)) {
+            Some(window) => window,
+            None => {
+                self.append_assistant_text(&format!(
+                    "From: /db prune\n\n[warn] Retention window out of range: {days} day(s)."
+                ));
+                self.status = "db: bad window".to_string();
+                return;
+            }
+        };
+        match self.storage.prune_messages_older_than(window) {
+            Ok(deleted) => {
+                self.append_assistant_text(&format!(
+                    "From: /db prune\n\nDeleted **{deleted}** message(s) older than \
+                     {days} day(s). Sessions are kept, so an expired transcript \
+                     stays listed but empty.\n\nThe database file does not shrink \
+                     until a `VACUUM`, which needs exclusive access - stop every \
+                     other codemason process first."
+                ));
+                self.push_log_no_agent(
+                    LogLevel::Info,
+                    format!("db: pruned {deleted} message(s) older than {days} day(s)"),
+                );
+                self.status = format!("db: pruned {deleted}");
+            }
+            Err(e) => {
+                self.append_assistant_text(&format!(
+                    "From: /db prune\n\n[warn] Could not prune messages: {e}"
+                ));
+                self.status = "db: prune failed".to_string();
+            }
+        }
+    }
+
+    /// Report how many messages a prune of `days` would delete, without
+    /// deleting anything (`/db prune --dry-run`).
+    pub(crate) fn count_prunable_messages(&mut self, days: u32) {
+        let window = match chrono::Duration::try_days(i64::from(days)) {
+            Some(window) => window,
+            None => {
+                self.append_assistant_text(&format!(
+                    "From: /db prune --dry-run\n\n[warn] Retention window out of \
+                     range: {days} day(s)."
+                ));
+                self.status = "db: bad window".to_string();
+                return;
+            }
+        };
+        match self.storage.count_messages_older_than(window) {
+            Ok(n) => {
+                self.append_assistant_text(&format!(
+                    "From: /db prune --dry-run\n\nWould delete **{n}** message(s) \
+                     older than {days} day(s); sessions are kept. Nothing was \
+                     deleted."
+                ));
+                self.status = format!("db: would prune {n}");
+            }
+            Err(e) => {
+                self.append_assistant_text(&format!(
+                    "From: /db prune --dry-run\n\n[warn] Could not count messages: {e}"
+                ));
+                self.status = "db: count failed".to_string();
+            }
+        }
+    }
+
+    /// Clear every structured memory scoped to the current project directory.
+    ///
+    /// Only the project's own memories are removed - other projects' entries are
+    /// left untouched. The outcome is reported in the chat transcript and the
+    /// memory panel is refreshed.
+    pub fn clear_project_memory(&mut self) {
+        // Use the real, non-collapsed working directory so this clears the same
+        // project key the Memory panel lists (`cwd_path`), not whatever the
+        // process cwd happens to be.
+        let project_dir = self.cwd_path.clone();
+        let output = match self.storage.clear_memories_for_project(&project_dir) {
+            Ok(n) => {
+                self.memory_cache_dirty = true;
+                format!(
+                    "From: /memory clear\n\nCleared {n} memory entr{} for this project.",
+                    if n == 1 { "y" } else { "ies" }
+                )
+            }
+            Err(e) => format!("From: /memory clear\n\n[warn] Could not clear memories: {e}"),
+        };
+        self.append_assistant_text(&output);
+    }
+
+    pub(crate) fn assert_input_cursor_invariant(&self) {
+        debug_assert!(self.session.input_cursor <= self.input_len_chars());
+    }
+
+    pub(crate) fn pane_area(&self, pane: SelectionPane) -> Rect {
+        match pane {
+            SelectionPane::Messages => self.message_area,
+            SelectionPane::Log => self.log_area,
+            SelectionPane::Profile => self.profile_area,
+            SelectionPane::Tasks => self.tasks_area,
+            SelectionPane::Memory => self.memory_area,
+            SelectionPane::Telemetry => self.telemetry_area,
+            SelectionPane::Input => self.input_area,
+            SelectionPane::ContextPanel => self.context_panel_area,
+        }
+    }
+
+    /// Clear any text selection or context menu anchored on a pane whose
+    /// layout area has collapsed to zero (e.g. a side panel that was just
+    /// dismissed by a toggle such as Alt+I). The render pass zeroes the
+    /// `*_area` of hidden panels, but the `text_selection`/`context_menu`
+    /// state may still reference that pane - left stale, the next
+    /// [`Self::assert_ui_invariants`] call would panic. This self-heals
+    /// that state whenever input arrives.
+    pub(crate) fn prune_stale_selection(&mut self) {
+        if let Some(sel) = &self.text_selection {
+            if self.pane_area(sel.pane).area() == 0 {
+                self.text_selection = None;
+            }
+        }
+        if let Some(menu) = &self.context_menu {
+            if self.pane_area(menu.pane).area() == 0 {
+                self.context_menu = None;
+            }
+        }
+    }
+
+    pub(crate) fn assert_ui_invariants(&self) {
+        self.assert_input_cursor_invariant();
+        if let Some(sel) = &self.text_selection {
+            debug_assert!(
+                self.pane_area(sel.pane).area() > 0,
+                "selection pane {:?} has no active area",
+                sel.pane
+            );
+        }
+        if let Some(menu) = &self.context_menu {
+            debug_assert!(
+                self.pane_area(menu.pane).area() > 0,
+                "context menu pane {:?} has no active area",
+                menu.pane
+            );
+        }
+    }
+
+    #[allow(unused_variables)]
+    pub(crate) fn debug_log_input_transition(
+        &self,
+        source: &str,
+        before_input: &str,
+        before_cursor: usize,
+    ) {
+        // Nothing moved: the overwhelming majority of keypresses (arrows while
+        // a panel is focused, modifier-only keys, swallowed dialog keys) leave
+        // the buffer untouched, so this is the cheap early out and it is what
+        // keeps the spool small enough to read.
+        if before_input == self.session.input && before_cursor == self.session.input_cursor {
+            return;
+        }
+        tracing::debug!(
+            source = source,
+            before_chars = before_input.chars().count(),
+            before_cursor = before_cursor,
+            after_chars = self.input_len_chars(),
+            after_cursor = self.session.input_cursor,
+            screen = ?self.current_screen,
+            slash_menu = self.slash_menu.is_some(),
+            file_menu = self.file_menu.is_some(),
+            "input transition"
+        );
+        self.append_input_transition_to_spool(
+            source,
+            before_input.chars().count(),
+            before_cursor,
+            before_input,
+        );
+    }
+
+    /// Append one input transition to the durable transition spool.
+    ///
+    /// The TUI's only live trace of input handling is the log panel, which is
+    /// rate-limited and lost when the process exits, so a reported "characters
+    /// land in the wrong place" could not be diagnosed after the fact. This
+    /// spools every transition whose buffer or cursor actually changed to
+    /// `log/logwindow/input-transitions.log`, recording which handler ran,
+    /// the buffer length and cursor before and after, and the text itself.
+    ///
+    /// The spool lives next to the other `logwindow` spools and honours
+    /// [`crate::app::helpers::log_root`], so a test run writes into
+    /// `target/temp/log` instead of the checked-in tree.
+    ///
+    /// Every failure is logged at `debug` and dropped: a diagnostic that cannot
+    /// be written must never disturb the session it is observing.
+    fn append_input_transition_to_spool(
+        &self,
+        source: &str,
+        before_chars: usize,
+        before_cursor: usize,
+        before_input: &str,
+    ) {
+        use std::io::Write;
+        let path = crate::app::helpers::log_root()
+            .join("logwindow")
+            .join("input-transitions.log");
+        if let Some(parent) = path.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            tracing::debug!(error = %e, "input transition spool directory creation failed");
+            return;
+        }
+        let Some(mut file) = crate::app::helpers::open_log_spool(&path) else {
+            tracing::debug!("input transition spool could not be opened");
+            return;
+        };
+        // Control characters in the buffer would break one-transition-per-line
+        // readability, so newlines and tabs are escaped rather than emitted raw.
+        // The buffer is also redacted before it is persisted: a pasted API key
+        // reaches the input field verbatim, and this spool outlives the session.
+        let escape = |s: &str| {
+            codemason_types::sanitize::redact_secrets(s)
+                .replace('\\', "\\\\")
+                .replace('\n', "\\n")
+                .replace('\r', "\\r")
+                .replace('\t', "\\t")
+        };
+        let line = format!(
+            "{} source={source} before_chars={before_chars} before_cursor={before_cursor} \
+             after_chars={} after_cursor={} cursor_delta={} screen={:?} \
+             before={:?} after={:?}\n",
+            chrono::Utc::now().to_rfc3339(),
+            self.input_len_chars(),
+            self.session.input_cursor,
+            self.session.input_cursor as i64 - before_cursor as i64,
+            self.current_screen,
+            escape(before_input),
+            escape(&self.session.input),
+        );
+        if let Err(e) = file.write_all(line.as_bytes()) {
+            tracing::debug!(error = %e, "failed to append input transition to spool");
+        }
+    }
+
+    pub(crate) fn set_cursor_char_index_clamped(&mut self, index: usize) {
+        self.session.input_cursor = index.min(self.input_len_chars());
+        self.assert_input_cursor_invariant();
+    }
+
+    pub(crate) fn refresh_input_menus(&mut self) {
+        if self.session.input.starts_with('/') {
+            self.update_slash_menu();
+        } else {
+            self.slash_menu = None;
+        }
+        if self.session.input.contains('@') {
+            self.update_file_menu();
+        } else {
+            self.file_menu = None;
+        }
+    }
+
+    pub(crate) fn get_parameter_hint(&self, trigger: &str) -> Option<String> {
+        match trigger {
+            "team" => Some("<subcommand>".to_string()),
+            "memory" => Some("<subcommand> [<arg>]".to_string()),
+            "db" => Some("[prune [--days N] [--dry-run]|help]".to_string()),
+            "agent" => Some("[<name>]".to_string()),
+            "codeindex" => Some("[on|off|show|sync|reindex|help]".to_string()),
+            "gcf" => Some("[on|off|show|help]".to_string()),
+            // FR-033: rendered from the one `TOOLS_SUBS` table, so the hint
+            // cannot offer a form the handler refuses or omit one it accepts.
+            "tools" => Some(format!(
+                "[{}]",
+                codemason_agent::tool::command_catalog::TOOLS_SUBS.join("|")
+            )),
+            "model" => Some("[show]".to_string()),
+            "spec" => Some("[create|add|delete|list|search|validate|status|task|govcreate <specid> <content-ref> <target-folder> [--language <lang>] [--type <type>] [--stack <name>] [--github|--gitlab] [--force]|activate|deactivate|coverage|impl|jtbd|help]".to_string()),
+            "router" => {
+                Some("[on|off|status|tiers|weights|boundaries|test|reload|help]".to_string())
+            }
+            "config" => Some("[show|save|list|help]".to_string()),
+            "triggers" => Some("[list|enable|disable|remove|status|help]".to_string()),
+            "websearch" => Some("[show|help]".to_string()),
+            "init" => Some("[config|help]".to_string()),
+            "thinking" => Some("[auto|off|low|medium|high]".to_string()),
+            "mouse" => Some("[on|off|help]".to_string()),
+            "status" => Some("[clear]".to_string()),
+            "osinfo" => Some("[show [--no-probe]|help]".to_string()),
+            "queue" => Some("[list|clear|next|help]".to_string()),
+            "alog" => Some("[help|on|off|config|list|status|delete <run-id> --yes|export <run-id> --yes]".to_string()),
+            "toolchain" => Some("[help|list [lang] [--json]]".to_string()),
+            "prompt" => Some("[help|primary [agent]|subagent [agent]|list|<agent>]".to_string()),
+            "log" => Some("[clear subagents|panics|research|editlog|help]".to_string()),
+            "loop" => Some("[help | <agent> <goal text...>]".to_string()),
+            "blueprints" => Some("[help|list|<name>]".to_string()),
+            "research" => Some(
+                "[create [--mode tiered|supervisor|competitive] [--summarization-model <model>] [--evaluate] [--clarify|--no-clarify] [--format report|executive-summary|comparison-table|source-bibliography|imrad|newsletter] [--tier light|full|dissertation] [--depth shallow|standard|deep] [--iterations N] [--fetch-concurrently N] [--use-local] [--use-specs] [--use-low-relevance] [--use-pdf] [--papers] [--oa-enable|--no-oa] [--web-time N] [--max-concepts N] [--max-findings N] [--url-cloak] [--age 30d|6m|2y] <name> <topic...>] | [list|open|search|show|delete|archive|cluster]".to_string(),
+            ),
+            "help" => Some("[<command>]".to_string()),
+            "quit" | "exit" => None,
+            "clear" => None,
+            "undo" => None,
+            "redo" => None,
+            "compact" | "compress" => None,
+            "halt" => None,
+            "resume" => None,
+            _ => Some("<arg>".to_string()),
+        }
+    }
+
+    pub(crate) fn refresh_project_files_cache(&mut self) {
+        let wd = self.cwd_path.clone();
+        let files = codemason_agent::reference::fuzzy::collect_project_files(&wd, 10_000);
+        self.project_files_cache_count = files.len();
+        self.project_files_cache = Some(files);
+        self.project_files_cache_cwd = Some(wd);
+        self.project_files_cache_refreshed_at = Some(std::time::SystemTime::now());
+    }
+
+    /// Insert a single character at the cursor and refresh autocomplete menus.
+    pub fn insert_char_at_cursor(&mut self, c: char) {
+        let insert_pos = self.cursor_byte_pos();
+        self.session.input.insert(insert_pos, c);
+        self.cursor_move_right();
+        self.refresh_input_menus();
+        self.assert_input_cursor_invariant();
+    }
+
+    /// Insert a string at the cursor and refresh autocomplete menus.
+    pub fn insert_text_at_cursor(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let insert_pos = self.cursor_byte_pos();
+        let added = text.chars().count();
+        self.session.input.insert_str(insert_pos, text);
+        self.set_cursor_char_index_clamped(self.session.input_cursor + added);
+        self.refresh_input_menus();
+        self.assert_input_cursor_invariant();
+    }
+
+    /// Delete the character before the cursor (backspace).
+    pub fn delete_prev_char(&mut self) {
+        if self.session.input_cursor == 0 {
+            return;
+        }
+        let delete_pos = self.cursor_byte_pos_at_char_index(self.session.input_cursor - 1);
+        self.session.input.remove(delete_pos);
+        self.cursor_move_left();
+        self.refresh_input_menus();
+        self.assert_input_cursor_invariant();
+    }
+
+    /// Delete the character at the cursor (delete).
+    pub fn delete_next_char(&mut self) {
+        if self.session.input_cursor >= self.input_len_chars() {
+            return;
+        }
+        let delete_pos = self.cursor_byte_pos();
+        self.session.input.remove(delete_pos);
+        self.refresh_input_menus();
+        self.assert_input_cursor_invariant();
+    }
+
+    /// Remove the inclusive character range `[start, end)` from the input
+    /// buffer, clamping to the current length. No-op when `start >= end`.
+    pub fn remove_input_char_range(&mut self, start: usize, end: usize) {
+        if start >= end {
+            return;
+        }
+        let clamped_start = start.min(self.input_len_chars());
+        let clamped_end = end.min(self.input_len_chars());
+        if clamped_start >= clamped_end {
+            return;
+        }
+        let byte_start = self.cursor_byte_pos_at_char_index(clamped_start);
+        let byte_end = self.cursor_byte_pos_at_char_index(clamped_end);
+        self.session.input.replace_range(byte_start..byte_end, "");
+        self.set_cursor_char_index_clamped(clamped_start);
+        self.refresh_input_menus();
+        self.assert_input_cursor_invariant();
+    }
+
+    pub(crate) fn input_selection_char_range(&self, sel: &TextSelection) -> Option<(usize, usize)> {
+        if !matches!(sel.pane, SelectionPane::Input) {
+            return None;
+        }
+        let area = self.input_area;
+        if area.width < 2 || area.height < 2 {
+            return None;
+        }
+        let inner_x = area.x + 1;
+        let inner_y = area.y + 1;
+        let inner_w = area.width.saturating_sub(2).max(1) as usize;
+        let ((start_col, start_row), (end_col, end_row)) = sel.normalized();
+        let start_disp = start_row.saturating_sub(inner_y) as usize * inner_w
+            + start_col.saturating_sub(inner_x) as usize;
+        let end_disp_exclusive = end_row.saturating_sub(inner_y) as usize * inner_w
+            + end_col.saturating_sub(inner_x) as usize
+            + 1;
+        // The prompt prefix widens by two columns while the queue counter is
+        // shown, so selection columns only line up with the input text when the
+        // counter width is subtracted too (spec `inputqueue` NFR-002, FR-020).
+        let prefix_len = crate::layout::input_prompt_prefix_len(self.input_queue_len());
+        let display_len = self.input_len_chars() + prefix_len;
+        let start_disp = start_disp.min(display_len);
+        let end_disp_exclusive = end_disp_exclusive.min(display_len);
+        if end_disp_exclusive <= start_disp {
+            return None;
+        }
+        let start_input = start_disp
+            .saturating_sub(prefix_len)
+            .min(self.input_len_chars());
+        let end_input = end_disp_exclusive
+            .saturating_sub(prefix_len)
+            .min(self.input_len_chars());
+        if end_input <= start_input {
+            None
+        } else {
+            Some((start_input, end_input))
+        }
+    }
+
+    pub(crate) fn active_input_widget_area(&self) -> Rect {
+        self.input_area
+    }
+
+    /// Return the byte offset in `self.input` corresponding to the current
+    /// cursor character index.
+    pub(crate) fn cursor_byte_pos(&self) -> usize {
+        self.cursor_byte_pos_at_char_index(self.session.input_cursor)
+    }
+
+    /// Return the byte offset in `self.input` for a given character index.
+    /// `char_index == 0` short-circuits to `0`.
+    pub fn cursor_byte_pos_at_char_index(&self, char_index: usize) -> usize {
+        if char_index == 0 {
+            return 0;
+        }
+        // Single pass: nth() returns None when char_index is past the end.
+        self.session
+            .input
+            .char_indices()
+            .nth(char_index)
+            .map(|(byte, _)| byte)
+            .unwrap_or_else(|| self.session.input.len())
+    }
+
+    pub(crate) fn cursor_move_left(&mut self) {
+        if self.session.input_cursor > 0 {
+            self.session.input_cursor -= 1;
+        }
+        self.assert_input_cursor_invariant();
+    }
+
+    pub(crate) fn cursor_move_right(&mut self) {
+        if self.session.input_cursor < self.input_len_chars() {
+            self.session.input_cursor += 1;
+        }
+        self.assert_input_cursor_invariant();
+    }
+
+    pub(crate) fn cursor_move_word_left(&mut self) {
+        if self.session.input_cursor == 0 {
+            return;
+        }
+        // Walk backwards from the cursor byte position without materialising
+        // the whole input into a char vector on every keypress.
+        let cursor_byte = self.cursor_byte_pos();
+        let mut cursor_chars = self.session.input_cursor;
+        let mut byte = cursor_byte;
+        let prev_is_ws = |b: usize| {
+            self.session.input[..b]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_whitespace)
+        };
+        while cursor_chars > 0 && prev_is_ws(byte) {
+            // Step back one char.
+            let prev = self.session.input[..byte]
+                .char_indices()
+                .next_back()
+                .map(|(b, _)| b)
+                .unwrap_or(0);
+            byte = prev;
+            cursor_chars -= 1;
+        }
+        while cursor_chars > 0 && !prev_is_ws(byte) {
+            let prev = self.session.input[..byte]
+                .char_indices()
+                .next_back()
+                .map(|(b, _)| b)
+                .unwrap_or(0);
+            byte = prev;
+            cursor_chars -= 1;
+        }
+        self.set_cursor_char_index_clamped(cursor_chars);
+    }
+
+    pub(crate) fn cursor_move_word_right(&mut self) {
+        let mut cursor_chars = self.session.input_cursor;
+        let mut byte = self.cursor_byte_pos();
+        let total_chars = self.input_len_chars();
+        let at_char = |b: usize| {
+            self.session.input[b..]
+                .chars()
+                .next()
+                .is_some_and(char::is_whitespace)
+        };
+        while cursor_chars < total_chars && !at_char(byte) {
+            let next = byte
+                + self.session.input[byte..]
+                    .chars()
+                    .next()
+                    .map_or(1, char::len_utf8);
+            byte = next;
+            cursor_chars += 1;
+        }
+        while cursor_chars < total_chars && at_char(byte) {
+            let next = byte
+                + self.session.input[byte..]
+                    .chars()
+                    .next()
+                    .map_or(1, char::len_utf8);
+            byte = next;
+            cursor_chars += 1;
+        }
+        self.set_cursor_char_index_clamped(cursor_chars);
+    }
+
+    pub(crate) fn cursor_move_home(&mut self) {
+        self.session.input_cursor = 0;
+        self.assert_input_cursor_invariant();
+    }
+
+    pub(crate) fn cursor_move_end(&mut self) {
+        self.session.input_cursor = self.input_len_chars();
+        self.assert_input_cursor_invariant();
+    }
+
+    pub(crate) fn cursor_on_first_logical_line(&self) -> bool {
+        let byte = self.cursor_byte_pos();
+        !self.session.input[..byte].contains('\n')
+    }
+
+    pub(crate) fn cursor_on_last_logical_line(&self) -> bool {
+        let byte = self.cursor_byte_pos();
+        !self.session.input[byte..].contains('\n')
+    }
+
+    pub(crate) fn cursor_move_up_logical_line(&mut self) {
+        let byte = self.cursor_byte_pos();
+        let before = &self.session.input[..byte];
+        let Some(nl_pos) = before.rfind('\n') else {
+            return;
+        };
+
+        // Column (char count) within current line
+        let line_start_byte = nl_pos + 1;
+        let col = before[line_start_byte..].chars().count();
+
+        // Previous line spans from after its preceding '\n' (or 0) to nl_pos
+        let prev_line_start = before[..nl_pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
+        let prev_line_len = before[prev_line_start..nl_pos].chars().count();
+
+        let target_col = col.min(prev_line_len);
+        let new_char = self.session.input[..prev_line_start].chars().count() + target_col;
+        self.set_cursor_char_index_clamped(new_char);
+    }
+
+    pub(crate) fn cursor_move_down_logical_line(&mut self) {
+        let byte = self.cursor_byte_pos();
+        let after = &self.session.input[byte..];
+        let Some(nl_offset) = after.find('\n') else {
+            return;
+        };
+
+        // Column within current line
+        let before = &self.session.input[..byte];
+        let line_start_byte = before.rfind('\n').map(|p| p + 1).unwrap_or(0);
+        let col = before[line_start_byte..].chars().count();
+
+        // Next line
+        let next_start = byte + nl_offset + 1;
+        let next_line = &self.session.input[next_start..];
+        let next_line_end = next_line.find('\n').unwrap_or(next_line.len());
+        let next_line_len = next_line[..next_line_end].chars().count();
+
+        let target_col = col.min(next_line_len);
+        let new_char = self.session.input[..next_start].chars().count() + target_col;
+        self.set_cursor_char_index_clamped(new_char);
+    }
+
+    /// Return the `(start, end)` character range of the current keyboard
+    /// selection, or `None` when the anchor and cursor coincide.
+    pub(crate) fn kb_selection_char_range(&self) -> Option<(usize, usize)> {
+        let anchor = self.session.kb_select_anchor?;
+        let cursor = self.session.input_cursor;
+        if anchor == cursor {
+            None
+        } else if anchor < cursor {
+            Some((anchor, cursor))
+        } else {
+            Some((cursor, anchor))
+        }
+    }
+
+    pub(crate) fn copy_kb_selection(&mut self) {
+        if let Some((start, end)) = self.kb_selection_char_range() {
+            let selected: String = self
+                .session
+                .input
+                .chars()
+                .skip(start)
+                .take(end - start)
+                .collect();
+            Self::set_clipboard(&selected);
+        }
+    }
+
+    pub(crate) fn cut_kb_selection(&mut self) {
+        if let Some((start, end)) = self.kb_selection_char_range() {
+            let selected: String = self
+                .session
+                .input
+                .chars()
+                .skip(start)
+                .take(end - start)
+                .collect();
+            Self::set_clipboard(&selected);
+            self.remove_input_char_range(start, end);
+            self.session.kb_select_anchor = None;
+        }
+    }
+
+    pub(crate) fn paste_text_from_clipboard(&mut self) {
+        if let Some(text) = Self::get_clipboard() {
+            self.handle_paste_text(&text);
+        }
+    }
+
+    /// Insert pasted text at the cursor, stripping `\r` and replacing any
+    /// active keyboard or mouse selection.
+    pub fn handle_paste_text(&mut self, text: &str) {
+        // The project `Properties` dialog takes the paste; the chat draft
+        // behind it is left alone.
+        if crate::project_properties::handle_paste(self, text) {
+            return;
+        }
+        let clean: String = text.chars().filter(|&c| c != '\r').collect();
+        if clean.is_empty() {
+            return;
+        }
+
+        // Replace a mouse-driven selection first.
+        if let Some(sel) = self.text_selection.clone() {
+            if let Some((start, end)) = self.input_selection_char_range(&sel) {
+                self.remove_input_char_range(start, end);
+            }
+            self.text_selection = None;
+        }
+
+        // Replace the keyboard-driven selection, if any.
+        if let Some((start, end)) = self.kb_selection_char_range() {
+            self.remove_input_char_range(start, end);
+            self.session.kb_select_anchor = None;
+        }
+
+        self.insert_text_at_cursor(&clean);
+    }
+
+    pub(crate) fn clear_kb_selection(&mut self) {
+        self.session.kb_select_anchor = None;
+    }
+
+    pub(crate) fn delete_prev_word(&mut self) {
+        if self.session.input_cursor == 0 {
+            return;
+        }
+        let end = self.session.input_cursor;
+        self.cursor_move_word_left();
+        let start = self.session.input_cursor;
+        self.remove_input_char_range(start, end);
+    }
+
+    pub(crate) fn delete_to_end_of_line(&mut self) {
+        let end = self.input_len_chars();
+        self.remove_input_char_range(self.session.input_cursor, end);
+    }
+
+    /// Set the active code index handle and trigger stats refresh.
+    pub(crate) fn set_code_index(
+        &mut self,
+        code_index: Option<Arc<codemason_codeindex::CodeIndex>>,
+    ) {
+        self.code_index = code_index;
+    }
+
+    /// Refresh cached code-index stats (file/symbol counts and busy flag)
+    /// on a throttled interval (1s while busy, 5s otherwise).
+    pub(crate) fn refresh_code_index_stats(&mut self) {
+        let interval = if self.code_index_busy {
+            std::time::Duration::from_secs(1)
+        } else {
+            std::time::Duration::from_secs(5)
+        };
+        if self.code_index_stats_last_refresh.elapsed() < interval {
+            return;
+        }
+        if let Some(ref idx) = self.code_index {
+            // Check progress atomics (lock-free) to detect active reindex
+            // even when locks are momentarily free between chunks.
+            // The reindex is active only while work remains (done < total);
+            // a completed reindex keeps total > 0 forever, so comparing
+            // against `done` here is what lets the busy latch clear once the
+            // initial reindex finishes (idle-CPU fix: a permanently-true
+            // `reindex_active` pinned compute_next_deadline at 250 ms).
+            let (done, total) = idx.reindex_progress();
+            let reindex_active = total > 0 && done < total;
+
+            // Graph-build latch: the lock-free graph_busy atomic is set by
+            // build_graph / build_graph_for_language / the graph phase of
+            // full_reindex, so it stays observable even while the store lock
+            // is held for the whole build. Read it BEFORE the try_status
+            // probe: the graph build holds the store mutex for its entire
+            // duration, so try_status() returning None while graph_busy is
+            // set means the graph build holds the lock - not indexing.
+            let graph_busy = idx.graph_busy();
+
+            if let Some(stats) = idx.try_status() {
+                self.code_index_stats_cache = Some(stats);
+                self.code_index_stats_last_refresh = std::time::Instant::now();
+                if self.code_index_busy && !reindex_active {
+                    self.code_index_busy = false;
+                    self.needs_redraw = true;
+                }
+            } else if graph_busy {
+                // Store lock held by the graph build. Do not latch the idx
+                // indicator from the lock-held heuristic; clear it if a
+                // previous poll set it, so each indicator tracks its own
+                // phase and clears at its own time instead of both
+                // vanishing the moment the graph build finishes.
+                if self.code_index_busy && !reindex_active {
+                    self.code_index_busy = false;
+                    self.needs_redraw = true;
+                }
+            } else {
+                // Locks busy - indexing in progress
+                if !self.code_index_busy {
+                    self.code_index_busy = true;
+                    self.needs_redraw = true;
+                }
+            }
+            // If reindex counters indicate active work, keep busy flag set.
+            if reindex_active && !self.code_index_busy {
+                self.code_index_busy = true;
+                self.needs_redraw = true;
+            }
+            if graph_busy != self.code_index_graph_busy {
+                self.code_index_graph_busy = graph_busy;
+                self.needs_redraw = true;
+            }
+        } else {
+            self.code_index_stats_cache = None;
+            self.code_index_stats_last_refresh = std::time::Instant::now();
+            self.code_index_busy = false;
+            if self.code_index_graph_busy {
+                self.code_index_graph_busy = false;
+                self.needs_redraw = true;
+            }
+        }
+    }
+
+    /// Spawn `/codeindex graph build` (or `graph lang <l>`) on the dedicated
+    /// codeindex graph-build thread. The command handler sets a `[wait]`
+    /// status; the spawned thread delivers the rendered result through
+    /// `code_index_bg_result`, drained by `poll_codeindex_bg_result`.
+    ///
+    /// Returns `Ok(())` when the build was spawned, `Err(reason)` when it was
+    /// refused (no index attached, or a build is already running).
+    pub(crate) fn spawn_codeindex_graph_build(
+        &mut self,
+        language: Option<String>,
+    ) -> Result<(), String> {
+        let Some(idx) = self.code_index.clone() else {
+            return Err("Code index is not active. Enable it first with `/codeindex on`.".into());
+        };
+        if self.code_index_graph_spawned {
+            return Err("a graph build is already running".into());
+        }
+        self.code_index_graph_spawned = true;
+        self.needs_redraw = true;
+        let results = self.code_index_bg_result.clone();
+        let spawn_result = std::thread::Builder::new()
+            .name("codeindex-graph-build-request".into())
+            .spawn(move || {
+                let outcome = if let Some(lang) = language {
+                    idx.build_graph_for_language(&lang).map(|result| {
+                        if result.edges_total == 0 {
+                            (
+                                format!(
+                                    "[warn] No edges found for language `{lang}`. Ensure \
+                                     files of that language are indexed (run \
+                                     `/codeindex reindex`)."
+                                ),
+                                format!("codeindex: graph lang {lang} (no edges)"),
+                            )
+                        } else {
+                            (
+                                format!(
+                                    "\u{2705} Graph built for `{lang}`: {} edges \
+                                     ({} EXTRACTED, {} INFERRED) in {}ms.",
+                                    result.edges_total,
+                                    result.edges_extracted,
+                                    result.edges_inferred,
+                                    result.elapsed_ms
+                                ),
+                                format!(
+                                    "codeindex: graph lang {lang} ({} edges)",
+                                    result.edges_total
+                                ),
+                            )
+                        }
+                    })
+                } else {
+                    idx.build_graph().map(|result| {
+                        (
+                            format!(
+                                "\u{2705} Graph built: {} edges ({} EXTRACTED, {} INFERRED) \
+                                 in {}ms.",
+                                result.edges_total,
+                                result.edges_extracted,
+                                result.edges_inferred,
+                                result.elapsed_ms
+                            ),
+                            format!("codeindex: graph built ({} edges)", result.edges_total),
+                        )
+                    })
+                };
+                let payload = outcome.map_err(|e| format!("graph build failed: {e}"));
+                if let Ok(mut guard) = results.lock() {
+                    *guard = Some(payload);
+                }
+            });
+        if let Err(e) = spawn_result {
+            // Roll the latch back so a later command can retry.
+            self.code_index_graph_spawned = false;
+            return Err(format!("failed to spawn graph build thread: {e}"));
+        }
+        Ok(())
+    }
+
+    /// Spawn a full reindex on a dedicated thread so the TUI event loop stays
+    /// responsive. Progress is observable via the existing reindex atomics
+    /// (and the graph phase via the graph-busy indicator).
+    pub(crate) fn spawn_codeindex_reindex(&mut self) -> Result<(), String> {
+        let Some(idx) = self.code_index.clone() else {
+            return Err("Code index is not active. Enable it first with `/codeindex on`.".into());
+        };
+        if self.code_index_reindex_spawned {
+            return Err("a reindex is already running".into());
+        }
+        self.code_index_reindex_spawned = true;
+        self.needs_redraw = true;
+        let results = self.code_index_bg_result.clone();
+        let spawn_result = std::thread::Builder::new()
+            .name("codeindex-manual-reindex".into())
+            .spawn(move || {
+                let payload = match idx.full_reindex() {
+                    Ok(result) => Ok((
+                        format!(
+                            "[ok] Re-index complete: +{} ~{} -{} files, {} symbols in {}ms.",
+                            result.files_added,
+                            result.files_updated,
+                            result.files_removed,
+                            result.symbols_extracted,
+                            result.elapsed_ms
+                        ),
+                        format!(
+                            "codeindex: reindexed {} files",
+                            result.files_added + result.files_updated
+                        ),
+                    )),
+                    Err(e) => Err(format!("Re-index failed: {e}")),
+                };
+                if let Ok(mut guard) = results.lock() {
+                    *guard = Some(payload);
+                }
+            });
+        if let Err(e) = spawn_result {
+            self.code_index_reindex_spawned = false;
+            return Err(format!("failed to spawn reindex thread: {e}"));
+        }
+        Ok(())
+    }
+
+    /// Drain the completion result from an off-thread codeindex graph build
+    /// or full reindex and surface it in the message window. Mirrors
+    /// `poll_compaction_result`; the success payload carries the message and the
+    /// status-bar text as a tuple.
+    pub fn poll_codeindex_bg_result(&mut self) {
+        let outcome = {
+            let mut guard = match self.code_index_bg_result.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            guard.take()
+        };
+        let Some(outcome) = outcome else {
+            return;
+        };
+        self.code_index_graph_spawned = false;
+        self.code_index_reindex_spawned = false;
+        match outcome {
+            Ok((message, status)) => {
+                self.append_assistant_text(&message);
+                self.status = status;
+                self.arm_status_expiry();
+                self.push_log_no_agent(
+                    LogLevel::Info,
+                    "Finished /codeindex background task".to_string(),
+                );
+            }
+            Err(msg) => {
+                self.append_assistant_text(&format!("[err] {msg}"));
+                self.status = "[warn] codeindex: background task failed".to_string();
+                self.push_log_no_agent(LogLevel::Error, msg);
+            }
+        }
+        self.needs_redraw = true;
+    }
+
+    /// Drain the loop-rollback result (FR-020/T-013) deposited by the async
+    /// rollback task and surface it in the status line and message window.
+    /// Without this poll the status stays at "rolling back to pre-loop
+    /// snapshot..." forever and a failed restore is invisible to the user.
+    pub fn poll_rollback_result(&mut self) {
+        let outcome = {
+            let mut guard = match self.session.rollback_result.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            guard.take()
+        };
+        let Some(outcome) = outcome else {
+            return;
+        };
+        match outcome {
+            Ok(true) => {
+                self.status = "rollback complete".to_string();
+                self.append_assistant_text(
+                    "[ok] Rolled back to the pre-loop snapshot; loop changes reverted.",
+                );
+                self.push_log_no_agent(
+                    LogLevel::Info,
+                    "Loop rollback completed (FR-020)".to_string(),
+                );
+            }
+            Ok(false) => {
+                self.status = "rollback: nothing to restore".to_string();
+                self.append_assistant_text("No pending pre-loop capture was found to restore.");
+            }
+            Err(e) => {
+                self.status = format!("[err] rollback failed: {e}");
+                self.append_assistant_text(&format!(
+                    "[err] Rollback failed: {e}. The pre-loop capture is kept - retry \
+                     the rollback to try again."
+                ));
+                self.push_log_no_agent(LogLevel::Error, format!("rollback error: {e}"));
+            }
+        }
+        self.needs_redraw = true;
+    }
+
+    /// Drain the `/websearch test` engine-diagnostic result deposited by the
+    /// spawned test task and surface it in the message window. Without this
+    /// poll the command would have to block the UI thread for the whole
+    /// multi-engine network probe, deferring the "Starting Websearch
+    /// test..." acknowledgement until after the test had already finished.
+    pub fn poll_websearch_test_result(&mut self) {
+        let outcome = {
+            let mut guard = match self.websearch_test_result.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            guard.take()
+        };
+        let Some(output) = outcome else {
+            return;
+        };
+        self.append_assistant_text(&output);
+        self.status = "websearch: engine test complete".to_string();
+        self.needs_redraw = true;
+    }
+
+    /// Test hook: exposes the crate-internal stats refresh to integration
+    /// tests (busy-latch regression coverage). Not part of the public API.
+    #[doc(hidden)]
+    pub fn refresh_code_index_stats_for_test(&mut self) {
+        self.refresh_code_index_stats();
+    }
+
+    /// Refresh cached structured-memory stats on a throttled 5s interval.
+    pub(crate) fn refresh_memory_stats(&mut self) {
+        if self.memory_stats_last_refresh.elapsed() < std::time::Duration::from_secs(5) {
+            return;
+        }
+        self.memory_stats_last_refresh = std::time::Instant::now();
+        let storage = self.storage.clone();
+        let project_dir = self.cwd_path.clone();
+        let pending = self.memory_entry_count_pending.clone();
+        tokio::task::spawn_blocking(move || {
+            let count = storage
+                .count_memories_for_project(&project_dir)
+                .unwrap_or(0);
+            pending.store(count, std::sync::atomic::Ordering::Relaxed);
+        });
+    }
+    /// Map the primary session's short id to the current agent name for log display.
+    pub(crate) fn register_primary_session_mapping(&mut self) {
+        if let Some(ref sid) = self.session.session_id {
+            let short_sid = short_session_id(sid);
+            self.sid_to_display_name
+                .insert(short_sid, self.session.agent_name.clone());
+        }
+    }
+
+    /// Toggle a discovered MCP server's enabled state from the `/mcp discover`
+    /// dialog: disable it when it is currently enabled, otherwise add it to
+    /// `codemason.json` (if an entry is missing) and enable it.
+    ///
+    /// The change is persisted (the project `codemason.json` entry and the global
+    /// enable ledger) and applied live through [`Self::set_mcp_server_enabled`]
+    /// when the MCP client is already running.
+    ///
+    /// Returns `(feedback, enabled)` where `enabled` is the server's new state,
+    /// so the dialog can refresh the toggled row without re-reading config or
+    /// the ledger from disk.
+    pub(crate) async fn toggle_discovered_mcp_server(
+        &mut self,
+        server: &DiscoveredMcpServer,
+        row_enabled: bool,
+    ) -> (String, bool) {
+        use codemason_agent::Config;
+
+        // Surface a malformed config rather than defaulting to "no servers
+        // configured": defaulting would read as "currently disabled" and flip
+        // an enabled server off on a parse error.
+        let configured = match Config::load_for(&self.cwd_path) {
+            Ok(c) => c.mcp,
+            Err(e) => return (format!("[x] failed to load config: {e}"), false),
+        };
+        // The dialog's own row state is authoritative for a server that is not in
+        // `codemason.json`: it is either a bridged row (enabled unless the ledger says
+        // otherwise) or a proposal the user has not adopted yet, and the config
+        // cannot tell the two apart.
+        let currently_enabled = if configured.contains_key(&server.id) {
+            let ledger = codemason_agent::mcp::McpEnableLedger::load();
+            crate::app::state::discovered_mcp_enabled(&server.id, &configured, &ledger)
+        } else {
+            row_enabled
+        };
+
+        if currently_enabled {
+            let report = self.set_mcp_server_enabled(&server.id, false).await;
+            if report.contains("[err]") {
+                return (format!("[x] could not disable '{}'", server.id), true);
+            }
+            return (format!("[ok] '{}' disabled", server.id), false);
+        }
+
+        // Enabling: discovery only proposes a server, so a `codemason.json` entry
+        // must exist before it can start. Add one when absent; lift a
+        // `disabled: true` override when present so the entry is not shadowed.
+        //
+        // A bridged row is exempt: its definition is already an entry inside a
+        // plugin's or connector's manifest, so writing a `codemason.json` copy would
+        // shadow the owner's declaration and drift the moment the owner changes.
+        // Only the enable ledger is touched, which is exactly what the row means.
+        let bridged = crate::app::mcp_bridge::is_bridged_source(&server.source);
+        if !bridged && let Err(e) = self.ensure_discovered_mcp_config(server) {
+            return (format!("[x] {e}"), false);
+        }
+        let report = if bridged {
+            self.set_bridged_mcp_server_enabled(&server.id, true).await
+        } else {
+            self.set_mcp_server_enabled(&server.id, true).await
+        };
+        if report.contains("[err]") {
+            return (format!("[x] could not enable '{}'", server.id), false);
+        }
+        (format!("[ok] '{}' enabled", server.id), true)
+    }
+
+    /// Write or update the `mcp.<id>` entry for a discovered server in the
+    /// project `.codemason/codemason.json`.
+    ///
+    /// An existing entry is preserved: only its `disabled` flag is cleared so a
+    /// hand-edited `args`/`env` is never clobbered by the discovered defaults.
+    /// A missing entry is added from the discovered definition.
+    fn ensure_discovered_mcp_config(&self, server: &DiscoveredMcpServer) -> Result<(), String> {
+        // SEC-082: discovery only proposes a server; before persisting it, vet
+        // the executable so a discovered definition cannot write an empty path,
+        // a control character, or a shell metacharacter payload into the project
+        // config (which the MCP stdio launcher later consumes).
+        validate_executable(&server.executable)?;
+
+        // Persist back to the **user-global** `codemason.json`.
+        //
+        // SEC-001: `merge_project` strips a project-local `mcp` block, so an
+        // entry written into `<cwd>/.codemason/codemason.json` would be dropped at the
+        // next load and the enable rejected as "unknown server". The global file
+        // is where the MCP client reads server definitions from, so discovery
+        // writes there. A project-local file is used only when no global config
+        // directory can be resolved.
+        let config_path = codemason_config::Config::global_config_path().unwrap_or_else(|| {
+            self.cwd_path
+                .clone()
+                .join(".codemason")
+                .join("codemason.json")
+        });
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create {}: {e}", parent.display()))?;
+        }
+
+        let server_id = server.id.clone();
+        let mcp_entry = serde_json::json!({
+            "type": "stdio",
+            "command": server.executable.to_string_lossy(),
+            "args": server.args,
+            "env": server.env,
+            "disabled": false,
+        });
+
+        let result = atomic_config_update(&config_path, |json| {
+            if let Some(existing) = json
+                .get_mut("mcp")
+                .and_then(serde_json::Value::as_object_mut)
+                .and_then(|mcp| mcp.get_mut(&server_id))
+                && let Some(obj) = existing.as_object_mut()
+            {
+                // A configured entry already exists: only lift a hard
+                // `disabled` override, leaving the user's fields intact.
+                obj.insert("disabled".to_string(), serde_json::Value::Bool(false));
+                return Ok(());
+            }
+            json["mcp"][&server_id] = mcp_entry;
+            Ok(())
+        });
+        if result.is_ok() {
+            // `atomic_config_update` writes the file directly, so the M-025
+            // on-disk load cache must be dropped before the enable path re-reads
+            // it; otherwise the just-written entry stays invisible and the
+            // enable would be rejected as an unknown server.
+            codemason_config::Config::invalidate_load_cache();
+            self.session_processor.invalidate_config_cache();
+        }
+        result
+    }
+
+    pub(crate) fn ensure_session(&mut self) -> bool {
+        if self.session.session_id.is_some() {
+            return true;
+        }
+        // A new session works in its view's directory (set by
+        // `/session new <path>` or inherited), else the focused directory.
+        if self.session.directory.as_os_str().is_empty() {
+            self.session.directory = self.cwd_path.clone();
+        }
+        let dir = self.session.directory.clone();
+        match self.session_processor.session_manager.create_session(dir) {
+            Ok(session) => {
+                self.session.session_id = Some(session.id.clone());
+                // A new session starts on its project's base model, when the
+                // project has one (spec `projects`).
+                match self.project_manager().get(&session.project_id) {
+                    Ok(Some(project)) => self.seed_project_base_model(&project),
+                    Ok(None) => {}
+                    Err(e) => tracing::debug!(error = %e, "could not read the session's project"),
+                }
+                // The status bar shows the backend it copied from its project.
+                self.refresh_active_backend();
+                // A fresh session starts with an empty queue (NFR-005).
+                self.clear_input_queue();
+                // Map the primary session's short_sid to the current agent name
+                let short_sid = short_session_id(&session.id);
+                self.sid_to_display_name
+                    .insert(short_sid, self.session.agent_name.clone());
+                true
+            }
+            Err(e) => {
+                // Surface a visible assistant message so slash commands don't fail silently.
+                self.status = format!("error: {}", e);
+                let msg = format!("From: /system\nFailed to create session: {}", e);
+                self.append_assistant_text(&msg);
+                false
+            }
+        }
+    }
+
+    /// Sync the in-memory `team_members` list with the on-disk team store,
+    /// copying session ids, status, and current task ids so the UI reflects the
+    /// authoritative persisted state. Also registers session_id -> teammate
+    /// name mappings for log display.
+    ///
+    /// Called from the Teams subpanel render (`layout_teams::render_teams_subpanel`)
+    /// so a freshly-opened team reflects on-disk state before the event
+    /// handlers have had a chance to fire.
+    ///
+    /// Also recounts the message counters from the mailbox files - see
+    /// [`App::recount_team_messages`]. Exposed `pub` for the consolidated test
+    /// target; not part of the crate's public API surface.
+    #[doc(hidden)]
+    pub fn refresh_team_member_session_ids(&mut self) {
+        let Some(team_name) = self.session.active_team.as_ref().map(|t| t.name.clone()) else {
+            return;
+        };
+        let working_dir = self.cwd_path.clone();
+        let Ok(store) = TeamStore::load_by_name(&team_name, &working_dir) else {
+            return;
+        };
+
+        for member in &mut self.session.team_members {
+            // If a stored entry exists for this agent, copy session_id, status,
+            // and current_task_id so the UI reflects the authoritative on-disk state.
+            if let Some(stored_member) = store
+                .config
+                .members
+                .iter()
+                .find(|m| m.agent_id == member.agent_id)
+            {
+                if member.session_id.is_none() {
+                    if let Some(sid) = &stored_member.session_id {
+                        member.session_id = Some(sid.clone());
+                    }
+                }
+                // Always sync status and current task from the store so races
+                // between disk hydration and spawn events don't leave the UI
+                // showing an outdated "spawning" state.
+                member.status = stored_member.status.clone();
+                member.current_task_id = stored_member.current_task_id.clone();
+            }
+        }
+        // Register session_id -> teammate name mappings for log display.
+        for member in &self.session.team_members {
+            if let Some(ref sid) = member.session_id {
+                let short_sid = short_session_id(sid);
+                self.sid_to_display_name
+                    .entry(short_sid)
+                    .or_insert_with(|| member.name.clone());
+            }
+        }
+
+        // FR-052: the mailbox files are the source of truth for the
+        // sent/received counters. They are drained by whichever process reads
+        // them (the teammate's own `team_read_messages`, the manager's poll
+        // loop, a server-side reader), so an event-driven counter misses
+        // nearly every message in a running team and the Teams panel paints
+        // `-` for all of them. Read every mailbox once per frame and recount.
+        self.recount_team_messages(&store);
+    }
+
+    /// Recount `team_message_counts` from the team's mailbox files.
+    ///
+    /// `sent` is the number of messages a member wrote and `recv` the number it
+    /// was sent, both taken over the whole on-disk mailbox set rather than from
+    /// live events: a mailbox is drained by every reader (the teammate's own
+    /// `team_read_messages`, the manager poll loop), so counting deliveries
+    /// from events leaves the counters at zero. The pair is a superset of what
+    /// the event handlers accumulate - an event never precedes the file write
+    /// that carries it - so the maximum of the two is kept and a counter can
+    /// only ever climb, never blink back to zero between a write and the next
+    /// event.
+    ///
+    /// The lead is a mailbox holder like any other, so its own sent/received
+    /// totals are counted from the same files. Mailbox messages that are not
+    /// agent-to-agent traffic - `IdleNotify` and `ShutdownAck` control
+    /// messages - are excluded, matching the event rule that only reports real
+    /// messages in the panel.
+    fn recount_team_messages(&mut self, store: &TeamStore) {
+        let mut totals: std::collections::HashMap<String, (u32, u32)> =
+            std::collections::HashMap::new();
+        let Ok(entries) = std::fs::read_dir(store.dir.join("mailbox")) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(agent_id) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let Ok(mailbox) = Mailbox::open(&store.dir, agent_id) else {
+                continue;
+            };
+            let Ok(messages) = mailbox.read_all() else {
+                continue;
+            };
+            for msg in messages {
+                if matches!(
+                    msg.message_type,
+                    MessageType::IdleNotify | MessageType::ShutdownAck
+                ) {
+                    continue;
+                }
+                if !msg.from.is_empty() {
+                    let counts = totals.entry(msg.from.clone()).or_insert((0, 0));
+                    counts.0 = counts.0.saturating_add(1);
+                }
+                if !msg.to.is_empty() {
+                    let counts = totals.entry(msg.to.clone()).or_insert((0, 0));
+                    counts.1 = counts.1.saturating_add(1);
+                }
+            }
+        }
+        for (agent_id, (sent, recv)) in totals {
+            let slot = self
+                .session
+                .team_message_counts
+                .entry(agent_id)
+                .or_insert((0, 0));
+            slot.0 = slot.0.max(sent);
+            slot.1 = slot.1.max(recv);
+        }
+    }
+
+    /// Load a session by id, replacing the current messages and updating the
+    /// session_id mapping. Returns an error if the session cannot be found.
+    pub fn load_session(&mut self, session_id: &str) -> anyhow::Result<()> {
+        let session = self
+            .storage
+            .get_session(session_id)?
+            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id))?;
+
+        let messages = self.storage.get_messages(session_id)?;
+        let msg_count = messages.len();
+
+        self.session.session_id = Some(session_id.to_string());
+        // The status bar shows the backend the session runs on.
+        self.refresh_active_backend();
+        // Switching or resuming a session drops any queued messages from the
+        // previous session (NFR-005: the queue is not persisted and does not
+        // cross a session boundary).
+        self.clear_input_queue();
+        // Cache the resumed session's creation timestamp for the teams panel
+        // elapsed-time display (FR-009: avoids per-frame storage reads).
+        self.session.lead_session_created_at =
+            chrono::DateTime::parse_from_rfc3339(&session.created_at)
+                .ok()
+                .map(|dt| dt.with_timezone(&chrono::Utc));
+        // Map the primary session's short_sid to the current agent name
+        let short_sid = short_session_id(session_id);
+        self.sid_to_display_name
+            .insert(short_sid, self.session.agent_name.clone());
+        self.session.messages = messages;
+        // Structural change: restored messages replace the current timeline,
+        // so the per-message render cache must be rebuilt from scratch.
+        self.reset_message_cache();
+        self.current_screen = ScreenMode::Chat;
+        self.status = format!("resumed ({} messages)", msg_count);
+
+        // Rebuild tool_step_map from restored tool calls and populate log
+        // (step count comes from event_bus, not local counter)
+        // Drop only this session's step bookkeeping: the maps are shared by
+        // every open session (MULTISESSION D2), so clearing them would wipe
+        // the background sessions' state.
+        self.forget_session_step_state(session_id);
+        // Map the primary session's short_sid to the current agent name
+        let short_sid = short_session_id(session_id);
+        self.sid_to_display_name
+            .insert(short_sid, self.session.agent_name.clone());
+        let mut restored_logs: Vec<(u32, u32, String, String)> = Vec::new();
+        let mut step_counter = 0u32;
+        for msg in &self.session.messages {
+            for part in &msg.parts {
+                if let MessagePart::ToolCall {
+                    call_id,
+                    tool,
+                    state,
+                } = part
+                {
+                    // For restoration, treat each tool call as a unique step.1
+                    step_counter += 1;
+                    let substep = 1u32;
+                    let short_sid = self
+                        .session
+                        .session_id
+                        .as_deref()
+                        .map(short_session_id)
+                        .unwrap_or_default();
+                    self.tool_step_map
+                        .insert(call_id.clone(), (short_sid, step_counter, substep));
+                    let icon = match state.status {
+                        codemason_agent::message::ToolCallStatus::Completed => "[ok]",
+                        codemason_agent::message::ToolCallStatus::Error => "[x]",
+                        _ => "...",
+                    };
+                    restored_logs.push((step_counter, substep, tool.clone(), icon.to_string()));
+                }
+            }
+        }
+        for (step, substep, tool, icon) in restored_logs {
+            let _short_sid = self
+                .session
+                .session_id
+                .as_deref()
+                .map(short_session_id)
+                .unwrap_or_default();
+            self.push_log_no_agent(
+                LogLevel::Tool,
+                format!("[{step}.{substep}] {tool} {icon} (restored)"),
+            );
+        }
+
+        // Update cwd to match the session's working directory. Keep the
+        // display string (`~`-collapsed) and the real path in sync so path
+        // consumers (`cwd_path`, e.g. the research manager root) follow the
+        // resumed session's directory.
+        if !session.directory.is_empty() {
+            self.cwd_path = Self::expand_home_path(std::path::Path::new(&session.directory));
+            self.cwd = Self::collapse_home_path(&self.cwd_path);
+        }
+        self.session.directory = self.cwd_path.clone();
+
+        // T-010/FR-013: the conversation history was just replaced; refresh
+        // the Context panel snapshot so the History partition and message
+        // count reflect the resumed session rather than the previous one.
+        self.schedule_context_snapshot_refresh();
+
+        self.push_log_no_agent(
+            LogLevel::Info,
+            format!(
+                "Resumed session {} ({} messages)",
+                short_id(session_id),
+                msg_count
+            ),
+        );
+
+        Ok(())
+    }
+
+    /// The git branch checked out in `dir`, if `dir` is in a work tree.
+    pub(crate) fn detect_git_branch(dir: &std::path::Path) -> Option<String> {
+        let output = std::process::Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(dir)
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        if output.status.success() {
+            let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if branch.is_empty() {
+                None
+            } else {
+                Some(branch)
+            }
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn current_config(&self) -> codemason_agent::Config {
+        codemason_agent::Config::load_for(&self.cwd_path).unwrap_or_default()
+    }
+
+    /// Compute an [`LlmStatsSummary`] (averages of elapsed time, prompt and
+    /// output tokens/sec) for samples belonging to the currently active model.
+    /// Returns `None` when no samples are recorded for that model.
+    pub(crate) fn llm_stats_summary(&self) -> Option<LlmStatsSummary> {
+        let model_ref = self.active_model_ref_string()?;
+        let samples: Vec<&LlmRequestStat> = self
+            .session
+            .llm_request_stats
+            .iter()
+            .filter(|sample| sample.model_ref == model_ref)
+            .collect();
+        if samples.is_empty() {
+            return None;
+        }
+
+        let count = samples.len() as f64;
+        let avg_elapsed_ms = samples.iter().map(|s| s.elapsed_ms as f64).sum::<f64>() / count;
+        let avg_prompt_tps = samples
+            .iter()
+            .map(|s| Self::tokens_per_second(s.input_tokens, s.elapsed_ms))
+            .sum::<f64>()
+            / count;
+        let avg_output_tps = samples
+            .iter()
+            .map(|s| Self::tokens_per_second(s.output_tokens, s.elapsed_ms))
+            .sum::<f64>()
+            / count;
+
+        Some(LlmStatsSummary {
+            samples: samples.len(),
+            avg_elapsed_ms,
+            avg_prompt_tps,
+            avg_output_tps,
+        })
+    }
+
+    pub(crate) fn tokens_per_second(tokens: u64, elapsed_ms: u64) -> f64 {
+        if elapsed_ms == 0 {
+            return 0.0;
+        }
+        tokens as f64 / (elapsed_ms as f64 / 1000.0)
+    }
+
+    /// Build the usage display string (provider quota % or token-rate info)
+    /// and a flag indicating whether the value is a rate limit.
+    pub fn usage_display(&self) -> (String, bool) {
+        let provider_id = self
+            .configured_provider
+            .as_ref()
+            .map(|p| p.id.as_str())
+            .unwrap_or("");
+
+        // Provider rate-limit quota % takes priority when available.
+        if let Some(quota) = self.quota_percent {
+            let label = if provider_id == "copilot" {
+                let plan = codemason_agent::provider::copilot::cached_copilot_plan()
+                    .unwrap_or_else(|| "Copilot".to_string());
+                format!("{} quota: {:.1}%", plan, quota)
+            } else {
+                format!("quota: {:.1}%", quota)
+            };
+            return (label, false);
+        }
+
+        let ctx_detail = self.context_window_display();
+        let ctx_label = |prefix: &str| -> String {
+            match ctx_detail.as_deref() {
+                Some(detail) if prefix.is_empty() => format!("ctx: {detail}"),
+                Some(detail) => format!("{prefix} ctx: {detail}"),
+                None => prefix.to_string(),
+            }
+        };
+
+        if provider_id == "copilot" {
+            let plan = codemason_agent::provider::copilot::cached_copilot_plan()
+                .unwrap_or_else(|| "Copilot".to_string());
+            (ctx_label(&plan), false)
+        } else if crate::utils::is_ollama_family(provider_id) {
+            let label = ctx_label("");
+            if label.is_empty() {
+                (
+                    if provider_id == "ollama" {
+                        "local"
+                    } else {
+                        "ollama"
+                    }
+                    .to_string(),
+                    false,
+                )
+            } else {
+                (label, false)
+            }
+        } else {
+            let label = ctx_label("");
+            if label.is_empty() {
+                ("unknown".to_string(), true)
+            } else {
+                (label, false)
+            }
+        }
+    }
+
+    /// Build the `"pct usedK/contextK"` context-window usage display, or
+    /// `None` when no model context window is configured.
+    pub(crate) fn context_window_display(&self) -> Option<String> {
+        let ctx_window = self.selected_model_context_window()?;
+        let pct = (self.session.last_input_tokens as f32 / ctx_window as f32 * 100.0).min(100.0);
+        Some(format!(
+            "{pct:.0}% {}K/{}K",
+            self.session.last_input_tokens / 1000,
+            ctx_window / 1000
+        ))
+    }
+
+    /// Refresh the file-mention autocomplete menu based on the active mention
+    /// span. Populates directory listings when navigating into a directory,
+    /// otherwise fuzzy-matches against the cached project file list.
+    pub fn update_file_menu(&mut self) {
+        let Some(active) = self.active_mention_span() else {
+            self.file_menu = None;
+            return;
+        };
+        let query = active.query(&self.session.input).to_string();
+
+        if let Some(dir) = self.file_menu.as_ref().and_then(|m| m.current_dir.clone()) {
+            self.populate_directory_menu(&dir, Some(&query));
+            return;
+        }
+
+        // Lazily populate or refresh the project file cache when cwd changes.
+        let wd = self.cwd_path.clone();
+        let cache_stale = self
+            .project_files_cache_cwd
+            .as_ref()
+            .is_none_or(|cached| *cached != wd);
+        if self.project_files_cache.is_none() || cache_stale {
+            self.refresh_project_files_cache();
+        }
+
+        if let Some(ref candidates) = self.project_files_cache {
+            let matches = codemason_agent::reference::fuzzy::fuzzy_match(&query, candidates);
+
+            let entries: Vec<FileMenuEntry> = matches
+                .into_iter()
+                .take(15)
+                .map(|m| {
+                    let is_dir = m.path.to_string_lossy().ends_with('/');
+                    FileMenuEntry {
+                        display: m.path.to_string_lossy().to_string(),
+                        path: m.path,
+                        is_dir,
+                    }
+                })
+                .collect();
+
+            let prev_selected = self.file_menu.as_ref().map(|m| m.selected).unwrap_or(0);
+            self.file_menu = Some(FileMenuState {
+                selected: prev_selected.min(entries.len().saturating_sub(1)),
+                matches: entries,
+                scroll_offset: 0,
+                query,
+                current_dir: None,
+            });
+        } else {
+            self.file_menu = None;
+        }
+    }
+
+    /// Accept the currently-selected file-menu entry: navigates into a
+    /// directory or inserts the chosen file path into the input buffer.
+    /// Returns `false` when the menu is empty or no selection can be made.
+    pub fn accept_file_menu_selection(&mut self) -> bool {
+        if self
+            .file_menu
+            .as_ref()
+            .is_some_and(|m| m.matches.is_empty())
+        {
+            return false;
+        }
+        // Clone the selected entry out of the menu to avoid holding an
+        // immutable borrow of self while we call mutating methods below.
+        let selected_entry: Option<FileMenuEntry> = self
+            .file_menu
+            .as_ref()
+            .and_then(|m| m.matches.get(m.selected).cloned());
+
+        if let Some(entry) = selected_entry {
+            if entry.is_dir {
+                if entry.display == "<back to fuzzy>" {
+                    self.update_file_menu();
+                    return false;
+                }
+                // Navigate into the directory instead of inserting it.
+                self.populate_directory_menu(&entry.path, None);
+                return false;
+            } else {
+                // Insert file path into the input and close the menu.
+                let path = entry.display.clone();
+                if let Some(active) = self.active_mention_span() {
+                    let replacement = format!("@{path}");
+                    self.session
+                        .input
+                        .replace_range(active.at_start..active.token_end, &replacement);
+                    let cursor_chars = self.session.input[..active.at_start].chars().count()
+                        + replacement.chars().count();
+                    self.set_cursor_char_index_clamped(cursor_chars);
+                } else {
+                    self.file_menu = None;
+                    return false;
+                }
+                self.file_menu = None;
+                return true;
+            }
+        }
+
+        self.file_menu = None;
+        false
+    }
+
+    pub(crate) fn mention_spans(&self) -> Vec<MentionSpan> {
+        let bytes = self.session.input.as_bytes();
+        let mut spans = Vec::new();
+        let mut i = 0usize;
+        while i < bytes.len() {
+            if bytes[i] == b'@' {
+                if i > 0 {
+                    let prev = bytes[i - 1];
+                    if prev.is_ascii_alphanumeric() || prev == b'.' {
+                        i += 1;
+                        continue;
+                    }
+                }
+                let at_start = i;
+                i += 1;
+                let token_start = i;
+                while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+                    i += 1;
+                }
+                if i > token_start {
+                    spans.push(MentionSpan {
+                        at_start,
+                        token_start,
+                        token_end: i,
+                    });
+                }
+                continue;
+            }
+            i += 1;
+        }
+        spans
+    }
+
+    pub(crate) fn active_mention_span(&self) -> Option<MentionSpan> {
+        let cursor = self.cursor_byte_pos();
+        let spans = self.mention_spans();
+        spans
+            .iter()
+            .find(|span| cursor >= span.at_start && cursor <= span.token_end)
+            .copied()
+    }
+
+    /// Map a screen coordinate to the side-panel pane it lands in.
+    ///
+    /// Returns the [`SelectionPane`] (Messages / Profile / Log / Todo /
+    /// Memory / Input) whose cached area contains `(col, row)`, or `None`
+    /// when the coordinate is outside every active pane. Side-panel panes
+    /// (Profile / Log / Todo / Memory) are only reported when their
+    /// corresponding `show_*` flag is true, so hidden panels never win
+    /// hit-testing even if their cached rect is stale. This is the single
+    /// mouse hit-testing entry point used by `handle_mouse_event` for
+    /// left-click selection start, right-click context-menu open, and
+    /// scrollbar-gutter detection (FR-013).
+    pub fn pane_at(&self, col: u16, row: u16) -> Option<SelectionPane> {
+        let pos = (col, row).into();
+        if self.message_area.area() > 0 && self.message_area.contains(pos) {
+            Some(SelectionPane::Messages)
+        } else if self.show_profile
+            && self.profile_area.area() > 0
+            && self.profile_area.contains(pos)
+        {
+            Some(SelectionPane::Profile)
+        } else if self.show_log && self.log_area.area() > 0 && self.log_area.contains(pos) {
+            Some(SelectionPane::Log)
+        } else if self.show_tasks_panel
+            && self.tasks_area.area() > 0
+            && self.tasks_area.contains(pos)
+        {
+            Some(SelectionPane::Tasks)
+        } else if self.show_memory && self.memory_area.area() > 0 && self.memory_area.contains(pos)
+        {
+            Some(SelectionPane::Memory)
+        } else if self.show_telemetry
+            && self.telemetry_area.area() > 0
+            && self.telemetry_area.contains(pos)
+        {
+            Some(SelectionPane::Telemetry)
+        } else if self.show_context_panel
+            && self.context_panel_area.area() > 0
+            && self.context_panel_area.contains(pos)
+        {
+            Some(SelectionPane::ContextPanel)
+        } else if self.input_area.area() > 0 && self.input_area.contains(pos) {
+            Some(SelectionPane::Input)
+        } else {
+            None
+        }
+    }
+
+    /// Extract a text selection spanning `[start_col, start_row]` to
+    /// `[end_col, end_row]` from `lines`, which are positioned at the inner
+    /// origin `(inner_x, inner_y)`. Joins multi-line selections with `\n`.
+    pub fn extract_text_from_lines(
+        lines: &[String],
+        inner_x: u16,
+        inner_y: u16,
+        start_col: u16,
+        start_row: u16,
+        end_col: u16,
+        end_row: u16,
+    ) -> String {
+        let mut result = String::new();
+        for screen_row in start_row..=end_row {
+            let line_idx = screen_row.saturating_sub(inner_y) as usize;
+            let line = lines.get(line_idx).map(|s| s.as_str()).unwrap_or("");
+            let line_start = if screen_row == start_row {
+                start_col.saturating_sub(inner_x) as usize
+            } else {
+                0
+            };
+            let line_end = if screen_row == end_row {
+                end_col.saturating_sub(inner_x) as usize + 1
+            } else {
+                line.chars().count()
+            };
+            let line_char_count = line.chars().count();
+            let start = line_start.min(line_char_count);
+            let end = line_end.min(line_char_count);
+            if start < end {
+                result.extend(line.chars().skip(start).take(end - start));
+            }
+            if screen_row < end_row {
+                result.push('\n');
+            }
+        }
+        result
+    }
+
+    pub(crate) fn set_clipboard(text: &str) {
+        crate::clipboard::set_clipboard_text(text);
+    }
+
+    pub(crate) fn get_clipboard() -> Option<String> {
+        crate::clipboard::get_clipboard_text()
+    }
+
+    /// Paste an image (or image file path) from the clipboard into the pending
+    /// attachments. Checks the text clipboard first for a `file://` URI or
+    /// path, then falls back to raw pixel data which is saved to
+    /// `target/temp/` with restrictive permissions.
+    pub(crate) fn paste_image_from_clipboard(&mut self) {
+        // --- Phase 1: look for a file reference in the text clipboard ---
+        if let Some(text) = Self::get_clipboard() {
+            let trimmed = text.trim();
+
+            // Resolve file:// URI
+            let candidate = if let Some(rest) = trimmed.strip_prefix("file://") {
+                Some(percent_decode_path(rest))
+            } else if trimmed.starts_with('/') || trimmed.starts_with('.') {
+                // Plain absolute or relative path
+                Some(std::path::PathBuf::from(trimmed))
+            } else {
+                None
+            };
+
+            if let Some(path) = candidate {
+                if path.exists() && is_image_path(&path) {
+                    self.warn_if_path_outside_safe_scope(&path);
+                    self.push_log_no_agent(
+                        LogLevel::Info,
+                        format!(
+                            "[attach] Image attached from clipboard path: {}",
+                            path.display()
+                        ),
+                    );
+                    self.session.pending_attachments.push(path);
+                    return;
+                }
+            }
+        }
+
+        // --- Phase 2: try raw pixel data ---
+        if let Some(img_data) = crate::clipboard::get_clipboard_image() {
+            match save_clipboard_image_to_temp(&img_data) {
+                Ok(path) => {
+                    self.push_log_no_agent(
+                        LogLevel::Info,
+                        format!("[attach] Image saved from clipboard: {}", path.display()),
+                    );
+                    self.session.pending_attachments.push(path);
+                }
+                Err(e) => {
+                    self.push_log_no_agent(
+                        LogLevel::Warn,
+                        format!("Failed to save clipboard image: {e}"),
+                    );
+                }
+            }
+        } else {
+            self.push_log_no_agent(
+                LogLevel::Info,
+                "No image data found in clipboard".to_string(),
+            );
+        }
+    }
+
+    /// Log a warning when a clipboard-resolved image path lies outside the
+    /// current working directory or the user's home directory. The file is
+    /// still attached (the user may intentionally want a screenshot or asset
+    /// from elsewhere), but the warning provides a visible security nudge.
+    fn warn_if_path_outside_safe_scope(&mut self, path: &std::path::Path) {
+        let cwd = self.cwd_path.clone();
+        let home = dirs::home_dir().unwrap_or_default();
+        let inside_cwd = path.strip_prefix(&cwd).is_ok();
+        let inside_home = path.strip_prefix(&home).is_ok();
+        if !inside_cwd && !inside_home {
+            tracing::warn!(
+                path = %path.display(),
+                cwd = %cwd.display(),
+                "clipboard image path is outside the working directory and home directory"
+            );
+            self.push_log_no_agent(
+                LogLevel::Warn,
+                format!(
+                    "[warn] Clipboard image path is outside the working directory and home: {}. \
+                       Attaching anyway.",
+                    path.display()
+                ),
+            );
+        }
+    }
+
+    /// Execute a context-menu action (copy/cut/paste/etc.) against the current
+    /// text selection, dismissing the menu afterwards.
+    pub fn execute_context_action(&mut self, action: ContextAction) {
+        let pane = self.context_menu.as_ref().map(|m| m.pane);
+        let selection = self.text_selection.clone();
+        self.context_menu = None;
+
+        match action {
+            ContextAction::Copy => {
+                self.copy_selection(false);
+            }
+            ContextAction::Cut => {
+                // Copy selected text then remove only the selected span in input pane.
+                self.copy_selection(true);
+                if matches!(pane, Some(SelectionPane::Input)) {
+                    if let Some(sel) = selection.as_ref()
+                        && let Some((start, end)) = self.input_selection_char_range(sel)
+                    {
+                        self.remove_input_char_range(start, end);
+                    }
+                }
+            }
+            ContextAction::Paste => {
+                if matches!(
+                    self.provider_setup,
+                    Some(ProviderSetupStep::EnterKey { .. })
+                        | Some(ProviderSetupStep::GitLabSetup { .. })
+                        | Some(ProviderSetupStep::TelemetrySetup { .. })
+                ) {
+                    self.paste_provider_setup_from_clipboard();
+                } else if matches!(pane, Some(SelectionPane::Input)) {
+                    if let Some(text) = Self::get_clipboard() {
+                        self.handle_paste_text(&text);
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) fn apply_scrollbar_drag(&mut self, mouse_y: u16, pane: ScrollbarDragPane) {
+        let (area, max_scroll) = match pane {
+            ScrollbarDragPane::Messages => (self.message_area, self.session.message_max_scroll),
+            ScrollbarDragPane::Log => (self.log_area, self.log_max_scroll),
+            ScrollbarDragPane::Profile => (self.profile_area, self.profile_max_scroll),
+            ScrollbarDragPane::Tasks => (self.tasks_area, self.tasks_max_scroll),
+            ScrollbarDragPane::Memory => (self.memory_area, self.memory_max_scroll),
+            ScrollbarDragPane::Telemetry => (self.telemetry_area, self.telemetry_max_scroll),
+            ScrollbarDragPane::ContextPanel => {
+                (self.context_panel_area, self.context_panel_max_scroll)
+            }
+            ScrollbarDragPane::AgentsWindow => {
+                (self.active_agents_area, self.active_agents_max_scroll)
+            }
+            ScrollbarDragPane::TeamsWindow => (self.teams_area, self.teams_max_scroll),
+        };
+        if area.height <= 1 || max_scroll == 0 {
+            return;
+        }
+
+        // Clamp mouse_y to the pane area
+        let y = mouse_y.clamp(area.y, area.bottom().saturating_sub(1));
+        let relative = y.saturating_sub(area.y) as f32;
+        let track_height = (area.height.saturating_sub(1)) as f32;
+        let fraction = (relative / track_height).clamp(0.0, 1.0);
+
+        // fraction 0.0 = top of scrollbar track, 1.0 = bottom.
+        // Messages, Log, Profile, and Tasks use "lines from bottom"
+        // semantics (scroll_offset = 0 -> bottom of content, max_scroll
+        // -> top; render_tasks_panel maps the stored offset via
+        // max_scroll - scroll), so dragging to the top of the track must
+        // produce offset = max_scroll: offset = (1.0 - fraction) *
+        // max_scroll.  Memory and Telemetry use "lines from top"
+        // semantics (scroll_offset = 0 -> top of content, max_scroll ->
+        // bottom), so dragging to the top must produce offset = 0 and
+        // dragging to the bottom must produce offset = max_scroll:
+        // offset = fraction * max_scroll.  Using a single formula for all
+        // panels inverts the drag direction for one of the two families,
+        // which is the erratic-scrollbar bug.
+        let offset = match pane {
+            ScrollbarDragPane::Messages
+            | ScrollbarDragPane::Log
+            | ScrollbarDragPane::Profile
+            | ScrollbarDragPane::Tasks => ((1.0 - fraction) * max_scroll as f32).round() as u16,
+            ScrollbarDragPane::Memory
+            | ScrollbarDragPane::Telemetry
+            | ScrollbarDragPane::ContextPanel
+            // The popup tables store "lines from top" like the memory family:
+            // offset 0 = top of the list (FR-059).
+            | ScrollbarDragPane::AgentsWindow
+            | ScrollbarDragPane::TeamsWindow => (fraction * max_scroll as f32).round() as u16,
+        };
+
+        match pane {
+            ScrollbarDragPane::Messages => self.session.scroll_offset = offset.min(max_scroll),
+            ScrollbarDragPane::Log => self.log_scroll_offset = offset.min(max_scroll),
+            ScrollbarDragPane::Profile => self.profile_scroll_offset = offset.min(max_scroll),
+            ScrollbarDragPane::Tasks => self.tasks_scroll_offset = offset.min(max_scroll),
+            ScrollbarDragPane::Memory => self.memory_scroll_offset = offset.min(max_scroll),
+            ScrollbarDragPane::Telemetry => self.telemetry_scroll_offset = offset.min(max_scroll),
+            ScrollbarDragPane::ContextPanel => self.context_scroll_offset = offset.min(max_scroll),
+            ScrollbarDragPane::AgentsWindow => {
+                self.active_agents_scroll_offset = offset.min(max_scroll)
+            }
+            ScrollbarDragPane::TeamsWindow => self.teams_scroll_offset = offset.min(max_scroll),
+        }
+    }
+
+    pub(crate) fn execute_plan_restore(&mut self, session_id: &str, summary: &str) {
+        if let Some(prev_agent) = self.session.agent_stack.pop() {
+            let from_name = self.session.agent_name.clone();
+            let to_name = prev_agent.name.clone();
+
+            self.session.agent_info = prev_agent;
+            self.session.agent_name = to_name.clone();
+            self.status = format!("agent: {}", to_name);
+            self.push_log_no_agent(LogLevel::Info, format!("plan restore: plan -> {}", to_name));
+
+            self.event_bus.publish(Event::AgentSwitched {
+                session_id: session_id.to_string(),
+                from: from_name,
+                to: to_name,
+            });
+
+            // Inject the plan summary into the chat so the restored agent
+            // can see it in context.
+            let plan_text = format!("[notice] **Plan summary:**\n{}", summary);
+            self.append_assistant_text(&plan_text);
+
+            // Offer /swarm as an execution option after plan completion
+            self.append_assistant_text(
+                "\n[idea] **Tip:** You can execute this plan in parallel with `/swarm <goal>`, \
+                 or implement it step-by-step.\n",
+            );
+            self.session.force_new_message = true;
+        } else {
+            self.push_log_no_agent(
+                LogLevel::Error,
+                "ExitPlanMode called but agent stack is empty".to_string(),
+            );
+        }
+    }
+
+    /// Push a log entry at the given level, tagging it with an optional agent
+    /// id and an optional explicit session id. When `session_id` is `None`, the
+    /// entry is stamped with the primary TUI session id so it appears in the
+    /// main log panel and the primary output-view overlay. Tracked sub-agent
+    /// and teammate events should pass the child/teammate session id so the
+    /// per-agent output-view overlay can include their activity.
+    ///
+    /// The entry is always re-emitted to `tracing` - not only while the log
+    /// panel is open - so the OTLP logs signal carries it (spec `otel` FR-036).
+    /// A record travels at the entry's own severity, and no event is natively
+    /// logged at the same level with the same body, so a caller that derived the
+    /// line from a `tracing` record (the drain of
+    /// [`TuiTracingLayer`][crate::tracing_layer::TuiTracingLayer]) still exports
+    /// it exactly once via [`push_log_deferred`](Self::push_log_deferred).
+    pub(crate) fn push_log_for(
+        &mut self,
+        level: LogLevel,
+        message: String,
+        agent_id: Option<String>,
+        session_id: Option<String>,
+    ) {
+        self.push_log_for_inner(level, message, agent_id, session_id);
+    }
+
+    /// Push a log entry that exists **only** in the TUI log panel: session
+    /// activity assembled from the agent event bus (a tool call starting, a
+    /// background task finishing, a teammate spawning) never passes through
+    /// `tracing` on its own.
+    ///
+    /// It behaves exactly like [`push_log`](Self::push_log) - the entry is
+    /// recorded in the panel and re-emitted to the OTLP logs signal (spec `otel`
+    /// FR-036) whether or not the panel is open - and the name is kept because
+    /// the call sites read as "this line has no native event behind it".
+    pub(crate) fn push_log_exported(
+        &mut self,
+        level: LogLevel,
+        message: String,
+        agent_id: Option<String>,
+        session_id: Option<String>,
+    ) {
+        self.push_log_for_inner(level, message, agent_id, session_id);
+    }
+
+    /// Push a log entry the log panel and the on-disk spool record for a line
+    /// the caller emits itself, so the panel entry is documentation for the
+    /// operator rather than the only record of the activity.
+    ///
+    /// The entry is **not** re-emitted to `tracing`: the caller either emitted
+    /// the underlying event itself or derived the line from a record the OTLP
+    /// logs layer has already exported. See
+    /// [`emit_log_entry_to_tracing`] for why the duplicate guard lives on the
+    /// caller rather than on a universally quiet level.
+    pub(crate) fn push_log_deferred(
+        &mut self,
+        level: LogLevel,
+        message: String,
+        agent_id: Option<String>,
+    ) {
+        self.push_log_for_inner_quiet(level, message, agent_id, None);
+    }
+
+    /// Shared implementation of [`push_log_for`](Self::push_log_for),
+    /// [`push_log_exported`](Self::push_log_exported) and
+    /// [`push_log_deferred`](Self::push_log_deferred): record the entry in the panel
+    /// and the spool, then re-emit it to `tracing` so the OTLP logs signal
+    /// carries it.
+    fn push_log_for_inner(
+        &mut self,
+        level: LogLevel,
+        message: String,
+        agent_id: Option<String>,
+        session_id: Option<String>,
+    ) {
+        self.push_log_record_and_maybe_export(level, message, agent_id, session_id, true);
+    }
+
+    /// The record-and-spool half of [`push_log_for_inner`](Self::push_log_for_inner),
+    /// with the re-emit suppressed.
+    ///
+    /// Used by [`push_log_deferred`](Self::push_log_deferred) for entries that
+    /// came *from* `tracing` (the `TuiTracingLayer` drain and the mirrored-child
+    /// drain). The OTLP logs layer already exported those records at their
+    /// original severity, so re-emitting the panel line would duplicate every
+    /// startup line and export-failure notice in the collector.
+    fn push_log_for_inner_quiet(
+        &mut self,
+        level: LogLevel,
+        message: String,
+        agent_id: Option<String>,
+        session_id: Option<String>,
+    ) {
+        self.push_log_record_and_maybe_export(level, message, agent_id, session_id, false);
+    }
+
+    /// Record one log entry in the panel (and the spool while the panel is
+    /// open), and optionally re-emit it to `tracing`.
+    ///
+    /// The export is bounded process-wide by [`ExportLimiter`] so a burst of
+    /// panel lines cannot turn into a burst of collector records.
+    fn push_log_record_and_maybe_export(
+        &mut self,
+        level: LogLevel,
+        message: String,
+        agent_id: Option<String>,
+        session_id: Option<String>,
+        export: bool,
+    ) {
+        // C-008: stamp each entry with its own monotonic sequence number so a
+        // new log line only invalidates the *new* group in `log_line_cache`,
+        // not the whole cache (the cache compares against `entry.seq`).
+        self.log_seq = self.log_seq.wrapping_add(1);
+        let entry = LogEntry {
+            timestamp: chrono::Utc::now(),
+            level,
+            message: message.clone(),
+            session_id: session_id.or_else(|| self.session.session_id.clone()),
+            agent_id,
+            seq: self.log_seq,
+        };
+        self.log_entries.push(entry);
+        // Keep the per-entry cache in lockstep: push a fresh (stale) group
+        // now so the render path never has to reconcile a length mismatch.
+        self.log_line_cache.push(crate::app::LogLineGroup {
+            lines: Vec::new(),
+            wrapped_lines: Vec::new(),
+            content_lines: Vec::new(),
+            wrapped_count: 0,
+            version: 0, // stale -> rendered on next frame
+        });
+        // R-11: Cap log entries with FIFO eviction so the Vec (and its
+        // mirror `log_line_cache`) do not grow without bound over a long
+        // session.
+        self.trim_log_entries_if_needed();
+        if self.show_log {
+            if let Some(ref path) = self.log_window_path {
+                self.append_log_entry_to_spool(path, level, &message);
+            }
+        }
+        // FR-036: re-emit the entry to `tracing` so the OTLP logs layer carries
+        // it, **independently of whether the panel is open**.
+        //
+        // This block used to sit inside the `if self.show_log` arm above, which
+        // made the export a consequence of a *view* being open. A normal session
+        // runs with the panel closed, so a collector received only the events
+        // that happen to have a native `tracing` record behind them: `Bash`
+        // emits `"Executing bash command"` on every call, while `Edit`, `Write`,
+        // `Grep`, `read` and the rest emit nothing, so they reached the
+        // collector only if the operator happened to open `/log`. That reads as
+        // "only Bash tool calls are exported", which is exactly the defect this
+        // reordering fixes.
+        //
+        // The re-emit carries the entry's OWN severity (a tool call travels at
+        // `INFO`, a warning at `WARN`, an error at `ERROR`) so the default
+        // `--log-level` and `telemetry.otel.logs.level` floors both admit it.
+        // `export` is `false` for entries that were themselves derived from a
+        // `tracing` record the OTLP layer already shipped: duplicating those is
+        // what previously buried the signal under startup chatter.
+        //
+        // The rate limit keeps a burst (a wall of mirrored stderr, a chatty
+        // tool) from turning one panel line into one exported record each; when
+        // the burst is over the next entry reports how many were withheld, so
+        // the collector sees the gap instead of a silent loss.
+        if export {
+            self.export_log_entry_to_tracing(level, &message);
+        }
+    }
+
+    /// Append a single formatted log line to the log-window spool file.
+    fn append_log_entry_to_spool(&self, path: &std::path::Path, level: LogLevel, message: &str) {
+        use std::io::Write;
+        let level_str = crate::app::helpers::log_level_str(level);
+        let ts = chrono::Utc::now().to_rfc3339();
+        let line = format!("{ts} {level_str} {message}\n");
+        // SEC-codemason-tui-005 (SECTASKS T-066): every log line (raw tool output,
+        // command output, stderr) was appended to a file created at the process
+        // umask default, so on a multi-user host the session transcript was
+        // world-readable. `open_log_spool` creates it owner-only, and tightens
+        // a pre-existing file.
+        if let Some(mut file) = crate::app::helpers::open_log_spool(path) {
+            if let Err(e) = file.write_all(line.as_bytes()) {
+                tracing::warn!(error = %e, "failed to append log entry to spool");
+            }
+        }
+    }
+
+    /// Convenience wrapper for [`push_log_for`](Self::push_log_for) that stamps
+    /// the entry with the primary TUI session id.
+    ///
+    /// The entry is recorded in the panel but **not** re-emitted to `tracing`.
+    /// This is the quiet half of the pair, and it is only correct for a line the
+    /// OTLP logs layer has *already* exported: the `TuiTracingLayer` drain, whose
+    /// records are themselves `tracing` events, and the mirrored-child stderr
+    /// drain, whose chatter would otherwise drown the signal. Use
+    /// [`push_log_exported`](Self::push_log_exported) for a panel line with no
+    /// native event behind it - which includes every agent-event-bus entry
+    /// reached through [`push_log_no_agent`](Self::push_log_no_agent).
+    pub(crate) fn push_log(&mut self, level: LogLevel, message: String, agent_id: Option<String>) {
+        self.push_log_for_inner_quiet(level, message, agent_id, None);
+    }
+
+    /// R-10: Trim `messages` and `message_line_cache` to `MAX_TUI_MESSAGES`
+    /// using FIFO eviction so long sessions do not accumulate every message
+    /// (with all `MessagePart`s up to 12 KB each) without bound.
+    pub(crate) fn trim_messages_if_needed(&mut self) {
+        const MAX_TUI_MESSAGES: usize = 500;
+        if self.session.messages.len() > MAX_TUI_MESSAGES {
+            let drop_count = self.session.messages.len() - MAX_TUI_MESSAGES;
+            self.session.messages.drain(0..drop_count);
+            // Trim the cache by the same count so cache slots stay aligned
+            // with their messages (both vectors drop from the front).
+            let drop_cache = drop_count.min(self.session.message_line_cache.len());
+            self.session.message_line_cache.drain(0..drop_cache);
+            // PERF-043: the cache shifted left by `drop_cache`; the watermark
+            // addresses the new (post-drain) indices, so subtract as well.
+            self.session.message_cache_dirty_from = self
+                .session
+                .message_cache_dirty_from
+                .saturating_sub(drop_cache);
+        }
+    }
+
+    /// PERF-043: record that the message at `index` was mutated in place.
+    ///
+    /// Lowers [`crate::app::SessionView::message_cache_dirty_from`] to `index` so the next
+    /// `render_messages` re-renders only the cache groups from there on,
+    /// instead of scanning the whole transcript for staleness every frame.
+    /// Call this immediately after `Message::touch()` on a message that was
+    /// mutated through `self.messages`.
+    pub fn mark_message_dirty(&mut self, index: usize) {
+        if index < self.session.message_cache_dirty_from {
+            self.session.message_cache_dirty_from = index;
+        }
+    }
+
+    /// PERF-041: prepare the plain-text rows of the message window for a copy.
+    ///
+    /// Copy paths (`/clip`, `/copy`, keyboard/right-click copy of the Messages
+    /// pane) call this instead of reading `message_content_lines` directly.
+    /// Any cache group that is still behind its message (a streaming group
+    /// waiting out its throttle window) is rendered first, then the flat
+    /// buffer is rebuilt from the per-message cache - so a copy always reads
+    /// fresh rows even mid-stream.
+    pub fn ensure_copy_content_lines(&mut self) {
+        crate::layout::ensure_message_copy_lines(self);
+    }
+
+    /// PERF-043/PERF-041: reset the per-message cache and its staleness
+    /// watermark.
+    ///
+    /// Called by every site that structurally replaces the message list
+    /// (session resume, compaction, `/clear`) so the next render rebuilds the
+    /// cache from index 0 instead of trusting a stale watermark that may point
+    /// past the new, shorter cache.
+    pub fn reset_message_cache(&mut self) {
+        self.session.message_line_cache.clear();
+        self.session.message_cache_dirty_from = 0;
+        self.session.message_content_lines.clear();
+    }
+
+    /// R-11: Trim `log_entries` and `log_line_cache` to `MAX_LOG_ENTRIES`
+    /// using FIFO eviction.
+    pub(crate) fn trim_log_entries_if_needed(&mut self) {
+        const MAX_LOG_ENTRIES: usize = 1000;
+        if self.log_entries.len() > MAX_LOG_ENTRIES {
+            let drop_count = self.log_entries.len() - MAX_LOG_ENTRIES;
+            self.log_entries.drain(0..drop_count);
+            if self.log_line_cache.len() > MAX_LOG_ENTRIES {
+                let drop_cache = self.log_line_cache.len() - MAX_LOG_ENTRIES;
+                self.log_line_cache.drain(0..drop_cache);
+            }
+        }
+    }
+
+    /// Flush every current log entry to the log-window spool file. Called when
+    /// the log panel is toggled on so the file contains the full history that
+    /// is currently visible in the panel. The file is opened once and all
+    /// entries are written in a single buffered pass instead of one open/write
+    /// syscall per entry.
+    pub(crate) fn spool_log_window_history(&mut self) {
+        use std::io::Write;
+        if !self.show_log {
+            return;
+        }
+        let Some(ref path) = self.log_window_path else {
+            return;
+        };
+        // SEC-codemason-tui-005 (SECTASKS T-066): same owner-only creation as
+        // `append_log_entry_to_spool` - both route through `open_log_spool`.
+        let Some(mut file) = crate::app::helpers::open_log_spool(path) else {
+            return;
+        };
+        for entry in &self.log_entries {
+            let level_str = crate::app::helpers::log_level_str(entry.level);
+            let ts = chrono::Utc::now().to_rfc3339();
+            let line = format!("{ts} {level_str} {}\n", entry.message);
+            if let Err(e) = file.write_all(line.as_bytes()) {
+                tracing::warn!(error = %e, "failed to spool log entry");
+                break;
+            }
+        }
+    }
+
+    /// Convenience wrapper for [`push_log_exported`](Self::push_log_exported)
+    /// with no agent id.
+    ///
+    /// Every caller is an agent-event-bus line (context compression start and
+    /// finish, response completion, `agent_complete`, agent notices, the
+    /// compaction notice). None of those has a native `tracing` event behind
+    /// them, so this must take the *exporting* path: routing it through
+    /// [`push_log`](Self::push_log), whose quiet half exists for lines the OTLP
+    /// logs layer has already shipped, would leave every one of them in the
+    /// panel and out of the collector.
+    pub(crate) fn push_log_no_agent(&mut self, level: LogLevel, message: String) {
+        self.push_log_exported(level, message, None, None);
+    }
+
+    pub(crate) fn open_output_view_session(&mut self, session_id: String, label: String) {
+        self.session.selected_agent_session_id = Some(session_id.clone());
+        // Opening the overlay is a content change: repaint (NFR-005).
+        self.needs_redraw = true;
+        self.output_view = Some(OutputViewState {
+            target: OutputViewTarget::Session { session_id, label },
+            scroll_offset: 0,
+            max_scroll: 0,
+            line_cache: crate::app::OutputViewLineCache {
+                wrapped_lines: Vec::new(),
+                content_lines: Vec::new(),
+                wrapped_count: 0,
+                cache_width: 0,
+                source_generation: 0,
+            },
+        });
+    }
+
+    /// Number of lines the assistant has produced in this session.
+    pub(crate) fn assistant_output_lines(&self) -> usize {
+        self.session
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::Assistant)
+            .map(|m| m.text_content().lines().count())
+            .sum()
+    }
+
+    /// Re-emit log-window entries to `tracing`, rate limited (spec `otel`
+    /// FR-036).
+    ///
+    /// Every entry pushed is re-emitted to `tracing`, rate limited, through
+    /// [`emit_log_entry_to_tracing`], which is what puts a tool call on the OTLP
+    /// logs signal. The re-emit does not depend on the log panel being open: a
+    /// session normally runs with it closed, and a tool call has no other route
+    /// to the collector.
+    ///
+    /// A burst is bounded at [`EXPORT_BURST`] records per
+    /// [`EXPORT_WINDOW_MILLIS`] milliseconds across the whole process - a
+    /// token-bucket refill - so a wall of mirrored stderr cannot turn one panel
+    /// line into one exported record. When a burst ends, the first entry that
+    /// fits again is preceded by a `warn` notice naming how many were withheld,
+    /// so the collector sees an explicit gap instead of a silent loss.
+    pub(crate) fn export_log_entry_to_tracing(&mut self, level: LogLevel, message: &str) {
+        let now = std::time::Instant::now();
+        let permit = match ExportLimiter::acquire(now) {
+            Ok(permit) => permit,
+            Err(_) => {
+                self.withheld_log_exports = self.withheld_log_exports.saturating_add(1);
+                return;
+            }
+        };
+        if permit.withheld > 0 {
+            let withheld = std::mem::take(&mut self.withheld_log_exports) + permit.withheld;
+            // The notice counts against the same budget, so a flapping burst
+            // cannot emit one notice per entry.
+            if ExportLimiter::acquire(now).is_err() {
+                self.withheld_log_exports = withheld;
+                return;
+            }
+            emit_log_entry_to_tracing(
+                LogLevel::Warn,
+                &format!("log window: {withheld} entries withheld from OTLP export (burst limit)"),
+            );
+        }
+        emit_log_entry_to_tracing(level, message);
+    }
+}
+
+/// Longest a single burst of log-window entries may export, in milliseconds.
+///
+/// One panel line is one exported record, so a wall of mirrored stderr or a
+/// tool that echoes its own progress could otherwise put thousands of records
+/// into a single OTLP batch. `EXPORT_BURST` records per window keeps the
+/// collector's cadence honest while still exporting every ordinary turn.
+const EXPORT_WINDOW_MILLIS: u64 = 1_000;
+
+/// Records exported per [`EXPORT_WINDOW_MILLIS`] before the burst limit trips.
+///
+/// Sized so a normal turn (a handful of tool calls, their results and a few
+/// notices) never reaches it, while a runaway loop is capped.
+const EXPORT_BURST: f64 = 60.0;
+
+/// Process-wide token bucket bounding how many log-window entries reach
+/// `tracing` per [`EXPORT_WINDOW_MILLIS`].
+///
+/// Process-wide on purpose: the panel is one sink and the limit protects one
+/// collector, so per-`App` state would let two windows double the rate.
+static EXPORT_BUCKET: std::sync::OnceLock<std::sync::Mutex<ExportBucket>> =
+    std::sync::OnceLock::new();
+
+/// Token-bucket state behind [`EXPORT_BUCKET`].
+struct ExportBucket {
+    /// Whole permits currently available, capped at [`EXPORT_BURST`].
+    tokens: f64,
+    /// When `tokens` was last refilled.
+    last: std::time::Instant,
+    /// Entries dropped since the last gap notice, awaiting the next permit.
+    withheld: u64,
+}
+
+/// What [`ExportLimiter::acquire`] hands back when a permit is granted.
+struct ExportPermit {
+    /// Entries the burst limit withheld since the last export, `0` when there
+    /// were none. The caller reports the gap on the entry it exports now.
+    withheld: u64,
+}
+
+/// Admission control for the log-window-to-`tracing` re-emit.
+struct ExportLimiter;
+
+impl ExportLimiter {
+    /// Take one permit, refilling the bucket for the elapsed window.
+    ///
+    /// Returns the entries withheld since the last export alongside the permit,
+    /// or `Err(withheld_now)` when the burst is already at its limit - the
+    /// caller increments its own running count and exports nothing.
+    fn acquire(now: std::time::Instant) -> Result<ExportPermit, u64> {
+        let cell = EXPORT_BUCKET.get_or_init(|| {
+            std::sync::Mutex::new(ExportBucket {
+                tokens: EXPORT_BURST,
+                last: now,
+                withheld: 0,
+            })
+        });
+        // A poisoned lock only means another thread panicked while holding it;
+        // the bucket is still consistent, so it is recovered rather than
+        // treated as fatal on a log path.
+        let mut bucket = match cell.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let elapsed = now.saturating_duration_since(bucket.last);
+        let refill =
+            elapsed.as_secs_f64() * (EXPORT_BURST / (EXPORT_WINDOW_MILLIS as f64 / 1000.0));
+        if refill > 0.0 {
+            bucket.tokens = (bucket.tokens + refill).min(EXPORT_BURST);
+            bucket.last = now;
+        }
+        // A permit is whole only once a token has accumulated, so a trickle
+        // refills at the steady-state rate instead of rounding to zero forever.
+        if bucket.tokens < 1.0 {
+            bucket.withheld = bucket.withheld.saturating_add(1);
+            return Err(bucket.withheld);
+        }
+        bucket.tokens -= 1.0;
+        Ok(ExportPermit {
+            withheld: std::mem::take(&mut bucket.withheld),
+        })
+    }
+}
+
+/// Forward one log-window entry to `tracing` at the entry's own severity (spec
+/// `otel` FR-036).
+///
+/// The TUI log window is a local, in-memory sink: an entry pushed there is never
+/// emitted as a `tracing` event, so the OTLP logs layer - which only sees
+/// `tracing` events - could not export it. This function re-emits the entry so a
+/// collector receives the same tool-call, tool-result, warning and error lines
+/// the operator sees in the panel.
+///
+/// # Why the entry's own severity, not `DEBUG`
+///
+/// An earlier revision emitted every entry at `DEBUG` so that no local sink
+/// gained a duplicate. That made the export opt-in twice over: the process-wide
+/// `EnvFilter` defaults to `warn` (`--log-level`), and the collector's
+/// `telemetry.otel.logs.level` defaults to `info`. Both floors sit above
+/// `DEBUG`, so a tool call reached the collector only when the operator also
+/// raised `--log-level` to `debug`/`all` - the exact case this feature exists to
+/// serve, so in practice it exported nothing.
+///
+/// Emitting at the entry's own [`LogLevel`] fixes the class rather than one
+/// caller: a tool call travels at `INFO`, a warning at `WARN`, an error at
+/// `ERROR`, so the default local and remote floors both admit them.
+///
+/// # The duplicate guard moved, it did not disappear
+///
+/// Some panel entries are *derived* from a `tracing` record that has already been
+/// exported - the drain of
+/// [`TuiTracingLayer`][crate::tracing_layer::TuiTracingLayer] records in the TUI
+/// event loop, and the mirrored-child drain that re-records those lines. Those
+/// call sites use [`push_log_deferred`](Self::push_log_deferred), which records
+/// the line in the panel and the spool but never re-emits it. The panel entry is
+/// documentation of an event the collector already has; re-emitting it here
+/// would put every startup line, export-failure notice and MCP banner into the
+/// collector twice.
+///
+/// So the invariant is held by the *caller*, not by a universally quiet level:
+/// use [`push_log_exported`](Self::push_log_exported) for a line that has no
+/// native `tracing` event behind it, and `push_log_deferred` for one that does.
+///
+/// `telemetry.otel.logs.level` still applies on top: `info` (the default)
+/// exports `INFO` and above, so tool calls arrive out of the box. The entry's
+/// own level also travels as the `log_window_level` attribute (`"tool"`,
+/// `"info"`, `"warn"`, `"error"`), so a collector can tell a tool call from a
+/// diagnostic even where both map to `INFO`.
+///
+/// The call is a no-op when no subscriber is installed, which is the case in
+/// tests and in any run that has not initialised `tracing`.
+pub fn emit_log_entry_to_tracing(level: LogLevel, message: &str) {
+    use tracing::Level;
+
+    // `tracing::event!` requires a literal level at the macro site, so the
+    // match has to select the call rather than a level value. Each arm repeats
+    // the same fields; a shared helper cannot be used for the same reason.
+    macro_rules! emit_at {
+        ($lvl:expr, $name:expr) => {
+            tracing::event!(
+                $lvl,
+                log_window = true,
+                log_window_level = $name,
+                "{message}"
+            )
+        };
+    }
+
+    match level {
+        LogLevel::Error => emit_at!(Level::ERROR, "error"),
+        LogLevel::Warn => emit_at!(Level::WARN, "warn"),
+        LogLevel::Info => emit_at!(Level::INFO, "info"),
+        // A tool call is ordinary session activity, not a warning, so it maps
+        // to `INFO` rather than being inflated to `WARN` to clear the local
+        // floor. The `--log-level` default is `info` (`src/main.rs`) so the
+        // local filter admits it.
+        LogLevel::Tool => emit_at!(Level::INFO, "tool"),
+    }
+}

@@ -1,6 +1,6 @@
 # /reload
 
-> "Reload customizations (/reload [all|config|mcp|skills|agents])" (SlashCommandDef, crates/ragent-tui/src/app/state.rs).
+> "Reload customizations (/reload [all|config|mcp|skills|agents])" (SlashCommandDef, crates/codemason-tui/src/app/state.rs).
 
 ## Overview
 
@@ -10,7 +10,7 @@ and skills); a subcommand narrows the scope to a single subsystem. Results
 accumulate into one `From: /reload` report block, one status line per
 subsystem, with per-subsystem success (`[ok]`) or failure (`[x]`) markers.
 
-The handler is the `reload` arm in `crates/ragent-tui/src/app/slash.rs`
+The handler is the `reload` arm in `crates/codemason-tui/src/app/slash.rs`
 (approximately lines 3727-3915). As part of every reload the bash
 allow/deny lists and directory lists are also refreshed from config.
 
@@ -28,7 +28,7 @@ The first argument defaults to `all` when omitted.
 |---|---|
 | `/reload` | Reload everything (config + agents + MCP + skills) |
 | `/reload all` | Same as bare `/reload` |
-| `/reload config` | Re-read `ragent.json`, refresh provider detection, selected model, context window, thinking level, and code index flag |
+| `/reload config` | Re-read `codemason.json`, refresh provider detection, selected model, context window, thinking level, and code index flag |
 | `/reload agents` | Rebuild the builtin and custom agent list, preserving the current selection |
 | `/reload mcp` | Rebuild the MCP server display list from config, preserving connected status and tools |
 | `/reload skills` | Confirm skills are re-read from disk on next use (no persistent cache) |
@@ -46,7 +46,7 @@ Output:
 
 ```
 From: /reload
-[ok] Config reloaded (ragent.json)
+[ok] Config reloaded (codemason.json)
 [ok] Agents reloaded - 3 custom agent(s) (was 3)
 [ok] MCP reloaded - 2 server(s) in config (was 2)
 [ok] Skills will be reloaded from disk on next use (no cache to clear)
@@ -62,7 +62,7 @@ Output:
 
 ```
 From: /reload
-[ok] Config reloaded (ragent.json)
+[ok] Config reloaded (codemason.json)
 ```
 
 This refreshes provider detection, the selected model and its context window,
@@ -136,8 +136,8 @@ Output: the help table listing the `all|config|mcp|skills|agents` forms.
   to the report.
 - The status line is set to `reload`.
 - Unconditionally after any `/reload` invocation, the bash lists
-  (`ragent_agent::bash_lists::load_from_config()`) and directory lists
-  (`ragent_agent::dir_lists::load_from_config()`) are refreshed from config.
+  (`codemason_agent::bash_lists::load_from_config()`) and directory lists
+  (`codemason_agent::dir_lists::load_from_config()`) are refreshed from config.
 
 ## Related
 

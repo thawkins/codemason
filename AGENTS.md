@@ -195,8 +195,8 @@ filters, the binary-wide `global_env_lock`, nextest test groups) live in
     test a `target/temp/...` value;
   - when a write location is not already a parameter, add a `#[doc(hidden)]`
     setter over a process-wide `OnceLock` (e.g.
-    `ragent_agent::session::history::set_subagent_log_root`,
-    `ragent_tui::app::set_log_root_override`) and call it from the test;
+    `codemason_agent::session::history::set_subagent_log_root`,
+    `codemason_tui::app::set_log_root_override`) and call it from the test;
   - resolve `target/temp` from `env!("CARGO_MANIFEST_DIR")` so the path is
     correct regardless of the test's working directory.
     Never "fix" this by restoring files with `git restore` after a run — that hides
@@ -222,7 +222,7 @@ When asked to use a team or when a task benefits from parallel reviewers / worke
 4. **Do not duplicate work**: Do not independently read files or do analysis that a teammate is already doing. Wait for them first.
 
 ```
-team_create blueprint="code-review" context="Review the crates/ragent-server directory for security, test coverage, and performance issues. Write findings to docs/COMPLIANCE.md"
+team_create blueprint="code-review" context="Review the crates/codemason-server directory for security, test coverage, and performance issues. Write findings to docs/COMPLIANCE.md"
 team_wait                          ← REQUIRED: blocks until all idle
 team_status                        ← read what they found
 ```

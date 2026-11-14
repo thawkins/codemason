@@ -1,0 +1,101 @@
+//! `git_diff` - Show changes between working tree, index, and commits.
+
+use anyhow::Result;
+use serde_json::{Value, json};
+
+use crate::{Tool, ToolContext, ToolOutput};
+
+/// Tool that shows changes (diff) in the working tree or index.
+pub struct GitDiffTool;
+
+#[async_trait::async_trait]
+impl Tool for GitDiffTool {
+    fn name(&self) -> &'static str {
+        "git_diff"
+    }
+
+    fn description(&self) -> &'static str {
+        "Show the difference between the working tree, the staged index, or two commits. \
+         No required parameters. 'target' (string) controls what to diff: 'working' (default), 'staged'/'cached', or a commit ref; \
+         'path' (string) limits the diff to a single file or directory; 'stat' (boolean, default false) shows a compact change summary. \
+         Common gotcha: when 'target' is a commit ref the diff compares that ref against the working tree; use 'staged' to see index changes."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": "What to diff: 'working' (default), 'staged', or a commit ref"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Limit diff to a specific file or directory"
+                },
+                "stat": {
+                    "type": "boolean",
+                    "description": "Show stat summary instead of full diff (default: false)"
+                }
+            }
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "git:read"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let target = input["target"].as_str().unwrap_or("working");
+        let path = input["path"].as_str();
+        let stat = input["stat"].as_bool().unwrap_or(false);
+
+        // SEC-codemason-tools-vcs-002 (SECTASKS T-022): `git diff --output=<path>`
+        // is accepted by git and creates/truncates the named file under a
+        // read-only grant, so `target` must not look like an option.
+        let target_is_ref = !matches!(target, "staged" | "cached" | "working");
+        if target_is_ref {
+            crate::git::reject_option_like(target, "target")?;
+        }
+
+        let mut args: Vec<&str> = vec!["diff"];
+
+        if stat {
+            args.push("--stat");
+        }
+
+        match target {
+            "staged" | "cached" => args.push("--cached"),
+            "working" => {} // default
+            ref_str => args.push(ref_str),
+        }
+
+        // Add -- before path to disambiguate from refs
+        if let Some(p) = path {
+            crate::git::reject_option_like(p, "path")?;
+            args.push("--");
+            args.push(p);
+        }
+
+        let args: Vec<String> = args.into_iter().map(ToString::to_string).collect();
+
+        let (stdout, stderr) = crate::git::run_git_async(args, ctx.working_dir.clone()).await?;
+
+        if !stderr.is_empty() && stdout.trim().is_empty() {
+            return Ok(ToolOutput {
+                content: format!("git diff error: {}", stderr.trim()),
+                metadata: None,
+            });
+        }
+
+        Ok(ToolOutput {
+            content: if stdout.trim().is_empty() {
+                "No differences found.".to_string()
+            } else {
+                stdout
+            },
+            metadata: None,
+        })
+    }
+}

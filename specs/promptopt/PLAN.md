@@ -3,7 +3,7 @@
 ## Overview
 
 This plan implements the `promptopt` specification by wiring the existing
-`ragent-prompt_opt` crate into ragent as a configurable prompt-preprocessing
+`codemason-prompt_opt` crate into codemason as a configurable prompt-preprocessing
 stage.  The work covers configuration, the core preprocessor, TUI slash-command
 integration, HTTP API wiring, and documentation.
 
@@ -11,8 +11,8 @@ integration, HTTP API wiring, and documentation.
 
 | ID | Title | Requirement | Effort | Priority | Dependencies |
 |----|-------|-------------|--------|----------|--------------|
-| T-001 | Add `prompt_opt` configuration types to `ragent-config` | FR-010 | S | High | None |
-| T-002 | Expose template-only optimizer in `ragent-prompt_opt` | FR-004 | M | High | T-001 |
+| T-001 | Add `prompt_opt` configuration types to `codemason-config` | FR-010 | S | High | None |
+| T-002 | Expose template-only optimizer in `codemason-prompt_opt` | FR-004 | M | High | T-001 |
 | T-003 | Implement `PromptPreprocessor` pipeline stage | FR-001, FR-002, FR-006, FR-009 | M | High | T-001, T-002 |
 | T-004 | Integrate preprocessor into agent session input path | FR-001, FR-007, FR-015 | M | Critical | T-003 |
 | T-005 | Extend `/opt` slash command for single and chained methods | FR-003, FR-008, FR-012 | M | High | T-003 |
@@ -24,9 +24,9 @@ integration, HTTP API wiring, and documentation.
 
 ## Task details
 
-### T-001 — Add `prompt_opt` configuration types to `ragent-config`
+### T-001 — Add `prompt_opt` configuration types to `codemason-config`
 
-Define a `PromptOptConfig` struct in `ragent-config` with fields:
+Define a `PromptOptConfig` struct in `codemason-config` with fields:
 
 - `enabled: bool`
 - `default_method: Option<String>`
@@ -34,11 +34,11 @@ Define a `PromptOptConfig` struct in `ragent-config` with fields:
 - `methods: Vec<String>` (ordered list for chaining)
 
 Deserialize with `serde`, default to `enabled = false`, and add it to the root
-configuration so that `ragent.json` accepts a `prompt_opt` block.
+configuration so that `codemason.json` accepts a `prompt_opt` block.
 
-### T-002 — Expose template-only optimizer in `ragent-prompt_opt`
+### T-002 — Expose template-only optimizer in `codemason-prompt_opt`
 
-Extend `ragent-prompt_opt` with a function such as
+Extend `codemason-prompt_opt` with a function such as
 `optimize_template(method, input) -> String` that fills the framework-specific
 skeleton using only the raw input, without calling an LLM.  Keep the existing
 LLM-driven `optimize` function intact.
@@ -56,7 +56,7 @@ Create a small crate-internal (or new crate) `PromptPreprocessor` that:
 
 ### T-004 — Integrate preprocessor into agent session input path
 
-In `ragent-agent` (or the session/orchestration layer), insert the
+In `codemason-agent` (or the session/orchestration layer), insert the
 `PromptPreprocessor` immediately after the user input is normalized and before it
 is handed to the agent loop.  Honor the default method and enabled flag from
 `PromptOptConfig`.  On failure, return the original input and emit a warning
@@ -75,7 +75,7 @@ message and, if `FR-014` is enabled, show a preview/confirmation dialog.
 
 ### T-006 — Add `POST /opt` and `GET /opt/help` HTTP endpoints
 
-In `ragent-server`, expose:
+In `codemason-server`, expose:
 
 - `POST /opt` with JSON body `{ "method": "...", "prompt": "..." }`, returning
   `{ "method": "...", "optimized": "..." }`.
@@ -115,7 +115,7 @@ example.
 
 ## Definition of done
 
-- `cargo test -p ragent-prompt_opt` and new integration tests pass.
+- `cargo test -p codemason-prompt_opt` and new integration tests pass.
 - The `/opt` slash command works in the TUI for single and chained methods.
 - `POST /opt` returns optimized prompts and `GET /opt/help` returns the help
   table.

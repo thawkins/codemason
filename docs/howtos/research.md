@@ -1,6 +1,6 @@
-# ragent Research Manual
+# codemason Research Manual
 
-This guide explains how to use ragent's built-in research system to perform
+This guide explains how to use codemason's built-in research system to perform
 extensive, structured information gathering and report synthesis. The research
 system decomposes a topic into sub-queries, searches the web and your local
 project in parallel, gathers and vaults sources, then runs an adversarial
@@ -10,8 +10,8 @@ quality pipeline before writing a structured dated report
 The same commands are available in three surfaces:
 
 - **TUI** — `/research` slash commands in the interactive terminal interface
-- **CLI** — `ragent research <subcommand>` from the shell
-- **HTTP API** — `GET/POST/PUT/DELETE /research` endpoints on the ragent server
+- **CLI** — `codemason research <subcommand>` from the shell
+- **HTTP API** — `GET/POST/PUT/DELETE /research` endpoints on the codemason server
 
 This document is written for the terminal interface but covers all three.
 
@@ -81,7 +81,7 @@ adversarial quality review.
 
 ## 2. Quick start
 
-Open ragent and run:
+Open codemason and run:
 
 ```text
 /research create rust-async "Rust async/await patterns"
@@ -147,13 +147,13 @@ research/
   `RESEARCH-2026-03-02.md` and leaves `RESEARCH-2026-02-14.md` on disk. The
   **primary** report is the one named for the item's creation date, which is
   the file every read surface resolves by default; the newest dated file wins
-  when the primary is absent. An item created by an older ragent keeps its
+  when the primary is absent. An item created by an older codemason keeps its
   undated `RESEARCH.md` / `CORPA.md`, which resolves by the same rule.
 - `sources/` holds the captured body text of every web, local, and spec
   source so each citation can be traced back to the original text.
 - `research/INDEX.md` is a derived table of all items, regenerated
   automatically on every create/delete/archive.
-- `.ragent/research_vault/<run_tag>/` holds the SQLite-indexed source vault
+- `.codemason/research_vault/<run_tag>/` holds the SQLite-indexed source vault
   with raw content files for resumability.
 
 ### Naming rules
@@ -172,7 +172,7 @@ Invalid names: `Rust-Async` (uppercase), `rust_async` (underscore), `1topic`
 ## 4. The `/research` slash command family
 
 All commands are entered in the TUI input box. The CLI equivalents use
-`ragent research <subcommand>`.
+`codemason research <subcommand>`.
 
 ### 4.1 `/research help`
 
@@ -222,7 +222,7 @@ refreshing `sources/` and the index with freshly gathered results. Because the
 report name carries the run date, the previous run's report is left in place -
 a same-day re-run still produces its own file. The original invocation is
 preserved on the replayed run. The same replay is available from the CLI
-(`ragent research update <name>`) and over HTTP (`PUT /research/{name}`).
+(`codemason research update <name>`) and over HTTP (`PUT /research/{name}`).
 
 **Which file does a read command open?** Every read surface resolves the report
 rather than assuming a name. `ResearchIo::resolve_research_md` checks the
@@ -416,7 +416,7 @@ is reordered most-relevant-first (a finding's relevance is the highest
 order) so truncation always discards the least-relevant entries. Override the
 limits per run with `--max-concepts N` and `--max-findings N`, or persistently
 with the `research.max_concepts` / `research.max_findings` keys in
-`ragent.json` (the per-run flags take precedence). A value of `0` means
+`codemason.json` (the per-run flags take precedence). A value of `0` means
 unbounded, matching the `0 disables the cap` convention used elsewhere.
 
 ```text
@@ -525,7 +525,7 @@ later - what actually moved?"
 
 ```text
 /research deck rust-async
-ragent research deck rust-async
+codemason research deck rust-async
 ```
 
 The deck's structure - the cover, the element slides, the status tags, the
@@ -613,7 +613,7 @@ shown on the cover slide as `**Coverage:** <older-date> to <newer-date>`. It is
 the one line that says which two runs you are looking at, so a deck found on
 disk months later is self-describing.
 
-An item created by an older ragent may still hold an undated `RESEARCH.md`. That
+An item created by an older codemason may still hold an undated `RESEARCH.md`. That
 legacy file is treated as the **oldest report of the series** - usable as a
 baseline, never as the current side - and its side of the cover window reads
 `legacy`. An item whose *only* report is `RESEARCH.md` cannot produce a deck at
@@ -685,8 +685,8 @@ order:
 
    _NEW 1 - ADDED 0 - UPDATE 0 - OLD 1 - 2 item(s)_
 
-   - `OLD` `crates/ragent-llm/src/retry.rs` - backoff policy
-   - `NEW` `crates/ragent-agent/src/loop.rs` - turn driver
+   - `OLD` `crates/codemason-llm/src/retry.rs` - backoff policy
+   - `NEW` `crates/codemason-agent/src/loop.rs` - turn driver
    ```
 
    Item order within a slide follows the newer report, with the unchanged items
@@ -788,8 +788,8 @@ there. The refusals are:
 The CLI prints one machine-readable event line and one human summary:
 
 ```text
-$ ragent research deck rust-async
-ragent-research: {"kind":"deck","payload":{...}}
+$ codemason research deck rust-async
+codemason-research: {"kind":"deck","payload":{...}}
 wrote `research/rust-async/DECK-2026-03-05.md` for `rust-async` (2026-02-14 to 2026-03-02): NEW 2, ADDED 0, UPDATE 0, OLD 3 - 2 change(s) across 1 element slide(s)
 ```
 
@@ -1063,8 +1063,8 @@ These flags control the performance and resilience of the gathering phases.
 | `--use-low-relevance` | off | Keep sources that would normally be filtered out as low-relevance. The pre-fetch filter matches query terms morphologically (plurals, gerunds, and derived forms such as "agentic" matching "agent" or "loops" matching "loop") and retains hits scoring Medium (35%+ term overlap) or better. |
 | `--papers` | off | Include academically-classified backends (OpenAlex) in the search sweep. Scholarly engines are excluded by default, so this flag opts them back in for academic topics. |
 | `--use-pdf` | off | Allow PDF documents from web search or `--from-url` to be captured as sources. |
-| `--oa-enable` | `research.open_access_recovery` (off) | Force open-access recovery on for this run, overriding `ragent.json`. |
-| `--no-oa` | `research.open_access_recovery` (off) | Force open-access recovery off for this run, overriding `ragent.json`. |
+| `--oa-enable` | `research.open_access_recovery` (off) | Force open-access recovery on for this run, overriding `codemason.json`. |
+| `--no-oa` | `research.open_access_recovery` (off) | Force open-access recovery off for this run, overriding `codemason.json`. |
 | `--url-cloak` | off | Emit web source URLs as defanged plain text (`hxxps://host[.]tld/...` in a code span) in the `Sources` bullets and the `References Index` table, so automated URL scanners do not flag the document. Non-URL rows are unchanged. |
 | `--age <span>` | off | Reject web sources published longer ago than the span (`30d`, `6m`, `2y`); a source with no publication date is rejected too. The window's start date (`today - span`, rendered as an ISO `YYYY-MM-DD`) is appended to every decomposed search query, so the engines steer towards material inside the window rather than the run discarding an all-old result set after fetching it. |
 
@@ -1265,7 +1265,7 @@ The session emits structured events that the TUI renders:
 
 By default, research uses `mf_search`, which queries OpenAlex and
 Wikipedia in parallel. Optional API-backed engines can be
-added in `ragent.json`:
+added in `codemason.json`:
 
 ```json
 {
@@ -1289,7 +1289,7 @@ The `--papers` flag includes academically-classified backends (OpenAlex) in the
 search sweep. Because scholarly engines are excluded by default, this flag opts
 them back in for academic topics where scholarly results help. Non-academic
 engines (Wikipedia and any configured web engines) always run. Set
-`research.exclude_academic_engines: true` in `ragent.json` to make the
+`research.exclude_academic_engines: true` in `codemason.json` to make the
 exclusion explicit; a per-run `--papers` overrides it, and the flag wins when
 both are present.
 
@@ -1348,7 +1348,7 @@ These backends require no API keys and run by default:
 
 ### API-backed backends
 
-These require API keys configured in `ragent.json`:
+These require API keys configured in `codemason.json`:
 
 - **LangSearch** — `langsearch_api_key`
 - **Tavily** — `tavily_api_key`
@@ -1361,11 +1361,11 @@ These require API keys configured in `ragent.json`:
 
 ## 14. Open-access recovery
 
-For scholarly sources, ragent can attempt to recover a legal full-text copy
+For scholarly sources, codemason can attempt to recover a legal full-text copy
 via Unpaywall and Europe PMC when the fetched body is shorter than the
 configured minimum (default: 1000 characters).
 
-Enable it in `ragent.json`:
+Enable it in `codemason.json`:
 
 ```json
 {
@@ -1400,7 +1400,7 @@ The recovery process:
 
 ## 15. Source vault and resumability
 
-The source vault (`.ragent/research_vault/<run_tag>/`) persists raw captured
+The source vault (`.codemason/research_vault/<run_tag>/`) persists raw captured
 source text and metadata in a SQLite index. Each vault entry records:
 
 - Source URL, title, and fetch timestamp
@@ -1592,12 +1592,12 @@ by title similarity).
 Replay the item's recorded invocation line: re-runs the full pipeline and
 writes a new dated report and its associated files with freshly gathered
 results. This is the HTTP equivalent of `/research update <name>` (and
-`ragent research update <name>`). The response uses the same envelope as
+`codemason research update <name>`). The response uses the same envelope as
 `POST /research`.
 
 ```bash
 curl -s -X PUT http://localhost:9100/research/rust-async \
-  -H "Authorization: Bearer $RAGENT_TOKEN"
+  -H "Authorization: Bearer $CODEMASON_TOKEN"
 ```
 
 **Error codes:**
@@ -1612,12 +1612,12 @@ Delete a research item. Requires a confirmation token.
 **Query parameter:** `?confirm=delete-{name}`
 
 The examples below assume a server started with
-`ragent serve --addr 127.0.0.1:9100` (the default bind address is
+`codemason serve --addr 127.0.0.1:9100` (the default bind address is
 `127.0.0.1:3000`).
 
 ```bash
 curl -X DELETE http://localhost:9100/research/rust-async?confirm=delete-rust-async \
-  -H "Authorization: Bearer $RAGENT_TOKEN"
+  -H "Authorization: Bearer $CODEMASON_TOKEN"
 ```
 
 **Error codes:**
@@ -1630,22 +1630,22 @@ curl -X DELETE http://localhost:9100/research/rust-async?confirm=delete-rust-asy
 ```bash
 # Create a research item
 curl -s -X POST http://localhost:9100/research \
-  -H "Authorization: Bearer $RAGENT_TOKEN" \
+  -H "Authorization: Bearer $CODEMASON_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"rust-async","topic":"Rust async/await patterns","use_local":true}' \
   | jq '.name, .total_sources'
 
 # List all items
 curl -s http://localhost:9100/research \
-  -H "Authorization: Bearer $RAGENT_TOKEN" | jq '.items[] | .name'
+  -H "Authorization: Bearer $CODEMASON_TOKEN" | jq '.items[] | .name'
 
 # Show one item
 curl -s http://localhost:9100/research/rust-async \
-  -H "Authorization: Bearer $RAGENT_TOKEN" | jq '.item.title'
+  -H "Authorization: Bearer $CODEMASON_TOKEN" | jq '.item.title'
 
 # Delete an item
 curl -s -X DELETE "http://localhost:9100/research/rust-async?confirm=delete-rust-async" \
-  -H "Authorization: Bearer $RAGENT_TOKEN"
+  -H "Authorization: Bearer $CODEMASON_TOKEN"
 ```
 
 ---
@@ -1655,43 +1655,43 @@ curl -s -X DELETE "http://localhost:9100/research/rust-async?confirm=delete-rust
 The same commands work outside the TUI:
 
 ```bash
-ragent research help
-ragent research create rust-async "Rust async patterns" --tier full --use-local
-ragent research create brief "Vector databases" --max-concepts 3 --max-findings 10
-ragent research create vendors "Managed vector db vendors" --url-cloak
-ragent research create from-url --from-urls https://example.com/article
-ragent research create from-doc --from-files docs/design.md --use-local
-ragent research create comp "vector db landscape" --mode competitive
-ragent research open rust-async
-ragent research list
-ragent research list --all
-ragent research search "vector database"
-ragent research show rust-async
-ragent research update rust-async
-ragent research delete rust-async --yes
-ragent research archive rust-async
-ragent research continue rust-async "Also cover tokio vs async-std"
-ragent research deck rust-async
-ragent research deck rust-async --from 2026-02-14 --to 2026-03-02
-ragent research deck rust-async --elements findings,open-questions --include-old
-ragent research deck rust-async --out docs/decks/rust-async-diff.md --force
+codemason research help
+codemason research create rust-async "Rust async patterns" --tier full --use-local
+codemason research create brief "Vector databases" --max-concepts 3 --max-findings 10
+codemason research create vendors "Managed vector db vendors" --url-cloak
+codemason research create from-url --from-urls https://example.com/article
+codemason research create from-doc --from-files docs/design.md --use-local
+codemason research create comp "vector db landscape" --mode competitive
+codemason research open rust-async
+codemason research list
+codemason research list --all
+codemason research search "vector database"
+codemason research show rust-async
+codemason research update rust-async
+codemason research delete rust-async --yes
+codemason research archive rust-async
+codemason research continue rust-async "Also cover tokio vs async-std"
+codemason research deck rust-async
+codemason research deck rust-async --from 2026-02-14 --to 2026-03-02
+codemason research deck rust-async --elements findings,open-questions --include-old
+codemason research deck rust-async --out docs/decks/rust-async-diff.md --force
 ```
 
 CLI `create` emits machine-readable JSON lines prefixed with
-`ragent-research:` so you can pipe them through `jq`:
+`codemason-research:` so you can pipe them through `jq`:
 
 ```bash
-ragent research create rust-async "Rust async patterns" 2>&1 | grep '^ragent-research:' | jq '.'
+codemason research create rust-async "Rust async patterns" 2>&1 | grep '^codemason-research:' | jq '.'
 ```
 
 Each JSON line is a session event (phase, queries, web source captured,
 local source captured, iteration completed, critic result, etc.).
 
-CLI `deck` emits exactly one `ragent-research: {"kind":"deck","payload":{...}}`
+CLI `deck` emits exactly one `codemason-research: {"kind":"deck","payload":{...}}`
 line per successful run, followed by a human summary:
 
 ```bash
-ragent research deck rust-async | grep '^ragent-research:' | jq '.payload'
+codemason research deck rust-async | grep '^codemason-research:' | jq '.payload'
 ```
 
 The payload carries `name`, `path`, `from`, `to`, `no_changes`, the per-status
@@ -1704,7 +1704,7 @@ element labels that produced a slide. See
 ## 19. Configuration
 
 Research-specific configuration lives under the `research` key in
-`ragent.json`:
+`codemason.json`:
 
 ```json
 {
@@ -1734,7 +1734,7 @@ Research-specific configuration lives under the `research` key in
 | `max_queries` | usize | `20` | Cap on the number of search queries produced by topic decomposition. A per-run `--max-queries` takes precedence; `0` means unbounded. |
 | `evaluate` | `ResearchEvaluateConfig` | `{"enabled": false}` | Self-evaluation scorecard settings (FR-015 of specs/opendeepresearch). When enabled, the pipeline appends a deterministic quality scorecard (quality, relevance, groundedness, completeness, structure) to the report. |
 
-Web search engine keys are top-level in `ragent.json`:
+Web search engine keys are top-level in `codemason.json`:
 
 ```json
 {
@@ -1806,7 +1806,7 @@ Web search engine keys are top-level in `ragent.json`:
 | `research/<name>` already exists | Duplicate create | Use `/research open <name>` or pick a new name |
 | Very slow run | Deep depth + full tier + many sources | Use `--depth standard` or `--tier light`; reduce `--fetch-concurrently` |
 | No scholarly sources | Scholarly engines are excluded by default | Pass `--papers` to include them; check `/websearch test` for OpenAlex status |
-| OA recovery not working | Not enabled or `contact_email` missing | Pass `--oa-enable`, or set `research.open_access_recovery: true` (plus `contact_email`) in `ragent.json` |
+| OA recovery not working | Not enabled or `contact_email` missing | Pass `--oa-enable`, or set `research.open_access_recovery: true` (plus `contact_email`) in `codemason.json` |
 | PDFs skipped | `--use-pdf` not set | Add `--use-pdf` to allow PDF web sources |
 | Sources not reused on re-run | Vault threshold not met | The vault needs 3/8/15 sources (light/full/dissertation) before skipping web search |
 

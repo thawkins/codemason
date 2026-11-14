@@ -16,7 +16,7 @@ upstream open-source CLIs (twitter-cli, rdt-cli, bili-cli, yt-dlp, feedparser,
 OpenCLI, etc.). Its distinctive value is the ordered "preferred + fallback"
 backend list per channel and the `agent-reach doctor` health check.
 
-ragent already provides strong general-purpose web tools:
+codemason already provides strong general-purpose web tools:
 
 - `webfetch` / `mf_fetch` — arbitrary web-page and PDF extraction.
 - `websearch` / `mf_search` — keyless multi-engine web search.
@@ -32,17 +32,17 @@ user hand-configuring each upstream CLI.
 
 ## Goal
 
-Add a new `reach` tool family to ragent that exposes Agent-Reach-style platform
-channels as native LLM tools, reusing ragent's existing `Tool` trait,
+Add a new `reach` tool family to codemason that exposes Agent-Reach-style platform
+channels as native LLM tools, reusing codemason's existing `Tool` trait,
 `ToolRegistry`, `ToolContext`, permission system, `tool_visibility` config, and
-HTTP/CLI execution infrastructure. Add only what ragent lacks: channel
+HTTP/CLI execution infrastructure. Add only what codemason lacks: channel
 backends, credential storage, routing, and a diagnostics tool.
 
 ## Scope
 
 ### In scope
 
-- A new `ragent-reach` crate under `crates/` providing channel backends.
+- A new `codemason-reach` crate under `crates/` providing channel backends.
 - New `reach_*` LLM tools registered via the extended-tools adapter.
 - A `tool_visibility.reach` config switch (default on).
 - Encrypted local credential storage for per-platform tokens/cookies.
@@ -57,21 +57,21 @@ backends, credential storage, routing, and a diagnostics tool.
   routing layer in Rust; upstream CLIs are invoked only when no native Rust
   backend is available).
 - A TUI installer wizard (Agent-Reach's `agent-reach install`). Configuration is
-  done via `ragent.json` and the `reach_credentials` tool.
+  done via `codemason.json` and the `reach_credentials` tool.
 - Reverse-engineering or scraping that violates platform ToS. Each backend
   uses either official APIs, the user's own authenticated session, or
-  public-page reads via existing ragent web tools.
+  public-page reads via existing codemason web tools.
 
 ## Design Principles
 
-1. **Reuse ragent infrastructure.** New tools implement the existing
-   `ragent_tools_extended::Tool` trait and are registered in
+1. **Reuse codemason infrastructure.** New tools implement the existing
+   `codemason_tools_extended::Tool` trait and are registered in
    `create_extended_registry()`. No new tool trait, registry, or permission
    model.
 2. **Capability layer, not a reader.** Each channel picks the best available
    backend at runtime and falls back gracefully. The LLM sees one stable tool
    per action (`reach_twitter_search`), not the underlying backend.
-3. **Credentials are local and encrypted.** Reuse `ragent-storage`'s encrypted
+3. **Credentials are local and encrypted.** Reuse `codemason-storage`'s encrypted
    credential store. Never log secrets. File permissions 0600.
 4. **Native Rust first.** Prefer HTTP-based backends implemented in Rust
    (using `reqwest` already in the workspace). Shell out to upstream CLIs only
@@ -85,12 +85,12 @@ backends, credential storage, routing, and a diagnostics tool.
 ## Architecture
 
 ```
-crates/ragent-reach/
+crates/codemason-reach/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs              # Tool trait impls, create_reach_registry()
-│   ├── config.rs           # ReachConfig (deserialised from ragent.json)
-│   ├── credentials.rs      # Encrypted credential store (delegates to ragent-storage)
+│   ├── config.rs           # ReachConfig (deserialised from codemason.json)
+│   ├── credentials.rs      # Encrypted credential store (delegates to codemason-storage)
 │   ├── routing.rs          # Ordered backend list + probe + select
 │   ├── doctor.rs           # reach_doctor tool
 │   ├── credentials_tool.rs # reach_credentials tool
@@ -117,12 +117,12 @@ crates/ragent-reach/
 │       ├── reddit_oauth.rs # Reddit OAuth2 (app-only token)
 │       ├── reddit_rss.rs   # Reddit RSS JSON endpoint (no auth, .json suffix)
 │       ├── bili_api.rs     # Bilibili public search/detail API
-│       └── browser_session.rs # Reuses ragent browser tool for login-gated
+│       └── browser_session.rs # Reuses codemason browser tool for login-gated
 ```
 
 The crate exposes its tools through `create_reach_registry()` which is called
-from `ragent-tools-extended::create_extended_registry()` (one additional
-`register_extracted_reach_tools` function in `ragent-agent/src/tool/mod.rs`),
+from `codemason-tools-extended::create_extended_registry()` (one additional
+`register_extracted_reach_tools` function in `codemason-agent/src/tool/mod.rs`),
 identical to how core/extended/vcs tools are already wired.
 
 ## Tool Inventory
@@ -152,7 +152,7 @@ identical to how core/extended/vcs tools are already wired.
 ### FR-001 — Ubiquitous
 
 The system **shall** register every `reach_*` tool in the existing
-`ragent-tools-extended` `ToolRegistry` via a `create_reach_registry()` function
+`codemason-tools-extended` `ToolRegistry` via a `create_reach_registry()` function
 called from `create_extended_registry()`, so that the agent loop, permission
 checker, and tool-visibility system treat them identically to all other tools.
 
@@ -161,7 +161,7 @@ checker, and tool-visibility system treat them identically to all other tools.
 ### FR-002 — Ubiquitous
 
 The system **shall** expose a `tool_visibility.reach` boolean config switch in
-`ragent-config::ToolVisibilityConfig`, defaulting to `true`, governed by the
+`codemason-config::ToolVisibilityConfig`, defaulting to `true`, governed by the
 same `set_hidden()` mechanism as `office`, `github`, and `gitlab`.
 
 ### FR-003 — Event-driven
@@ -202,7 +202,7 @@ shown as `configured` / `not configured`.
 ### FR-007 — Ubiquitous
 
 The system **shall** store all platform credentials in the existing
-`ragent-storage` encrypted credential store, keyed by platform name, with
+`codemason-storage` encrypted credential store, keyed by platform name, with
 file permissions `0600` on the underlying database.
 
 ### FR-008 — State-driven
@@ -244,7 +244,7 @@ duplicating the existing extraction pipeline.
 
 ### FR-014 — Ubiquitous
 
-The `ragent-reach` crate **shall** compile with zero warnings under
+The `codemason-reach` crate **shall** compile with zero warnings under
 `cargo build` and pass `cargo clippy` with the workspace's standard lints,
 matching the zero-warnings policy of all other crates.
 
@@ -269,8 +269,8 @@ published date, and content summary per item.
 
 ### FR-018 — State-driven
 
-**If** the `ragent-reach` crate is not built (feature-gated off via a
-`reach` Cargo feature on `ragent-tools-extended`), the agent binary **shall**
+**If** the `codemason-reach` crate is not built (feature-gated off via a
+`reach` Cargo feature on `codemason-tools-extended`), the agent binary **shall**
 still compile and all non-reach tools **shall** remain registered and visible.
 
 ### FR-019 — Ubiquitous
@@ -279,7 +279,7 @@ The system **shall** perform all reach credential reads, writes, and deletes
 through the existing `StorageBackend` trait's `get_provider_auth`,
 `set_provider_auth`, and `delete_provider_auth` methods. Direct `rusqlite`
 calls, raw SQL queries, or parallel encryption implementations in the
-`ragent-reach` crate are prohibited.
+`codemason-reach` crate are prohibited.
 
 > Ubiquitous: applies to every credential I/O path in the reach crate.
 
@@ -295,7 +295,7 @@ panicking, calling `unwrap()`, or silently succeeding.
 ### FR-021 — Ubiquitous
 
 The system **shall** encrypt all reach credentials at rest using
-`ragent_storage::storage::encrypt_key` (the v2 blake3-derived keystream
+`codemason_storage::storage::encrypt_key` (the v2 blake3-derived keystream
 scheme) before persisting them. The stored value in the database **shall**
 carry the `v2:` prefix. Reliance on the deprecated v1 `obfuscate_key` path
 is prohibited for reach credential writes.
@@ -306,9 +306,9 @@ is prohibited for reach credential writes.
 
 **When** a reach credential is stored via `ReachCredentialStore::set`, the
 system **shall** register the plaintext value with
-`ragent_storage::sanitize::register_secret` so the existing redaction layer
+`codemason_storage::sanitize::register_secret` so the existing redaction layer
 masks it in logs and telemetry. **When** a credential is deleted, the system
-**shall** call `ragent_storage::sanitize::unregister_secret` to remove it
+**shall** call `codemason_storage::sanitize::unregister_secret` to remove it
 from the redaction registry.
 
 > Event-driven: triggered by credential set/delete operations.
@@ -335,7 +335,7 @@ it to v2 `encrypt_key` format on first read. No reach-specific migration code
 ### FR-025 — Unwanted
 
 The system **shall not** pre-encrypt reach credential values with
-`ragent_storage::storage::encrypt_key` before passing them to
+`codemason_storage::storage::encrypt_key` before passing them to
 `set_provider_auth`. The `set_provider_auth` method applies v2 encryption
 internally (`obfuscate_key` delegates to `encrypt_key`), so a second
 `encrypt_key` call on the same plaintext would produce a double-encrypted
@@ -348,8 +348,8 @@ resulting stored value **shall** carry the `v2:` prefix exactly once.
 
 ### FR-026 — Unwanted
 
-The `ragent-reach` crate **shall not** call
-`ragent_storage::sanitize::register_secret` or `unregister_secret` for
+The `codemason-reach` crate **shall not** call
+`codemason_storage::sanitize::register_secret` or `unregister_secret` for
 credentials that are stored or deleted via `set_provider_auth` /
 `delete_provider_auth`. Those storage methods already register the plaintext
 with (and unregister it from) the in-memory redaction registry. A second
@@ -362,10 +362,10 @@ layer to manage the sanitize registry for `provider_auth` entries.
 
 ### FR-027 — Ubiquitous
 
-The `ragent-reach` crate **shall** obtain its `Storage` handle from
+The `codemason-reach` crate **shall** obtain its `Storage` handle from
 `ToolContext.storage` (the session's shared `Arc<Storage>` instance) and
 **shall not** open a second `Storage::open` connection to the shared
-`ragent.db` database. This guarantees that the process-global sanitize
+`codemason.db` database. This guarantees that the process-global sanitize
 secret registry stays consistent across reach and non-reach credential I/O,
 and avoids WAL lock contention between two concurrent connections to the
 same database file. The Gmail `SqliteTokenStore::shared()` pattern (which
@@ -393,7 +393,7 @@ not a credential and is exempt.
 return the set of stored reach credential names by querying the storage
 layer's `provider_auth` table through a storage-trait enumeration method.
 Direct `rusqlite` calls or raw `SELECT provider_id FROM provider_auth` SQL
-inside the `ragent-reach` crate are prohibited (FR-019). **If** no
+inside the `codemason-reach` crate are prohibited (FR-019). **If** no
 storage-trait enumeration method exists, the system **shall** maintain a
 reach-owned namespaced index (a JSON array of `ReachCredentialKey` strings
 stored under a single `settings` key such as `reach::__credential_index__`)
@@ -457,12 +457,12 @@ with `reach::`.
 
 All automated tests covering reach credential storage **shall** run against
 `Storage::open_in_memory()` or a temporary SQLite file under `target/temp/`,
-and **shall not** open, read, or mutate the user's real `ragent.db` database
+and **shall not** open, read, or mutate the user's real `codemason.db` database
 or any pre-existing row in its `provider_auth` table. This guarantees that
 test runs can never leak fixtures into, or destroy credentials in, the live
 encrypted store.
 
-> Ubiquitous: applies to every test in `crates/ragent-reach/tests/` and to
+> Ubiquitous: applies to every test in `crates/codemason-reach/tests/` and to
 > any reach credential test elsewhere in the workspace.
 
 ### FR-034 — Ubiquitous
@@ -521,14 +521,14 @@ not by the probe.
 The system **shall** route every reach credential read, write, delete, and
 enumeration operation through the `ReachCredentialStore` facade established in
 T-032. No channel backend, routing module, or tool implementation in
-`ragent-reach` **shall** call `get_provider_auth`, `set_provider_auth`,
+`codemason-reach` **shall** call `get_provider_auth`, `set_provider_auth`,
 `delete_provider_auth`, `get_setting`, or `set_setting` directly. The
 `ReachCredentialStore` is the single boundary between reach code and the
-shared `ragent-storage` encrypted credential store, ensuring consistent
+shared `codemason-storage` encrypted credential store, ensuring consistent
 caching (T-036), masking (FR-006), error sanitisation (FR-035), and
 namespace enforcement (FR-032).
 
-> Ubiquitous: applies to every credential access path in the `ragent-reach`
+> Ubiquitous: applies to every credential access path in the `codemason-reach`
 > crate, from channel backends through to the `reach_credentials` tool.
 
 ### FR-039 — Event-driven
@@ -551,7 +551,7 @@ is executed, the system **shall** emit a structured `tracing::debug!` event
 recording the operation type and the `ReachCredentialKey` name. The event
 **shall not** include the credential value, masked or otherwise. This provides
 a security audit trail of credential access without violating the FR-006
-no-leak rule. The event **shall** use the `target = "ragent_reach::credentials"`
+no-leak rule. The event **shall** use the `target = "codemason_reach::credentials"`
 span so it can be filtered independently of platform backend traffic.
 
 > Event-driven: triggered by every credential I/O operation.
@@ -559,10 +559,10 @@ span so it can be filtered independently of platform backend traffic.
 ### NFR-007
 
 Reach credential encryption **shall** reuse whatever at-rest cipher
-`ragent-storage` currently implements — the v2 blake3-derived keystream scheme
+`codemason-storage` currently implements — the v2 blake3-derived keystream scheme
 (`encrypt_key`) specified in FR-021 — and **shall not** introduce any
 additional cryptographic primitive (AES-GCM or otherwise) into the
-`ragent-reach` crate. This clarifies NFR-003, which references "AES-GCM" as the
+`codemason-reach` crate. This clarifies NFR-003, which references "AES-GCM" as the
 storage cipher; the actual v2 scheme is a blake3 keystream XOR, and reach
 delegates entirely to the storage layer's `set_provider_auth` /
 `get_provider_auth` so the cipher choice is a storage-layer concern, not a
@@ -594,13 +594,13 @@ cannot stall unrelated storage users (memory, sessions, Gmail token store).
 ### FR-041 — Ubiquitous
 
 The system **shall** rely on the existing
-`ragent_storage::Storage::seed_secret_registry()` startup call to populate the
+`codemason_storage::Storage::seed_secret_registry()` startup call to populate the
 in-memory redaction registry with reach credentials. Because reach credentials
 are stored in the same `provider_auth` table as all other provider credentials
 (FR-007, FR-019), the existing startup seeding pass — which iterates every
 `provider_auth` row, decrypts it, and feeds the plaintext into
 `crate::sanitize::seed_secrets` — **shall** cover `reach::`-namespaced keys
-with no reach-specific seeding code. The `ragent-reach` crate **shall not**
+with no reach-specific seeding code. The `codemason-reach` crate **shall not**
 implement, duplicate, or wrap `seed_secret_registry`; it **shall** assume the
 session's startup sequence has already called it on the shared `Storage`
 handle (FR-027).
@@ -610,15 +610,15 @@ handle (FR-027).
 
 ### FR-042 — Unwanted
 
-The `ragent-reach` crate **shall not** create, alter, or extend any SQLite
-table, column, index, or migration in the shared `ragent.db` database. Reach
+The `codemason-reach` crate **shall not** create, alter, or extend any SQLite
+table, column, index, or migration in the shared `codemason.db` database. Reach
 credentials **shall** be stored exclusively in the existing `provider_auth`
 table (schema: `provider_id TEXT PRIMARY KEY, api_key TEXT, updated_at TEXT`)
 and non-secret configuration exclusively in the existing `settings` table
 (schema: `key TEXT PRIMARY KEY, value TEXT, updated_at TEXT`). The
-`ragent-reach` crate **shall not** define or execute any `CREATE TABLE`,
+`codemason-reach` crate **shall not** define or execute any `CREATE TABLE`,
 `ALTER TABLE`, `CREATE INDEX`, or migration SQL. Any schema evolution of the
-encrypted credential store is a `ragent-storage` concern, not a reach
+encrypted credential store is a `codemason-storage` concern, not a reach
 concern.
 
 > Unwanted: the reach-owned schema-mutation behaviour is prohibited because
@@ -634,8 +634,8 @@ explicitly state that the credential store uses a machine-local encryption key
 derived from the current user's username and home directory, and that
 credentials set on one machine or under one user account cannot be decrypted
 on another. This surfaces the inherent machine-binding property of the
-existing `ragent-storage` v2 `encrypt_key` scheme (which derives its key via
-`blake3::derive_key("ragent credential encryption v2", "{username}:{home}")`)
+existing `codemason-storage` v2 `encrypt_key` scheme (which derives its key via
+`blake3::derive_key("codemason credential encryption v2", "{username}:{home}")`)
 so the user understands the failure cause rather than re-entering the same
 credential and getting the same result.
 
@@ -649,7 +649,7 @@ reach credential plaintext as part of any configuration export, session
 export, debug dump, or `reach_doctor` output. Reach credentials are
 machine-bound (the v2 `encrypt_key` scheme ties ciphertext to the current
 username + home directory) and their plaintext exists only transiently in
-process memory for backend use. Any existing or future ragent export
+process memory for backend use. Any existing or future codemason export
 mechanism that iterates the `provider_auth` table **shall** treat reach
 credential rows identically to LLM-provider credential rows — emitting at
 most the `provider_id` (the `reach::` key name) and never the decrypted
@@ -675,25 +675,25 @@ so a single unresponsive backend cannot stall the diagnostic.
 
 ### NFR-003
 
-Credential storage **shall** reuse `ragent-storage`'s existing AES-GCM
-encryption; no new cryptographic code in `ragent-reach`.
+Credential storage **shall** reuse `codemason-storage`'s existing AES-GCM
+encryption; no new cryptographic code in `codemason-reach`.
 
 ### NFR-004
 
-The `ragent-reach` crate **shall** add no new workspace dependencies beyond
+The `codemason-reach` crate **shall** add no new workspace dependencies beyond
 `feed-rs` (RSS parsing) and reuse `reqwest`, `serde`, `serde_json`, `anyhow`,
-`tokio`, `tracing`, and `ragent-types` already present.
+`tokio`, `tracing`, and `codemason-types` already present.
 
 ### NFR-009
 
-The `ragent-reach` crate **shall** introduce zero new SQLite schema objects
+The `codemason-reach` crate **shall** introduce zero new SQLite schema objects
 — no tables, no columns, no indexes, no views, no triggers, and no migration
-steps — in the shared `ragent.db` database. This operationalises FR-042 at
+steps — in the shared `codemason.db` database. This operationalises FR-042 at
 the non-functional level: the encrypted credential store's schema is owned
-entirely by `ragent-storage`, and reach's storage footprint is limited to
+entirely by `codemason-storage`, and reach's storage footprint is limited to
 rows in the existing `provider_auth` and `settings` tables. A post-build
 audit **shall** confirm that no `CREATE TABLE`, `ALTER TABLE`, `CREATE INDEX`,
-or `migration` SQL string appears in `crates/ragent-reach/src/**/*.rs`.
+or `migration` SQL string appears in `crates/codemason-reach/src/**/*.rs`.
 
 ## Open Questions
 
@@ -712,10 +712,10 @@ or `migration` SQL string appears in `crates/ragent-reach/src/**/*.rs`.
 
 ## Dependencies
 
-- `ragent-storage` (encrypted credential store) — existing
-- `ragent-config` (new `ReachConfig`, `tool_visibility.reach`) — extension
-- `ragent-tools-extended` (registration host) — extension
-- `ragent-agent` (tool adapter wiring) — extension
+- `codemason-storage` (encrypted credential store) — existing
+- `codemason-config` (new `ReachConfig`, `tool_visibility.reach`) — extension
+- `codemason-tools-extended` (registration host) — extension
+- `codemason-agent` (tool adapter wiring) — extension
 - `feed-rs` crate — new workspace dependency (RSS parsing)
 - `reqwest` — existing
 

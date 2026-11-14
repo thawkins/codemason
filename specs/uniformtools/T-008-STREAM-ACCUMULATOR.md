@@ -5,7 +5,7 @@ with FR-005 (parallel calls stay independent) as the reason keying exists at all
 
 ## 1. What the tree already held, and what this task actually changed
 
-The accumulator itself is **not** this task's delta. `crates/ragent-llm/src/providers/wire/decode.rs`
+The accumulator itself is **not** this task's delta. `crates/codemason-llm/src/providers/wire/decode.rs`
 (559 lines) landed with `d6abcd4a` and already carries the whole delivered API:
 
 - `StreamKey::{Index, CallId}` and `StreamKey::from_frame(index, id)` - the one place a
@@ -31,7 +31,7 @@ now delegate to the accumulator.
 The description says "the Converse path keeps last-opened attribution via
 `delta_last`/`end_last` because per-block keys are T-009 (FR-005)". This tree cannot do
 that, because T-009's *test* had already landed even though its source work had not:
-`crates/ragent-llm/tests/test_wire_decode.rs:400`
+`crates/codemason-llm/tests/test_wire_decode.rs:400`
 (`test_no_stream_attributes_a_frame_to_the_call_opened_last`) scans `wire/decode.rs`,
 `bedrock.rs`, `anthropic.rs`, `gemini.rs` and `sse.rs` and **fails on the strings
 `delta_last`, `end_last` and `open.last_mut()`**. Adding either helper here would have made
@@ -47,7 +47,7 @@ cases in `bedrock_tests.rs`), not with a deletion it would find already done. Te
 five distinct open-call representations deleted, and one per-provider contract opt-out
 removed.
 
-At `HEAD`, `crates/ragent-llm/tests/test_wire_decode.rs:340`
+At `HEAD`, `crates/codemason-llm/tests/test_wire_decode.rs:340`
 (`test_the_provider_modules_no_longer_keep_their_own_tool_call_maps`) was **red**, failing
 on `anthropic.rs does not use the shared accumulator`, because the test was written with
 the conversion and the conversion was not applied. It is green now. That is this task's
@@ -111,7 +111,7 @@ Two details are load-bearing rather than cosmetic:
 
 ## 5. Tests
 
-`crates/ragent-llm/tests/test_wire_decode.rs` holds 19 cases; the eleven below are this
+`crates/codemason-llm/tests/test_wire_decode.rs` holds 19 cases; the eleven below are this
 task's (the rest are T-009 to T-011's, whose requirements are separate):
 
 1. `by_index_attributes_interleaved_deltas_to_their_own_block` - two blocks open,
@@ -139,7 +139,7 @@ task's (the rest are T-009 to T-011's, whose requirements are separate):
     `started_tool_call_indices`, `open_tool_calls`. This is the case that was red at
     `HEAD` and is the task's own guard.
 
-`crates/ragent-llm/tests/inline/bedrock_tests.rs`'s Converse case was updated rather than
+`crates/codemason-llm/tests/inline/bedrock_tests.rs`'s Converse case was updated rather than
 weakened: its frames now carry the `contentBlockIndex` that a frame naming no block cannot
 have (see section 6), and every original assertion is unchanged.
 
@@ -198,12 +198,12 @@ Verification:
 
 - `cargo fmt --all -- --check` - clean.
 - `cargo check --workspace --all-targets` - clean, no new warning.
-- `cargo clippy -p ragent-llm --all-targets` - the 19 findings are all pre-existing
+- `cargo clippy -p codemason-llm --all-targets` - the 19 findings are all pre-existing
   `unnecessary structure name repetition` in `providers/tool_cache.rs`; no finding in any
   file this task touched.
-- `cargo test -p ragent-llm --lib` - 323 passed.
-- `cargo test -p ragent-llm --doc` - 30 passed.
-- `cargo test -p ragent-llm --test all` - **294 passed, 4 failed, 2 ignored**. The count
+- `cargo test -p codemason-llm --lib` - 323 passed.
+- `cargo test -p codemason-llm --doc` - 30 passed.
+- `cargo test -p codemason-llm --test all` - **294 passed, 4 failed, 2 ignored**. The count
   went 293 -> 294 passed and 5 -> 4 failed against the T-004 baseline, and the case that
   moved is this task's own guard. The four remaining failures are all owned by later,
   still-`pending` tasks and none is in a file this task touched:

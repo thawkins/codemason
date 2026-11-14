@@ -6,7 +6,7 @@
 
 `/status` shows the history of status-line messages recorded in this TUI
 session, newest first, or clears it. The history keeps the most recent 100
-messages (`StatusHistory` in `crates/ragent-tui/src/theme.rs`); messages are
+messages (`StatusHistory` in `crates/codemason-tui/src/theme.rs`); messages are
 recorded when a command sets a working/in-progress status.
 
 ## Syntax

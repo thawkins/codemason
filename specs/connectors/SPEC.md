@@ -11,18 +11,18 @@ audit:
 
 ## Overview
 
-This specification defines a **connector system** for ragent: named, user-facing
+This specification defines a **connector system** for codemason: named, user-facing
 integrations (Google Drive, Slack, GitHub, Git, Postgres, Puppeteer, and the wider
 community catalogue) that reach external systems through the **Model Context Protocol
 (MCP)**. A *connector* is the user-facing unit — a catalogue entry with a display name, a
 category, an authentication requirement, and one or more MCP servers — while the MCP
-server remains the transport ragent already speaks.
+server remains the transport codemason already speaks.
 
 The capability being reproduced is the one Claude exposes as *connectors*: pick an
 integration from a catalogue, authenticate it, and its tools appear in the session. In
-ragent those tools already flow through [`McpClient`](../../crates/ragent-agent/src/mcp/mod.rs)
+codemason those tools already flow through [`McpClient`](../../crates/codemason-agent/src/mcp/mod.rs)
 and the plugin `mcpServers` bridge
-([`ragent_plugins::bridge`](../../crates/ragent-plugins/src/bridge.rs)), so the connector
+([`codemason_plugins::bridge`](../../crates/codemason-plugins/src/bridge.rs)), so the connector
 system is a **management and catalogue layer** on top of machinery that exists.
 
 The system is managed through a single slash-command family, `/connectors`, patterned
@@ -47,7 +47,7 @@ after the `/plugins` family (spec `plugins` FR-006):
 ### Why this exists
 
 Users arriving from Claude expect a catalogue of integrations they can browse, add, and
-authenticate without hand-editing JSON or knowing what "stdio transport" means. ragent
+authenticate without hand-editing JSON or knowing what "stdio transport" means. codemason
 already has the transport (`McpClient`), the enable/disable ledger (`mcp_state.json`), an
 MCP discovery scanner, and a plugin-store browser (`StoreProvider`, the Codex and Claude
 marketplaces). What is missing is the **connector abstraction**: a catalogue entry that
@@ -78,10 +78,10 @@ overturn it deliberately.
   tags, an authentication shape, and provenance. The session-visible tools are exactly the
   MCP tools those servers advertise; no second tool mechanism is introduced.
 - **A2 - Connectors reuse the plugin store pattern.** Connector manifests live in a
-  connector store under the project `.ragent/connectors/` directory, falling back to the
-  user-global `~/.config/ragent/connectors/`, scanned at session start. Enable/disable
+  connector store under the project `.codemason/connectors/` directory, falling back to the
+  user-global `~/.config/codemason/connectors/`, scanned at session start. Enable/disable
   state persists per store in a `_state.json` ledger, mirroring
-  [`ragent_plugins::store`](../../crates/ragent-plugins/src/store.rs).
+  [`codemason_plugins::store`](../../crates/codemason-plugins/src/store.rs).
 - **A3 - Enablement is durable and global, like MCP servers.** Whether a connector's
   servers actually start is recorded in the existing global enable ledger
   (`<state dir>/mcp_state.json`, spec `plugins`/`mcp` FR semantics), so a connector disabled
@@ -90,12 +90,12 @@ overturn it deliberately.
 - **A4 - The catalogue is served through store providers.** The connector catalogue is
   fetched from an HTTPS index endpoint and normalised through a `ConnectorProvider`
   strategy, reusing the tolerant per-entry-skip discipline of
-  [`StoreProvider`](../../crates/ragent-plugins/src/store_provider.rs) (spec `pluginstores`
+  [`StoreProvider`](../../crates/codemason-plugins/src/store_provider.rs) (spec `pluginstores`
   FR-013, FR-027). Entries that cannot be normalised are skipped and counted, never fatal.
 - **A5 - Credentials are separate from configuration.** A connector's non-secret
   configuration (endpoint, scopes) lives in the connector store; secrets (tokens, client
   secrets, database passwords) live in the existing encrypted credential store and are
-  referenced by name, never written into `ragent.json` or the connector manifest.
+  referenced by name, never written into `codemason.json` or the connector manifest.
 - **A6 - No new transport.** The connector system adds no protocol. Every connector
   resolves to `McpServerConfig` values the existing `McpClient` connects with (stdio, SSE,
   or HTTP). A catalogue entry that cannot be expressed as an MCP server is reported as an
@@ -103,25 +103,25 @@ overturn it deliberately.
 
 ## Background - existing machinery to reuse
 
-- **MCP client.** [`McpClient`](../../crates/ragent-agent/src/mcp/mod.rs) connects stdio,
+- **MCP client.** [`McpClient`](../../crates/codemason-agent/src/mcp/mod.rs) connects stdio,
   SSE, and HTTP servers, lists their tools, and invokes them; `MAX_CONCURRENT_MCP_CONNECTIONS`
   bounds fan-out. Tools register as `mcp_<server>_<tool>` and flow through the normal
   permission engine.
-- **MCP enable ledger.** [`ragent_agent::mcp::enable_state`](../../crates/ragent-agent/src/mcp/enable_state.rs)
+- **MCP enable ledger.** [`codemason_agent::mcp::enable_state`](../../crates/codemason-agent/src/mcp/enable_state.rs)
   persists a durable, global enabled/disabled choice per server id; absent means enabled.
-- **MCP discovery.** [`ragent_agent::mcp::discovery`](../../crates/ragent-agent/src/mcp/discovery.rs)
+- **MCP discovery.** [`codemason_agent::mcp::discovery`](../../crates/codemason-agent/src/mcp/discovery.rs)
   scans `PATH`, npm global packages, and MCP registry directories; its `DiscoveredMcpServer`
   carries the executable, args, and env a connector entry needs.
-- **Plugin store + browser.** The `ragent-plugins` crate owns store paths, the scan/ledger
+- **Plugin store + browser.** The `codemason-plugins` crate owns store paths, the scan/ledger
   pattern, the marketplace providers, the fetch budget, and the browse panel — the exact
   shapes the connector system mirrors.
-- **Plugin MCP bridge.** [`scanned_plugin_mcp_servers`](../../crates/ragent-plugins/src/bridge.rs)
+- **Plugin MCP bridge.** [`scanned_plugin_mcp_servers`](../../crates/codemason-plugins/src/bridge.rs)
   already turns a manifest's `mcpServers` section into `(server_id, McpServerConfig)` pairs
   and prefixes the id with the owner; the connector bridge is the same shape with a
   connector owner.
 - **Slash-command surface.** Commands are declared as `SlashCommandDef` in
-  `crates/ragent-tui/src/app/state.rs` (`SLASH_COMMANDS`) and dispatched in
-  `crates/ragent-tui/src/app/slash.rs`; `/plugins` is the precedent for a multi-subcommand
+  `crates/codemason-tui/src/app/state.rs` (`SLASH_COMMANDS`) and dispatched in
+  `crates/codemason-tui/src/app/slash.rs`; `/plugins` is the precedent for a multi-subcommand
   family with help, validation, and usage text.
 
 ## Definitions
@@ -130,7 +130,7 @@ overturn it deliberately.
 | -------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | **Connector**        | A catalogue entry naming an integration, carrying a display name, category, tags, authentication shape, and one or more MCP server definitions. |
 | **Connector manifest**| The on-disk descriptor that records an installed connector's servers and non-secret configuration.              |
-| **Connector store**  | The directory tree where installed connectors live: project `.ragent/connectors/`, falling back to user-global `~/.config/ragent/connectors/`. |
+| **Connector store**  | The directory tree where installed connectors live: project `.codemason/connectors/`, falling back to user-global `~/.config/codemason/connectors/`. |
 | **Connector catalogue**| The HTTPS index the browser searches; a list of catalogue entries keyed by connector id.                       |
 | **Catalog provider** | The strategy that normalises one catalogue document shape into the internal connector-entry model.              |
 | **Bridged server**   | An MCP server contributed by a connector, registered under the id `<connector-id>.<server>`.                    |
@@ -142,15 +142,15 @@ overturn it deliberately.
 ### Ubiquitous requirements
 
 **FR-001** — The system shall maintain a connector store under the project
-`.ragent/connectors/` directory, falling back to the user-global
-`~/.config/ragent/connectors/` directory, and shall scan both locations on session start to
+`.codemason/connectors/` directory, falling back to the user-global
+`~/.config/codemason/connectors/` directory, and shall scan both locations on session start to
 discover installed connectors, with project-local connectors taking precedence on
 connector-id collision.
 
 **FR-002** — The system shall represent a connector as a normalised descriptor carrying an
 id, display name, category, tags, provenance, an optional authentication shape, and one or
 more MCP server definitions, and shall expose that descriptor to every command surface so
-the `/connectors` family and the `ragent connectors` CLI print one wording.
+the `/connectors` family and the `codemason connectors` CLI print one wording.
 
 **FR-003** — The system shall resolve every enabled connector's MCP server definitions into
 `McpServerConfig` values and shall register each bridged server under the registry id
@@ -169,7 +169,7 @@ catalogue surface with one filter model.
 
 **FR-005** — The system shall store a connector's secrets (tokens, client secrets,
 passwords) in the existing encrypted credential store and shall reference them by name from
-the connector manifest, and shall never write a secret value into `ragent.json` or into a
+the connector manifest, and shall never write a secret value into `codemason.json` or into a
 connector manifest.
 
 **FR-006** — The system shall render every `/connectors` report with the attribution prefix
@@ -177,7 +177,7 @@ connector manifest.
 `/plugins` family conventions.
 
 **FR-007** — The system shall add an optional `connectors` configuration block to
-`ragent-config`, with a master `enabled` switch (default `true`), catalogue endpoints, and
+`codemason-config`, with a master `enabled` switch (default `true`), catalogue endpoints, and
 shared fetch budgets, loaded and merged with the same precedence as every other config
 section (project overrides user-global).
 
@@ -231,7 +231,7 @@ session.
 **FR-016** — When a bridged MCP server fails to connect or returns an error from a tool
 call, the system shall record the connector state as `errored` with the cause (connection
 failure) or report the tool call as failed with the server's error message, and shall keep
-ragent itself running and stable.
+codemason itself running and stable.
 
 **FR-017** — When `/connectors help` is invoked, or `/connectors` is invoked with no
 subcommand or an unrecognised one, the system shall display usage text documenting every
@@ -272,7 +272,7 @@ endpoint in preference to the compiled default for that catalogue, and shall let
 catalogue keep its compiled default when only the other is overridden.
 
 **FR-025** — Where a connector's catalogue entry cannot be expressed as one or more MCP
-servers (an unknown transport, an empty command, a transport ragent does not speak), the
+servers (an unknown transport, an empty command, a transport codemason does not speak), the
 system shall record the entry's unexpressible capability as an unsupported-capability
 label, shall skip the entry, and shall report the label in `/connectors list`.
 
@@ -310,7 +310,7 @@ during a connection attempt, then the system shall record the connector state as
 connector's shape, and shall not retry the connection in a loop.
 
 **FR-033** — If a connector's registered server id would collide with an existing MCP server
-id in `ragent.json` or with another connector's bridged server, then the system shall reject
+id in `codemason.json` or with another connector's bridged server, then the system shall reject
 the later registration and shall report the collision rather than silently overwriting the
 existing server.
 
@@ -378,7 +378,7 @@ unsupported   : [string]  (recorded, not dropped - FR-025)
 ## Security and privacy
 
 - Secrets are stored encrypted and referenced by name; they never appear in manifests,
-  `ragent.json`, or report output (FR-005, FR-014).
+  `codemason.json`, or report output (FR-005, FR-014).
 - Archive extraction is path-traversal-safe: no entry may write outside the connector store
   (FR-029).
 - Non-`https` sources are refused (FR-028).
@@ -396,7 +396,7 @@ unsupported   : [string]  (recorded, not dropped - FR-025)
 ## Scope
 
 In scope: the connector descriptor model, the connector store and ledger, the catalogue
-providers and browser, the `/connectors` slash family, the `ragent connectors` CLI parity,
+providers and browser, the `/connectors` slash family, the `codemason connectors` CLI parity,
 the session-start bridge into `McpClient`, and the `connectors` config block.
 
 Out of scope: new MCP transports, an OAuth refresh-token daemon beyond the single
@@ -422,7 +422,7 @@ transport itself.
    unsupported label is reported.
 9. An archive-escape, an id collision, a non-https URL, and a removal-while-enabled are all
    refused with a reason and no partial write.
-10. `ragent connectors <sub>` prints the same wording as the TUI `/connectors` family.
+10. `codemason connectors <sub>` prints the same wording as the TUI `/connectors` family.
 
 ## Open Questions
 
@@ -435,11 +435,11 @@ transport itself.
 
 ## Default Claude connector catalogue endpoint
 
-This section resolves Open Question 1: ragent ships a compiled default endpoint for the
+This section resolves Open Question 1: codemason ships a compiled default endpoint for the
 Claude connector catalogue, preinstalled and pointed at the standard Claude connector
 catalog, so a new install can browse and add Claude connectors with no configuration. The
 requirement mirrors the compiled-default discipline already proven for plugin stores
-(`ragent_plugins::store_index::DEFAULT_CLAUDE_STORE_URL`).
+(`codemason_plugins::store_index::DEFAULT_CLAUDE_STORE_URL`).
 
 **FR-034** — The system shall ship a compiled default endpoint for the Claude connector
 catalogue as a single public constant, preinstalled with the binary, so that the Claude
@@ -526,7 +526,7 @@ repo URL are resolved syntactically to
 any other `https://` URL is used verbatim; a local directory is recorded with
 its manifest `name` and no fetch URL. `add` records the marketplace under
 `connectors.stores.marketplaces` in the **user-global** config
-(`~/.config/ragent/ragent.json`), refusing a duplicate name without `--force`;
+(`~/.config/codemason/codemason.json`), refusing a duplicate name without `--force`;
 `remove` drops an entry by name; both render an `[ok]`/`[err]` report. The
 `/connectors claude` browse panel shall fetch the base endpoint first and then
 each added marketplace, merging their entries into the one panel and dropping an

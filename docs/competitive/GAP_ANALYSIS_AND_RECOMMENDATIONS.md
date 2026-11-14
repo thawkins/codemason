@@ -11,11 +11,11 @@
 
 ## Executive Summary
 
-This document synthesizes competitive intelligence from four major AI coding assistant competitors (ClaudeCode, OpenCode, GitHub Copilot CLI, and RooCode) to identify feature gaps in ragent and provide prioritized recommendations. The analysis categorizes recommendations by **impact** (high/medium/low) and **implementation complexity** (high/medium/low) to guide strategic product development.
+This document synthesizes competitive intelligence from four major AI coding assistant competitors (ClaudeCode, OpenCode, GitHub Copilot CLI, and RooCode) to identify feature gaps in codemason and provide prioritized recommendations. The analysis categorizes recommendations by **impact** (high/medium/low) and **implementation complexity** (high/medium/low) to guide strategic product development.
 
 ### Key Findings
 
-**ragent's Current Competitive Advantages:**
+**codemason's Current Competitive Advantages:**
 - Rust implementation (performance, reliability, single binary)
 - Multi-provider support (no vendor lock-in)
 - Team/swarm orchestration system
@@ -43,7 +43,7 @@ This document synthesizes competitive intelligence from four major AI coding ass
 **Competitors:** ClaudeCode (CLAUDE.md), OpenCode (Skills), Copilot CLI (Custom Instructions)
 
 **Current State:**
-- ragent loads single root `AGENTS.md` file
+- codemason loads single root `AGENTS.md` file
 - No multi-directory discovery
 - No recursive scanning
 - No automatic project context accumulation
@@ -264,7 +264,7 @@ ClaudeCode uses `node -c` equivalent to validate syntax:
 **Competitors:** Copilot CLI (Autopilot), RooCode (Auto-Approve)
 
 **Current State:**
-- ragent requires approval at each tool execution step
+- codemason requires approval at each tool execution step
 - No autonomous multi-step execution mode
 - `--yes` flag approves all but doesn't loop
 
@@ -300,7 +300,7 @@ ClaudeCode uses `node -c` equivalent to validate syntax:
 **Competitors:** OpenCode (build/plan/general), RooCode (Code/Architect/Ask/Debug/Test), Copilot CLI (Standard/Plan/Autopilot)
 
 **Current State:**
-- ragent has agent presets (coder, task, architect, ask, debug)
+- codemason has agent presets (coder, task, architect, ask, debug)
 - No in-session mode switching
 - No tool access restrictions by mode
 - No read-only "plan" mode
@@ -337,7 +337,7 @@ ClaudeCode uses `node -c` equivalent to validate syntax:
 **Competitors:** Copilot CLI (Plan Mode)
 
 **Current State:**
-- ragent has `plan` agent but no structured plan-approve-implement workflow
+- codemason has `plan` agent but no structured plan-approve-implement workflow
 - No clarifying questions before implementation
 - No plan checkpoint
 
@@ -470,7 +470,7 @@ ClaudeCode uses `node -c` equivalent to validate syntax:
 **Competitors:** Copilot CLI (/fleet), RooCode (Cloud Agents)
 
 **Current State:**
-- ragent has team/swarm system but requires manual task decomposition
+- codemason has team/swarm system but requires manual task decomposition
 - No automatic task breakdown
 - No `/fleet`-style command for parallel execution
 - Team lead must manually create and coordinate
@@ -500,7 +500,7 @@ ClaudeCode uses `node -c` equivalent to validate syntax:
 - Result consolidation
 - Error handling across subagents
 
-**Recommendation:** ragent already has team system; enhance with automatic task decomposition and `/fleet` command
+**Recommendation:** codemason already has team system; enhance with automatic task decomposition and `/fleet` command
 
 ---
 
@@ -663,7 +663,7 @@ ClaudeCode uses `node -c` equivalent to validate syntax:
 **Competitors:** All competitors have extensive slash commands
 
 **Current State:**
-- ragent has basic slash commands
+- codemason has basic slash commands
 - Missing several common commands
 
 **Gap Details:**
@@ -720,7 +720,7 @@ ClaudeCode uses `node -c` equivalent to validate syntax:
 **Competitors:** All competitors have rich streaming UX
 
 **Current State:**
-- ragent streams but limited status indicators
+- codemason streams but limited status indicators
 - No tool execution state visibility during streaming
 
 **Gap Details:**
@@ -765,7 +765,7 @@ ClaudeCode prevents:
 **Competitors:** ClaudeCode
 
 **Current State:**
-- ragent has file pattern permissions
+- codemason has file pattern permissions
 - No command prefix permissions
 
 **Gap Details:**
@@ -832,7 +832,7 @@ ClaudeCode memoizes:
 **Competitors:** ClaudeCode, OpenCode
 
 **Current State:**
-- ragent uses basic grep
+- codemason uses basic grep
 - No ripgrep optimization
 
 **Gap Details:**
@@ -994,7 +994,7 @@ ClaudeCode:
 - **Rationale:** Enables authenticated MCP servers
 
 **P4.3 — MCP Configuration** [LOW IMPACT, LOW COMPLEXITY]
-- Add MCP server configuration to `ragent.json`
+- Add MCP server configuration to `codemason.json`
 - Server lifecycle management
 - Connection health checks
 - **Rationale:** User control over MCP servers
@@ -1204,7 +1204,7 @@ ClaudeCode:
 
 ## Competitive Positioning Recommendations
 
-### Double Down on ragent's Unique Strengths
+### Double Down on codemason's Unique Strengths
 
 **1. Rust Performance & Reliability**
 - Market as "10x faster than TypeScript agents"
@@ -1294,7 +1294,7 @@ ClaudeCode:
 
 ## Conclusion
 
-ragent has strong foundational advantages (Rust performance, multi-provider support, team orchestration, native code intelligence) but lags in key UX areas that competitors have refined:
+codemason has strong foundational advantages (Rust performance, multi-provider support, team orchestration, native code intelligence) but lags in key UX areas that competitors have refined:
 
 **Critical Gaps:**
 1. Persistent shell sessions (biggest UX gap)
@@ -1315,7 +1315,7 @@ ragent has strong foundational advantages (Rust performance, multi-provider supp
 - **Messaging:** "The fast, transparent, self-hosted AI coding agent that speaks your shell"
 - **Differentiation:** Rust performance + no vendor lock-in + team orchestration + enterprise-ready
 
-By closing the critical gaps in Phases 1-3 (6-9 months), ragent will achieve competitive parity with market leaders while maintaining unique advantages in performance, transparency, and enterprise deployability. The persistent shell (Phase 5) should be prioritized after establishing strong foundation, as it's complex but transformative for daily workflows.
+By closing the critical gaps in Phases 1-3 (6-9 months), codemason will achieve competitive parity with market leaders while maintaining unique advantages in performance, transparency, and enterprise deployability. The persistent shell (Phase 5) should be prioritized after establishing strong foundation, as it's complex but transformative for daily workflows.
 
 ---
 

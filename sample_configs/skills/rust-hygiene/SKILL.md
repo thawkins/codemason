@@ -52,7 +52,7 @@ seconds. Ensure that All errors and warnings are resolved
 ### 3. cargo nextest run
 
 ```
-cargo nextest run --workspace --features ragent-tools-extended/test-ssrf-bypass --profile ci --no-fail-fast
+cargo nextest run --workspace --features codemason-tools-extended/test-ssrf-bypass --profile ci --no-fail-fast
 cargo test --workspace --doc
 ```
 
@@ -107,12 +107,12 @@ Fix the code, not the guard: each script prints the file and line it rejects.
 ### 7. Regression suites
 
 Run every `run:` line of the `ms0-regression` job in
-`.github/workflows/ci.yml` (and the two `cargo nextest run -p ragent-types`
+`.github/workflows/ci.yml` (and the two `cargo nextest run -p codemason-types`
 lines at the end of `security-guards`). Most overlap step 3, but the telemetry
 suite needs its own feature flag and is only exercised here:
 
 ```
-cargo nextest run -p ragent-telemetry --features telemetry -E "test(test_metric_toggles::)"
+cargo nextest run -p codemason-telemetry --features telemetry -E "test(test_metric_toggles::)"
 ```
 
 ### 8. Clippy

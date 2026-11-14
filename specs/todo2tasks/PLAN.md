@@ -21,7 +21,7 @@ mapped to Critical / High / Medium / Low.
 | T-008 | Create `task_update` tool (`TaskUpdateTool`) — required `task_id`; optional `status` (`pending` / `in_progress` / `completed`), `subject`, `description`, `active_form`, `owner`, `metadata`, `add_blocked_by` (array), `add_blocks` (array); validates deps (FR-004, FR-009); rejects `status=blocked`; triggers auto-unblock (FR-003) on `completed` transition | FR-004, FR-009, FR-011, FR-013 | M | Critical | completed | T-006, T-007 |
 | T-009 | Create `task_get` tool (`TaskGetTool`) — required `task_id`; returns full record: `id`, `subject`, `description`, `active_form`, `status`, `owner`, `metadata`, `blocked_by`, `blocks` (derived), `created_at`, `updated_at` | FR-011, FR-014 | S | High | completed | T-004 |
 | T-010 | Create `task_list` tool (`TaskListTool`) — optional `status` filter (`pending` / `in_progress` / `completed` / `all`, default `all`); returns all session tasks ordered by `created_at`; each entry includes `id`, `subject`, `status`, `owner`, `blocked_by` | FR-011, FR-015 | S | High | completed | T-004 |
-| T-011 | Register all four new tools in `ragent_tools_extended::register_tools` and bridge through `CoreStorageAdapter` trait; hardwire auto-approve (same permission category as `todo_read` / `todo_write`); wire into the tool category that triggers TUI panel-refresh events | FR-011, FR-017 | S | Critical | completed | T-007, T-008, T-009, T-010 |
+| T-011 | Register all four new tools in `codemason_tools_extended::register_tools` and bridge through `CoreStorageAdapter` trait; hardwire auto-approve (same permission category as `todo_read` / `todo_write`); wire into the tool category that triggers TUI panel-refresh events | FR-011, FR-017 | S | Critical | completed | T-007, T-008, T-009, T-010 |
 | T-012 | Convert `TodoReadTool` into a thin alias delegating to `task_list` implementation; produce same human-readable text format; emit deprecation notice directing callers to `task_list` | FR-016 | S | High | completed | T-010, T-011 |
 | T-013 | Convert `TodoWriteTool` into a thin alias: map `action=add` → `task_create`, `action=update`/`complete` → `task_update` (accept both `done` and `completed`), `action=remove` → delete path, `action=clear` → bulk delete; emit deprecation notice directing callers to `task_create` / `task_update` | FR-016 | M | High | completed | T-007, T-008, T-011 |
 | T-014 | Update `message_widget.rs` tool-display pretty-printer to recognise `task_create` / `task_update` / `task_get` / `task_list` tool names and route them through the same panel-refresh path as `todo_write` | FR-017 | S | Medium | completed | T-011 |
@@ -63,8 +63,8 @@ T-001 → T-002 → T-003 → T-004 → T-005 → T-006
 
 | Milestone | Success criterion |
 |-----------|-------------------|
-| M1 — Storage ready | `cargo test -p ragent-storage` passes with a task containing `blocked_by`; reading it back yields the same edges; legacy rows with missing columns return safe defaults. |
-| M2 — Tools wired | `task_create` + `task_update` + `task_get` + `task_list` round-trip through the tool registry; `cargo test -p ragent-tools-extended` green; tools are hardwired auto-approved. |
+| M1 — Storage ready | `cargo test -p codemason-storage` passes with a task containing `blocked_by`; reading it back yields the same edges; legacy rows with missing columns return safe defaults. |
+| M2 — Tools wired | `task_create` + `task_update` + `task_get` + `task_list` round-trip through the tool registry; `cargo test -p codemason-tools-extended` green; tools are hardwired auto-approved. |
 | M3 — Aliases pass | Existing `test_todo_*` suites pass unchanged against the alias shim; deprecation notice appears in alias output. |
 | M4 — Panel renders | `test_todo_panel` (renamed / updated) asserts the "TASKS" title, blocked annotation, owner suffix, and `active_form` sub-line. |
 | M5 — Full green | `cargo fmt --check && cargo clippy && cargo test` all clean across the workspace. |

@@ -19,17 +19,17 @@ extraction with OCR, and page screenshots. It costs $0, requires no API keys,
 and no accounts.
 
 This specification ("**masterfetch**") defines the integration of Hound's six
-web-access tools into ragent **as a set of native Rust tools** in the
-`ragent-tools-extended` crate — **not** as an external MCP server. The tools will
+web-access tools into codemason **as a set of native Rust tools** in the
+`codemason-tools-extended` crate — **not** as an external MCP server. The tools will
 be re-implemented in Rust using `reqwest` for HTTP transport, `readability-rs`
 and `html2text` for content extraction (both already in the workspace), and
-ragent's existing `Tool` trait, `ToolRegistry`, and permission/visibility
+codemason's existing `Tool` trait, `ToolRegistry`, and permission/visibility
 infrastructure.
 
 The name "masterfetch" is the internal spec/feature identifier. The integrated
 tools are named `mf_fetch`, `mf_crawl`, `mf_search`, `mf_screenshot`,
 `mf_cache_clear`, and `mf_version` — prefixed `mf_` to distinguish them from
-ragent's existing `webfetch`/`websearch` tools while remaining recognisable.
+codemason's existing `webfetch`/`websearch` tools while remaining recognisable.
 
 ## Background
 
@@ -90,10 +90,10 @@ src/master_fetch/
 5. **Honest signals** — `content_ok=False` for JS shells / login walls; quality
    score for PDFs; `engine_blocked` for rate-limited search backends.
 
-### ragent tool architecture
+### codemason tool architecture
 
-ragent tools implement the `Tool` trait defined in
-`crates/ragent-tools-extended/src/lib.rs`:
+codemason tools implement the `Tool` trait defined in
+`crates/codemason-tools-extended/src/lib.rs`:
 
 ```rust
 #[async_trait::async_trait]
@@ -114,7 +114,7 @@ calls `register_extracted_extended_tools()` which adapts each extended tool with
 `ExtractedExtendedToolAdapter`.
 
 Tool visibility is controlled by `ToolVisibilityConfig` in
-`crates/ragent-config/src/config.rs` with switches (`office`, `github`,
+`crates/codemason-config/src/config.rs` with switches (`office`, `github`,
 `gitlab`, `teams`, `agents`, `plan`, `codeindex`). The
 `tool_family_names(switch)` function maps a switch name to the list of tool
 names it controls. `effective_hidden_tools()` hides any tool whose family
@@ -127,15 +127,15 @@ for article extraction and `html2text` as a fallback.
 
 ### Design constraints
 
-1. **No MCP dependency.** Tools are compiled into the ragent binary. No `pip`,
+1. **No MCP dependency.** Tools are compiled into the codemason binary. No `pip`,
    no Python, no Node.js, no stdio transport, no `mcp` package.
 2. **No API keys for search.** Hound's search is keyless and local — it scrapes
      public search engines. The integrated `mf_search` must preserve this
-     zero-config promise. (ragent's existing `websearch` uses Tavily + API key;
+     zero-config promise. (codemason's existing `websearch` uses Tavily + API key;
      `mf_search` is a keyless alternative.)
 3. **Single binary.** All HTTP fetch, content extraction, crawl, search, and
      cache logic must be pure Rust with no runtime subprocess.
-4. **Reuse ragent infra.** Tools use the existing `Tool` trait, `ToolRegistry`,
+4. **Reuse codemason infra.** Tools use the existing `Tool` trait, `ToolRegistry`,
      `ToolContext`, `reqwest` workspace dependency, `readability-rs`,
      `html2text`, `url`, and permission/visibility system.
 5. **Graceful degradation.** Hound's browser tier (Patchright/Playwright) cannot
@@ -146,7 +146,7 @@ for article extraction and `html2text` as a fallback.
 6. **No new heavy dependencies.** Prefer workspace crates already present
      (`reqwest`, `serde`, `serde_json`, `regex`, `html2text`, `readability-rs`,
      `url`, `chrono`, `tokio`, `async-trait`, `tracing`). The SQLite cache can
-     reuse `ragent-storage` infrastructure or a lightweight `rusqlite` dependency
+     reuse `codemason-storage` infrastructure or a lightweight `rusqlite` dependency
      if not already available.
 
 ## Requirements
@@ -155,7 +155,7 @@ for article extraction and `html2text` as a fallback.
 
 The system **shall** provide all six Hound web-access tools (`mf_fetch`,
 `mf_crawl`, `mf_search`, `mf_screenshot`, `mf_cache_clear`, `mf_version`) as
-native Rust structs implementing the `ragent_tools_extended::Tool` trait.
+native Rust structs implementing the `codemason_tools_extended::Tool` trait.
 
 > *Ubiquitous requirement — applies to every tool in the masterfetch set
 > without exception.*
@@ -165,7 +165,7 @@ native Rust structs implementing the `ragent_tools_extended::Tool` trait.
 The `mf_fetch` tool **shall** accept a `url` parameter (and optionally a
 `urls` array for parallel bulk fetch), fetch the page via HTTP GET using
 `reqwest`, and extract the main content as markdown using `readability-rs`
-with `html2text` as fallback — mirroring ragent's existing `webfetch`
+with `html2text` as fallback — mirroring codemason's existing `webfetch`
 extraction chain. The tool **shall** support an optional `css_selector`
 parameter to narrow extraction scope, and an optional `format` parameter
 (`markdown` | `html` | `text` | `raw`).
@@ -324,7 +324,7 @@ to fetch the relevant subset.
 
 ### FR-015 — `mf_screenshot` graceful degradation (state-driven)
 
-When a headless browser engine ragent can drive is **not** present, the
+When a headless browser engine codemason can drive is **not** present, the
 `mf_screenshot` capability **shall** be absent from the advertised tool set, so
 it is never offered when it cannot work. When it **is** present (a build with the
 opt-in `headless-browser` feature and an engine binary on `PATH`) and the tool is
@@ -349,7 +349,7 @@ purged. The tool **shall** return a count of purged entries.
 ### FR-017 — `mf_version` version info (ubiquitous)
 
 The `mf_version` tool **shall** return the masterfetch integration version,
-the ragent version, and a brief description of the integrated tool set. This
+the codemason version, and a brief description of the integrated tool set. This
 tool does not make network calls.
 
 > *Ubiquitous requirement — always available, always returns version
@@ -386,7 +386,7 @@ parser confusion).
 ### FR-020 — Tool registration (ubiquitous)
 
 The system **shall** register all six `mf_*` tools in
-`create_extended_registry()` in `crates/ragent-tools-extended/src/lib.rs`,
+`create_extended_registry()` in `crates/codemason-tools-extended/src/lib.rs`,
 each wrapped in `Arc::new(...)` and added after the existing tool
 registrations. The tools **shall** be automatically surfaced to agents via
 the existing `register_extracted_extended_tools()` →
@@ -398,7 +398,7 @@ the existing `register_extracted_extended_tools()` →
 ### FR-021 — Tool visibility switch (state-driven)
 
 The system **shall** add a `masterfetch` boolean switch to
-`ToolVisibilityConfig` in `crates/ragent-config/src/config.rs` (default:
+`ToolVisibilityConfig` in `crates/codemason-config/src/config.rs` (default:
 `true`), with a corresponding field in `ToolVisibilitySpecified`, an entry in
 `iter_switches()`, a `"masterfetch"` arm in `tool_family_names()` listing all
 six `mf_*` tool names, handling in the custom `Serialize`/`Deserialize`
@@ -412,12 +412,12 @@ switch is `false`, all six tools **shall** be hidden from
 ### FR-022 — Permission category (ubiquitous)
 
 The `mf_fetch`, `mf_crawl`, `mf_search`, and `mf_screenshot` tools **shall**
-return `"web"` from `permission_category()`, consistent with ragent's
+return `"web"` from `permission_category()`, consistent with codemason's
 existing `webfetch` and `websearch` tools. The `mf_cache_clear` and
 `mf_version` tools **shall** return `"system"` since they do not make
 outbound network calls.
 
-> *Ubiquitous requirement — all tools must participate in ragent's
+> *Ubiquitous requirement — all tools must participate in codemason's
 > permission system.*
 
 ### FR-023 — No API keys required for search (unwanted)
@@ -430,7 +430,7 @@ upstream search-engine outage **shall** produce a readable error with
 
 > *Unwanted requirement — credential-gating for search is explicitly
 > forbidden; this preserves Hound's zero-config promise and differentiates
-> `mf_search` from ragent's existing Tavily-based `websearch`.*
+> `mf_search` from codemason's existing Tavily-based `websearch`.*
 
 ### FR-024 — Error handling (unwanted)
 
@@ -447,7 +447,7 @@ implementation's catch-and-return-text pattern.
 ### FR-025 — Shared HTTP client and user agent (ubiquitous)
 
 The masterfetch HTTP layer **shall** use a shared `reqwest::Client` with a
-`User-Agent` header of the form `ragent/{version} (masterfetch)` and a
+`User-Agent` header of the form `codemason/{version} (masterfetch)` and a
 configurable request timeout (default 30 seconds), consistent with the
 existing `webfetch` and `websearch` tools. The client **shall** follow
 redirects (up to 5) and handle gzip/deflate decompression automatically via
@@ -534,7 +534,7 @@ The implementation **shall** prefer crates already present in the workspace
 (`reqwest`, `serde`, `serde_json`, `regex`, `html2text`, `readability-rs`,
 `url`, `chrono`, `tokio`, `async-trait`, `tracing`, `anyhow`, `thiserror`).
 If a SQLite cache is required, the implementation **shall** reuse
-`ragent-storage` infrastructure or add `rusqlite` only if no existing SQLite
+`codemason-storage` infrastructure or add `rusqlite` only if no existing SQLite
 dependency is available. No browser engine (Playwright, Chromium, Patchright)
 or OCR engine (rapidocr, onnxruntime, pypdfium2) dependencies shall be
 added.
@@ -565,7 +565,7 @@ anti-pattern warnings — mirroring Hound's hand-crafted tool definitions.
 
 - Re-implementing all six Hound tools (`mf_fetch`, `mf_crawl`, `mf_search`,
   `mf_screenshot`, `mf_cache_clear`, `mf_version`) in Rust inside
-  `crates/ragent-tools-extended`.
+  `crates/codemason-tools-extended`.
 - Shared HTTP client module with SSRF protection and URL validation.
 - Content extraction chain (`readability-rs` → `html2text` → raw text).
 - Metadata extraction (OpenGraph, JSON-LD, canonical, `<title>`).
@@ -580,7 +580,7 @@ anti-pattern warnings — mirroring Hound's hand-crafted tool definitions.
 - Keyless multi-engine web search (DuckDuckGo + Brave minimum, extensible).
 - Cross-engine consensus ranking and result merging.
 - Tool registration in `create_extended_registry()`.
-- `masterfetch` tool-visibility switch in `ragent-config`.
+- `masterfetch` tool-visibility switch in `codemason-config`.
 - Permission categories (`web` for network tools, `system` for cache/version).
 - Unit tests for all pure-logic modules.
 - Integration tests for tool registration and visibility.
@@ -595,7 +595,7 @@ anti-pattern warnings — mirroring Hound's hand-crafted tool definitions.
 - Cloudflare bypass / Turnstile solving — requires a browser engine.
 - Screenshot capture (`mf_screenshot` returns an honest error explaining the
   browser-engine limitation).
-- PDF extraction with OCR (pdfplumber, pypdfium2, rapidocr) — ragent already
+- PDF extraction with OCR (pdfplumber, pypdfium2, rapidocr) — codemason already
   has `pdf_read` in the extended tool set; `mf_fetch` will detect PDFs and
   delegate to `pdf_read` or return a content-type hint rather than
   re-implementing PDF extraction.
@@ -608,6 +608,6 @@ anti-pattern warnings — mirroring Hound's hand-crafted tool definitions.
   enhancement.
 - Hound CLI features (`hound -u`, `--doctor`, `--rollback`) — not applicable
   to integrated tools.
-- Self-updating mechanism — ragent has its own release process.
+- Self-updating mechanism — codemason has its own release process.
 - Search engine proxy support (`HOUND_SEARCH_PROXY`) — may be a future
   enhancement.

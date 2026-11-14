@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build a flat .pkg installer for ragent on Apple Silicon (arm64) macOS.
+# Build a flat .pkg installer for codemason on Apple Silicon (arm64) macOS.
 #
 # Usage:
 #   ./scripts/macos-pkg.sh <version> <binary_path> <output_dir>
@@ -9,8 +9,8 @@
 #   binary_path  - path to the aarch64-apple-darwin release binary
 #   output_dir   - directory where the .pkg will be written
 #
-# The produced installer installs the binary to /usr/local/lib/ragent/ragent
-# and creates a symlink at /usr/local/bin/ragent.
+# The produced installer installs the binary to /usr/local/lib/codemason/codemason
+# and creates a symlink at /usr/local/bin/cdmn.
 
 set -euo pipefail
 
@@ -24,23 +24,23 @@ PKG_ROOT="$(mktemp -d)"
 trap 'rm -rf "${PKG_ROOT}"' EXIT
 
 # Destination inside the package payload.
-mkdir -p "${PKG_ROOT}/usr/local/lib/ragent"
-cp "${BINARY_PATH}" "${PKG_ROOT}/usr/local/lib/ragent/ragent"
-chmod 755 "${PKG_ROOT}/usr/local/lib/ragent/ragent"
+mkdir -p "${PKG_ROOT}/usr/local/lib/codemason"
+cp "${BINARY_PATH}" "${PKG_ROOT}/usr/local/lib/codemason/codemason"
+chmod 755 "${PKG_ROOT}/usr/local/lib/codemason/codemason"
 
 # Verify we are actually packaging an arm64 binary.
-ARCH="$(file "${PKG_ROOT}/usr/local/lib/ragent/ragent" | grep -o 'arm64' || true)"
+ARCH="$(file "${PKG_ROOT}/usr/local/lib/codemason/codemason" | grep -o 'arm64' || true)"
 if [ -z "${ARCH}" ]; then
     echo "ERROR: binary is not arm64: ${BINARY_PATH}" >&2
     exit 1
 fi
 
 mkdir -p "${OUTPUT_DIR}"
-OUTPUT_PKG="${OUTPUT_DIR}/ragent-${VERSION}-macos-arm64.pkg"
+OUTPUT_PKG="${OUTPUT_DIR}/codemason-${VERSION}-macos-arm64.pkg"
 
 pkgbuild \
     --root "${PKG_ROOT}" \
-    --identifier "com.timhawkins.ragent" \
+    --identifier "com.timhawkins.codemason" \
     --version "${VERSION}" \
     --install-location "/" \
     --scripts "${ROOT_DIR}/packaging/macos/scripts" \

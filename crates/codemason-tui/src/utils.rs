@@ -1,0 +1,222 @@
+//! Layout utilities for codemason TUI.
+//!
+//! Provides common layout helper functions used across the UI components.
+
+use chrono::{DateTime, Utc};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+
+/// Returns true for providers that use Ollama's boolean `think` parameter.
+///
+/// Covers both the local (`ollama`) and cloud (`ollama_cloud`) variants so a
+/// call site never re-spells the two-id check inline.
+pub fn is_ollama_family(provider_id: &str) -> bool {
+    provider_id == "ollama" || provider_id == "ollama_cloud"
+}
+
+/// Current wall-clock time as Unix milliseconds.
+///
+/// Returns `0` if the system clock is set before the Unix epoch (which cannot
+/// happen in practice); callers use this for relative deadlines, where a `0`
+/// base simply expires immediately rather than panicking.
+#[must_use]
+pub fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Format a UTC timestamp as elapsed duration from now (e.g. "2m34s").
+pub fn format_elapsed(created_at: DateTime<Utc>) -> String {
+    codemason_types::strutil::format_duration_compact((Utc::now() - created_at).num_seconds())
+}
+
+/// Shorten a session/task id to the last 8 chars (the unique suffix).
+///
+/// Delegates to [`codemason_types::strutil::short_suffix`], which falls back to the
+/// whole id when the cut would land mid-UTF-8-codepoint.
+pub fn short_id(id: &str) -> String {
+    codemason_types::strutil::short_suffix(id, 8)
+}
+
+/// Shorten a string by keeping the start and end, inserting an ellipsis in the middle.
+///
+/// Returns the original string unchanged if it fits within `max_chars`. For a budget of
+/// one character returns the single ellipsis glyph.
+pub fn shorten_middle(s: &str, max_chars: usize) -> String {
+    let total = s.chars().count();
+    if total <= max_chars {
+        return s.to_string();
+    }
+    // The separator is the single-character ellipsis glyph, so the budget it
+    // consumes is 1. A budget of 2 or 3 cannot fit any end char around the
+    // separator, so only the ellipsis is returned.
+    if max_chars <= 3 {
+        return "\u{2026}".to_string();
+    }
+    let keep_left = (max_chars - 1) / 2;
+    let keep_right = max_chars - 1 - keep_left;
+    let left: String = s.chars().take(keep_left).collect();
+    let right: String = s.chars().skip(total.saturating_sub(keep_right)).collect();
+    format!("{left}\u{2026}{right}")
+}
+
+/// Responsive layout constraints based on terminal width.
+#[derive(Debug, Clone, Copy)]
+pub enum ResponsiveBreakpoint {
+    /// Small: < 80 columns
+    Small,
+    /// Medium: 80-120 columns
+    Medium,
+    /// Large: > 120 columns
+    Large,
+}
+
+impl ResponsiveBreakpoint {
+    /// Determine the breakpoint from terminal width.
+    pub fn from_width(width: u16) -> Self {
+        if width < 80 {
+            Self::Small
+        } else if width <= 120 {
+            Self::Medium
+        } else {
+            Self::Large
+        }
+    }
+
+    /// Get the percentage split for the side panel (log, tasks, memory,
+    /// profile, telemetry, and the Alt+C Context panel).
+    /// Returns (messages_percent, log_percent)
+    ///
+    /// Every right-hand side panel takes 40% of the application width at all
+    /// breakpoints.
+    pub fn log_split(&self) -> (u16, u16) {
+        // Every side panel takes 40% of the application width.
+        (60, 40)
+    }
+
+    /// Get the minimum content width for this breakpoint.
+    pub fn min_content_width(&self) -> u16 {
+        match self {
+            Self::Small => 40,
+            Self::Medium => 60,
+            Self::Large => 80,
+        }
+    }
+
+    /// Get the status bar height for this breakpoint.
+    pub fn status_bar_height(&self) -> u16 {
+        match self {
+            Self::Small => 2,  // Compact status bar
+            Self::Medium => 2, // Standard
+            Self::Large => 2,  // Standard (could be expanded in future)
+        }
+    }
+
+    /// Get the button column width for the input area.
+    pub fn button_column_width(&self) -> u16 {
+        match self {
+            Self::Small => 12,  // Narrower buttons
+            Self::Medium => 18, // Standard
+            Self::Large => 20,  // Wider buttons
+        }
+    }
+}
+
+/// Check if terminal size is below minimum recommended dimensions.
+/// Returns true if terminal is too small for optimal experience.
+pub fn is_below_minimum_size(area: Rect) -> bool {
+    area.width < 40 || area.height < 12
+}
+
+/// Center a rectangle within the given area.
+///
+/// Returns a Rect centered in the provided area with the specified
+/// percentage width and height.
+pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    // Clamp to [0, 100] so `(100 - percent) / 2` cannot underflow for
+    // out-of-range percentages.
+    let px = percent_x.min(100);
+    let py = percent_y.min(100);
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - py) / 2),
+            Constraint::Percentage(py),
+            Constraint::Percentage((100 - py) / 2),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - px) / 2),
+            Constraint::Percentage(px),
+            Constraint::Percentage((100 - px) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
+
+/// Center a rectangle with maximum dimensions.
+///
+/// Similar to `centered_rect` but caps the width and height at the specified
+/// maximum values. This prevents oversized dialogs on large screens.
+///
+/// # Arguments
+///
+/// * `percent_x` - Horizontal percentage of the area to use
+/// * `percent_y` - Vertical percentage of the area to use
+/// * `max_w` - Maximum width in columns
+/// * `max_h` - Maximum height in rows
+/// * `area` - The area to center within
+pub fn centered_rect_max(
+    percent_x: u16,
+    percent_y: u16,
+    max_w: u16,
+    max_h: u16,
+    area: Rect,
+) -> Rect {
+    let raw = centered_rect(percent_x, percent_y, area);
+    let w = raw.width.min(max_w).min(area.width);
+    let h = raw.height.min(max_h).min(area.height);
+    let x = raw.x + (raw.width.saturating_sub(w) / 2);
+    let y = raw.y + (raw.height.saturating_sub(h) / 2);
+    Rect::new(x, y, w, h)
+}
+
+/// Centre a fixed-size rectangle within `area`, clamping its dimensions so it
+/// can never exceed the available space.
+///
+/// The centring form shared by every content-sized modal (queue menu, queue
+/// show panel, clear confirmation, plugin-store panel): the caller computes the
+/// desired `width`/`height` and this function clamps them to the screen and
+/// offsets the rectangle by half the remaining space on each axis.
+pub fn centered_rect_fixed(width: u16, height: u16, area: Rect) -> Rect {
+    let w = width.min(area.width);
+    let h = height.min(area.height);
+    Rect::new(
+        area.x + area.width.saturating_sub(w) / 2,
+        area.y + area.height.saturating_sub(h) / 2,
+        w,
+        h,
+    )
+}
+
+/// Truncate text with ellipsis if it exceeds the maximum length.
+///
+/// Returns the original string if it's within bounds, otherwise
+/// returns a truncated version with the ellipsis glyph at the end. For a
+/// budget of one character or fewer only the ellipsis is returned.
+pub fn truncate_with_ellipsis(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        text.to_string()
+    } else if max_chars <= 1 {
+        "\u{2026}".to_string()
+    } else {
+        text.chars()
+            .take(max_chars.saturating_sub(1))
+            .collect::<String>()
+            + "\u{2026}"
+    }
+}

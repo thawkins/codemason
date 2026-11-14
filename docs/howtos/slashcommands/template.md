@@ -4,7 +4,7 @@
 ## Overview
 
 `/template` lists reusable prompt templates discovered from two directories -
-`~/.ragent/templates/` (personal) and `.ragent/templates/` (project) - and
+`~/.codemason/templates/` (personal) and `.codemason/templates/` (project) - and
 applies them by name. Templates are markdown files with `{{placeholder}}`
 variables such as `{{title}}`, `{{description}}`, and `{{arguments}}`.
 
@@ -72,8 +72,8 @@ Bare form: a markdown table sorted by name with the columns
 `Name | Description | Scope | Placeholders`. When no templates are found,
 the output explains where to create them:
 
-- `~/.ragent/templates/` - personal templates
-- `.ragent/templates/` - project templates (higher priority)
+- `~/.codemason/templates/` - personal templates
+- `.codemason/templates/` - project templates (higher priority)
 - placeholders use the `{{name}}` form, e.g. `{{title}}`, `{{description}}`,
   `{{arguments}}`
 
@@ -93,6 +93,6 @@ followed by the sorted list of available names and the usage line.
 ## Related
 
 - `/reload` - rescan configuration and skills (restart picks up new template files)
-- `~/.ragent/templates/` - personal template directory
-- `.ragent/templates/` - project template directory (higher priority)
+- `~/.codemason/templates/` - personal template directory
+- `.codemason/templates/` - project template directory (higher priority)
 - `/history` - reuse previous inputs as an alternative to templates

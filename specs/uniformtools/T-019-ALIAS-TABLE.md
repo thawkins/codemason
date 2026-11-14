@@ -8,7 +8,7 @@ Status: **completed**. Dependency: T-001 (the canonical type additions).
 ## 1. What the task asks for
 
 > Where `tools.aliases` is configured (or the built-in default table is enabled),
-> the system **shall** resolve an inbound tool name to its ragent tool before the
+> the system **shall** resolve an inbound tool name to its codemason tool before the
 > unknown-tool check, using a case-sensitive table of exact spellings. Where
 > `tools.expose_alias_names` is `true`, the outbound tool list **shall** advertise
 > each alias alongside the canonical name. Where neither is enabled, behaviour
@@ -20,11 +20,11 @@ as the empty-table case.
 
 ## 2. What was built
 
-### `crates/ragent-agent/src/tool/alias_table.rs` (312 lines)
+### `crates/codemason-agent/src/tool/alias_table.rs` (312 lines)
 
 | Item | Purpose |
 |---|---|
-| `ProviderAlias { spelling, ragent_name }` | one built-in row; `Copy` so a `const` table iterates by value |
+| `ProviderAlias { spelling, codemason_name }` | one built-in row; `Copy` so a `const` table iterates by value |
 | `BUILTIN_PROVIDER_ALIASES: [ProviderAlias; 4]` | the D7 table: `WebFetch -> webfetch`, `WebSearch -> websearch`, `file_search -> codeindex_search`, `web_search -> websearch`, ascending by spelling |
 | `AliasTable::from_tools_config` / `from_aliases` | builds the table once per turn from `tools.aliases`; empty when absent / `false` / `{}` |
 | `AliasTable::resolve` | exact, case-sensitive lookup (D5: never guessed at) |
@@ -63,7 +63,7 @@ and the `MessagePart::ToolCall` record all see one canonical name and the
 provider spelling never reaches the persisted form (FR-001).
 
 One application point, deliberately: `process_message` is the only tool-executing
-loop, so every inbound surface that reaches a tool (TUI prompt, `ragent run`,
+loop, so every inbound surface that reaches a tool (TUI prompt, `codemason run`,
 `/v1/chat/completions`, ACP server, automation, sub-agents, teams) inherits the
 resolution. No provider, backend or UI module names the table.
 
@@ -75,21 +75,21 @@ Both are the same class: source that was committed but never compiled or run.
    and its doc comment landed with `d6abcd4a`, but nothing declared it, so
    `cargo check` did not build it and the resolver did not exist as far as the
    compiler was concerned.
-2. **Neither test file was registered.** `crates/ragent-agent/tests/test_tool_alias_table.rs`
+2. **Neither test file was registered.** `crates/codemason-agent/tests/test_tool_alias_table.rs`
    (25 cases) and `test_tool_alias_resolution.rs` (4 cases) were at `HEAD` with no
-   `#[path]` line in `crates/ragent-agent/tests/all.rs`, so all 29 cases had never
-   run. `git show HEAD:crates/ragent-agent/tests/all.rs | grep tool_alias` is
+   `#[path]` line in `crates/codemason-agent/tests/all.rs`, so all 29 cases had never
+   run. `git show HEAD:crates/codemason-agent/tests/all.rs | grep tool_alias` is
    empty. Registering them is what makes the rest of this record a measurement
    rather than an assertion.
 
 Two further orphans of the same class were found and are **out of scope here**,
-recorded so they are not lost: `crates/ragent-agent/src/tool/allowed_tools.rs`
-(T-036) and `crates/ragent-agent/src/session/dispatch.rs` +
+recorded so they are not lost: `crates/codemason-agent/src/tool/allowed_tools.rs`
+(T-036) and `crates/codemason-agent/src/session/dispatch.rs` +
 `session/tool_input_error.rs` (T-014) are still undeclared.
 
 ## 4. Tests
 
-`crates/ragent-agent/tests/test_tool_alias_table.rs` - 25 cases, unit:
+`crates/codemason-agent/tests/test_tool_alias_table.rs` - 25 cases, unit:
 
 - **default off** - absent section, explicit `false`, and `{}` each produce an
   empty table (`len() == 0`), which is FR-015's "behaviour shall be unchanged";
@@ -109,7 +109,7 @@ recorded so they are not lost: `crates/ragent-agent/src/tool/allowed_tools.rs`
   pair in the table; an unresolved target reports once and is refused when used;
   a resolved target is never reported unresolved.
 
-`crates/ragent-agent/tests/test_tool_alias_resolution.rs` - 4 cases, end to end
+`crates/codemason-agent/tests/test_tool_alias_resolution.rs` - 4 cases, end to end
 through `SessionProcessor::process_message` with a scripted provider and an
 in-memory SQLite session, each asserting the recorded `MessagePart::ToolCall`:
 
@@ -144,19 +144,19 @@ Restored to `9de4eb9737f2e3181c8bda5992cfa5ba` (`processor.rs`) and
 ## 6. Verification
 
 - `cargo fmt --check` - clean.
-- `cargo clippy -p ragent-agent --all-targets` - no new warning; only the
+- `cargo clippy -p codemason-agent --all-targets` - no new warning; only the
   pre-existing `pub(crate)`-inside-private-module noise (63) and
-  `unnecessary structure name repetition` (19, all in `ragent-llm` /
-  `ragent-research`).
-- `cargo check -p ragent-agent --all-targets` - clean.
-- `cargo test -p ragent-agent --test all` - **1661 passed, 0 failed, 1 ignored**.
-- `cargo test -p ragent-config --test all` - **412 passed, 0 failed** (the
+  `unnecessary structure name repetition` (19, all in `codemason-llm` /
+  `codemason-research`).
+- `cargo check -p codemason-agent --all-targets` - clean.
+- `cargo test -p codemason-agent --test all` - **1661 passed, 0 failed, 1 ignored**.
+- `cargo test -p codemason-config --test all` - **412 passed, 0 failed** (the
   `tools.aliases` load-time refusal of T-042 is unaffected).
 - Eight guard scripts pass: `check-inline-tests`, `check-dead-code-reasons`,
   `check-silent-errors`, `check-security-unwraps`, `check-poison-locks`,
   `check-test-env-isolation`, `check-file-tool-containment`,
   `check-shared-guards`.
-- `cargo test -p ragent-agent --doc` - 54 passed, 4 failed, all 4 **pre-existing
+- `cargo test -p codemason-agent --doc` - 54 passed, 4 failed, all 4 **pre-existing
   at `HEAD`** and unrelated to this task: `agent/mod.rs::read_git_status`,
   `session/archive.rs` (both doctests), and `tool/mod.rs::ToolContext`, whose
   example never gained `allowed_roots` / `canonical_cache` and does not import
@@ -189,7 +189,7 @@ Restored to `9de4eb9737f2e3181c8bda5992cfa5ba` (`processor.rs`) and
 
 - **T-020** adds the config keys (`tools.aliases`, `tools.expose_alias_names`,
   `tools.wire_trace`) and their merge rules. The table already reads
-  `ToolsConfig`, and `crates/ragent-config/src/tools.rs` exists in this tree, so
+  `ToolsConfig`, and `crates/codemason-config/src/tools.rs` exists in this tree, so
   T-020's work is largely landed - it needs its own record and verification.
 - **T-021** honours `expose_alias_names` in the outbound tool list. Today
   `definitions()` advertises registry names only, which is FR-030's honest count

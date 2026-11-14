@@ -2,7 +2,7 @@
 
 ## Summary
 
-Replaced the fixed 50 ms polling loop in `crates/ragent-tui/src/lib.rs` with an
+Replaced the fixed 50 ms polling loop in `crates/codemason-tui/src/lib.rs` with an
 event-driven main loop. The TUI now sleeps until:
 - a crossterm input event arrives,
 - an event-bus message arrives,
@@ -50,13 +50,13 @@ idle wake).
 
 ## Build / Test
 
-- `cargo fmt -p ragent-tui` passed.
-- `cargo check -p ragent-tui` passed with no warnings.
-- `cargo test -p ragent-tui --lib` passed: 83 tests OK.
+- `cargo fmt -p codemason-tui` passed.
+- `cargo check -p codemason-tui` passed with no warnings.
+- `cargo test -p codemason-tui --lib` passed: 83 tests OK.
 
 ## Note
 
-Full `cargo test -p ragent-tui` (integration tests) has unrelated pre-existing
+Full `cargo test -p codemason-tui` (integration tests) has unrelated pre-existing
 failures in `test_thinking_defaults.rs` (type mismatch) and
 `test_memory_panel.rs` (missing `canonical_cache` field), the latter patched
 locally for this run. These are not caused by T-002.

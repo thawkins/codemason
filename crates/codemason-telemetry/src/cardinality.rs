@@ -1,0 +1,237 @@
+//! Cardinality cap for metric attributes (FR-035).
+//!
+//! The [`CardinalityCache`] tracks the number of distinct attribute-value
+//! combinations seen per metric name. When the number of unique combinations
+//! for a single metric exceeds the configured limit (default 1000), excess
+//! combinations are collapsed into a single `unknown` bucket by replacing all
+//! attribute values with `"unknown"`.
+//!
+//! # Design
+//!
+//! The cache is `Arc`-shared across all clones of an [`InstrumentRegistry`]
+//! so that cardinality is tracked globally per metric, not per recorder
+//! clone. The internal state is protected by an [`RwLock`] - reads (checking
+//! if a signature is already seen) take a read lock, writes (inserting a new
+//! signature) take a write lock. In the common case (signature already
+//! seen), only a read lock is needed.
+//!
+//! # Attribute signature
+//!
+//! The signature of an attribute set is the concatenation of the `KeyValue`
+//! values in order, separated by `|`. This is deterministic because the
+//! recorders always build attribute slices in the same order. The keys are
+//! not included in the signature because they are constant per metric - only
+//! the values vary.
+
+#[cfg(feature = "telemetry")]
+use std::collections::{HashMap, HashSet};
+#[cfg(feature = "telemetry")]
+use std::sync::RwLock;
+
+#[cfg(feature = "telemetry")]
+use opentelemetry::KeyValue;
+
+/// Sentinel value for the metric `name` argument when redacting a value that is
+/// not a plain string (SEC-codemason-telemetry-005).
+#[cfg(feature = "telemetry")]
+const NON_STRING_ATTR: &str = "<non-string>";
+
+/// The sentinel value used for attribute values when the cardinality limit
+/// is exceeded (FR-035).
+pub const UNKNOWN_BUCKET: &str = "unknown";
+
+/// The default cardinality limit per metric (FR-035).
+pub const DEFAULT_CARDINALITY_LIMIT: usize = 1000;
+
+/// A thread-safe cache that tracks distinct attribute combinations per metric
+/// and collapses excess combinations into an `unknown` bucket (FR-035).
+///
+/// Held inside an [`Arc`] within [`InstrumentRegistry`](crate::InstrumentRegistry)
+/// so that all clones share the same cardinality state.
+#[cfg(feature = "telemetry")]
+#[derive(Debug)]
+pub struct CardinalityCache {
+    /// Per-metric sets of seen attribute signatures.
+    /// Key: metric name. Value: set of attribute-value signatures.
+    seen: RwLock<HashMap<String, HashSet<String>>>,
+    /// Maximum number of distinct combinations per metric before overflow.
+    max: usize,
+}
+
+#[cfg(feature = "telemetry")]
+impl CardinalityCache {
+    /// Create a new cache with the given per-metric cardinality limit.
+    #[must_use]
+    pub fn new(max: usize) -> Self {
+        Self {
+            seen: RwLock::new(HashMap::new()),
+            max,
+        }
+    }
+
+    /// Resolve a set of attributes for a given metric, applying the
+    /// cardinality cap (FR-035).
+    ///
+    /// If the attribute combination is already tracked for this metric,
+    /// the original attributes are returned unchanged. If the combination
+    /// is new and the per-metric limit has not been reached, the
+    /// combination is registered and the original attributes are returned.
+    /// If the limit has been reached, all attribute values are replaced
+    /// with [`UNKNOWN_BUCKET`] ("unknown") so that excess combinations
+    /// collapse into a single bucket.
+    ///
+    /// When `attrs` is empty (no attributes), this is a no-op - the
+    /// metric has no cardinality to cap.
+    #[must_use]
+    pub fn resolve(&self, metric_name: &str, attrs: &[KeyValue]) -> Vec<KeyValue> {
+        // SEC-codemason-telemetry-005 (SECTASKS T-066): the documented contract in
+        // `sensitive.rs` promised the guard was applied where the cache resolves
+        // attribute sets, but `resolve` returned the caller's values untouched,
+        // so safety depended on every call site using the `attr_*` helpers.
+        // Sanitise here so the guarantee holds regardless of call site.
+        let sanitised: Vec<KeyValue> = attrs
+            .iter()
+            .map(|kv| {
+                KeyValue::new(
+                    kv.key.clone(),
+                    match &kv.value {
+                        opentelemetry::Value::String(s) => {
+                            crate::sensitive::sanitize_attr_value(s.as_str())
+                        }
+                        _ => NON_STRING_ATTR.to_string(),
+                    },
+                )
+            })
+            .collect();
+        let attrs = sanitised.as_slice();
+
+        // Fast path: no attributes -> no cardinality to cap.
+        if attrs.is_empty() {
+            return Vec::new();
+        }
+
+        let signature = make_signature(attrs);
+
+        // Try read lock first - common case is that the signature is already seen.
+        {
+            if let Ok(seen) = self.seen.read()
+                && let Some(set) = seen.get(metric_name)
+                && set.contains(&signature)
+            {
+                return attrs.to_vec();
+            }
+        }
+
+        // Need to insert - take write lock.
+        if let Ok(mut seen) = self.seen.write() {
+            let set = seen.entry(metric_name.to_string()).or_default();
+
+            // Double-check after acquiring write lock (another thread may have
+            // inserted while we were waiting).
+            if set.contains(&signature) {
+                return attrs.to_vec();
+            }
+
+            if set.len() < self.max {
+                set.insert(signature);
+                attrs.to_vec()
+            } else {
+                // Limit exceeded - collapse to unknown bucket.
+                attrs
+                    .iter()
+                    .map(|kv| KeyValue::new(kv.key.clone(), UNKNOWN_BUCKET.to_string()))
+                    .collect()
+            }
+        } else {
+            // SEC-codemason-telemetry-005 (SECTASKS T-066): a poisoned lock used to
+            // fail open (returning attributes untouched, bypassing both the cap
+            // and the redaction above). Fail closed to the unknown bucket.
+            attrs
+                .iter()
+                .map(|kv| KeyValue::new(kv.key.clone(), UNKNOWN_BUCKET.to_string()))
+                .collect()
+        }
+    }
+
+    /// Returns the number of distinct attribute combinations currently
+    /// tracked for the given metric name. Primarily useful for testing.
+    #[must_use]
+    pub fn distinct_count(&self, metric_name: &str) -> usize {
+        self.seen.read().map_or(0, |seen| {
+            seen.get(metric_name)
+                .map_or(0, std::collections::HashSet::len)
+        })
+    }
+
+    /// Returns the configured per-metric cardinality limit.
+    #[must_use]
+    pub const fn limit(&self) -> usize {
+        self.max
+    }
+}
+
+#[cfg(feature = "telemetry")]
+impl Default for CardinalityCache {
+    fn default() -> Self {
+        Self::new(DEFAULT_CARDINALITY_LIMIT)
+    }
+}
+
+#[cfg(feature = "telemetry")]
+impl Clone for CardinalityCache {
+    fn clone(&self) -> Self {
+        // Clone the inner state so that each InstrumentRegistry clone
+        // shares the same cardinality tracking. Actually - we want all
+        // clones to share the SAME state, so we use Arc externally.
+        // This Clone impl is only used if someone explicitly clones the
+        // cache (not the normal path). It creates a snapshot copy.
+        let seen = self.seen.read().map(|s| s.clone()).unwrap_or_default();
+        Self {
+            seen: RwLock::new(seen),
+            max: self.max,
+        }
+    }
+}
+
+/// Build a deterministic signature string from an ordered slice of `KeyValue`s.
+///
+/// Only the values are included, not the keys, because the keys are constant
+/// per metric - only the values vary. Values are joined with `|`.
+#[cfg(feature = "telemetry")]
+fn make_signature(attrs: &[KeyValue]) -> String {
+    let mut parts: Vec<String> = Vec::with_capacity(attrs.len());
+    for kv in attrs {
+        parts.push(kv.value.to_string());
+    }
+    parts.join("|")
+}
+
+// -- No-op stub when `telemetry` feature is off ---------------------------
+
+/// No-op cardinality cache used when the `telemetry` Cargo feature is off.
+///
+/// All methods are zero-cost no-ops - when the feature is off, no
+/// `InstrumentRegistry` exists, so this type is never instantiated in
+/// practice. It exists only to keep the module compilable.
+#[cfg(not(feature = "telemetry"))]
+#[derive(Debug, Clone, Default)]
+pub struct CardinalityCache;
+
+#[cfg(not(feature = "telemetry"))]
+impl CardinalityCache {
+    /// Create a no-op cache.
+    #[must_use]
+    pub fn new(_max: usize) -> Self {
+        Self
+    }
+}
+
+// -- Tests ----------------------------------------------------------------
+
+#[cfg(all(test, feature = "telemetry"))]
+#[path = "../tests/inline/cardinality_tests.rs"]
+mod tests;
+
+#[cfg(all(test, not(feature = "telemetry")))]
+#[path = "../tests/inline/cardinality_tests.rs"]
+mod tests;

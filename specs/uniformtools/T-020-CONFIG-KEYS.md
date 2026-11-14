@@ -15,13 +15,13 @@ conditional the same way: *"Where `tools.wire_trace` is enabled in config ... an
 So both requirements are gated on a config key that did not exist, and the
 clause that matters most is the one nobody writes a test for: **unchanged when
 absent**. A key that defaults to `false` in the struct but appears in every
-user's `ragent.json` after the first save has already changed behaviour - it
+user's `codemason.json` after the first save has already changed behaviour - it
 changed what the file says, and it changed what a diff of two users' configs
 means. The deliverable is therefore three keys *and* a serialisation discipline.
 
 ## 2. What was built
 
-### `crates/ragent-config/src/tools.rs` (494 lines)
+### `crates/codemason-config/src/tools.rs` (494 lines)
 
 - `ToolsConfig { aliases, expose_alias_names, wire_trace }`, plus `is_default()`
   (every field at its default) and `merge(&mut self, &other)`.
@@ -42,7 +42,7 @@ means. The deliverable is therefore three keys *and* a serialisation discipline.
   `serde_json::from_str::<ToolsConfig>` usable in a test that must inspect a
   rejected entry. Its caller is T-042's loader hook.
 
-### `crates/ragent-config/src/config.rs`
+### `crates/codemason-config/src/config.rs`
 
 ```rust
 #[serde(default, skip_serializing_if = "ToolsConfig::is_default")]
@@ -59,18 +59,18 @@ base.tools.merge(&overlay.tools);
 
 `merge_inner` is the shared body of both `Config::merge` and
 `Config::merge_project`, so the section merges identically on the global-to-
-project path and on `RAGENT_CONFIG`/`RAGENT_CONFIG_CONTENT`. No `merge_project`
+project path and on `CODEMASON_CONFIG`/`CODEMASON_CONFIG_CONTENT`. No `merge_project`
 strip clause was added - see section 4.
 
-### `crates/ragent-config/src/lib.rs`
+### `crates/codemason-config/src/lib.rs`
 
 `pub mod tools;` and `pub use tools::{AliasesConfig, RetiredAliasSpelling,
 TOOLS_ALIASES_KEY, ToolsConfig};`. The module declaration is the part that is
 easy to forget: `tools.rs` had been written in `d6abcd4a` and, until this task,
 `lib.rs` did not declare it, `Config` had no `tools` field, and
-`crates/ragent-config/tests/test_tools_config.rs` (24 cases) and
+`crates/codemason-config/tests/test_tools_config.rs` (24 cases) and
 `test_retired_alias_spelling.rs` (11 cases) had no `#[path]` line in
-`crates/ragent-config/tests/all.rs`. Thirty-five cases across two files had never
+`crates/codemason-config/tests/all.rs`. Thirty-five cases across two files had never
 compiled. This is the **fourth** orphan-module defect in this spec (after
 `tool_args`, `tool_rename` and `tool_input_error`), and the pattern is now
 explicit: a module that "exists" is unverified until its `pub mod`, its
@@ -103,7 +103,7 @@ content: `yolo`, `permission` allow rules, `bash`/`dirs` lists, `telemetry`,
 that list, and the reason is in what the section can actually do.
 
 An alias resolves a **name**, not a capability. After resolution the call
-carries a canonical ragent tool name and then goes through the unknown-tool
+carries a canonical codemason tool name and then goes through the unknown-tool
 check, the loop's `LOOP_WRITE_TOOLS` restriction, the destructive-action
 classifier, the hooks, the permission layer (with its 120 s prompt and YOLO
 bypass), the repeat guard and the 7-layer bash validation exactly as if the model
@@ -121,7 +121,7 @@ user having to repeat it globally. A test pins it
 ## 5. The serialisation contract
 
 - The whole section is omitted while `is_default()`. A build that has never seen
-  `tools` therefore writes a `ragent.json` byte-identical to one written before
+  `tools` therefore writes a `codemason.json` byte-identical to one written before
   the feature existed, so the first unrelated `save_to_source` cannot introduce
   the key into a user's file.
 - Inside a non-default section, each key is omitted when it is at its own
@@ -138,7 +138,7 @@ user having to repeat it globally. A test pins it
 
 ## 6. Tests
 
-### `crates/ragent-config/tests/test_tools_config.rs` (24 cases, value-level)
+### `crates/codemason-config/tests/test_tools_config.rs` (24 cases, value-level)
 
 Registered by this task. Defaults (`is_default`, `is_unspecified`,
 `is_enabled`); the `true` form; the `false` form and its round-trip; the object
@@ -152,7 +152,7 @@ cases (empty object is specified-but-disabled, round-trips as `{}`, does not
 clear an inherited table, does not keep the built-in request, does not undo a
 lower layer's explicit `false`).
 
-### `crates/ragent-config/tests/test_tools_config_load.rs` (5 cases, NEW)
+### `crates/codemason-config/tests/test_tools_config_load.rs` (5 cases, NEW)
 
 The value-level file proves the arithmetic; this one proves the **loader and the
 disk** agree with it, in a sandbox that redirects `XDG_CONFIG_HOME`, the current
@@ -166,7 +166,7 @@ drop):
 | `test_a_project_explicit_false_switches_the_global_table_off` | global table + project `false` -> resolution off, entries empty, not `unspecified` |
 | `test_save_to_source_writes_the_section_and_it_reloads` | a populated section is written to the loaded file and reloads identically |
 | `test_a_never_configured_save_writes_no_tools_key` | a default section is absent from the file on disk, not merely from `to_string` |
-| `test_a_non_boolean_switch_is_refused_naming_the_file` | `"expose_alias_names": "yes"` stops the load, naming `ragent.json` and the expected type |
+| `test_a_non_boolean_switch_is_refused_naming_the_file` | `"expose_alias_names": "yes"` stops the load, naming `codemason.json` and the expected type |
 
 The last case exists because the section is not `deny_unknown_fields` (a build
 must be able to read a newer config, and the type is what carries the meaning).
@@ -188,11 +188,11 @@ fails after a "restore"), and every restore was verified with `md5sum`.
 
 ## 8. Verification
 
-- `cargo test -p ragent-config --test all` -> **417 passed, 0 failed** (412
+- `cargo test -p codemason-config --test all` -> **417 passed, 0 failed** (412
   before this task's 5 new cases; the 24 value cases and the 11 FR-031 cases now
   actually run).
-- `cargo test -p ragent-config --doc` -> 8 passed.
-- `cargo clippy -p ragent-config --all-targets` -> clean.
+- `cargo test -p codemason-config --doc` -> 8 passed.
+- `cargo clippy -p codemason-config --all-targets` -> clean.
 - `cargo fmt --all -- --check` -> clean.
 - `bash scripts/check-test-env-isolation.sh` -> OK (the new sandbox file is
   `#[serial]` throughout; the guard rejects a file-local mutex mixed with
@@ -204,12 +204,12 @@ fails after a "restore"), and every restore was verified with `md5sum`.
   `ToolRegistry::definitions()` advertises registry names only today, which is
   FR-030's honest count and FR-015's default.
 - **T-023** writes the trace files. This task only defines the switch; the
-  recording lives in `crates/ragent-llm/src/providers/wire/trace.rs` and is inert
+  recording lives in `crates/codemason-llm/src/providers/wire/trace.rs` and is inert
   until the loop sets it from `config.tools.wire_trace`. That call is *not* yet
-  in `crates/ragent-agent/src/session/loop_steps.rs`, so
+  in `crates/codemason-agent/src/session/loop_steps.rs`, so
   `test_wire_trace::test_agent_loop_sets_the_switch_from_config` currently fails -
   a T-023 failure, not a T-020 one (it asserts on the agent loop's source text,
   which this task did not touch).
 - **T-042** calls `ToolsConfig::validate_alias_spellings()` from
-  `Config::parse_file` and the `RAGENT_CONFIG_CONTENT` route and renders
+  `Config::parse_file` and the `CODEMASON_CONFIG_CONTENT` route and renders
   `RetiredAliasSpelling::reason()` with the file name prepended.

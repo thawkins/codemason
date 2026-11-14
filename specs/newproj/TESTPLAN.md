@@ -11,12 +11,12 @@ session against a real GitHub/GitLab account where hosting tests are involved.
 
 ## Prerequisites
 
-- ragent binary built from the feature branch (`cargo build`) and available on `PATH`.
+- codemason binary built from the feature branch (`cargo build`) and available on `PATH`.
 - A scratch parent directory for disposable projects, e.g. `~/scratch/newproj-tests/`
   containing **only** empty subdirectories created for each test case.
-- For GitHub tests: valid GitHub credentials configured in ragent (previously used
+- For GitHub tests: valid GitHub credentials configured in codemason (previously used
   `github` tools successfully in a session).
-- For GitLab tests: valid GitLab credentials configured in ragent.
+- For GitLab tests: valid GitLab credentials configured in codemason.
 - A known non-empty directory for guard tests: create `~/scratch/newproj-tests/busy/`
   containing one stray file (`keepme.txt`).
 - Language toolchains installed as required by each case: `rust` (cargo), `python` 3,
@@ -28,7 +28,7 @@ session against a real GitHub/GitLab account where hosting tests are involved.
 
 **Requirement:** FR-012
 
-**Preconditions:** ragent running in the TUI inside an empty directory
+**Preconditions:** codemason running in the TUI inside an empty directory
 (`~/scratch/newproj-tests/tc001/`).
 
 **Steps:**
@@ -49,13 +49,13 @@ session against a real GitHub/GitLab account where hosting tests are involved.
 
 **Requirement:** FR-001, FR-004, FR-005, FR-006, FR-008, FR-011, FR-019
 
-**Preconditions:** ragent running in the TUI inside empty directory
+**Preconditions:** codemason running in the TUI inside empty directory
 `~/scratch/newproj-tests/tc002/`.
 
 **Steps:**
 1. Type `/new --language rust --type cmdline` and press `Enter`.
 2. Watch the streamed progress lines in the message window.
-3. After the summary report appears, quit ragent (`/quit`) and inspect the directory
+3. After the summary report appears, quit codemason (`/quit`) and inspect the directory
    in a normal shell.
 
 **Test data:** `/new --language rust --type cmdline`
@@ -66,7 +66,7 @@ session against a real GitHub/GitLab account where hosting tests are involved.
 - Summary report lists: layout, generated files, language/type, and
   `remote: none`.
 - Directory contains: `Cargo.toml`, `src/main.rs` printing `Hello, world!`,
-  `.gitignore`, `AGENTS.md`, `specs/`, `log/`, `.ragent/`, plus the FR-019 docs set
+  `.gitignore`, `AGENTS.md`, `specs/`, `log/`, `.codemason/`, plus the FR-019 docs set
   (`README.md`, `QUICKSTART.md`, `STATS.md`, `docs/`).
 - `cargo run` in the directory builds and prints `Hello, world!`.
 - `git status` reports "not a git repository" (no remote configured, no push).
@@ -75,7 +75,7 @@ session against a real GitHub/GitLab account where hosting tests are involved.
 
 **Requirement:** FR-002
 
-**Preconditions:** ragent running in the TUI inside `~/scratch/newproj-tests/busy/`
+**Preconditions:** codemason running in the TUI inside `~/scratch/newproj-tests/busy/`
 (containing `keepme.txt`). Note the exact byte contents of `keepme.txt`.
 
 **Steps:**
@@ -95,7 +95,7 @@ session against a real GitHub/GitLab account where hosting tests are involved.
 
 **Requirement:** FR-003
 
-**Preconditions:** ragent running in the TUI inside empty directory
+**Preconditions:** codemason running in the TUI inside empty directory
 `~/scratch/newproj-tests/tc004/`.
 
 **Steps:**
@@ -116,12 +116,12 @@ session against a real GitHub/GitLab account where hosting tests are involved.
 
 **Requirement:** FR-006
 
-**Preconditions:** ragent running in the TUI inside empty directory
+**Preconditions:** codemason running in the TUI inside empty directory
 `~/scratch/newproj-tests/tc005/`.
 
 **Steps:**
 1. Type `/new --language rust --type library` and press `Enter`.
-2. Quit ragent and inspect the directory.
+2. Quit codemason and inspect the directory.
 
 **Test data:** `/new --language rust --type library`
 
@@ -134,28 +134,28 @@ session against a real GitHub/GitLab account where hosting tests are involved.
 
 **Requirement:** FR-007
 
-**Preconditions:** ragent running in the TUI inside empty directory
+**Preconditions:** codemason running in the TUI inside empty directory
 `~/scratch/newproj-tests/tc006/`.
 
 **Steps:**
 1. Type `/new --language rust --type cmdline --stack made_up_framework` and press
    `Enter`.
-2. Quit ragent and inspect the directory.
+2. Quit codemason and inspect the directory.
 
 **Test data:** `/new --language rust --type cmdline --stack made_up_framework`
 
 **Expected results:**
 - A visible warning names the unknown stack and states the base layout is used.
-- Scaffold completes otherwise as in TC-002 (buildable, ragent layout present).
+- Scaffold completes otherwise as in TC-002 (buildable, codemason layout present).
 
 ### TC-019 — Stack overlay on a binary app type emits a single entry point
 
 **Requirement:** FR-007
 
-**Preconditions:** ragent build with the T-019 fix; run from a shell.
+**Preconditions:** codemason build with the T-019 fix; run from a shell.
 
 **Steps:**
-1. Run `ragent new --language rust --type tui --stack ratatui` in an empty
+1. Run `codemason new --language rust --type tui --stack ratatui` in an empty
    directory, then repeat for `--type cmdline --stack axum`,
    `--type cmdline --stack warp`, `--type gui --stack raylib`, and
    `--type gui --stack gtk4`.
@@ -176,7 +176,7 @@ matching app types.
 
 **Requirement:** FR-008, FR-011
 
-**Preconditions:** ragent running in the TUI inside empty directory
+**Preconditions:** codemason running in the TUI inside empty directory
 `~/scratch/newproj-tests/tc007/`; valid GitHub credentials; the repo name derived from
 the directory name (`tc007`) must not already exist on the GitHub account.
 
@@ -197,7 +197,7 @@ the directory name (`tc007`) must not already exist on the GitHub account.
 
 **Requirement:** FR-008, FR-011
 
-**Preconditions:** ragent running in the TUI inside empty directory
+**Preconditions:** codemason running in the TUI inside empty directory
 `~/scratch/newproj-tests/tc008/`; valid GitLab credentials; `tc008` free on the account.
 
 **Steps:**
@@ -215,7 +215,7 @@ the directory name (`tc007`) must not already exist on the GitHub account.
 
 **Requirement:** FR-009
 
-**Preconditions:** ragent running in the TUI inside empty directory
+**Preconditions:** codemason running in the TUI inside empty directory
 `~/scratch/newproj-tests/tc009/`.
 
 **Steps:**
@@ -232,7 +232,7 @@ the directory name (`tc007`) must not already exist on the GitHub account.
 
 **Requirement:** FR-010
 
-**Preconditions:** ragent running in the TUI inside empty directory
+**Preconditions:** codemason running in the TUI inside empty directory
 `~/scratch/newproj-tests/tc010/`; GitHub credentials configured but **invalid**
 (revoked token) so remote creation fails.
 
@@ -253,19 +253,19 @@ the directory name (`tc007`) must not already exist on the GitHub account.
 
 **Requirement:** FR-005, FR-006, FR-007, FR-011
 
-**Preconditions:** ragent running in the TUI inside empty directory
+**Preconditions:** codemason running in the TUI inside empty directory
 `~/scratch/newproj-tests/tc011/`; `node` + `npm` installed.
 
 **Steps:**
 1. Type `/new --language typescript --type tui --stack ink` and press `Enter`.
-2. Quit ragent and inspect the directory.
+2. Quit codemason and inspect the directory.
 
 **Test data:** `/new --language typescript --type tui --stack ink`
 
 **Expected results:**
 - Scaffold contains `package.json` with `ink` in dependencies, a `src/` entrypoint
-  rendering a hello TUI, and the ragent layout (`.gitignore`, `AGENTS.md`, `specs/`,
-  `log/`, `.ragent/`).
+  rendering a hello TUI, and the codemason layout (`.gitignore`, `AGENTS.md`, `specs/`,
+  `log/`, `.codemason/`).
 - Summary lists the stack as `ink`.
 - `npm install && npm run build` (or documented equivalent) succeeds.
 
@@ -278,7 +278,7 @@ with its scaffold. Edit `AGENTS.md` to contain a unique marker line
 `MARKER-TC-012` and save.
 
 **Steps:**
-1. Relaunch ragent in `~/scratch/newproj-tests/tc002/`.
+1. Relaunch codemason in `~/scratch/newproj-tests/tc002/`.
 2. Type `/new --language rust --type cmdline` and press `Enter`.
 3. Inspect `AGENTS.md` in a shell.
 
@@ -299,28 +299,28 @@ with its scaffold. Edit `AGENTS.md` to contain a unique marker line
 the TUI.
 
 **Steps:**
-1. Run `ragent run "/new --language go --type library" --no-tui` (or the documented
+1. Run `codemason run "/new --language go --type library" --no-tui` (or the documented
    CLI equivalent) from the directory's parent after `cd` into it, following the
    documented usage.
 2. Inspect the directory.
 
-**Test data:** `ragent run "/new --language go --type library" --no-tui`
+**Test data:** `codemason run "/new --language go --type library" --no-tui`
 
 **Expected results:**
 - Same scaffold as the TUI path: `go.mod` with library module (no `main.go` binary
-  entry), ragent layout, summary output on stdout, `remote: none`.
+  entry), codemason layout, summary output on stdout, `remote: none`.
 
 ### TC-014 — Idempotent remote retry after partial failure
 
 **Requirement:** FR-010, FR-015
 
 **Preconditions:** After TC-010, keep the directory `~/scratch/newproj-tests/tc010/`
-(scaffold present, no remote). Restore valid GitHub credentials in ragent; ensure
+(scaffold present, no remote). Restore valid GitHub credentials in codemason; ensure
 `tcb010` naming does not conflict — the repo name is derived from the directory name,
 so rename the directory to `~/scratch/newproj-tests/tc014/` first and `cd` into it.
 
 **Steps:**
-1. Relaunch ragent in `tc014/`.
+1. Relaunch codemason in `tc014/`.
 2. Type `/new --language rust --type cmdline --github` and press `Enter`.
 3. Inspect git state and the GitHub account.
 
@@ -336,7 +336,7 @@ and no remote.
 
 **Requirement:** FR-018, NFR-001
 
-**Preconditions:** ragent running in the TUI inside an empty directory
+**Preconditions:** codemason running in the TUI inside an empty directory
 (`~/scratch/newproj-tests/tc015/`).
 
 **Steps:**
@@ -366,12 +366,12 @@ and no remote.
 
 **Requirement:** FR-019, NFR-002
 
-**Preconditions:** ragent running in the TUI inside empty directory
+**Preconditions:** codemason running in the TUI inside empty directory
 `~/scratch/newproj-tests/tc016/`.
 
 **Steps:**
 1. Type `/new --language rust --type cmdline` and press `Enter`.
-2. After the summary, quit ragent and inspect the directory in a shell.
+2. After the summary, quit codemason and inspect the directory in a shell.
 3. Open `README.md`, `QUICKSTART.md`, and `STATS.md`; read the build/run instructions.
 4. Run the run-command given in `QUICKSTART.md` and compare its output with the
    documented first output.
@@ -388,7 +388,7 @@ and no remote.
 - `QUICKSTART.md` exists with prerequisites, the exact build/run command, and the
   expected first output (`Hello, world!`).
 - `STATS.md` exists and records: a UTC timestamp, language `rust`, app type
-  `cmdline`, stack `none`, a count of generated files, and the ragent version.
+  `cmdline`, stack `none`, a count of generated files, and the codemason version.
 - `docs/` folder exists (may contain an empty index or placeholder).
 - For the Python run: `README.md`/`QUICKSTART.md` show `python3 main.py` instead of
   `cargo run`, and `STATS.md` records language `python`.
@@ -401,14 +401,14 @@ and no remote.
 
 **Requirement:** FR-008
 
-**Preconditions:** A stored token at `~/.config/ragent/github_token` whose value is a
+**Preconditions:** A stored token at `~/.config/codemason/github_token` whose value is a
 GitHub App token (`ghu_`), and an authenticated `gh` CLI (`gh auth status` shows a
 `repo`-scoped token).
 
 **Steps:**
-1. Run `ragent new --language rust --type cmdline --github` in an empty directory.
+1. Run `codemason new --language rust --type cmdline --github` in an empty directory.
 2. Inspect the `Remote:` line and `git remote -v`.
-3. Repeat with `RAGENT_GITHUB_NO_GH_CLI=1` in a fresh empty directory.
+3. Repeat with `CODEMASON_GITHUB_NO_GH_CLI=1` in a fresh empty directory.
 
 **Test data:** stored `ghu_` token + `gh auth token` credential.
 
@@ -427,11 +427,11 @@ GitHub App token (`ghu_`), and an authenticated `gh` CLI (`gh auth status` shows
 
 **Requirement:** FR-008, FR-010
 
-**Preconditions:** ragent build with the T-018 fix; run from a shell (not the TUI).
+**Preconditions:** codemason build with the T-018 fix; run from a shell (not the TUI).
 
 **Steps:**
-1. Run `ragent new --language rust --type cmdline --github` and then
-   `ragent run "/new --language go --type cmdline --github"` in empty directories.
+1. Run `codemason new --language rust --type cmdline --github` and then
+   `codemason run "/new --language go --type cmdline --github"` in empty directories.
 2. Confirm neither invocation panics and each prints a `Remote:` outcome.
 
 **Expected results:**
@@ -443,12 +443,12 @@ GitHub App token (`ghu_`), and an authenticated `gh` CLI (`gh auth status` shows
 
 **Requirement:** FR-006
 
-**Preconditions:** ragent running in the TUI inside empty directory
+**Preconditions:** codemason running in the TUI inside empty directory
 `~/scratch/newproj-tests/tc020/`.
 
 **Steps:**
 1. Type `/new --language rust --type webapp` and press `Enter`.
-2. Quit ragent and inspect the directory.
+2. Quit codemason and inspect the directory.
 3. Repeat with `/new --language go --type webapp` and
    `/new --language java --type webapp` in their own empty directories.
 
@@ -468,4 +468,4 @@ with no web idiom such as `java`.
 - Delete all scratch project directories: `rm -rf ~/scratch/newproj-tests/`.
 - Delete the repositories created by TC-007 (`tc007`), TC-008 (`tc008`), and
   TC-014 (`tc014`) from the GitHub/GitLab accounts.
-- Quit any ragent sessions left open (`/quit`).
+- Quit any codemason sessions left open (`/quit`).

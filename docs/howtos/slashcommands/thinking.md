@@ -81,5 +81,5 @@ Invalid level - prints the usage line in the status bar.
 
 - `/model` - select the model whose thinking level you configure
 - `/provider` - change provider configuration
-- Provider `thinking` section in `ragent.json` - per-provider and per-model
+- Provider `thinking` section in `codemason.json` - per-provider and per-model
   thinking defaults (`enabled`, `level`, `budget_tokens`)

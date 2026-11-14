@@ -58,7 +58,7 @@ Check the usage line:
 Plan with explicit scope constraints in the description:
 
 ```
-/plan redesign the permission check pipeline, touch only crates/ragent-agent/src/session
+/plan redesign the permission check pipeline, touch only crates/codemason-agent/src/session
 ```
 
 ## Output

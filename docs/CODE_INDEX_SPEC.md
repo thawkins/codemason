@@ -2,7 +2,7 @@
 
 **Version:** 1.0  
 **Status:** Active — source-of-truth for any scan, report, or remediation that references "a 1000-line function" or "a 1000-line module"  
-**Owner:** ragent team  
+**Owner:** codemason team  
 **Applies to:** code-index scanner, `FUNCPLAN`, `PERFPLAN`, `scripts/function_analyzer.py`, and any ad-hoc audit script. `scripts/function_analyzer.py` implements §1.3, §2, §3 and the §5 fields for functions; it does not use tree-sitter, emit module records, or provide `--spec-check` (see §7)
 
 ---
@@ -167,7 +167,7 @@ Every scan tool that implements this spec MUST emit one JSON object per violatio
 
 ```json
 {
-  "path": "crates/ragent-agent/src/session/processor.rs",
+  "path": "crates/codemason-agent/src/session/processor.rs",
   "language": "rust",
   "kind": "function",
   "name": "SessionProcessor::run_turn",
@@ -190,7 +190,7 @@ Optional enrichment: `raw_lines` (before blank/comment stripping), `blank_lines`
 - A Rust file with 1000 effective LOC is **clean**. At 1001 it becomes a violation.
 - `const onClick = (e) => setState(e)` in a `.tsx` file is a one-line arrow assigned to a variable — counts as a function **only** if its body span exceeds the threshold on its own (unlikely); inline `arr.map(x => x+1)` never counts.
 - `vendor/highlight.js/highlight.min.js` is excluded by both `vendor/` and `*.min.js`.
-- `crates/ragent-tui/tests/test_layout_deep.rs` is a test file — excluded from the violation list.
+- `crates/codemason-tui/tests/test_layout_deep.rs` is a test file — excluded from the violation list.
 
 ---
 

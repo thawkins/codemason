@@ -1,7 +1,7 @@
 ---
 status: draft
 spec_id: zoeygap
-title: "Zoey Gap — Voice-First Companion Orchestration for ragent"
+title: "Zoey Gap — Voice-First Companion Orchestration for codemason"
 created: 2026-01-15
 ---
 # Zoey Gap — Voice-First Companion Orchestration
@@ -9,15 +9,15 @@ created: 2026-01-15
 ## Overview
 
 This specification defines the integration of Zoey OS–style capabilities into
-ragent, leveraging as many existing ragent subsystems as possible. The core
+codemason, leveraging as many existing codemason subsystems as possible. The core
 goals are:
 
 1. **Voice interaction** (required) — speech-to-text input and text-to-speech
-   output so users can talk to ragent and hear responses.
+   output so users can talk to codemason and hear responses.
 2. **Companion orchestration** — a lead "coordinator" agent that receives user
    intent, routes work to specialised companion agents, and aggregates results
    — analogous to Zoey OS's "Zoey delegates to companions, bots execute" model.
-3. **Leverage existing ragent features** — teams/swarm, custom agents, skills,
+3. **Leverage existing codemason features** — teams/swarm, custom agents, skills,
    memory, MCP, HTTP/SSE server, cron, Gmail/messaging, VCS tools, permissions,
    prompt optimization, and session management — rather than building parallel
    systems.
@@ -46,9 +46,9 @@ identified from the public site:
 | Workflow automation     | Unify data, systems, workflows                                                   |
 | Security & compliance   | Row-level security, encrypted credentials, audit logs                            |
 
-### Mapping to Existing ragent Capabilities
+### Mapping to Existing codemason Capabilities
 
-| Zoey OS Feature          | ragent Equivalent (existing or partial)                                      |
+| Zoey OS Feature          | codemason Equivalent (existing or partial)                                      |
 | ------------------------ | ---------------------------------------------------------------------------- |
 | Companion delegation     | Teams & Swarm (`team_create`, `team_spawn`, `team_task_*`, `/swarm`) |
 | Companion customisation  | Custom agents (`CustomAgentDef`, OASF JSON / Markdown profiles)            |
@@ -61,7 +61,7 @@ identified from the public site:
 | Behaviour interviews     | Prompt optimization (`/opt`, 12 frameworks)                                |
 | Workflow automation      | Sub-agents (`new_task`, `wait_tasks`), orchestrator module               |
 | Session persistence      | Session management (SQLite history, resume, export)                          |
-| Configuration            | `ragent.json` / `ragent.jsonc` configuration                             |
+| Configuration            | `codemason.json` / `codemason.jsonc` configuration                             |
 
 ### Gaps Requiring New Work
 
@@ -114,7 +114,7 @@ notation. Each requirement uses one of the five EARS templates:
 ### FR-005 — Voice Backend Configuration (Ubiquitous)
 
 > The system shall support configurable speech-to-text and text-to-speech
-> backends specified in `ragent.json`, including at minimum a local subprocess
+> backends specified in `codemason.json`, including at minimum a local subprocess
 > backend (e.g. `whisper` CLI for STT, `espeak`/`piper` for TTS) and an
 > OpenAI-compatible API backend.
 
@@ -141,7 +141,7 @@ notation. Each requirement uses one of the five EARS templates:
 ### FR-009 — Companion Agent Definitions (Ubiquitous)
 
 > The system shall treat custom agent definitions (OASF JSON / Markdown
-> profiles loaded from `.ragent/agents/`) as "companions" and shall expose them
+> profiles loaded from `.codemason/agents/`) as "companions" and shall expose them
 > to the coordinator for routing, including their declared skills, tools, and
 > permissions.
 
@@ -179,7 +179,7 @@ notation. Each requirement uses one of the five EARS templates:
 
 ### FR-015 — Telegram Bridge (Optional)
 
-> Where Telegram channel configuration is present in `ragent.json`, the system
+> Where Telegram channel configuration is present in `codemason.json`, the system
 > shall accept incoming messages from a Telegram bot as user input to the
 > coordinator agent and shall send coordinator/companion responses back through
 > the existing `send_channel_message` infrastructure, enabling mobile
@@ -218,7 +218,7 @@ notation. Each requirement uses one of the five EARS templates:
 
 ### FR-021 — Coordinator CLI Subcommand (Ubiquitous)
 
-> The system shall provide a `ragent companion` CLI subcommand (or
+> The system shall provide a `codemason companion` CLI subcommand (or
 > `--coordinator` flag) that launches a session with the coordinator agent,
 > automatically enabling team infrastructure and companion routing.
 
@@ -277,7 +277,7 @@ notation. Each requirement uses one of the five EARS templates:
 - **Custom integrations** — no Python or visual builder for new integrations;
   MCP and existing tool systems cover integration needs.
 - **Multi-seat tenancy** — no per-team-member worlds, shared knowledge, or
-  role-based multi-tenant permissions. ragent's HTTP server already supports
+  role-based multi-tenant permissions. codemason's HTTP server already supports
   bearer-token auth; a full multi-tenant identity system is out of scope.
 - **Data ownership / four-tier privacy** — no four-tier privacy model or
   "never train on data" guarantee is specified. The existing permission system

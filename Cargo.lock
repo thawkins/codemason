@@ -874,6 +874,552 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
+name = "codemason"
+version = "1.0.169"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "clap",
+ "codemason-agent",
+ "codemason-config",
+ "codemason-connectors",
+ "codemason-llm",
+ "codemason-plugins",
+ "codemason-research",
+ "codemason-server",
+ "codemason-specs",
+ "codemason-tools-core",
+ "codemason-tools-extended",
+ "codemason-tui",
+ "codemason-types",
+ "futures",
+ "libc",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "codemason-agent"
+version = "1.0.169"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64 0.23.1",
+ "chrono",
+ "codemason-codeindex",
+ "codemason-config",
+ "codemason-llm",
+ "codemason-plugins",
+ "codemason-research",
+ "codemason-specs",
+ "codemason-storage",
+ "codemason-surface",
+ "codemason-telemetry",
+ "codemason-tools-core",
+ "codemason-tools-extended",
+ "codemason-tools-vcs",
+ "codemason-types",
+ "criterion",
+ "dashmap",
+ "dirs",
+ "flate2",
+ "fs2",
+ "futures",
+ "gcf",
+ "globset",
+ "hex",
+ "html2text",
+ "ignore",
+ "libc",
+ "num_cpus",
+ "opentelemetry_sdk",
+ "parking_lot",
+ "process-wrap",
+ "readability-rs",
+ "regex",
+ "reqwest",
+ "rmcp",
+ "rusqlite",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "serial_test",
+ "sha2 0.11.1",
+ "similar",
+ "sysinfo",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "walkdir",
+ "wiremock",
+]
+
+[[package]]
+name = "codemason-bench"
+version = "1.0.169"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "calamine",
+ "chrono",
+ "codemason-agent",
+ "codemason-llm",
+ "codemason-tools-core",
+ "codemason-types",
+ "criterion",
+ "futures",
+ "hex",
+ "reqwest",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "codemason-codeindex"
+version = "1.0.169"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "chrono",
+ "codemason-types",
+ "criterion",
+ "globset",
+ "ignore",
+ "lru",
+ "notify",
+ "rayon",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tantivy",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tree-sitter",
+ "tree-sitter-c",
+ "tree-sitter-cmake",
+ "tree-sitter-cpp",
+ "tree-sitter-go",
+ "tree-sitter-groovy",
+ "tree-sitter-hcl",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-kotlin-ng",
+ "tree-sitter-openscad-ng",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+ "tree-sitter-xml",
+]
+
+[[package]]
+name = "codemason-config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "codemason-types",
+ "dirs",
+ "globset",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
+name = "codemason-connectors"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "codemason-config",
+ "codemason-surface",
+ "codemason-types",
+ "flate2",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tar",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "url",
+ "zip",
+]
+
+[[package]]
+name = "codemason-hyperresearch"
+version = "1.0.169"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codemason-config",
+ "codemason-types",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "codemason-llm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "bytes",
+ "chrono",
+ "codemason-config",
+ "codemason-storage",
+ "codemason-types",
+ "dirs",
+ "futures",
+ "hex",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "codemason-plugins"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "codemason-config",
+ "codemason-surface",
+ "codemason-tools-core",
+ "codemason-types",
+ "flate2",
+ "hex",
+ "reqwest",
+ "rquickjs",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+ "zip",
+]
+
+[[package]]
+name = "codemason-research"
+version = "1.0.169"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "blake3",
+ "chrono",
+ "codemason-config",
+ "codemason-llm",
+ "codemason-specs",
+ "codemason-tools-extended",
+ "codemason-types",
+ "criterion",
+ "futures",
+ "proptest",
+ "regex",
+ "reqwest",
+ "rusqlite",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "codemason-server"
+version = "1.0.169"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "axum",
+ "blake3",
+ "chrono",
+ "codemason-agent",
+ "codemason-config",
+ "codemason-research",
+ "codemason-types",
+ "criterion",
+ "futures",
+ "http-body-util",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tower",
+ "tower-http",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "codemason-specs"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "codemason-tools-extended",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "codemason-storage"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.23.1",
+ "blake3",
+ "chacha20poly1305",
+ "chrono",
+ "codemason-types",
+ "criterion",
+ "dirs",
+ "rand 0.10.3",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "similar",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "codemason-surface"
+version = "0.1.0"
+dependencies = [
+ "codemason-config",
+ "codemason-types",
+ "reqwest",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "codemason-telemetry"
+version = "0.1.0"
+dependencies = [
+ "codemason-config",
+ "codemason-types",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "parking_lot",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
+name = "codemason-tools-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "codemason-config",
+ "codemason-types",
+ "dirs",
+ "filetime",
+ "globset",
+ "grep-regex",
+ "grep-searcher",
+ "ignore",
+ "libc",
+ "lru",
+ "rayon",
+ "regex",
+ "rust_xlsxwriter",
+ "same-file",
+ "serde",
+ "serde_json",
+ "similar",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "which",
+]
+
+[[package]]
+name = "codemason-tools-extended"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "chrono",
+ "codemason-codeindex",
+ "codemason-config",
+ "codemason-tools-core",
+ "codemason-tools-extended",
+ "codemason-types",
+ "futures",
+ "html2text",
+ "lingua",
+ "lopdf",
+ "pdf-extract",
+ "printpdf",
+ "quick-xml",
+ "readability-rs",
+ "regex",
+ "reqwest",
+ "rusqlite",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
+name = "codemason-tools-vcs"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "codemason-config",
+ "codemason-storage",
+ "codemason-types",
+ "futures",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "wiremock",
+ "zip",
+]
+
+[[package]]
+name = "codemason-tui"
+version = "1.0.169"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "async-trait",
+ "axum",
+ "chrono",
+ "codemason-agent",
+ "codemason-bench",
+ "codemason-codeindex",
+ "codemason-config",
+ "codemason-connectors",
+ "codemason-llm",
+ "codemason-plugins",
+ "codemason-research",
+ "codemason-server",
+ "codemason-specs",
+ "codemason-storage",
+ "codemason-telemetry",
+ "codemason-tools-core",
+ "codemason-tools-extended",
+ "codemason-tools-vcs",
+ "codemason-types",
+ "criterion",
+ "crossterm 0.28.1",
+ "dirs",
+ "filetime",
+ "fs2",
+ "futures",
+ "html2text",
+ "image",
+ "lru",
+ "parking_lot",
+ "pulldown-cmark",
+ "rand 0.10.3",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "unicode-segmentation",
+ "unicode-width",
+ "uuid",
+]
+
+[[package]]
+name = "codemason-types"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "libc",
+ "memchr",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "codepage"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4898,552 +5444,6 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
-
-[[package]]
-name = "ragent"
-version = "1.0.169"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "clap",
- "futures",
- "libc",
- "parking_lot",
- "ragent-agent",
- "ragent-config",
- "ragent-connectors",
- "ragent-llm",
- "ragent-plugins",
- "ragent-research",
- "ragent-server",
- "ragent-specs",
- "ragent-tools-core",
- "ragent-tools-extended",
- "ragent-tui",
- "ragent-types",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "ragent-agent"
-version = "1.0.169"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "base64 0.23.1",
- "chrono",
- "criterion",
- "dashmap",
- "dirs",
- "flate2",
- "fs2",
- "futures",
- "gcf",
- "globset",
- "hex",
- "html2text",
- "ignore",
- "libc",
- "num_cpus",
- "opentelemetry_sdk",
- "parking_lot",
- "process-wrap",
- "ragent-codeindex",
- "ragent-config",
- "ragent-llm",
- "ragent-plugins",
- "ragent-research",
- "ragent-specs",
- "ragent-storage",
- "ragent-surface",
- "ragent-telemetry",
- "ragent-tools-core",
- "ragent-tools-extended",
- "ragent-tools-vcs",
- "ragent-types",
- "readability-rs",
- "regex",
- "reqwest",
- "rmcp",
- "rusqlite",
- "rustc-hash",
- "serde",
- "serde_json",
- "serde_norway",
- "serial_test",
- "sha2 0.11.1",
- "similar",
- "sysinfo",
- "tar",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "tokio-stream",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
- "walkdir",
- "wiremock",
-]
-
-[[package]]
-name = "ragent-bench"
-version = "1.0.169"
-dependencies = [
- "anyhow",
- "async-trait",
- "calamine",
- "chrono",
- "criterion",
- "futures",
- "hex",
- "ragent-agent",
- "ragent-llm",
- "ragent-tools-core",
- "ragent-types",
- "reqwest",
- "rustc-hash",
- "serde",
- "serde_json",
- "sha2 0.11.1",
- "tempfile",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "ragent-codeindex"
-version = "1.0.169"
-dependencies = [
- "anyhow",
- "blake3",
- "chrono",
- "criterion",
- "globset",
- "ignore",
- "lru",
- "notify",
- "ragent-types",
- "rayon",
- "rusqlite",
- "serde",
- "serde_json",
- "tantivy",
- "tempfile",
- "tokio",
- "tracing",
- "tree-sitter",
- "tree-sitter-c",
- "tree-sitter-cmake",
- "tree-sitter-cpp",
- "tree-sitter-go",
- "tree-sitter-groovy",
- "tree-sitter-hcl",
- "tree-sitter-java",
- "tree-sitter-javascript",
- "tree-sitter-kotlin-ng",
- "tree-sitter-openscad-ng",
- "tree-sitter-python",
- "tree-sitter-rust",
- "tree-sitter-typescript",
- "tree-sitter-xml",
-]
-
-[[package]]
-name = "ragent-config"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "dirs",
- "globset",
- "ragent-types",
- "serde",
- "serde_json",
- "serial_test",
- "tempfile",
- "tracing",
-]
-
-[[package]]
-name = "ragent-connectors"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "flate2",
- "hex",
- "ragent-config",
- "ragent-surface",
- "ragent-types",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.11.1",
- "tar",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
- "url",
- "zip",
-]
-
-[[package]]
-name = "ragent-hyperresearch"
-version = "1.0.169"
-dependencies = [
- "anyhow",
- "clap",
- "ragent-config",
- "ragent-types",
- "serde",
- "serde_json",
- "serde_norway",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "ragent-llm"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-stream",
- "async-trait",
- "bytes",
- "chrono",
- "dirs",
- "futures",
- "hex",
- "ragent-config",
- "ragent-storage",
- "ragent-types",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.11.1",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "ragent-plugins"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "flate2",
- "hex",
- "ragent-config",
- "ragent-surface",
- "ragent-tools-core",
- "ragent-types",
- "reqwest",
- "rquickjs",
- "serde",
- "serde_json",
- "sha2 0.11.1",
- "tar",
- "tempfile",
- "thiserror 2.0.21",
- "tracing",
- "zip",
-]
-
-[[package]]
-name = "ragent-research"
-version = "1.0.169"
-dependencies = [
- "anyhow",
- "async-trait",
- "blake3",
- "chrono",
- "criterion",
- "futures",
- "proptest",
- "ragent-config",
- "ragent-llm",
- "ragent-specs",
- "ragent-tools-extended",
- "ragent-types",
- "regex",
- "reqwest",
- "rusqlite",
- "rustc-hash",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "ragent-server"
-version = "1.0.169"
-dependencies = [
- "anyhow",
- "async-stream",
- "async-trait",
- "axum",
- "blake3",
- "chrono",
- "criterion",
- "futures",
- "http-body-util",
- "parking_lot",
- "ragent-agent",
- "ragent-config",
- "ragent-research",
- "ragent-types",
- "serde",
- "serde_json",
- "tokio",
- "tokio-stream",
- "tower",
- "tower-http",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "ragent-specs"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "ragent-tools-extended",
- "regex",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "ragent-storage"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.23.1",
- "blake3",
- "chacha20poly1305",
- "chrono",
- "criterion",
- "dirs",
- "ragent-types",
- "rand 0.10.3",
- "rusqlite",
- "serde",
- "serde_json",
- "similar",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "ragent-surface"
-version = "0.1.0"
-dependencies = [
- "ragent-config",
- "ragent-types",
- "reqwest",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "ragent-telemetry"
-version = "0.1.0"
-dependencies = [
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
- "parking_lot",
- "ragent-config",
- "ragent-types",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "url",
-]
-
-[[package]]
-name = "ragent-tools-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "dirs",
- "filetime",
- "globset",
- "grep-regex",
- "grep-searcher",
- "ignore",
- "libc",
- "lru",
- "ragent-config",
- "ragent-types",
- "rayon",
- "regex",
- "rust_xlsxwriter",
- "same-file",
- "serde",
- "serde_json",
- "similar",
- "tempfile",
- "tokio",
- "tracing",
- "which",
-]
-
-[[package]]
-name = "ragent-tools-extended"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "chrono",
- "futures",
- "html2text",
- "lingua",
- "lopdf",
- "pdf-extract",
- "printpdf",
- "quick-xml",
- "ragent-codeindex",
- "ragent-config",
- "ragent-tools-core",
- "ragent-tools-extended",
- "ragent-types",
- "readability-rs",
- "regex",
- "reqwest",
- "rusqlite",
- "rustc-hash",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
- "url",
- "uuid",
- "wiremock",
-]
-
-[[package]]
-name = "ragent-tools-vcs"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "futures",
- "ragent-config",
- "ragent-storage",
- "ragent-types",
- "reqwest",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "wiremock",
- "zip",
-]
-
-[[package]]
-name = "ragent-tui"
-version = "1.0.169"
-dependencies = [
- "anyhow",
- "arboard",
- "async-trait",
- "axum",
- "chrono",
- "criterion",
- "crossterm 0.28.1",
- "dirs",
- "filetime",
- "fs2",
- "futures",
- "html2text",
- "image",
- "lru",
- "parking_lot",
- "pulldown-cmark",
- "ragent-agent",
- "ragent-bench",
- "ragent-codeindex",
- "ragent-config",
- "ragent-connectors",
- "ragent-llm",
- "ragent-plugins",
- "ragent-research",
- "ragent-server",
- "ragent-specs",
- "ragent-storage",
- "ragent-telemetry",
- "ragent-tools-core",
- "ragent-tools-extended",
- "ragent-tools-vcs",
- "ragent-types",
- "rand 0.10.3",
- "ratatui",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "unicode-segmentation",
- "unicode-width",
- "uuid",
-]
-
-[[package]]
-name = "ragent-types"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "libc",
- "memchr",
- "regex",
- "rusqlite",
- "serde",
- "serde_json",
- "serial_test",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
- "url",
- "uuid",
-]
 
 [[package]]
 name = "rand"

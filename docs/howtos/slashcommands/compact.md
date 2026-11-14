@@ -12,7 +12,7 @@ model's context limit or output starts to degrade.
 Compaction is asynchronous: the command starts a background compaction task,
 shows a `compacting...` status, and updates the message window when the summary
 arrives. The same engine also runs automatic compaction (configured in the
-`compaction` section of `ragent.json`), and manual compaction inherits the
+`compaction` section of `codemason.json`), and manual compaction inherits the
 post-compaction queued-prompt drain so a prompt submitted during compaction is
 sent after the history swap completes.
 
@@ -101,5 +101,5 @@ What appears in the message window and status bar:
 - `/context` - context cache management and window measurement
 - `/model` - switch the model used for compaction and chatting
 - `/clear` - wipe history entirely (no summary retained)
-- `compaction` config section in `ragent.json` - automatic compaction,
+- `compaction` config section in `codemason.json` - automatic compaction,
   threshold, buffer, summary token cap, and optional dedicated compaction model

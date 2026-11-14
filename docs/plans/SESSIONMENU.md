@@ -9,7 +9,7 @@ Roadmap: ROADMAP.md items 4 and 5
 
 Overview
 --------
-The sessions sidebar (`crates/ragent-tui/src/sessions_sidebar.rs`) already
+The sessions sidebar (`crates/codemason-tui/src/sessions_sidebar.rs`) already
 acts on the row under the cursor with single keys: `p` pin, `a` archive, `F2`
 rename. Claude desktop exposes the same actions, and more, through a context
 menu on each row. This plan adds that menu and implements every item in it,
@@ -19,7 +19,7 @@ comments, and fixes it.
 
 Reference menu (Claude desktop, accelerator in brackets):
 
-| # | Item | Key | ragent today | Gap |
+| # | Item | Key | codemason today | Gap |
 | --- | --- | --- | --- | --- |
 | 1 | Open PR | `G` | none | session-to-PR binding, browser open |
 | 2 | Open in > | - | none | submenu: editor, file manager, terminal |
@@ -40,7 +40,7 @@ Assumptions (correct these before M1 starts)
   system file manager (`xdg-open` / `open` / `explorer`), and a new terminal
   in the session directory. Split view (two transcripts side by side) stays
   out of scope, as MULTISESSION.md already decided. Opening the same session
-  in a second ragent process is not offered: two processes writing one
+  in a second codemason process is not offered: two processes writing one
   session would corrupt its message order.
 - A3 Fork copies the transcript up to now into a new session in the same
   directory; it does not create a git worktree. Worktree-per-session stays
@@ -148,7 +148,7 @@ Auto-fix
   job log), the conflicting files, or the comment text and location. If the
   session is busy, the message is queued on that session's input queue. A
   background session gets the existing `!`/unread marker and an
-  `on_notification` hook with `RAGENT_NOTIFICATION_KIND=autofix`.
+  `on_notification` hook with `CODEMASON_NOTIFICATION_KIND=autofix`.
 - FR-19 Guard rails: at most `vcs.autofix.max_attempts` (default 3) wake-ups
   per trigger kind per head SHA; after that the session is marked needing the
   user and Auto-fix pauses for that PR/MR. Auto-fix never merges, never
@@ -159,7 +159,7 @@ Auto-fix
   the binding stays (read-only) so `Open PR/MR` still works, and the status
   line says "PR #67 merged". Archiving or deleting the session stops the
   watcher.
-- FR-21 Config (`vcs` block in `ragent.json`, global config only, the same
+- FR-21 Config (`vcs` block in `codemason.json`, global config only, the same
   SEC-001 rule that keeps project config from adding MCP servers):
   `vcs.github.hosts: [{ host, api_url }]` for GitHub Enterprise,
   `vcs.autofix.poll_secs` (default 60, min 30), `max_attempts`,
@@ -172,11 +172,11 @@ Auto-fix
 
 Non-functional requirements
 ---------------------------
-- NFR-01 Polling only; no webhooks (ragent has no public endpoint). One
+- NFR-01 Polling only; no webhooks (codemason has no public endpoint). One
   watcher task per process polls all bound, enabled sessions, batched per
   repository, with ETag/`If-None-Match` on GitHub to stay inside rate limits.
   Backoff on 403/429 using the existing `http_client` retry rules.
-- NFR-02 The watcher runs only while ragent runs. Bindings and trigger
+- NFR-02 The watcher runs only while codemason runs. Bindings and trigger
   dedup state are persisted so a restart neither loses nor repeats a
   trigger.
 - NFR-03 Tokens come only from the existing auth paths
@@ -188,7 +188,7 @@ Non-functional requirements
 Design
 ------
 
-### D1. Context menu widget (`crates/ragent-tui/src/session_menu.rs`)
+### D1. Context menu widget (`crates/codemason-tui/src/session_menu.rs`)
 
 - `SessionMenu { session_id, anchor: Rect, items: Vec<MenuItem>, cursor,
   submenu: Option<Box<SessionMenu>> }` lives in `SidebarState::menu`.
@@ -207,7 +207,7 @@ Design
   other destructive slash commands (check in M1 which one; do not add a
   second dialog type).
 
-### D2. Storage (`crates/ragent-storage`, schema 6)
+### D2. Storage (`crates/codemason-storage`, schema 6)
 
 ```sql
 ALTER TABLE sessions ADD COLUMN unread INTEGER NOT NULL DEFAULT 0;
@@ -253,7 +253,7 @@ section membership and the unread and binding sets; it is still reloaded
 only when `SidebarState::dirty` is set. `Attention::Unread` becomes
 "runtime unread OR persisted unread"; focusing clears both.
 
-### D4. VCS additions (`crates/ragent-tools-vcs`)
+### D4. VCS additions (`crates/codemason-tools-vcs`)
 
 New read-only client functions (not new agent tools; the watcher calls them
 directly, and the agent keeps its existing tools for fixing):
@@ -272,7 +272,7 @@ directly, and the agent keeps its existing tools for fixing):
   `vcs.github.hosts` (FR-21), and the remote parser accepts those hosts.
   GraphQL URL for GHES is `<api_url>/graphql` with `/api/v3` stripped.
 
-### D5. Auto-fix watcher (`crates/ragent-agent/src/autofix/`)
+### D5. Auto-fix watcher (`crates/codemason-agent/src/autofix/`)
 
 - `AutofixWatcher` is a tokio task owned by `SessionProcessor`, started at
   TUI startup, with a `watch` channel for "bindings changed".
@@ -308,14 +308,14 @@ M1 - Confirm and wire the menu shell (2 days) - DONE
   row-action dialog (`App::row_action_confirm`, `RowAction`) with a new
   `RowAction::DeleteSession` variant: default `No`, so a stray `Enter`
   cannot delete.
-- T1.2 `crates/ragent-tui/src/session_menu.rs`: `SessionMenu` in
+- T1.2 `crates/codemason-tui/src/session_menu.rs`: `SessionMenu` in
   `SidebarState::menu`, painted by `layout::render` after the chat and
   before every modal overlay; `sessions_sidebar::handle_key`/`handle_mouse`
   give it first refusal. Items: Pin/Unpin (`P`), Rename (`R`), Archive
   (`A`), dispatched to the same `App` methods as `p`, `F2` (now
   `sessions_sidebar::begin_rename`) and `a`. Submenus arrive with their
   first user in M3. The menu closes if the sidebar is hidden.
-- Verify: `ragent-tui/tests/test_session_menu.rs` (9 tests) renders the
+- Verify: `codemason-tui/tests/test_session_menu.rs` (9 tests) renders the
   menu into a `TestBackend` and checks: `m` opens it below its row with
   accelerators and a rule between groups; `Shift+F10` opens and `Esc`
   closes; header rows open nothing; right-click opens for the clicked row
@@ -353,7 +353,7 @@ M2 - Mark as unread, Delete, Fork (3-4 days) - DONE
   top-level listing, and nothing reads the link. Delete and Fork refuse a
   running session ("stop it first"), as Archive already does, instead of
   stopping it or cutting the in-flight turn.
-- Verify: `ragent-storage/tests/test_session_delete_fork.rs` (6: unread
+- Verify: `codemason-storage/tests/test_session_delete_fork.rs` (6: unread
   round trip skipping archived; delete removes the tree, messages and index
   entries and nothing else; delete of a missing id; fork copies messages
   with new ids, order, timestamps and search entries and survives deleting
@@ -379,7 +379,7 @@ M3 - Sections and Open in (3 days) - DONE
   `<name>` / `--none` move the focused session; `new <name>` creates and
   moves; `rename <name>` and `delete [name]` act on a section (default: the
   focused session's).
-- T3.2 `crates/ragent-tui/src/open_in.rs`: `launch_spec(target, dir, env)`
+- T3.2 `crates/codemason-tui/src/open_in.rs`: `launch_spec(target, dir, env)`
   resolves the program from a `LaunchEnv` (OS, variables, `PATH`) and
   `spawn` starts it detached. Editor: `$VISUAL`, else `$EDITOR`, on `.`; a
   terminal editor (vim, nano, helix, `emacs -nw`, ...) runs in a new
@@ -392,10 +392,10 @@ M3 - Sections and Open in (3 days) - DONE
 - The menu gained submenus (`SessionMenu::submenu`): `Right`/`Enter`/click
   opens, `Left`/`Esc` closes one level, a click outside closes both. It
   opens to the right of the menu, or to the left when there is no room.
-- Verify: `ragent-storage/tests/test_sidebar_sections.rs` (5: create and
+- Verify: `codemason-storage/tests/test_sidebar_sections.rs` (5: create and
   order, duplicate and empty names, rename conflicts, move/delete returning
   sessions with archived left out, back to project, v6 to v7 migration),
-  `ragent-tui/tests/test_open_in.rs` (7: file manager per OS, `VISUAL`
+  `codemason-tui/tests/test_open_in.rs` (7: file manager per OS, `VISUAL`
   before `EDITOR`, no editor variable, terminal editors inside a terminal,
   terminal found on a fake `PATH`, none found, macOS), and
   `test_session_menu.rs` grows to 23 (move via submenu with the row placed
@@ -405,7 +405,7 @@ M3 - Sections and Open in (3 days) - DONE
 
 M4 - Binding on top of projects (about 3 days) - DONE (revised after PR #68)
 PR #68 (spec `projects`) landed while M4 was starting. It already has:
-`ragent_agent::project::remote` (`RemoteKind`, `ProjectRemote { kind,
+`codemason_agent::project::remote` (`RemoteKind`, `ProjectRemote { kind,
 host, path }`, `parse_remote_url`, `detect_remote`; github.com, gitlab.com,
 `gitlab.*` and the configured GitLab instance), a project record per
 checkout that stores its remote, `SessionCheckout { branch, worktree,
@@ -439,12 +439,12 @@ row). M4 builds on these instead of adding a second remote parser.
   web URL with the platform opener.
 - Verify: request lookups against a `wiremock` server for GitHub, GitHub
   Enterprise (`/api/v3`) and GitLab self-managed; binding storage
-  round trip; `/autofix` commands and the menu item in `ragent-tui`.
+  round trip; `/autofix` commands and the menu item in `codemason-tui`.
 - Done as planned, with these details:
   - The remote parser keeps its old signatures; `parse_remote_url_with_hosts`
     and `detect_remote_with_hosts` take the `vcs.github.hosts` list.
     `ProjectManager` and `PullRequestCounts` get the hosts through
-    `with_github_hosts` (TUI, server and `ragent project` CLI pass them).
+    `with_github_hosts` (TUI, server and `codemason project` CLI pass them).
   - A GitHub remote on a host that is neither github.com nor configured gets
     no API client, so no token is sent to it.
   - `bind_session(storage, session, source, remote, BindTarget)` returns
@@ -454,8 +454,8 @@ row). M4 builds on these instead of adding a second remote parser.
   - `RequestNoun` also carries the number sigil (`#` / `!`).
   - The menu item is shown only when bound; it opens the stored URL with
     `open_in::url_spec`, which refuses anything but `http(s)://`.
-  - Tests: `ragent-agent` `test_request_binding` (7), `ragent-tools-vcs`
-    `test_request_binding` (3), `ragent-tui` `test_autofix` (4) and two
+  - Tests: `codemason-agent` `test_request_binding` (7), `codemason-tools-vcs`
+    `test_request_binding` (3), `codemason-tui` `test_autofix` (4) and two
     more in `test_session_menu`.
 
 M5 - Auto-fix watcher (1 week) - DONE
@@ -464,7 +464,7 @@ M5 - Auto-fix watcher (1 week) - DONE
 - T5.2 `AutofixTrigger` event routing into focused and background sessions,
   queueing when busy, notification hook (FR-18).
 - T5.3 Toggle, status bar text, sidebar glyphs (FR-16, FR-22).
-- Verify: `ragent-agent/tests/test_autofix_watcher.rs` drives the watcher
+- Verify: `codemason-agent/tests/test_autofix_watcher.rs` drives the watcher
   with a scripted mock server through: CI fail -> one trigger; same SHA next
   tick -> none; new SHA -> counts reset; three failures -> paused and marked
   needing the user; conflict and review triggers; merged -> stops. A TUI
@@ -479,7 +479,7 @@ M5 - Auto-fix watcher (1 week) - DONE
   - `vcs.autofix { poll_secs, max_attempts, default_on }` (global config
     only, like `vcs.github`). `default_on` applies when a session is bound
     for the first time, by a create tool or by `/autofix bind`.
-  - `ragent_agent::autofix::AutofixWatcher` takes a source resolver (the
+  - `codemason_agent::autofix::AutofixWatcher` takes a source resolver (the
     TUI passes `PullRequestCounts::source_for`, so the GHES and GitLab host
     rules of M4 apply) and is started once at TUI startup; `/autofix on`
     wakes it at once. One poll per bound request per tick (not batched per
@@ -501,7 +501,7 @@ M5 - Auto-fix watcher (1 week) - DONE
     kind `autofix`. `paused` and `closed` events only add a notice.
   - Menu `Auto-fix: on/off` (`X`) under `Open PR/MR`; sidebar `#` / `#!`;
     the status bar shows the focused session's latest summary.
-  - Tests: `ragent-agent` `test_autofix_watcher` (7), `ragent-tui`
+  - Tests: `codemason-agent` `test_autofix_watcher` (7), `codemason-tui`
     `test_autofix` (4 more) and `test_session_menu` (1 more).
   - PR #69 review: logs redacted, bounded to their tail and read only for
     jobs that wake the session; Actions job id from `details_url`; all list
@@ -533,7 +533,7 @@ Risks and open questions
   GraphQL access (some fine-grained PATs) falls back to REST review comments
   without resolved state, so a resolved thread could re-trigger. Mitigation:
   dedup on comment id, so each comment triggers at most once.
-- R2 Two ragent processes with the same session open would both poll and
+- R2 Two codemason processes with the same session open would both poll and
   both wake it. Mitigation: the `autofix_events` primary key makes the
   second insert fail, and only the inserter publishes.
 - R3 An agent that pushes a "fix" that does not fix CI burns attempts per
@@ -547,7 +547,7 @@ Risks and open questions
 
 Out of scope
 ------------
-- Split view and opening a session in a second ragent window.
+- Split view and opening a session in a second codemason window.
 - Worktree-per-session (and so "fork into a new branch").
 - Webhook delivery, auto-merge, and resolving review threads automatically.
 - Other forges (Bitbucket, Gitea).

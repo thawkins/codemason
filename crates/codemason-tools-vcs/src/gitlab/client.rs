@@ -1,0 +1,770 @@
+//! GitLab API client.
+//!
+//! Mirrors the [`GitHubClient`](crate::github::GitHubClient) pattern but
+//! targets a configurable GitLab instance URL and authenticates with a
+//! Personal Access Token via the `PRIVATE-TOKEN` header.
+
+use anyhow::{Context, Result, bail};
+use serde_json::Value;
+
+use crate::github::RepoMetadata;
+use crate::vcs_error::{VcsStatus, classify_status};
+
+/// Lightweight authenticated GitLab API client.
+#[derive(Clone)]
+pub struct GitLabClient {
+    token: String,
+    base_url: String,
+    client: reqwest::Client,
+}
+
+impl GitLabClient {
+    /// Create a new client from stored configuration and token.
+    ///
+    /// Resolves credentials using the layered priority: env vars -> codemason.json -> database.
+    pub fn new(storage: &crate::storage::Storage) -> Result<Self> {
+        let config = super::auth::load_config(storage).context(
+            "GitLab not configured. Run /gitlab setup to configure instance URL and credentials.",
+        )?;
+        // Use the checked loader so a credential-store read error is reported as
+        // an error rather than being collapsed into "no token" (FUNC-011).
+        let token = super::auth::load_token_checked(storage)
+            .context("Failed to read GitLab credentials from the database")?
+            .context(
+                "No GitLab token found. Run /gitlab setup to configure your Personal Access Token.",
+            )?;
+        Ok(Self {
+            token,
+            base_url: config.instance_url.trim_end_matches('/').to_string(),
+            client: crate::http_client::shared_client(),
+        })
+    }
+
+    /// Create from explicit values.
+    #[must_use]
+    pub fn with_credentials(base_url: String, token: String) -> Self {
+        Self {
+            token,
+            base_url: base_url.trim_end_matches('/').to_string(),
+            client: crate::http_client::shared_client(),
+        }
+    }
+
+    /// GET request to the GitLab API.
+    pub async fn get(&self, path: &str) -> Result<Value> {
+        self.get_paged(path).await.map(|(value, _)| value)
+    }
+
+    /// GET request that also returns the pagination cursor (FUNC-053).
+    ///
+    /// Returns the parsed JSON body and the `x-next-page` header value when
+    /// present (`None` on the last page). Callers that need every page (e.g. a
+    /// jobs list longer than one `per_page` window) use this; everything else
+    /// uses [`Self::get`].
+    ///
+    /// A 429 response is retried up to [`MAX_RATE_LIMIT_RETRIES`] times,
+    /// honouring the `Retry-After` header, before the call ultimately fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on a non-2xx response (after exhausting retries) or a
+    /// body-read/parse failure.
+    pub async fn get_paged(&self, path: &str) -> Result<(Value, Option<u32>)> {
+        let url = if codemason_types::strutil::is_http_url(path) {
+            path.to_string()
+        } else {
+            format!("{}/api/v4{path}", self.base_url)
+        };
+
+        let mut attempt = 0u32;
+        loop {
+            let resp = self
+                .client
+                .get(&url)
+                .header("PRIVATE-TOKEN", &self.token)
+                .header("User-Agent", "codemason/0.1")
+                .send()
+                .await
+                .with_context(|| format!("GitLab GET {path} failed"))?;
+
+            if resp.status().as_u16() == 429 && attempt < MAX_RATE_LIMIT_RETRIES {
+                let delay = retry_after_secs(&resp);
+                attempt += 1;
+                tracing::warn!(
+                    attempt,
+                    delay_secs = delay,
+                    path,
+                    "gitlab: rate limited (429); retrying after Retry-After"
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                continue;
+            }
+
+            let next_page = resp
+                .headers()
+                .get("x-next-page")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.trim().parse::<u32>().ok());
+
+            let value = self.handle_response(resp, path).await?;
+            return Ok((value, next_page));
+        }
+    }
+
+    /// GET request for a plain-text API resource, such as a job log
+    /// (`/projects/{id}/jobs/{job}/trace`), keeping only its last `limit`
+    /// bytes. The body is streamed, so a huge log never sits in memory
+    /// whole.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on a non-2xx response or a body-read failure.
+    pub async fn get_text_tail(&self, path: &str, limit: usize) -> Result<String> {
+        let url = format!("{}/api/v4{path}", self.base_url);
+        let resp = self
+            .client
+            .get(&url)
+            .header("PRIVATE-TOKEN", &self.token)
+            .header("User-Agent", "codemason/0.1")
+            .send()
+            .await
+            .with_context(|| format!("GitLab GET {path} failed"))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("GitLab API error {status} for {path}: {body}");
+        }
+        let tail = crate::http_client::read_tail(resp, limit)
+            .await
+            .with_context(|| format!("Failed to read GitLab text for {path}"))?;
+        Ok(String::from_utf8_lossy(&tail).into_owned())
+    }
+
+    /// POST request to the GitLab API.
+    pub async fn post(&self, path: &str, body: &Value) -> Result<Value> {
+        let url = format!("{}/api/v4{path}", self.base_url);
+        let resp = self
+            .client
+            .post(&url)
+            .header("PRIVATE-TOKEN", &self.token)
+            .header("User-Agent", "codemason/0.1")
+            .json(body)
+            .send()
+            .await
+            .with_context(|| format!("GitLab POST {path} failed"))?;
+
+        self.handle_response(resp, path).await
+    }
+
+    /// PUT request to the GitLab API.
+    pub async fn put(&self, path: &str, body: &Value) -> Result<Value> {
+        let url = format!("{}/api/v4{path}", self.base_url);
+        let resp = self
+            .client
+            .put(&url)
+            .header("PRIVATE-TOKEN", &self.token)
+            .header("User-Agent", "codemason/0.1")
+            .json(body)
+            .send()
+            .await
+            .with_context(|| format!("GitLab PUT {path} failed"))?;
+
+        self.handle_response(resp, path).await
+    }
+
+    /// Handle a GitLab API response, checking for errors and parsing JSON.
+    async fn handle_response(&self, resp: reqwest::Response, path: &str) -> Result<Value> {
+        let status = resp.status();
+
+        // Shared shape rule (T-308); GitLab sends no `x-ratelimit-remaining`
+        // header, so a 403 is always a permission denial here.
+        match classify_status(status.as_u16(), None) {
+            VcsStatus::RateLimited => bail!("GitLab rate limit exceeded. Path: {path}"),
+            VcsStatus::Unauthorized => bail!(
+                "GitLab authentication failed. Run /gitlab setup to update your Personal Access Token."
+            ),
+            VcsStatus::PermissionDenied => {
+                bail!("GitLab permission denied for {path}. Check your token scopes.");
+            }
+            VcsStatus::Other => {}
+        }
+
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            bail!("GitLab API error {status} for {path}: {body}");
+        }
+
+        // Some endpoints (e.g. DELETE) return 204 with no body. A body-read
+        // *failure* must not be conflated with a genuinely empty body - that
+        // would report a failed read as success (FUNC-010).
+        let body_text = resp
+            .text()
+            .await
+            .with_context(|| format!("Failed to read GitLab response body for {path}"))?;
+        if body_text.is_empty() {
+            return Ok(Value::Null);
+        }
+
+        serde_json::from_str(&body_text)
+            .with_context(|| format!("Failed to parse GitLab response for {path}"))
+    }
+
+    /// Detect the GitLab project path from the current git repository remote.
+    ///
+    /// Returns a URL-encoded project path (e.g. `namespace%2Fproject`) suitable
+    /// for use in `/projects/:id/` API endpoints.
+    #[must_use]
+    pub fn detect_project(working_dir: &std::path::Path) -> Option<String> {
+        // FUNC-050: timeout-bounded git runner (a hung prompt cannot block).
+        let output =
+            crate::git::run_git_output(&["remote", "get-url", "origin"], working_dir).ok()?;
+        if !output.success {
+            return None;
+        }
+        let url = String::from_utf8(output.stdout).ok()?;
+        let url = url.trim();
+
+        // Try to extract the path after a gitlab-ish host.
+        // Supports: git@host:namespace/project.git, https://host/namespace/project.git
+        let path = if let Some(idx) = url.find(':') {
+            // SSH format: git@gitlab.example.com:group/project.git
+            if url[..idx].contains('@') {
+                Some(&url[idx + 1..])
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+        .or_else(|| {
+            // HTTPS format: https://gitlab.example.com/group/project.git
+            url.split("//")
+                .nth(1)
+                .and_then(|rest| rest.find('/').map(|i| &rest[i + 1..]))
+        })?;
+
+        let path = path.trim_end_matches(".git");
+        if path.is_empty() || !path.contains('/') {
+            return None;
+        }
+
+        Some(urlencoded_path(path))
+    }
+
+    /// Return the configured instance URL.
+    #[must_use]
+    pub fn instance_url(&self) -> &str {
+        &self.base_url
+    }
+
+    /// Return the resolved Personal Access Token.
+    ///
+    /// Lets callers that need a raw HTTP request (e.g. the CI job-trace
+    /// endpoint, which returns plain text) reuse the already-resolved token
+    /// instead of hitting the credential store a second time (PERF-059).
+    #[must_use]
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
+    /// Fetch a GitLab project's metadata via `GET /projects/:id` (FR-008,
+    /// FR-009).
+    ///
+    /// `project_path` is the `namespace/project` identifier (which may contain
+    /// nested groups, e.g. `group/subgroup/project`). It is URL-encoded into
+    /// the `:id` path segment before the API call. The GitLab project JSON
+    /// response is mapped onto a [`RepoMetadata`] struct:
+    ///
+    /// - `description` -> `description`
+    /// - `topics` (array of strings) -> `topics`
+    /// - `star_count` -> `stargazers_count`
+    /// - `default_branch` -> `default_branch`
+    /// - primary language -> `language`, resolved from the separate
+    ///   `GET /projects/:id/languages` endpoint (the language with the highest
+    ///   share). If the languages call fails or is empty, `language` defaults
+    ///   to an empty string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the `GET /projects/:id` call fails (network, auth,
+    /// 404, etc.). A failure of the secondary `GET /projects/:id/languages`
+    /// call is **not** propagated - `language` simply defaults to empty.
+    pub async fn fetch_project_metadata(&self, project_path: &str) -> Result<RepoMetadata> {
+        let encoded = urlencoded_path(project_path);
+        let path = format!("/projects/{encoded}");
+        let value = self.get(&path).await?;
+
+        let language = self
+            .fetch_primary_language(&encoded)
+            .await
+            .unwrap_or_default();
+        Ok(gitlab_project_to_metadata(&value, &language))
+    }
+
+    /// Resolve the primary programming language for a project from the
+    /// `GET /projects/:id/languages` endpoint.
+    ///
+    /// The endpoint returns a JSON object mapping language names to their
+    /// share (a float between 0 and 100). The language with the highest share
+    /// is returned. Returns an empty string if the response is empty or the
+    /// call fails.
+    async fn fetch_primary_language(&self, encoded_project: &str) -> Result<String> {
+        let path = format!("/projects/{encoded_project}/languages");
+        let value = self.get(&path).await?;
+        Ok(top_language(&value))
+    }
+
+    /// Fetch the root-level repository file tree via
+    /// `GET /projects/:id/repository/tree` (FR-008, FR-010).
+    ///
+    /// Returns the list of root-level file and directory names, in the order
+    /// returned by the GitLab API. Each entry in the response array is a JSON
+    /// object with at minimum a `name` string (and a `type` field such as
+    /// `"blob"` or `"tree"`). An empty repository (or one with no visible root
+    /// entries) yields an empty vector.
+    ///
+    /// `project_path` is the `namespace/project` identifier (which may contain
+    /// nested groups, e.g. `group/subgroup/project`). It is URL-encoded into
+    /// the `:id` path segment before the API call.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the GitLab API call fails (network, auth, 404,
+    /// etc.).
+    pub async fn fetch_repository_tree(&self, project_path: &str) -> Result<Vec<String>> {
+        let encoded = urlencoded_path(project_path);
+        let path = format!("/projects/{encoded}/repository/tree");
+        let value = self.get(&path).await?;
+        Ok(parse_gitlab_tree(&value))
+    }
+
+    /// Fetch the repository file tree recursively up to the specified depth
+    /// (FR-027, FR-028).
+    ///
+    /// At depth 1, only the root-level entries are returned (directory names
+    /// get a trailing `/`). At depth N > 1, directories are recursively
+    /// expanded by calling `GET /projects/:id/repository/tree?path=<dir>` for
+    /// each subdirectory, stopping when the requested depth is reached or no
+    /// more directories exist.
+    ///
+    /// Directory entries are formatted with a trailing `/` to distinguish them
+    /// from files (FR-028). The returned paths use `/` separators so the LLM
+    /// can infer the full directory structure (e.g. `src/`, `src/main.rs`,
+    /// `src/models/`, `src/models/user.rs`).
+    ///
+    /// `project_path` is the `namespace/project` identifier (which may contain
+    /// nested groups). It is URL-encoded into the `:id` path segment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any API call fails. Individual directory fetch
+    /// failures are tolerated - the directory entry is still listed (with a
+    /// trailing slash) but its children are omitted.
+    pub async fn fetch_repository_tree_recursive(
+        &self,
+        project_path: &str,
+        depth: u32,
+    ) -> Result<Vec<String>> {
+        let encoded = urlencoded_path(project_path);
+        let mut entries = Vec::new();
+        let mut requests = 0u32;
+        Box::pin(self.fetch_gitlab_tree_inner(&encoded, "", depth, &mut entries, &mut requests))
+            .await?;
+        Ok(entries)
+    }
+
+    /// Internal recursive helper for [`fetch_repository_tree_recursive`].
+    ///
+    /// `encoded` is the URL-encoded project `:id`. `prefix` is the directory
+    /// path within the repo (empty for root). `remaining` is the number of
+    /// levels left to fetch (1 = this level only, no recursion).
+    ///
+    /// FUNC-053: the recursion is bounded by [`MAX_TREE_REQUESTS`] HTTP calls
+    /// and [`MAX_TREE_ENTRIES`] collected paths, so a pathological tree cannot
+    /// issue an unbounded number of requests or allocate without limit. A
+    /// per-directory fetch failure is logged and its children omitted rather
+    /// than silently discarded.
+    async fn fetch_gitlab_tree_inner(
+        &self,
+        encoded: &str,
+        prefix: &str,
+        remaining: u32,
+        entries: &mut Vec<String>,
+        requests: &mut u32,
+    ) -> Result<()> {
+        if *requests >= MAX_TREE_REQUESTS {
+            bail!(
+                "GitLab repository tree exceeds the {MAX_TREE_REQUESTS}-request fetch budget; \
+                 results are truncated"
+            );
+        }
+        *requests += 1;
+
+        let path = if prefix.is_empty() {
+            format!("/projects/{encoded}/repository/tree")
+        } else {
+            format!("/projects/{encoded}/repository/tree?path={prefix}")
+        };
+        let value = self.get(&path).await?;
+        let items = parse_gitlab_tree_entries(&value);
+
+        for item in &items {
+            if entries.len() >= MAX_TREE_ENTRIES {
+                bail!(
+                    "GitLab repository tree exceeds the {MAX_TREE_ENTRIES}-entry fetch budget; \
+                     results are truncated"
+                );
+            }
+            let full_path = if prefix.is_empty() {
+                item.name.clone()
+            } else {
+                format!("{prefix}/{}", item.name)
+            };
+            if item.is_dir {
+                entries.push(format!("{full_path}/"));
+                if remaining > 1 {
+                    if let Err(e) = Box::pin(self.fetch_gitlab_tree_inner(
+                        encoded,
+                        &full_path,
+                        remaining - 1,
+                        entries,
+                        requests,
+                    ))
+                    .await
+                    {
+                        // A budget error is fatal (the whole tree is truncated);
+                        // a per-directory fetch failure is logged and skipped.
+                        if *requests >= MAX_TREE_REQUESTS || entries.len() >= MAX_TREE_ENTRIES {
+                            return Err(e);
+                        }
+                        tracing::warn!(
+                            directory = %full_path,
+                            error = %e,
+                            "gitlab: failed to expand subdirectory in recursive tree fetch"
+                        );
+                    }
+                }
+            } else {
+                entries.push(full_path);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Fetch the README content for a GitLab project (FR-008, FR-011).
+    ///
+    /// Calls `GET /projects/:id/readme` to obtain the README metadata. If the
+    /// project has no README (HTTP 404), returns `Ok(None)` so the caller can
+    /// proceed with an empty README string rather than failing. On success,
+    /// the raw README text is fetched via the `readme_url` field from the
+    /// metadata response (a direct URL to the raw blob). If `readme_url` is
+    /// absent, the method falls back to the
+    /// `GET /projects/:id/repository/files/:file_path/raw` endpoint using
+    /// the `file_path` field.
+    ///
+    /// `project_path` is the `namespace/project` identifier (which may contain
+    /// nested groups). It is URL-encoded into the `:id` path segment before
+    /// the API call.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for non-404 API failures (network, auth, rate limit,
+    /// 500, etc.). A 404 is **not** an error - it yields `Ok(None)`.
+    pub async fn fetch_readme(&self, project_path: &str) -> Result<Option<String>> {
+        let encoded = urlencoded_path(project_path);
+        let path = format!("/projects/{encoded}/readme");
+        let url = format!("{}/api/v4{path}", self.base_url);
+
+        let resp = self
+            .client
+            .get(&url)
+            .header("PRIVATE-TOKEN", &self.token)
+            .header("User-Agent", "codemason/0.1")
+            .send()
+            .await
+            .with_context(|| format!("GitLab GET {path} failed"))?;
+
+        let status = resp.status();
+        if status.as_u16() == 404 {
+            // No README present - proceed with empty README, per FR-011.
+            return Ok(None);
+        }
+        if status.as_u16() == 401 {
+            bail!(
+                "GitLab authentication failed. Run /gitlab setup to update your Personal Access Token."
+            );
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            bail!("GitLab API error {status} for {path}: {body}");
+        }
+
+        let value: Value = resp
+            .json()
+            .await
+            .with_context(|| format!("Failed to parse README metadata JSON for {path}"))?;
+
+        // Prefer the readme_url field (a direct raw-blob URL) but only when it
+        // points at the configured instance; otherwise fall through to the
+        // same-origin `file_path` endpoint instead of leaking the token to a
+        // foreign host (FUNC-009).
+        if let Some(readme_url) = extract_readme_url(&value) {
+            if self.url_targets_instance(&readme_url) {
+                return self.fetch_raw_text(&readme_url).await.map(Some);
+            }
+            tracing::warn!(
+                url = %readme_url,
+                instance = %self.base_url,
+                "ignoring readme_url outside the configured GitLab instance"
+            );
+        }
+
+        // Fall back to the repository/files/:file_path/raw endpoint using the
+        // file_path field from the README metadata.
+        if let Some(file_path) = value.get("file_path").and_then(Value::as_str) {
+            // FUNC-063: full byte-wise encoding (the previous `/`-only replace
+            // left spaces and non-ASCII characters unencoded).
+            let encoded_file = crate::percent::encode_component(file_path);
+            let raw_path = format!("/projects/{encoded}/repository/files/{encoded_file}/raw");
+            let raw_value = self.get(&raw_path).await?;
+            return raw_value
+                .as_str()
+                .map(|s| Some(s.to_string()))
+                .ok_or_else(|| anyhow::anyhow!("Expected raw text from {raw_path}"));
+        }
+
+        bail!("README metadata response missing 'readme_url' and 'file_path' for {path}");
+    }
+
+    /// Fetch raw text content from an absolute URL, authenticating with the
+    /// configured GitLab token.
+    ///
+    /// The token is only attached when the URL points at the *configured*
+    /// GitLab instance host. A `readme_url` supplied by the API response is
+    /// untrusted input: without this check a malicious or compromised response
+    /// could redirect the request (and the `PRIVATE-TOKEN` header) to an
+    /// attacker-controlled host - SSRF plus token exfiltration (FUNC-009).
+    async fn fetch_raw_text(&self, url: &str) -> Result<String> {
+        // SEC-033: an API-supplied `readme_url` that is not under the configured
+        // instance is refused entirely (not merely fetched token-less), so the
+        // agent cannot be steered into an SSRF request to an internal host.
+        if !self.url_targets_instance(url) {
+            bail!("GitLab: refusing to fetch a URL outside the configured instance: {url}");
+        }
+        let request = self
+            .client
+            .get(url)
+            .header("User-Agent", "codemason/0.1")
+            .header("PRIVATE-TOKEN", &self.token);
+
+        let resp = request
+            .send()
+            .await
+            .with_context(|| format!("GitLab GET (raw) {url} failed"))?;
+
+        let status = resp.status();
+        if status.as_u16() == 401 {
+            bail!(
+                "GitLab authentication failed. Run /gitlab setup to update your Personal Access Token."
+            );
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            bail!("GitLab API error {status} for {url}: {body}");
+        }
+
+        let text = resp
+            .text()
+            .await
+            .with_context(|| format!("Failed to read GitLab raw text for {url}"))?;
+        Ok(text)
+    }
+
+    /// Whether `url` has the same origin (scheme, host, port) as the configured
+    /// GitLab instance.
+    ///
+    /// Used to decide whether the token may be attached to an API-supplied URL:
+    /// a `readme_url` from the response is untrusted, and sending the
+    /// `PRIVATE-TOKEN` header to a foreign origin is SSRF plus token
+    /// exfiltration (FUNC-009). Host comparison is case-insensitive because DNS
+    /// hostnames are.
+    fn url_targets_instance(&self, url: &str) -> bool {
+        let Ok(candidate) = reqwest::Url::parse(url) else {
+            return false;
+        };
+        let Ok(instance) = reqwest::Url::parse(&self.base_url) else {
+            return false;
+        };
+        candidate.scheme() == instance.scheme()
+            && candidate.port_or_known_default() == instance.port_or_known_default()
+            && match (candidate.host_str(), instance.host_str()) {
+                (Some(candidate_host), Some(instance_host)) => {
+                    candidate_host.eq_ignore_ascii_case(instance_host)
+                }
+                _ => false,
+            }
+    }
+}
+
+/// Map a GitLab `GET /projects/:id` JSON response onto [`RepoMetadata`]
+/// (FR-009).
+///
+/// GitLab uses `star_count` (GitHub uses `stargazers_count`), exposes `topics`
+/// as an array of strings, and reports the default branch via `default_branch`.
+/// The `language` field is supplied separately (resolved from the
+/// `/languages` endpoint) because GitLab's project JSON does not carry it.
+pub(crate) fn gitlab_project_to_metadata(value: &Value, language: &str) -> RepoMetadata {
+    let description = value
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let topics = value
+        .get("topics")
+        .and_then(|t| t.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let stargazers_count = value.get("star_count").and_then(Value::as_u64).unwrap_or(0);
+    let default_branch = value
+        .get("default_branch")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    RepoMetadata {
+        description,
+        language: language.to_string(),
+        topics,
+        stargazers_count,
+        default_branch,
+    }
+}
+
+/// Select the language with the highest share from a GitLab
+/// `GET /projects/:id/languages` response.
+///
+/// The response is a JSON object mapping language names to a float share, e.g.
+/// `{"Rust": 80.5, "Shell": 19.5}`. The entry with the largest share wins. If
+/// the response is not an object, is empty, or no share parses as a number,
+/// an empty string is returned.
+#[must_use]
+pub(crate) fn top_language(value: &Value) -> String {
+    let obj = match value.as_object() {
+        Some(obj) => obj,
+        None => return String::new(),
+    };
+    obj.iter()
+        .filter_map(|(lang, share)| share.as_f64().map(|s| (lang.as_str(), s)))
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(lang, _)| lang.to_string())
+        .unwrap_or_default()
+}
+
+/// Parse a GitLab `GET /projects/:id/repository/tree` JSON response into a
+/// list of root-level file and directory names (FR-010).
+///
+/// The GitLab tree endpoint returns a JSON array of objects, each with a
+/// `name` string and a `type` field (e.g. `"blob"` for files, `"tree"` for
+/// directories). This helper extracts the `name` of every entry, preserving
+/// the API's ordering. A non-array response (e.g. an empty-repo error body or
+/// a single object) yields an empty vector.
+#[must_use]
+pub(crate) fn parse_gitlab_tree(value: &Value) -> Vec<String> {
+    let arr = match value.as_array() {
+        Some(arr) => arr,
+        None => return Vec::new(),
+    };
+    arr.iter()
+        .filter_map(|entry| entry.get("name").and_then(Value::as_str).map(String::from))
+        .collect()
+}
+
+/// Extract the `readme_url` from a GitLab `GET /projects/:id/readme` JSON
+/// response (FR-011).
+///
+/// The README metadata object includes a `readme_url` string pointing at the
+/// raw README blob. Returns `None` if the field is absent, null, or not a
+/// string.
+#[must_use]
+pub(crate) fn extract_readme_url(value: &Value) -> Option<String> {
+    value
+        .get("readme_url")
+        .and_then(Value::as_str)
+        .map(String::from)
+}
+
+/// A parsed entry from a GitLab repository/tree API response.
+struct GitLabTreeEntry {
+    name: String,
+    is_dir: bool,
+}
+
+/// Parse a GitLab `GET /projects/:id/repository/tree` JSON response into
+/// typed entries with name and type information (FR-027, FR-028).
+///
+/// Each entry has a `name` and a `type` field (`"blob"` for files, `"tree"`
+/// for directories). A non-array response yields an empty vector.
+fn parse_gitlab_tree_entries(value: &Value) -> Vec<GitLabTreeEntry> {
+    let arr = match value.as_array() {
+        Some(arr) => arr,
+        None => return Vec::new(),
+    };
+    arr.iter()
+        .filter_map(|entry| {
+            let name = entry.get("name").and_then(Value::as_str)?;
+            let is_dir = entry
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|t| t == "tree");
+            Some(GitLabTreeEntry {
+                name: name.to_string(),
+                is_dir,
+            })
+        })
+        .collect()
+}
+
+/// URL-encode a GitLab project path (e.g. `group/project` -> `group%2Fproject`).
+///
+/// FUNC-063: delegates to the shared byte-wise encoder so non-ASCII namespace
+/// segments encode as UTF-8 (`%C3%A9`) instead of the previous implementation's
+/// `/`-only replacement, which left every other reserved character (and every
+/// multibyte character) unencoded.
+fn urlencoded_path(path: &str) -> String {
+    crate::percent::encode_project_path(path)
+}
+
+/// Maximum number of HTTP GETs issued while walking a repository tree
+/// (FUNC-053) - a hard budget so a pathological tree cannot fan out without
+/// bound.
+const MAX_TREE_REQUESTS: u32 = 500;
+
+/// Maximum number of path entries collected by a recursive tree fetch
+/// (FUNC-053).
+const MAX_TREE_ENTRIES: usize = 20_000;
+
+/// Maximum number of `429 Too Many Requests` retries per GitLab request
+/// (FUNC-053).
+const MAX_RATE_LIMIT_RETRIES: u32 = 3;
+
+/// Parse a `Retry-After` header (seconds), defaulting to a short backoff and
+/// clamping to a sane ceiling so a hostile/absurd header cannot stall us
+/// (FUNC-053).
+fn retry_after_secs(resp: &reqwest::Response) -> u64 {
+    const DEFAULT_SECS: u64 = 1;
+    const MAX_SECS: u64 = 30;
+    resp.headers()
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_SECS)
+        .min(MAX_SECS)
+}
+
+#[cfg(test)]
+#[path = "../../tests/inline/client_tests.rs"]
+mod tests;

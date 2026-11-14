@@ -8,14 +8,14 @@ audit:
 **Spec:** [SPEC.md](SPEC.md) | **Plan:** [PLAN.md](PLAN.md)
 
 This is a **manual** test plan. Every case is executed by a human against a built
-`ragent` binary. Each case lists the requirements it exercises, its preconditions, the
+`codemason` binary. Each case lists the requirements it exercises, its preconditions, the
 literal keys to press and data to type, and the expected result. Keys are written as
 `Enter`, `Tab`, `Up`, `Down`, `Esc`, `Ctrl+C`, and literal text in `backticks`. Where a
 step opens a TUI panel or dialog, every key press and the exact field contents are given.
 
 This document is executed entirely by hand and contains no automated test code.
 
-The new surfaces follow ragent's existing conventions: slash commands open TUI panels,
+The new surfaces follow codemason's existing conventions: slash commands open TUI panels,
 and the matching CLI subcommand performs the same action headlessly. The cases below use
 the documented command names (`/backend`, `/automation`, `/skill`, `/mcp`,
 `/security-analyzer`) and the matching CLI subcommands.
@@ -23,9 +23,9 @@ the documented command names (`/backend`, `/automation`, `/skill`, `/mcp`,
 ## Prerequisites
 
 1. **Build the binary.** Run `cargo build` (debug is sufficient; allow up to 1000
-   seconds). Confirm `./target/debug/ragent --version` runs and prints a version.
+   seconds). Confirm `./target/debug/cdmn --version` runs and prints a version.
 2. **Configure a model.** Configure a provider (a cloud API key or a local Ollama model)
-   and confirm a one-shot prompt responds: `./target/debug/ragent run "say hello" --no-tui`.
+   and confirm a one-shot prompt responds: `./target/debug/cdmn run "say hello" --no-tui`.
 3. **Create a scratch root.** Create `~/scratch/openhands-tests/` and run every step from
    inside it. Create a marker file `~/scratch/openhands-tests/HOST_MARKER.txt` containing
    `HOST-ONLY` so the host-working-directory check (TC-003) is measurable.
@@ -33,9 +33,9 @@ the documented command names (`/backend`, `/automation`, `/skill`, `/mcp`,
    Docker (Docker Desktop or Docker Engine) or Podman running and reachable (`docker info`
    or `podman info` succeeds). Note which runtime is present and use it as `<RUNTIME>`. If
    neither is available, run only the FR-026 half of TC-003.
-5. **Second ragent instance (TC-005).** For the `remote` backend case, start a second
-   ragent server on another port from a different scratch directory:
-   `./target/debug/ragent serve --addr 127.0.0.1:3001`. Record its bearer token from the
+5. **Second codemason instance (TC-005).** For the `remote` backend case, start a second
+   codemason server on another port from a different scratch directory:
+   `./target/debug/cdmn serve --addr 127.0.0.1:3001`. Record its bearer token from the
    server's startup output. Record the address as `<REMOTE_ADDR>` and the token as
    `<REMOTE_TOKEN>`.
 6. **ACP agent CLI (TC-006).** For ACP cases, install at least one of Claude Code, Codex,
@@ -57,15 +57,15 @@ the documented command names (`/backend`, `/automation`, `/skill`, `/mcp`,
 **Requirement:** FR-001, FR-008, FR-019
 
 **Preconditions:** Fresh scratch root with no `execution_backend` key in
-`.ragent/ragent.json` (or no config file at all). No container runtime required.
+`.codemason/codemason.json` (or no config file at all). No container runtime required.
 
-**Automated coverage:** `crates/ragent-agent/tests/test_backend_registry.rs`
+**Automated coverage:** `crates/codemason-agent/tests/test_backend_registry.rs`
 (`registry_always_includes_a_healthy_local_entry`, `registry_entries_are_ordered_local_first`)
 covers the always-present, always-`ok` `local` entry and the active-backend
 resolution (FR-004, FR-019).
 
 **Steps:**
-1. Launch the TUI: `./target/debug/ragent`.
+1. Launch the TUI: `./target/debug/cdmn`.
 2. Read the status bar at the bottom and the first screen after startup.
 3. Type `/backend` and press `Enter` to open the backend panel.
 4. Read the panel's active and registry rows.
@@ -85,7 +85,7 @@ resolution (FR-004, FR-019).
 **Requirement:** FR-004, FR-008
 
 **Preconditions:** `local` backend active; a container backend configured in
-`.ragent/ragent.json` under a `backends` list (see TC-003 for the shape); `<RUNTIME>`
+`.codemason/codemason.json` under a `backends` list (see TC-003 for the shape); `<RUNTIME>`
 (Docker or Podman) running.
 
 **Steps:**
@@ -116,14 +116,14 @@ resolution (FR-004, FR-019).
 
 **Preconditions:** `<RUNTIME>` running. `~/scratch/openhands-tests/HOST_MARKER.txt` exists
 with contents `HOST-ONLY`. A container backend is configured, for example in
-`.ragent/ragent.json`:
+`.codemason/codemason.json`:
 
 ```jsonc
 {
   "execution_backend": "podman",
   "backends": [
     { "id": "podman", "name": "Podman sandbox", "kind": "podman",
-      "image": "ghcr.io/thawkins/ragent-sandbox:latest", "workspace": "." }
+      "image": "ghcr.io/thawkins/codemason-sandbox:latest", "workspace": "." }
   ]
 }
 ```
@@ -141,7 +141,7 @@ is present.
 5. Wait, then in a separate host terminal read
    `~/scratch/openhands-tests/` directory contents.
 6. Edit the config to replace `image` with a bogus value
-   `ghcr.io/thawkins/ragent-sandbox-does-not-exist:latest`, restart the TUI, select the
+   `ghcr.io/thawkins/codemason-sandbox-does-not-exist:latest`, restart the TUI, select the
    container backend, and type `run "echo hello"`.
 7. Read the result.
 
@@ -160,13 +160,13 @@ is present.
   as a selectable kind, and `podman` is the default container kind when one is chosen
   (FR-026).
 
-**Automated coverage:** `crates/ragent-agent/tests/test_container_backend.rs` covers
+**Automated coverage:** `crates/codemason-agent/tests/test_container_backend.rs` covers
 runtime detection and the `podman` default (FR-026), the fail-without-fallback path
 for a bad image (FR-031), the refusal of unadapted tools (FR-031), workspace path
 confinement (FR-020, FR-035), and - when a runtime and image are present - the live
 run-inside-the-sandbox cases. The 7-layer gate on the container path (FR-002, FR-037)
 is additionally pinned hermetically (no runtime needed) by
-`crates/ragent-agent/tests/test_hardening_invariants.rs`
+`crates/codemason-agent/tests/test_hardening_invariants.rs`
 (`sandbox_bash_is_gated_by_the_seven_layer_validator`), which proves each of four
 validator layers rejects its command before any container is touched and that the
 tool never executes on the host.
@@ -187,9 +187,9 @@ in the encrypted credential store under a name such as `EXAMPLE_API_KEY` with va
 4. Type the prompt `run "grep -r sk-test-do-not-leak-0001 . || echo NOT_IN_WORKSPACE"` and
    press `Enter`.
 5. Read the result.
-6. Open `/config` in the TUI (or run `./target/debug/ragent config show`) and read the
+6. Open `/config` in the TUI (or run `./target/debug/cdmn config show`) and read the
    output.
-7. Open `.ragent/ragent.json` in an editor and read it.
+7. Open `.codemason/codemason.json` in an editor and read it.
 8. Type the prompt `run "touch PERSISTED.txt"`; stop and restart the TUI; select the
    container backend again; type `run "ls PERSISTED.txt"` and read the result.
 
@@ -201,11 +201,11 @@ in the encrypted credential store under a name such as `EXAMPLE_API_KEY` with va
 - Step 5 `NOT_IN_WORKSPACE` is printed: the secret is not written into any workspace file
   (FR-010, FR-035).
 - Step 6 the `/config` output redacts the secret value (FR-035).
-- Step 7 `ragent.json` contains no plaintext secret value (FR-035).
+- Step 7 `codemason.json` contains no plaintext secret value (FR-035).
 - Step 8 `PERSISTED.txt` is listed after the restart: the workspace volume survives
   container replacement (FR-023).
 
-**Automated coverage:** `crates/ragent-agent/tests/test_sandbox_secrets.rs` covers the
+**Automated coverage:** `crates/codemason-agent/tests/test_sandbox_secrets.rs` covers the
 resolution, missing-credential failure, redaction registration, stable-volume/
 rotated-container naming, remote store-resolved bearer key, and (when a runtime and
 image are present) the live env-var/not-in-workspace and workspace-survival cases.
@@ -214,10 +214,10 @@ image are present) the live env-var/not-in-workspace and workspace-survival case
 
 **Requirement:** FR-003, FR-004, FR-021, FR-030, FR-034
 
-**Preconditions:** The second ragent server is running at `<REMOTE_ADDR>` with token
+**Preconditions:** The second codemason server is running at `<REMOTE_ADDR>` with token
 `<REMOTE_TOKEN>` (Prerequisite 5). A `remote` backend is configured by URL and key.
 
-**Automated coverage:** `crates/ragent-agent/tests/test_backend_registry.rs`
+**Automated coverage:** `crates/codemason-agent/tests/test_backend_registry.rs`
 (`remote_health_requires_a_url_and_a_key`, `register_remote_adds_and_replaces_an_entry`,
 `refresh_health_probes_the_remote_health_endpoint`) covers remote registration by URL
 and key, the reachable/`unavailable` health states, and the live `/health` probe
@@ -273,10 +273,10 @@ agent selected, for example via Settings -> Agent (`/agent`) with the ACP preset
 
 **Requirement:** FR-003, FR-011, FR-024, FR-038
 
-**Preconditions:** A ragent server running with the OpenAI-compatible surface enabled and
+**Preconditions:** A codemason server running with the OpenAI-compatible surface enabled and
 a bearer token set. Record the base URL as `<BASE>` and the token as `<TOKEN>`.
 
-**Automated coverage:** `crates/ragent-server/tests/test_openai_surface.rs` drives the
+**Automated coverage:** `crates/codemason-server/tests/test_openai_surface.rs` drives the
 live router in-process: `test_models_requires_auth` and
 `test_chat_completions_requires_auth` cover the bearer gate (FR-024),
 `test_non_streaming_completion_shape` the completion shape (FR-011), and
@@ -317,11 +317,11 @@ curl -s <BASE>/v1/chat/completions -H "Authorization: Bearer <TOKEN>" \
 
 **Preconditions:** As TC-007, with the surface enabled via
 `"openai": { "enabled": true, "token": "<TOKEN>" }` (or the ambient
-`RAGENT_TOKEN`). The server's bearer token is the configured token.
+`CODEMASON_TOKEN`). The server's bearer token is the configured token.
 
-**Automated coverage:** `crates/ragent-server/tests/test_openai_surface.rs`
+**Automated coverage:** `crates/codemason-server/tests/test_openai_surface.rs`
 (`test_streaming_completion_emits_chunks_and_done`, `test_streaming_requires_auth`)
-drives the live router in-process; `crates/ragent-config/tests/test_openai_config.rs`
+drives the live router in-process; `crates/codemason-config/tests/test_openai_config.rs`
 covers the token gate (`enabled_without_a_token_has_no_resolvable_token`,
 `configured_token_is_resolved`, `blank_token_is_not_a_credential`,
 `project_overlay_cannot_set_the_surface_token`). The serve-time refuse-to-start
@@ -362,7 +362,7 @@ curl -sN <BASE>/v1/chat/completions -H "Authorization: Bearer <TOKEN>" \
 
 **Requirement:** FR-013, FR-018, FR-033
 
-**Preconditions:** A ragent server running with the automation service enabled. An
+**Preconditions:** A codemason server running with the automation service enabled. An
 automation named `on-issue` registered with a webhook trigger on path `/auto/on-issue`.
 Selected backend: `local`.
 
@@ -373,7 +373,7 @@ Selected backend: `local`.
    `curl -s -X POST <BASE>/auto/on-issue -H "Content-Type: application/json" -d '{"issue":"42","title":"fix login"}'`.
 4. Read the webhook response code.
 5. Re-open `/automation` in the TUI, select `on-issue`, press `Enter` on its `runs` row (or
-   run `./target/debug/ragent automation runs on-issue`).
+   run `./target/debug/cdmn automation runs on-issue`).
 6. Read the newest run history record.
 
 **Test data:** the JSON payload `{"issue":"42","title":"fix login"}`; automation name
@@ -394,9 +394,9 @@ Selected backend: `local`.
 next few minutes (for example `every 2m`), backend `local`.
 
 **Steps:**
-1. Run `./target/debug/ragent automation list` and read the `next_due` column.
+1. Run `./target/debug/cdmn automation list` and read the `next_due` column.
 2. Wait until the next-due time passes.
-3. Run `./target/debug/ragent automation runs nightly` and read the newest record.
+3. Run `./target/debug/cdmn automation runs nightly` and read the newest record.
 4. Re-run step 3 after another interval and compare timestamps.
 
 **Test data:** automation name `nightly`; schedule `every 2m`.
@@ -423,12 +423,12 @@ description: A trivial pack used by the manual test plan.
 When asked, reply with exactly: TINY-OK
 ```
 
-**Automated coverage:** `crates/ragent-agent/tests/test_agentskills_discovery.rs`
+**Automated coverage:** `crates/codemason-agent/tests/test_agentskills_discovery.rs`
 (`test_registry_load_discovers_project_agents_skills_pack`,
 `test_agentskills_pack_is_loadable_and_invocable`,
 `test_registry_load_agents_skills_clash_prefers_existing_pack`) covers
 discovery, load/invoke content, and the clash precedence. The TUI `/skill`
-surface is covered by `crates/ragent-tui/tests/test_skill_command.rs`
+surface is covered by `crates/codemason-tui/tests/test_skill_command.rs`
 (`test_skill_list_shows_agentskills_pack`, `test_skill_load_starts_invocation`,
 `test_skill_clash_prefers_existing_pack`, `test_skill_unknown_pack_reports_not_found`).
 
@@ -483,7 +483,7 @@ surface is covered by `crates/ragent-tui/tests/test_skill_command.rs`
 
 **Requirement:** FR-007, FR-025
 
-**Preconditions:** A ragent server running; an MCP server configured with `http` transport.
+**Preconditions:** A codemason server running; an MCP server configured with `http` transport.
 
 **Steps:**
 1. Run `curl -s <BASE>/openapi.json` and save it to a file.
@@ -529,12 +529,12 @@ surface is covered by `crates/ragent-tui/tests/test_skill_command.rs`
 **Requirement:** FR-027
 
 **Preconditions:** A locale message catalog installed (for example a `fr` catalog under the
-ragent locale directory) with only a subset of keys translated. Optional: this case may be
+codemason locale directory) with only a subset of keys translated. Optional: this case may be
 skipped if FR-027 is dropped (it is out of scope per the SPEC Scope section).
 
 **Steps:**
 1. Launch the TUI with the locale set to the configured locale (for example
-   `LANG=fr_FR.UTF-8 ./target/debug/ragent` or the matching config key).
+   `LANG=fr_FR.UTF-8 ./target/debug/cdmn` or the matching config key).
 2. Read the TUI status bar, help text, and a panel footer.
 3. Find a string that has a translation in the catalog and one that does not.
 4. Switch the locale back to English (`en`) and re-read the same strings.
@@ -551,19 +551,19 @@ skipped if FR-027 is dropped (it is out of scope per the SPEC Scope section).
 
 **Requirement:** FR-022, FR-028
 
-**Preconditions:** The default build (`./target/debug/ragent`); and, for the enabled branch,
+**Preconditions:** The default build (`./target/debug/cdmn`); and, for the enabled branch,
 a build with the feature: `cargo build --features acp-server` (the resulting binary replaces
-`./target/debug/ragent`).
+`./target/debug/cdmn`).
 
 **Steps:**
 1. With the default build and no `acp.server_enabled` key, run
-   `./target/debug/ragent acp-server` and read the exit code and message.
+   `./target/debug/cdmn acp-server` and read the exit code and message.
 2. Build with the feature (`cargo build --features acp-server`) but leave
-   `acp.server_enabled` unset; run `./target/debug/ragent acp-server` again.
-3. Enable the endpoint in `.ragent/ragent.json`
+   `acp.server_enabled` unset; run `./target/debug/cdmn acp-server` again.
+3. Enable the endpoint in `.codemason/codemason.json`
    (`"acp": { "server_enabled": true, "server_agent": "general" }`).
 4. Send an `initialize` and a `session/new` frame on stdin and read the replies:
-   `printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' '{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"'$PWD'"}}' | ./target/debug/ragent acp-server`
+   `printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' '{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"'$PWD'"}}' | ./target/debug/cdmn acp-server`
 5. Read the first frame's `result.protocolVersion` and the second frame's
    `result.sessionId`.
 
@@ -579,12 +579,12 @@ a build with the feature: `cargo build --features acp-server` (the resulting bin
 ## Cleanup
 
 1. Exit every TUI session with `Ctrl+C`.
-2. Stop the second ragent server and any webhook receiver (`nc`/`curl` listener).
+2. Stop the second codemason server and any webhook receiver (`nc`/`curl` listener).
 3. Remove the test container if one was created:
-   `podman rm -f ragent-sandbox-test` (or `docker rm -f ragent-sandbox-test`; adjust to the
+   `podman rm -f codemason-sandbox-test` (or `docker rm -f codemason-sandbox-test`; adjust to the
    id actually launched).
 4. Remove the scratch tree: delete `~/scratch/openhands-tests/`.
-5. Revert any TUI/config changes made for the tests: restore `.ragent/ragent.json` to its
+5. Revert any TUI/config changes made for the tests: restore `.codemason/codemason.json` to its
    pre-test contents and remove the `PreToolUse`/`PostToolUse` hook scripts added in
    TC-012.
 6. Remove the temporary MCP `http` server entry added in TC-013 if it was not pre-existing.

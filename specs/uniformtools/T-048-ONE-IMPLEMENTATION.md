@@ -25,7 +25,7 @@ only because a human kept them in step, and nothing proved it.
 
 `scripts/check_tool_rename.py` (1954 lines) held the logic and
 `scripts/check-tool-rename.sh` (a wrapper) held a **second copy of the self-test
-fixture source**, while `crates/ragent-agent/tests/test_tool_rename_guard.rs`
+fixture source**, while `crates/codemason-agent/tests/test_tool_rename_guard.rs`
 held a **third**. Three spellings of one fixture, kept in step by review.
 
 The four defects the audit found, before a line was written:
@@ -35,13 +35,13 @@ The four defects the audit found, before a line was written:
 | 1 | `--self-test` existed in two places (the shell wrapper and the crate test's `SeedFile`), each writing the same fixture | a change to the fixture in one place silently stopped the other from proving anything |
 | 2 | the guard's output was prose only - no machine-readable form | the crate test could only assert substrings of the human report, so "the two forms agree" was untestable |
 | 3 | the guard had no `--root`, so every case that needed a fixture had to write **into the checkout** | the module needs a nextest process group to serialise itself against its own siblings, which is a rule about a test, not about the guard |
-| 4 | `_dependency_map` globbed `root.glob("Cargo.toml")`, which matches only entries **below** root | the root package (the `ragent` binary) had **no dependency edges at all**, and the `ragent-agent` manifest was only read through the test crate `crates/ragent-agent/tests/` - so predicate (g) was structurally blind in two packages |
+| 4 | `_dependency_map` globbed `root.glob("Cargo.toml")`, which matches only entries **below** root | the root package (the `codemason` binary) had **no dependency edges at all**, and the `codemason-agent` manifest was only read through the test crate `crates/codemason-agent/tests/` - so predicate (g) was structurally blind in two packages |
 
 Defect 4 is the serious one, and it was found by this task rather than by the
 task that owns the predicate: a wholesale forwarder seeded into
-`crates/ragent-agent/src/` was **not reported**, and the only reason the real
+`crates/codemason-agent/src/` was **not reported**, and the only reason the real
 tree's `update_file` forwarder was ever reported is that the guard also read
-`crates/ragent-agent/tests/Cargo.toml`.
+`crates/codemason-agent/tests/Cargo.toml`.
 
 ## 3. What was built
 
@@ -89,7 +89,7 @@ and fails closed when it is missing.
 `root.glob("Cargo.toml")` does not match root itself. The root manifest is now
 added explicitly, and `_delegation_targets` sees every package. Both the seeded
 (g) case and the real tree are affected: the seeded forwarder case only passed
-before because the scratch copy contained `crates/ragent-agent/tests/Cargo.toml`.
+before because the scratch copy contained `crates/codemason-agent/tests/Cargo.toml`.
 
 ### Two further honest fixes
 
@@ -175,10 +175,10 @@ not claim to prove it.
   The forbidden-spelling list in that case names the open-symbol in halves
   (`"Workbook::"`), because this very file is scanned by the FR-023 invariant case
   (`test_tool_rename_table::test_tool_rename_invariant_test_does_not_open_the_workbook`),
-  which fails any `crates/ragent-agent/tests/*.rs` naming the whole symbol. It
+  which fails any `crates/codemason-agent/tests/*.rs` naming the whole symbol. It
   caught the first draft of this task, which is the case doing its job.
-- **The full `ragent-agent` suite found one regression this task had introduced**
-  and it is fixed: the workbook case above. `cargo nextest run -p ragent-agent`
+- **The full `codemason-agent` suite found one regression this task had introduced**
+  and it is fixed: the workbook case above. `cargo nextest run -p codemason-agent`
   is now 2161 run, 2161 passed, 1 skipped.
 - **`cargo check --workspace --all-targets` reported two dead fields** in the new
   JSON reader (`GuardReport::problems`, `GuardHit::nfr008`). Rather than keep
@@ -190,15 +190,15 @@ not claim to prove it.
 - `cargo fmt --all --check` clean.
 - `python3 scripts/check_tool_rename.py` exit 0, `44 reviewed exemption(s) all match`.
 - `bash scripts/check-tool-rename.sh --self-test` exit 0, and no
-  `crates/ragent-tools-core/src/__tool_rename_guard_selftest.rs` survives.
-- `cargo nextest run -p ragent-agent -E 'test(test_tool_rename_guard::)'`:
+  `crates/codemason-tools-core/src/__tool_rename_guard_selftest.rs` survives.
+- `cargo nextest run -p codemason-agent -E 'test(test_tool_rename_guard::)'`:
   **16 run, 16 passed** (was 12 cases, 5 of them failing on the pre-existing
   predicate (g) hit that the exemption now reviews).
 - The full-tree run is 2.2 s warm (NFR-009's "a few seconds").
-- `cargo check --workspace --all-targets` and `cargo clippy -p ragent-agent
+- `cargo check --workspace --all-targets` and `cargo clippy -p codemason-agent
   --all-targets` name no line this task added (after the two dead fields and the
   one `starts_with('*')` lint were fixed).
-- `cargo nextest run -p ragent-agent`: **2161 run, 2161 passed, 1 skipped**.
+- `cargo nextest run -p codemason-agent`: **2161 run, 2161 passed, 1 skipped**.
 - All twelve `scripts/check-*.sh` guards pass, and all twelve pass their
   `--self-test`.
 
@@ -208,13 +208,13 @@ not claim to prove it.
 |---|---|
 | `scripts/check_tool_rename.py` | `--json`, `--root`, `--self-test`, `--check`; one fixture constant; per-root FR-023 pairs; root manifest in the dependency map; `(f)` reports both sites, string-literal keys only, forwarding `name()` skipped; two reviewed exemptions |
 | `scripts/check-tool-rename.sh` | rewritten as a 67-line wrapper with no predicate logic and no fixture |
-| `crates/ragent-agent/tests/test_tool_rename_guard.rs` | rewritten: 16 cases, a scratch-copy harness, a JSON reader, the two entry points compared |
-| `crates/ragent-agent/src/tool/aliases.rs` | doc comment on `UpdateFileTool::execute` naming the designed forward |
-| `crates/ragent-agent/src/tool/mod.rs` | doc comment on `LegacyMultiEditAlias` explaining why `name()` returns a constant |
+| `crates/codemason-agent/tests/test_tool_rename_guard.rs` | rewritten: 16 cases, a scratch-copy harness, a JSON reader, the two entry points compared |
+| `crates/codemason-agent/src/tool/aliases.rs` | doc comment on `UpdateFileTool::execute` naming the designed forward |
+| `crates/codemason-agent/src/tool/mod.rs` | doc comment on `LegacyMultiEditAlias` explaining why `name()` returns a constant |
 | `.config/nextest.toml` | the group comment now says which two cases still seed into the checkout |
 | `specs/uniformtools/PLAN.md` | this task's row -> completed |
 | `specs/uniformtools/TESTPLAN.md` | TC-030's automated half, part 2 |
 | `specs/uniformtools/SPEC.md` | "The guard is one implementation, in two forms" |
 | `specs/uniformtools/T-048-ONE-IMPLEMENTATION.md` | this record |
 | `CHANGELOG.md` | one `### Added` bullet |
-| `crates/ragent-agent/DOCS.md` | the guard's one-implementation note |
+| `crates/codemason-agent/DOCS.md` | the guard's one-implementation note |

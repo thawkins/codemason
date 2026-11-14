@@ -8,9 +8,9 @@ audit:
 
 ## Overview
 
-This specification defines a `/new` slash command for ragent that scaffolds a brand-new
+This specification defines a `/new` slash command for codemason that scaffolds a brand-new
 software project inside an **empty** current directory. The command creates the directory
-layout that ragent expects (`.ragent/`, `specs/`, `log/`, `.gitignore`), generates a
+layout that codemason expects (`.codemason/`, `specs/`, `log/`, `.gitignore`), generates a
 minimal, runnable "Hello, World" application for the user-selected language and
 application type, and optionally initialises a git repository with a remote on GitHub or
 GitLab and pushes the initial commit.
@@ -29,20 +29,20 @@ occurs.
 
 ## Background
 
-ragent already contains most of the machinery needed for this feature:
+codemason already contains most of the machinery needed for this feature:
 
 - **Slash-command registry** — commands are declared as static trigger entries in
-  `crates/ragent-tui/src/app/state.rs` and dispatched in
-  `crates/ragent-tui/src/app/slash.rs`. `/spec reverse` demonstrates flag-parsing
+  `crates/codemason-tui/src/app/state.rs` and dispatched in
+  `crates/codemason-tui/src/app/slash.rs`. `/spec reverse` demonstrates flag-parsing
   precedent (the `/new` scaffold flags, `--create`).
-- **VCS tooling** — `crates/ragent-tools-vcs` exposes GitHub and GitLab clients
+- **VCS tooling** — `crates/codemason-tools-vcs` exposes GitHub and GitLab clients
   (auth, client, issues, PRs/MRs, pipelines) plus a full local `git` tool family
   (init is a trivial addition to the existing family).
 - **Scaffolding precedent** — the research system writes self-contained artifact
   directories; the `/bench init` command already creates benchmark folders.
-- **Project-guideline loader** — ragent auto-loads `AGENTS.md` from the project root,
+- **Project-guideline loader** — codemason auto-loads `AGENTS.md` from the project root,
   so the scaffolder should emit one so a freshly created project is immediately
-  agent-friendly when opened with ragent.
+  agent-friendly when opened with codemason.
 
 The new work is a scaffolding engine plus command wiring; it reuses existing VCS
 tooling for hosting setup.
@@ -57,8 +57,8 @@ directory.
 
 ### FR-002 — Empty-directory guard (event-driven)
 
-**When** the user invokes `/new` in a directory that is not empty (ignoring ragent's own
-artifacts: `.ragent/`, `log/`, `target/`), the system shall refuse to scaffold, report
+**When** the user invokes `/new` in a directory that is not empty (ignoring codemason's own
+artifacts: `.codemason/`, `log/`, `target/`), the system shall refuse to scaffold, report
 the offending entries, and exit without modifying the filesystem.
 
 ### FR-003 — Required flag validation (event-driven)
@@ -67,14 +67,14 @@ the offending entries, and exit without modifying the filesystem.
 shall display a usage message listing valid values for both flags and abort without
 creating any files.
 
-### FR-004 — ragent workspace initialisation (ubiquitous)
+### FR-004 — codemason workspace initialisation (ubiquitous)
 
-The scaffolder shall create the ragent project layout in the target directory:
+The scaffolder shall create the codemason project layout in the target directory:
 
-- `.ragent/` (agents, config placeholders)
+- `.codemason/` (agents, config placeholders)
 - `specs/` (spec directory)
 - `log/` (runtime logs, gitignored)
-- `.gitignore` (pre-populated for the chosen language + ragent artifacts)
+- `.gitignore` (pre-populated for the chosen language + codemason artifacts)
 - `AGENTS.md` (minimal project-guidelines stub)
 
 ### FR-005 — Hello-world generation (ubiquitous)
@@ -128,13 +128,13 @@ Copilot provider's OAuth application, the token it stores is a GitHub App token
 (`ghu_`) that cannot create repositories (`POST /user/repos` answers
 `403 Resource not accessible by integration`); such a stored token defers to
 the `gh` CLI credential when one is available, and is otherwise used unchanged
-so read-only GitHub tooling keeps working. `RAGENT_GITHUB_NO_GH_CLI=1`
+so read-only GitHub tooling keeps working. `CODEMASON_GITHUB_NO_GH_CLI=1`
 disables the `gh` fallback.
 
 The remote half must run off the async runtime's own thread: the GitHub and
 GitLab API calls go through a `reqwest::blocking` client, which spawns a
 private runtime and panics if that runtime is dropped from within an async
-context. In the CLI parity path (`ragent new --github`) the call is therefore
+context. In the CLI parity path (`codemason new --github`) the call is therefore
 executed inside a blocking worker; the TUI already runs it on a worker
 `std::thread` with no ambient runtime.
 
@@ -164,8 +164,8 @@ display usage, flag table, and supported language/type/stack combinations.
 
 ### FR-013 — CLI parity (optional feature)
 
-**If/when** ragent is run in non-TUI mode (`--no-tui`), the same `/new` behaviour shall
-be reachable (e.g. `ragent run "/new ..."` or a dedicated CLI surface) with identical
+**If/when** codemason is run in non-TUI mode (`--no-tui`), the same `/new` behaviour shall
+be reachable (e.g. `codemason run "/new ..."` or a dedicated CLI surface) with identical
 flags and identical behaviour.
 
 ### FR-014 — Foreground execution (state-driven)
@@ -233,7 +233,7 @@ application artifacts, the following documentation files in the target directory
   and the expected first output (`Hello, world!`).
 - `STATS.md` — an initial project-statistics document containing: generated
   timestamp (UTC), selected language, app type, stack (or none), count of
-  generated files, and the ragent version that produced the scaffold.
+  generated files, and the codemason version that produced the scaffold.
 
 The scaffolder shall also create a `docs/` folder in the target directory.
 
@@ -256,7 +256,7 @@ is `cargo run`).
 ## Acceptance Checks
 
 - `/new --language rust --type cmdline` in an empty dir produces a buildable cargo
-  project + ragent layout, no remote.
+  project + codemason layout, no remote.
 - `/new --language rust --type cmdline --github` in an empty dir additionally creates
   a private GitHub repo and pushes.
 - `/new` in a non-empty dir aborts with a clear message and zero file mutations.

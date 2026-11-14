@@ -37,14 +37,14 @@ currently selected for use, and whether the last diagnostic run marked it as
 failed.
 
 - Keyless engines that need no API key: OpenAlex (scholarly works; set
-  `openalex_email` in `ragent.json` or the `OPENALEX_EMAIL` environment
+  `openalex_email` in `codemason.json` or the `OPENALEX_EMAIL` environment
   variable to join the polite pool) and Wikipedia (encyclopedia summaries).
 - API-backed engines activate only when a key is configured:
   `langsearch_api_key`, `tavily_api_key` (or the `TAVILY_API_KEY`
   environment variable), `perplexity_api_key` (or
   `PERPLEXITY_API_KEY`), `exa_api_key` (or the `EXA_API_KEY`
   environment variable), and `serper_api_key` (or the `SERPER_API_KEY`
-  environment variable). Configure these in `ragent.json`.
+  environment variable). Configure these in `codemason.json`.
 
 ## Examples
 
@@ -121,5 +121,5 @@ behaviour:
 - `mf_search` - the agent tool the engines back
 - `mf_fetch`, `mf_crawl`, `mf_cache_clear` - the rest of the MasterFetch tool family
 - `/webapi` - control the built-in HTTP API server
-- `ragent.json` - where `langsearch_api_key`, `tavily_api_key`, and
+- `codemason.json` - where `langsearch_api_key`, `tavily_api_key`, and
   `perplexity_api_key` are configured

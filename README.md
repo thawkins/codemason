@@ -1,12 +1,12 @@
-# ragent
+# codemason
 
 An AI coding agent for the terminal, built in Rust.
 
-![ragent terminal UI](assets/screens/ragentstart.png)
+![codemason terminal UI](assets/screens/codemasonstart.png)
 
-![ragent mcp start](assets/screens/ragentmcpstartup.png)
+![codemason mcp start](assets/screens/codemasonmcpstartup.png)
 
-ragent is a Rust coding agent inspired by RooCode, Claude Code, Copilot CLI and
+codemason is a Rust coding agent inspired by RooCode, Claude Code, Copilot CLI and
 OpenCode. It provides multi-provider LLM orchestration, a comprehensive built-in
 tool system, a terminal UI, and a client/server architecture — all compiled into a
 single binary that links only against the system C runtime (libc, libm, libgcc_s).
@@ -24,17 +24,17 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   (File), Amazon Bedrock, OpenRouter, and a Model Router cluster — 15 registry
   entries behind an extensible provider trait
 
-![Provider Selector](assets/screens/ragentprovider.png)
+![Provider Selector](assets/screens/codemasonprovider.png)
 
-![LLM Selector](assets/screens/ragentmodel.png)
+![LLM Selector](assets/screens/codemasonmodel.png)
 
-- **Local-first defaults** — when no model is explicitly configured, ragent resolves
+- **Local-first defaults** — when no model is explicitly configured, codemason resolves
   to the first available local/self-hosted provider (e.g. Ollama) rather than
   hard-wiring a cloud provider
 - **Pluggable execution backends** — select *where* a session's tools run without
   changing the agent loop: `local` (host, the default), `docker`/`podman` (a
   per-session container whose workspace is a named volume, never a host bind mount),
-  and `remote` (drive a second ragent server over REST+SSE and mirror its events
+  and `remote` (drive a second codemason server over REST+SSE and mirror its events
   locally). A durable backend registry reports each backend's health, the TUI
   `/backend` switcher shows and changes the active backend, sandbox credentials are
   resolved from the encrypted store at spawn time and injected as container
@@ -50,10 +50,10 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
 - **Comprehensive tool system** — a registry of tools grouped into permission
   categories in the default build (the engine-gated `mf_screenshot` tool registers
   only when a drivable headless browser is present — spec `openhands` FR-029).
-  `ragent run --dry-run` prints the live total and per-category counts (see
+  `codemason run --dry-run` prints the live total and per-category counts (see
   [docs/howtos/tools/INDEX.md](docs/howtos/tools/INDEX.md)); the groups are:
 
-![ragent tool session](assets/screens/ragentsession.png)
+![codemason tool session](assets/screens/codemasonsession.png)
 
 - **File** (27) — read, Write, create, Edit, multiedit, apply_patch, patch, rm,
   move_file, copy_file, make_directory, append_to_file, file_info, diff_files,
@@ -113,7 +113,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   of a team's `config.json` goes through `TeamStore::update`, which holds the
   exclusive lock from read to write, so two teammates changing status at once no
   longer lose one change. The team runtime is bound before tool dispatch in every
-  entry point - TUI, `ragent run`, `ragent serve` and ACP - so `team_spawn` works
+  entry point - TUI, `codemason run`, `codemason serve` and ACP - so `team_spawn` works
   outside the TUI, and it is rebindable (`TeamManagerSlot`) rather than pinned to
   the first team the process ever created: a manager whose team is gone is
   unbound atomically, a manager refuses to spawn into a team it does not drive,
@@ -137,7 +137,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
 - **None** (8) — calculator, DateTime (current date/time from the system clock:
   RFC 3339 UTC instant, the same instant rendered at an optional fixed UTC
   offset, individual date/time fields, and the Unix timestamp; it reads no `TZ`
-  or host timezone database), think, agent_complete, ragent_info (running version,
+  or host timezone database), think, agent_complete, codemason_info (running version,
   build time, git commit, compiler, plus this instance's pid, uptime, memory and
   thread count), os_info (read-only host report: OS identity and Linux
   distribution, CPU, graphics adapters and graphics-API versions, physical
@@ -173,7 +173,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   refused the change as `[err]` with the cause instead of an unconditional
   `[ok]`, and saving creates the user-global config directory when it is
   missing, so a fresh install can configure telemetry at all. After
-  **5 consecutive failures** ragent switches telemetry off through the same path
+  **5 consecutive failures** codemason switches telemetry off through the same path
   as `/telemetry off` (persisting `telemetry.otel.enabled: false`), so a dead
   collector stops costing a request per export interval, and the notice says so
   and names `/telemetry on` as the retry. The switch survives a restart: saving
@@ -190,11 +190,11 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   reconfigure (any `/telemetry on|off|logs|setup`) starts a new generation, and
   a retired pipeline's final background export - its own shutdown can take up
   to the export timeout - is forwarded without resetting or extending the live
-  streak. `telemetry.otel.endpoint` is a *base* URL: ragent appends the
+  streak. `telemetry.otel.endpoint` is a *base* URL: codemason appends the
   OTLP/HTTP signal path (`/v1/metrics`, `/v1/logs`) itself, keeps a base path
   (`https://gw.example.com/otel`), and uses a value that already names a signal
   path verbatim, so both documented forms reach a stock collector
-- **OTLP log export** — ragent's `tracing` events are also shipped to the
+- **OTLP log export** — codemason's `tracing` events are also shipped to the
   metrics collector over the OTLP **logs** signal whenever telemetry is on:
   `/telemetry on` starts both signals and `/telemetry off` stops both, so there
   is no separate logs switch. `/telemetry logs [all|trace|debug|info|warn|error]`
@@ -229,7 +229,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   **A tool call reaches the collector by this route and by no other**, and it
   travels at `INFO`, so tool-call activity arrives with no extra configuration -
   neither `--log-level` (now defaulting to `info`) nor `logs.level` (default
-  `info`) has to be raised. Lines that are *copies* of something ragent already
+  `info`) has to be raised. Lines that are *copies* of something codemason already
   logged through `tracing` - the `TuiTracingLayer` drain carrying startup,
   provider, code-index, MCP and export-health messages, and the mirrored
   child-process stderr drain - use a deferred push that records them in the panel
@@ -244,7 +244,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   remote. A session can run in its own `git worktree` at a branch
   (`/session new --branch`), and the session sidebar groups sessions by
   project and shows the pull/merge request count for each session's branch
-  (`/project`, `ragent project`)
+  (`/project`, `codemason project`)
 - **Session menu and Auto-fix** — right-click (or `m` on) a sidebar session
   for Open PR/MR, Open in (editor, file manager, terminal), Pin, Mark as
   unread, Rename, Fork, Move to section, Archive, Delete and, on a machine that
@@ -267,7 +267,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   submenu that opens any of them in the browser
 - **Session management** — persistent conversation history stored in SQLite;
   list, resume, export-archive, and import sessions. A session's transcript can be
-  aged out with `/db prune [--days N] [--dry-run]` (TUI) or `ragent db prune`
+  aged out with `/db prune [--days N] [--dry-run]` (TUI) or `codemason db prune`
   (CLI): messages older than the window are deleted and **the session itself is
   kept**, so an expired conversation stays listed and resumable with an empty
   transcript. A real prune asks for confirmation first and the dialog opens on
@@ -297,7 +297,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   with tailored system prompts
 - **Custom agents** — user-defined agents via JSON (OASF format) or Markdown profiles
 - **Project guidelines** — auto-loads `AGENTS.md` from the project root (and
-  `~/.local/share/ragent/`) into the system prompt so agents follow project-specific
+  `~/.local/share/codemason/`) into the system prompt so agents follow project-specific
   conventions
 - **MCP client** — Model Context Protocol support with auto-discovery of 18 known
   server types, stdio and Streamable-HTTP clients, and tool bridging; a server
@@ -307,21 +307,21 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   (`/mcp` / `/mcp status`, `/mcp config`, `/mcp discover`, `/mcp connect <id>`,
   `/mcp disconnect <id>`, `/mcp remove <id>`) with durable global enable/disable state
   (`mcp_state.json`) and live connect/disconnect. `/mcp config` reports where
-  ragent looks for MCP definitions (ragent-native, npm global, `PATH`, and the
+  codemason looks for MCP definitions (codemason-native, npm global, `PATH`, and the
   Claude/Cline/XDG registry directories), the count found at each location, and
   the servers discovered, naming the manifest that declares each one so a
-  plugin- or connector-bridged server is distinguishable from a `ragent.json`
-  entry. `/mcp remove <id>` deletes a configured server's `ragent.json` entry
+  plugin- or connector-bridged server is distinguishable from a `codemason.json`
+  entry. `/mcp remove <id>` deletes a configured server's `codemason.json` entry
   (every other key preserved) and clears its enable-ledger row; a bridged server
   is refused by name, because its definition belongs to its plugin or connector
   and is removed with `/plugins remove <id>` or `/connectors remove <id>`
 
-![MCP Selector](assets/screens/ragentmcpdiscover.png)
+![MCP Selector](assets/screens/codemasonmcpdiscover.png)
 
 - **ACP integration** — Agent Client Protocol support in both directions: an ACP
   **client** that drives Claude Code, Codex, or Gemini CLI as an external
   subprocess over JSON-RPC on stdio, and a **feature-gated, off-by-default ACP
-  server** (`cargo build --features acp-server`; `ragent acp-server`) that an
+  server** (`cargo build --features acp-server`; `codemason acp-server`) that an
   ACP-capable editor (Zed, VS Code, JetBrains) attaches to, streaming the driven
   session's updates back as `session/update` notifications
 - **Snapshot & undo** — file snapshots before edits so changes can be rolled back
@@ -410,7 +410,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   written under the scaffolded project (`<folder>/specs/<name>/`) when
   `--folder` was used
 - **Project scaffolding** — `/new --language <lang> --type <type>` scaffolds a
-  new project in an empty directory: the ragent workspace (`.ragent/`, `specs/`,
+  new project in an empty directory: the codemason workspace (`.codemason/`, `specs/`,
   `log/`, `.gitignore`, `AGENTS.md`), a runnable hello-world artifact set for
   26 application languages (rust, python, go, typescript, ...) with
   library/cmdline/tui/gui layouts (plus a webapp HTTP server for the five web
@@ -420,12 +420,12 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   stack layers (`--stack axum`), starter docs (`README.md`, `QUICKSTART.md`,
   `STATS.md`, `docs/`), git init + initial commit, and optional GitHub/GitLab
   remote creation + push (`--github`/`--gitlab`); progress streams live in the
-  message window; also available as the `ragent new` CLI subcommand
-- **Research system** — `/research` slash command family and `ragent research` CLI for
+  message window; also available as the `codemason new` CLI subcommand
+- **Research system** — `/research` slash command family and `codemason research` CLI for
   structured information gathering (web search + local file cross-referencing) with
   self-contained dated report outputs (`research/<name>/RESEARCH-<YYYY-MM-DD>.md`
   plus the `CORPA-<YYYY-MM-DD>.md` QA companion, so a `/research update` re-run
-  keeps the earlier run's report; an item created by an older ragent keeps its
+  keeps the earlier run's report; an item created by an older codemason keeps its
   legacy undated `RESEARCH.md` / `CORPA.md`, and every read surface resolves
   whichever exists) and `GET/POST/DELETE /research` HTTP endpoints;
   concept/finding output limits (`--max-concepts`/`--max-findings`, `research.max_concepts`/
@@ -468,7 +468,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   multi-target trees that ship both nested manifests side by side (e.g.
   `mongodb/agent-skills`), which resolve to the Claude dialect — run their
   JavaScript entries on an embedded, budget-sandboxed engine (`rquickjs`, no
-  Node/Deno required) behind a versioned `ragent` host API, and register their
+  Node/Deno required) behind a versioned `codemason` host API, and register their
   tools (`plugin_<id>_<tool>`) and slash commands; skill-only/MCP-only plugins
   (no JavaScript entry) install and load inertly, and their `skills` directories
   and `mcpServers` entries are bridged into the session (plugin skills join the
@@ -521,7 +521,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   `/plugins list|add|remove|enable|disable|test|stores|marketplace|help` in the TUI
   (`/plugins list [--verbose]` opens an interactive table panel with the capability
   blocks listed at the end; `Space` toggles the highlighted plugin's enabled state) and
-  the `ragent plugins <sub>` CLI (`/plugins marketplace show` and `/plugins marketplace <codex|claude> list` list the marketplaces configured for each store,
+  the `codemason plugins <sub>` CLI (`/plugins marketplace show` and `/plugins marketplace <codex|claude> list` list the marketplaces configured for each store,
   one section per store with a name/url/description table; `/plugins marketplace <codex|claude> add <source>` registers an additional marketplace from an
   `owner/repo` slug, an SSH remote, an `https://` URL, or a local directory, in the
   user-global `plugins.stores.marketplaces`, and the two browse panels fetch and
@@ -531,22 +531,22 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   hint and a `-` version marker while a value stays unknown; `plugins.enabled: false`
   makes the subsystem inert
 
-![CodexPlugins](assets/screens/ragentpluginscodex.png)
+![CodexPlugins](assets/screens/codemasonpluginscodex.png)
 
-![ClaudePlugins](assets/screens/ragentpluginsclaude.png)
+![ClaudePlugins](assets/screens/codemasonpluginsclaude.png)
 
 - **Connector system** — a Claude-connector-equivalent catalogue of named
   integrations (Google Drive, Slack, GitHub, Git, Postgres, Puppeteer, and the
   wider community catalogue) that reach an external system through one or more
   MCP servers; a connector is a catalogue entry (display name, category, auth
-  shape, and one or more servers) on top of the MCP transport ragent already
+  shape, and one or more servers) on top of the MCP transport codemason already
   speaks. Managed through the thirteen-subcommand `/connectors` family
   (`list [--verbose] [--category <name>]`,
   `claude [query] [--category <name>] [--refresh]`, `add <id|source> [--force]`,
   `remove <id>`, `enable <id>`, `disable <id>`, `connect <id>`,
   `disconnect <id>`, `auth <id>`, `test <id>`, `stores [--check]`,
   `marketplace show|claude list|add|remove`, `help`) in the TUI and the
-  `ragent connectors <sub>` CLI. `/connectors claude` opens an interactive,
+  `codemason connectors <sub>` CLI. `/connectors claude` opens an interactive,
   off-the-event-loop catalogue browser wearing the same design language as
   `/plugins claude` (filter by query, category, and marketplace; browse; install with
   one key): a calm slate accent frame and a structured title line; a left column
@@ -573,7 +573,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   enabled; `enable` connects their servers now in a running session.
   `connectors.enabled: false` makes the subsystem inert
 
-![ragent connectors claude](assets/screens/ragentconnectorsclaude.png)
+![codemason connectors claude](assets/screens/codemasonconnectorsclaude.png)
 
 - **Automation service** — named, schedulable or webhook-triggered agent runs
   with durable run history and execution-backend confinement (spec `openhands`
@@ -584,7 +584,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   output reference, and can notify Slack/GitHub/Linear/Notion/a generic webhook.
   A run executes only in its configured backend. Managed through
   `/automation [list]`, `/automation runs <id>`, `/automation run <id>`,
-  `/automation help` in the TUI, `ragent automation list|runs <id>|run <id>` on
+  `/automation help` in the TUI, `codemason automation list|runs <id>|run <id>` on
   the CLI, and `GET /automation`, `GET /automation/runs/{id}`,
   `POST /automation/{id}/run` over HTTP. `automation.enabled: false` (or an
   absent block) makes the subsystem inert
@@ -593,8 +593,8 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   route table in the server crate so it cannot drift from the served routes; a
   companion test asserts the table and the router agree in both directions. The
   same table generates a dependency-free typed TypeScript client
-  (`docs/openapi/ragent-client.d.ts`), emitted from the CLI with
-  `ragent openapi --client`. The document carries no runtime data or secrets,
+  (`docs/openapi/codemason-client.d.ts`), emitted from the CLI with
+  `codemason openapi --client`. The document carries no runtime data or secrets,
   so `/openapi.json` is public while every described operation declares the
   native bearer security scheme
 - **OpenAI-compatible surface** — an inbound `POST /v1/chat/completions` and
@@ -603,7 +603,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   `chat.completion` JSON object; `stream:true` streams `chat.completion.chunk`
   `text/event-stream` events terminated by `data: [DONE]` (FR-011, FR-012).
   Enable it with `openai.enabled` plus an `openai.token`; enabling it without a
-  token makes `ragent serve` refuse to start the surface rather than serve it
+  token makes `codemason serve` refuse to start the surface rather than serve it
   unauthenticated (FR-032). Permission checks are preserved on both paths
   (FR-038).
 - **Input queue** — the TUI input field stays editable while the primary agent
@@ -617,9 +617,9 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
 - **Teams & Swarms** — multi-agent coordination with named teammates, shared task lists,
   mailbox messaging, and swarm decomposition for parallel work (`/swarm <prompt>`)
 
-![ragent swarm](assets/screens/ragentswarm.png)
+![codemason swarm](assets/screens/codemasonswarm.png)
 
-![ragent team](assets/screens/ragentteam.png)
+![codemason team](assets/screens/codemasonteam.png)
 
 - **Autopilot mode** — autonomous operation with configurable iteration limits and
   permission auto-approval (`/autopilot on [--max-tokens N] [--max-time N]`), or a
@@ -638,10 +638,10 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
 ### From source
 
 ```bash
-git clone https://github.com/thawkins/ragent.git
-cd ragent
+git clone https://github.com/thawkins/codemason.git
+cd codemason
 cargo build --release
-# Binary is at target/release/ragent
+# Binary is at target/release/cdmn
 ```
 
 Requires Rust 1.91+ (edition 2024; the pinned toolchain is `stable`). The
@@ -670,7 +670,7 @@ test gets its own process, so a wedged test cannot block its neighbours. Run one
 file by filter:
 
 ```bash
-cargo nextest run -p ragent-tui -E 'test(test_slash_commands::)'
+cargo nextest run -p codemason-tui -E 'test(test_slash_commands::)'
 cargo test --workspace --doc   # doc tests: nextest does not run them
 ```
 
@@ -689,26 +689,26 @@ export GENERIC_OPENAI_API_KEY="sk-..."
 export OPENROUTER_API_KEY="sk-or-..."
 
 # Launch the interactive TUI
-ragent
+cdmn
 
 # Run a one-shot prompt
-ragent run "Explain this codebase"
+cdmn run "Explain this codebase"
 
 # Check that the install is ready (no model or tool is invoked)
-ragent run --dry-run "hello"
+cdmn run --dry-run "hello"
 
 # Start the HTTP server only
-ragent serve --addr 127.0.0.1:9100
+cdmn serve --addr 127.0.0.1:9100
 ```
 
 Use OpenRouter models directly from the CLI:
 
 ```bash
-ragent run --model openrouter/anthropic/claude-sonnet-4 "Refactor this function"
+cdmn run --model openrouter/anthropic/claude-sonnet-4 "Refactor this function"
 ```
 
 Generic OpenAI-compatible endpoint (including custom port) can be configured in
-`ragent.json`:
+`codemason.json`:
 
 ```json
 {
@@ -724,7 +724,7 @@ Generic OpenAI-compatible endpoint (including custom port) can be configured in
 ## Usage
 
 ```
-ragent [OPTIONS] [COMMAND]
+cdmn [OPTIONS] [COMMAND]
 
   run          Execute agent with prompt
   serve        Start HTTP server only
@@ -736,20 +736,20 @@ ragent [OPTIONS] [COMMAND]
   new          Scaffold a new project in the current directory (the `/new` command)
 ```
 
-With no command, `ragent` launches the interactive TUI. Run `ragent --help` for
-the full list of commands and options, and `ragent <command> --help` for one
+With no command, `codemason` launches the interactive TUI. Run `codemason --help` for
+the full list of commands and options, and `codemason <command> --help` for one
 command.
 
-`ragent run --dry-run` is the fastest way to confirm a machine is set up: it loads
+`codemason run --dry-run` is the fastest way to confirm a machine is set up: it loads
 config, resolves the provider, lists the registered skills and tools by category, and
 connects MCP servers, then prints a `READY` / `WARNING` / `BLOCKED` verdict.
 
 ## Configuration
 
-ragent reads configuration from `ragent.json` in the `.ragent/` directory, layered
-over `~/.config/ragent/ragent.json`.
+codemason reads configuration from `codemason.json` in the `.codemason/` directory, layered
+over `~/.config/codemason/codemason.json`.
 
-A repository's `.ragent/ragent.json` is untrusted input, so `Config::merge_project`
+A repository's `.codemason/codemason.json` is untrusted input, so `Config::merge_project`
 strips the privileged keys a project may not set: `yolo`, permission allow-rules,
 `bash` allow/deny lists, `dirs` allow/deny lists and allowed roots, `telemetry`,
 `hooks`, `openai`, `mcp` (stdio servers spawn subprocesses with no prompt), `acp`
@@ -798,7 +798,7 @@ live in the user-global config. Rejected keys are logged at `warn!`.
   "execution_backend": "podman",
   "backends": [
     { "id": "sandbox", "name": "Podman sandbox", "kind": "podman",
-      "image": "ghcr.io/yourorg/ragent-sandbox:latest", "workspace": "/projects",
+      "image": "ghcr.io/yourorg/codemason-sandbox:latest", "workspace": "/projects",
       "credentials": ["EXAMPLE_API_KEY"] }
   ],
   // LLM security analyzer (spec `openhands` FR-006, FR-017). Opt-in; a
@@ -808,11 +808,11 @@ live in the user-global config. Rejected keys are logged at `warn!`.
     "model": { "provider_id": "ollama", "model_id": "qwen2.5:1.5b" }
   },
   // OpenAI-compatible inbound surface (spec `openhands` FR-012, FR-024,
-  // FR-032). When `enabled` is true a `token` (or the ambient `RAGENT_TOKEN`)
-  // is required or `ragent serve` refuses to start the surface.
+  // FR-032). When `enabled` is true a `token` (or the ambient `CODEMASON_TOKEN`)
+  // is required or `codemason serve` refuses to start the surface.
   "openai": {
     "enabled": true,
-    "token": "sk-ragent-local"
+    "token": "sk-codemason-local"
   },
   // UI internationalisation (spec `openhands` FR-027). Opt-in; a non-English
   // ambient `LANG` with an installed catalog enables it automatically.
@@ -876,12 +876,12 @@ You can define your own agents as JSON files using the
 [Open Agentic Schema Framework (OASF)](https://oasf.agntcy.org/) standard.
 Place them in:
 
-- `~/.ragent/agents/` — user-global (all projects)
-- `~/.config/ragent/agents/` — user-global (all projects; XDG config location,
-  takes priority over `~/.ragent/agents/`)
-- `.ragent/agents/` — project-local (this project, highest priority)
+- `~/.codemason/agents/` — user-global (all projects)
+- `~/.config/codemason/agents/` — user-global (all projects; XDG config location,
+  takes priority over `~/.codemason/agents/`)
+- `.codemason/agents/` — project-local (this project, highest priority)
 
-ragent loads them automatically at startup. Use `/agents` to list loaded agents
+codemason loads them automatically at startup. Use `/agents` to list loaded agents
 and view diagnostics, or `/agent` to open the interactive picker (custom agents
 are marked with a yellow `[custom]` badge).
 
@@ -889,7 +889,7 @@ See [docs/howtos/custom-agents.md](docs/howtos/custom-agents.md) for the full sc
 reference, template variables (`{{WORKING_DIR}}`, `{{FILE_TREE}}`, `{{AGENTS_MD}}`,
 `{{DATE}}`), permission rules, and worked examples — the manual carries a
 complete minimal OASF document and a security-reviewer profile you can copy
-straight into `.ragent/agents/`.
+straight into `.codemason/agents/`.
 
 ## Project Scaffolding
 
@@ -901,11 +901,11 @@ command:
 /new --language rust --type cmdline
 
 # CLI
-ragent new --language rust --type cmdline
+cdmn new --language rust --type cmdline
 ```
 
-The command validates the directory is empty, generates the ragent workspace
-(`.ragent/`, `specs/`, `log/`, `.gitignore`, `AGENTS.md`), a runnable
+The command validates the directory is empty, generates the codemason workspace
+(`.codemason/`, `specs/`, `log/`, `.gitignore`, `AGENTS.md`), a runnable
 hello-world artifact set for `rust`/`python`/`go`/`typescript` in
 `library`/`cmdline`/`tui`/`gui`/`webapp` layouts, starter documentation (`README.md`,
 `QUICKSTART.md`, `STATS.md`, `docs/`), initialises git with an initial
@@ -914,10 +914,10 @@ repository, sets it as `origin`, and pushes.
 
 ```bash
 # Add a framework stack (Rust: axum, warp, raylib, gtk4, ratatui)
-ragent new --language rust --type cmdline --stack axum
+cdmn new --language rust --type cmdline --stack axum
 
 # Create the project on GitHub or GitLab (mutually exclusive)
-ragent new --language python --type library --gitlab
+cdmn new --language python --type library --gitlab
 ```
 
 See [`docs/howtos/newproj.md`](docs/howtos/newproj.md) for the full manual; `/new help`
@@ -950,25 +950,25 @@ The project is a Cargo workspace built from 19 focused crates:
 
 | Crate                     | Purpose                                                                  |
 | ------------------------- | ------------------------------------------------------------------------ |
-| `ragent-agent`          | Agent/runtime layer: sessions, orchestration, MCP, memory, tool registry |
-| `ragent-bench`          | Benchmark runner shared between the TUI and the CLI                      |
-| `ragent-codeindex`      | Indexing: tree-sitter parsing, SQLite store, Tantivy FTS, file watcher   |
-| `ragent-config`         | Configuration types, defaults, and parsing                               |
-| `ragent-connectors`     | Connector catalogue, store, providers, MCP bridge, `/connectors`       |
-| `ragent-hyperresearch`  | Deep-research engine: decomposition, notes, citation graph, vault       |
-| `ragent-llm`            | Provider clients and model registry (every built-in provider + Model Router) |
-| `ragent-plugins`        | Codex/Claude dialect plugins, sandboxed JS runtime, `/plugins`         |
-| `ragent-research`       | Web/local research gathering, synthesis, dated report output             |
-| `ragent-server`         | Axum HTTP routes and SSE streaming                                       |
-| `ragent-specs`          | Spec lifecycle: discovery, validation, review, archival, JTBD            |
-| `ragent-storage`        | SQLite storage, snapshots, encrypted credentials                         |
-| `ragent-surface`        | Shared helpers for the plugin/connector command surfaces                 |
-| `ragent-telemetry`      | OpenTelemetry instrumentation and OTLP export                            |
-| `ragent-tools-core`     | Core shell, file and search tools                                        |
-| `ragent-tools-extended` | Extended document, web, memory and codeindex tools                       |
-| `ragent-tools-vcs`      | Git, GitHub and GitLab tool surface                                      |
-| `ragent-tui`            | Ratatui terminal interface                                               |
-| `ragent-types`          | Shared IDs, events, messages and sanitization primitives                 |
+| `codemason-agent`          | Agent/runtime layer: sessions, orchestration, MCP, memory, tool registry |
+| `codemason-bench`          | Benchmark runner shared between the TUI and the CLI                      |
+| `codemason-codeindex`      | Indexing: tree-sitter parsing, SQLite store, Tantivy FTS, file watcher   |
+| `codemason-config`         | Configuration types, defaults, and parsing                               |
+| `codemason-connectors`     | Connector catalogue, store, providers, MCP bridge, `/connectors`       |
+| `codemason-hyperresearch`  | Deep-research engine: decomposition, notes, citation graph, vault       |
+| `codemason-llm`            | Provider clients and model registry (every built-in provider + Model Router) |
+| `codemason-plugins`        | Codex/Claude dialect plugins, sandboxed JS runtime, `/plugins`         |
+| `codemason-research`       | Web/local research gathering, synthesis, dated report output             |
+| `codemason-server`         | Axum HTTP routes and SSE streaming                                       |
+| `codemason-specs`          | Spec lifecycle: discovery, validation, review, archival, JTBD            |
+| `codemason-storage`        | SQLite storage, snapshots, encrypted credentials                         |
+| `codemason-surface`        | Shared helpers for the plugin/connector command surfaces                 |
+| `codemason-telemetry`      | OpenTelemetry instrumentation and OTLP export                            |
+| `codemason-tools-core`     | Core shell, file and search tools                                        |
+| `codemason-tools-extended` | Extended document, web, memory and codeindex tools                       |
+| `codemason-tools-vcs`      | Git, GitHub and GitLab tool surface                                      |
+| `codemason-tui`            | Ratatui terminal interface                                               |
+| `codemason-types`          | Shared IDs, events, messages and sanitization primitives                 |
 
 The binary entry point (`src/main.rs`) wires these crates together behind a clap CLI.
 
@@ -996,17 +996,17 @@ User Input
 
 ## Performance
 
-Criterion benchmarks ship with `ragent-agent`, `ragent-bench`, `ragent-codeindex`,
-`ragent-research`, `ragent-server`, `ragent-storage`, and `ragent-tui`. See
+Criterion benchmarks ship with `codemason-agent`, `codemason-bench`, `codemason-codeindex`,
+`codemason-research`, `codemason-server`, `codemason-storage`, and `codemason-tui`. See
 [`docs/userdocs/bench.md`](docs/userdocs/bench.md) for the TUI benchmark runner and
 [`docs/howtos/slashcommands/bench.md`](docs/howtos/slashcommands/bench.md) for the
 `/bench` command family.
 
 ```bash
 # Run crate benchmarks
-cargo bench -p ragent-tui
-cargo bench -p ragent-agent
-cargo bench -p ragent-codeindex
+cargo bench -p codemason-tui
+cargo bench -p codemason-agent
+cargo bench -p codemason-codeindex
 ```
 
 Key optimisations include:

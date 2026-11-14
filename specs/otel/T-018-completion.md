@@ -16,24 +16,24 @@ as OTEL instruments when telemetry is enabled. Both `spawn_sync` (blocking) and
 
 The `CoordinatorRecorder` type already existed from T-015 and already provided
 `record_agent_spawn()` and `record_agent_complete()` methods that increment the
-correct OTEL instruments (`ragent.subagent.spawns`, `ragent.agents.active` up/down,
-`ragent.agents.completed`). T-018 wires this recorder into `TaskManager`.
+correct OTEL instruments (`codemason.subagent.spawns`, `codemason.agents.active` up/down,
+`codemason.agents.completed`). T-018 wires this recorder into `TaskManager`.
 
 ## Requirement
 
 ### FR-018
 
 > When a sub-agent is spawned, the system shall record
-> `ragent.subagent.spawns` and increment `ragent.agents.active`; when it
-> completes, the system shall decrement `ragent.agents.active` and increment
-> `ragent.agents.completed`.
+> `codemason.subagent.spawns` and increment `codemason.agents.active`; when it
+> completes, the system shall decrement `codemason.agents.active` and increment
+> `codemason.agents.completed`.
 
 ## Changes
 
-### `crates/ragent-agent/src/task/mod.rs`
+### `crates/codemason-agent/src/task/mod.rs`
 
 - **New struct field**: `pub coordinator_recorder:
-  ragent_telemetry::recorder::CoordinatorRecorder` added to `TaskManager`,
+  codemason_telemetry::recorder::CoordinatorRecorder` added to `TaskManager`,
   with a docblock. Defaulted to `disabled()` in the `new()` constructor.
 
 - **New builder method**: `with_coordinator_recorder(recorder)` — sets the
@@ -62,18 +62,18 @@ correct OTEL instruments (`ragent.subagent.spawns`, `ragent.agents.active` up/do
 ### Build checks
 
 ```
-cargo check -p ragent-agent                          # pass (default features)
-cargo check -p ragent-agent --features telemetry      # pass
-cargo check -p ragent-telemetry --features telemetry  # pass
+cargo check -p codemason-agent                          # pass (default features)
+cargo check -p codemason-agent --features telemetry      # pass
+cargo check -p codemason-telemetry --features telemetry  # pass
 ```
 
 ### Test results
 
 ```
-cargo test -p ragent-agent --lib
+cargo test -p codemason-agent --lib
 test result: ok. 316 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
-cargo test -p ragent-telemetry --features telemetry --lib -- --skip test_flush_on_signal
+cargo test -p codemason-telemetry --features telemetry --lib -- --skip test_flush_on_signal
 test result: ok. 60 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out
 ```
 

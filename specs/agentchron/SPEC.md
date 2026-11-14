@@ -11,7 +11,7 @@ audit:
 
 ## Overview
 
-This specification describes an **agent cron system** for ragent that allows
+This specification describes an **agent cron system** for codemason that allows
 users to schedule agent runs with a designated agent type and an initial prompt.
 The system supports both **one-shot** events (fire once at a specified timestamp)
 and **repeated** events (fire on a recurring interval). Every event execution is
@@ -180,7 +180,7 @@ description (e.g. "every 30m from 2025-01-15T09:00Z") alongside the raw fields.
 
 **FR-016** (unwanted)
 The system **shall not** execute an event whose agent type is not in the set of
-built-in or custom agents known to ragent; instead it **shall** log an outcome
+built-in or custom agents known to codemason; instead it **shall** log an outcome
 of `"error"` with a message identifying the unknown agent type.
 
 **FR-017** (unwanted)

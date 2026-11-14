@@ -1,0 +1,600 @@
+//! Benchmark command handling for the TUI.
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+// Prompt optimization templates
+
+// State types from app/state.rs
+use crate::app::state::{App, LogLevel};
+
+// Helpers
+
+// Re-export status types from theme
+use crate::app::session_ops::recover_poisoned;
+
+impl App {
+    /// Remove the active bench run's task entry and reset all per-run state.
+    /// Shared by the watchdog-detach and run-completion paths, which must not
+    /// drift apart (a field cleared in one branch but not the other leaves
+    /// stale bench state pinned to the status line).
+    fn clear_active_bench(&mut self) {
+        self.bench_origin_session = None;
+        if let Some(task_id) = self.active_bench_task_id.take()
+            && let Some(idx) = self.active_tasks.iter().position(|task| task.id == task_id)
+        {
+            self.active_tasks.remove(idx);
+        }
+        self.active_bench_summary = None;
+        self.active_bench_started_at = None;
+        self.active_bench_cancel = None;
+        if let Some(progress) = &self.active_bench_progress {
+            progress.clear();
+        }
+        self.active_bench_progress = None;
+    }
+
+    /// Whether the active benchmark run has outlived the staleness cap.
+    ///
+    /// A wedged bench runner (hung HTTP call, blocked tool) would otherwise
+    /// keep `active_bench_task_id` set forever, pinning the main loop at a
+    /// 250 ms animate deadline and re-rendering the same status line.
+    pub(crate) fn bench_stale(&self) -> bool {
+        match (
+            self.active_bench_task_id.as_ref(),
+            self.active_bench_started_at,
+        ) {
+            (Some(_), Some(started)) => {
+                let elapsed_secs = (chrono::Utc::now() - started).num_seconds().max(0) as u64;
+                elapsed_secs >= crate::BENCH_STALE_SECS
+            }
+            // No start timestamp recorded: treat as fresh so the watchdog
+            // cannot prematurely cancel a valid run.
+            _ => false,
+        }
+    }
+
+    /// Poll the active benchmark task, refresh the status line with progress,
+    /// drain progress events, and surface the finished result when complete.
+    pub fn poll_pending_bench(&mut self) {
+        // Output belongs to the session that started the run (MULTISESSION).
+        let origin = self.bench_origin_session.clone();
+        self.with_origin_session(origin.as_deref(), Self::poll_pending_bench_in_origin);
+    }
+
+    /// [`Self::poll_pending_bench`] with the run's own session focused.
+    fn poll_pending_bench_in_origin(&mut self) {
+        // Watchdog: surface and clear a run that has outlived the staleness
+        // cap so a wedged runner cannot hold the animate deadline forever.
+        if self.bench_stale() {
+            let elapsed = self
+                .active_bench_started_at
+                .map(|started| (chrono::Utc::now() - started).num_seconds().max(0))
+                .unwrap_or(0);
+            self.clear_active_bench();
+            self.status = "bench: timed out".to_string();
+            self.needs_redraw = true;
+            self.push_log_no_agent(
+                LogLevel::Warn,
+                format!(
+                    "Benchmark run exceeded the {} minute watchdog and was detached (elapsed {}s)",
+                    crate::BENCH_STALE_SECS / 60,
+                    elapsed
+                ),
+            );
+            self.append_assistant_text(
+                "[warn] **Benchmark watchdog**\n\nThe benchmark run did not finish within the \
+                 watchdog window and was detached. It may still be wedged in the background; \
+                 check process state before retrying.",
+            );
+            return;
+        }
+        if self.active_bench_task_id.is_some()
+            && let Some(progress) = self
+                .active_bench_progress
+                .as_ref()
+                .and_then(|handle| handle.snapshot())
+        {
+            self.status = format!(
+                "[wait] bench: {} {}/{}",
+                progress.suite_id, progress.completed_cases, progress.total_cases
+            );
+        }
+        self.drain_bench_progress_events();
+        let outcome = {
+            let mut guard = recover_poisoned(self.bench_result.lock(), "bench_result");
+            guard.take()
+        };
+        let Some(outcome) = outcome else { return };
+        self.drain_bench_progress_events();
+        self.clear_active_bench();
+
+        match outcome {
+            Ok(run) => {
+                let codemason_bench::BenchRunOutcome {
+                    message,
+                    workbook_paths,
+                    ..
+                } = run;
+                self.bench_last_summary = Some(message.clone());
+                self.bench_last_workbooks = workbook_paths.clone();
+                self.bench_last_finished_at = Some(chrono::Utc::now());
+                self.session.force_new_message = true;
+                self.append_assistant_text(&message);
+                self.status = "bench: done".to_string();
+                self.push_log_no_agent(
+                    LogLevel::Info,
+                    format!("Finished /bench run - {} workbook(s)", workbook_paths.len()),
+                );
+                // Arm the status auto-expiry timer so "bench: done" transitions
+                // to "ready" after the grace period.
+                self.arm_status_expiry();
+            }
+            Err(msg) => {
+                self.bench_last_summary = Some(format!("Benchmark run failed: {msg}"));
+                self.bench_last_finished_at = Some(chrono::Utc::now());
+                self.status = format!("[warn] bench failed: {msg}");
+                self.session.force_new_message = true;
+                self.append_assistant_text(&format!("From: /bench run\n[err] {msg}"));
+                self.push_log_no_agent(LogLevel::Warn, format!("bench error: {msg}"));
+            }
+        }
+        self.needs_redraw = true;
+    }
+
+    pub(crate) fn drain_bench_progress_events(&mut self) {
+        if let Some(handle) = &self.active_bench_progress {
+            let events = handle.drain_events();
+            for event in events {
+                self.session.force_new_message = true;
+                self.append_assistant_text(&self.render_bench_run_event(&event));
+            }
+        }
+    }
+
+    pub(crate) fn render_bench_run_event(&self, event: &codemason_bench::BenchRunEvent) -> String {
+        match event {
+            codemason_bench::BenchRunEvent::SuiteStarted {
+                suite_id,
+                language,
+                total_cases,
+            } => {
+                format!(
+                    "From: /bench run\n[wait] Running `{suite_id}` [{language}] - {total_cases} case(s)."
+                )
+            }
+            codemason_bench::BenchRunEvent::CaseFinished {
+                suite_id,
+                language,
+                case_id,
+                status,
+            } => {
+                let icon = if status == "passed" { "[ok]" } else { "[err]" };
+                format!(
+                    "From: /bench run\n{icon} `{suite_id}` [{language}] case `{case_id}` -> `{status}`."
+                )
+            }
+        }
+    }
+
+    pub(crate) fn render_bench_init_event(
+        &self,
+        event: &codemason_bench::BenchInitProgressEvent,
+    ) -> String {
+        match event {
+            codemason_bench::BenchInitProgressEvent::Starting {
+                suite_id,
+                language,
+                mode,
+                verify_only,
+            } => {
+                let action = if *verify_only {
+                    "Verifying"
+                } else if matches!(mode, codemason_bench::BenchInitMode::Full) {
+                    "Loading full benchmark data for"
+                } else {
+                    "Loading benchmark data for"
+                };
+                format!("From: /bench init\n[wait] {action} `{suite_id}` [{language}]...")
+            }
+            codemason_bench::BenchInitProgressEvent::Finished {
+                suite_id,
+                language,
+                verify_only,
+                case_count,
+                data_root,
+                ..
+            } => {
+                let action = if *verify_only { "Verified" } else { "Loaded" };
+                format!(
+                    "From: /bench init\n[ok] {action} `{suite_id}` [{language}] at `{}` ({} case(s)).",
+                    data_root.display(),
+                    case_count
+                )
+            }
+        }
+    }
+
+    /// Render the `/bench help` reference: each command in its own table row,
+    /// followed by the full list of registered benchmarks and their supported
+    /// languages (FR-013 parity with the other slash-command help surfaces).
+    pub(crate) fn render_bench_help(&self) -> String {
+        let mut output = String::from("From: /bench help\n## Benchmark Commands\n\n");
+        output.push_str("| command | description |\n| --- | --- |\n");
+        let commands: &[(&str, &str)] = &[
+            (
+                "`/bench list`",
+                "List all registered benchmark suites, virtual targets, and profiles.",
+            ),
+            (
+                "`/bench show`",
+                "Show benchmark defaults: selected model, target expansions, and last workbooks.",
+            ),
+            (
+                "`/bench status`",
+                "Show the active benchmark run, or the most recent completed run.",
+            ),
+            (
+                "`/bench init <suite-or-all-or-full> [--full] [--language LANG] \
+                 [--force-download] [--verify-only]`",
+                "Initialize benchmark data: sample fixtures by default, or full upstream \
+                 datasets with `--full`; `--verify-only` checks existing data without writing.",
+            ),
+            (
+                "`/bench run <suite-or-profile-or-all> [--limit N|--cap N] [--samples K] \
+                 [--subset NAME] [--release VERSION] [--scenario NAME] [--language LANG] \
+                 [--temperature F] [--top-p F] [--max-tokens N] [--deterministic] \
+                 [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--resume] [--no-exec] [--yes]`",
+                "Run one suite, a named profile, or every registered suite. `--yes` confirms \
+                 expensive targets; `--resume` continues a prior partial run.",
+            ),
+            (
+                "`/bench open last`",
+                "Open the most recent benchmark workbook(s) and their summary.",
+            ),
+            (
+                "`/bench cancel`",
+                "Request cancellation of the active benchmark run.",
+            ),
+            ("`/bench help`", "Show this help reference."),
+        ];
+        for (command, description) in commands {
+            output.push_str(&format!("| {command} | {description} |\n"));
+        }
+
+        output.push_str("\n## Benchmarks\n\n");
+        output.push_str("| suite | description | default language | supported languages |\n");
+        output.push_str("| --- | --- | --- | --- |\n");
+        for suite in codemason_bench::all_suites() {
+            let languages = suite.languages.join(", ");
+            output.push_str(&format!(
+                "| `{}` ({}) | {} | `{}` | {} |\n",
+                suite.id, suite.display_name, suite.description, suite.default_language, languages
+            ));
+        }
+
+        output.push_str("\n## Virtual Targets\n\n");
+        output.push_str("| target | expands to |\n| --- | --- |\n");
+        output.push_str(&format!(
+            "| `all` | all {} registered suites |\n",
+            codemason_bench::all_suites().len()
+        ));
+        output.push_str("| `full` | full upstream dataset ingestion for every suite |\n");
+
+        output.push_str("\n## Profiles\n\n");
+        output.push_str("| profile | suites |\n| --- | --- |\n");
+        for profile in codemason_bench::all_profiles() {
+            let suites = if profile.suites.is_empty() {
+                "(none yet)".to_string()
+            } else {
+                profile
+                    .suites
+                    .iter()
+                    .map(|suite| format!("`{suite}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            output.push_str(&format!("| `{}` | {} |\n", profile.id, suites));
+        }
+
+        output
+    }
+
+    pub(crate) fn render_bench_list(&self) -> String {
+        let mut output = String::from("From: /bench list\n## Benchmark Suites\n\n");
+        output.push_str(
+            "| suite | description | default | languages | language data | revision |\n| --- | --- | --- | --- | --- | --- |\n",
+        );
+        for suite in codemason_bench::all_suites() {
+            let languages = suite.languages.join(", ");
+            let local_partition = if suite.languages.len() > 1 {
+                format!("local partitions: `benches/data/{}/<language>`", suite.id)
+            } else {
+                format!(
+                    "local partition: `benches/data/{}/{}`",
+                    suite.id, suite.default_language
+                )
+            };
+            let language_data = if suite.language_source_note.is_empty() {
+                local_partition
+            } else {
+                format!("{local_partition}; {}", suite.language_source_note)
+            };
+            output.push_str(&format!(
+                "| `{}` | {} | `{}` | `{}` | {} | `{}` |\n",
+                suite.id,
+                suite.description,
+                suite.default_language,
+                languages,
+                language_data,
+                suite.revision
+            ));
+        }
+        output.push_str("\n## Virtual Targets\n\n");
+        output.push_str("| target | expands to | notes |\n| --- | --- | --- |\n");
+        output.push_str(&format!(
+            "| `all` | `{}` registered suites | Initializes or runs every known benchmark suite; `/bench init all --full` uses full ingestion where available and sample fixtures elsewhere. |\n",
+            codemason_bench::all_suites().len()
+        ));
+        output.push_str(
+            "| `full` | all suites, full upstream datasets | `/bench init full` is reserved for complete dataset ingestion and stays gated until every suite supports it. |\n",
+        );
+        output.push_str("\n## Profiles\n\n");
+        output.push_str("| profile | suites | notes |\n| --- | --- | --- |\n");
+        for profile in codemason_bench::all_profiles() {
+            let suites = if profile.suites.is_empty() {
+                "(none yet)".to_string()
+            } else {
+                profile.suites.join(", ")
+            };
+            let notes = if profile.expensive {
+                format!("{} Requires `--yes`.", profile.description)
+            } else {
+                profile.description.to_string()
+            };
+            output.push_str(&format!(
+                "| `{}` | `{}` | {} |\n",
+                profile.id, suites, notes
+            ));
+        }
+        output
+    }
+
+    pub(crate) fn render_bench_show(&self) -> String {
+        let selected_model = self
+            .session
+            .selected_model
+            .as_deref()
+            .unwrap_or("(not selected)");
+        let last = if self.bench_last_workbooks.is_empty() {
+            "(none)".to_string()
+        } else {
+            self.bench_last_workbooks
+                .iter()
+                .map(|path| format!("`{}`", path.display()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        format!(
+            "From: /bench show\n## Benchmark Defaults\n\n\
+             - **Selected model:** `{selected_model}`\n\
+             - **Virtual all target:** every registered benchmark suite\n\
+             - **Virtual full target:** full upstream dataset ingestion for every suite (gated until all suites support it)\n\
+             - **Quick profile:** `humaneval`, `mbpp`\n\
+             - **Standard profile:** `humaneval`, `mbpp`, `ds1000`, `repobench`, `crosscodeeval`\n\
+             - **Agentic profile:** `swebench-lite`, `livecodebench`\n\
+             - **Last workbook(s):** {last}\n"
+        )
+    }
+
+    pub(crate) fn render_bench_status(&self) -> String {
+        if let Some(task_id) = &self.active_bench_task_id {
+            let summary = self
+                .active_bench_summary
+                .as_deref()
+                .unwrap_or("benchmark task running");
+            let started = self
+                .active_bench_started_at
+                .map(|value| value.to_rfc3339())
+                .unwrap_or_else(|| "(unknown)".to_string());
+            let cancellation = if self
+                .active_bench_cancel
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Relaxed))
+            {
+                "\n- **Cancellation:** requested"
+            } else {
+                ""
+            };
+            let progress = self
+                .active_bench_progress
+                .as_ref()
+                .and_then(codemason_bench::BenchProgressHandle::snapshot)
+                .map(|progress| {
+                    format!(
+                        "\n- **Progress:** suite `{}` ({}/{}) - case `{}/{}`",
+                        progress.suite_id,
+                        progress.suite_index,
+                        progress.total_suites,
+                        progress.completed_cases,
+                        progress.total_cases
+                    )
+                })
+                .unwrap_or_default();
+            return format!(
+                "From: /bench status\n## Active Benchmark Run\n\n- **Task ID:** `{}`\n- **Status:** `running`\n- **Summary:** {}\n- **Started:** `{}`{}{}\n",
+                task_id, summary, started, progress, cancellation
+            );
+        }
+        if let Some(summary) = &self.bench_last_summary {
+            let finished = self
+                .bench_last_finished_at
+                .map(|value| value.to_rfc3339())
+                .unwrap_or_else(|| "(unknown)".to_string());
+            return format!(
+                "From: /bench status\n## Last Benchmark Run\n\n- **Finished:** `{finished}`\n- **Workbook count:** `{}`\n\n{}",
+                self.bench_last_workbooks.len(),
+                summary
+            );
+        }
+        "From: /bench status\nNo benchmark runs yet.".to_string()
+    }
+
+    pub(crate) fn render_bench_open_last(&self) -> String {
+        if self.bench_last_workbooks.is_empty() {
+            return "From: /bench open last\nNo benchmark workbooks available yet.".to_string();
+        }
+        let mut output = String::from("From: /bench open last\n## Latest Benchmark Results\n\n");
+        for path in &self.bench_last_workbooks {
+            output.push_str(&format!("- `{}`\n", path.display()));
+        }
+        if let Some(summary) = &self.bench_last_summary {
+            output.push_str("\n");
+            output.push_str(summary);
+        }
+        output
+    }
+
+    pub(crate) fn start_bench_run(
+        &mut self,
+        raw_command: &str,
+        target: codemason_bench::BenchTarget,
+        options: codemason_bench::BenchRunOptions,
+    ) {
+        if self.active_bench_task_id.is_some() {
+            self.status = "[warn] A benchmark run is already active.".to_string();
+            return;
+        }
+
+        let selected_model = match self.session.selected_model.as_deref() {
+            Some(model) => model,
+            None => {
+                self.status =
+                    "[warn] /bench run requires a configured model - use /model".to_string();
+                return;
+            }
+        };
+        let config = codemason_agent::Config::load_for(&self.cwd_path).unwrap_or_default();
+        let selection = match codemason_bench::resolve_model_context(
+            selected_model,
+            self.provider_registry.as_ref(),
+            self.storage.as_ref(),
+            &config,
+            self.effective_thinking_config_for_agent(&self.session.agent_info),
+        ) {
+            Ok(selection) => selection,
+            Err(e) => {
+                self.status = format!("[warn] Invalid model selection: {e}");
+                return;
+            }
+        };
+
+        let project_root = match std::env::current_dir() {
+            Ok(path) => path,
+            Err(e) => {
+                self.status = format!("[warn] Could not resolve current directory: {e}");
+                return;
+            }
+        };
+
+        if let Err(e) =
+            codemason_bench::validate_run_prerequisites(&project_root, &target, &options)
+        {
+            self.status = format!("[warn] {e}");
+            self.append_assistant_text(&format!("From: /bench run\n[err] {e}"));
+            return;
+        }
+
+        let task_id = format!("bench-{}", chrono::Utc::now().timestamp_millis());
+        let cancel = Arc::new(AtomicBool::new(false));
+        let progress = codemason_bench::BenchProgressHandle::default();
+        let target_label = match &target {
+            codemason_bench::BenchTarget::Suite(id) => id.as_str(),
+            codemason_bench::BenchTarget::Profile(id) => id.as_str(),
+            codemason_bench::BenchTarget::All => "all",
+        };
+        self.active_bench_task_id = Some(task_id.clone());
+        self.bench_origin_session = self.session.session_id.clone();
+        self.active_bench_summary = Some(format!(
+            "`{target_label}` on `{}/{}`",
+            selection.provider_id, selection.model_id
+        ));
+        self.active_bench_started_at = Some(chrono::Utc::now());
+        self.active_bench_cancel = Some(cancel.clone());
+        self.active_bench_progress = Some(progress.clone());
+        self.status = "[wait] bench: running...".to_string();
+        self.push_log_no_agent(LogLevel::Info, format!("benchmark task started: {task_id}"));
+        self.append_assistant_text(&format!(
+            "From: /bench run\n[wait] Started benchmark run for `{}` on `{}/{}.`\n\n- **Task ID:** `{}`\n- **Use:** `/bench status` for progress, `/bench cancel` to stop, `/bench open last` after completion.",
+            target_label,
+            selection.provider_id,
+            selection.model_id,
+            task_id
+        ));
+
+        let entry = codemason_agent::task::TaskEntry {
+            id: task_id,
+            parent_session_id: self.session.session_id.clone().unwrap_or_default(),
+            child_session_id: "bench".to_string(),
+            agent_name: "bench".to_string(),
+            task_prompt: raw_command.to_string(),
+            background: true,
+            detached: false,
+            status: codemason_agent::task::TaskStatus::Running,
+            result: Some(Arc::from("benchmark run in progress")),
+            error: None,
+            created_at: chrono::Utc::now(),
+            completed_at: None,
+            reported: false,
+            waiter_count: 0,
+            output_file: None,
+            report_status: codemason_agent::task::ReportStatus::default(),
+            time_bound_secs: None,
+        };
+        self.active_tasks.push(entry);
+
+        let bench_result = Arc::clone(&self.bench_result);
+        let raw_command = raw_command.to_string();
+        let provider_registry = Arc::clone(&self.provider_registry);
+        let storage = Arc::clone(&self.storage);
+        let mock_outputs = self.bench_mock_outputs.clone();
+        let progress_for_thread = progress.clone();
+        std::thread::spawn(move || {
+            let model_runner: Result<Box<dyn codemason_bench::BenchModelRunner>, String> =
+                if let Some(outputs) = mock_outputs {
+                    Ok(Box::new(codemason_bench::MockBenchModelRunner::new(
+                        selection.clone(),
+                        outputs,
+                    )))
+                } else {
+                    codemason_bench::LiveBenchModelRunner::new(
+                        selection.clone(),
+                        provider_registry,
+                        storage,
+                    )
+                    .map(|runner| Box::new(runner) as Box<dyn codemason_bench::BenchModelRunner>)
+                    .map_err(|e| e.to_string())
+                };
+            let outcome = model_runner.and_then(|runner| {
+                codemason_bench::run_target_with_progress(
+                    &project_root,
+                    runner.as_ref(),
+                    &raw_command,
+                    &target,
+                    &options,
+                    &cancel,
+                    Some(&progress_for_thread),
+                )
+                .map_err(|e| e.to_string())
+            });
+            match bench_result.lock() {
+                Ok(mut guard) => {
+                    *guard = Some(outcome);
+                }
+                Err(poisoned) => {
+                    let mut guard = poisoned.into_inner();
+                    *guard = Some(Err("benchmark result lock poisoned".to_string()));
+                }
+            }
+        });
+    }
+}

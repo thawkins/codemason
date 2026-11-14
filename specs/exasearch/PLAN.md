@@ -9,7 +9,7 @@
 |----|-------|-------------|--------|----------|--------|--------------|
 | T-001 | Add `exa_api_key` config field to `Config` struct | FR-002, FR-010 | S | High | completed | — |
 | T-002 | Add `exa_api_key` overlay-merge logic in `merge_config` | FR-010 | S | High | completed | T-001 |
-| T-003 | Create `crates/ragent-tools-extended/src/masterfetch/search/exa.rs` module with `ExaEngine` struct, constants, and constructors | FR-001, FR-006 | M | Critical | completed | — |
+| T-003 | Create `crates/codemason-tools-extended/src/masterfetch/search/exa.rs` module with `ExaEngine` struct, constants, and constructors | FR-001, FR-006 | M | Critical | completed | — |
 | T-004 | Implement `build_request_body` pure function (query → Exa JSON body) | FR-003 | M | Critical | completed | T-003 |
 | T-005 | Implement `parse_response_json` pure function (Exa JSON → `Vec<RawResult>`) | FR-004, FR-011 | M | Critical | completed | T-003 |
 | T-006 | Implement `SearchEngine::search` for `ExaEngine` (HTTP call, error handling, dedup) | FR-001, FR-005, FR-011, NFR-001 | M | Critical | completed | T-004, T-005 |

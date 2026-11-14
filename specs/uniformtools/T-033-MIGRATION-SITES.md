@@ -70,7 +70,7 @@ program named `bash` in a module doc comment is not confused with a mention of t
 | `tool/aliases.rs` delegation targets | `write`, `bash` | `Write`, `Bash` (Rust types + doc text) |
 | `skill/bundled.rs` `allowed_tools` | `Bash`/`Grep`/`Glob` (already adopted) | bodies: `Grep`/`Glob`/`Write` already adopted, no change needed |
 | `tools-core/src/edit.rs` edit-log `tool` field | `"edit"` (14 call sites) | `"Edit"` |
-| `ragent-tui/src/widgets/message_widget.rs` `canonical_tool_name` | alias map only | alias map, then `Rename::after_of` |
+| `codemason-tui/src/widgets/message_widget.rs` `canonical_tool_name` | alias map only | alias map, then `Rename::after_of` |
 | agent/codeindex prompt text | `grep`, `glob`, `bash tool` | `Grep`, `Glob`, `Bash tool` |
 | doc (`///`, `//!`) prose naming a tool | retired spelling | adopted spelling (see below) |
 
@@ -91,12 +91,12 @@ their display strings.
 
 ### `canonical_tool_name` resolves a retired spelling
 
-`crates/ragent-tui/src/widgets/message_widget.rs`'s `canonical_tool_name` mapped only
+`crates/codemason-tui/src/widgets/message_widget.rs`'s `canonical_tool_name` mapped only
 `update_file` -> `Write` and `run_code` -> `Bash`. FR-028 replays a stored
 `MessagePart::ToolCall` verbatim, so a session resumed from history written before the
 rename still carries `"bash"`/`"grep"`/`"task_create"` and would have fallen through to
 the generic argument dump. The function now resolves any retired spelling through
-`ragent_types::tool_rename::Rename::after_of`, so a replayed record keeps its rich
+`codemason_types::tool_rename::Rename::after_of`, so a replayed record keeps its rich
 rendering while a live call is unaffected (it is already canonical). The two existing
 cases that assert the alias mapping pass unchanged; one new case covers the fallback
 (see Tests).
@@ -144,7 +144,7 @@ changes when possible using the bash tool". All now name the adopted spelling.
 
 ### TUI display
 
-`crates/ragent-tui/src/widgets/message_widget.rs` is the reason FR-027 is user-visible.
+`crates/codemason-tui/src/widgets/message_widget.rs` is the reason FR-027 is user-visible.
 Its `tool_input_summary` / `tool_result_summary` / `tool_inline_diff` arms and the
 per-tool render branches were keyed on the retired spellings, so a real `Bash` call fell
 through to the generic argument dump. The arms now key on `Bash`, `Write`, `Edit`,
@@ -162,7 +162,7 @@ comment that name the tool were migrated with it.
 
 Two further classes of literal were migrated once the scan was read line by line:
 
-- **The edit log's `tool` field.** `crates/ragent-tools-core/src/edit.rs` passed the
+- **The edit log's `tool` field.** `crates/codemason-tools-core/src/edit.rs` passed the
   literal `"edit"` as the recorded tool name in all fourteen `log_edit_operation` /
   `EntryExtras` call sites, so every new `log/editlog/edits-*.jsonl` record named a tool
   the registry no longer holds. All fourteen now record `Edit`. The **file-name** label
@@ -212,19 +212,19 @@ it moved. No new test *file* was added; one new **case** was (see the end of thi
 section, because it is the only behaviour change). Seven existing assertions named an old
 spelling as the expected string and were updated to the new one rather than relaxed:
 
-- `crates/ragent-agent/tests/test_skill_manage.rs` - the unknown-action message now
+- `crates/codemason-agent/tests/test_skill_manage.rs` - the unknown-action message now
   reads "Unknown Skill action".
-- `crates/ragent-agent/tests/test_memory_extraction.rs` - the cases now drive `"Bash"`
+- `crates/codemason-agent/tests/test_memory_extraction.rs` - the cases now drive `"Bash"`
   as the tool name (they drove `"bash"`, which no longer reaches the extractor's
   `tool_name == "Bash"` branch). The error-resolution candidate's **tag** is still
   `"bash"` and the assertion for it is unchanged, with a comment recording why.
-- `crates/ragent-tools-core/tests/test_edit_integration.rs` - four cases assert the
+- `crates/codemason-tools-core/tests/test_edit_integration.rs` - four cases assert the
   edit-log entry's `tool` field, which is now `"Edit"`.
-- `crates/ragent-tui/tests/test_slash_deep2.rs` - the `/editlog show` fixture JSON now
+- `crates/codemason-tui/tests/test_slash_deep2.rs` - the `/editlog show` fixture JSON now
   carries `"tool":"Edit"` and the tool-column assertion looks for `Edit`.
 
 One **new** case was added: `test_tool_display::test_canonical_tool_name_resolves_a_retired_spelling`
-in `crates/ragent-tui/tests/test_tool_display.rs`. `canonical_tool_name` gaining the
+in `crates/codemason-tui/tests/test_tool_display.rs`. `canonical_tool_name` gaining the
 `Rename::after_of` fallback is the only behaviour change in this task, so it is the only
 one that needs a case of its own; it pins all four renamed families, a live canonical
 name, and a name the table never held.
@@ -247,18 +247,18 @@ byte-identically (`md5sum`-checked):
 Both restores were followed by `touch` on the restored file: cargo reuses an object file
 with an older mtime than its dependencies, so a `cp -p`ed restore can silently keep the
 broken build and report the unmodified test as failing.
-- `crates/ragent-agent/tests/test_backend_misc_more.rs` - the routed-tool table drives
+- `crates/codemason-agent/tests/test_backend_misc_more.rs` - the routed-tool table drives
   `Write`, `Glob`, `Grep`, `append_to_file` and `make_directory` (it previously drove
   `write`, `glob`, `grep`, `append_file` and `mkdir`, none of which `container_script`
   matched, so those cases were silently exercising the refuse path).
-- `crates/ragent-specs/tests/test_spec_commands.rs` - two cases asserted the add prompt
+- `crates/codemason-specs/tests/test_spec_commands.rs` - two cases asserted the add prompt
   contains "`edit` tool"; the prompt now says "`Edit` tool".
 
 ## Findings (recorded, not fixed here)
 
 Two things the scan turned up that belong to another task:
 
-- **`crates/ragent-agent/src/session/dispatch.rs` is an orphan module.**
+- **`crates/codemason-agent/src/session/dispatch.rs` is an orphan module.**
   `session/mod.rs` declares `acp_dispatch` and `remote_dispatch` but not `dispatch`, so
   the unified-dispatch pipeline (including `plan_gate_denial`, which `dispatch.rs:232`
   calls as `crate::team::plan_gate_denial` - a function that exists in no compiled
@@ -278,31 +278,31 @@ Two things the scan turned up that belong to another task:
 
 - `cargo fmt --check` - clean.
 - `cargo clippy --workspace --all-targets` - no new warning (only the pre-existing
-  `pub(crate)`-inside-a-private-module noise in `ragent-tools-vcs`, `ragent-research`
+  `pub(crate)`-inside-a-private-module noise in `codemason-tools-vcs`, `codemason-research`
   and others).
 - `cargo check --workspace --all-targets` - clean.
-- `cargo test -p ragent-agent --test all` - 1694 passed, 1 ignored.
-- `cargo test -p ragent-tools-core --test all` - 394 passed (the `Edit` tool's name is
+- `cargo test -p codemason-agent --test all` - 1694 passed, 1 ignored.
+- `cargo test -p codemason-tools-core --test all` - 394 passed (the `Edit` tool's name is
   asserted by `test_lib_registry`, which was migrated with the rename in T-031).
-- `cargo test -p ragent-tools-extended --test all` - 1806 passed, 11 ignored.
-- `cargo test -p ragent-tui --test all` - 3647 passed, 3 failed. The three failures are
+- `cargo test -p codemason-tools-extended --test all` - 1806 passed, 11 ignored.
+- `cargo test -p codemason-tui --test all` - 3647 passed, 3 failed. The three failures are
   pre-existing and unrelated to this task: `test_input_more::alt_toggle_keys_map_to_actions`,
   `test_input_queue_menu_binding::test_other_alt_keys_are_unaffected` and
   `test_memory_panel::test_toggle_memory_mutually_excludes_tasks_panel` all assert the
   Alt+T -> `ToggleTasksPanel` mapping. They fail because T-014/T-036's concurrent work on
   the same tree removed/changed that key binding; none of the three reads a tool name,
   and this task touches no input mapping.
-- `cargo test -p ragent-config --test all` - 417 passed.
-- `cargo test -p ragent-specs --test all` - 432 passed.
-- `cargo test -p ragent-server --test all` - 192 passed.
-- `cargo test -p ragent-research --test all` - 471 passed.
-- `cargo test -p ragent-tools-vcs --test all` - 397 passed.
-- `cargo test -p ragent-connectors --test all` - 369 passed.
-- `cargo test -p ragent-storage --test all` - 346 passed.
-- `cargo test -p ragent-types --test all` - 418 passed.
-- `cargo test -p ragent-codeindex --test all` - 447 passed, 2 ignored.
-- `cargo test -p ragent-telemetry --test all` - 231 passed.
-- `cargo test -p ragent-llm --test all` - 293 passed, 5 failed, 2 ignored. All five failures
+- `cargo test -p codemason-config --test all` - 417 passed.
+- `cargo test -p codemason-specs --test all` - 432 passed.
+- `cargo test -p codemason-server --test all` - 192 passed.
+- `cargo test -p codemason-research --test all` - 471 passed.
+- `cargo test -p codemason-tools-vcs --test all` - 397 passed.
+- `cargo test -p codemason-connectors --test all` - 369 passed.
+- `cargo test -p codemason-storage --test all` - 346 passed.
+- `cargo test -p codemason-types --test all` - 418 passed.
+- `cargo test -p codemason-codeindex --test all` - 447 passed, 2 ignored.
+- `cargo test -p codemason-telemetry --test all` - 231 passed.
+- `cargo test -p codemason-llm --test all` - 293 passed, 5 failed, 2 ignored. All five failures
   are **pre-existing on this tree** and belong to a later task in this spec, not to
   T-033: `test_wire_decode`'s "no module invents a tool-call id" and "no module keeps its
   own tool-call map", `test_wire_encode_message`'s "no provider writes a result-carrier
@@ -337,7 +337,7 @@ Two things the scan turned up that belong to another task:
    real routes, so the table had to migrate in the same change or it would have started
    failing; it now proves the script branches build.
 5. **The edit log's `tool` field is a tool name; its filename is not.** Fourteen
-   `log_edit_operation` / `EntryExtras` call sites in `crates/ragent-tools-core/src/edit.rs`
+   `log_edit_operation` / `EntryExtras` call sites in `crates/codemason-tools-core/src/edit.rs`
    passed `"edit"` as the recorded name, and two test files asserted it. The label in the
    filename (`edits-<timestamp>.jsonl`) is not a tool name and stays; the field is.
 6. **A doc comment is not a dispatch site, but a wrong one still misleads.** The scan

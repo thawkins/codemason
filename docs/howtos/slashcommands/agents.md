@@ -8,7 +8,7 @@
 split into two sections. The **Built-in Agents** section lists every cycleable
 built-in agent with its description, marking the currently active agent with a
 bullet. The **Custom Agents** section lists user-defined agents loaded from
-`.ragent/agents/` (project scope) or `~/.ragent/agents/` (global scope), each
+`.codemason/agents/` (project scope) or `~/.codemason/agents/` (global scope), each
 annotated with its scope (`project` or `global`) and format (`oasf` for JSON
 definitions, `profile` for Markdown definitions). When no custom agents are
 loaded, a placeholder line explains where to place them.
@@ -62,7 +62,7 @@ No custom agents loaded:
 ```
 Custom Agents
 
-*(none - place .json or .md files in .ragent/agents/ or ~/.ragent/agents/)*
+*(none - place .json or .md files in .codemason/agents/ or ~/.codemason/agents/)*
 ```
 
 Diagnostics section (only when load warnings exist):

@@ -33,14 +33,14 @@ entered, not when they are executed.
 **In scope**
 
 - The TUI message-window input field (`render_input`), its key handling in
-  `crates/ragent-tui/src/input.rs`, and its submit path (`InputAction::SendMessage`).
-- App state in `crates/ragent-tui/src/app/` (`App`), the `VecDeque` queue, the counter
+  `crates/codemason-tui/src/input.rs`, and its submit path (`InputAction::SendMessage`).
+- App state in `crates/codemason-tui/src/app/` (`App`), the `VecDeque` queue, the counter
   render, and the turn-boundary drain.
 - Adding queued entries to the existing `input_history`.
 
 **Out of scope**
 
-- The HTTP server, the headless `ragent run` path, and the CLI one-shot mode. Those
+- The HTTP server, the headless `codemason run` path, and the CLI one-shot mode. Those
   remain synchronous request/response and are unchanged.
 - Sub-agent / teammate mailboxes. Teammate-routed messages keep their existing
   behaviour.
@@ -333,14 +333,14 @@ reordering, and deleting from it **shall not** block the UI thread or introduce 
 
 ## References
 
-- `crates/ragent-tui/src/app/session_ops.rs` - `is_input_blocked`, `dispatch_user_message`.
-- `crates/ragent-tui/src/app/input_handler.rs` - `InputAction::SendMessage` handling.
-- `crates/ragent-tui/src/input.rs` - `handle_key`, Enter/char busy guards.
-- `crates/ragent-tui/src/layout.rs` - `render_input`, `input_lines_with_kb_selection`,
+- `crates/codemason-tui/src/app/session_ops.rs` - `is_input_blocked`, `dispatch_user_message`.
+- `crates/codemason-tui/src/app/input_handler.rs` - `InputAction::SendMessage` handling.
+- `crates/codemason-tui/src/input.rs` - `handle_key`, Enter/char busy guards.
+- `crates/codemason-tui/src/layout.rs` - `render_input`, `input_lines_with_kb_selection`,
   `input_widget_height`, `input_cursor_display_pos`, `refresh_input_render_cache`.
-- `crates/ragent-tui/src/app/event_handler.rs` - `MessageStart` / `MessageEnd` /
+- `crates/codemason-tui/src/app/event_handler.rs` - `MessageStart` / `MessageEnd` /
   `AgentError` handlers.
-- `crates/ragent-tui/src/lib.rs` - housekeeping poll loop and `HOUSEKEEPING_INTERVAL`.
-- `crates/ragent-tui/src/app/models.rs` - `add_to_history`.
-- `crates/ragent-tui/src/app/state.rs` - `is_processing`, `input_history`,
+- `crates/codemason-tui/src/lib.rs` - housekeeping poll loop and `HOUSEKEEPING_INTERVAL`.
+- `crates/codemason-tui/src/app/models.rs` - `add_to_history`.
+- `crates/codemason-tui/src/app/state.rs` - `is_processing`, `input_history`,
   `pending_send_after_compact`, `InputRenderCache`.

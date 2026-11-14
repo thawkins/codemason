@@ -12,7 +12,7 @@ deadline notification, and the live status-bar countdown.
 
 ## Prerequisites
 
-1. A local ragent binary exists at `./target/release/ragent` (or equivalent).
+1. A local codemason binary exists at `./target/release/cdmn` (or equivalent).
 2. An LLM provider is configured with a valid API key (e.g. `ANTHROPIC_API_KEY`,
    `OPENAI_API_KEY`, or a local Ollama endpoint) — research runs call the LLM for
    decomposition and synthesis.
@@ -27,7 +27,7 @@ deadline notification, and the live status-bar countdown.
 
 1. Delete any test research folders created under `research/` (e.g.
    `research/webtime-test-*`) after the tests complete.
-2. Return any modified `ragent.json` configuration to its original state.
+2. Return any modified `codemason.json` configuration to its original state.
 3. Close any TUI sessions used for testing.
 
 ## Test Cases
@@ -37,12 +37,12 @@ deadline notification, and the live status-bar countdown.
 **Title:** Default deadline bounds the web-gather phase and the run continues.
 
 **Preconditions:**
-- ragent builds and launches.
+- codemason builds and launches.
 - Default configuration (no `--web-time` override).
 - Network is reachable.
 
 **Steps:**
-1. Launch the TUI by running `./target/release/ragent`.
+1. Launch the TUI by running `./target/release/cdmn`.
 2. Wait for the main chat interface to render.
 3. Focus the input bar and type `/research create webtime-test-default <topic>` where
    `<topic>` is a broad query such as `Rust async runtime internals`.
@@ -72,13 +72,13 @@ deadline notification, and the live status-bar countdown.
 **Title:** Sources captured before the deadline feed synthesis.
 
 **Preconditions:**
-- ragent builds and launches.
+- codemason builds and launches.
 - Default configuration (60-second deadline).
 - Network is reachable; a slow or large topic is chosen so that more candidate sources
   exist than can be fetched in 60 seconds.
 
 **Steps:**
-1. Launch the TUI by running `./target/release/ragent`.
+1. Launch the TUI by running `./target/release/cdmn`.
 2. Focus the input bar and type
    `/research create webtime-test-partial <slow topic>` where `<slow topic>` is a query
    likely to yield many results, e.g. `history of distributed systems`.
@@ -136,13 +136,13 @@ deadline notification, and the live status-bar countdown.
 
 **Steps:**
 1. In a terminal, run:
-   `./target/release/ragent research create webtime-test-nolimit --web-time 0 "Rust async runtime internals"`
+   `./target/release/cdmn research create webtime-test-nolimit --web-time 0 "Rust async runtime internals"`
    (adjusting flags to the CLI's accepted form if it prompts for a research id).
 2. Monitor the run until the web phase finishes.
 3. Note whether any deadline notice appears and how long the web phase ran.
 
 **Test data to enter:**
-- Command: `./target/release/ragent research create webtime-test-nolimit --web-time 0 "Rust async runtime internals"`
+- Command: `./target/release/cdmn research create webtime-test-nolimit --web-time 0 "Rust async runtime internals"`
 
 **Expected results:**
 - No web-phase deadline notice appears at 60 seconds.
@@ -156,7 +156,7 @@ deadline notification, and the live status-bar countdown.
 **Title:** Each iteration of a multi-iteration run is bounded by the web-phase deadline.
 
 **Preconditions:**
-- ragent builds and launches.
+- codemason builds and launches.
 - The CLI/TUI front-end supports `--iterations 2` or deep mode for `/research create`.
 
 **Steps:**
@@ -183,7 +183,7 @@ deadline notification, and the live status-bar countdown.
 **Title:** The deadline notice is emitted once, with the correct captured count.
 
 **Preconditions:**
-- ragent builds and launches.
+- codemason builds and launches.
 - A topic likely to be truncated mid-search (many results, slow network or slow fetches).
 
 **Steps:**
@@ -208,7 +208,7 @@ deadline notification, and the live status-bar countdown.
 **Title:** A per-second countdown of remaining web-phase time shows in the top-right wait status.
 
 **Preconditions:**
-- ragent builds and launches.
+- codemason builds and launches.
 - A terminal at least 120 columns wide so the status-bar right segment is visible.
 - Default 60-second deadline.
 
@@ -266,7 +266,7 @@ deadline notification, and the live status-bar countdown.
 **Title:** Non-default deadline values bound the phase and drive the countdown.
 
 **Preconditions:**
-- ragent builds and launches.
+- codemason builds and launches.
 - The `/research create` front-end accepts a web-time override.
 
 **Steps:**
@@ -293,12 +293,12 @@ deadline notification, and the live status-bar countdown.
 **Title:** No countdown-related activity when no research run is active.
 
 **Preconditions:**
-- ragent builds and launches.
+- codemason builds and launches.
 - No research run is running.
 
 **Steps:**
 1. Launch the TUI and let it sit idle at the ready prompt for 60 seconds.
-2. Observe CPU usage (e.g. via `top -p $(pgrep ragent)`) over that minute.
+2. Observe CPU usage (e.g. via `top -p $(pgrep codemason)`) over that minute.
 3. Then start a research run and observe CPU during the countdown window for comparison.
 
 **Test data to enter:**

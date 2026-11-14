@@ -8,16 +8,16 @@ Spec: `specs/alogui/SPEC.md`
 
 ## Prerequisites
 
-1. A working build of `ragent` with the `/alog` command implemented:
+1. A working build of `codemason` with the `/alog` command implemented:
    `cargo build` succeeds.
-2. At least one ragent session has run previously so that the activity-log
+2. At least one codemason session has run previously so that the activity-log
    database exists under the platform data directory
-   (`~/.local/share/ragent` on Linux, or the equivalent `dirs::data_dir()`
+   (`~/.local/share/codemason` on Linux, or the equivalent `dirs::data_dir()`
    location on macOS/Windows). If the database does not yet exist, the
    `/alog` commands must still run without crashing and must report that the
    log is empty / unreachable.
-3. The terminal supports the ragent TUI (alternate screen, mouse, etc.).
-4. No other ragent process is holding an exclusive lock on the activity-log
+3. The terminal supports the codemason TUI (alternate screen, mouse, etc.).
+4. No other codemason process is holding an exclusive lock on the activity-log
    database (WAL mode allows concurrent readers).
 5. The current working directory is writable so that `/alog export` can
    create the `log/exports/` directory and write the export file into it.
@@ -27,7 +27,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-001 — `/alog` with no subcommand shows help
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - The activity-log database may or may not exist.
 
 **Steps:**
@@ -46,7 +46,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-002 — `/alog help` shows the help table
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 
 **Steps:**
 1. Type `/alog help`.
@@ -66,7 +66,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-003 — `/alog config` shows database location and setup
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - The activity-log database file path is known (the platform data directory
   joined with the activity-log filename).
 
@@ -89,8 +89,8 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-004 — `/alog list` enumerates runs with counts
 
 **Preconditions:**
-- ragent TUI is open.
-- At least one prior ragent session has produced activity-log events so that
+- codemason TUI is open.
+- At least one prior codemason session has produced activity-log events so that
   `list_runs()` returns one or more runs. If none exist, see TC-005.
 
 **Steps:**
@@ -115,7 +115,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-005 — `/alog list` on an empty log
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - The activity-log database does not exist or contains zero runs (e.g. a
   fresh install or after deleting the database file).
 
@@ -134,7 +134,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-006 — `/alog status` shows system health
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - At least one run exists in the activity log (ideally a mix: some
   `Completed`, some `Interrupted` if reproducible).
 
@@ -158,7 +158,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-007 — `/alog status` when the database cannot be opened
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - The activity-log database file is missing, or its directory is not
   readable (simulate by temporarily renaming the file or pointing at a
   non-existent path).
@@ -179,7 +179,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-008 — `/alog` appears in the slash autocomplete menu
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 
 **Steps:**
 1. Type `/` to open the slash-command autocomplete menu.
@@ -195,7 +195,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-009 — `/alog <sub>` autocomplete suggestions
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - The `alog` subcommand autocomplete is implemented (FR-009, FR-017, FR-025).
 
 **Steps:**
@@ -215,7 +215,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-010 — Inspection subcommands do not mutate the activity log
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - Note the current run count and total event count (run `/alog status` once
   and record the numbers).
 
@@ -237,7 +237,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-011 — `/alog delete` without `--yes` flag aborts
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - At least one run exists in the activity log (note its `RunId` from
   `/alog list`).
 
@@ -260,7 +260,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-012 — `/alog delete` without a run-id argument shows usage error
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 
 **Steps:**
 1. Type `/alog delete --yes` (note: no `<run-id>` before the flag).
@@ -277,7 +277,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-013 — `/alog delete <unknown-run-id> --yes` warns and does not delete
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - A run-id that does not exist in the activity log (e.g. `nonexistent-run`).
 
 **Steps:**
@@ -295,7 +295,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-014 — `/alog delete <run-id> --yes` deletes the run and confirms
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - At least one run exists in the activity log. Record its `RunId` and event
   count via `/alog list` before deletion.
 - Total run count and total event count recorded via `/alog status`.
@@ -322,7 +322,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-015 — `/alog delete` leaves other runs intact
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - At least two runs exist in the activity log. Record both `RunId`s, both
   event counts, and the total run/event counts via `/alog status`.
 
@@ -344,7 +344,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-016 — `/alog delete` when the database cannot be opened
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - The activity-log database file is missing or unreadable (simulate by
   temporarily renaming the file).
 
@@ -363,7 +363,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-017 — `/alog export` without `--yes` flag aborts
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - At least one run exists in the activity log (note its `RunId` from
   `/alog list`).
 
@@ -385,7 +385,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-018 — `/alog export` without a run-id argument shows usage error
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 
 **Steps:**
 1. Type `/alog export --yes` (note: no `<run-id>` before the flag).
@@ -402,7 +402,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-019 — `/alog export <unknown-run-id> --yes` warns and does not export
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - A run-id that does not exist in the activity log (e.g. `nonexistent-run`).
 
 **Steps:**
@@ -420,7 +420,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-020 — `/alog export <run-id> --yes` writes a JSONL file and confirms
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - At least one run exists in the activity log. Record its `RunId` and event
   count via `/alog list` before export.
 - The `log/exports/` directory does not already exist (or is empty) in the
@@ -449,7 +449,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-021 — `/alog export` does not mutate the activity log
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - At least one run exists in the activity log. Record its `RunId`, event
   count, and the total run/event counts via `/alog status`.
 
@@ -471,7 +471,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-022 — `/alog export` creates `log/exports/` if it does not exist
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - At least one run exists in the activity log.
 - The `log/exports/` directory does NOT exist in the current working
   directory (delete it if it does).
@@ -491,7 +491,7 @@ Spec: `specs/alogui/SPEC.md`
 ### TC-023 — `/alog export` when the database cannot be opened
 
 **Preconditions:**
-- ragent TUI is open.
+- codemason TUI is open.
 - The activity-log database file is missing or unreadable (simulate by
   temporarily renaming the file).
 
@@ -513,7 +513,7 @@ Spec: `specs/alogui/SPEC.md`
 1. If you renamed or moved the activity-log database for any test
    (TC-007, TC-016, TC-023), restore it to its original path.
 2. If you deleted a run during TC-014 or TC-015 and need it back, re-run a
-   ragent session to generate fresh activity-log data — deleted runs cannot
+   codemason session to generate fresh activity-log data — deleted runs cannot
    be recovered (NFR-002).
 3. Exported JSONL files written to `log/exports/` during TC-020–TC-022 may
    be deleted if they are no longer needed. The exports are copies; deleting

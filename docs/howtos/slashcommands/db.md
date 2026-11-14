@@ -9,14 +9,14 @@ subcommands and no hidden behaviour: `prune` ages out chat messages, `help`
 prints the usage page (a bare `/db` prints the same page).
 
 `/db prune` deletes **messages** older than a retention window. The **session
-row is kept**, so an expired conversation stays listed in `ragent session list`
+row is kept**, so an expired conversation stays listed in `codemason session list`
 and can be resumed - it simply reads back with an empty transcript. This is the
 difference between `/db prune` and a session delete.
 
 The same operation is available headless as
-`ragent db prune [--days N] [--dry-run]`, and the identical prune runs
+`codemason db prune [--days N] [--dry-run]`, and the identical prune runs
 automatically at startup when `storage.retention.enabled` is set in
-`ragent.json`.
+`codemason.json`.
 
 Nothing is deleted without confirmation: a real prune opens a
 `Delete messages older than N day(s)?` dialog that starts on `No`, so a stray
@@ -51,7 +51,7 @@ Flag rules:
 - `--days 0` is **refused**: a zero-day window would empty the store on every
   run, so it is treated as a usage error rather than silently accepted.
 - Omit `--days` and the window is `storage.retention.message_days` from
-  `ragent.json` (default `14`).
+  `codemason.json` (default `14`).
 - `--dry-run` composes with `--days` in either order. It never deletes, and it
   never arms the confirmation dialog.
 - Any unrecognised argument (for example `--wat`) fails with a message naming
@@ -102,14 +102,14 @@ Deleted **128** message(s) older than 14 day(s). Sessions are kept, so an
 expired transcript stays listed but empty.
 
 The database file does not shrink until a `VACUUM`, which needs exclusive
-access - stop every other ragent process first.
+access - stop every other codemason process first.
 ```
 
 The headless equivalent:
 
 ```bash
-ragent db prune --days 14 --dry-run
-ragent db prune --days 14
+codemason db prune --days 14 --dry-run
+codemason db prune --days 14
 ```
 
 Read the help page:
@@ -136,7 +136,7 @@ returns an error rather than panicking.
 
 ## Pruning automatically at startup
 
-Set the opt-in `storage.retention` section in `ragent.json`:
+Set the opt-in `storage.retention` section in `codemason.json`:
 
 ```json
 {
@@ -160,8 +160,8 @@ a blocking thread so the delete never stalls the startup critical path.
 ## Caveats
 
 - **The file does not shrink.** `DELETE` returns pages to SQLite's freelist;
-  `ragent.db` keeps its size until a `VACUUM` rewrites it. `VACUUM` needs
-  exclusive access: stop every other ragent process (and release the `-wal` /
+  `codemason.db` keeps its size until a `VACUUM` rewrites it. `VACUUM` needs
+  exclusive access: stop every other codemason process (and release the `-wal` /
   `-shm` sidecars) first.
 - **`--days 0` is an error, not a shortcut.** Use a real window; to delete
   everything deliberately, delete the sessions instead.
@@ -170,8 +170,8 @@ a blocking thread so the delete never stalls the startup critical path.
 
 ## Related
 
-- `ragent db prune [--days N] [--dry-run]` - the headless equivalent
-- `ragent session list` / `ragent session resume <id>` - the sessions a prune leaves intact
+- `codemason db prune [--days N] [--dry-run]` - the headless equivalent
+- `codemason session list` / `codemason session resume <id>` - the sessions a prune leaves intact
 - `/history` - browse and re-use previous inputs
 - `docs/sqlite.md` - pragma table, `journal_size_limit`, and the retention section
 - `docs/howtos/config.md` - the full `storage.retention` reference

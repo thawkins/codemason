@@ -1,10 +1,10 @@
 #!/bin/sh
-# Pre-installation script for the ragent macOS installer package.
+# Pre-installation script for the codemason macOS installer package.
 # Removes an existing symlink before the payload is laid down.
 
 set -e
 
-LINK="/usr/local/bin/ragent"
+LINK="/usr/local/bin/cdmn"
 
 if [ -L "${LINK}" ] || [ -e "${LINK}" ]; then
     rm -f "${LINK}"

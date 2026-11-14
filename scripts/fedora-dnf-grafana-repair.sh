@@ -6,7 +6,7 @@ set -euo pipefail
 
 readonly REPO_FILE="/etc/yum.repos.d/grafana.repo"
 readonly DNF_CONF="/etc/dnf/dnf.conf"
-readonly BACKUP_DIR="/var/tmp/ragent-dnf-repair-$(date +%Y%m%d-%H%M%S)"
+readonly BACKUP_DIR="/var/tmp/codemason-dnf-repair-$(date +%Y%m%d-%H%M%S)"
 readonly LOG="${BACKUP_DIR}/repair.log"
 
 mkdir -p "$BACKUP_DIR"

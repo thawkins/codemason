@@ -18,7 +18,7 @@ actual LLM call to a concrete provider/model pair configured for that tier. The
 feature adds an interactive setup flow reachable through the existing `/provider`
 slash command, so users can select multiple configured providers, assign them to
 the four router buckets, and persist the resulting `provider.router` cluster
-configuration in `ragent.json`.
+configuration in `codemason.json`.
 
 ## Scope
 
@@ -31,10 +31,10 @@ configuration in `ragent.json`.
   the router buckets.
 - Assign selected provider/model pairs to the four router tiers (`SIMPLE`,
   `MEDIUM`, `COMPLEX`, `REASONING`).
-- Persist the tier mappings into `provider.router.tiers` in `ragent.json`.
+- Persist the tier mappings into `provider.router.tiers` in `codemason.json`.
 - Visualise the active router configuration via `/provider show`.
 - Keep the existing classifier, boundaries, and weights configuration accessible
-  only through manual `ragent.json` editing in this phase.
+  only through manual `codemason.json` editing in this phase.
 
 ### Out of Scope
 
@@ -47,13 +47,13 @@ configuration in `ragent.json`.
 
 ### Existing Router Implementation
 
-- `crates/ragent-llm/src/providers/router.rs` defines `RouterProvider`, which
+- `crates/codemason-llm/src/providers/router.rs` defines `RouterProvider`, which
   implements the `Provider` trait with `id() == "router"` and `name() == "Model
   Router"`.
-- `crates/ragent-llm/src/providers/router_config.rs` defines `RouterConfig`,
+- `crates/codemason-llm/src/providers/router_config.rs` defines `RouterConfig`,
   `TierConfig`, `TierEntry`, and `Tier`.
 - The router is disabled by default and currently configured entirely through
-  `provider.router` in `ragent.json`.
+  `provider.router` in `codemason.json`.
 - The `RouterProvider::create_client` method constructs a `RouterClient` that
   reads the current tier configuration at request time.
 
@@ -63,15 +63,15 @@ configuration in `ragent.json`.
   concrete provider to configure.
 - `/provider show` opens `ProviderSetupStep::ShowProviderConfig` to display
   already-configured providers.
-- The setup steps live in `crates/ragent-tui/src/app/state.rs` and are rendered
-  by the TUI layout code in `crates/ragent-tui/src/layout.rs`.
+- The setup steps live in `crates/codemason-tui/src/app/state.rs` and are rendered
+  by the TUI layout code in `crates/codemason-tui/src/layout.rs`.
 
 ### Provider Registry
 
 - `ProviderRegistry` contains concrete providers and exposes metadata such as
   `id`, `name`, and `default_models`.
 - A configured provider is one whose credentials are available either from the
-  environment or from the ragent database.
+  environment or from the codemason database.
 
 ## Assumptions
 
@@ -83,7 +83,7 @@ configuration in `ragent.json`.
    concrete provider assigned to a bucket must already have working credentials.
 4. The existing `RouterConfig::default()` provides sensible fallback tier
    models if a tier is left unconfigured in the TUI.
-5. The router configuration is stored in `ragent.json` and reloaded on startup.
+5. The router configuration is stored in `codemason.json` and reloaded on startup.
 
 ## Requirements
 
@@ -105,7 +105,7 @@ configuration in `ragent.json`.
 - **FR-007** The system shall allow the user to drag or move a selected
   provider/model pair into any of the four router buckets.
 - **FR-008** The system shall persist the resulting tier mappings to
-  `provider.router.tiers` in `ragent.json` in the same serialised form used by
+  `provider.router.tiers` in `codemason.json` in the same serialised form used by
   `RouterConfig`.
 - **FR-009** The system shall enable the router (`provider.router.enabled:
   true`) when a non-empty cluster is saved.
@@ -122,7 +122,7 @@ configuration in `ragent.json`.
 - **FR-013** When the user assigns a provider/model pair to a tier bucket, the
   system shall immediately update the in-memory draft `RouterConfig`.
 - **FR-014** When the user confirms the router cluster, the system shall write
-  the updated `ragent.json` and emit a status message confirming the router is
+  the updated `codemason.json` and emit a status message confirming the router is
   enabled.
 - **FR-015** When the user cancels the router setup flow, the system shall
   discard the draft configuration and return to the normal chat input state.
@@ -169,14 +169,14 @@ configuration in `ragent.json`.
   terminal backend.
 - **NFR-003** Saving the router cluster shall not block the TUI event loop for
   more than 100 ms.
-- **NFR-004** The router TUI code shall live in `ragent-tui` and reuse the
+- **NFR-004** The router TUI code shall live in `codemason-tui` and reuse the
   existing `ProviderSetupStep` state machine rather than introducing a separate
   modal system.
 
 ## Acceptance Criteria
 
 1. Running `/provider`, selecting `Model Router`, and completing the setup flow
-   writes a valid `provider.router` block to `ragent.json`.
+   writes a valid `provider.router` block to `codemason.json`.
 2. The saved `provider.router.enabled` field is `true` after the flow.
 3. `/provider show` displays the router and its tier mappings.
 4. Selecting the router as the active provider makes subsequent chat requests
@@ -188,7 +188,7 @@ configuration in `ragent.json`.
 
 ## Related Work
 
-- Existing router implementation: `crates/ragent-llm/src/providers/router.rs`,
+- Existing router implementation: `crates/codemason-llm/src/providers/router.rs`,
   `router_config.rs`, `router_client.rs`, `router_classifier.rs`.
-- Existing `/provider` flow: `crates/ragent-tui/src/app/state.rs` and
-  `crates/ragent-tui/src/app/slash.rs`.
+- Existing `/provider` flow: `crates/codemason-tui/src/app/state.rs` and
+  `crates/codemason-tui/src/app/slash.rs`.

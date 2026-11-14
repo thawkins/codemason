@@ -12,14 +12,14 @@ audit:
 ## Overview
 
 The research system stores one report per run under `research/<name>/` as
-`RESEARCH-<YYYY-MM-DD>.md` (see `crates/ragent-research/src/io.rs`). Because a
+`RESEARCH-<YYYY-MM-DD>.md` (see `crates/codemason-research/src/io.rs`). Because a
 re-run of an existing item (`/research update`) writes a new dated file instead
 of overwriting the previous one, an item accumulates a chronological series of
 reports. Today there is no way to consume that series as a *change narrative*:
 a reader who wants to know what moved between two runs has to open both reports
 side by side and diff them by eye.
 
-This specification defines **`/research deck <name>`** (CLI: `ragent research deck <name>`), which reads a research item, selects two of its dated reports -
+This specification defines **`/research deck <name>`** (CLI: `codemason research deck <name>`), which reads a research item, selects two of its dated reports -
 by default the two most recent - and writes a single self-contained deck
 document `DECK-<YYYY-MM-DD>.md` into the item directory. The deck is a Markdown
 document laid out as a slide deck:
@@ -49,7 +49,7 @@ output, the run costs no tokens, and it works with no provider configured.
 
 **FR-001 (Ubiquitous)**
 The system shall provide a `/research deck <name>` TUI slash command and a
-`ragent research deck <name>` CLI sub-command that both produce a diff deck for
+`codemason research deck <name>` CLI sub-command that both produce a diff deck for
 the research item `<name>`.
 
 **FR-002 (Ubiquitous)**
@@ -334,7 +334,7 @@ resolves a heading rather than requiring one literal spelling:
 ## Acceptance Summary
 
 The feature is complete when `/research deck <name>` and
-`ragent research deck <name>` produce a `DECK-<YYYY-MM-DD>.md` for a multi-run
+`codemason research deck <name>` produce a `DECK-<YYYY-MM-DD>.md` for a multi-run
 research item, the file opens with a cover slide naming the item and its
 coverage window, each concept has a slide carrying its definition and the
 findings grouped under it, every rendered item carries one of `NEW` / `ADDED` /

@@ -18,10 +18,10 @@ MCP server that calls two free, unauthenticated public APIs:
   fix versions, batch queries.
 
 This specification ("**Hermes**") defines the integration of Hound's 12
-dependency-security tools into ragent **as a set of native Rust tools** in the
-`ragent-tools-extended` crate — **not** as an external MCP server. The tools
+dependency-security tools into codemason **as a set of native Rust tools** in the
+`codemason-tools-extended` crate — **not** as an external MCP server. The tools
 will be re-implemented in Rust using `reqwest` for HTTP, share a common API
-client module, and register through ragent's existing `ToolRegistry` and
+client module, and register through codemason's existing `ToolRegistry` and
 permission/visibility infrastructure.
 
 The name "Hermes" is the internal spec/feature identifier. The tools keep
@@ -72,10 +72,10 @@ src/
 | `hound_advisories` | `id` | OSV + deps.dev |
 | `hound_popular` | `ecosystem`, `packages?` | deps.dev + OSV batch |
 
-### ragent tool architecture
+### codemason tool architecture
 
-ragent tools implement the `Tool` trait defined in
-`crates/ragent-tools-extended/src/lib.rs`:
+codemason tools implement the `Tool` trait defined in
+`crates/codemason-tools-extended/src/lib.rs`:
 
 ```rust
 #[async_trait::async_trait]
@@ -94,7 +94,7 @@ to agents via `ToolRegistry::definitions()`. The agent crate's
 adapts each extended tool with `ExtractedExtendedToolAdapter`.
 
 Tool visibility is controlled by `ToolVisibilityConfig` in
-`crates/ragent-config/src/config.rs` with switches (`office`, `github`,
+`crates/codemason-config/src/config.rs` with switches (`office`, `github`,
 `gitlab`, `teams`, `agents`, `plan`, `codeindex`). The
 `tool_family_names(switch)` function maps a switch name to the list of tool
 names it controls. `effective_hidden_tools()` hides any tool whose family
@@ -106,14 +106,14 @@ with a shared `USER_AGENT` constant.
 
 ### Design constraints
 
-1. **No MCP dependency.** Tools are compiled into the ragent binary. No
+1. **No MCP dependency.** Tools are compiled into the codemason binary. No
    `npx`, no Node.js, no stdio transport, no `@modelcontextprotocol/sdk`.
 2. **No API keys.** Both upstream APIs are free and unauthenticated. The
    integration must never require credentials, matching Hound's zero-config
    promise.
 3. **Single binary.** All lockfile parsers, API clients, and tool logic must
    be pure Rust with no runtime subprocess.
-4. **Reuse ragent infra.** Tools use the existing `Tool` trait,
+4. **Reuse codemason infra.** Tools use the existing `Tool` trait,
    `ToolRegistry`, `ToolContext`, `reqwest` workspace dependency, and
    permission/visibility system.
 
@@ -125,7 +125,7 @@ The system **shall** provide all 12 Hound tools (`hound_audit`,
 `hound_score`, `hound_compare`, `hound_preinstall`, `hound_upgrade`,
 `hound_license_check`, `hound_vulns`, `hound_inspect`, `hound_tree`,
 `hound_typosquat`, `hound_advisories`, `hound_popular`) as native Rust
-structs implementing the `ragent_tools_extended::Tool` trait.
+structs implementing the `codemason_tools_extended::Tool` trait.
 
 > *Ubiquitous requirement — applies to every tool in the Hermes set without
 > exception.*
@@ -324,8 +324,8 @@ nuget, and rubygems.
 ### FR-019 — Tool registration (ubiquitous)
 
 All 12 Hermes tools **shall** be registered in
-`create_extended_registry()` within `crates/ragent-tools-extended/src/lib.rs`
-so they appear in every ragent session alongside the existing extended
+`create_extended_registry()` within `crates/codemason-tools-extended/src/lib.rs`
+so they appear in every codemason session alongside the existing extended
 tools.
 
 > *Ubiquitous requirement — registration is mandatory for the tools to be
@@ -339,7 +339,7 @@ switch is enabled (or absent), the tools **shall** be visible. The switch
 **shall** be added to `ToolVisibilityConfig`, `ToolVisibilitySpecified`,
 `iter_switches()`, `tool_family_names()`, the `Default` implementation
 (default: `true`), the custom `Serialize`/`Deserialize` impls, and the
-`merge()` overlay logic in `crates/ragent-config/src/config.rs`.
+`merge()` overlay logic in `crates/codemason-config/src/config.rs`.
 
 > *State-driven requirement — the visibility state of the `hermes` switch
 > controls tool availability.*
@@ -347,7 +347,7 @@ switch is enabled (or absent), the tools **shall** be visible. The switch
 ### FR-021 — Permission category (ubiquitous)
 
 Every Hermes tool **shall** return `"network:fetch"` from
-`permission_category()` so that it participates in ragent's existing
+`permission_category()` so that it participates in codemason's existing
 network permission rules (allow / deny / ask / YOLO), consistent with
 `http_request` and `webfetch`.
 
@@ -379,7 +379,7 @@ reference implementation's catch-and-return-text pattern.
 ### FR-024 — Shared HTTP client and user agent (ubiquitous)
 
 The Hermes API clients **shall** use a shared `reqwest::Client` with a
-`User-Agent` header of the form `ragent/{version}` and a default request
+`User-Agent` header of the form `codemason/{version}` and a default request
 timeout of 30 seconds, consistent with the existing `webfetch` and
 `websearch` tools.
 
@@ -392,7 +392,7 @@ Every Hermes tool **shall** return its result as a `ToolOutput` whose
 `content` is a human-readable text string (the formatted report). Tools
 **shall not** return raw JSON to the agent, matching the reference
 implementation's "formatted text strings — never return raw JSON"
-convention and ragent's existing tool output style.
+convention and codemason's existing tool output style.
 
 > *Ubiquitous requirement — defines the output contract for all 12 tools.*
 
@@ -440,14 +440,14 @@ describing its purpose, per the project's documentation standards. The
 ### In scope
 
 - Re-implementing all 12 Hound tools in Rust inside
-  `crates/ragent-tools-extended`.
+  `crates/codemason-tools-extended`.
 - Shared `depsdev` and `osv` API client modules.
 - Shared HTTP helper with retry/backoff.
 - Lockfile parser module (11+ formats).
 - Licence classification constants.
 - Ecosystem mapping and validation.
 - Tool registration in `create_extended_registry()`.
-- `hermes` tool-visibility switch in `ragent-config`.
+- `hermes` tool-visibility switch in `codemason-config`.
 - `network:fetch` permission category for all tools.
 - Unit tests for API clients, parsers, scoring, and variant generation.
 - Integration tests for tool registration and visibility.

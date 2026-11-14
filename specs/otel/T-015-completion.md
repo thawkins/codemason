@@ -19,20 +19,20 @@ when telemetry is enabled. All three job-start methods (`start_job_sync`,
 
 ### FR-012
 
-> The system shall record `ragent.errors.total` and `ragent.timeouts.total`
+> The system shall record `codemason.errors.total` and `codemason.timeouts.total`
 > from the `Coordinator::Metrics` counters, tagged with `component` where
 > identifiable.
 
 ### FR-018
 
 > When a sub-agent is spawned, the system shall record
-> `ragent.subagent.spawns` and increment `ragent.agents.active`; when it
-> completes, the system shall decrement `ragent.agents.active` and increment
-> `ragent.agents.completed`.
+> `codemason.subagent.spawns` and increment `codemason.agents.active`; when it
+> completes, the system shall decrement `codemason.agents.active` and increment
+> `codemason.agents.completed`.
 
 ## Changes
 
-### `crates/ragent-telemetry/src/recorder.rs`
+### `crates/codemason-telemetry/src/recorder.rs`
 
 Created a new `CoordinatorRecorder` type alongside the existing recorders:
 
@@ -42,13 +42,13 @@ Created a new `CoordinatorRecorder` type alongside the existing recorders:
   - `from_subsystem(&TelemetrySubsystem) -> Self`
   - `disabled() -> Self`
   - `is_enabled() -> bool`
-  - `record_agent_spawn()` — increments `ragent.subagent.spawns` counter and
-    `ragent.agents.active` up/down counter by 1 (FR-018).
-  - `record_agent_complete()` — decrements `ragent.agents.active` by 1 and
-    increments `ragent.agents.completed` by 1 (FR-018).
-  - `record_error(component: &str)` — increments `ragent.errors.total`
+  - `record_agent_spawn()` — increments `codemason.subagent.spawns` counter and
+    `codemason.agents.active` up/down counter by 1 (FR-018).
+  - `record_agent_complete()` — decrements `codemason.agents.active` by 1 and
+    increments `codemason.agents.completed` by 1 (FR-018).
+  - `record_error(component: &str)` — increments `codemason.errors.total`
     tagged with the `component` attribute (FR-012).
-  - `record_timeout()` — increments `ragent.timeouts.total` (FR-012).
+  - `record_timeout()` — increments `codemason.timeouts.total` (FR-012).
 
 - **Feature-off variant** (`#[cfg(not(feature = "telemetry"))]`,
   `#[derive(Clone, Copy)]`): Zero-sized no-op.
@@ -58,22 +58,22 @@ Created a new `CoordinatorRecorder` type alongside the existing recorders:
 - **Unit tests added** (feature-on test module):
   - `test_disabled_coordinator_recorder_is_noop`
   - `test_coordinator_recorder_record_agent_spawn` — verifies
-    `ragent.subagent.spawns` = 2 and `ragent.agents.active` = 2
+    `codemason.subagent.spawns` = 2 and `codemason.agents.active` = 2
   - `test_coordinator_recorder_record_agent_complete` — verifies
-    `ragent.agents.active` = 1 and `ragent.agents.completed` = 1 after
+    `codemason.agents.active` = 1 and `codemason.agents.completed` = 1 after
     2 spawns + 1 complete
   - `test_coordinator_recorder_record_error` — verifies
-    `ragent.errors.total` = 2 and the `component=coordinator` attribute
+    `codemason.errors.total` = 2 and the `component=coordinator` attribute
   - `test_coordinator_recorder_record_timeout` — verifies
-    `ragent.timeouts.total` = 2
+    `codemason.timeouts.total` = 2
 
 - **No-op test added** (feature-off test module):
   - `test_noop_coordinator_recorder`
 
-### `crates/ragent-agent/src/orchestrator/coordinator.rs`
+### `crates/codemason-agent/src/orchestrator/coordinator.rs`
 
 - **New struct field**: `pub coordinator_recorder:
-  ragent_telemetry::recorder::CoordinatorRecorder` added to `Coordinator`,
+  codemason_telemetry::recorder::CoordinatorRecorder` added to `Coordinator`,
   with a docblock. Defaulting to `disabled()` in all three constructors
   (`new`, `with_router`, `with_request_timeout`).
 
@@ -107,23 +107,23 @@ Created a new `CoordinatorRecorder` type alongside the existing recorders:
 
 ```
 cargo check --workspace                          # pass (default features)
-cargo check -p ragent-agent --features telemetry # pass
-cargo check -p ragent-telemetry --features telemetry # pass
+cargo check -p codemason-agent --features telemetry # pass
+cargo check -p codemason-telemetry --features telemetry # pass
 ```
 
 ### Test results
 
 ```
-cargo test -p ragent-telemetry --features telemetry --lib recorder
+cargo test -p codemason-telemetry --features telemetry --lib recorder
 test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 29 filtered out
 
-cargo test -p ragent-telemetry --lib
+cargo test -p codemason-telemetry --lib
 test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
-cargo test -p ragent-agent --lib
+cargo test -p codemason-agent --lib
 test result: ok. 316 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
-cargo test -p ragent-tui --lib
+cargo test -p codemason-tui --lib
 test result: ok. 63 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 

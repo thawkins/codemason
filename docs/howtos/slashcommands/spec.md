@@ -171,10 +171,10 @@ Reads the local Markdown design document and creates the draft spec plus an axum
 ## Related
 
 - `/spec coverage` semantics are shared with the spec_task_update tool.
-- `ragent-specs` crate implements the lifecycle engine behind every form.
+- `codemason-specs` crate implements the lifecycle engine behind every form.
 - specs/<name>/SPEC.md is the source of truth; PLAN.md and TESTPLAN.md are
   derived artifacts.
 - `/spec list` argument handling and the transition table mirror
-  `ragent_specs::manager`; the round-trip guarantees are documented in
+  `codemason_specs::manager`; the round-trip guarantees are documented in
   `docs/howtos/spec.md` section 7.
 - See docs/howtos/ for the spec system manual and JTBD analysis guide.

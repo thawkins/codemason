@@ -1,6 +1,6 @@
 # Teams How-To Manual
 
-This guide is a practical, end-to-end manual for using the Teams capability in `ragent`.
+This guide is a practical, end-to-end manual for using the Teams capability in `codemason`.
 
 It covers:
 
@@ -33,13 +33,13 @@ Use Teams when you want parallel execution (for example: API/UI/tests split, or 
 
 Teams are persisted on disk:
 
-- Project-local (preferred): `[PROJECT]/.ragent/teams/<team-name>/`
-- Global fallback: `~/.ragent/teams/<team-name>/`
+- Project-local (preferred): `[PROJECT]/.codemason/teams/<team-name>/`
+- Global fallback: `~/.codemason/teams/<team-name>/`
 
 Typical structure:
 
 ```text
-.ragent/
+.codemason/
   teams/
     feature-squad/
       config.json
@@ -67,14 +67,14 @@ Blueprints are pre-built team templates that define which teammates to spawn and
 
 Blueprints are searched in priority order (closest wins):
 
-1. **Project-local:** `[PROJECT]/.ragent/blueprints/teams/<name>/`
-2. **User-config (XDG):** `~/.config/ragent/blueprints/teams/<name>/`
-3. **User-global (legacy):** `~/.ragent/blueprints/teams/<name>/`
+1. **Project-local:** `[PROJECT]/.codemason/blueprints/teams/<name>/`
+2. **User-config (XDG):** `~/.config/codemason/blueprints/teams/<name>/`
+3. **User-global (legacy):** `~/.codemason/blueprints/teams/<name>/`
 
 ### Blueprint directory structure
 
 ```text
-.ragent/blueprints/teams/code-review/
+.codemason/blueprints/teams/code-review/
   README.md              # Team description (copied to team directory)
   spawn-prompts.json     # Teammate definitions with role-specific prompts
   task-seed.json         # Initial tasks seeded on team creation
@@ -201,7 +201,7 @@ Teams are fully operable via tools. TUI commands are convenience wrappers.
   "tool": "team_create",
   "input": {
     "blueprint": "code-review",
-    "context": "Review the crates/ragent-server directory for security issues, test coverage gaps, and performance problems. Write findings to crates/ragent-server/COMPLIANCE.md",
+    "context": "Review the crates/codemason-server directory for security issues, test coverage gaps, and performance problems. Write findings to crates/codemason-server/COMPLIANCE.md",
     "project_local": true
   }
 }
@@ -331,7 +331,7 @@ team could read another team's mailbox. `team_wait` without `team_name` defaults
 to the caller's own team.
 
 **The team runtime is bound before tool dispatch, in every entry point.** Only
-the TUI ever created a `TeamManager`, so in `ragent run`, `ragent serve` and ACP
+the TUI ever created a `TeamManager`, so in `codemason run`, `codemason serve` and ACP
 mode `team_spawn` reported a teammate as "queued" but never started it. The
 session processor now binds the runtime for the team its session leads
 (`SessionProcessor::ensure_team_manager`), reconciles members queued in
@@ -395,13 +395,13 @@ When a team is created and assigned work, the specific details about what code n
 
 ### How context flows
 
-1. User asks: *"Review the crates/ragent-server directory for security issues"*
-2. Lead calls `team_create` with `context: "Review the crates/ragent-server directory..."`
+1. User asks: *"Review the crates/codemason-server directory for security issues"*
+2. Lead calls `team_create` with `context: "Review the crates/codemason-server directory..."`
 3. Each teammate's spawn prompt from the blueprint gets the context prepended:
 
 ```text
 ## Work Context
-Review the crates/ragent-server directory for security issues, test coverage,
+Review the crates/codemason-server directory for security issues, test coverage,
 and performance problems. Write findings to COMPLIANCE.md.
 
 ## Your Role
@@ -479,16 +479,16 @@ The output view updates incrementally during execution — you can watch a teamm
 /team blueprint code-review
 ```
 
-3. Ask ragent to create and run the team:
+3. Ask codemason to create and run the team:
 
 ```text
-Create a code-review team and have it review the crates/ragent-server directory
+Create a code-review team and have it review the crates/codemason-server directory
 for security issues, test gaps, and performance problems. Write the output to
-COMPLIANCE.md in the crates/ragent-server folder.
+COMPLIANCE.md in the crates/codemason-server folder.
 ```
 
 The LLM will:
-- Call `team_create` with `blueprint="code-review"` and `context="Review the crates/ragent-server directory..."`
+- Call `team_create` with `blueprint="code-review"` and `context="Review the crates/codemason-server directory..."`
 - All 3 teammates auto-spawn with the context prepended to their prompts
 - Call `team_wait` to block until all teammates finish
 - Call `team_status` to collect findings
@@ -715,7 +715,7 @@ Cause: team name not found in project-local/global team directories.
 Fix:
 
 - Verify team name spelling
-- Confirm the team exists under `.ragent/teams/` or `~/.ragent/teams/`
+- Confirm the team exists under `.codemason/teams/` or `~/.codemason/teams/`
 
 ### "teammate(s) still active --- shut them down first"
 
@@ -804,7 +804,7 @@ creates an ephemeral team, and orchestrates parallel execution.
 ### Example
 
 ```text
-/swarm Review the crates/ragent-server directory for security vulnerabilities, test coverage gaps, and performance issues. Write findings to docs/reviews/server-review.md
+/swarm Review the crates/codemason-server directory for security vulnerabilities, test coverage gaps, and performance issues. Write findings to docs/reviews/server-review.md
 ```
 
 With a default agent type:
@@ -828,15 +828,15 @@ With a default agent type:
 ## 16) Related docs and examples
 
 - Quickstart: `QUICKSTART.md` (Teams section)
-- Blueprint location: `[PROJECT]/.ragent/blueprints/teams/`, `~/.config/ragent/blueprints/teams/`, or `~/.ragent/blueprints/teams/`
+- Blueprint location: `[PROJECT]/.codemason/blueprints/teams/`, `~/.config/codemason/blueprints/teams/`, or `~/.codemason/blueprints/teams/`
 - Blueprints installed in this repository:
-  - `.ragent/blueprints/teams/code-review/`
-  - `.ragent/blueprints/teams/parallel-feature/`
-  - `.ragent/blueprints/teams/debate/`
+  - `.codemason/blueprints/teams/code-review/`
+  - `.codemason/blueprints/teams/parallel-feature/`
+  - `.codemason/blueprints/teams/debate/`
 
 Each blueprint directory holds a `README.md`, a spawn-prompt document
 (`spawn-prompts.json` - the roster `team_create` executes; `parallel-feature`
 carries the prose `spawn-prompts.md` variant) and a `task-seed.json` (the shared
 task list `team_create` seeds). Copy one into your own project's
-`.ragent/blueprints/teams/` to use it; a hook script can be attached by pointing
+`.codemason/blueprints/teams/` to use it; a hook script can be attached by pointing
 the blueprint's hook entry at any executable (e.g. a `teammate-idle.sh` gate).

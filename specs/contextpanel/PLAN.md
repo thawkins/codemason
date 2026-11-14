@@ -6,7 +6,7 @@ status: draft
 
 ## Summary
 
-This plan adds a right-hand context-breakdown panel to the ragent TUI. The panel
+This plan adds a right-hand context-breakdown panel to the codemason TUI. The panel
 is modelled on the existing logwindow panel, bound to `Alt-C`, and shows the token
 size and percentage share of the major components that make up the active
 context window.

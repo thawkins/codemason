@@ -1,6 +1,6 @@
 //! Crash-dump capture for aborts that bypass the panic hook.
 //!
-//! ragent's [`crate::panic_hook`] writes a full report for *unwinding* panics,
+//! codemason's [`crate::panic_hook`] writes a full report for *unwinding* panics,
 //! but a stack overflow is not one: once the guard page is hit the Rust runtime
 //! prints `thread "..." has overflowed its stack` and calls `abort()`. Nothing
 //! after that point runs in-process, so the only place a stack overflow can be
@@ -10,7 +10,7 @@
 //! after the fact. At startup it stamps `log/panics/last-crash.json` with the
 //! session identity (pid, executable, args, working directory, thread name) and
 //! marks the session as *running*; a clean shutdown overwrites the marker with
-//! a `clean exit` record. If the next ragent start finds a session still marked
+//! a `clean exit` record. If the next codemason start finds a session still marked
 //! `running` whose pid is gone, the previous run died without unwinding -
 //! an abort, a stack overflow, a SIGKILL, or a `std::process::exit`.
 //!
@@ -87,7 +87,7 @@ pub fn create_owner_only(path: &Path) -> std::io::Result<std::fs::File> {
 /// Session marker written to `log/panics/last-crash.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrashRecord {
-    /// Process id of the ragent run.
+    /// Process id of the codemason run.
     pub pid: u32,
     /// Absolute path of the running executable.
     pub exe: String,
@@ -169,12 +169,12 @@ pub fn write_record(working_dir: &Path, status: &str) -> std::io::Result<PathBuf
         exe: std::env::current_exe()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| "<unknown>".to_string()),
-        // ANTIPAT A-02: argv can carry a credential (`ragent auth openai sk-...`,
+        // ANTIPAT A-02: argv can carry a credential (`codemason auth openai sk-...`,
         // `--model ...sk-...`), and this record is written to disk. Route every
         // argument through the shared redactor so the marker never stores a
         // secret in plain text.
         args: std::env::args()
-            .map(|a| ragent_types::sanitize::redact_secrets(&a))
+            .map(|a| codemason_types::sanitize::redact_secrets(&a))
             .collect(),
         cwd: working_dir.display().to_string(),
         status: status.to_string(),
@@ -213,7 +213,7 @@ pub fn write_record(working_dir: &Path, status: &str) -> std::io::Result<PathBuf
     Ok(path)
 }
 
-/// Report whether a previous, unfinished ragent session is on record.
+/// Report whether a previous, unfinished codemason session is on record.
 ///
 /// Reads `<working_dir>/log/panics/last-crash.json`; when it still says
 /// `running` and its pid is no longer alive, returns the record so the caller

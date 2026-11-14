@@ -33,7 +33,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-seed="crates/ragent-types/tests/test___env_isolation_selftest.rs"
+seed="crates/codemason-types/tests/test___env_isolation_selftest.rs"
 
 # Runs the scanner with the seeded fixture and reports whether it failed.
 scan_with_seed() {
@@ -52,7 +52,7 @@ if [ "${1:-}" = "--self-test" ]; then
 
 #[test]
 fn selftest_unguarded_env_mutation() {
-    unsafe { std::env::set_var("RAGENT_SELFTEST_UNGUARDED", "1") };
+    unsafe { std::env::set_var("CODEMASON_SELFTEST_UNGUARDED", "1") };
 }
 RUST
     if scan_with_seed; then
@@ -74,7 +74,7 @@ fn selftest_harness() -> std::sync::MutexGuard<'static, ()> {
 fn selftest_reacquires_the_env_lock() {
     let _held = crate::global_env_lock();
     let _also_held = selftest_harness();
-    unsafe { std::env::set_var("RAGENT_SELFTEST_RELOCK", "1") };
+    unsafe { std::env::set_var("CODEMASON_SELFTEST_RELOCK", "1") };
 }
 RUST
     if scan_with_seed; then

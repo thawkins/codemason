@@ -28,14 +28,14 @@ See `specs/tuiopt/SPEC.md` for the full EARS requirements list.
 
 ### T-001 — Audit existing performance findings and benchmarks
 
-Read `crates/ragent-tui/performance_findings.md`, the current `benches/`
+Read `crates/codemason-tui/performance_findings.md`, the current `benches/`
 directory, and the main loop, layout, active-agents, and teams source files.
 Confirm which items are already partially addressed and which still apply.
 Record the baseline in a short note inside the spec directory.
 
 ### T-002 — Make main loop event-driven and remove 20 Hz idle wake
 
-Edit `crates/ragent-tui/src/lib.rs` so the main loop redraws only when
+Edit `crates/codemason-tui/src/lib.rs` so the main loop redraws only when
 `app.needs_redraw` is true, the minimum refresh interval expires, or an input /
 event-bus / background-channel message arrives. Replace the fixed 50 ms sleep
 with a long idle timeout. Ensure `needs_redraw` is set by all state-changing paths.
@@ -43,7 +43,7 @@ with a long idle timeout. Ensure `needs_redraw` is set by all state-changing pat
 ### T-003 — Convert model/provider discovery to async background tasks
 
 Replace UI-thread `block_in_place` + `block_on` calls in
-`crates/ragent-tui/src/app/models.rs`, `event_handler.rs`, and `slash.rs` with
+`crates/codemason-tui/src/app/models.rs`, `event_handler.rs`, and `slash.rs` with
 `tokio::spawn` tasks that return results through the event bus. Introduce
 loading states in the relevant pickers and ensure the UI remains responsive
 while discovery runs.
@@ -57,7 +57,7 @@ alongside the line cache.
 
 ### T-005 — Optimise active-agents panel traversal and step counts
 
-In `crates/ragent-tui/src/layout_active_agents.rs`, build a parent-to-children
+In `crates/codemason-tui/src/layout_active_agents.rs`, build a parent-to-children
 map once per render pass and walk it instead of scanning the task list for each
 row. Cache per-session step counts and `custom_names` / `teammate_ids` sets in
 `App`, updating them only when the source data changes. Avoid cloning
@@ -66,7 +66,7 @@ row. Cache per-session step counts and `custom_names` / `teammate_ids` sets in
 ### T-006 — Cache teams panel state and remove per-frame storage reads
 
 Maintain a `TeamCache` in `App` that is updated by team events. In
-`crates/ragent-tui/src/layout_teams.rs`, render from the cache and avoid disk
+`crates/codemason-tui/src/layout_teams.rs`, render from the cache and avoid disk
 I/O during `render_teams_subpanel`. Remove the per-frame
 `refresh_team_member_session_ids`, `team_members.clone()`, and direct storage
 reads.
@@ -80,7 +80,7 @@ Keep the existing cache but avoid its full clear on eviction.
 
 ### T-008 — Reduce per-frame string clones in status bar and layout
 
-In `crates/ragent-tui/src/layout_statusbar.rs` and `layout.rs`, cache status-bar
+In `crates/codemason-tui/src/layout_statusbar.rs` and `layout.rs`, cache status-bar
 title strings and responsive layout constraints until their inputs change. Use
 borrowed `&str` and `as_deref()` in hot render paths instead of cloning
 `Option<String>` fields.
@@ -94,26 +94,26 @@ or scroll. Apply to provider/model/file/slash pickers in `layout.rs`,
 
 ### T-010 — Rate-limit log-panel drain per frame
 
-In `crates/ragent-tui/src/lib.rs`, cap the number of tracing records drained
+In `crates/codemason-tui/src/lib.rs`, cap the number of tracing records drained
 from `log_rx` per frame (for example, 50). Set `needs_redraw = true` only if
 records were added.
 
 ### T-011 — Append-only input-history flush
 
-In `crates/ragent-tui/src/app/state.rs`, track the number of history entries
+In `crates/codemason-tui/src/app/state.rs`, track the number of history entries
 already flushed and append only new entries to the history file instead of
 serialising the entire vector each time.
 
 ### T-012 — Add Criterion benchmarks for message list, active agents, and teams panels
 
-Extend `crates/ragent-tui/benches/` with benchmarks for `render_messages` at
+Extend `crates/codemason-tui/benches/` with benchmarks for `render_messages` at
 100/500/2000 messages, `render_active_agents_subpanel` at 50/200 tasks, and
 `render_teams_subpanel` with 20 teammates. Run the benchmarks before and after
 the optimisation work.
 
 ### T-013 — Document optimisation changes and run validation tests
 
-Update `crates/ragent-tui/performance_findings.md` with what was changed. Run
+Update `crates/codemason-tui/performance_findings.md` with what was changed. Run
 the existing TUI unit/integration tests, the new benchmarks, and a manual smoke
 test through the TUI to confirm no regressions. Update `CHANGELOG.md` when the
 work is complete.

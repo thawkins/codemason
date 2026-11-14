@@ -15,7 +15,7 @@ labels: bug
 
 ## Environment
 
-- ragent version (`ragent --version`):
+- codemason version (`codemason --version`):
 - OS:
 - Provider / model:
 

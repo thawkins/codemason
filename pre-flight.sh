@@ -142,7 +142,7 @@ bash "$(dirname "$0")/scripts/check-team-duplication.sh" --self-test || print_fa
 # Test process-global isolation guard (one test binary per crate: every
 # `tests/test_*.rs` of a crate shares one process, so an unguarded
 # `set_var`/`remove_var`/`set_current_dir` races every other test - the
-# reproduced ragent-config flake).
+# reproduced codemason-config flake).
 print_step "Test env-isolation guard..."
 bash "$(dirname "$0")/scripts/check-test-env-isolation.sh" --self-test || print_failure "Test env-isolation guard self-test failed"
 bash "$(dirname "$0")/scripts/check-test-env-isolation.sh" || print_failure "Test env-isolation guard failed"
@@ -216,10 +216,10 @@ if $QUICK_MODE; then
     fi
 else
     print_step "Running full test suite..."
-    # `ragent-tools-extended/test-ssrf-bypass` compiles in the loopback escape
+    # `codemason-tools-extended/test-ssrf-bypass` compiles in the loopback escape
     # hatch the fetch/crawl integration tests need. Off by default, so a
     # release build keeps its SSRF guard regardless of the environment.
-    if timeout 600 cargo nextest run --workspace --features ragent-tools-extended/test-ssrf-bypass --no-fail-fast 2>&1; then
+    if timeout 600 cargo nextest run --workspace --features codemason-tools-extended/test-ssrf-bypass --no-fail-fast 2>&1; then
         print_success "All tests passed"
     else
         print_failure "Tests failed"

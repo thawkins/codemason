@@ -126,7 +126,7 @@ and *why* each pair of stages is ordered as it is.
 
 ## 4. The cases
 
-`crates/ragent-agent/tests/test_unified_dispatch.rs` - **11 existing cases, +3
+`crates/codemason-agent/tests/test_unified_dispatch.rs` - **11 existing cases, +3
 new**. The new ones:
 
 | Case | Pins |
@@ -137,7 +137,7 @@ new**. The new ones:
 | `agent_loop_calls_the_one_stage_body_and_duplicates_no_refusal` (rewritten) | the loop defines no `resolve_call`, calls `resolve_tool_call` exactly once and `ToolDispatchPipeline::run` exactly once, and carries none of `denied_tool_call`, `unknown_tool_error`, `synthetic_error_result` |
 | `unknown_tool_refusal_precedes_every_guard` (extended) | the repeat guard is no longer called from the loop body; it is the pipeline's stage 9 |
 
-`crates/ragent-agent/tests/test_refusal_outcome.rs` - **new file, 3 cases**:
+`crates/codemason-agent/tests/test_refusal_outcome.rs` - **new file, 3 cases**:
 
 | Case | Pins |
 |---|---|
@@ -145,7 +145,7 @@ new**. The new ones:
 | `a_schema_refusal_is_a_terminal_error_outcome` | the same shape from the schema stage |
 | `every_stopped_call_has_the_same_record_shape` | a guard denial and a pre-dispatch refusal differ in sentence but not in shape: both `Error`, both carry a reason, both close the call once |
 
-`crates/ragent-agent/tests/test_tool_input_error.rs` - the T-013 case
+`crates/codemason-agent/tests/test_tool_input_error.rs` - the T-013 case
 `both_gates_build_their_refusal_with_the_shared_constructor` now reads
 `session/dispatch.rs` as well as `processor.rs`: stages 1-3 moved out of the loop
 body, and a scan of one file would have reported the gate as missing merely
@@ -181,11 +181,11 @@ fix" is exactly the failure mode a red proof exists to catch, and it was caught.
 
 - `cargo fmt --all -- --check` - clean
 - `cargo check --workspace --all-targets` - no error, no new warning
-- `cargo clippy -p ragent-agent --all-targets` - no diagnostic names a file this
+- `cargo clippy -p codemason-agent --all-targets` - no diagnostic names a file this
   task touched (the only groups are the pre-existing
   `pub(crate) ... inside private module` lints and provider
   `unnecessary structure name repetition`)
-- `cargo nextest run -p ragent-agent` - **2101 passed**, 0 failed, 1 skipped
+- `cargo nextest run -p codemason-agent` - **2101 passed**, 0 failed, 1 skipped
   (was 2098 passed / 1 failed before the last two fixes; the two failures were
   `test_sandbox_secrets` cases colliding on one container name, see below)
 - the twelve `scripts/check-*.sh` guards - all pass
@@ -193,7 +193,7 @@ fix" is exactly the failure mode a red proof exists to catch, and it was caught.
 ### A fix outside the task's own files
 
 `test_sandbox_secrets` and `test_container_backend` each start a real container
-from a name derived from the workspace path (`ragent-sandbox-<hash>`). Under
+from a name derived from the workspace path (`codemason-sandbox-<hash>`). Under
 nextest's one-process-per-test model two of them run at once and the loser fails
 with *"the container name ... is already in use"*. `.config/nextest.toml` gained
 a `test-group-sandbox` group (`max-threads = 1`) covering both modules, in

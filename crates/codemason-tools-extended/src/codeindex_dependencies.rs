@@ -1,0 +1,101 @@
+//! Codebase index dependency graph tool.
+
+use anyhow::{Context, Result};
+use serde_json::{Value, json};
+
+use super::{Tool, ToolContext, ToolOutput};
+use crate::codeindex_utils::codeindex_not_available;
+use crate::codeindex_utils::{busy_output, with_retry};
+
+/// Query file-level dependency relationships from the code index.
+pub struct CodeIndexDependenciesTool;
+
+#[async_trait::async_trait]
+impl Tool for CodeIndexDependenciesTool {
+    fn name(&self) -> &'static str {
+        "codeindex_dependencies"
+    }
+
+    fn description(&self) -> &'static str {
+        "Query file-level dependencies from the code index. Required parameter: \
+         'path' (relative file path). Optional 'direction': 'imports' (what this \
+         file uses, default) or 'dependents' (what uses this file). USE THIS instead \
+         of `Grep` for import/use statements - the index tracks dependency edges that \
+         Grep can only approximate with fragile pattern matching."
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Relative file path to query dependencies for"
+                },
+                "direction": {
+                    "type": "string",
+                    "description": "Direction: 'imports' (what this file uses) or 'dependents' (what uses this file)",
+                    "enum": ["imports", "dependents"],
+                    "default": "imports"
+                }
+            },
+            "required": ["path"],
+            "additionalProperties": false
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "codeindex:read"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let idx = match &ctx.code_index {
+            Some(idx) => idx,
+            None => {
+                return Ok(codeindex_not_available(
+                    "Use `Grep` to search for import/use statements manually.",
+                    &["Grep"],
+                ));
+            }
+        };
+
+        let path = input["path"]
+            .as_str()
+            .context("Missing required 'path' parameter")?;
+
+        let direction = match input["direction"].as_str() {
+            Some("dependents") => codemason_codeindex::types::DepDirection::Dependents,
+            _ => codemason_codeindex::types::DepDirection::Imports,
+        };
+
+        let deps = match with_retry(|| idx.try_dependencies(path, direction)).await? {
+            Some(d) => d,
+            None => return Ok(busy_output("codeindex_dependencies")),
+        };
+
+        if deps.is_empty() {
+            let dir_label = match direction {
+                codemason_codeindex::types::DepDirection::Imports => "imports",
+                codemason_codeindex::types::DepDirection::Dependents => "dependents",
+            };
+            return Ok(ToolOutput {
+                content: format!("No {dir_label} found for '{path}'."),
+                metadata: Some(json!({"total_results": 0})),
+            });
+        }
+
+        let dir_label = match direction {
+            codemason_codeindex::types::DepDirection::Imports => "Imports",
+            codemason_codeindex::types::DepDirection::Dependents => "Dependents",
+        };
+
+        let mut output = format!("{dir_label} for `{path}`:\n");
+        for dep in &deps {
+            output.push_str(&format!("  - {dep}\n"));
+        }
+
+        Ok(ToolOutput {
+            content: output,
+            metadata: Some(json!({"total_results": deps.len()})),
+        })
+    }
+}

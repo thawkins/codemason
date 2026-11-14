@@ -27,7 +27,7 @@ jobs:
         id: set-asset
         shell: bash
         run: |
-          echo "ASSET_NAME=ragent-${{ github.ref_name }}-linux-x86_64" >> "$GITHUB_ENV"
+          echo "ASSET_NAME=codemason-${{ github.ref_name }}-linux-x86_64" >> "$GITHUB_ENV"
           echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
@@ -48,7 +48,7 @@ jobs:
       - name: Build release binary
         run: |
           cargo build --release --target x86_64-unknown-linux-gnu
-          cp "target/x86_64-unknown-linux-gnu/release/ragent" "${{ env.ASSET_NAME }}"
+          cp "target/x86_64-unknown-linux-gnu/release/codemason" "${{ env.ASSET_NAME }}"
 
       - name: Install packaging tools
         run: |
@@ -57,16 +57,16 @@ jobs:
 
       - name: Build .deb package
         run: |
-          cargo deb --target x86_64-unknown-linux-gnu --no-build --output "ragent-${{ github.ref_name }}-linux-x86_64.deb"
+          cargo deb --target x86_64-unknown-linux-gnu --no-build --output "codemason-${{ github.ref_name }}-linux-x86_64.deb"
 
       - name: Build .rpm package
         run: |
-          cargo generate-rpm --target x86_64-unknown-linux-gnu --output "ragent-${{ github.ref_name }}-linux-x86_64.rpm"
+          cargo generate-rpm --target x86_64-unknown-linux-gnu --output "codemason-${{ github.ref_name }}-linux-x86_64.rpm"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ragent-${{ github.ref_name }}-linux-x86_64
+          name: codemason-${{ github.ref_name }}-linux-x86_64
           path: |
             ${{ env.ASSET_NAME }}
             *.deb
@@ -84,7 +84,7 @@ jobs:
       - name: Set asset name
         shell: bash
         run: |
-          echo "ASSET_NAME=ragent-${{ github.ref_name }}-macos-arm64" >> "$GITHUB_ENV"
+          echo "ASSET_NAME=codemason-${{ github.ref_name }}-macos-arm64" >> "$GITHUB_ENV"
           echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain
@@ -95,18 +95,18 @@ jobs:
       - name: Build release binary
         run: |
           cargo build --release --target aarch64-apple-darwin
-          cp "target/aarch64-apple-darwin/release/ragent" "${{ env.ASSET_NAME }}"
+          cp "target/aarch64-apple-darwin/release/codemason" "${{ env.ASSET_NAME }}"
 
       - name: Build .pkg installer
         run: |
           ./scripts/macos-pkg.sh "${{ env.VERSION }}" \
-            "target/aarch64-apple-darwin/release/ragent" \
+            "target/aarch64-apple-darwin/release/codemason" \
             "$(pwd)"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ragent-${{ github.ref_name }}-macos-arm64
+          name: codemason-${{ github.ref_name }}-macos-arm64
           path: |
             ${{ env.ASSET_NAME }}
             *.pkg
@@ -123,7 +123,7 @@ jobs:
       - name: Set asset name
         shell: bash
         run: |
-          echo "ASSET_NAME=ragent-${{ github.ref_name }}-windows-x86_64.exe" >> "$GITHUB_ENV"
+          echo "ASSET_NAME=codemason-${{ github.ref_name }}-windows-x86_64.exe" >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -133,7 +133,7 @@ jobs:
       - name: Build release binary
         run: |
           cargo build --release --target x86_64-pc-windows-msvc
-          cp "target/x86_64-pc-windows-msvc/release/ragent.exe" "$env:ASSET_NAME"
+          cp "target/x86_64-pc-windows-msvc/release/codemason.exe" "$env:ASSET_NAME"
         shell: powershell
 
       - name: Install WiX packaging tool
@@ -142,22 +142,22 @@ jobs:
       - name: Stage binary for WiX
         run: |
           New-Item -ItemType Directory -Force -Path target\release | Out-Null
-          Copy-Item "target\x86_64-pc-windows-msvc\release\ragent.exe" "target\release\ragent.exe" -Force
+          Copy-Item "target\x86_64-pc-windows-msvc\release\codemason.exe" "target\release\codemason.exe" -Force
         shell: powershell
 
       - name: Create WiX source files
-        run: cargo wix init --package ragent
+        run: cargo wix init --package codemason
         shell: powershell
 
       - name: Build .msi package
         run: |
-          cargo wix --no-build --package ragent --target x86_64-pc-windows-msvc --output "ragent-${{ github.ref_name }}-windows-x86_64.msi"
+          cargo wix --no-build --package codemason --target x86_64-pc-windows-msvc --output "codemason-${{ github.ref_name }}-windows-x86_64.msi"
         shell: powershell
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-            name: ragent-${{ github.ref_name }}-windows-x86_64
+            name: codemason-${{ github.ref_name }}-windows-x86_64
             path: |
               ${{ env.ASSET_NAME }}
               *.msi
@@ -178,19 +178,19 @@ jobs:
       - name: Download Linux artifacts
         uses: actions/download-artifact@v4
         with:
-          name: ragent-${{ github.ref_name }}-linux-x86_64
+          name: codemason-${{ github.ref_name }}-linux-x86_64
           path: linux
 
       - name: Download macOS artifacts
         uses: actions/download-artifact@v4
         with:
-          name: ragent-${{ github.ref_name }}-macos-arm64
+          name: codemason-${{ github.ref_name }}-macos-arm64
           path: macos
 
       - name: Download Windows artifacts
         uses: actions/download-artifact@v4
         with:
-          name: ragent-${{ github.ref_name }}-windows-x86_64
+          name: codemason-${{ github.ref_name }}-windows-x86_64
           path: windows
 
       - name: Extract release notes from CHANGELOG.md

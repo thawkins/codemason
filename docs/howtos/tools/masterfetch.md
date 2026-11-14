@@ -148,7 +148,7 @@ honest error recommending `mf_fetch` for text-based extraction).
 
 ## mf_version
 
-Return the masterfetch integration version, the ragent version, and a brief
+Return the masterfetch integration version, the codemason version, and a brief
 description of the tool set. Makes no network calls and always succeeds.
 
 **Arguments:** none.

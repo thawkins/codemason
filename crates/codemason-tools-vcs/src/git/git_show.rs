@@ -1,0 +1,105 @@
+//! `git_show` - Show commit details.
+
+use anyhow::Result;
+use serde_json::{Value, json};
+
+use crate::{Tool, ToolContext, ToolOutput};
+
+/// Tool that shows details of a commit or tag.
+pub struct GitShowTool;
+
+#[async_trait::async_trait]
+impl Tool for GitShowTool {
+    fn name(&self) -> &'static str {
+        "git_show"
+    }
+
+    fn description(&self) -> &'static str {
+        "Show details of a commit, tag, or other git object. \
+         No required parameters. 'ref' (string, default HEAD) is the commit hash, tag, or ref to inspect; \
+         'stat' (boolean, default true) includes file change statistics. \
+         Output includes author, date, commit message, and, when 'stat' is true, a list of changed files. \
+         Common gotcha: ambiguous refs or lightweight tags may resolve differently; use a full commit hash when exact output matters."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "ref": {
+                    "type": "string",
+                    "description": "Commit hash, tag, or ref to show (default: HEAD)"
+                },
+                "stat": {
+                    "type": "boolean",
+                    "description": "Include file change statistics (default: true)"
+                }
+            }
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "git:read"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let git_ref = input["ref"].as_str().unwrap_or("HEAD");
+        let stat = input["stat"].as_bool().unwrap_or(true);
+
+        // SEC-codemason-tools-vcs-002 (SECTASKS T-022): `git show --output=<path>`
+        // writes a file under a read-only grant; reject option-like refs.
+        crate::git::reject_option_like(git_ref, "ref")?;
+
+        let mut args = vec!["show", "--format=fuller"];
+        if stat {
+            args.push("--stat");
+        }
+        // No `--` before the revision: `git show <ref> --` would make `<ref>`
+        // parse as a pathspec. `reject_option_like` above already guarantees
+        // the value cannot be an option.
+        args.push(git_ref);
+
+        let args: Vec<String> = args.into_iter().map(ToString::to_string).collect();
+
+        let (stdout, stderr) = crate::git::run_git_async(args, ctx.working_dir.clone()).await?;
+
+        if !stderr.is_empty() && stdout.trim().is_empty() {
+            return Ok(ToolOutput {
+                content: format!("git show error: {}", stderr.trim()),
+                metadata: None,
+            });
+        }
+
+        // Extract structured metadata from the output
+        let mut author = None;
+        let mut date = None;
+        let mut subject = None;
+        let mut commit_hash = None;
+
+        for line in stdout.lines() {
+            if line.starts_with("commit ") && commit_hash.is_none() {
+                commit_hash = Some(line[7..].to_string());
+            }
+            if line.starts_with("Author:     ") && author.is_none() {
+                author = Some(line[12..].to_string());
+            }
+            if line.starts_with("CommitDate: ") && date.is_none() {
+                date = Some(line[12..].to_string());
+            }
+            if line.starts_with("    ") && subject.is_none() {
+                subject = Some(line.trim().to_string());
+            }
+        }
+
+        Ok(ToolOutput {
+            content: stdout,
+            metadata: Some(json!({
+                "commit": commit_hash,
+                "author": author,
+                "date": date,
+                "subject": subject,
+            })),
+        })
+    }
+}

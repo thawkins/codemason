@@ -1,6 +1,6 @@
 # How-To: Permissions, Autopilot, and YOLO Mode
 
-ragent gives an AI agent direct access to your filesystem, shell, network,
+codemason gives an AI agent direct access to your filesystem, shell, network,
 and version-control systems. The permissions system is the defense-in-depth
 layer that decides whether each tool call is **allowed**, **denied**, or must
 **ask** the user for interactive confirmation before it runs.
@@ -46,12 +46,12 @@ This guide covers every part of that pipeline:
 
 ## 1. Overview
 
-Every tool call in ragent passes through a permission check before it
+Every tool call in codemason passes through a permission check before it
 executes. The check is performed by `PermissionChecker` (defined in
-`crates/ragent-config/src/permission.rs` and re-exported via
-`crates/ragent-agent/src/permission/mod.rs`) and the session processor's
+`crates/codemason-config/src/permission.rs` and re-exported via
+`crates/codemason-agent/src/permission/mod.rs`) and the session processor's
 `check_permission_with_prompt` helper (defined in
-`crates/ragent-agent/src/session/permissions.rs`).
+`crates/codemason-agent/src/session/permissions.rs`).
 
 The decision flow has five stages, applied in order:
 
@@ -79,7 +79,7 @@ Each stage can short-circuit the pipeline. If any stage returns **Allow** or
 agent publish a `PermissionRequested` event and wait for the user to respond.
 
 The five-stage pipeline is implemented in
-`check_permission_with_prompt` (`crates/ragent-agent/src/session/permissions.rs`):
+`check_permission_with_prompt` (`crates/codemason-agent/src/session/permissions.rs`):
 
 ```rust
 pub async fn check_permission_with_prompt(
@@ -98,7 +98,7 @@ pub async fn check_permission_with_prompt(
 ## 2. Permission Rule Schema
 
 A permission rule maps a **permission category** and a **glob pattern** to an
-**action**. Rules are defined in the `permissions` array of `ragent.json`
+**action**. Rules are defined in the `permissions` array of `codemason.json`
 (global or project) or in a custom agent's `permissions` block.
 
 ### Rule Object
@@ -117,8 +117,8 @@ A permission rule maps a **permission category** and a **glob pattern** to an
 | `pattern`     | string | Glob pattern matched against the resource path. `"*"` matches all.|
 | `action`      | string | What to do when the rule matches: `allow`, `deny`, or `ask`.      |
 
-The Rust struct lives in `crates/ragent-config/src/permission.rs`
-(re-exported through `crates/ragent-agent/src/permission/mod.rs`):
+The Rust struct lives in `crates/codemason-config/src/permission.rs`
+(re-exported through `crates/codemason-agent/src/permission/mod.rs`):
 
 ```rust
 pub struct PermissionRule {
@@ -216,8 +216,8 @@ variant, so rules keyed on `"read"` match tools that report `"file:read"`.
 | `mcp`                | `Permission::Custom`   | `mcp_tool`                               |
 | `none`               | (no permission needed) | `think`, `agent_complete`                |
 
-The `Permission` enum is defined in `crates/ragent-config/src/permission.rs`
-(re-exported through `crates/ragent-agent/src/permission/mod.rs`):
+The `Permission` enum is defined in `crates/codemason-config/src/permission.rs`
+(re-exported through `crates/codemason-agent/src/permission/mod.rs`):
 
 ```rust
 pub enum Permission {
@@ -263,7 +263,7 @@ still allows the tool now called `AskUserQuestion`.
 
 Both of those read like a missed migration and are the requirement. The rename
 took the tool names to Claude Code's spellings; the families `bash` and
-`ask_user` are ragent's own permission vocabulary and are unchanged, which is
+`ask_user` are codemason's own permission vocabulary and are unchanged, which is
 why `permission_category()` still reports `bash:execute` for `Bash` and
 `ask_user` for `AskUserQuestion`. `specs/uniformtools/T-041-BASELINE.md` records
 32 distinct categories across the registry, before and after the rename; spec
@@ -274,7 +274,7 @@ tool with no category reports - see the table above).
 ### Default Permission Ruleset
 
 Built-in agents ship with a default ruleset (defined in
-`crates/ragent-agent/src/agent/mod.rs`):
+`crates/codemason-agent/src/agent/mod.rs`):
 
 ```rust
 pub fn default_permissions() -> PermissionRuleset {
@@ -345,8 +345,8 @@ The `dirs` config block provides glob-pattern allow/deny lists for file
 operations. These are checked **before** the permission ruleset and take
 precedence over it. Denylist entries always win over allowlist entries.
 
-Defined in `crates/ragent-config/src/dir_lists.rs` and configured in
-`ragent.json`:
+Defined in `crates/codemason-config/src/dir_lists.rs` and configured in
+`codemason.json`:
 
 ```json
 {
@@ -408,7 +408,7 @@ canonicalized working directory. This prevents tricks like
 ## 5. The 7-Layer Bash Security Model
 
 Before a shell command reaches the permission system, the `BashTool`
-(`crates/ragent-tools-core/src/bash.rs`) validates it through seven layers in
+(`crates/codemason-tools-core/src/bash.rs`) validates it through seven layers in
 this order; any rejection stops execution. The layer-by-layer reference
 (`SAFE_COMMANDS`, `BANNED_COMMANDS`, the denied lists, examples) lives in
 [bash.md - The seven-layer security model](bash.md#the-seven-layer-security-model).
@@ -426,7 +426,7 @@ this order; any rejection stops execution. The layer-by-layer reference
 How the layers meet the permission system:
 
 - **Layer 1 only skips the prompt.** A whitelisted command (`SAFE_COMMANDS` in
-  `crates/ragent-tools-core/src/bash.rs`; prefix matched, never one containing a
+  `crates/codemason-tools-core/src/bash.rs`; prefix matched, never one containing a
   shell separator or redirection) is
   auto-approved at the permission check but still runs every later layer.
   `git`, `cargo`, `npm`, interpreters and `rm` are not on the list, so they
@@ -436,8 +436,8 @@ How the layers meet the permission system:
   not exempt the command from Layers 5-7.
 - **The denylist is Layer 6.** `/bash add deny <pattern>` (or a
   `bash.denylist` entry) rejects any command containing the pattern.
-- `/bash` changes persist immediately to `.ragent/ragent.json` (project) or
-  `~/.config/ragent/ragent.json` (with `--global`); see
+- `/bash` changes persist immediately to `.codemason/codemason.json` (project) or
+  `~/.config/codemason/codemason.json` (with `--global`); see
   [bash.md - The `/bash` slash commands](bash.md#the-bash-slash-commands).
 - After all seven layers pass, the command goes to the permission check
   (`PermissionChecker` plus the interactive prompt) like any other tool call.
@@ -492,7 +492,7 @@ Disable:
 ### 6.2 How Autopilot Works
 
 When autopilot is enabled, the TUI state machine (defined in
-`crates/ragent-tui/src/app/state.rs` and `event_handler.rs`) automatically
+`crates/codemason-tui/src/app/state.rs` and `event_handler.rs`) automatically
 sends a continuation prompt after each agent turn ends without the agent
 calling `agent_complete`:
 
@@ -590,7 +590,7 @@ control the agent and its inputs completely.
 
 ### 7.1 What YOLO Bypasses
 
-When YOLO mode is enabled (defined in `crates/ragent-config/src/yolo.rs`),
+When YOLO mode is enabled (defined in `crates/codemason-config/src/yolo.rs`),
 the following safety checks are skipped:
 
 | Check                              | Bypassed? | Notes                                    |
@@ -611,9 +611,9 @@ The bypass is implemented as early returns in the Bash tool and
 ```rust
 // In BashTool::execute:
 if contains_banned_command(command) {
-    if ragent_config::yolo::is_enabled() {
+    if codemason_config::yolo::is_enabled() {
         tracing::warn!("YOLO mode: allowing banned command tool");
-    } else if ragent_config::bash_lists::is_allowlisted(command) {
+    } else if codemason_config::bash_lists::is_allowlisted(command) {
         tracing::info!("Banned command allowed by user allowlist");
     } else {
         bail!("Command rejected: uses banned external tool ...");
@@ -621,7 +621,7 @@ if contains_banned_command(command) {
 }
 
 // In check_permission_with_prompt:
-if ragent_config::yolo::is_enabled() {
+if codemason_config::yolo::is_enabled() {
     return Ok(PermissionAction::Allow);
 }
 ```
@@ -642,9 +642,9 @@ Alt+Y
 
 **2. CLI flag (permission auto-approve only):**
 ```bash
-ragent --yes
+codemason --yes
 # or the alias:
-ragent --no-prompt
+codemason --no-prompt
 ```
 
 > **Note:** `--yes` is *not* YOLO mode. It sets `auto_approve = true` on the
@@ -655,8 +655,8 @@ ragent --no-prompt
 > it only lasts for the current session.
 
 The `/yolo` slash command and `Alt+Y` shortcut toggle the persistent YOLO
-flag, which is saved to the **user-global** `ragent.json`
-(`~/.config/ragent/ragent.json`) and restored on the next startup.
+flag, which is saved to the **user-global** `codemason.json`
+(`~/.config/codemason/codemason.json`) and restored on the next startup.
 
 ### 7.3 Automatic sub-agent scope
 
@@ -707,7 +707,7 @@ per-turn function of the run's own offered tool surface:
 ### 7.4 Persistence
 
 YOLO is a user-only toggle, so it is always written to the user-global config
-- never the project-local `.ragent/ragent.json`. Project config is untrusted
+- never the project-local `.codemason/codemason.json`. Project config is untrusted
 repository content whose `yolo` key is stripped by `Config::merge_project`
 (SECTASKS T-011), so a project-file write could never round-trip on the next
 load (and would let a repo turn YOLO on for a reviewer). YOLO state is
@@ -728,7 +728,7 @@ the atomic write helper (temp file + `fsync` + rename). It deliberately does
 *not* re-serialise the merged `Config`, so the project overlay and any key the
 running build does not model are never folded into the user's global file.
 
-The `yolo` field in `ragent.json`:
+The `yolo` field in `codemason.json`:
 
 ```json
 {
@@ -871,7 +871,7 @@ Requests are displayed one at a time as earlier ones are resolved.
 ### 8.5 Permission Decision Types
 
 The `PermissionDecision` enum (defined in
-`crates/ragent-types/src/permission.rs`) captures the user's response:
+`crates/codemason-types/src/permission.rs`) captures the user's response:
 
 ```rust
 pub enum PermissionDecision {
@@ -885,7 +885,7 @@ pub enum PermissionDecision {
 
 ## 9. HTTP Server Permission Flow
 
-When running ragent as an HTTP server (`ragent serve`), permission requests
+When running codemason as an HTTP server (`codemason serve`), permission requests
 are delivered as SSE events and replies are sent via a REST endpoint.
 
 ### 9.1 SSE Event
@@ -940,7 +940,7 @@ Some tools are **always auto-approved** and never trigger an interactive
 prompt, regardless of the configured ruleset. This is because they are
 read-only helpers that pose no risk to the system.
 
-Defined in `crates/ragent-agent/src/session/permissions.rs`:
+Defined in `crates/codemason-agent/src/session/permissions.rs`:
 
 ```rust
 pub(crate) fn is_hardwired_auto_approved_tool(tool_name: &str) -> bool {
@@ -950,7 +950,7 @@ pub(crate) fn is_hardwired_auto_approved_tool(tool_name: &str) -> bool {
         || TASK_TOOLS.contains(&tool_name)
         || tool_name == "AskUserQuestion"
         || tool_name == "model_info"
-        || tool_name == "ragent_info"
+        || tool_name == "codemason_info"
         || tool_name == "tool_info"
         || tool_name == "commands_info"
 }
@@ -1005,13 +1005,13 @@ index tools and `docs/howtos/teams.md` for the team coordination tools.
 
 ### 11.1 Configuration Sources
 
-ragent loads configuration with the following precedence (highest first):
+codemason loads configuration with the following precedence (highest first):
 
 1. `--config <PATH>` CLI argument
-2. `RAGENT_CONFIG_CONTENT` environment variable (inline JSON)
-3. `RAGENT_CONFIG` environment variable (path to config file)
-4. `.ragent/ragent.json` (or `ragent.jsonc`) in the working directory
-5. `~/.config/ragent/ragent.json` (global config)
+2. `CODEMASON_CONFIG_CONTENT` environment variable (inline JSON)
+3. `CODEMASON_CONFIG` environment variable (path to config file)
+4. `.codemason/codemason.json` (or `codemason.jsonc`) in the working directory
+5. `~/.config/codemason/codemason.json` (global config)
 6. Built-in defaults
 
 Global and project configs are **merged** — the union of all entries is
@@ -1081,7 +1081,7 @@ See `docs/howtos/custom-agents.md` for the full custom agent schema.
 ```json
 {
   "modules": [{
-    "type": "ragent/agent/v1",
+    "type": "codemason/agent/v1",
     "payload": {
       "system_prompt": "You are a technical writer...",
       "permissions": [
@@ -1155,8 +1155,8 @@ You are a security-focused code reviewer...
 /bash remove deny <pattern>             Remove from denylist
 /bash help                              Show help
 
-# Append --global to write to ~/.config/ragent/ragent.json
-# instead of .ragent/ragent.json
+# Append --global to write to ~/.config/codemason/codemason.json
+# instead of .codemason/codemason.json
 ```
 
 ### 13.2 `/dirs` — Directory/File Permission Management
@@ -1184,7 +1184,7 @@ Pattern matching uses glob syntax:
 /yolo                                   Toggle YOLO mode on/off
 ```
 
-Also toggled with `Alt+Y`. Persists to `ragent.json`.
+Also toggled with `Alt+Y`. Persists to `codemason.json`.
 
 ### 13.4 `/autopilot` — Autonomous Operation
 
@@ -1268,13 +1268,13 @@ unattended:
 
 ```bash
 # Start with YOLO mode and auto-approve
-ragent --yes
+codemason --yes
 
 # In the TUI, enable autopilot with limits
 /autopilot on --max-tokens 200000 --max-time 3600
 ```
 
-Or configure in `ragent.json`:
+Or configure in `codemason.json`:
 
 ```json
 {

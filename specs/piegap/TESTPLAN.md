@@ -19,13 +19,13 @@ marked "NOT Required" in the spec. No test cases are defined for them.
 ### Environment
 
 1. **Rust toolchain**: Rust 1.85+ (edition 2024) installed and on `PATH`.
-2. **ragent binary**: Build the debug binary:
+2. **codemason binary**: Build the debug binary:
    ```bash
-   cd ~/Projects/ragent
+   cd ~/Projects/codemason
    cargo build
    ```
 
-   The binary is at `target/debug/ragent`.
+   The binary is at `target/debug/cdmn`.
 3. **Working directory**: A test project directory with a few source files:
    ```bash
    mkdir -p ~/Projects/piegap-test/src
@@ -34,7 +34,7 @@ marked "NOT Required" in the spec. No test cases are defined for them.
    ```
 4. **Provider configured**: At least one LLM provider configured (e.g.,
    `export ANTHROPIC_API_KEY=sk-ant-...` or `export OPENAI_API_KEY=sk-...`).
-5. **ragent config**: A `.ragent/ragent.json` in the test project with the gap
+5. **codemason config**: A `.codemason/codemason.json` in the test project with the gap
    feature being tested enabled (see each test case for the specific config).
 
 ### Feature-Specific Prerequisites
@@ -51,12 +51,12 @@ marked "NOT Required" in the spec. No test cases are defined for them.
 
 **Preconditions**:
 
-- ragent built with the dynamic triggers feature enabled
-- `ragent.json` contains: `{"triggers": {"enabled": true, "poll_interval_secs": 5}}`
+- codemason built with the dynamic triggers feature enabled
+- `codemason.json` contains: `{"triggers": {"enabled": true, "poll_interval_secs": 5}}`
 
 **Steps**:
 
-1. Launch ragent TUI: `ragent`
+1. Launch codemason TUI: `codemason`
 2. Type the following prompt and press Enter:
    ```
    when ~/piegap-test/trigger.flag exists, print its contents
@@ -84,7 +84,7 @@ marked "NOT Required" in the spec. No test cases are defined for them.
 
 **Preconditions**:
 
-- ragent running with at least one dynamic trigger rule created (from TC-001).
+- codemason running with at least one dynamic trigger rule created (from TC-001).
 
 **Steps**:
 
@@ -109,8 +109,8 @@ marked "NOT Required" in the spec. No test cases are defined for them.
 
 **Preconditions**:
 
-- ragent built with MCP notification hooks enabled
-- `ragent.json` contains:
+- codemason built with MCP notification hooks enabled
+- `codemason.json` contains:
   ```json
   {
     "mcp_notifications": {"enabled": true},
@@ -130,7 +130,7 @@ marked "NOT Required" in the spec. No test cases are defined for them.
 
 **Steps**:
 
-1. Launch ragent TUI: `ragent`
+1. Launch codemason TUI: `codemason`
 2. Wait for the MCP server to start and push a notification frame.
 3. Observe the TUI feed for the injected summary.
 4. Type `/triggers` and press Enter.
@@ -155,12 +155,12 @@ marked "NOT Required" in the spec. No test cases are defined for them.
 
 **Preconditions**:
 
-- ragent built with stateful loops + inbox enabled
-- `ragent.json` contains: `{"loops": {"enabled": true}, "inbox": {"enabled": true}}`
+- codemason built with stateful loops + inbox enabled
+- `codemason.json` contains: `{"loops": {"enabled": true}, "inbox": {"enabled": true}}`
 
 **Steps**:
 
-1. Launch ragent TUI: `ragent`
+1. Launch codemason TUI: `codemason`
 2. Type the following and press Enter:
    ```
    /cron add --stateful "*/2 * * * *" check if ~/piegap-test/trigger.flag exists and report it as a finding
@@ -190,16 +190,16 @@ marked "NOT Required" in the spec. No test cases are defined for them.
 
 **Preconditions**:
 
-- ragent built with lifecycle hooks enabled
-- `ragent.json` contains: `{"hooks": {"enabled": true}}`
-- A hooks config file at `~/.config/ragent/hooks.json`:
+- codemason built with lifecycle hooks enabled
+- `codemason.json` contains: `{"hooks": {"enabled": true}}`
+- A hooks config file at `~/.config/codemason/hooks.json`:
   ```json
   {
     "hooks": [
       {
         "event": "tool_end",
         "tool": "bash",
-        "command": "echo \"$RAGENT_TOOL_NAME done\" >> ~/piegap-test/hooks.log",
+        "command": "echo \"$CODEMASON_TOOL_NAME done\" >> ~/piegap-test/hooks.log",
         "timeout_ms": 3000
       }
     ]
@@ -208,7 +208,7 @@ marked "NOT Required" in the spec. No test cases are defined for them.
 
 **Steps**:
 
-1. Launch ragent TUI: `ragent`
+1. Launch codemason TUI: `codemason`
 2. Type a prompt that causes the agent to run a bash command:
    ```
    run `ls ~/piegap-test` and show me the result
@@ -231,7 +231,7 @@ marked "NOT Required" in the spec. No test cases are defined for them.
 
 **Preconditions**:
 
-- ragent built with lifecycle hooks enabled
+- codemason built with lifecycle hooks enabled
 - A webhook receiver running locally (e.g., `python3 -m http.server 9876` or a
   `nc -l 9876` listener)
 - Hooks config:
@@ -249,7 +249,7 @@ marked "NOT Required" in the spec. No test cases are defined for them.
 
 **Steps**:
 
-1. Launch ragent TUI: `ragent`
+1. Launch codemason TUI: `codemason`
 2. Type a short prompt: `hello` and press Enter.
 3. Wait for the turn to complete.
 4. Check the webhook receiver for an incoming POST request.
@@ -267,12 +267,12 @@ marked "NOT Required" in the spec. No test cases are defined for them.
 
 **Preconditions**:
 
-- ragent built with bug-report feature enabled
+- codemason built with bug-report feature enabled
 - At least one completed agent turn in the current session.
 
 **Steps**:
 
-1. Launch ragent TUI: `ragent` in the `~/piegap-test` directory
+1. Launch codemason TUI: `codemason` in the `~/piegap-test` directory
 2. Type a prompt and wait for a response: `hello`
 3. Type `/bug-report` and press Enter.
 4. Note the file path reported in the TUI output.
@@ -297,8 +297,8 @@ marked "NOT Required" in the spec. No test cases are defined for them.
 
 **Preconditions**:
 
-- ragent built with prompt templates enabled
-- A template file at `~/.config/ragent/templates/review.md`:
+- codemason built with prompt templates enabled
+- A template file at `~/.config/codemason/templates/review.md`:
   ```markdown
   ---
   name: review
@@ -309,7 +309,7 @@ marked "NOT Required" in the spec. No test cases are defined for them.
 
 **Steps**:
 
-1. Launch ragent TUI: `ragent` in `~/Projects/piegap-test`
+1. Launch codemason TUI: `codemason` in `~/Projects/piegap-test`
 2. Type `/template review` and press Enter.
 3. Wait for the agent to respond.
 4. Type `/template` (no argument) and press Enter.
@@ -327,12 +327,12 @@ marked "NOT Required" in the spec. No test cases are defined for them.
 
 **Preconditions**:
 
-- ragent built with `/undo` enabled
+- codemason built with `/undo` enabled
 - At least one completed user/assistant turn in the current session.
 
 **Steps**:
 
-1. Launch ragent TUI: `ragent`
+1. Launch codemason TUI: `codemason`
 2. Type: `what is 2+2` and press Enter. Wait for the response.
 3. Type `/undo` and press Enter.
 4. Type `/history` and press Enter (or check the session feed).
@@ -350,17 +350,17 @@ marked "NOT Required" in the spec. No test cases are defined for them.
 
 **Preconditions**:
 
-- ragent built with session naming enabled.
+- codemason built with session naming enabled.
 
 **Steps**:
 
-1. Launch ragent TUI: `ragent`
+1. Launch codemason TUI: `codemason`
 2. Type `/name My Test Session` and press Enter.
 3. Verify the TUI status bar or banner shows the new name.
-4. Exit ragent (Ctrl+C or `/quit`).
-5. Relaunch ragent and resume the session:
+4. Exit codemason (Ctrl+C or `/quit`).
+5. Relaunch codemason and resume the session:
    ```bash
-   ragent session list
+   codemason session list
    ```
 6. Verify the session appears with the name "My Test Session".
 7. Type `/name` (empty argument) and press Enter.
@@ -369,7 +369,7 @@ marked "NOT Required" in the spec. No test cases are defined for them.
 **Expected results**:
 
 - `/name <text>` sets a display name on the session.
-- The name appears in `ragent session list` output.
+- The name appears in `codemason session list` output.
 - `/name` with no argument clears the name.
 - The name persists across session restarts.
 
@@ -379,12 +379,12 @@ marked "NOT Required" in the spec. No test cases are defined for them.
 
 **Preconditions**:
 
-- ragent built with goal stop hook enabled
-- `ragent.json` contains: `{"goal": {"enabled": true, "max_continuations": 5}}`
+- codemason built with goal stop hook enabled
+- `codemason.json` contains: `{"goal": {"enabled": true, "max_continuations": 5}}`
 
 **Steps**:
 
-1. Launch ragent TUI: `ragent` in a test project
+1. Launch codemason TUI: `codemason` in a test project
 2. Type: `/goal create a file called done.txt with the content "complete"`
 3. Wait for the agent to work on the goal.
 4. Observe the feed for goal evaluation messages after each turn.
@@ -416,12 +416,12 @@ content 'complete'".
 
 **Preconditions**:
 
-- ragent source code checked out
+- codemason source code checked out
 - All gap features implemented behind feature gates.
 
 **Steps**:
 
-1. Edit `ragent.json` to disable ALL gap features:
+1. Edit `codemason.json` to disable ALL gap features:
    ```json
    {
      "triggers": {"enabled": false},
@@ -438,7 +438,7 @@ content 'complete'".
      "session_naming": {"enabled": false}
    }
    ```
-2. Launch ragent TUI: `ragent`
+2. Launch codemason TUI: `codemason`
 3. Type: `hello` and press Enter. Wait for a response.
 4. Type: `/triggers` and press Enter (should show "feature disabled" or be
    absent from the command list).
@@ -450,24 +450,24 @@ content 'complete'".
    absent).
 8. Type: `/goal test` and press Enter (should show "feature disabled" or be
    absent).
-9. Exit ragent.
-10. Re-enable only ONE feature (e.g., hooks) in `ragent.json`:
+9. Exit codemason.
+10. Re-enable only ONE feature (e.g., hooks) in `codemason.json`:
     ```json
     {"hooks": {"enabled": true}}
     ```
-11. Launch ragent again.
+11. Launch codemason again.
 12. Verify hooks work but other features remain disabled.
 
 **Expected results**:
 
-- With all features disabled, ragent functions normally for basic chat, file
+- With all features disabled, codemason functions normally for basic chat, file
   operations, and shell commands.
 - Disabled features either show a clear "disabled" message or do not appear
   in `/help` output.
 - Enabling a single feature does not require enabling any other feature.
 - No compilation errors or runtime panics when features are selectively
   enabled/disabled.
-- Existing ragent features (cron, compaction, permissions, MCP client, code
+- Existing codemason features (cron, compaction, permissions, MCP client, code
   index, memory, teams, research, skills, prompt optimization) continue to
   work regardless of gap feature enable/disable state.
 
@@ -477,34 +477,34 @@ content 'complete'".
 
 **Preconditions**:
 
-- ragent built with session archive enabled
+- codemason built with session archive enabled
 - An existing session with at least 2 turns and (optionally) one dynamic
   trigger rule.
 
 **Steps**:
 
-1. Launch ragent TUI: `ragent`
+1. Launch codemason TUI: `codemason`
 2. Complete at least 2 turns in the session.
 3. Create a dynamic trigger rule (if triggers are enabled).
-4. Type: `/session export ~/piegap-test/session.ragentsession` and press Enter.
-5. Exit ragent.
+4. Type: `/session export ~/piegap-test/session.codemasonsession` and press Enter.
+5. Exit codemason.
 6. In a separate terminal, inspect the archive:
    ```bash
-   tar tf ~/piegap-test/session.ragentsession
+   tar tf ~/piegap-test/session.codemasonsession
    ```
-7. Launch ragent in a fresh project directory:
+7. Launch codemason in a fresh project directory:
    ```bash
    mkdir -p ~/piegap-test/import-test
    cd ~/piegap-test/import-test
-   ragent session import ~/piegap-test/session.ragentsession
+   codemason session import ~/piegap-test/session.codemasonsession
    ```
 8. When prompted about automation activation, choose "no" (disabled by
    default).
-9. Launch ragent and resume the imported session.
+9. Launch codemason and resume the imported session.
 
 **Expected results**:
 
-- The export produces a `.ragentsession` archive file.
+- The export produces a `.codemasonsession` archive file.
 - `tar tf` shows: `manifest.json`, `session.jsonl`, and optional sidecar files.
 - The import creates a new session with the same transcript.
 - Automation sidecars (triggers/cron) are imported but disabled by default.
@@ -517,14 +517,14 @@ content 'complete'".
 
 **Preconditions**:
 
-- ragent built with web UI enabled
+- codemason built with web UI enabled
 - A browser installed (Firefox or Chromium)
 
 **Steps**:
 
-1. Start ragent in web mode:
+1. Start codemason in web mode:
    ```bash
-   ragent web --port 9101
+   codemason web --port 9101
    ```
 2. Open a browser and navigate to `http://127.0.0.1:9101`.
 3. Verify the web UI loads with an input box and feed area.
@@ -536,7 +536,7 @@ content 'complete'".
 9. Close the browser tab.
 10. Verify the server rejects a non-loopback bind by default:
     ```bash
-    ragent web --host 0.0.0.0 --port 9101
+    codemason web --host 0.0.0.0 --port 9101
     ```
 
     (Should refuse or warn about non-loopback binding.)
@@ -556,10 +556,10 @@ content 'complete'".
 
 **Preconditions**:
 
-- ragent built with the OpenAI Responses provider
+- codemason built with the OpenAI Responses provider
 - A local OpenAI-compatible server running that implements the Responses API
   (or a real OpenAI API key for testing)
-- A model definition in `~/.config/ragent/models.json`:
+- A model definition in `~/.config/codemason/models.json`:
   ```json
   {
     "models": [
@@ -579,7 +579,7 @@ content 'complete'".
 
 **Steps**:
 
-1. Launch ragent TUI: `ragent --provider local --model test-responses`
+1. Launch codemason TUI: `codemason --provider local --model test-responses`
 2. Type: `what is 2+2?` and press Enter.
 3. Wait for the response.
 4. Type: `/cost` and press Enter.
@@ -602,35 +602,35 @@ content 'complete'".
 
 **Preconditions**:
 
-- ragent built with at least one gap feature enabled (e.g., hooks).
+- codemason built with at least one gap feature enabled (e.g., hooks).
 
 **Steps**:
 
-1. Create a project-local config at `~/Projects/piegap-test/.ragent/ragent.json`:
+1. Create a project-local config at `~/Projects/piegap-test/.codemason/codemason.json`:
    ```json
    {"hooks": {"enabled": true, "opt_in_project_local": true}}
    ```
-2. Create a user-global config at `~/.config/ragent/config.json`:
+2. Create a user-global config at `~/.config/codemason/config.json`:
    ```json
    {"hooks": {"enabled": false}}
    ```
-3. Launch ragent TUI: `ragent` in `~/Projects/piegap-test`
+3. Launch codemason TUI: `codemason` in `~/Projects/piegap-test`
 4. Verify that the project-local config takes precedence (hooks enabled).
 5. Remove the project-local config:
    ```bash
-   rm ~/Projects/piegap-test/.ragent/ragent.json
+   rm ~/Projects/piegap-test/.codemason/codemason.json
    ```
-6. Relaunch ragent in the same directory.
+6. Relaunch codemason in the same directory.
 7. Verify the user-global config is used (hooks disabled).
-8. Test with a `.ragent/ragent.jsonc` (JSONC) file to verify JSONC parsing.
+8. Test with a `.codemason/codemason.jsonc` (JSONC) file to verify JSONC parsing.
 
 **Expected results**:
 
-- Project-local `.ragent/ragent.json` takes precedence over
-  `~/.config/ragent/config.json`.
+- Project-local `.codemason/codemason.json` takes precedence over
+  `~/.config/codemason/config.json`.
 - When no project-local config exists, the user-global config is used.
-- `.ragent/ragent.jsonc` (JSON with comments) is parsed correctly.
-- Configuration is discovered following the standard ragent config discovery
+- `.codemason/codemason.jsonc` (JSON with comments) is parsed correctly.
+- Configuration is discovered following the standard codemason config discovery
   pattern.
 
 ---
@@ -645,24 +645,24 @@ After all manual tests are complete:
    ```
 2. **Remove test config**:
    ```bash
-   rm -f ~/.config/ragent/hooks.json
-   rm -f ~/.config/ragent/templates/review.md
-   rm -f ~/.config/ragent/models.json
-   rm -f ~/.config/ragent/extensions.json
-   rm -f ~/.config/ragent/config.json
+   rm -f ~/.config/codemason/hooks.json
+   rm -f ~/.config/codemason/templates/review.md
+   rm -f ~/.config/codemason/models.json
+   rm -f ~/.config/codemason/extensions.json
+   rm -f ~/.config/codemason/config.json
    ```
 3. **Remove generated artifacts**:
    ```bash
    rm -f ~/piegap-test/hooks.log
-   rm -f ~/piegap-test/session.ragentsession
+   rm -f ~/piegap-test/session.codemasonsession
    rm -f ~/piegap-test/trigger.flag
    rm -f ~/piegap-test/done.txt
    rm -f ~/piegap-test/mcp_push.py
    rm -rf ~/piegap-test/log/
    ```
-4. **Reset ragent config**: Restore `ragent.json` to its pre-test state or
-   remove the test `ragent.json` from the test project directory.
+4. **Reset codemason config**: Restore `codemason.json` to its pre-test state or
+   remove the test `codemason.json` from the test project directory.
 5. **Kill any lingering servers**: Stop any local model servers, webhook
-   receivers, or ragent web UI processes started during testing.
-6. **Clean ragent state** (optional): If test sessions clutter the session
-   list, archive or delete them via `ragent session` commands.
+   receivers, or codemason web UI processes started during testing.
+6. **Clean codemason state** (optional): If test sessions clutter the session
+   list, archive or delete them via `codemason session` commands.

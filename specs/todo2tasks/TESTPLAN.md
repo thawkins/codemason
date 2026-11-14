@@ -11,20 +11,20 @@ created: 2026-08-16
 **Plan:** `specs/todo2tasks/PLAN.md`
 
 This document defines **manual** test cases for a human tester to execute
-against a running ragent instance (TUI or CLI). Each case lists
+against a running codemason instance (TUI or CLI). Each case lists
 preconditions, step-by-step instructions, test data, and expected
 results. Test cases are keyed to the spec requirements they cover.
 
 ## Prerequisites
 
-- A working ragent build (`cargo build`) with the Todo-to-Tasks
+- A working codemason build (`cargo build`) with the Todo-to-Tasks
   migration applied.
 - A configured LLM provider (any provider will do; the test prompts are
   simple tool-call requests).
 - A clean or known-state SQLite database. If testing migration of
   legacy data, pre-populate the `todos` table with rows that lack the
   new columns before starting.
-- The TUI is the primary test surface (`ragent` with no `--no-tui` flag)
+- The TUI is the primary test surface (`codemason` with no `--no-tui` flag)
   unless a case specifies CLI mode.
 
 ## Test Cases
@@ -385,14 +385,14 @@ results. Test cases are keyed to the spec requirements they cover.
 **Covers:** FR-002, NFR-002
 
 **Preconditions:**
-- A ragent database exists with rows in the `todos` table that predate
+- A codemason database exists with rows in the `todos` table that predate
   the migration (i.e., the rows do not have the new columns:
   `active_form`, `owner`, `metadata`, `blocked_by`).
-- To set this up: start ragent on the pre-migration build, create a few
+- To set this up: start codemason on the pre-migration build, create a few
   todos, then shut down. Apply the migration and restart.
 
 **Steps:**
-1. Start ragent with the migrated build, using the same database.
+1. Start codemason with the migrated build, using the same database.
 2. Open a session that had pre-existing todos.
 3. Prompt the LLM:
    ```
@@ -404,7 +404,7 @@ results. Test cases are keyed to the spec requirements they cover.
 - (uses pre-existing database rows)
 
 **Expected results:**
-- ragent starts without errors — the schema migration runs
+- codemason starts without errors — the schema migration runs
   additively (ALTER TABLE ADD COLUMN).
 - The pre-existing todos appear in the `task_list` output.
 - Each legacy row has safe defaults:
@@ -633,4 +633,4 @@ After all test cases are complete:
    test run.
 2. If the legacy migration test (TC-012) used a real database, back it
    up first or run on a copy to avoid data loss.
-3. Close all ragent sessions.
+3. Close all codemason sessions.

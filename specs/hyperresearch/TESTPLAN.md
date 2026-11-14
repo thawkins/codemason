@@ -2,28 +2,28 @@
 spec_id: hyperresearch
 status: draft
 title: "Manual test plan for Hyperresearch integration"
-author: "ragent"
+author: "codemason"
 date: "2025-08-15"
 ---
 
-# Manual Test Plan: Hyperresearch integration for ragent /research
+# Manual Test Plan: Hyperresearch integration for codemason /research
 
 ## Prerequisites
 
-1. Build ragent from source in the current workspace:
+1. Build codemason from source in the current workspace:
    ```bash
    cargo build --release
    ```
 2. Ensure an LLM provider is configured (e.g., `ANTHROPIC_API_KEY` or `OLLAMA_HOST`).
 3. For open-access recovery tests, set a valid contact email in one of:
-   - `ragent.json` under `research.contact_email`
+   - `codemason.json` under `research.contact_email`
    - The `UNPAYWALL_EMAIL` environment variable
-4. Prepare a clean temporary project directory to avoid contaminating the main ragent vault.
+4. Prepare a clean temporary project directory to avoid contaminating the main codemason vault.
 5. Have a known paywalled DOI that has a legal open-access copy available (e.g., a PMC article or an Unpaywall-listed repository copy).
 
 ## Cleanup
 
-1. After each test, remove the run directories under `.ragent/research_vault/` created during the test.
+1. After each test, remove the run directories under `.codemason/research_vault/` created during the test.
 2. Delete any `RESEARCH.md` files written by the tests.
 3. Unset `UNPAYWALL_EMAIL` if it was set only for testing.
 
@@ -34,7 +34,7 @@ date: "2025-08-15"
 **Title:** Research command defaults to full tier
 
 **Preconditions:**
-- ragent is built and runnable via `target/release/ragent` or `cargo run --`.
+- codemason is built and runnable via `target/release/cdmn` or `cargo run --`.
 - A working directory without prior vault data for the chosen query is available.
 - Provider is configured.
 
@@ -42,11 +42,11 @@ date: "2025-08-15"
 1. Open a terminal in a clean temporary directory.
 2. Run:
    ```bash
-   /path/to/ragent research "GLP-1 drugs cardiovascular outcomes"
+   /path/to/codemason research "GLP-1 drugs cardiovascular outcomes"
    ```
-   (If using the TUI, launch ragent, type `/research GLP-1 drugs cardiovascular outcomes`, and press Enter.)
+   (If using the TUI, launch codemason, type `/research GLP-1 drugs cardiovascular outcomes`, and press Enter.)
 3. Wait for the command to finish, or interrupt it after the width sweep step is logged.
-4. Open `.ragent/research_vault/<run_tag>/manifest.json`.
+4. Open `.codemason/research_vault/<run_tag>/manifest.json`.
 
 **Test data to enter:**
 - Query text: `GLP-1 drugs cardiovascular outcomes`
@@ -70,16 +70,16 @@ date: "2025-08-15"
 1. Open a terminal in a clean temporary directory.
 2. Run:
    ```bash
-   /path/to/ragent research --tier light "what is retrieval-augmented generation"
+   /path/to/codemason research --tier light "what is retrieval-augmented generation"
    ```
    (TUI equivalent: `/research --tier light what is retrieval-augmented generation` then Enter.)
 3. Wait for the command to finish.
-4. List the contents of `.ragent/research_vault/`:
+4. List the contents of `.codemason/research_vault/`:
    ```bash
-   ls -la .ragent/research_vault/
+   ls -la .codemason/research_vault/
    ```
 5. Open the generated `RESEARCH.md`.
-6. Open `.ragent/research_vault/<run_tag>/manifest.json`.
+6. Open `.codemason/research_vault/<run_tag>/manifest.json`.
 
 **Test data to enter:**
 - Query text: `what is retrieval-augmented generation`
@@ -87,7 +87,7 @@ date: "2025-08-15"
 
 **Expected results:**
 - A `RESEARCH.md` is produced.
-- `.ragent/research_vault/` contains at least one run directory with `sources/` and `manifest.json`.
+- `.codemason/research_vault/` contains at least one run directory with `sources/` and `manifest.json`.
 - The report does not contain a contradiction graph or source tensions section.
 - The manifest `tier` field equals `light` and `completed_steps` does not include contradiction, loci, depth, critics, gap-fill, or readability audit.
 - The elapsed wall-clock time is under 45 minutes.
@@ -105,12 +105,12 @@ date: "2025-08-15"
 **Steps:**
 1. In a terminal, run:
    ```bash
-   /path/to/ragent research --tier full "GLP-1 drugs cardiovascular outcomes"
+   /path/to/codemason research --tier full "GLP-1 drugs cardiovascular outcomes"
    ```
    (TUI equivalent: `/research --tier full GLP-1 drugs cardiovascular outcomes` then Enter.)
 2. Wait for each pipeline step to log to the terminal or TUI log panel.
 3. When prompted by the cite-check gate (if any citation fails), approve or reject each flagged sentence.
-4. Open `.ragent/research_vault/<run_tag>/manifest.json`.
+4. Open `.codemason/research_vault/<run_tag>/manifest.json`.
 5. Open `RESEARCH.md`.
 
 **Test data to enter:**
@@ -133,10 +133,10 @@ date: "2025-08-15"
 - TC-003 has been started but interrupted before completion, OR a new full-tier run is started and forcibly stopped with Ctrl+C after the width sweep.
 
 **Steps:**
-1. Identify the `run_tag` from the run directory name under `.ragent/research_vault/`.
+1. Identify the `run_tag` from the run directory name under `.codemason/research_vault/`.
 2. Run:
    ```bash
-   /path/to/ragent research resume <run_tag>
+   /path/to/codemason research resume <run_tag>
    ```
    (TUI equivalent: `/research resume <run_tag>` then Enter.)
 3. Wait for completion.
@@ -158,26 +158,26 @@ date: "2025-08-15"
 **Title:** Paywalled source recovered via Unpaywall / Europe PMC
 
 **Preconditions:**
-- `research.open_access_recovery` is `true` in `ragent.json`, or `UNPAYWALL_EMAIL` is set.
+- `research.open_access_recovery` is `true` in `codemason.json`, or `UNPAYWALL_EMAIL` is set.
 - A known paywalled DOI with an open-access copy is identified.
 - The provider has web-fetch capability.
 
 **Steps:**
 1. In a terminal, run:
    ```bash
-   /path/to/ragent research --tier full "effects of sleep deprivation on cognitive performance DOI:10.xxxx/xxxxx"
+   /path/to/codemason research --tier full "effects of sleep deprivation on cognitive performance DOI:10.xxxx/xxxxx"
    ```
    Replace `10.xxxx/xxxxx` with the real paywalled-but-OA DOI.
 2. Watch the terminal or TUI log panel for messages containing `oa_recovery`, `Unpaywall`, or `Europe PMC`.
 3. Open the vault source note for the recovered DOI:
    ```bash
-   cat .ragent/research_vault/<run_tag>/sources/<source_id>.md
+   cat .codemason/research_vault/<run_tag>/sources/<source_id>.md
    ```
 4. Open `RESEARCH.md` and locate the frontmatter and any citation of the recovered source.
 
 **Test data to enter:**
 - Query text including the paywalled DOI.
-- `contact_email` in `ragent.json` (if not using env var).
+- `contact_email` in `codemason.json` (if not using env var).
 
 **Expected results:**
 - The source body length exceeds the configured `oa_min_full_text_chars` default.
@@ -197,7 +197,7 @@ date: "2025-08-15"
 **Steps:**
 1. Run a second research command with a closely related query:
    ```bash
-   /path/to/ragent research --tier light "semaglutide heart failure"
+   /path/to/codemason research --tier light "semaglutide heart failure"
    ```
 2. Observe the terminal or TUI log for messages indicating `vault_hit`, `source reused`, or no new web fetch for sources already in the vault.
 3. Compare the run directory of the second query with the first.
@@ -224,7 +224,7 @@ date: "2025-08-15"
 **Steps:**
 1. Run:
    ```bash
-   /path/to/ragent research --tier dissertation --chapter-count 5 "history of programming language type systems"
+   /path/to/codemason research --tier dissertation --chapter-count 5 "history of programming language type systems"
    ```
    (TUI equivalent: `/research --tier dissertation --chapter-count 5 history of programming language type systems`.)
 2. Wait for the run to announce chapter boundaries in the log.
@@ -272,14 +272,14 @@ date: "2025-08-15"
 **Title:** Open-access recovery defaults to off
 
 **Preconditions:**
-- No `research.open_access_recovery` key in `ragent.json`.
+- No `research.open_access_recovery` key in `codemason.json`.
 - No `UNPAYWALL_EMAIL` environment variable set.
 - A paywalled DOI is available for testing.
 
 **Steps:**
 1. Run:
    ```bash
-   /path/to/ragent research --tier full "effects of sleep deprivation on cognitive performance DOI:10.xxxx/xxxxx"
+   /path/to/codemason research --tier full "effects of sleep deprivation on cognitive performance DOI:10.xxxx/xxxxx"
    ```
 2. Inspect the log and the source note for the DOI.
 

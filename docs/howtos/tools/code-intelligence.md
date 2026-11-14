@@ -62,7 +62,7 @@ and documentation.
 |----------|------|----------|-------------|---------------|
 | `name` | string | no | Case-insensitive leading-fragment match | `"parse"` |
 | `kind` | enum | no | Symbol kind (same list as `codeindex_search`) | `"struct"` |
-| `file_path` | string | no | Filter by file path substring | `"crates/ragent-config"` |
+| `file_path` | string | no | Filter by file path substring | `"crates/codemason-config"` |
 | `language` | string | no | Filter by language | `"rust"` |
 | `visibility` | enum | no | `public`, `private`, or `crate` | `"public"` |
 | `limit` | integer | no | Maximum results (max 200) | `50` |
@@ -91,7 +91,7 @@ Query file-level dependency edges from the index.
 
 | Argument | Type | Required | Description | Typical value |
 |----------|------|----------|-------------|---------------|
-| `path` | string | yes | Relative file path | `"crates/ragent-agent/src/lib.rs"` |
+| `path` | string | yes | Relative file path | `"crates/codemason-agent/src/lib.rs"` |
 | `direction` | enum | no | `imports` (what this file uses, default) or `dependents` (what uses this file) | `"dependents"` |
 
 ---

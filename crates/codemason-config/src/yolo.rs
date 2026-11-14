@@ -1,0 +1,67 @@
+//! YOLO mode - bypass all command validation and tool restrictions.
+//!
+//! When enabled, the following safety checks are skipped:
+//! - **Bash denied patterns** - destructive commands like `rm -rf /` are allowed
+//! - **Dynamic context allowlist** - any executable can run in skill bodies
+//! - **MCP config validation** - shell metacharacters and unvalidated paths are permitted
+//!
+//! # Warning
+//!
+//! This is inherently dangerous. Use only when you trust the agent and its
+//! inputs completely, or for local development/debugging.
+
+use crate::runtime_flag::RuntimeFlag;
+
+static YOLO_MODE: RuntimeFlag = RuntimeFlag::new("yolo", false);
+
+/// Returns `true` if YOLO mode is currently enabled.
+pub fn is_enabled() -> bool {
+    YOLO_MODE.is_enabled()
+}
+
+/// Enable or disable YOLO mode globally.
+pub fn set_enabled(enabled: bool) {
+    YOLO_MODE.set_enabled(enabled);
+}
+
+/// Persist the requested YOLO state to the config file and update the runtime
+/// flag.
+///
+/// YOLO is a privileged, user-only toggle: the value normally lands in the
+/// **user-global** config (`~/.config/codemason/codemason.json`), never the
+/// project-local `.codemason/codemason.json`. Project config is untrusted repository
+/// content whose `yolo` key is stripped by
+/// [`Config::merge_project`](crate::config::Config::merge_project)
+/// (SECTASKS T-011), so a project-file write could never round-trip on the next
+/// load. A repo therefore cannot turn YOLO on for a reviewer, while a user's own
+/// `/yolo` toggle still persists across restarts.
+///
+/// When the process was started with `codemason --config <file>`, that explicit
+/// file is the loaded source and becomes the write target (see
+/// [`Config::set_config_write_target`](crate::config::Config::set_config_write_target)),
+/// because nothing else is read back on the following start.
+///
+/// Any error during persistence is returned so callers can decide how to
+/// report it.
+pub fn persist_yolo(enabled: bool) -> anyhow::Result<()> {
+    YOLO_MODE.persist_to_global(enabled)
+}
+
+/// Load the current config and update the runtime YOLO flag from its value.
+pub fn sync_from_config() {
+    YOLO_MODE.sync_from_config(false);
+}
+
+/// Update the runtime YOLO flag from an already-loaded config value, avoiding
+/// a redundant disk read.
+pub fn sync_from_config_value(enabled: bool) {
+    YOLO_MODE.set_enabled(enabled);
+}
+
+/// Toggle YOLO mode, persist the new state to the user-global config, and
+/// return it.
+///
+/// This is the recommended path for UI toggles (`Alt+Y`, `/yolo`).
+pub fn toggle_persist() -> anyhow::Result<bool> {
+    YOLO_MODE.toggle_persist_global()
+}

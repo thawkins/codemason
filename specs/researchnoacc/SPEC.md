@@ -17,7 +17,7 @@ literature. Today it does not do that at the search layer.
 
 The `--no-papers` option is threaded through the CLI, TUI, and server into
 `WebGatherer.disable_scholarly`, but its only effect is a **post-search, per-hit
-filter** in `crates/ragent-research/src/web_gatherer.rs`:
+filter** in `crates/codemason-research/src/web_gatherer.rs`:
 
 - the OpenAlex search call is still issued, consuming search budget and a
   (potentially metered) backend call;
@@ -29,7 +29,7 @@ filter** in `crates/ragent-research/src/web_gatherer.rs`:
 
 The `mf_search` tool exposes only a positive `engine` selector (restrict to
 exactly one backend); it has **no** way to exclude a set of engines. The
-`ragent-research` crate cannot steer engine choice either: its `WebSearchTool`
+`codemason-research` crate cannot steer engine choice either: its `WebSearchTool`
 trait passes only `query` and `max_results`.
 
 This specification adds a first-class **engine exclusion** capability to the
@@ -48,7 +48,7 @@ and every doc say `--no-papers`).
    the research engine-exclusion mapping.
 3. Make `--no-papers` (research) translate into an `mf_search` engine exclusion
    so OpenAlex is not queried, not returned, and not processed.
-4. Make the engine exclusion configurable in `ragent.json` for both research
+4. Make the engine exclusion configurable in `codemason.json` for both research
    runs and direct `mf_search` callers.
 5. Keep `mf_search` fully functional and keyless when exclusions remove engines.
 6. Fix the `--no-papers` / `--no-scholarly` flag spelling so the documented flag
@@ -58,14 +58,14 @@ and every doc say `--no-papers`).
 
 In scope:
 
-- `crates/ragent-tools-extended/src/masterfetch/search/` (engine classification,
+- `crates/codemason-tools-extended/src/masterfetch/search/` (engine classification,
   orchestrator exclusion).
-- `crates/ragent-tools-extended/src/masterfetch/tools/search_tool.rs`
+- `crates/codemason-tools-extended/src/masterfetch/tools/search_tool.rs`
   (`mf_search` schema and execution).
-- `crates/ragent-research` (web gatherer, config, request plumbing).
-- `src/cli.rs`, `crates/ragent-research/src/cli.rs` (flag spelling).
-- `crates/ragent-server/src/routes/research.rs` (HTTP parity).
-- `crates/ragent-tui` (completion/help parity).
+- `crates/codemason-research` (web gatherer, config, request plumbing).
+- `src/cli.rs`, `crates/codemason-research/src/cli.rs` (flag spelling).
+- `crates/codemason-server/src/routes/research.rs` (HTTP parity).
+- `crates/codemason-tui` (completion/help parity).
 - Docs and CHANGELOG entries.
 
 Out of scope:
@@ -94,19 +94,19 @@ exclusion list, leaving the receiver unchanged.
 names in exactly one place and reuse it for (a) research scholarly-hit
 classification and (b) the research-to-`mf_search` exclusion mapping.
 
-**FR-004** — The `WebSearchTool` trait in `crates/ragent-research/src/web_gatherer.rs`
+**FR-004** — The `WebSearchTool` trait in `crates/codemason-research/src/web_gatherer.rs`
 shall accept an exclusion parameter so the gatherer can request that named
 engines are not queried, and the concrete implementation that backs the trait
 shall translate that parameter into `mf_search`'s `exclude_engines`.
 
 **FR-005** — The `--no-papers` research option shall be spelled identically and
-accepted on every entry point: the root `ragent` CLI, the `ragent research`
+accepted on every entry point: the root `codemason` CLI, the `codemason research`
 hand parser, the TUI `/research create` command, and `POST /research`.
 
 ### Event-driven requirements
 
 **FR-006** — When a research run executes with `--no-papers` (or
-`research.exclude_academic_engines` enabled in `ragent.json`), the system shall
+`research.exclude_academic_engines` enabled in `codemason.json`), the system shall
 issue search requests that exclude the academically-classified engines, so that
 no OpenAlex query is dispatched.
 
@@ -134,7 +134,7 @@ behave exactly as before, querying all configured engines in parallel.
 ### Optional requirements
 
 **FR-012** — The system may expose the scholarly exclusion as a persistent
-configuration value (`research.exclude_academic_engines`) in `ragent.json`, with
+configuration value (`research.exclude_academic_engines`) in `codemason.json`, with
 the per-run `--no-papers` flag taking precedence over the configured value.
 
 **FR-013** — The system may accept the `exclude_engines` parameter in the
@@ -182,7 +182,7 @@ be added in one place:
 
 ## Configuration schema
 
-`ragent.json` gains an optional boolean under the `research` block:
+`codemason.json` gains an optional boolean under the `research` block:
 
 ```jsonc
 {
@@ -197,7 +197,7 @@ be added in one place:
 Precedence (highest first):
 
 1. Per-run `--no-papers` flag (CLI/TUI) or the server request field.
-2. `research.exclude_academic_engines` in `ragent.json`.
+2. `research.exclude_academic_engines` in `codemason.json`.
 3. Default: `false` (academic engines enabled).
 
 ## Interfaces
@@ -232,7 +232,7 @@ behaviour.
 
 ## Acceptance criteria
 
-1. `ragent research create x "topic" --no-papers` runs with no OpenAlex query
+1. `codemason research create x "topic" --no-papers` runs with no OpenAlex query
    dispatched (verified by log/metadata inspection), while Wikipedia and any
    configured web engines still return results.
 2. `mf_search` invoked with `exclude_engines: ["openalex"]` returns no

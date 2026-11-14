@@ -15,7 +15,7 @@ The `mf_search` tool already runs a multi-engine keyless search pipeline
 (DuckDuckGo + Brave, plus optional LangSearch / Tavily / Perplexity
 API-backed backends) behind the `SearchEngine` trait. Each backend is
 implemented as a small adapter module under
-`crates/ragent-tools-extended/src/masterfetch/search/` and plugged into
+`crates/codemason-tools-extended/src/masterfetch/search/` and plugged into
 `SearchOrchestrator` by `MfSearchTool::build_orchestrator`.
 
 [OpenAlex](https://openalex.org) is a fully-open catalog of scholarly works,
@@ -47,7 +47,7 @@ parallel consensus pipeline without any user configuration.
 In scope:
 
 - New `openalex` module under
-  `crates/ragent-tools-extended/src/masterfetch/search/`.
+  `crates/codemason-tools-extended/src/masterfetch/search/`.
 - An `OpenAlexEngine` struct implementing the existing `SearchEngine` trait.
 - Mapping of shared `SearchOptions` to OpenAlex query parameters.
 - Parsing of the OpenAlex JSON response (`results[]`) into `RawResult` rows.

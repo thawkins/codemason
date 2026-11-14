@@ -14,7 +14,7 @@ FR-026 has three clauses, and each fails differently:
    adapter stands under it;
 3. a call or lookup using `before` **fails as an unknown tool** carrying the
    did-you-mean hint, and `before` is not accepted at any inbound tool-name
-   resolution stage - on every inbound path: the TUI prompt, `ragent run`, the
+   resolution stage - on every inbound path: the TUI prompt, `codemason run`, the
    OpenAI-compatible `/v1` surface, and ACP.
 
 Clause 1 is a surface property, clause 2 is a registry property, and clause 3 is
@@ -54,7 +54,7 @@ true and are different surfaces.
 Clause 2's "no forwarding wrapper or adapter" reads like a source scan, and the
 first attempt tried one. It fails for a structural reason: the workspace's one
 forwarding alias, `LegacyMultiEditAlias`
-(`crates/ragent-agent/src/tool/mod.rs`), reports its name from a `&'static str`
+(`crates/codemason-agent/src/tool/mod.rs`), reports its name from a `&'static str`
 **field** (`self.0`), so its file contains no call-shaped literal at all - the
 retired spelling it returns is a value passed in at construction, and a scan
 keyed on a quoted `before` literal finds nothing in a file that plainly contains
@@ -75,13 +75,13 @@ proof looks:
 
 ### 2.3 Every inbound surface already shares one path
 
-- the TUI prompt: `crates/ragent-tui/src/app/session_ops.rs` calls
+- the TUI prompt: `crates/codemason-tui/src/app/session_ops.rs` calls
   `SessionProcessor::process_message`;
-- `ragent run`: `src/main.rs`'s `Commands::Run` arm calls it - **not**
+- `codemason run`: `src/main.rs`'s `Commands::Run` arm calls it - **not**
   `src/cli.rs`, which only parses the arguments;
-- the `/v1` surface: `crates/ragent-server/src/routes/openai.rs` calls it for
+- the `/v1` surface: `crates/codemason-server/src/routes/openai.rs` calls it for
   both `stream:false` and `stream:true`;
-- ACP: `crates/ragent-agent/src/acp/server.rs` calls it from `session/prompt`.
+- ACP: `crates/codemason-agent/src/acp/server.rs` calls it from `session/prompt`.
 
 So clause 3's "at every inbound path" holds by construction, and the case's job
 is to pin the construction rather than re-test four transports. The
@@ -93,8 +93,8 @@ a rename row fails the file rather than silently widening it.
 
 ## 3. What this task added
 
-One file, `crates/ragent-agent/tests/test_fr026_no_alias_survives.rs` (9 cases),
-registered in `crates/ragent-agent/tests/all.rs`:
+One file, `crates/codemason-agent/tests/test_fr026_no_alias_survives.rs` (9 cases),
+registered in `crates/codemason-agent/tests/all.rs`:
 
 | # | Case | What it reads |
 |---|---|---|
@@ -125,13 +125,13 @@ demand edits to the explanation.
 - **No production source.** The proof found the requirements already met; the
   only source file it touched was during red-proof work and was restored (see
   section 5).
-- **`LegacyMultiEditAlias`** (`crates/ragent-agent/src/tool/mod.rs`). It is a
+- **`LegacyMultiEditAlias`** (`crates/codemason-agent/src/tool/mod.rs`). It is a
   forwarding wrapper, and clause 2 forbids forwarding wrappers - for the FR-023
   rows. `multiedit` is not one, and retiring it is `editrenewal`'s decision, not
   this spec's.
 - **The `tools.aliases` built-in list.** Case 9 proves it names neither column of
   any pair; it was already correct (`BUILTIN_PROVIDER_ALIASES` holds only the
-  four provider spellings ragent did not adopt).
+  four provider spellings codemason did not adopt).
 - **`scripts/check-tool-rename.sh`.** The literal half of the no-alias rule
   (FR-027, NFR-008 predicates (d) and (e)) belongs to T-034 and T-047; this file
   adds the behavioural half those scans cannot see.
@@ -174,11 +174,11 @@ registry assertion with a seeded control rather than a grep.
 |---|---|
 | `cargo fmt --all -- --check` | clean |
 | `cargo check --workspace --all-targets` | clean (1m 01s) |
-| `cargo clippy -p ragent-agent --all-targets` | names no touched file (one `unnecessary_literal_bound` was found and fixed by reading the stub's own field) |
-| `cargo nextest run -p ragent-agent -E 'test(test_fr026_no_alias_survives::)'` | 9 passed |
-| `cargo nextest run -p ragent-agent --no-fail-fast` | 2144 passed, 1 skipped, 0 failed |
+| `cargo clippy -p codemason-agent --all-targets` | names no touched file (one `unnecessary_literal_bound` was found and fixed by reading the stub's own field) |
+| `cargo nextest run -p codemason-agent -E 'test(test_fr026_no_alias_survives::)'` | 9 passed |
+| `cargo nextest run -p codemason-agent --no-fail-fast` | 2144 passed, 1 skipped, 0 failed |
 | guard scripts | 12 of 13 exit 0; `check-bench-regression` exits 2 with no `target/criterion` (pre-existing) |
-| production diff | none - `git diff` on `crates/ragent-agent/src/` shows only T-031's uncommitted rename |
+| production diff | none - `git diff` on `crates/codemason-agent/src/` shows only T-031's uncommitted rename |
 
 ## 7. Hand-off
 

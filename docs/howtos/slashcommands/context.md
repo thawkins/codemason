@@ -1,6 +1,6 @@
 # /context
 
-> "Manage context cache: /context refresh | /context help" (SlashCommandDef, crates/ragent-tui/src/app/state.rs).
+> "Manage context cache: /context refresh | /context help" (SlashCommandDef, crates/codemason-tui/src/app/state.rs).
 
 ## Overview
 
@@ -12,7 +12,7 @@ current working directory. Use it after creating, moving, or deleting files
 outside of the agent's own tool calls, or when switching branches in a
 separate terminal.
 
-The handler is the `context` arm in `crates/ragent-tui/src/app/slash.rs`
+The handler is the `context` arm in `crates/codemason-tui/src/app/slash.rs`
 (approximately lines 2215-2235).
 
 ## Syntax
@@ -77,7 +77,7 @@ Unknown subcommand. Usage: /context refresh | /context help
 
 ## Output
 
-- `refresh` calls `ragent_agent::agent::clear_prompt_context_cache()` and
+- `refresh` calls `codemason_agent::agent::clear_prompt_context_cache()` and
   reports `[sync] Context cache cleared - next message will recompute file
   tree, git status, and README.` The status line shows the subcommand name.
 - `help` (and bare `/context`) prints the subcommand table.

@@ -8,13 +8,13 @@ Drive, Slack, GitHub, Git, Postgres, Puppeteer, and the wider community
 catalogue) that reach an external system through one or more **MCP servers**.
 A connector is a catalogue entry carrying a display name, a category, an
 authentication requirement, and one or more MCP servers; the MCP server remains
-the transport ragent already speaks (`McpClient`), so the connector system is a
+the transport codemason already speaks (`McpClient`), so the connector system is a
 management and catalogue layer over machinery that already exists.
 
 A bare `/connectors`, `/connectors help`, and any unrecognised subcommand all
 print the same usage block and create or modify no files.
 
-The same operations are available from a shell via the `ragent connectors <sub>`
+The same operations are available from a shell via the `codemason connectors <sub>`
 CLI parity surface; the two surfaces share one help text and one set of command
 handlers.
 
@@ -115,12 +115,12 @@ and ends by confirming the harness was torn down with the live session untouched
 
 ## Configuration
 
-The `connectors` block in `ragent.json` controls the subsystem (`enabled`,
+The `connectors` block in `codemason.json` controls the subsystem (`enabled`,
 `store_dir`, the catalogue `stores` endpoints and fetch budgets, and the
 non-secret `credentials` name mapping). With `connectors.enabled: false`, every
 subcommand other than `help` reports the subsystem is disabled and no discovery,
 catalogue fetch, or connection occurs. Connectors are discovered under
-`.ragent/connectors/` (project), falling back to `~/.config/ragent/connectors/`
+`.codemason/connectors/` (project), falling back to `~/.config/codemason/connectors/`
 (user-global).
 
 See [`docs/howtos/config.md`](../config.md) §7.37 and
@@ -131,5 +131,5 @@ See [`docs/howtos/config.md`](../config.md) §7.37 and
 - [`docs/howtos/connectors.md`](../connectors.md) - the full connector-system manual
 - `/mcp` - MCP server status, discovery, and enable/disable
 - `/plugins` - the sandboxed Codex/Claude plugin system (a sibling catalogue)
-- `ragent connectors <sub>` - CLI parity for the same subcommands
+- `codemason connectors <sub>` - CLI parity for the same subcommands
 - `specs/connectors/SPEC.md` - the full connector-system specification

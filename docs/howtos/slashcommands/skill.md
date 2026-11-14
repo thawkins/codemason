@@ -56,7 +56,7 @@ Load a pack with an argument:
 
 The list form renders a fenced block per pack with the pack's `/name`, its
 `scope` (for example `openskills-project` for a `.agents/skills/` pack, or
-`project` for `.ragent/skills/`), its `access` level, and its description, then
+`project` for `.codemason/skills/`), its `access` level, and its description, then
 a footer line reporting the registered count.
 
 The load form echoes `/name` as a user message and sets the status to
@@ -69,14 +69,14 @@ configured, it points at `/provider` / `/model`.
 
 Packs are discovered from, lowest to highest priority:
 
-- `~/.ragent/skills/<name>/SKILL.md` (personal)
-- `.ragent/skills/<name>/SKILL.md` (project)
+- `~/.codemason/skills/<name>/SKILL.md` (personal)
+- `.codemason/skills/<name>/SKILL.md` (project)
 - the AgentSkills convention `~/.agents/skills/<name>/SKILL.md` (user) and
   `.agents/skills/<name>/SKILL.md` (project)
 
 Each pack is a directory holding a `SKILL.md` whose YAML frontmatter declares
 at least `name` and `description`. On a name clash the existing higher-scope
-pack wins, so an AgentSkills pack never shadows a same-named `.ragent/skills/`
+pack wins, so an AgentSkills pack never shadows a same-named `.codemason/skills/`
 pack. Reload with `/reload skills` after adding or editing packs.
 
 ## Related

@@ -1,0 +1,430 @@
+//! Tests for the task tool family guidance, schemas, and descriptions.
+//!
+//! These tests guard against regressions in the guidance that prevents models
+//! from confusing `agent_complete` (autonomous loop signal) with
+//! `team_task_complete` (team workflow) - see AGENTS.md for context.
+//!
+//! The original confusion was:
+//! - Model called `new_agent(agent: "explore")` without supplying `task` - the
+//!   schema rejected it with "Missing required parameter: task".
+//! - Model called `agent_complete(task_id: "...", result: "...")` confusing it
+//!   with `team_task_complete` - the schema rejected it with "Missing required
+//!   'summary' parameter".
+//!
+//! These tests ensure the descriptions and schemas clearly distinguish the two
+//! tools, and that the system prompt always carries the anti-confusion guidance.
+
+use codemason_agent::agent::TASK_TOOL_FAMILY_GUIDANCE;
+use codemason_agent::tool::create_default_registry;
+use serde_json::Value;
+
+fn def_for(tool_name: &str) -> codemason_llm::llm::ToolDefinition {
+    let registry = create_default_registry();
+    registry
+        .definitions()
+        .iter()
+        .find(|d| d.name == tool_name)
+        .cloned()
+        .unwrap_or_else(|| panic!("tool {tool_name} should be registered"))
+}
+
+fn schema_for(tool_name: &str) -> Value {
+    def_for(tool_name).parameters
+}
+
+fn description_for(tool_name: &str) -> String {
+    def_for(tool_name).description
+}
+
+#[test]
+fn test_agent_complete_schema_requires_summary_and_only_summary() {
+    let schema = schema_for("agent_complete");
+    let required = schema
+        .get("required")
+        .and_then(|v| v.as_array())
+        .expect("agent_complete schema must declare a 'required' array");
+    let required: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
+    assert_eq!(
+        required,
+        vec!["summary"],
+        "agent_complete must require ONLY `summary`"
+    );
+    assert!(
+        schema
+            .get("properties")
+            .and_then(|p| p.get("summary"))
+            .is_some(),
+        "agent_complete schema must define a `summary` property"
+    );
+    // It should NOT advertise `task_id`, `team_name`, `result`, or `output`.
+    let props: Vec<String> = schema
+        .get("properties")
+        .and_then(|p| p.as_object())
+        .map(|o| o.keys().cloned().collect())
+        .unwrap_or_default();
+    for forbidden in ["task_id", "team_name", "result", "output"] {
+        assert!(
+            !props.iter().any(|p| p == forbidden),
+            "agent_complete must not advertise a `{forbidden}` property (got {props:?})"
+        );
+    }
+    // additionalProperties: false so unknown keys are rejected, not silently ignored.
+    assert_eq!(
+        schema.get("additionalProperties").and_then(Value::as_bool),
+        Some(false),
+        "agent_complete must set additionalProperties: false"
+    );
+}
+
+#[test]
+fn test_agent_complete_description_warns_about_team_task_complete_confusion() {
+    let desc = description_for("agent_complete");
+    assert!(
+        desc.contains("team_task_complete"),
+        "agent_complete description must reference team_task_complete to prevent confusion, got: {desc}"
+    );
+    assert!(
+        desc.contains("summary"),
+        "agent_complete description must mention the `summary` parameter, got: {desc}"
+    );
+    assert!(
+        desc.to_lowercase().contains("terminal")
+            || desc.to_lowercase().contains("ends the loop")
+            || desc.to_lowercase().contains("ends the agent loop"),
+        "agent_complete description must warn that it ends the session loop, got: {desc}"
+    );
+    // It must NOT list `task_id` as a *valid* key.  The description
+    // IS allowed to mention `task_id` as part of the
+    // "DO NOT confuse with `team_task_complete`" anti-confusion warning,
+    // but it must not advertise it as a parameter this tool accepts.
+    let lower = desc.to_lowercase();
+    assert!(
+        !lower.contains("`task_id` (string)")
+            && !lower.contains("`task_id` is required")
+            && !lower.contains("required: `task_id`"),
+        "agent_complete description must not advertise `task_id` as a required parameter, got: {desc}"
+    );
+}
+
+#[test]
+fn test_team_task_complete_schema_requires_team_name_and_task_id() {
+    let schema = schema_for("team_task_complete");
+    let required = schema
+        .get("required")
+        .and_then(|v| v.as_array())
+        .expect("team_task_complete schema must declare a 'required' array");
+    let required: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
+    assert_eq!(
+        required,
+        vec!["team_name", "task_id"],
+        "team_task_complete must require BOTH `team_name` and `task_id`"
+    );
+    // It should NOT advertise `summary` as the only field - the description
+    // should explicitly say it does NOT take `summary`.
+    let desc = description_for("team_task_complete");
+    assert!(
+        desc.contains("team_task_complete")
+            && desc.contains("agent_complete")
+            && desc.contains("NOT `summary`"),
+        "team_task_complete description must warn that it does NOT take `summary` and \
+         reference agent_complete to prevent confusion, got: {desc}"
+    );
+    assert_eq!(
+        schema.get("additionalProperties").and_then(Value::as_bool),
+        Some(false),
+        "team_task_complete must set additionalProperties: false"
+    );
+}
+
+#[test]
+fn test_new_agent_schema_requires_both_agent_and_task() {
+    let schema = schema_for("new_agent");
+    let required = schema
+        .get("required")
+        .and_then(|v| v.as_array())
+        .expect("new_agent schema must declare a 'required' array");
+    let required: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
+    assert!(
+        required.contains(&"agent") && required.contains(&"task"),
+        "new_agent must require BOTH `agent` and `task`, got required={required:?}"
+    );
+    let desc = description_for("new_agent");
+    assert!(
+        desc.contains("BOTH") || desc.to_lowercase().contains("both"),
+        "new_agent description must explicitly state that BOTH agent and task are required, got: {desc}"
+    );
+    assert_eq!(
+        schema.get("additionalProperties").and_then(Value::as_bool),
+        Some(false),
+        "new_agent must set additionalProperties: false"
+    );
+}
+
+#[test]
+fn test_task_tool_family_guidance_constant_present() {
+    assert_ne!(TASK_TOOL_FAMILY_GUIDANCE, "");
+    assert!(
+        TASK_TOOL_FAMILY_GUIDANCE.contains("Task Tool Family"),
+        "guidance must include the section header"
+    );
+    assert!(
+        TASK_TOOL_FAMILY_GUIDANCE.contains("agent_complete")
+            && TASK_TOOL_FAMILY_GUIDANCE.contains("team_task_complete"),
+        "guidance must reference both agent_complete and team_task_complete"
+    );
+    // The guidance must call out the most common mistake explicitly.
+    assert!(
+        TASK_TOOL_FAMILY_GUIDANCE.contains("summary")
+            && TASK_TOOL_FAMILY_GUIDANCE.contains("task_id")
+            && TASK_TOOL_FAMILY_GUIDANCE.contains("team_name"),
+        "guidance must list the required parameters of each tool"
+    );
+    assert!(
+        TASK_TOOL_FAMILY_GUIDANCE.contains("TERMINAL")
+            || TASK_TOOL_FAMILY_GUIDANCE.contains("ends the"),
+        "guidance must warn that agent_complete is terminal / ends the loop"
+    );
+    assert!(
+        TASK_TOOL_FAMILY_GUIDANCE.contains("new_agent"),
+        "guidance must cover the new_agent requirement that both agent and task are required"
+    );
+}
+
+#[tokio::test]
+async fn test_agent_complete_rejects_task_id_and_result_inputs() {
+    use codemason_agent::tool::ToolContext;
+    use serde_json::json;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    let registry = create_default_registry();
+    let tool = registry
+        .get("agent_complete")
+        .expect("agent_complete tool should be registered");
+    let event_bus = Arc::new(codemason_agent::event::EventBus::new(16));
+
+    // The model should not pass `task_id` or `result`. The tool should error
+    // because `summary` is missing.
+    let input = json!({
+        "task_id": "explore-1234",
+        "result": "some result text",
+    });
+    let ctx = ToolContext {
+        session_id: "test-session".to_string(),
+        working_dir: PathBuf::from("target/temp"),
+        event_bus: event_bus.clone(),
+        storage: None,
+        agent_manager: None,
+        active_model: None,
+        provider_registry: None,
+        team_context: None,
+        team_manager: None,
+        code_index: None,
+        bg_service: None,
+        spec_manager: None,
+        active_spec_id: None,
+        config: None,
+        allowed_roots: Vec::new(),
+        cached_team_dir: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        permission_checker: None,
+        tool_registry: ToolContext::default_tool_registry(),
+        read_timestamps: std::sync::Arc::new(std::sync::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
+        canonical_cache: std::sync::Arc::new(codemason_tools_core::CanonicalPathCache::new()),
+    };
+    let result = tool.execute(input, &ctx).await;
+    assert!(
+        result.is_err(),
+        "agent_complete must reject calls that omit `summary`"
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("summary"),
+        "error message must mention `summary`, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_agent_complete_accepts_summary_input() {
+    use codemason_agent::tool::ToolContext;
+    use serde_json::json;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    let registry = create_default_registry();
+    let tool = registry
+        .get("agent_complete")
+        .expect("agent_complete tool should be registered");
+    let event_bus = Arc::new(codemason_agent::event::EventBus::new(16));
+
+    let input = json!({
+        "summary": "Implemented feature X, wrote 3 tests, updated docs",
+    });
+    let ctx = ToolContext {
+        session_id: "test-session".to_string(),
+        working_dir: PathBuf::from("target/temp"),
+        event_bus: event_bus.clone(),
+        storage: None,
+        agent_manager: None,
+        active_model: None,
+        provider_registry: None,
+        team_context: None,
+        team_manager: None,
+        code_index: None,
+        bg_service: None,
+        spec_manager: None,
+        active_spec_id: None,
+        config: None,
+        allowed_roots: Vec::new(),
+        cached_team_dir: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        permission_checker: None,
+        tool_registry: ToolContext::default_tool_registry(),
+        read_timestamps: std::sync::Arc::new(std::sync::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
+        canonical_cache: std::sync::Arc::new(codemason_tools_core::CanonicalPathCache::new()),
+    };
+    let result = tool.execute(input, &ctx).await;
+    assert!(
+        result.is_ok(),
+        "agent_complete must accept calls with valid `summary`, got: {:?}",
+        result.err()
+    );
+    let output = result.unwrap();
+    let metadata = output
+        .metadata
+        .expect("agent_complete output should include metadata");
+    assert_eq!(
+        metadata.get("agent_complete").and_then(Value::as_bool),
+        Some(true),
+        "agent_complete metadata should include agent_complete: true"
+    );
+    assert_eq!(
+        metadata.get("summary").and_then(Value::as_str),
+        Some("Implemented feature X, wrote 3 tests, updated docs"),
+    );
+}
+
+// -- FR-042: tool descriptions state the rule the runtime enforces ----------
+
+/// The `team_task_complete` description must state the FR-001 ownership rule the
+/// runtime actually enforces (spec `teamssetup` FR-042).
+///
+/// The defect FR-042 answers is a *mismatch*: the previous description said only
+/// that a task "must be currently assigned to the caller", so a model could
+/// reasonably conclude that completing an unowned task would take ownership -
+/// which is exactly what the pre-fix runtime did, silently. The description now
+/// has to say that a refusal does not re-assign, name the two ways forward, and
+/// name every refusal token the metadata carries.
+#[test]
+fn test_team_task_complete_description_states_the_ownership_rule() {
+    let desc = description_for("team_task_complete");
+    let lower = desc.to_lowercase();
+    for (needle, why) in [
+        ("ownership rule", "must state that an ownership rule exists"),
+        (
+            "assigned agent",
+            "must name the two actors allowed to complete",
+        ),
+        ("lead", "must name the lead as the second allowed actor"),
+        (
+            "not re-assigned",
+            "must say a refusal does not hand the task over",
+        ),
+        (
+            "team_task_claim",
+            "must name the claim verb as a way forward",
+        ),
+        (
+            "team_assign_task",
+            "must name the assign verb as a way forward",
+        ),
+        ("pending", "must cover the unclaimed-task refusal"),
+        (
+            "no-op success",
+            "must state that re-completion is idempotent",
+        ),
+        ("not_owner", "must name the not_owner refusal token"),
+        ("not_claimed", "must name the not_claimed refusal token"),
+        (
+            "already_completed",
+            "must name the already_completed refusal token",
+        ),
+        (
+            "rejection_reason",
+            "must name the metadata field the token lands in",
+        ),
+    ] {
+        assert!(
+            lower.contains(needle),
+            "team_task_complete description must contain {needle:?} ({why}), got: {desc}"
+        );
+    }
+}
+
+/// The `team_cleanup` description must state the FR-022 liveness guard the tool
+/// enforces (spec `teamssetup` FR-042).
+///
+/// The guard is `blocks_teardown`, and the risk FR-042 answers is a model that
+/// believes it must shut every member down before cleanup can succeed. The
+/// parked statuses - `blocked` in particular, which the fix makes escapable -
+/// must be spelled out as non-blocking.
+#[test]
+fn test_team_cleanup_description_states_the_liveness_guard() {
+    let desc = description_for("team_cleanup");
+    let lower = desc.to_lowercase();
+    for (needle, why) in [
+        ("live or shutting down", "must define the blocking set"),
+        ("spawning", "must name every live status"),
+        ("working", "must name every live status"),
+        ("shutting_down", "must name every live status"),
+        ("idle", "must name the parked statuses that do not block"),
+        (
+            "plan_pending",
+            "must name the parked statuses that do not block",
+        ),
+        ("blocked", "must name the parked statuses that do not block"),
+        (
+            "suspended",
+            "must name the parked statuses that do not block",
+        ),
+        (
+            "stopped",
+            "must name the terminal statuses that do not block",
+        ),
+        (
+            "failed",
+            "must name the terminal statuses that do not block",
+        ),
+        ("force", "must name the only override"),
+        (
+            "/team cleanup",
+            "must say the guard is shared with the slash surface",
+        ),
+        (
+            "/team delete",
+            "must say the guard is shared with the delete surface",
+        ),
+    ] {
+        assert!(
+            lower.contains(needle),
+            "team_cleanup description must contain {needle:?} ({why}), got: {desc}"
+        );
+    }
+    // `force` must be optional, not a required parameter: the guard is the
+    // default behaviour, and a required override would offer no guard at all.
+    let schema = schema_for("team_cleanup");
+    let required: Vec<&str> = schema
+        .get("required")
+        .and_then(|v| v.as_array())
+        .expect("team_cleanup schema must declare a 'required' array")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert_eq!(
+        required,
+        vec!["team_name"],
+        "team_cleanup must require only `team_name`; `force` is the explicit override"
+    );
+}

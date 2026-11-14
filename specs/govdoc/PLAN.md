@@ -7,12 +7,12 @@
 Add one new subcommand to the existing `/spec` surface and reuse three existing engines
 rather than building new ones:
 
-1. **Command surface** - extend `SpecCommand` in `crates/ragent-specs/src/commands.rs`
+1. **Command surface** - extend `SpecCommand` in `crates/codemason-specs/src/commands.rs`
    with a `GovCreate` variant and a dedicated parser (`parse_govcreate`), register the
    subcommand in `USAGE_SUBCOMMANDS` and in `/spec help`, and add a `"govcreate"` case to
-   the `/spec` dispatch arm in `crates/ragent-tui/src/app/slash.rs` (~line 6393).
+   the `/spec` dispatch arm in `crates/codemason-tui/src/app/slash.rs` (~line 6393).
 2. **Content acquisition front end** - a new module family
-   (`crates/ragent-tools-extended/src/archdoc/`) that classifies a content reference as
+   (`crates/codemason-tools-extended/src/archdoc/`) that classifies a content reference as
    URL or local path (pure function), crawls URLs through the existing masterfetch crawl
    engine and reads local files/folders through the existing file readers, then
    normalises both into one `GatheredCorpus { sources, text, stats }` shape. Budget
@@ -33,7 +33,7 @@ rather than building new ones:
    progress through the `/new`-style `ProgressLine` machinery, with staged failure
    containment (FR-013/FR-014) and cancellation-boundary handling (FR-019).
 7. **CLI parity** - a `Commands::Spec` subcommand path in `src/cli.rs` mirroring the
-   `ragent new` token-rebuild pattern so both surfaces share one parser.
+   `codemason new` token-rebuild pattern so both surfaces share one parser.
 8. **Docs** - `docs/howtos/spec.md` section plus autocomplete/help updates and CHANGELOG.
 
 FR-006 is evaluated **before** the scaffold runs: an unreadable or empty content
@@ -89,7 +89,7 @@ against it.
 | T-012 | Implement the govcreate orchestration runner (pre-scaffold validation, ordering, failure containment, cancellation) | FR-006, FR-011, FR-012, FR-013, FR-014, FR-019 | L | Critical | completed | T-005, T-009 |
 | T-013 | Stream staged progress into a single in-place message and emit the terminal report | FR-015, FR-013, FR-019, NFR-005 | M | High | completed | T-012 |
 | T-014 | Add TUI result polling and progress-message refresh for govcreate | FR-015 | M | Medium | completed | T-013 |
-| T-015 | Add `ragent spec govcreate` CLI parity using the shared token parser | FR-020 | M | Medium | completed | T-002, T-012 |
+| T-015 | Add `codemason spec govcreate` CLI parity using the shared token parser | FR-020 | M | Medium | completed | T-002, T-012 |
 | T-016 | Document the command in `docs/howtos/spec.md` and regenerate the how-to PDFs | NFR-001 | S | Medium | completed | T-011 |
 | T-017 | Add unit tests for the parser, classifier, and acquisition budgets | FR-002, FR-003, FR-006, FR-016, FR-017, NFR-002 | M | High | completed | T-002, T-003, T-006, T-007 |
 | T-018 | Verify acceptance criteria end to end, run fmt/clippy/test, and check NFR-004 timing | All, NFR-004 | M | High | completed | T-001, T-002, T-003, T-004, T-005, T-006, T-007, T-008, T-009, T-010, T-011, T-012, T-013, T-014, T-015, T-016, T-017 |
@@ -98,7 +98,7 @@ against it.
 ### T-001 - Define the `GovCreate` variant and register the subcommand
 
 - Add `SpecCommand::GovCreate { spec_id, content_ref, target_folder, scaffold: ScaffoldRequest, force: bool }`
-  to `crates/ragent-specs/src/commands.rs` alongside `Create` (line ~11) and `Jtbd`.
+  to `crates/codemason-specs/src/commands.rs` alongside `Create` (line ~11) and `Jtbd`.
 - Add `"govcreate"` to `USAGE_SUBCOMMANDS` (line ~194) so `is_usage_error` (line ~449)
   stays in sync.
 - Keep the variant free of I/O; it carries parsed data only (NFR-002).
@@ -156,7 +156,7 @@ against it.
 
 ### T-006 - Bounded URL acquisition
 
-- New `crates/ragent-tools-extended/src/archdoc/url_source.rs` that invokes the
+- New `crates/codemason-tools-extended/src/archdoc/url_source.rs` that invokes the
   masterfetch crawl engine with a bounded budget (`max_pages`, `max_depth`,
   `max_total_chars`, `deadline_ms`), reusing the `pub const` defaults in
   `masterfetch/crawl/orchestrator.rs` (DEFAULT_MAX_PAGES, DEFAULT_MAX_DEPTH,
@@ -168,7 +168,7 @@ against it.
 
 ### T-007 - Local file/folder acquisition
 
-- New `crates/ragent-tools-extended/src/archdoc/local_source.rs`: for a file, read it
+- New `crates/codemason-tools-extended/src/archdoc/local_source.rs`: for a file, read it
   through the existing document readers; for a directory, walk subdirectories and gather
   supported text/markup/PDF/office types.
 - Sort the walk deterministically and cap total characters using the same budget shape as
@@ -246,7 +246,7 @@ against it.
 
 ### T-015 - CLI parity
 
-- Add a `ragent spec govcreate` subcommand to the spec command enum in `src/cli.rs`,
+- Add a `codemason spec govcreate` subcommand to the spec command enum in `src/cli.rs`,
   rebuilding the token slice from typed args (the `ScaffoldArgs::to_tokens` pattern at
   cli.rs:1056) and calling the shared parser + runner.
 - Print progress and the summary to stdout; exit non-zero on a guard or acquisition

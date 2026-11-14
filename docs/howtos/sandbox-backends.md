@@ -1,8 +1,8 @@
 # How-To: Switchable Execution Backends and Sandboxing
 
-ragent can run a session's tool invocations in one of four **execution
+codemason can run a session's tool invocations in one of four **execution
 backends**: on the host (`local`, the default), inside a container sandbox
-(`docker` or `podman`), or against a second ragent server reached over its
+(`docker` or `podman`), or against a second codemason server reached over its
 REST+SSE API (`remote`). Selecting a backend changes *where* a tool runs - it
 never changes the agent loop, the LLM providers, the tool registry, the
 permission system, or the event bus (spec `openhands` FR-001, assumption A1).
@@ -55,7 +55,7 @@ This guide covers four things:
 | Term | Meaning |
 | ---- | ------- |
 | **Execution backend** | The layer that decides where one tool call executes. Selected by the `execution_backend` config key plus optional `backends` entries. |
-| **Kind** | One of `local`, `docker`, `podman`, `remote` (`ExecutionBackendKind`, `crates/ragent-config/src/config.rs`). |
+| **Kind** | One of `local`, `docker`, `podman`, `remote` (`ExecutionBackendKind`, `crates/codemason-config/src/config.rs`). |
 | **Descriptor** | A `BackendConfig` entry: a stable `id`, a display `name`, a `kind`, kind-specific connection fields (`image`, `workspace`, `url`, `api_key`), and a list of credential *names*. |
 | **Registry entry** | The read model over a descriptor: id, name, kind, a secret-free `ConnectionDescriptor`, and a health state (FR-004). |
 | **Sandbox** | The long-lived container a `docker`/`podman` backend provisions for a session and dispatches every tool call into. |
@@ -70,10 +70,10 @@ guard, the permission system, and the always-allowed codeindex hardwiring all ru
 ## 2. The `/backend` Command
 
 `/backend` is the TUI surface for the execution backend (FR-008). It is
-implemented in `crates/ragent-tui/src/app/slash.rs`
+implemented in `crates/codemason-tui/src/app/slash.rs`
 (`handle_backend_command`, dispatch arm `"backend"`) and
-`crates/ragent-tui/src/app/backend_panel.rs`. It is TUI-only - there is no
-`ragent backend` CLI subcommand.
+`crates/codemason-tui/src/app/backend_panel.rs`. It is TUI-only - there is no
+`codemason backend` CLI subcommand.
 
 ### 2.1 Syntax
 
@@ -124,7 +124,7 @@ not re-probe health on each frame.
 
 Health is computed from the config and the host, with a live probe only for
 `remote` entries (`initial_health` / `refresh_health` in
-`crates/ragent-agent/src/backend/registry.rs`).
+`crates/codemason-agent/src/backend/registry.rs`).
 
 | Kind | `ok` when | `unavailable` when |
 | ---- | --------- | ------------------ |
@@ -135,7 +135,7 @@ Health is computed from the config and the host, with a live probe only for
 ### 2.4 Persistence
 
 A successful switch writes `execution_backend: "<kind>"` into the loaded config
-file - the project-local `.ragent/ragent.json` when one was loaded, otherwise the
+file - the project-local `.codemason/codemason.json` when one was loaded, otherwise the
 global config (`persist_active_backend` / `backend_config_path`) - using an atomic
 temp-file-then-rename update. The per-turn config cache is then invalidated, so
 the change takes effect on the **next** turn. After a switch the status bar shows
@@ -159,7 +159,7 @@ key, declare a full descriptor in the `backends` array (or as an inline
 
 ## 3. How the Switchable Backend Works
 
-All of the machinery lives in `crates/ragent-agent/src/backend/`.
+All of the machinery lives in `crates/codemason-agent/src/backend/`.
 
 | File | Responsibility |
 | ---- | -------------- |
@@ -191,7 +191,7 @@ pub trait ExecutionBackend: Send + Sync {
 ### 3.2 Resolution on every dispatch
 
 Each tool dispatch resolves the backend from the session's live config
-(`dispatch_tool_leaf` in `crates/ragent-agent/src/session/processor.rs` calls
+(`dispatch_tool_leaf` in `crates/codemason-agent/src/session/processor.rs` calls
 `resolve_backend_with_secrets`):
 
 ```rust
@@ -236,7 +236,7 @@ is of the form
 
 Automation runs (spec `openhands` T-016, FR-033) need to confine a run to a
 specific backend regardless of the ambient config. This is done with a
-process-global map in `crates/ragent-agent/src/automation/mod.rs`:
+process-global map in `crates/codemason-agent/src/automation/mod.rs`:
 
 ```rust
 pub fn register_session_backend(session_id: &str, descriptor: BackendConfig);
@@ -246,7 +246,7 @@ pub fn apply_session_backend_override(config: &Arc<Config>, session_id: &str) ->
 ```
 
 `apply_session_backend_override` is applied once per turn in
-`crates/ragent-agent/src/session/loop_steps.rs` (before hooks are parsed), so the
+`crates/codemason-agent/src/session/loop_steps.rs` (before hooks are parsed), so the
 whole turn - and every tool dispatch in it - is confined to the run's configured
 backend. A run with no override returns the shared `Arc` unchanged, so the common
 path stays allocation-free; a run with an override gets a modified clone whose
@@ -262,8 +262,8 @@ invocation:
   long-lived container** for the session:
 
   ```text
-  <runtime> run -d --name ragent-sandbox-<hash> \
-             -v ragent-sandbox-vol-<hash>:/projects -w /projects \
+  <runtime> run -d --name codemason-sandbox-<hash> \
+             -v codemason-sandbox-vol-<hash>:/projects -w /projects \
              -e NAME=VALUE ... \
              <image> sleep infinity
   ```
@@ -276,7 +276,7 @@ invocation:
   the descriptor names none, provisioning fails.
 
 - **Workspace isolation (FR-020, FR-035).** The workspace is a
-  **container-named volume** (`ragent-sandbox-vol-<hash>`), never a host bind
+  **container-named volume** (`codemason-sandbox-vol-<hash>`), never a host bind
   mount. A tool inside the container cannot read or write a host path - it is the
   strongest form of "shall not expose the host working directory". The container
   and volume names are derived deterministically from `(runtime, id, image,
@@ -286,7 +286,7 @@ invocation:
 
 - **Dispatch.** Only the shell and file/search tools are served:
   - `Bash` - validated by the **7-layer host validator**
-    (`ragent_tools_core::bash::validate_shell_command`) before it is executed, so
+    (`codemason_tools_core::bash::validate_shell_command`) before it is executed, so
     the sandbox can never be used to bypass the security model (FR-002, FR-037);
     it then runs as `exec <name> sh -lc '<command>'` with the workspace as the
     working directory.
@@ -305,7 +305,7 @@ invocation:
 
 ### 3.6 The remote backend
 
-`RemoteBackend` (`remote.rs`) points at a second ragent server (usually on
+`RemoteBackend` (`remote.rs`) points at a second codemason server (usually on
 another host) and runs the session **against that server**. It does not execute
 tools locally; it relays the whole turn over REST+SSE and mirrors that server's
 event stream into the local event bus (FR-021):
@@ -319,7 +319,7 @@ POST <url>/sessions/<id>/permission/<req_id> { "decision": "allow" }
 The `send_message` route both starts the turn and streams its events, so one
 request drives the whole turn (`relay_turn`). Frames are decoded into
 `RemoteUpdate`s and re-published onto the **local** bus under the local session id
-(`crates/ragent-agent/src/session/remote_dispatch.rs`), so the TUI renders a
+(`crates/codemason-agent/src/session/remote_dispatch.rs`), so the TUI renders a
 remote turn exactly like a local one. The remote session is cached per local
 session id, so a follow-up message reuses the same remote session.
 
@@ -340,7 +340,7 @@ to host execution (`validate_remote_backend`).
 
 A `docker`/`podman`/`remote` descriptor may list `credentials` - **names**, never
 values. At spawn time the backend resolves each name from the encrypted
-credential store (the same `provider_auth` table the `ragent auth` command writes
+credential store (the same `provider_auth` table the `codemason auth` command writes
 to) and injects it (FR-010):
 
 ```rust
@@ -353,7 +353,7 @@ pub fn container_env_args(secrets: &[ResolvedSecret]) -> Vec<String>; // ["-e", 
 ```
 
 - Values are injected as container environment variables (`-e NAME=VALUE`), never
-  written into the image, the workspace, or `ragent.json` (FR-035).
+  written into the image, the workspace, or `codemason.json` (FR-035).
 - A name the store does not hold is a **hard provisioning failure** - the sandbox
   is never started with a required credential silently missing.
 - Every resolved value is registered with the shared redaction registry, so any
@@ -390,10 +390,10 @@ table).
   // Registry form: declare backends and select one by id (or by kind label).
   "backends": [
     { "id": "sandbox", "name": "Podman sandbox", "kind": "podman",
-      "image": "ghcr.io/yourorg/ragent-sandbox:latest", "workspace": "/projects",
+      "image": "ghcr.io/yourorg/codemason-sandbox:latest", "workspace": "/projects",
       "credentials": ["EXAMPLE_API_KEY"] },
     { "id": "build-farm", "name": "Remote build host", "kind": "remote",
-      "url": "http://10.0.0.5:9100", "api_key": "sk-ragent-remote" }
+      "url": "http://10.0.0.5:9100", "api_key": "sk-codemason-remote" }
   ]
 }
 ```
@@ -432,7 +432,7 @@ works identically - substitute `docker` for `podman` and `"kind": "docker"`.
 podman --version          # or: docker --version
 ```
 
-ragent probes `PATH` for the runtime binary (it never spawns the runtime just to
+codemason probes `PATH` for the runtime binary (it never spawns the runtime just to
 check). If `podman` is missing, the `/backend` row for a Podman backend reads
 `unavailable` and cannot be selected. Install `podman` (or `docker`) or stay on
 `local`.
@@ -460,7 +460,7 @@ RUN apt-get update \
 Build it with the runtime that will back the sandbox:
 
 ```bash
-podman build -t ragent-sandbox:latest -f Dockerfile .
+podman build -t codemason-sandbox:latest -f Dockerfile .
 ```
 
 (The backend starts the container with `sleep infinity`, so the image does not
@@ -469,12 +469,12 @@ need a long-running entrypoint.)
 ### Step 3 - Store the credential the sandbox needs
 
 A descriptor's `credentials` list names entries in the encrypted credential store
-- the same `provider_auth` table the `ragent auth` command writes to. Store the
+- the same `provider_auth` table the `codemason auth` command writes to. Store the
 value under the name the descriptor will list (never put the value in
-`ragent.json`):
+`codemason.json`):
 
 ```bash
-ragent auth EXAMPLE_API_KEY sk-example-0123456789
+codemason auth EXAMPLE_API_KEY sk-example-0123456789
 ```
 
 The value is stored encrypted and resolved by name **at spawn time**, then
@@ -482,7 +482,7 @@ injected as the container environment variable `EXAMPLE_API_KEY`.
 
 ### Step 4 - Declare the backend
 
-Add the descriptor and select it. In the project-local `.ragent/ragent.json`:
+Add the descriptor and select it. In the project-local `.codemason/codemason.json`:
 
 ```jsonc
 {
@@ -492,7 +492,7 @@ Add the descriptor and select it. In the project-local `.ragent/ragent.json`:
       "id": "sandbox",
       "name": "Podman sandbox",
       "kind": "podman",
-      "image": "ragent-sandbox:latest",
+      "image": "codemason-sandbox:latest",
       "workspace": "/projects",
       "credentials": ["EXAMPLE_API_KEY"]
     }
@@ -505,7 +505,7 @@ Notes:
 - `workspace` is the **container-side** mount point. `"/projects"` is the default;
   a relative value such as `"."` also keeps the default.
 - `credentials` carries **names only** - `EXAMPLE_API_KEY` here, matching the
-  `ragent auth EXAMPLE_API_KEY ...` above.
+  `codemason auth EXAMPLE_API_KEY ...` above.
 - Omit `execution_backend` (or set it to `"local"`) to keep host execution.
 
 ### Step 5 - Activate the backend
@@ -523,7 +523,7 @@ with `Up`/`Down` and press `Enter` on `sandbox` - or select it in one step:
 /backend sandbox
 ```
 
-Either way, ragent persists `execution_backend: "sandbox"` to the config file and
+Either way, codemason persists `execution_backend: "sandbox"` to the config file and
 the status bar now shows `Backend:podman`. The change applies to the **next** turn.
 
 ### Step 6 - Run a turn and observe the sandbox
@@ -536,8 +536,8 @@ List the files in the workspace with `Bash: ls -la`.
 
 What happens on the first tool call:
 
-1. ragent provisions the sandbox container:
-   `<runtime> run -d --name ragent-sandbox-<hash> -v ragent-sandbox-vol-<hash>:/projects -w /projects -e EXAMPLE_API_KEY=<value> ragent-sandbox:latest sleep infinity`.
+1. codemason provisions the sandbox container:
+   `<runtime> run -d --name codemason-sandbox-<hash> -v codemason-sandbox-vol-<hash>:/projects -w /projects -e EXAMPLE_API_KEY=<value> codemason-sandbox:latest sleep infinity`.
 2. The `ls -la` command is validated by the **7-layer bash validator** on the host
    as usual, then executed inside the container as `exec <name> sh -lc 'ls -la'`.
 
@@ -555,7 +555,7 @@ FR-020/FR-035 working as designed.
 Point the descriptor at an image that does not exist:
 
 ```jsonc
-"image": "ragent-sandbox:nonexistent"
+"image": "codemason-sandbox:nonexistent"
 ```
 
 The next tool call fails with a `Provision` error naming the image and stating the
@@ -568,7 +568,7 @@ conversation created earlier are still there.
 Change the stored value:
 
 ```bash
-ragent auth EXAMPLE_API_KEY sk-example-rotated
+codemason auth EXAMPLE_API_KEY sk-example-rotated
 ```
 
 Because the credential set is part of the sandbox's deterministic identity, the
@@ -584,8 +584,8 @@ value while re-mounting the same volume (FR-010, FR-023).
 The status bar returns to `Backend:local`. To reclaim disk used by the sandbox:
 
 ```bash
-podman rm -f $(podman ps -a --filter name=ragent-sandbox --format '{{.Names}}')
-podman volume rm $(podman volume ls --filter name=ragent-sandbox --format '{{.Name}}')
+podman rm -f $(podman ps -a --filter name=codemason-sandbox --format '{{.Names}}')
+podman volume rm $(podman volume ls --filter name=codemason-sandbox --format '{{.Name}}')
 ```
 
 ---
@@ -598,7 +598,7 @@ podman volume rm $(podman volume ls --filter name=ragent-sandbox --format '{{.Na
 | Turn fails with "container runtime ... was not found on PATH" | the descriptor names a runtime that is absent | install it, or drop `image`/switch the descriptor's `kind`. |
 | Turn fails with "has no container image configured" | `image` is missing on the descriptor | set `image`. |
 | Turn fails with "failed to start the ... sandbox container from image ..." | the image cannot be pulled/started | build or pull the image; the runtime's own error is echoed (with secrets redacted). |
-| Turn fails with "requires the credential ... which is not present" | the `credentials` name is not in the store | store it with `ragent auth <NAME> <VALUE>` (FR-010). |
+| Turn fails with "requires the credential ... which is not present" | the `credentials` name is not in the store | store it with `codemason auth <NAME> <VALUE>` (FR-010). |
 | A tool is refused with "no adapter" | the tool is outside the sandbox's shell/file/search subset | use a tool in the subset, or switch to `local` (FR-031). |
 | `/backend <id>` reports "No registered backend matches" | the id is not declared in `backends` | add a descriptor, or use a kind label. |
 
