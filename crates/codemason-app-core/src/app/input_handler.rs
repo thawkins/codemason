@@ -17,8 +17,7 @@ const SCROLL_STEP_LINES: u16 = 3;
 
 // State types from app/state.rs
 use crate::app::state::{
-    App, ContextAction, ContextMenuState, LogLevel, ProviderSetupStep, ScrollbarDragPane,
-    SelectionPane, StorePane, TextSelection,
+    App, LogLevel, ProviderSetupStep, ScrollbarDragPane, SelectionPane, StorePane, TextSelection,
 };
 use codemason_connectors::CataloguePane;
 
@@ -963,35 +962,7 @@ impl App {
 
                 let selection_for_pane =
                     self.text_selection.as_ref().is_some_and(|s| s.pane == pane);
-                let in_input = matches!(pane, SelectionPane::Input);
-                let has_clipboard = Self::get_clipboard().is_some_and(|s| !s.is_empty());
-                                  let provider_setup_input = matches!(
-                                      self.provider_setup,
-                                      Some(ProviderSetupStep::EnterKey { .. })
-                                          | Some(ProviderSetupStep::GitLabSetup { .. })
-                                          | Some(ProviderSetupStep::TelemetrySetup { .. })
-                                  );
-                let items = vec![
-                    (ContextAction::Cut, selection_for_pane && in_input),
-                    (ContextAction::Copy, selection_for_pane),
-                    (
-                        ContextAction::Paste,
-                        if provider_setup_input {
-                            true
-                        } else {
-                            in_input && has_clipboard
-                        },
-                    ),
-                ];
-                let selected = items.iter().position(|(_, en)| *en).unwrap_or(0);
-
-                self.context_menu = Some(ContextMenuState {
-                    x: col,
-                    y: row,
-                    pane,
-                    selected,
-                    items,
-                });
+                self.open_context_menu(col, row, pane, selection_for_pane);
             }
             _ => {}
         }

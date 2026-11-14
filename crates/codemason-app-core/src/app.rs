@@ -9,11 +9,13 @@ pub use self::state::*;
 
 mod helpers;
 mod housekeeping;
+mod output_content;
 #[doc(hidden)]
 pub use helpers::short_id;
 pub use helpers::{hard_break_lines, image_dimensions_or_placeholder, sanitize_for_display};
 #[doc(hidden)]
 pub use helpers::{set_log_root_override, use_scratch_log_root_for_tests};
+pub use output_content::OutputViewContent;
 
 pub mod autofix;
 mod backend_panel;

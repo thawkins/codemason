@@ -55,12 +55,13 @@
 //! The `@` mention completions (`App::file_menu`) and the `/` command
 //! completions (`App::slash_menu`) are drawn as a popup at the prompt; their
 //! keys are forwarded to the App. The images staged with Alt+V
-//! (`pending_attachments`) are listed above the prompt.
+//! (`pending_attachments`) are listed above the prompt. A right-click opens
+//! the Cut/Copy/Paste context menu ([`crate::dialogs::context_menu`]).
 //!
 //! Dependencies: `codemason-app-core` (the App state), `craft-ui` (the IME
 //! composer) and `egui`.
 
-use codemason_app_core::app::App;
+use codemason_app_core::app::{App, SelectionPane};
 use craft_ui::ime::Composer;
 use egui::text::{CCursor, CCursorRange};
 use egui::{Event, Id};
@@ -400,6 +401,39 @@ fn keep_with_ime_events(events: &[Event], kept: &[Event]) -> Vec<Event> {
         .collect()
 }
 
+/// The editor state to put back while a right-click on the prompt is in
+/// progress, from its press to its release, so the click leaves the
+/// selection as it was.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context.
+/// * `before_press` - the editor's state from before this frame's right
+///   press, if the right button was pressed this frame.
+/// * `over_prompt` - whether the pointer is over the prompt.
+///
+/// # Returns
+///
+/// The state to restore this frame, if any.
+fn keep_selection_through_right_click(
+    ctx: &egui::Context,
+    before_press: Option<egui::text_edit::TextEditState>,
+    over_prompt: bool,
+) -> Option<egui::text_edit::TextEditState> {
+    let slot = Id::unique("codemason_prompt_right_press");
+    if let Some(state) = before_press
+        && over_prompt
+    {
+        ctx.data_mut(|d| d.insert_temp(slot, state));
+    }
+    let saved = ctx.data(|d| d.get_temp::<egui::text_edit::TextEditState>(slot))?;
+    if !ctx.input(|i| i.pointer.button_down(egui::PointerButton::Secondary)) {
+        // Released (this frame or earlier): restore once more, then forget.
+        ctx.data_mut(|d| d.remove::<egui::text_edit::TextEditState>(slot));
+    }
+    Some(saved)
+}
+
 /// Draw the prompt editor over the App's input buffer, with the `@` mention
 /// completions above it while the App has them open.
 ///
@@ -412,6 +446,13 @@ pub fn prompt_ui(ui: &mut egui::Ui, app: &mut App) {
     push_app_cursor(ui.ctx(), id, app.session.input_cursor);
     let editable = !crate::dialogs::locks_prompt(app);
     let queued = app.session.input_queue.len();
+    // egui's editor moves its cursor on any button press and drag, so a
+    // right-click would drop the selection the context menu's Cut and Copy
+    // act on: keep the editor's state from before the right press.
+    let before_right_press = ui
+        .input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary))
+        .then(|| egui::TextEdit::load_state(ui.ctx(), id))
+        .flatten();
     attachments_row(ui, app);
     let output = ui
         .horizontal(|ui| {
@@ -432,11 +473,27 @@ pub fn prompt_ui(ui: &mut egui::Ui, app: &mut App) {
             output
         })
         .inner;
-    let cursor = output.cursor_range.map(|range| range.primary.index.0);
+    let mut cursor = output.cursor_range.map(|range| range.primary.index.0);
+    if let Some(state) = keep_selection_through_right_click(
+        ui.ctx(),
+        before_right_press,
+        output.response.response.contains_pointer(),
+    ) {
+        cursor = state.cursor.char_range().map(|range| range.primary.index.0);
+        state.store(ui.ctx(), id);
+    }
     if output.response.response.changed() {
         app.input_edited(cursor.unwrap_or(app.session.input_cursor));
     } else if let Some(cursor) = cursor {
         app.session.input_cursor = cursor;
+    }
+    if editable && output.response.response.secondary_clicked() {
+        // A right-click opens app-core's Cut/Copy/Paste menu over the
+        // input; its items act on this editor's selection.
+        let has_selection = egui::TextEdit::load_state(ui.ctx(), id)
+            .and_then(|state| state.cursor.char_range())
+            .is_some_and(|range| !range.is_empty());
+        crate::dialogs::context_menu::open(ui.ctx(), app, SelectionPane::Input, has_selection);
     }
     if editable {
         completion_popup(ui, app, output.response.response.rect);

@@ -1592,6 +1592,8 @@ dependencies = [
  "codemason-agent",
  "codemason-app-core",
  "codemason-config",
+ "codemason-connectors",
+ "codemason-plugins",
  "codemason-types",
  "craft-keymap",
  "craft-ui",

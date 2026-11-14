@@ -115,6 +115,28 @@ pub struct MessagesView {
     scroll_offset: f32,
 }
 
+/// The messages a [`MessagesView`] shows.
+#[derive(Debug, Clone, Copy)]
+pub struct MessageSource<'a> {
+    /// The messages, oldest first.
+    pub messages: &'a [Message],
+    /// Whether they are being streamed (the PERF-042 throttle applies).
+    pub processing: bool,
+}
+
+/// Where a [`MessagesView`] drew and how far it is scrolled.
+#[derive(Debug, Clone, Copy)]
+pub struct ViewScroll {
+    /// The rectangle the view filled.
+    pub rect: Rect,
+    /// The scroll offset from the top, in points.
+    pub offset: f32,
+    /// The largest scroll offset, in points (zero when everything fits).
+    pub max_offset: f32,
+    /// The height of one text row, in points.
+    pub row_height: f32,
+}
+
 /// What [`MessagesView::sync`] changed that drawing must react to.
 #[derive(Debug)]
 struct SyncOutcome {
@@ -154,18 +176,65 @@ impl MessagesView {
     /// * `ui` - where to draw.
     /// * `app` - the application whose `session.messages` are shown.
     /// * `palette` - the colours of the current theme mode.
-    pub fn show(&mut self, ui: &mut egui::Ui, app: &App, palette: &Palette) {
+    ///
+    /// # Returns
+    ///
+    /// The transcript's response (hover only), labelled [`MESSAGES_LABEL`].
+    pub fn show(&mut self, ui: &mut egui::Ui, app: &App, palette: &Palette) -> egui::Response {
+        let source = MessageSource {
+            messages: &app.session.messages,
+            processing: app.session.is_processing,
+        };
+        let frame = self.show_messages(ui, app, source, palette, None);
+        // Hover only (a click sense would make the transcript a Tab stop);
+        // the shell reads a right-click over it from the pointer to open
+        // the context menu, as it holds the App mutably.
+        let response = ui.interact(
+            frame.rect,
+            ui.scope_id().with("messages_transcript"),
+            Sense::hover(),
+        );
+        response.widget_info(|| WidgetInfo::labeled(Role::Log, true, MESSAGES_LABEL));
+        response
+    }
+
+    /// Draw `source.messages` into `ui`, filling the available space, and
+    /// report the scroll geometry.
+    ///
+    /// # Arguments
+    ///
+    /// * `ui` - where to draw.
+    /// * `app` - the application, for the core's message rendering (tool
+    ///   step numbers, display names, working directory).
+    /// * `source` - the messages to show and whether they are streaming.
+    /// * `palette` - the colours of the current theme mode.
+    /// * `scroll_to` - a scroll offset from the top, in points, to move to
+    ///   this frame (a keyboard scroll); `None` keeps the user's scrolling.
+    ///
+    /// # Returns
+    ///
+    /// The drawn rectangle and the scroll offset, largest offset and row
+    /// height after this frame.
+    pub fn show_messages(
+        &mut self,
+        ui: &mut egui::Ui,
+        app: &App,
+        source: MessageSource<'_>,
+        palette: &Palette,
+        scroll_to: Option<f32>,
+    ) -> ViewScroll {
         self.laid_out = 0;
         let row_height = ui
             .ctx()
             .fonts_mut(|fonts| fonts.row_height(&FontId::proportional(FONT_SIZE)));
         let now = self.clock.unwrap_or_else(Instant::now);
-        let outcome = self.sync(app, row_height, now);
+        let outcome = self.sync(app, source, row_height, now);
         if let Some(delay) = outcome.retry_in {
             // A streamed edit is waiting out the throttle; draw it then.
             ui.ctx().request_repaint_after(delay);
         }
 
+        let mut max_offset = 0.0;
         let frame = egui::Frame::NONE
             .fill(palette.background)
             .inner_margin(MARGIN)
@@ -174,7 +243,9 @@ impl MessagesView {
                     .id_salt("messages_scroll")
                     .auto_shrink(false)
                     .stick_to_bottom(true);
-                if outcome.evicted_height > 0.0 && !self.at_bottom {
+                if let Some(offset) = scroll_to {
+                    scroll = scroll.vertical_scroll_offset(offset.max(0.0));
+                } else if outcome.evicted_height > 0.0 && !self.at_bottom {
                     // Keep the same message at the top of the viewport while
                     // the user is scrolled up: the content above it shrank.
                     scroll = scroll.vertical_scroll_offset(
@@ -183,16 +254,16 @@ impl MessagesView {
                 }
                 let output = scroll
                     .show_viewport(ui, |ui, viewport| self.show_visible(ui, viewport, palette));
-                let max_offset = output.content_size.y - output.inner_rect.height();
+                max_offset = (output.content_size.y - output.inner_rect.height()).max(0.0);
                 self.scroll_offset = output.state.clamped_offset().y;
                 self.at_bottom = self.scroll_offset >= max_offset - HEIGHT_EPSILON;
             });
-        let response = ui.interact(
-            frame.response.rect,
-            ui.scope_id().with("messages_transcript"),
-            Sense::hover(),
-        );
-        response.widget_info(|| WidgetInfo::labeled(Role::Log, true, MESSAGES_LABEL));
+        ViewScroll {
+            rect: frame.response.rect,
+            offset: self.scroll_offset,
+            max_offset,
+            row_height,
+        }
     }
 
     /// How many messages the last frame laid out.
@@ -236,7 +307,7 @@ impl MessagesView {
         self.clock = Some(now);
     }
 
-    /// Bring the cached entries in line with `app.session.messages`.
+    /// Bring the cached entries in line with `source.messages`.
     ///
     /// Entries are matched to messages by id, so a message keeps its
     /// rendered lines and measured height when messages before it are
@@ -255,12 +326,18 @@ impl MessagesView {
     /// The cumulative height of the messages evicted from the front, and,
     /// when an edit was held back by the throttle, how long until it may
     /// render.
-    fn sync(&mut self, app: &App, row_height: f32, now: Instant) -> SyncOutcome {
-        let messages = &app.session.messages;
+    fn sync(
+        &mut self,
+        app: &App,
+        source: MessageSource<'_>,
+        row_height: f32,
+        now: Instant,
+    ) -> SyncOutcome {
+        let messages = source.messages;
         let evicted_height = self.drop_evicted_front(messages);
         self.reorder_by_id(messages);
 
-        let throttled = app.session.is_processing
+        let throttled = source.processing
             && self
                 .last_stream_render
                 .is_some_and(|t| now.saturating_duration_since(t) < MESSAGE_STREAM_MIN_INTERVAL);

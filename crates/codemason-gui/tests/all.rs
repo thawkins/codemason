@@ -28,6 +28,8 @@ mod test_main_thread;
 mod test_markdown;
 #[path = "test_messages.rs"]
 mod test_messages;
+#[path = "test_overlays.rs"]
+mod test_overlays;
 #[path = "test_palette.rs"]
 mod test_palette;
 #[path = "test_prompt.rs"]

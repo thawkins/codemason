@@ -41,9 +41,14 @@ pub const RESTORE: &str = "Restore";
 /// The button that closes a picker (Esc).
 pub const CLOSE: &str = "Close";
 
-/// Draw `rows` as a list with `selected` highlighted; returns a clicked row
-/// and whether it was double-clicked.
-fn entry_list(ui: &mut egui::Ui, rows: &[String], selected: usize) -> Option<(usize, bool)> {
+/// Draw `rows` as a list labelled `label` with `selected` highlighted;
+/// returns a clicked row and whether it was double-clicked.
+pub(crate) fn entry_list(
+    ui: &mut egui::Ui,
+    label: &str,
+    rows: &[String],
+    selected: usize,
+) -> Option<(usize, bool)> {
     let mut clicked = None;
     let height = (ui.ctx().content_rect().height() * 0.6).max(120.0);
     let list = egui::ScrollArea::vertical()
@@ -65,7 +70,7 @@ fn entry_list(ui: &mut egui::Ui, rows: &[String], selected: usize) -> Option<(us
             .response
         });
     list.inner
-        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::List, true, ENTRIES_LABEL));
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::List, true, label));
     clicked
 }
 
@@ -88,7 +93,7 @@ pub fn show_history(ctx: &egui::Context, app: &mut App) -> bool {
     let mut clicked = None;
     modal(ctx, "codemason_history_picker", HISTORY_TITLE, |ui| {
         ui.weak(format!("{} entries", rows.len()));
-        clicked = entry_list(ui, &rows, selected);
+        clicked = entry_list(ui, ENTRIES_LABEL, &rows, selected);
         ui.add_space(6.0);
         ui.add_enabled_ui(!rows.is_empty(), |ui| {
             key_buttons(
@@ -146,7 +151,7 @@ pub fn show_config_saves(ctx: &egui::Context, app: &mut App) -> bool {
         CONFIG_SAVES_TITLE,
         |ui| {
             ui.weak(format!("{} entries in {dir}", rows.len()));
-            clicked = entry_list(ui, &rows, selected);
+            clicked = entry_list(ui, ENTRIES_LABEL, &rows, selected);
             ui.add_space(6.0);
             ui.add_enabled_ui(!rows.is_empty(), |ui| {
                 key_buttons(ui, &[(RESTORE, plain(Key::Enter))]);

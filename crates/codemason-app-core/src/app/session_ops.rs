@@ -26,12 +26,12 @@ use codemason_tools_core::{Tool, ToolContext};
 // State types from app/state.rs
 use crate::app::state::{
     App, ConnectorBrowseStatus, ConnectorCatalogueInstallResult, ConnectorCatalogueResult,
-    ConnectorEnrichResult, ContextAction, ContextPartitionSnapshot, FileMenuEntry, FileMenuState,
-    LlmRequestStat, LlmStatsSummary, LogEntry, LogLevel, OutputViewState, OutputViewTarget,
-    PluginStoreBrowser, PluginStoreFetchResult, PluginStoreInstallResult, ProviderSetupStep,
-    QueuedInput, ScreenMode, ScrollbarDragPane, SelectionPane, StoreEnrichResult, StorePane,
-    TextSelection, atomic_config_update, is_image_path, percent_decode_path,
-    save_clipboard_image_to_temp,
+    ConnectorEnrichResult, ContextAction, ContextMenuState, ContextPartitionSnapshot,
+    FileMenuEntry, FileMenuState, LlmRequestStat, LlmStatsSummary, LogEntry, LogLevel,
+    OutputViewState, OutputViewTarget, PluginStoreBrowser, PluginStoreFetchResult,
+    PluginStoreInstallResult, ProviderSetupStep, QueuedInput, ScreenMode, ScrollbarDragPane,
+    SelectionPane, StoreEnrichResult, StorePane, TextSelection, atomic_config_update,
+    is_image_path, percent_decode_path, save_clipboard_image_to_temp,
 };
 
 // Helpers
@@ -5304,6 +5304,58 @@ impl App {
                 ),
             );
         }
+    }
+
+    /// Open the right-click context menu over `pane` at (`x`, `y`).
+    ///
+    /// The menu always opens inside a pane; its items are enabled only when
+    /// valid there: Cut with a selection in the input, Copy with a selection
+    /// in the pane, Paste in the input with text on the clipboard (or always
+    /// while a provider-setup text field takes the paste). The highlight
+    /// starts on the first enabled item.
+    ///
+    /// # Arguments
+    ///
+    /// * `x`, `y` - where the menu opens (terminal cells for the TUI; a
+    ///   frontend that places the menu itself may pass zero).
+    /// * `pane` - the pane that was right-clicked.
+    /// * `selection_for_pane` - whether that pane holds a text selection.
+    pub fn open_context_menu(
+        &mut self,
+        x: u16,
+        y: u16,
+        pane: SelectionPane,
+        selection_for_pane: bool,
+    ) {
+        let in_input = matches!(pane, SelectionPane::Input);
+        let has_clipboard = Self::get_clipboard().is_some_and(|s| !s.is_empty());
+        let provider_setup_input = matches!(
+            self.provider_setup,
+            Some(ProviderSetupStep::EnterKey { .. })
+                | Some(ProviderSetupStep::GitLabSetup { .. })
+                | Some(ProviderSetupStep::TelemetrySetup { .. })
+        );
+        let items = vec![
+            (ContextAction::Cut, selection_for_pane && in_input),
+            (ContextAction::Copy, selection_for_pane),
+            (
+                ContextAction::Paste,
+                if provider_setup_input {
+                    true
+                } else {
+                    in_input && has_clipboard
+                },
+            ),
+        ];
+        let selected = items.iter().position(|(_, en)| *en).unwrap_or(0);
+
+        self.context_menu = Some(ContextMenuState {
+            x,
+            y,
+            pane,
+            selected,
+            items,
+        });
     }
 
     /// Execute a context-menu action (copy/cut/paste/etc.) against the current

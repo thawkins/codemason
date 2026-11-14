@@ -39,15 +39,20 @@
 
 pub mod banner;
 pub mod confirm;
+pub mod context_menu;
+pub mod lists;
 pub mod loop_setup;
 pub mod model_picker;
+pub mod output_view;
 pub mod permission;
 pub mod pickers;
+pub mod progress;
 pub mod properties;
 pub mod provider;
 pub mod question;
 pub mod session_menu;
 pub mod shortcuts;
+pub mod stores;
 
 use codemason_app_core::app::{App, ProviderSetupStep};
 use codemason_app_core::input_event::{Key, KeyInput, Modifiers};
@@ -65,6 +70,14 @@ pub enum ActiveDialog {
     /// The router configuration save confirmation
     /// (`App::pending_router_save`).
     RouterSave,
+    /// The plugin-store browser (`App::plugin_store`).
+    PluginStore,
+    /// The connector-catalogue browser (`App::connector_store`).
+    ConnectorStore,
+    /// The `/backend` switcher (`App::backend_panel`).
+    BackendPanel,
+    /// The right-click Cut/Copy/Paste menu (`App::context_menu`).
+    ContextMenu,
     /// The `?` keyboard shortcuts panel (`App::show_shortcuts`).
     Shortcuts,
     /// The provider setup flow (`App::provider_setup`), except its model
@@ -73,6 +86,10 @@ pub enum ActiveDialog {
     /// The model lists of the provider setup flow
     /// (`ProviderSetupStep::SelectModel` and `SelectRouterModel`).
     ModelPicker,
+    /// The `/mcp discover` dialog (`App::mcp_discover`).
+    McpDiscover,
+    /// The `/plugins list` dialog (`App::plugins_list`).
+    PluginsList,
     /// The `/loop` setup dialog (`App::loop_setup`).
     LoopSetup,
     /// The agent's front question (`session.question_queue`).
@@ -90,6 +107,8 @@ pub enum ActiveDialog {
     Rollback,
     /// The plan approval (`session.plan_approval_pending`).
     PlanApproval,
+    /// The tool-output overlay (`App::output_view`).
+    OutputView,
     /// The project properties dialog (`sidebar.properties`).
     Properties,
     /// The sidebar's session menu (`sidebar.menu`).
@@ -125,14 +144,21 @@ pub fn active(app: &App) -> Option<ActiveDialog> {
     if app.pending_router_save.is_some() {
         return Some(ActiveDialog::RouterSave);
     }
-    let earlier = app.plugin_store.is_some()
-        || app.connector_store.is_some()
-        || app.backend_panel.is_some()
-        || app.queue_show_open
-        || app.queue_menu_open
-        || app.context_menu.is_some();
-    if earlier {
+    if app.plugin_store.is_some() {
+        return Some(ActiveDialog::PluginStore);
+    }
+    if app.connector_store.is_some() {
+        return Some(ActiveDialog::ConnectorStore);
+    }
+    if app.backend_panel.is_some() {
+        return Some(ActiveDialog::BackendPanel);
+    }
+    // The queue panel draws the queue entry panel and the queue menu.
+    if app.queue_show_open || app.queue_menu_open {
         return None;
+    }
+    if app.context_menu.is_some() {
+        return Some(ActiveDialog::ContextMenu);
     }
     if app.show_shortcuts {
         return Some(ActiveDialog::Shortcuts);
@@ -145,8 +171,11 @@ pub fn active(app: &App) -> Option<ActiveDialog> {
             _ => ActiveDialog::Provider,
         });
     }
-    if app.mcp_discover.is_some() || app.plugins_list.is_some() {
-        return None;
+    if app.mcp_discover.is_some() {
+        return Some(ActiveDialog::McpDiscover);
+    }
+    if app.plugins_list.is_some() {
+        return Some(ActiveDialog::PluginsList);
     }
     if app.loop_setup.is_some() {
         return Some(ActiveDialog::LoopSetup);
@@ -177,13 +206,17 @@ pub fn active(app: &App) -> Option<ActiveDialog> {
     if app.session.plan_approval_pending.is_some() {
         return Some(ActiveDialog::PlanApproval);
     }
+    // The prompt draws the slash and file completion menus; the research
+    // and memory views are not ported yet.
     let later = app.slash_menu.is_some()
         || app.file_menu.is_some()
         || app.research_view.is_some()
-        || app.memory_view.is_some()
-        || app.output_view.is_some();
+        || app.memory_view.is_some();
     if later {
         return None;
+    }
+    if app.output_view.is_some() {
+        return Some(ActiveDialog::OutputView);
     }
     if app.sidebar.properties.is_some() {
         return Some(ActiveDialog::Properties);
@@ -195,10 +228,11 @@ pub fn active(app: &App) -> Option<ActiveDialog> {
 }
 
 /// Whether the prompt must give up the keyboard: an app-core modal locks
-/// the input (`App::is_input_locked`), or the sidebar's properties dialog or
-/// session menu is open. Those two take every key in app-core's
-/// `handle_key` without being input locks, so the prompt treats them as
-/// locks too: the router forwards every key and the prompt stops editing.
+/// the input (`App::is_input_locked`), or the sidebar's properties dialog,
+/// the session menu or the connector-catalogue browser is open. Those take
+/// every key in app-core's `handle_key` without being input locks, so the
+/// prompt treats them as locks too: the router forwards every key and the
+/// prompt stops editing.
 ///
 /// # Arguments
 ///
@@ -209,7 +243,10 @@ pub fn active(app: &App) -> Option<ActiveDialog> {
 /// `true` while the App, not the prompt, takes the keyboard.
 #[must_use]
 pub fn locks_prompt(app: &App) -> bool {
-    app.is_input_locked() || app.sidebar.properties.is_some() || app.sidebar.menu.is_some()
+    app.is_input_locked()
+        || app.sidebar.properties.is_some()
+        || app.sidebar.menu.is_some()
+        || app.connector_store.is_some()
 }
 
 /// Draw the active dialog ([`active`]), if any.
@@ -227,6 +264,9 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
     if dialog != Some(ActiveDialog::ModelPicker) {
         model_picker::reset(ctx);
     }
+    if dialog != Some(ActiveDialog::OutputView) {
+        output_view::reset(ctx);
+    }
     let was_open = ctx.data(|d| d.get_temp::<bool>(open_id())).unwrap_or(false);
     let unfocused = ctx.memory(|m| {
         m.focused().is_none_or(|id| {
@@ -240,15 +280,24 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         ctx.memory_mut(|m| m.request_focus(prompt_id()));
     }
     ctx.data_mut(|d| d.insert_temp(open_id(), dialog.is_some()));
+    // The model loading and download windows take no keys; they show
+    // whenever their state is set, as in the TUI.
+    progress::show(ctx, app);
     // The run-cost banner is not a modal; it sits above everything.
     banner::show(ctx, app);
     match dialog {
         Some(ActiveDialog::ConfigSavePicker) => pickers::show_config_saves(ctx, app),
         Some(ActiveDialog::HistoryPicker) => pickers::show_history(ctx, app),
         Some(ActiveDialog::RouterSave) => confirm::show_router_save(ctx, app),
+        Some(ActiveDialog::PluginStore) => stores::show_plugin_store(ctx, app),
+        Some(ActiveDialog::ConnectorStore) => stores::show_connector_store(ctx, app),
+        Some(ActiveDialog::BackendPanel) => lists::show_backend_panel(ctx, app),
+        Some(ActiveDialog::ContextMenu) => context_menu::show(ctx, app),
         Some(ActiveDialog::Shortcuts) => shortcuts::show(ctx, app),
         Some(ActiveDialog::Provider) => provider::show(ctx, app),
         Some(ActiveDialog::ModelPicker) => model_picker::show(ctx, app),
+        Some(ActiveDialog::McpDiscover) => lists::show_mcp_discover(ctx, app),
+        Some(ActiveDialog::PluginsList) => lists::show_plugins_list(ctx, app),
         Some(ActiveDialog::LoopSetup) => loop_setup::show(ctx, app),
         Some(ActiveDialog::Question) => question::show(ctx, app),
         Some(ActiveDialog::Permission) => permission::show(ctx, app),
@@ -257,6 +306,7 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         Some(ActiveDialog::ForceCleanup) => confirm::show_force_cleanup(ctx, app),
         Some(ActiveDialog::Rollback) => confirm::show_rollback(ctx, app),
         Some(ActiveDialog::PlanApproval) => confirm::show_plan_approval(ctx, app),
+        Some(ActiveDialog::OutputView) => output_view::show(ctx, app),
         Some(ActiveDialog::Properties) => properties::show(ctx, app),
         Some(ActiveDialog::SessionMenu) => session_menu::show(ctx, app),
         None => false,
@@ -283,10 +333,17 @@ pub fn prepare(ctx: &egui::Context, app: &mut App) {
         Some(ActiveDialog::Provider) => provider::prepare(ctx, app),
         Some(ActiveDialog::Properties) => properties::prepare(ctx, app),
         Some(ActiveDialog::LoopSetup) => loop_setup::prepare(ctx, app),
+        Some(ActiveDialog::ContextMenu) => context_menu::prepare(ctx, app),
         Some(
             ActiveDialog::ConfigSavePicker
             | ActiveDialog::HistoryPicker
             | ActiveDialog::RouterSave
+            | ActiveDialog::PluginStore
+            | ActiveDialog::ConnectorStore
+            | ActiveDialog::BackendPanel
+            | ActiveDialog::McpDiscover
+            | ActiveDialog::PluginsList
+            | ActiveDialog::OutputView
             | ActiveDialog::Shortcuts
             | ActiveDialog::Question
             | ActiveDialog::Permission

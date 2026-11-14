@@ -15,7 +15,7 @@
 //! presses the dialogs' buttons sent ([`dialogs::take_keys`]).
 
 use codemason_agent::event::Event;
-use codemason_app_core::app::{App, LogLevel};
+use codemason_app_core::app::{App, LogLevel, SelectionPane};
 use codemason_app_core::log_channel::TuiLogReceiver;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -138,7 +138,19 @@ impl Shell {
         });
         egui::CentralPanel::default().show(ui, |ui| {
             let palette = palette_for(self.app.theme_mode);
-            self.messages.show(ui, &self.app, &palette);
+            let transcript = self.messages.show(ui, &self.app, &palette);
+            let right_click =
+                ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Secondary));
+            if right_click && transcript.hovered() && !dialogs::locks_prompt(&self.app) {
+                // The transcript has no text selection in the GUI, so its
+                // menu has nothing enabled, as the TUI's without one.
+                dialogs::context_menu::open(
+                    ui.ctx(),
+                    &mut self.app,
+                    SelectionPane::Messages,
+                    false,
+                );
+            }
         });
         dialogs::show(ui.ctx(), &mut self.app);
     }
@@ -152,6 +164,9 @@ impl Shell {
         self.drain_sources();
         self.housekeeping(ui.ctx());
         self.poll_timers(ui.ctx());
+        // A context-menu item chosen last frame acts on the prompt editor
+        // before the prompt reads this frame's input.
+        dialogs::context_menu::apply_pending(ui.ctx());
         let focus = self.prompt.prepare(ui.ctx(), &mut self.app);
         dialogs::prepare(ui.ctx(), &mut self.app);
         self.route_keys(ui.ctx(), focus);
