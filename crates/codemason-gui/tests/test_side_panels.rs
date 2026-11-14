@@ -388,3 +388,38 @@ fn test_teams_panel_keys_select_and_shutdown_confirm() {
     assert!(rig.harness.state().app().row_action_confirm.is_none());
     assert_eq!(rig.harness.state().app().session.team_members.len(), 2);
 }
+
+#[test]
+fn test_agents_panel_cursor_stops_at_the_last_sub_agent() {
+    let mut rig = rig(|rt, app| {
+        let sid = start_session(rt, app);
+        app.active_tasks.push(task("task-alpha-0001", &sid));
+        let now = chrono::Utc::now();
+        app.agents_history
+            .push_back(codemason_app_core::app::CompletedTaskRow {
+                id: "task-done-00003".to_string(),
+                child_session_id: "task-done-00003-session".to_string(),
+                agent_name: "explore".to_string(),
+                status: TaskStatus::Completed,
+                background: false,
+                detached: false,
+                created_at: now,
+                completed_at: now,
+                report_status: ReportStatus::default(),
+                output_file: None,
+            });
+    });
+    focus_prompt(&mut rig);
+    alt(&mut rig, egui::Key::A, "a");
+    rig.harness
+        .get_by_label_contains("Completed (newest first)");
+
+    // Down past the only sub-agent stays on it: the history rows are not
+    // cursor rows.
+    for _ in 0..4 {
+        tap(&mut rig, egui::Key::ArrowDown);
+    }
+    let app = rig.harness.state().app();
+    assert_eq!(app.agents_subagent_task_ids, vec!["task-alpha-0001"]);
+    assert_eq!(app.agents_cursor_subagent, Some(0));
+}

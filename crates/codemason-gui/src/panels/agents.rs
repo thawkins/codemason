@@ -219,8 +219,9 @@ fn tree_rows(
 
 /// Every row of the table with its key (empty for a row the cursor cannot
 /// select, `"primary"` for the primary agent, else the sub-agent's task id),
-/// and where the sub-agent rows start.
-fn rows(app: &App, palette: &Palette) -> (Vec<(Line, String)>, usize) {
+/// and the range of the sub-agent tree rows (the cursor's rows; the
+/// background and history rows after them are not).
+fn rows(app: &App, palette: &Palette) -> (Vec<(Line, String)>, std::ops::Range<usize>) {
     let dim = palette.muted;
     let primary_session = app.session.session_id.clone().unwrap_or_default();
     let mut tasks: HashMap<&str, Vec<&TaskEntry>> = HashMap::new();
@@ -289,6 +290,7 @@ fn rows(app: &App, palette: &Palette) -> (Vec<(Line, String)>, usize) {
         palette,
     };
     tree_rows(&ctx, &primary_session, &[], &mut out);
+    let tree = start..out.len();
     let cyan = palette.color(ThemeColor::Cyan);
     if !app.bg_tasks.is_empty() {
         out.push((
@@ -348,7 +350,7 @@ fn rows(app: &App, palette: &Palette) -> (Vec<(Line, String)>, usize) {
             out.push((line, String::new()));
         }
     }
-    (out, start)
+    (out, tree)
 }
 
 /// Draw the Active agents panel into `ui`, publish the row keys app-core's
@@ -361,9 +363,10 @@ fn rows(app: &App, palette: &Palette) -> (Vec<(Line, String)>, usize) {
 ///   `App::agents_cursor_from_click`.
 /// * `palette` - the colours to draw with.
 pub fn agents_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
-    let (rows, start) = rows(app, palette);
+    let (rows, tree) = rows(app, palette);
     let keys: Vec<String> = rows.iter().map(|(_, key)| key.clone()).collect();
-    app.agents_subagent_task_ids = keys.get(start..).unwrap_or_default().to_vec();
+    // The cursor walks the sub-agent tree rows only, as in the TUI.
+    app.agents_subagent_task_ids = keys.get(tree).unwrap_or_default().to_vec();
     app.agents_row_task_ids = keys;
     let cursor_row = app
         .agents_cursor_subagent
