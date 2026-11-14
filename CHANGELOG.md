@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Changed - project renamed from ragent to codemason; binary is `cdmn`
+
+- Every crate is renamed `ragent-*` -> `codemason-*` (directories, package
+  names and `codemason_*` Rust paths), and the root package is `codemason`.
+- The binary is built as `cdmn` (`[[bin]] name = "cdmn"`, clap
+  `Usage: cdmn`); `.deb`/`.rpm` packaging installs `/usr/bin/cdmn`.
+- Environment variables are `CODEMASON_*` (were `RAGENT_*`), the local state
+  directory is `.codemason/` (was `.ragent/`), and the `ragent_info` tool is
+  `codemason_info`. Settings stored under the old names are not read.
+- `test_fr030_surface_agreement` pins the new tool-name digest, which changed
+  with the `codemason_info` rename.
+
 ### Fixed - "New session on branch" no longer leaves an orphaned worktree
 
 - `ProjectManager::create_session` created the session's git worktree before
