@@ -30,6 +30,8 @@ pub use codemason_app_core::app::md_worker;
 mod connector;
 mod models;
 mod newproj;
+mod outcome;
+pub use self::outcome::HandleOutcome;
 mod plugin;
 pub(crate) use self::plugin::toggle_plugin_enabled;
 pub use models::model_part_from_selected_model;

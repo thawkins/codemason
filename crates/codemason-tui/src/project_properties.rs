@@ -14,7 +14,9 @@
 //! through the enabled choices and `Space` opens the full list. A backend
 //! that cannot run here (no runtime, no remote configured) is greyed out.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use codemason_app_core::input_event::{
+    Key, KeyInput, Modifiers, MouseButton, MouseInput, MouseKind,
+};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -294,7 +296,7 @@ fn save(app: &mut App) {
 /// # Returns
 ///
 /// `true` when the dialog is open (it consumes every key), `false` otherwise.
-pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
+pub fn handle_key(app: &mut App, key: KeyInput) -> bool {
     let Some(dialog) = app.sidebar.properties.as_mut() else {
         return false;
     };
@@ -302,11 +304,11 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
         list_key(dialog, cursor, key);
         return true;
     }
-    match key.code {
-        KeyCode::Esc => app.sidebar.properties = None,
-        KeyCode::Enter => save(app),
-        KeyCode::Tab | KeyCode::Down => dialog.focus = dialog.focus.step(true),
-        KeyCode::BackTab | KeyCode::Up => dialog.focus = dialog.focus.step(false),
+    match key.key {
+        Key::Esc => app.sidebar.properties = None,
+        Key::Enter => save(app),
+        Key::Tab | Key::Down => dialog.focus = dialog.focus.step(true),
+        Key::BackTab | Key::Up => dialog.focus = dialog.focus.step(false),
         _ => match dialog.focus {
             Field::Description => edit_key(dialog, key),
             Field::Backend | Field::Model => choice_key(dialog, key),
@@ -316,37 +318,37 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
 }
 
 /// A key in the description field.
-fn edit_key(dialog: &mut ProjectProperties, key: KeyEvent) {
+fn edit_key(dialog: &mut ProjectProperties, key: KeyInput) {
     let len = dialog.description.chars().count();
     let byte = |text: &str, at: usize| text.char_indices().nth(at).map_or(text.len(), |(i, _)| i);
-    match key.code {
-        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+    match key.key {
+        Key::Char(c) if !key.mods.contains(Modifiers::CTRL) => {
             if len < MAX_DESCRIPTION_CHARS {
                 let at = byte(&dialog.description, dialog.caret);
                 dialog.description.insert(at, c);
                 dialog.caret += 1;
             }
         }
-        KeyCode::Backspace if dialog.caret > 0 => {
+        Key::Backspace if dialog.caret > 0 => {
             dialog.caret -= 1;
             let at = byte(&dialog.description, dialog.caret);
             dialog.description.remove(at);
         }
-        KeyCode::Delete if dialog.caret < len => {
+        Key::Delete if dialog.caret < len => {
             let at = byte(&dialog.description, dialog.caret);
             dialog.description.remove(at);
         }
-        KeyCode::Left => dialog.caret = dialog.caret.saturating_sub(1),
-        KeyCode::Right => dialog.caret = (dialog.caret + 1).min(len),
-        KeyCode::Home => dialog.caret = 0,
-        KeyCode::End => dialog.caret = len,
+        Key::Left => dialog.caret = dialog.caret.saturating_sub(1),
+        Key::Right => dialog.caret = (dialog.caret + 1).min(len),
+        Key::Home => dialog.caret = 0,
+        Key::End => dialog.caret = len,
         _ => {}
     }
 }
 
 /// A key on a choice field: `Left`/`Right` step to the previous or next
 /// enabled choice, `Space` opens the list.
-fn choice_key(dialog: &mut ProjectProperties, key: KeyEvent) {
+fn choice_key(dialog: &mut ProjectProperties, key: KeyInput) {
     let Some((choices, chosen)) = dialog.focused_choices() else {
         return;
     };
@@ -362,43 +364,43 @@ fn choice_key(dialog: &mut ProjectProperties, key: KeyEvent) {
             })
             .find(|&i| choices[i].enabled)
     };
-    match key.code {
-        KeyCode::Left => {
+    match key.key {
+        Key::Left => {
             if let Some(i) = step(false) {
                 dialog.choose(i);
             }
         }
-        KeyCode::Right => {
+        Key::Right => {
             if let Some(i) = step(true) {
                 dialog.choose(i);
             }
         }
-        KeyCode::Char(' ') => dialog.list = Some(chosen),
+        Key::Char(' ') => dialog.list = Some(chosen),
         _ => {}
     }
 }
 
 /// A key while a choice list is open: move, `Enter` picks an enabled
 /// entry, `Esc` closes the list.
-fn list_key(dialog: &mut ProjectProperties, cursor: usize, key: KeyEvent) {
+fn list_key(dialog: &mut ProjectProperties, cursor: usize, key: KeyInput) {
     let Some((choices, _)) = dialog.focused_choices() else {
         dialog.list = None;
         return;
     };
     let last = choices.len().saturating_sub(1);
     let enabled = choices.get(cursor).is_some_and(|c| c.enabled);
-    dialog.list = match key.code {
-        KeyCode::Up => Some(cursor.saturating_sub(1)),
-        KeyCode::Down => Some((cursor + 1).min(last)),
-        KeyCode::PageUp => Some(cursor.saturating_sub(LIST_ROWS)),
-        KeyCode::PageDown => Some((cursor + LIST_ROWS).min(last)),
-        KeyCode::Home => Some(0),
-        KeyCode::End => Some(last),
-        KeyCode::Enter if enabled => {
+    dialog.list = match key.key {
+        Key::Up => Some(cursor.saturating_sub(1)),
+        Key::Down => Some((cursor + 1).min(last)),
+        Key::PageUp => Some(cursor.saturating_sub(LIST_ROWS)),
+        Key::PageDown => Some((cursor + LIST_ROWS).min(last)),
+        Key::Home => Some(0),
+        Key::End => Some(last),
+        Key::Enter if enabled => {
             dialog.choose(cursor);
             None
         }
-        KeyCode::Esc => None,
+        Key::Esc => None,
         _ => Some(cursor),
     };
 }
@@ -439,7 +441,7 @@ pub fn handle_paste(app: &mut App, text: &str) -> bool {
 /// # Returns
 ///
 /// `true` when the dialog is open, `false` otherwise.
-pub fn handle_mouse(app: &mut App, event: MouseEvent) -> bool {
+pub fn handle_mouse(app: &mut App, event: MouseInput) -> bool {
     let Some(dialog) = app.sidebar.properties.as_ref() else {
         return false;
     };
@@ -448,7 +450,7 @@ pub fn handle_mouse(app: &mut App, event: MouseEvent) -> bool {
         && event.column < area.x + area.width
         && event.row >= area.y
         && event.row < area.y + area.height;
-    if matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) && !inside {
+    if matches!(event.kind, MouseKind::Down(MouseButton::Left)) && !inside {
         app.sidebar.properties = None;
     }
     true

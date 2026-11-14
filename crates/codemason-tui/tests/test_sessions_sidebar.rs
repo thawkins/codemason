@@ -6,6 +6,7 @@
 
 use codemason_agent::event::Event;
 use codemason_tui::App;
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use codemason_tui::sessions_sidebar::{self, SidebarState};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;

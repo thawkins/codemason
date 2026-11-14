@@ -12,7 +12,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use codemason_plugins::{StoreEntry, StoreKind};
 use codemason_tui::app::{PluginStoreBrowser, PluginStoreStatus, QueuedInput};
-use codemason_tui::input::handle_key;
+use codemason_tui::crossterm_input::handle_key;
 
 #[path = "support/mod.rs"]
 mod support;

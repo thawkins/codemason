@@ -23,6 +23,7 @@
 
 mod support;
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -33,7 +34,8 @@ use codemason_tui::app::{
     ConfiguredProvider, ModelPickerEntry, PendingForceCleanup, PlanApprovalState,
     ProviderSetupStep, ProviderSource, RollbackOfferState, SelectionPane,
 };
-use codemason_tui::input::{InputAction, handle_key};
+use codemason_tui::crossterm_input::handle_key;
+use codemason_tui::input::InputAction;
 use codemason_tui::input_field::InputField;
 
 fn key(code: KeyCode) -> KeyEvent {

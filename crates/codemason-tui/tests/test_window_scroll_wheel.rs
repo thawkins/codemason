@@ -19,6 +19,7 @@
 
 mod support;
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;

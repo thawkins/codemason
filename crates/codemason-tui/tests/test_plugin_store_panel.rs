@@ -11,6 +11,7 @@
 //! These drive the real renderer through a `TestBackend` and read the painted
 //! buffer back, so no store endpoint is contacted.
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::style::Color;

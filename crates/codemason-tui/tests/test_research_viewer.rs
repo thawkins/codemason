@@ -102,6 +102,7 @@ mod interaction_tests {
     use codemason_tui::app::ResearchViewState;
 
     use super::{PathBuf, support};
+    use codemason_tui::crossterm_input::CrosstermAppExt;
 
     fn make_research_view() -> ResearchViewState {
         ResearchViewState {

@@ -17,6 +17,7 @@
 
 mod support;
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// Path of the transition spool under the scratch log root.

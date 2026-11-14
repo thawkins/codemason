@@ -9,6 +9,7 @@
 //! `unsafe` in edition 2024 and the workspace denies `unsafe_code`, so this
 //! target opts back in explicitly (env mutation is contained to the test).
 #![allow(unsafe_code)]
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::fs;
 use std::sync::{Arc, MutexGuard};
 
@@ -1673,8 +1674,11 @@ async fn test_slash_provider_always_prompts_for_key_when_already_configured() {
         selected: anthropic_idx,
         force_key_entry: true,
     });
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
 
     // Even though anthropic is already configured, /provider should show
     // the EnterKey dialog so the user can edit the key.
@@ -1735,8 +1739,11 @@ async fn test_slash_provider_selection_updates_displayed_provider() {
     // Press Enter to confirm the model selection. Because this is an Ollama-family
     // provider, the selector now forces the thinking-level step even when model
     // detection reports no levels.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
     assert!(
         matches!(
             app.provider_setup,
@@ -1746,8 +1753,11 @@ async fn test_slash_provider_selection_updates_displayed_provider() {
     );
 
     // Press Enter again to confirm the default thinking level.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
 
     assert_eq!(
         app.configured_provider.as_ref().map(|p| p.id.as_str()),
@@ -1835,15 +1845,21 @@ async fn test_model_selector_navigation_wraps_top_and_bottom() {
         selected: 0,
     });
 
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+    )
+    .await;
     match app.provider_setup.as_ref().expect("provider setup present") {
         ProviderSetupStep::SelectModel { selected, .. } => assert_eq!(*selected, 2),
         _ => panic!("expected SelectModel state"),
     }
 
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+    )
+    .await;
     match app.provider_setup.as_ref().expect("provider setup present") {
         ProviderSetupStep::SelectModel { selected, .. } => assert_eq!(*selected, 0),
         _ => panic!("expected SelectModel state"),
@@ -1876,14 +1892,17 @@ async fn test_generic_openai_enter_key_supports_endpoint_field_and_tab_toggle() 
     });
 
     // Toggle to endpoint field and type URL.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
-        .await;
-    codemason_tui::input::handle_key(
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+    )
+    .await;
+    codemason_tui::crossterm_input::handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
     )
     .await;
-    codemason_tui::input::handle_key(
+    codemason_tui::crossterm_input::handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
     )
@@ -1916,8 +1935,11 @@ async fn test_generic_openai_enter_key_persists_endpoint_setting() {
         error: None,
     });
 
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
 
     assert_eq!(
         app.storage
@@ -2583,7 +2605,7 @@ async fn test_file_menu_enter_accepts_without_sending() {
         current_dir: None,
     });
 
-    let action = codemason_tui::input::handle_key(
+    let action = codemason_tui::crossterm_input::handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
     )
@@ -2711,7 +2733,7 @@ async fn test_file_menu_ctrl_backslash_toggles_hidden_filter() {
     });
 
     assert!(!app.file_menu_show_hidden);
-    let _ = codemason_tui::input::handle_key(
+    let _ = codemason_tui::crossterm_input::handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('\\'), KeyModifiers::CONTROL),
     )
@@ -2742,7 +2764,7 @@ async fn test_file_menu_down_scrolls_selection_window() {
     });
 
     for _ in 0..9 {
-        let _ = codemason_tui::input::handle_key(
+        let _ = codemason_tui::crossterm_input::handle_key(
             &mut app,
             KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
         )
@@ -3770,7 +3792,10 @@ fn test_config_save_picker_key_navigation_and_restore() {
     });
 
     // Down should move to the newer backup.
-    app.handle_config_save_picker_key(KeyEvent::new(KeyCode::Down, KeyModifiers::empty()));
+    app.handle_config_save_picker_key(codemason_tui::crossterm_input::key_input(KeyEvent::new(
+        KeyCode::Down,
+        KeyModifiers::empty(),
+    )));
     assert_eq!(
         app.config_save_picker.as_ref().unwrap().selected,
         1,
@@ -3778,7 +3803,10 @@ fn test_config_save_picker_key_navigation_and_restore() {
     );
 
     // Up should move back.
-    app.handle_config_save_picker_key(KeyEvent::new(KeyCode::Up, KeyModifiers::empty()));
+    app.handle_config_save_picker_key(codemason_tui::crossterm_input::key_input(KeyEvent::new(
+        KeyCode::Up,
+        KeyModifiers::empty(),
+    )));
     assert_eq!(
         app.config_save_picker.as_ref().unwrap().selected,
         0,
@@ -3786,7 +3814,10 @@ fn test_config_save_picker_key_navigation_and_restore() {
     );
 
     // Enter restores the currently selected backup (oldest = coder config).
-    app.handle_config_save_picker_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    app.handle_config_save_picker_key(codemason_tui::crossterm_input::key_input(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::empty(),
+    )));
     assert!(
         app.config_save_picker.is_none(),
         "picker should close after restore"
@@ -3809,7 +3840,10 @@ fn test_config_save_picker_key_navigation_and_restore() {
         scroll_offset: 0,
         config_dir: dir.to_path_buf(),
     });
-    app.handle_config_save_picker_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    app.handle_config_save_picker_key(codemason_tui::crossterm_input::key_input(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::empty(),
+    )));
     let restored2 = fs::read_to_string(dir.join("codemason.json")).expect("read restored 2");
     assert_eq!(
         restored2, second,
@@ -3824,7 +3858,10 @@ fn test_config_save_picker_key_navigation_and_restore() {
         scroll_offset: 0,
         config_dir: dir.to_path_buf(),
     });
-    app.handle_config_save_picker_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+    app.handle_config_save_picker_key(codemason_tui::crossterm_input::key_input(KeyEvent::new(
+        KeyCode::Esc,
+        KeyModifiers::empty(),
+    )));
     assert!(
         app.config_save_picker.is_none(),
         "picker should close on Esc"
@@ -3867,7 +3904,10 @@ fn test_config_restore_invalidates_config_cache() {
         scroll_offset: 0,
         config_dir: dir.to_path_buf(),
     });
-    app.handle_config_save_picker_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    app.handle_config_save_picker_key(codemason_tui::crossterm_input::key_input(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::empty(),
+    )));
 
     let guard = app.session_processor.cached_config.lock();
     assert!(
@@ -4788,8 +4828,11 @@ async fn test_model_selector_preserves_openrouter_vendor_slug() {
 
     // Confirm the model selection. OpenRouter models may report reasoning levels
     // from discovery, so the flow opens the thinking-level selector.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
     assert!(
         matches!(
             app.provider_setup,
@@ -4800,7 +4843,7 @@ async fn test_model_selector_preserves_openrouter_vendor_slug() {
     );
 
     if let Some(ProviderSetupStep::SelectThinkingLevel { .. }) = app.provider_setup {
-        codemason_tui::input::handle_key(
+        codemason_tui::crossterm_input::handle_key(
             &mut app,
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
         )

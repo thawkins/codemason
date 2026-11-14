@@ -34,8 +34,10 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
+use codemason_app_core::input_event::{
+    Key, KeyInput, Modifiers, MouseButton, MouseInput, MouseKind,
+};
 use codemason_storage::{ProjectSessions, SessionCheckout, SidebarSection, Storage, project_root};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -1419,34 +1421,34 @@ fn cursor_session(app: &App) -> Option<String> {
 /// # Returns
 ///
 /// `true` when the sidebar consumed the key.
-pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
+pub fn handle_key(app: &mut App, key: KeyInput) -> bool {
     if crate::project_properties::handle_key(app, key) {
         return true;
     }
     if crate::session_menu::handle_key(app, key) {
         return true;
     }
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let alt = key.modifiers.contains(KeyModifiers::ALT);
-    match key.code {
-        KeyCode::Char('s') if alt => {
+    let ctrl = key.mods.contains(Modifiers::CTRL);
+    let alt = key.mods.contains(Modifiers::ALT);
+    match key.key {
+        Key::Char('s') if alt => {
             toggle(app);
             return true;
         }
-        KeyCode::Char('n') if ctrl => {
+        Key::Char('n') if ctrl => {
             let result = app.open_new_session();
             report(app, result);
             return true;
         }
-        KeyCode::Up if ctrl => {
+        Key::Up if ctrl => {
             cycle_session(app, false);
             return true;
         }
-        KeyCode::Down if ctrl => {
+        Key::Down if ctrl => {
             cycle_session(app, true);
             return true;
         }
-        KeyCode::Char('r') if alt => {
+        Key::Char('r') if alt => {
             let recent = app
                 .background
                 .iter()
@@ -1467,12 +1469,12 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
         return false;
     }
     if app.sidebar.filter_editing {
-        match key.code {
-            KeyCode::Char(c) if !ctrl && !alt => app.sidebar.filter.push(c),
-            KeyCode::Backspace => {
+        match key.key {
+            Key::Char(c) if !ctrl && !alt => app.sidebar.filter.push(c),
+            Key::Backspace => {
                 app.sidebar.filter.pop();
             }
-            KeyCode::Enter | KeyCode::Esc => app.sidebar.filter_editing = false,
+            Key::Enter | Key::Esc => app.sidebar.filter_editing = false,
             _ => {}
         }
         app.sidebar.cursor = 0;
@@ -1482,92 +1484,92 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     let rows = build_rows(app);
     let last = rows.len().saturating_sub(1);
     let state = &mut app.sidebar;
-    match key.code {
-        KeyCode::Up => state.cursor = selectable(&rows, state.cursor.saturating_sub(1), false),
-        KeyCode::Down => state.cursor = selectable(&rows, (state.cursor + 1).min(last), true),
-        KeyCode::PageUp => {
+    match key.key {
+        Key::Up => state.cursor = selectable(&rows, state.cursor.saturating_sub(1), false),
+        Key::Down => state.cursor = selectable(&rows, (state.cursor + 1).min(last), true),
+        Key::PageUp => {
             state.cursor = selectable(&rows, state.cursor.saturating_sub(page), false);
         }
-        KeyCode::PageDown => {
+        Key::PageDown => {
             state.cursor = selectable(&rows, (state.cursor + page).min(last), true);
         }
-        KeyCode::Home => state.cursor = 0,
-        KeyCode::End => state.cursor = selectable(&rows, last, false),
-        KeyCode::Enter | KeyCode::Char(' ') => activate_row(app, app.sidebar.cursor),
-        KeyCode::Left | KeyCode::Right => {
+        Key::Home => state.cursor = 0,
+        Key::End => state.cursor = selectable(&rows, last, false),
+        Key::Enter | Key::Char(' ') => activate_row(app, app.sidebar.cursor),
+        Key::Left | Key::Right => {
             if let Some(SidebarRow::Header { key: section, .. }) =
                 build_rows(app).get(app.sidebar.cursor)
             {
                 let section = section.clone();
-                toggle_section(app, &section, Some(key.code == KeyCode::Left));
+                toggle_section(app, &section, Some(key.key == Key::Left));
             }
         }
-        KeyCode::Char('/') => start_filter(app),
+        Key::Char('/') => start_filter(app),
         // On a project heading: `n` starts a session in that project, `b`
         // prefills the command that starts one on its own branch.
-        KeyCode::Char('n') => {
+        Key::Char('n') => {
             if let Some(project) = cursor_project(app) {
                 let result = new_session_in(app, project);
                 report(app, result);
             }
         }
-        KeyCode::Char('b') => {
+        Key::Char('b') => {
             if let Some(project) = cursor_project(app) {
                 let text = branch_session_command(app, &project);
                 prefill_input(app, &text);
             }
         }
-        KeyCode::Char('p') => {
+        Key::Char('p') => {
             if let Some(id) = cursor_session(app) {
                 let result = app.toggle_session_pin(&id);
                 report(app, result);
             }
         }
-        KeyCode::Char('a') => {
+        Key::Char('a') => {
             if let Some(id) = cursor_session(app) {
                 let result = app.archive_session_by_id(&id);
                 report(app, result);
             }
         }
-        KeyCode::F(2) => {
+        Key::F(2) => {
             if let Some(id) = cursor_session(app) {
                 begin_rename(app, &id);
             }
         }
-        KeyCode::Char('m') => open_menu_at_cursor(app),
-        KeyCode::Char('v') => {
+        Key::Char('m') => open_menu_at_cursor(app),
+        Key::Char('v') => {
             if let Some(id) = cursor_session(app) {
                 toggle_selected(app, &id);
             }
         }
-        KeyCode::Char('u') => {
+        Key::Char('u') => {
             if let Some(id) = cursor_session(app) {
                 let result = app.toggle_session_unread(&id);
                 report(app, result);
             }
         }
-        KeyCode::Char('f') => {
+        Key::Char('f') => {
             if let Some(id) = cursor_session(app) {
                 let result = app.fork_session_by_id(&id);
                 report(app, result);
                 app.sidebar.focused = false;
             }
         }
-        KeyCode::Char('D') => {
+        Key::Char('D') => {
             if let Some(id) = cursor_session(app) {
                 let result = app.request_delete_session(&id);
                 report(app, result);
             }
         }
-        KeyCode::F(10) if key.modifiers.contains(KeyModifiers::SHIFT) => {
+        Key::F(10) if key.mods.contains(Modifiers::SHIFT) => {
             open_menu_at_cursor(app);
         }
-        KeyCode::Esc if !state.selected.is_empty() => state.selected.clear(),
-        KeyCode::Esc if !state.filter.is_empty() => {
+        Key::Esc if !state.selected.is_empty() => state.selected.clear(),
+        Key::Esc if !state.filter.is_empty() => {
             state.filter.clear();
             state.cursor = 0;
         }
-        KeyCode::Esc | KeyCode::Tab => state.focused = false,
+        Key::Esc | Key::Tab => state.focused = false,
         _ => {}
     }
     true
@@ -1583,7 +1585,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
 /// # Returns
 ///
 /// `true` when the sidebar consumed the event.
-pub fn handle_mouse(app: &mut App, event: MouseEvent) -> bool {
+pub fn handle_mouse(app: &mut App, event: MouseInput) -> bool {
     if crate::project_properties::handle_mouse(app, event) {
         return true;
     }
@@ -1593,10 +1595,10 @@ pub fn handle_mouse(app: &mut App, event: MouseEvent) -> bool {
     let area = app.sidebar.area;
     if app.sidebar.dragging {
         match event.kind {
-            MouseEventKind::Drag(MouseButton::Left) => {
+            MouseKind::Drag(MouseButton::Left) => {
                 app.sidebar.width = (event.column.saturating_sub(area.x) + 1).max(MIN_WIDTH);
             }
-            MouseEventKind::Up(MouseButton::Left) => {
+            MouseKind::Up(MouseButton::Left) => {
                 app.sidebar.dragging = false;
                 app.sidebar.save(&app.storage);
             }
@@ -1607,19 +1609,19 @@ pub fn handle_mouse(app: &mut App, event: MouseEvent) -> bool {
     let inside = area.width > 0 && area.contains((event.column, event.row).into());
     if !inside {
         match event.kind {
-            MouseEventKind::Down(_) => app.sidebar.focused = false,
+            MouseKind::Down(_) => app.sidebar.focused = false,
             // A drag that ends outside the sidebar drops nothing.
-            MouseEventKind::Up(MouseButton::Left) => app.sidebar.drag_session = None,
+            MouseKind::Up(MouseButton::Left) => app.sidebar.drag_session = None,
             _ => {}
         }
         return false;
     }
     let border_x = area.x + area.width - 1;
     match event.kind {
-        MouseEventKind::Down(MouseButton::Left) if event.column == border_x => {
+        MouseKind::Down(MouseButton::Left) if event.column == border_x => {
             app.sidebar.dragging = true;
         }
-        MouseEventKind::Down(MouseButton::Left) => {
+        MouseKind::Down(MouseButton::Left) => {
             app.sidebar.focused = true;
             let top = area.y + 1;
             if event.row >= top && event.row < area.y + area.height - 1 {
@@ -1627,7 +1629,7 @@ pub fn handle_mouse(app: &mut App, event: MouseEvent) -> bool {
                 let rows = build_rows(app);
                 // `Ctrl`+click adds the session to the selection or takes it
                 // out; a plain click clears the selection.
-                if event.modifiers.contains(KeyModifiers::CONTROL)
+                if event.mods.contains(Modifiers::CTRL)
                     && let Some(SidebarRow::Session { id, .. }) = rows.get(index)
                 {
                     let id = id.clone();
@@ -1645,12 +1647,12 @@ pub fn handle_mouse(app: &mut App, event: MouseEvent) -> bool {
                 }
             }
         }
-        MouseEventKind::Up(MouseButton::Left) => {
+        MouseKind::Up(MouseButton::Left) => {
             if let Some(id) = app.sidebar.drag_session.take() {
                 drop_session(app, &id, area, event.row);
             }
         }
-        MouseEventKind::Down(MouseButton::Right) => {
+        MouseKind::Down(MouseButton::Right) => {
             app.sidebar.focused = true;
             let top = area.y + 1;
             if event.row >= top && event.row < area.y + area.height - 1 {
@@ -1660,12 +1662,12 @@ pub fn handle_mouse(app: &mut App, event: MouseEvent) -> bool {
                 }
             }
         }
-        MouseEventKind::ScrollUp => {
+        MouseKind::ScrollUp => {
             let rows = build_rows(app);
             app.sidebar.scroll = app.sidebar.scroll.saturating_sub(1);
             app.sidebar.cursor = selectable(&rows, app.sidebar.cursor.saturating_sub(1), false);
         }
-        MouseEventKind::ScrollDown => {
+        MouseKind::ScrollDown => {
             let rows = build_rows(app);
             let last = rows.len().saturating_sub(1);
             app.sidebar.cursor = selectable(&rows, (app.sidebar.cursor + 1).min(last), true);

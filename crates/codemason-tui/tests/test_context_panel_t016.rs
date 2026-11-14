@@ -11,6 +11,7 @@
 
 mod support;
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::time::Duration;
 
 use codemason_agent::message::{Message, MessagePart, Role};

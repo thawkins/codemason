@@ -11,6 +11,7 @@
 //! These exercise the full key-event path through [`App::handle_key_event`] so
 //! the `InputAction::SendMessage` arm is tested as the user drives it.
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use codemason_tui::App;

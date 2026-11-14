@@ -10,6 +10,7 @@
 //! the `InputAction::SlashCommand` arm is tested as the user drives it, then
 //! drain the queue through the public [`App::advance_input_queue`] boundary.
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use codemason_tui::App;

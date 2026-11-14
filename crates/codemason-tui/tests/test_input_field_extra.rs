@@ -8,16 +8,18 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use codemason_app_core::input_event::KeyInput;
 use codemason_tui::clipboard::ClipboardTestOverrideGuard;
+use codemason_tui::crossterm_input::key_input;
 use codemason_tui::input::is_global_quit_key;
 use codemason_tui::input_field::InputField;
 
-fn k(code: KeyCode) -> KeyEvent {
-    KeyEvent::new(code, KeyModifiers::NONE)
+fn k(code: KeyCode) -> KeyInput {
+    key_input(KeyEvent::new(code, KeyModifiers::NONE))
 }
 
-fn kmod(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
-    KeyEvent::new(code, mods)
+fn kmod(code: KeyCode, mods: KeyModifiers) -> KeyInput {
+    key_input(KeyEvent::new(code, mods))
 }
 
 // ---------------------------------------------------------------------------

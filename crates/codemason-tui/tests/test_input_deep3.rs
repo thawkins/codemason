@@ -21,6 +21,7 @@
 
 mod support;
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -30,7 +31,8 @@ use codemason_tui::app::{
     ConfigSavePickerState, ContextAction, ContextMenuState, HistoryPickerState, ModelPickerEntry,
     PendingMemoryDelete, ProviderSetupStep, SelectionPane, TextSelection,
 };
-use codemason_tui::input::{InputAction, handle_key};
+use codemason_tui::crossterm_input::handle_key;
+use codemason_tui::input::InputAction;
 use codemason_tui::input_field::InputField;
 
 /// A plain (no-modifier) key press.

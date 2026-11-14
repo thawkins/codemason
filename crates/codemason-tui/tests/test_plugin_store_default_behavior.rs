@@ -29,7 +29,7 @@ use codemason_plugins::{
 };
 use codemason_tui::App;
 use codemason_tui::app::{PluginStoreBrowser, PluginStoreStatus};
-use codemason_tui::input::handle_key;
+use codemason_tui::crossterm_input::handle_key;
 
 #[path = "support/mod.rs"]
 mod support;

@@ -12,6 +12,7 @@
 #![allow(clippy::await_holding_lock)]
 
 use codemason_tui::App;
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[path = "slash_support/mod.rs"]

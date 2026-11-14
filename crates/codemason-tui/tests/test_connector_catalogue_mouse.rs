@@ -10,6 +10,7 @@
 //! left-click on a result row moves the result cursor and leaves the category
 //! alone, and every mouse path installs nothing.
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -348,19 +349,19 @@ async fn tab_cycles_focus_through_the_three_panes() {
     render(&mut app, 130, 30);
 
     assert!(!app.connector_catalogue_nav_focused());
-    codemason_tui::input::handle_key(&mut app, key(KeyCode::Tab)).await;
+    codemason_tui::crossterm_input::handle_key(&mut app, key(KeyCode::Tab)).await;
     assert!(app.connector_catalogue_nav_focused(), "Tab -> Categories");
-    codemason_tui::input::handle_key(&mut app, key(KeyCode::Tab)).await;
+    codemason_tui::crossterm_input::handle_key(&mut app, key(KeyCode::Tab)).await;
     assert!(
         app.connector_catalogue_marketplace_focused(),
         "Tab -> Marketplaces"
     );
-    codemason_tui::input::handle_key(&mut app, key(KeyCode::Tab)).await;
+    codemason_tui::crossterm_input::handle_key(&mut app, key(KeyCode::Tab)).await;
     assert!(
         !app.connector_catalogue_nav_focused() && !app.connector_catalogue_marketplace_focused(),
         "Tab -> Results"
     );
-    codemason_tui::input::handle_key(&mut app, key(KeyCode::BackTab)).await;
+    codemason_tui::crossterm_input::handle_key(&mut app, key(KeyCode::BackTab)).await;
     assert!(
         app.connector_catalogue_marketplace_focused(),
         "BackTab -> Marketplaces"
@@ -384,7 +385,7 @@ async fn c_clears_the_focused_navigators_filter() {
     app.connector_catalogue_focus_next();
     app.connector_catalogue_focus_next();
     assert!(app.connector_catalogue_marketplace_focused());
-    codemason_tui::input::handle_key(&mut app, key(KeyCode::Char('c'))).await;
+    codemason_tui::crossterm_input::handle_key(&mut app, key(KeyCode::Char('c'))).await;
     let browser = app.connector_store.as_ref().expect("panel open");
     assert_eq!(browser.active_marketplace(), "ALL", "marketplace cleared");
     assert_eq!(

@@ -12,6 +12,7 @@
 //! real keystroke path - ALT-Q, `Clear` row, then `Yes`/`No`/`Esc` - and
 //! asserts the resulting queue state.
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use ratatui::Terminal;

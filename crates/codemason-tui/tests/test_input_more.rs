@@ -20,7 +20,8 @@ use codemason_tui::app::{
     PendingForceCleanup, PendingMemoryDelete, PlanApprovalState, QuestionRequest, QueuedInput,
     ResearchViewState, RollbackOfferState, SelectionPane, SlashMenuEntry, SlashMenuState,
 };
-use codemason_tui::input::{InputAction, handle_key};
+use codemason_tui::crossterm_input::handle_key;
+use codemason_tui::input::InputAction;
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)

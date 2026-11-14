@@ -3,6 +3,7 @@
 //! These tests exercise the state-machine helpers and persistence logic
 //! without launching a full terminal backend.
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -381,7 +382,7 @@ async fn test_router_setup_space_toggles_provider() {
     let mut app = router_setup_with_providers(mem_storage());
     // Initially anthropic is selected in the palette.
     // Space on the selected provider removes it.
-    codemason_tui::input::handle_key(
+    codemason_tui::crossterm_input::handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
     )
@@ -397,9 +398,12 @@ async fn test_router_setup_space_toggles_provider() {
     }
 
     // Move down to openai and add it to the palette.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
-        .await;
-    codemason_tui::input::handle_key(
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+    )
+    .await;
+    codemason_tui::crossterm_input::handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
     )
@@ -420,8 +424,11 @@ async fn test_router_setup_space_toggles_provider() {
 #[tokio::test]
 async fn test_router_setup_tab_switches_pane_focus() {
     let mut app = router_setup_with_providers(mem_storage());
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+    )
+    .await;
     match app.provider_setup.as_ref().expect("setup") {
         ProviderSetupStep::SetupRouter {
             left_pane_focused,
@@ -439,8 +446,11 @@ async fn test_router_setup_tab_switches_pane_focus() {
 async fn test_router_setup_assigns_model_to_bucket() {
     let mut app = router_setup_with_providers(mem_storage());
     // Enter opens the model picker for the selected anthropic provider.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
     assert!(
         matches!(
             app.provider_setup,
@@ -450,8 +460,11 @@ async fn test_router_setup_assigns_model_to_bucket() {
     );
 
     // Confirm the first model.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
     match app.provider_setup.as_ref().expect("setup") {
         ProviderSetupStep::SetupRouter {
             draft_config,
@@ -480,10 +493,16 @@ async fn test_router_setup_save_persists_cluster_and_enables_router() {
     app.config_paths = vec![config_path.clone()];
 
     // Assign a model to the SIMPLE bucket.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
 
     // Save with Ctrl+S.
     app.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
@@ -546,7 +565,7 @@ async fn test_router_setup_rejects_empty_cluster_on_save() {
     let config_path = temp_config_path();
     app.config_paths = vec![config_path.clone()];
 
-    codemason_tui::input::handle_key(
+    codemason_tui::crossterm_input::handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
     )
@@ -671,8 +690,11 @@ async fn test_router_setup_rejects_recursive_router_assignment() {
     });
 
     // Confirming the assignment should be rejected.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
     match app.provider_setup.as_ref().expect("setup") {
         ProviderSetupStep::SetupRouter { error, .. } => {
             assert!(
@@ -710,19 +732,34 @@ async fn test_router_setup_empty_state_when_no_providers() {
 async fn test_router_setup_reorder_models_within_bucket() {
     let mut app = router_setup_with_providers(mem_storage());
     // Assign two models to the SIMPLE bucket.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
 
     // Re-open the picker and move down to select a different anthropic model,
     // then assign it as a second fallback in the SIMPLE bucket.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
-        .await;
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+    )
+    .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
 
     // Focus should now be in the bucket pane on the second model.
     match app.provider_setup.as_ref().expect("setup") {
@@ -741,8 +778,11 @@ async fn test_router_setup_reorder_models_within_bucket() {
     }
 
     // Ctrl+Up should move the selected model up one slot.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::CONTROL))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::CONTROL),
+    )
+    .await;
     match app.provider_setup.as_ref().expect("setup") {
         ProviderSetupStep::SetupRouter {
             draft_config,
@@ -819,18 +859,24 @@ async fn test_provider_show_renders_router_cluster() {
         panic!("expected ShowProviderConfig");
     };
     for _ in 0..router_index.saturating_sub(selected) {
-        codemason_tui::input::handle_key(
+        codemason_tui::crossterm_input::handle_key(
             &mut app,
             KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
         )
         .await;
     }
     for _ in 0..selected.saturating_sub(router_index) {
-        codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))
-            .await;
-    }
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        codemason_tui::crossterm_input::handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        )
         .await;
+    }
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
 
     let text = app
         .session
@@ -951,8 +997,11 @@ async fn test_router_model_picker_enter_preserves_providers() {
         .expect("setup router state");
 
     // Enter on the selected provider opens the model picker.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
     assert!(
         matches!(
             app.provider_setup,
@@ -972,8 +1021,11 @@ async fn test_router_model_picker_enter_preserves_providers() {
     );
 
     // Select the first model and confirm.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
     match app.provider_setup.as_ref().expect("setup present") {
         ProviderSetupStep::SetupRouter {
             providers,
@@ -1020,16 +1072,22 @@ async fn test_router_model_picker_esc_preserves_providers() {
         .expect("setup router state");
 
     // Open the model picker.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
     assert!(matches!(
         app.provider_setup,
         Some(ProviderSetupStep::SelectRouterModel { .. })
     ));
 
     // Cancel with Esc.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )
+    .await;
     match app.provider_setup.as_ref().expect("setup present") {
         ProviderSetupStep::SetupRouter {
             providers,
@@ -1069,8 +1127,11 @@ async fn test_provider_picker_router_opens_setup_router() {
         selected: router_idx,
         force_key_entry: false,
     });
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
     assert!(
         matches!(
             app.provider_setup,
@@ -1111,8 +1172,11 @@ async fn test_provider_picker_router_no_concrete_providers_keeps_picker() {
         selected: router_idx,
         force_key_entry: false,
     });
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
     assert!(
         matches!(
             app.provider_setup,
@@ -1154,8 +1218,11 @@ fn render_router_setup_to_string(app: &mut App, width: u16, height: u16) -> Stri
 async fn test_router_setup_renders_full_tier_names_in_bucket_titles() {
     let mut app = router_setup_with_providers(mem_storage());
     // Move focus to the bucket pane so the right-hand titles render.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+    )
+    .await;
 
     let text = render_router_setup_to_string(&mut app, 120, 40);
     // The full tier names must appear in the bucket titles, not single chars.
@@ -1182,10 +1249,16 @@ async fn test_router_setup_bucket_displays_retained_model_properties() {
     let mut app = router_setup_with_providers(mem_storage());
 
     // Assign the first anthropic model to the SIMPLE bucket.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
 
     // Render and confirm the bucket shows retained model properties (context
     // window + features). The anthropic default catalog advertises context
@@ -1213,8 +1286,11 @@ async fn test_router_setup_bucket_displays_retained_model_properties() {
 async fn test_router_model_picker_renders_property_columns() {
     let mut app = router_setup_with_providers(mem_storage());
     // Open the model picker for the selected anthropic provider.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
     assert!(matches!(
         app.provider_setup,
         Some(ProviderSetupStep::SelectRouterModel { .. })
@@ -1335,18 +1411,33 @@ async fn test_router_setup_reopen_without_saved_config_uses_empty_draft() {
 async fn test_router_setup_delete_removes_selected_model_in_bucket() {
     let mut app = router_setup_with_providers(mem_storage());
     // Assign two models to the SIMPLE bucket.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
 
     // Re-open the picker and assign a second model to SIMPLE.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
-        .await;
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+    )
+    .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
 
     // Sanity check: two models present and bucket pane is focused.
     match app.provider_setup.as_ref().expect("setup") {
@@ -1364,8 +1455,11 @@ async fn test_router_setup_delete_removes_selected_model_in_bucket() {
     }
 
     // Delete the selected (second) model.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE),
+    )
+    .await;
     match app.provider_setup.as_ref().expect("setup") {
         ProviderSetupStep::SetupRouter {
             draft_config,
@@ -1389,8 +1483,11 @@ async fn test_router_setup_delete_removes_selected_model_in_bucket() {
 async fn test_router_setup_delete_does_nothing_in_provider_pane() {
     let mut app = router_setup_with_providers(mem_storage());
     // Focus is initially in the left provider pane.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE),
+    )
+    .await;
     match app.provider_setup.as_ref().expect("setup") {
         ProviderSetupStep::SetupRouter {
             selected_provider_ids,
@@ -1411,10 +1508,16 @@ async fn test_router_setup_delete_does_nothing_in_provider_pane() {
 async fn test_router_setup_delete_on_last_model_adjusts_index() {
     let mut app = router_setup_with_providers(mem_storage());
     // Assign one model to the SIMPLE bucket and move cursor to it.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
 
     // Sanity: one model at index 0, bucket pane focused.
     match app.provider_setup.as_ref().expect("setup") {
@@ -1432,8 +1535,11 @@ async fn test_router_setup_delete_on_last_model_adjusts_index() {
     }
 
     // Delete the only model; index should remain 0.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE),
+    )
+    .await;
     match app.provider_setup.as_ref().expect("setup") {
         ProviderSetupStep::SetupRouter {
             draft_config,
@@ -1457,13 +1563,19 @@ async fn test_router_setup_delete_on_last_model_adjusts_index() {
 async fn test_router_save_confirmation_renders_above_setup_dialog() {
     let mut app = router_setup_with_providers(mem_storage());
     // Assign the first model to the SIMPLE bucket so the draft has content.
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
 
     // Press Ctrl+S to arm the save confirmation modal.
-    codemason_tui::input::handle_key(
+    codemason_tui::crossterm_input::handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
     )
@@ -1510,8 +1622,11 @@ async fn test_provider_picker_already_configured_router_opens_setup_router() {
         force_key_entry: false,
     });
 
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
 
     assert!(
         matches!(

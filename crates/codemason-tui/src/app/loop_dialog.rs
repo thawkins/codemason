@@ -21,7 +21,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use codemason_app_core::input_event::{Key, KeyInput};
 
 use codemason_agent::agent::AgentInfo;
 use codemason_agent::session::loop_state::LoopSpec;
@@ -406,8 +406,8 @@ pub fn open_loop_setup(app: &mut App) {
 /// - `Space` toggles the checkpoints switch when it is focused.
 /// - `Enter` validates and starts the loop; a missing goal returns to the
 ///   dialog with an error naming the field (FR-005).
-pub fn handle_loop_setup_key(app: &mut App, key: KeyEvent) {
-    if key.code == KeyCode::Esc {
+pub fn handle_loop_setup_key(app: &mut App, key: KeyInput) {
+    if key.key == Key::Esc {
         // FR-004: cancel without starting; keep the entered values.
         app.loop_setup_draft = app.loop_setup.take();
         app.status = "loop: setup cancelled (values kept)".to_string();
@@ -417,8 +417,8 @@ pub fn handle_loop_setup_key(app: &mut App, key: KeyEvent) {
         return;
     };
     let is_text = state.active_field.is_text();
-    match key.code {
-        KeyCode::Enter => {
+    match key.key {
+        Key::Enter => {
             let defaults = loop_config_defaults();
             match build_spec_from_state(&state, &defaults) {
                 Ok(spec) => {
@@ -432,23 +432,23 @@ pub fn handle_loop_setup_key(app: &mut App, key: KeyEvent) {
             }
             return;
         }
-        KeyCode::Tab => {
+        Key::Tab => {
             state.active_field = state.active_field.next();
         }
-        KeyCode::BackTab => {
+        Key::BackTab => {
             state.active_field = state.active_field.previous();
         }
-        KeyCode::Up => match state.active_field {
+        Key::Up => match state.active_field {
             LoopSetupField::Agent => state.select_previous_agent(),
             LoopSetupField::Checkpoints => state.checkpoints = !state.checkpoints,
             field => state.active_field = field.previous(),
         },
-        KeyCode::Down => match state.active_field {
+        Key::Down => match state.active_field {
             LoopSetupField::Agent => state.select_next_agent(),
             LoopSetupField::Checkpoints => state.checkpoints = !state.checkpoints,
             field => state.active_field = field.next(),
         },
-        KeyCode::Char(' ') if state.active_field == LoopSetupField::Checkpoints => {
+        Key::Char(' ') if state.active_field == LoopSetupField::Checkpoints => {
             state.checkpoints = !state.checkpoints;
         }
         _ => {

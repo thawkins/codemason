@@ -20,6 +20,7 @@
 #![allow(clippy::await_holding_lock)]
 #![cfg(test)]
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::sync::MutexGuard;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

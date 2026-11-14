@@ -2,6 +2,7 @@
 //! while a turn is running, Enter confirms the halt (turn cancel flag set,
 //! loop interrupt raised) and Esc keeps the agent running.
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{Terminal, backend::TestBackend};
 

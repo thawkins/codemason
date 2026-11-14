@@ -349,7 +349,7 @@ fn is_terminal_member_status(status: MemberStatus) -> bool {
 // -- Keyboard block-cursor navigation (Agents / Teams windows) ---------------
 
 /// Key-handling contract for the two modal windows, keyboard-first (upheld by
-/// `handle_key_event` in `input_handler.rs`):
+/// `App::handle_key` in `input_handler.rs`):
 ///
 /// - the window keys arm before the main input editor so no key leaks into the
 ///   message buffer (FR-055) while a popup owns the keyboard;

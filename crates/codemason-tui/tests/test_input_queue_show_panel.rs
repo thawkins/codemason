@@ -7,6 +7,7 @@
 //! the only key that dismisses the panel. The panel must never mutate the
 //! editable input buffer, the staged attachments, or the running turn.
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 

@@ -23,6 +23,7 @@ mod support;
 use codemason_config::OtelProtocol;
 use codemason_tui::App;
 use codemason_tui::app::ProviderSetupStep;
+use codemason_tui::crossterm_input::CrosstermAppExt;
 
 fn last_message_text(app: &App) -> String {
     app.session

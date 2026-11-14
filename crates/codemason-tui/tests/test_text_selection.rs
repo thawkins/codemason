@@ -3,6 +3,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use ratatui::{Terminal, backend::TestBackend};

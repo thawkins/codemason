@@ -104,7 +104,7 @@ async fn test_multiple_choice_selection_navigates_down() {
     .await;
 
     // Simulate pressing Down (Char('j')).
-    let _ = codemason_tui::input::handle_key(
+    let _ = codemason_tui::crossterm_input::handle_key(
         &mut app,
         crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Char('j')),
     )

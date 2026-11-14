@@ -15,7 +15,7 @@
 //! sidebar's single-key shortcut or `/session` subcommand, so the paths
 //! cannot drift apart.
 
-use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use codemason_app_core::input_event::{Key, KeyInput, MouseButton, MouseInput, MouseKind};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -943,7 +943,7 @@ fn activate(app: &mut App, index: usize, in_submenu: bool) {
 /// # Returns
 ///
 /// `true` when the menu is open (it consumes every key), `false` otherwise.
-pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
+pub fn handle_key(app: &mut App, key: KeyInput) -> bool {
     let Some(menu) = app.sidebar.menu.as_mut() else {
         return false;
     };
@@ -953,20 +953,20 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
         None => menu,
     };
     let last = level.items.len().saturating_sub(1);
-    match key.code {
-        KeyCode::Up => level.cursor = level.cursor.saturating_sub(1),
-        KeyCode::Down => level.cursor = (level.cursor + 1).min(last),
-        KeyCode::Home => level.cursor = 0,
-        KeyCode::End => level.cursor = last,
-        KeyCode::Enter => {
+    match key.key {
+        Key::Up => level.cursor = level.cursor.saturating_sub(1),
+        Key::Down => level.cursor = (level.cursor + 1).min(last),
+        Key::Home => level.cursor = 0,
+        Key::End => level.cursor = last,
+        Key::Enter => {
             let index = level.cursor;
             activate(app, index, in_submenu);
         }
-        KeyCode::Right if !in_submenu => {
+        Key::Right if !in_submenu => {
             let index = level.cursor;
             open_submenu(app, index);
         }
-        KeyCode::Esc | KeyCode::Left => {
+        Key::Esc | Key::Left => {
             if let Some(menu) = app.sidebar.menu.as_mut()
                 && in_submenu
             {
@@ -975,7 +975,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
                 app.sidebar.menu = None;
             }
         }
-        KeyCode::Char(c) => {
+        Key::Char(c) => {
             let c = c.to_ascii_lowercase();
             if let Some(index) = level.items.iter().position(|item| item.accel == Some(c)) {
                 activate(app, index, in_submenu);
@@ -993,7 +993,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
 /// `true` when the menu is open (it consumes every event), `false` otherwise.
 /// A left click on an item runs it (or opens its submenu); any other button
 /// press, or a click outside both levels, closes the menu.
-pub fn handle_mouse(app: &mut App, event: MouseEvent) -> bool {
+pub fn handle_mouse(app: &mut App, event: MouseInput) -> bool {
     let Some(menu) = app.sidebar.menu.as_ref() else {
         return false;
     };
@@ -1003,13 +1003,13 @@ pub fn handle_mouse(app: &mut App, event: MouseEvent) -> bool {
         .as_deref()
         .filter(|sub| sub.contains(column, row));
     match event.kind {
-        MouseEventKind::Down(MouseButton::Left) if in_sub.is_some() => {
+        MouseKind::Down(MouseButton::Left) if in_sub.is_some() => {
             // A click on the border or a rule keeps the menu open.
             if let Some(index) = in_sub.and_then(|sub| sub.item_at_row(row)) {
                 activate(app, index, true);
             }
         }
-        MouseEventKind::Down(MouseButton::Left) if menu.contains(column, row) => {
+        MouseKind::Down(MouseButton::Left) if menu.contains(column, row) => {
             if let Some(index) = menu.item_at_row(row) {
                 if let Some(menu) = app.sidebar.menu.as_mut() {
                     menu.submenu = None;
@@ -1017,7 +1017,7 @@ pub fn handle_mouse(app: &mut App, event: MouseEvent) -> bool {
                 activate(app, index, false);
             }
         }
-        MouseEventKind::Down(_) => app.sidebar.menu = None,
+        MouseKind::Down(_) => app.sidebar.menu = None,
         _ => {}
     }
     true

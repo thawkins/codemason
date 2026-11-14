@@ -18,6 +18,7 @@
 #![cfg(test)]
 #![allow(clippy::await_holding_lock)]
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

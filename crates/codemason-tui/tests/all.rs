@@ -131,6 +131,8 @@ mod test_agentui_t019_offline;
 mod test_alt_a_agents_window;
 #[path = "test_alt_t_teams_window.rs"]
 mod test_alt_t_teams_window;
+#[path = "test_app_core_input.rs"]
+mod test_app_core_input;
 #[path = "test_app_send_sync.rs"]
 mod test_app_send_sync;
 #[path = "test_automation_command.rs"]

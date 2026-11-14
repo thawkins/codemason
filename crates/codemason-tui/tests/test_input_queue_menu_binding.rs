@@ -7,9 +7,11 @@
 //! three-option rendering and the `Next`/`Stop`/`Clear` actions are covered by
 //! the T-014..T-019 tests.
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use codemason_tui::input::{InputAction, handle_key};
+use codemason_tui::crossterm_input::handle_key;
+use codemason_tui::input::InputAction;
 
 #[path = "support/mod.rs"]
 mod support;

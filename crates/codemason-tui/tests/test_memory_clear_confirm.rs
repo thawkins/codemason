@@ -12,6 +12,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{Terminal, backend::TestBackend};
 use tempfile::TempDir;

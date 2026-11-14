@@ -127,7 +127,7 @@ async fn test_research_clarification_dialog_round_trip_publishes_answer() {
 
     // Type the answer and submit it with Enter (the free-text dialog path).
     app.session.pending_question_input = "  async runtimes  ".to_string();
-    let _ = codemason_tui::input::handle_key(
+    let _ = codemason_tui::crossterm_input::handle_key(
         &mut app,
         crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Enter),
     )
@@ -176,7 +176,7 @@ async fn test_research_clarification_dismissed_marker_rejected() {
     })
     .await;
 
-    let _ = codemason_tui::input::handle_key(
+    let _ = codemason_tui::crossterm_input::handle_key(
         &mut app,
         crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Esc),
     )

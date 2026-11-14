@@ -23,6 +23,7 @@
 //! points - the same methods the menu key-handling invokes - after the menu has
 //! been opened through the real `ALT-Q` keystroke path.
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

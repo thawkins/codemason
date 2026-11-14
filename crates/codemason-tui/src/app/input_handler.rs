@@ -1,10 +1,13 @@
 //! Keyboard and mouse event handling for the TUI.
 use std::sync::atomic::Ordering;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use codemason_app_core::input_event::{
+    Key, KeyInput, Modifiers, MouseButton, MouseInput, MouseKind,
+};
 
 use codemason_agent::event::Event;
 
+use crate::app::HandleOutcome;
 use crate::input::{self, InputAction};
 
 // Prompt optimization templates
@@ -38,32 +41,32 @@ fn alt_o_default_autopilot_time_limit() -> u64 {
 }
 
 impl App {
-    pub(crate) fn handle_history_picker_key(&mut self, key: KeyEvent) {
-        use crossterm::event::KeyCode;
+    pub(crate) fn handle_history_picker_key(&mut self, key: KeyInput) {
+        use codemason_app_core::input_event::Key;
         let picker = match self.history_picker.as_mut() {
             Some(p) => p,
             None => return,
         };
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
+        match key.key {
+            Key::Esc | Key::Char('q') => {
                 self.history_picker = None;
             }
-            KeyCode::Up | KeyCode::Char('k') if picker.selected > 0 => {
+            Key::Up | Key::Char('k') if picker.selected > 0 => {
                 picker.selected -= 1;
                 if picker.selected < picker.scroll_offset {
                     picker.scroll_offset = picker.selected;
                 }
             }
-            KeyCode::Down | KeyCode::Char('j') if picker.selected + 1 < picker.entries.len() => {
+            Key::Down | Key::Char('j') if picker.selected + 1 < picker.entries.len() => {
                 picker.selected += 1;
             }
-            KeyCode::Enter => {
+            Key::Enter => {
                 let chosen = picker.entries[picker.selected].clone();
                 self.history_picker = None;
                 self.session.input = chosen;
                 self.set_cursor_char_index_clamped(self.input_len_chars());
             }
-            KeyCode::Char('c') => {
+            Key::Char('c') => {
                 // Copy the highlighted entry to the clipboard without closing
                 // the picker, so several entries can be copied in one session.
                 let chosen = picker.entries[picker.selected].clone();
@@ -79,29 +82,29 @@ impl App {
     /// Mirrors the history picker: Up/Down (or k/j) move the selection,
     /// Enter restores the highlighted backup over the global `codemason.json`,
     /// and Esc/q close the picker without taking any action.
-    pub fn handle_config_save_picker_key(&mut self, key: KeyEvent) {
-        use crossterm::event::KeyCode;
+    pub fn handle_config_save_picker_key(&mut self, key: KeyInput) {
+        use codemason_app_core::input_event::Key;
 
         let picker = match self.config_save_picker.as_mut() {
             Some(p) => p,
             None => return,
         };
 
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
+        match key.key {
+            Key::Esc | Key::Char('q') => {
                 self.config_save_picker = None;
                 self.status = "config list: cancelled".to_string();
             }
-            KeyCode::Up | KeyCode::Char('k') if picker.selected > 0 => {
+            Key::Up | Key::Char('k') if picker.selected > 0 => {
                 picker.selected -= 1;
                 if picker.selected < picker.scroll_offset {
                     picker.scroll_offset = picker.selected;
                 }
             }
-            KeyCode::Down | KeyCode::Char('j') if picker.selected + 1 < picker.entries.len() => {
+            Key::Down | Key::Char('j') if picker.selected + 1 < picker.entries.len() => {
                 picker.selected += 1;
             }
-            KeyCode::Enter => {
+            Key::Enter => {
                 let backup = picker.entries[picker.selected].clone();
                 let config_dir = picker.config_dir.clone();
                 self.config_save_picker = None;
@@ -169,7 +172,7 @@ impl App {
     /// while leaving the active category unchanged. Every path is pure in-memory
     /// bookkeeping and installs nothing. A click or wheel that lands on the modal
     /// but outside both columns is swallowed, so nothing behind the panel reacts.
-    fn handle_connector_catalogue_mouse(&mut self, event: MouseEvent) {
+    fn handle_connector_catalogue_mouse(&mut self, event: MouseInput) {
         let nav_area = self.connector_store_nav_area;
         let marketplace_area = self.connector_store_marketplace_area;
         let result_area = self.connector_store_result_area;
@@ -184,10 +187,10 @@ impl App {
             // A left-click on the search box's `[x] clear` button clears the live
             // filter. Checked before the generic result/navigator cases so the
             // button, painted in the bottom row, is never mis-attributed.
-            MouseEventKind::Down(MouseButton::Left) if in_clear => {
+            MouseKind::Down(MouseButton::Left) if in_clear => {
                 self.connector_catalogue_clear_search();
             }
-            MouseEventKind::Down(MouseButton::Left) if in_nav => {
+            MouseKind::Down(MouseButton::Left) if in_nav => {
                 let row = event.row.saturating_sub(nav_area.y) as usize;
                 if let Some(browser) = self.connector_store.as_mut() {
                     // Map the clicked viewport row to an absolute navigator row
@@ -199,7 +202,7 @@ impl App {
                 }
                 self.needs_redraw = true;
             }
-            MouseEventKind::Down(MouseButton::Left) if in_marketplace => {
+            MouseKind::Down(MouseButton::Left) if in_marketplace => {
                 let row = event.row.saturating_sub(marketplace_area.y) as usize;
                 if let Some(browser) = self.connector_store.as_mut() {
                     // Same viewport-to-absolute mapping as the category navigator,
@@ -210,7 +213,7 @@ impl App {
                 }
                 self.needs_redraw = true;
             }
-            MouseEventKind::Down(MouseButton::Left) if in_results => {
+            MouseKind::Down(MouseButton::Left) if in_results => {
                 let row = event.row.saturating_sub(result_area.y) as usize;
                 if let Some(browser) = self.connector_store.as_mut() {
                     // The result list scrolls as its cursor moves; an out-of-range
@@ -223,37 +226,37 @@ impl App {
                 }
                 self.needs_redraw = true;
             }
-            MouseEventKind::ScrollDown if in_nav => {
+            MouseKind::ScrollDown if in_nav => {
                 if let Some(browser) = self.connector_store.as_mut() {
                     browser.category_scroll_by(SCROLL_STEP_LINES as i16);
                 }
                 self.needs_redraw = true;
             }
-            MouseEventKind::ScrollUp if in_nav => {
+            MouseKind::ScrollUp if in_nav => {
                 if let Some(browser) = self.connector_store.as_mut() {
                     browser.category_scroll_by(-(SCROLL_STEP_LINES as i16));
                 }
                 self.needs_redraw = true;
             }
-            MouseEventKind::ScrollDown if in_marketplace => {
+            MouseKind::ScrollDown if in_marketplace => {
                 if let Some(browser) = self.connector_store.as_mut() {
                     browser.marketplace_scroll_by(SCROLL_STEP_LINES as i16);
                 }
                 self.needs_redraw = true;
             }
-            MouseEventKind::ScrollUp if in_marketplace => {
+            MouseKind::ScrollUp if in_marketplace => {
                 if let Some(browser) = self.connector_store.as_mut() {
                     browser.marketplace_scroll_by(-(SCROLL_STEP_LINES as i16));
                 }
                 self.needs_redraw = true;
             }
-            MouseEventKind::ScrollDown if in_results => {
+            MouseKind::ScrollDown if in_results => {
                 if let Some(browser) = self.connector_store.as_mut() {
                     browser.scroll_results_by(SCROLL_STEP_LINES as i16);
                 }
                 self.needs_redraw = true;
             }
-            MouseEventKind::ScrollUp if in_results => {
+            MouseKind::ScrollUp if in_results => {
                 if let Some(browser) = self.connector_store.as_mut() {
                     browser.scroll_results_by(-(SCROLL_STEP_LINES as i16));
                 }
@@ -284,7 +287,7 @@ impl App {
     /// A click or wheel that lands on the modal but outside every column is
     /// swallowed, so it can never start a message text selection or open a context
     /// menu on a surface hidden behind the panel.
-    fn handle_plugin_store_mouse(&mut self, event: MouseEvent) {
+    fn handle_plugin_store_mouse(&mut self, event: MouseInput) {
         let nav_area = self.plugin_store_nav_area;
         let marketplace_area = self.plugin_store_marketplace_area;
         let result_area = self.plugin_store_result_area;
@@ -299,10 +302,10 @@ impl App {
             // A left-click on the search box's `[x] clear` button clears the live
             // filter (FR-004). Checked before the generic result/navigator cases so
             // the button, painted in the bottom row, is never mis-attributed.
-            MouseEventKind::Down(MouseButton::Left) if in_clear => {
+            MouseKind::Down(MouseButton::Left) if in_clear => {
                 self.plugin_store_clear_search();
             }
-            MouseEventKind::Down(MouseButton::Left) if in_nav => {
+            MouseKind::Down(MouseButton::Left) if in_nav => {
                 let row = event.row.saturating_sub(nav_area.y) as usize;
                 if let Some(browser) = self.plugin_store.as_mut() {
                     // Map the clicked viewport row to an absolute navigator row
@@ -315,7 +318,7 @@ impl App {
                 }
                 self.needs_redraw = true;
             }
-            MouseEventKind::Down(MouseButton::Left) if in_marketplace => {
+            MouseKind::Down(MouseButton::Left) if in_marketplace => {
                 let row = event.row.saturating_sub(marketplace_area.y) as usize;
                 if let Some(browser) = self.plugin_store.as_mut() {
                     // Same viewport-to-absolute mapping as the category navigator, with
@@ -326,7 +329,7 @@ impl App {
                 }
                 self.needs_redraw = true;
             }
-            MouseEventKind::Down(MouseButton::Left) if in_results => {
+            MouseKind::Down(MouseButton::Left) if in_results => {
                 let row = event.row.saturating_sub(result_area.y) as usize;
                 if let Some(browser) = self.plugin_store.as_mut() {
                     // The result list scrolls as its cursor moves, so the row-to-index
@@ -339,37 +342,37 @@ impl App {
                 }
                 self.needs_redraw = true;
             }
-            MouseEventKind::ScrollDown if in_nav => {
+            MouseKind::ScrollDown if in_nav => {
                 if let Some(browser) = self.plugin_store.as_mut() {
                     browser.category_scroll_by(SCROLL_STEP_LINES as i16);
                 }
                 self.needs_redraw = true;
             }
-            MouseEventKind::ScrollUp if in_nav => {
+            MouseKind::ScrollUp if in_nav => {
                 if let Some(browser) = self.plugin_store.as_mut() {
                     browser.category_scroll_by(-(SCROLL_STEP_LINES as i16));
                 }
                 self.needs_redraw = true;
             }
-            MouseEventKind::ScrollDown if in_marketplace => {
+            MouseKind::ScrollDown if in_marketplace => {
                 if let Some(browser) = self.plugin_store.as_mut() {
                     browser.marketplace_scroll_by(SCROLL_STEP_LINES as i16);
                 }
                 self.needs_redraw = true;
             }
-            MouseEventKind::ScrollUp if in_marketplace => {
+            MouseKind::ScrollUp if in_marketplace => {
                 if let Some(browser) = self.plugin_store.as_mut() {
                     browser.marketplace_scroll_by(-(SCROLL_STEP_LINES as i16));
                 }
                 self.needs_redraw = true;
             }
-            MouseEventKind::ScrollDown if in_results => {
+            MouseKind::ScrollDown if in_results => {
                 if let Some(browser) = self.plugin_store.as_mut() {
                     browser.scroll_results_by(SCROLL_STEP_LINES as i16);
                 }
                 self.needs_redraw = true;
             }
-            MouseEventKind::ScrollUp if in_results => {
+            MouseKind::ScrollUp if in_results => {
                 if let Some(browser) = self.plugin_store.as_mut() {
                     browser.scroll_results_by(-(SCROLL_STEP_LINES as i16));
                 }
@@ -399,10 +402,10 @@ impl App {
     /// # Returns
     /// `true` when the event was a wheel notch, whether or not it landed on the
     /// dialog; `false` for every other mouse event so normal routing continues.
-    fn handle_provider_setup_mouse(&mut self, event: MouseEvent) -> bool {
+    fn handle_provider_setup_mouse(&mut self, event: MouseInput) -> bool {
         let code = match event.kind {
-            MouseEventKind::ScrollUp => KeyCode::Up,
-            MouseEventKind::ScrollDown => KeyCode::Down,
+            MouseKind::ScrollUp => Key::Up,
+            MouseKind::ScrollDown => Key::Down,
             _ => return false,
         };
         // Only the list-bearing selectors react to a notch. A form, a spinner or
@@ -428,7 +431,10 @@ impl App {
                 .provider_setup_area
                 .contains((event.column, event.row).into())
         {
-            let key = KeyEvent::new(code, KeyModifiers::empty());
+            let key = KeyInput {
+                key: code,
+                mods: Modifiers::NONE,
+            };
             input::handle_provider_setup_key(self, key);
             self.needs_redraw = true;
         }
@@ -438,7 +444,7 @@ impl App {
     /// Dispatch a mouse event to the appropriate UI region, updating the input
     /// buffer / cursor / scroll / context menu as needed. Asserts UI
     /// invariants and logs the transition for diagnostics.
-    pub fn handle_mouse_event(&mut self, event: MouseEvent) {
+    pub fn handle_mouse(&mut self, event: MouseInput) {
         let before_input = self.session.input.clone();
         let before_cursor = self.session.input_cursor;
         // While the destructive row-action confirmation dialog is open it owns
@@ -448,7 +454,7 @@ impl App {
         // surface beneath the modal can react (FR-036, FR-037, FR-040, FR-070).
         if self.row_action_confirm_open() {
             let area = self.row_action_confirm_area;
-            if event.kind == MouseEventKind::Down(MouseButton::Left)
+            if event.kind == MouseKind::Down(MouseButton::Left)
                 && area.width > 0
                 && area.contains((event.column, event.row).into())
             {
@@ -504,9 +510,9 @@ impl App {
         }
         // If context menu is open, intercept clicks.
         if self.context_menu.is_some() {
-            if let MouseEventKind::Down(MouseButton::Left) = event.kind {
+            if let MouseKind::Down(MouseButton::Left) = event.kind {
                 self.handle_context_menu_click(event.column, event.row);
-            } else if let MouseEventKind::Down(MouseButton::Right) = event.kind {
+            } else if let MouseKind::Down(MouseButton::Right) = event.kind {
                 // Second right-click dismisses the menu.
                 self.context_menu = None;
             }
@@ -531,7 +537,7 @@ impl App {
             // overlay pinned to its newest page (bug report, fixed as T-021).
             // Research/memory keep their own later arms but are listed after
             // the overlay for the same z-order reason.
-            MouseEventKind::ScrollUp
+            MouseKind::ScrollUp
                 if self.output_view.is_some()
                     && self
                         .output_view_area
@@ -540,7 +546,7 @@ impl App {
                 self.scroll_output_view_by(SCROLL_STEP_LINES as i16);
                 self.needs_redraw = true;
             }
-            MouseEventKind::ScrollDown
+            MouseKind::ScrollDown
                 if self.output_view.is_some()
                     && self
                         .output_view_area
@@ -556,7 +562,7 @@ impl App {
             // arms precede the research/output-view and pane checks; a wheel
             // over the popup can thus never scroll the surface beneath it
             // (spec `agentui` FR-008, FR-059, T-017).
-            MouseEventKind::ScrollUp
+            MouseKind::ScrollUp
                 if self.active_agents_area.contains((event.column, event.row).into()) =>
             {
                 self.active_agents_scroll_offset = (self
@@ -565,14 +571,14 @@ impl App {
                 .min(self.active_agents_max_scroll);
                 self.needs_redraw = true;
             }
-            MouseEventKind::ScrollDown
+            MouseKind::ScrollDown
                 if self.active_agents_area.contains((event.column, event.row).into()) =>
             {
                 self.active_agents_scroll_offset =
                     self.active_agents_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
                 self.needs_redraw = true;
             }
-            MouseEventKind::ScrollUp
+            MouseKind::ScrollUp
                 if self.teams_area.contains((event.column, event.row).into()) =>
             {
                 self.teams_scroll_offset = (self.teams_scroll_offset.saturating_add(
@@ -581,14 +587,14 @@ impl App {
                 .min(self.teams_max_scroll);
                 self.needs_redraw = true;
             }
-            MouseEventKind::ScrollDown
+            MouseKind::ScrollDown
                 if self.teams_area.contains((event.column, event.row).into()) =>
             {
                 self.teams_scroll_offset =
                     self.teams_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
                 self.needs_redraw = true;
             }
-            MouseEventKind::ScrollUp => {
+            MouseKind::ScrollUp => {
                 if self.research_view.is_some()
                     && self
                         .research_view_area
@@ -629,7 +635,7 @@ impl App {
                     }
                 }
             }
-            MouseEventKind::ScrollDown => {
+            MouseKind::ScrollDown => {
                 if self.research_view.is_some()
                     && self
                         .research_view_area
@@ -671,7 +677,7 @@ impl App {
                 }
             }
             // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-            MouseEventKind::Down(MouseButton::Left) => {
+            MouseKind::Down(MouseButton::Left) => {
                 let pos = (event.column, event.row);
                 if self.agents_button_area.contains(pos.into()) {
                     self.toggle_agents_window();
@@ -887,7 +893,7 @@ impl App {
                     }
                 }
             }
-            MouseEventKind::Drag(MouseButton::Left) => {
+            MouseKind::Drag(MouseButton::Left) => {
                 if let Some(pane) = self.scrollbar_drag {
                     self.apply_scrollbar_drag(event.row, pane);
                 } else if let Some(ref mut sel) = self.text_selection {
@@ -896,7 +902,7 @@ impl App {
             }
 
             // Mouse move -> used for hover highlighting of file menu entries
-            MouseEventKind::Moved
+            MouseKind::Moved
                 // If file menu is open, update the highlighted row under the cursor.
                 if self.file_menu.is_some() => {
                     // Snapshot needed values without holding immutable borrows while mutating.
@@ -935,11 +941,11 @@ impl App {
                     }
                 }
 
-            MouseEventKind::Up(MouseButton::Left) => {
+            MouseKind::Up(MouseButton::Left) => {
                 self.scrollbar_drag = None;
                 // Keep text_selection alive so it stays highlighted until right-click or next click
             }
-            MouseEventKind::Down(MouseButton::Right) => {
+            MouseKind::Down(MouseButton::Right) => {
                 // Right-click contract: always open context menu when inside a pane.
                 // Actions are enabled only when valid for that pane + selection context.
                 let col = event.column;
@@ -1165,10 +1171,27 @@ impl App {
         }
     }
 
+    /// Dispatch a key press to the active UI region and report the outcome.
+    ///
+    /// # Arguments
+    /// * `input` - the key press (frontends filter out releases first).
+    ///
+    /// # Returns
+    /// [`HandleOutcome::Quit`] when the key stopped the app
+    /// (`is_running` is now `false`), otherwise [`HandleOutcome::Consumed`].
+    pub async fn handle_key(&mut self, input: KeyInput) -> HandleOutcome {
+        self.dispatch_key(input).await;
+        if self.is_running {
+            HandleOutcome::Consumed
+        } else {
+            HandleOutcome::Quit
+        }
+    }
+
     /// Dispatch a key event to the active UI region (history picker, agent /
     /// teams dialog, slash menu, context menu, or the main input editor).
     /// Asserts UI invariants and logs the transition for diagnostics.
-    pub async fn handle_key_event(&mut self, key: KeyEvent) {
+    async fn dispatch_key(&mut self, key: KeyInput) {
         let before_input = self.session.input.clone();
         let before_cursor = self.session.input_cursor;
         // Self-heal any selection/menu anchored on a panel that a recent
@@ -1184,9 +1207,9 @@ impl App {
         if self.session.run_cost_banner.take().is_some() {
             self.session.run_cost_banner_at = None;
             self.needs_redraw = true;
-            let is_plain_char = matches!(key.code, KeyCode::Char(_))
-                && !key.modifiers.contains(KeyModifiers::CONTROL)
-                && !key.modifiers.contains(KeyModifiers::ALT);
+            let is_plain_char = matches!(key.key, Key::Char(_))
+                && !key.mods.contains(Modifiers::CTRL)
+                && !key.mods.contains(Modifiers::ALT);
             // Alt+X (open the stop dialog) and every key while the stop
             // dialog or the destructive row-action confirmation is open fall
             // through to normal processing instead of being consumed by the
@@ -1194,8 +1217,7 @@ impl App {
             // or its `Enter`/`Esc` answer swallowed by the banner's dismissal.
             let is_stop_confirm = self.session.pending_stop_confirm
                 || self.row_action_confirm_open()
-                || (matches!(key.code, KeyCode::Char('x'))
-                    && key.modifiers.contains(KeyModifiers::ALT));
+                || (matches!(key.key, Key::Char('x')) && key.mods.contains(Modifiers::ALT));
             // The always-on quit keys (Ctrl+C/Ctrl+D) also fall through, so
             // quitting works identically while the cost banner is showing
             // (LOW-6).
@@ -1227,18 +1249,18 @@ impl App {
         // move between `Yes` and `No`, `Enter` selects, `Esc` dismisses;
         // everything else is swallowed so nothing reaches the input buffer.
         if self.row_action_confirm_open() {
-            match key.code {
-                KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
+            match key.key {
+                Key::Left | Key::Right | Key::Tab | Key::BackTab => {
                     self.row_action_confirm_toggle();
                 }
-                KeyCode::Enter => {
+                Key::Enter => {
                     if self.row_action_confirm_is_yes() {
                         self.row_action_confirm_accept();
                     } else {
                         self.row_action_confirm_cancel();
                     }
                 }
-                KeyCode::Esc => self.row_action_confirm_cancel(),
+                Key::Esc => self.row_action_confirm_cancel(),
                 _ => {}
             }
             self.assert_ui_invariants();
@@ -1250,42 +1272,42 @@ impl App {
         // input editor, and while the output overlay sits on top of the popup
         // its own keys (Esc close, PgUp/PgDn scroll) keep working.
         if self.show_agents_window && self.output_view.is_none() {
-            let consumed = match key.code {
-                KeyCode::Up => {
+            let consumed = match key.key {
+                Key::Up => {
                     self.move_agents_cursor(-1);
                     true
                 }
-                KeyCode::Down => {
+                Key::Down => {
                     self.move_agents_cursor(1);
                     true
                 }
-                KeyCode::PageUp => {
+                Key::PageUp => {
                     self.page_agents_cursor(-1);
                     true
                 }
-                KeyCode::PageDown => {
+                Key::PageDown => {
                     self.page_agents_cursor(1);
                     true
                 }
-                KeyCode::Char(' ') => {
+                Key::Char(' ') => {
                     self.agents_cursor_toggle_stop_resume();
                     true
                 }
-                KeyCode::Delete => {
+                Key::Delete => {
                     self.agents_cursor_kill();
                     true
                 }
-                KeyCode::Enter => {
+                Key::Enter => {
                     self.agents_cursor_open_output();
                     true
                 }
-                KeyCode::Char('K') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                Key::Char('K') if key.mods.contains(Modifiers::SHIFT) => {
                     self.agents_cursor_kill();
                     true
                 }
                 // `Esc` is the window's only dismissal: the modal carries no
                 // Close button, so the footer legend ends with `Esc close`.
-                KeyCode::Esc => {
+                Key::Esc => {
                     self.close_agents_window();
                     true
                 }
@@ -1298,42 +1320,42 @@ impl App {
             }
         }
         if self.show_teams_window && self.output_view.is_none() {
-            let consumed = match key.code {
-                KeyCode::Up => {
+            let consumed = match key.key {
+                Key::Up => {
                     self.move_teams_cursor(-1);
                     true
                 }
-                KeyCode::Down => {
+                Key::Down => {
                     self.move_teams_cursor(1);
                     true
                 }
-                KeyCode::PageUp => {
+                Key::PageUp => {
                     self.page_teams_cursor(-1);
                     true
                 }
-                KeyCode::PageDown => {
+                Key::PageDown => {
                     self.page_teams_cursor(1);
                     true
                 }
-                KeyCode::Char(' ') => {
+                Key::Char(' ') => {
                     self.teams_cursor_toggle_stop_resume();
                     true
                 }
-                KeyCode::Delete => {
+                Key::Delete => {
                     self.teams_cursor_shutdown();
                     true
                 }
-                KeyCode::Enter => {
+                Key::Enter => {
                     self.teams_cursor_focus();
                     true
                 }
-                KeyCode::Char('K') | KeyCode::Char('k') => {
+                Key::Char('K') | Key::Char('k') => {
                     self.teams_cursor_shutdown();
                     true
                 }
                 // Mirror the Agents window: `Esc` dismisses, since there is no
                 // Close button to click.
-                KeyCode::Esc => {
+                Key::Esc => {
                     self.close_teams_window();
                     true
                 }

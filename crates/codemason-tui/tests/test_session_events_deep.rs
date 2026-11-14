@@ -33,7 +33,7 @@ use codemason_tui::app::{
     ConnectorCatalogueInstallResult, ConnectorEnrichResult, PluginStoreBrowser,
     PluginStoreInstallResult, PluginStoreStatus, StorePane,
 };
-use codemason_tui::input::handle_key;
+use codemason_tui::crossterm_input::handle_key;
 
 #[path = "support/mod.rs"]
 mod support;

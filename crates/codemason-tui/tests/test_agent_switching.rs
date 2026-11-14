@@ -4,6 +4,7 @@
 ///
 /// Verifies that cycling through agents updates the agent name, status bar,
 /// log entries, and publishes `AgentSwitched` events when a session is active.
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::sync::Arc;
 
 use codemason_agent::{

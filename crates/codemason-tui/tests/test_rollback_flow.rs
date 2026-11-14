@@ -9,6 +9,7 @@
 //!   discards the pending capture so no later rollback can resurrect it;
 //! - the offer is not armed for events from a different session.
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;

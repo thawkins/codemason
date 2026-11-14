@@ -14,6 +14,7 @@
 //! neither channel is left unverified, and the category-less and malformed
 //! fixtures pin the `ALL`-only and inline-error fallbacks.
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,7 +28,7 @@ use codemason_connectors::CategoryFilter;
 use codemason_plugins::{FixtureStoreFetcher, StoreKind};
 use codemason_tui::App;
 use codemason_tui::app::PluginStoreBrowser;
-use codemason_tui::input::handle_key;
+use codemason_tui::crossterm_input::handle_key;
 use codemason_tui::layout;
 
 #[path = "support/mod.rs"]

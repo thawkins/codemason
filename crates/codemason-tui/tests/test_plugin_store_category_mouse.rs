@@ -10,6 +10,7 @@
 //! result row moves the result cursor and leaves the category alone, and every
 //! mouse path installs nothing and never touches the message input.
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;

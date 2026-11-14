@@ -8,6 +8,7 @@
 //! T-015/T-016/T-017 suites; this suite exercises the key path that opens and
 //! dismisses the overlay.
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 

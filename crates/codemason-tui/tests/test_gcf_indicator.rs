@@ -10,6 +10,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::sync::MutexGuard;
 
 use codemason_tui::{App, layout};

@@ -1,6 +1,7 @@
 //! Tests for `test_force_cleanup_modal.rs`
 
 use codemason_agent::team::{MemberStatus, TeamConfig, TeamMember, TeamStore};
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[path = "support/mod.rs"]

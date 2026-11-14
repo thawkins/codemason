@@ -11,6 +11,7 @@
 mod support;
 
 use codemason_tui::App;
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// Press the `Alt+O` chord the way the TUI main loop does.

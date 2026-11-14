@@ -17,6 +17,7 @@
 #![cfg(test)]
 #![allow(clippy::await_holding_lock)]
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::sync::Arc;
 use std::time::Duration;
 

@@ -10,6 +10,7 @@
 
 mod support;
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::collections::HashMap;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

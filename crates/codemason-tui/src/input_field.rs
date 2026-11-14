@@ -4,7 +4,7 @@
 //! word navigation, and deletion - mirroring the behaviour of the main
 //! message input but in a self-contained, reusable struct.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use codemason_app_core::input_event::{Key, KeyInput, Modifiers};
 
 /// A single-line text input field.
 ///
@@ -313,7 +313,7 @@ impl InputField {
 
     // -- Key event handler -----------------------------------------------
 
-    /// Process a [`KeyEvent`] and return `true` if the event was consumed.
+    /// Process a [`KeyInput`] and return `true` if the event was consumed.
     ///
     /// Supports:
     /// - Typing characters (replacing selection)
@@ -329,44 +329,44 @@ impl InputField {
     /// - Ctrl+W (delete previous word)
     /// - Ctrl+K (delete to end)
     /// - Ctrl+U (clear)
-    pub fn handle_key(&mut self, key: KeyEvent) -> bool {
-        use KeyCode::{Backspace, Char, Delete, End, Home, Left, Right};
+    pub fn handle_key(&mut self, key: KeyInput) -> bool {
+        use Key::{Backspace, Char, Delete, End, Home, Left, Right};
 
-        match key.code {
-            Char('a') if key.modifiers == KeyModifiers::CONTROL => {
+        match key.key {
+            Char('a') if key.mods == Modifiers::CTRL => {
                 self.select_all();
                 true
             }
-            Char('c') if key.modifiers == KeyModifiers::CONTROL => {
+            Char('c') if key.mods == Modifiers::CTRL => {
                 self.copy_selection();
                 true
             }
-            Char('x') if key.modifiers == KeyModifiers::CONTROL => {
+            Char('x') if key.mods == Modifiers::CTRL => {
                 self.cut_selection();
                 true
             }
             Char('v')
-                if key.modifiers == KeyModifiers::CONTROL
-                    || key.modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
+                if key.mods == Modifiers::CTRL
+                    || key.mods == (Modifiers::CTRL | Modifiers::SHIFT) =>
             {
                 self.paste_clipboard();
                 true
             }
-            Char('w') if key.modifiers == KeyModifiers::CONTROL => {
+            Char('w') if key.mods == Modifiers::CTRL => {
                 self.delete_prev_word();
                 true
             }
-            Char('k') if key.modifiers == KeyModifiers::CONTROL => {
+            Char('k') if key.mods == Modifiers::CTRL => {
                 self.delete_to_end();
                 true
             }
-            Char('u') if key.modifiers == KeyModifiers::CONTROL => {
+            Char('u') if key.mods == Modifiers::CTRL => {
                 self.text.clear();
                 self.cursor = 0;
                 self.anchor = None;
                 true
             }
-            Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            Char(c) if key.mods.is_empty() || key.mods == Modifiers::SHIFT => {
                 self.insert_char(c);
                 true
             }
@@ -378,33 +378,33 @@ impl InputField {
                 self.delete();
                 true
             }
-            Left if key.modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) => {
+            Left if key.mods == (Modifiers::CTRL | Modifiers::SHIFT) => {
                 if self.anchor.is_none() {
                     self.anchor = Some(self.cursor);
                 }
                 self.move_word_left();
                 true
             }
-            Right if key.modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) => {
+            Right if key.mods == (Modifiers::CTRL | Modifiers::SHIFT) => {
                 if self.anchor.is_none() {
                     self.anchor = Some(self.cursor);
                 }
                 self.move_word_right();
                 true
             }
-            Left if key.modifiers == KeyModifiers::SHIFT => {
+            Left if key.mods == Modifiers::SHIFT => {
                 self.select_left();
                 true
             }
-            Right if key.modifiers == KeyModifiers::SHIFT => {
+            Right if key.mods == Modifiers::SHIFT => {
                 self.select_right();
                 true
             }
-            Left if key.modifiers == KeyModifiers::CONTROL => {
+            Left if key.mods == Modifiers::CTRL => {
                 self.move_word_left();
                 true
             }
-            Right if key.modifiers == KeyModifiers::CONTROL => {
+            Right if key.mods == Modifiers::CTRL => {
                 self.move_word_right();
                 true
             }
@@ -416,11 +416,11 @@ impl InputField {
                 self.move_right();
                 true
             }
-            Home if key.modifiers == KeyModifiers::CONTROL => {
+            Home if key.mods == Modifiers::CTRL => {
                 self.move_home();
                 true
             }
-            End if key.modifiers == KeyModifiers::CONTROL => {
+            End if key.mods == Modifiers::CTRL => {
                 self.move_end();
                 true
             }

@@ -13,6 +13,7 @@
 
 mod support;
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -20,7 +21,8 @@ use ratatui::backend::TestBackend;
 use codemason_agent::task::{ReportStatus, TaskEntry, TaskStatus};
 use codemason_agent::team::TeamConfig;
 use codemason_tui::App;
-use codemason_tui::input::{InputAction, handle_key};
+use codemason_tui::crossterm_input::handle_key;
+use codemason_tui::input::InputAction;
 use support::make_app;
 
 /// The lead session id used by every case.

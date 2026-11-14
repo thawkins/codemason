@@ -42,8 +42,11 @@ async fn test_model_selection_opens_thinking_selector_for_reasoning_models() {
         selected: 0,
     });
 
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
 
     match app.provider_setup.as_ref() {
         Some(ProviderSetupStep::SelectThinkingLevel {
@@ -74,8 +77,11 @@ async fn test_thinking_selector_confirm_persists_selected_level() {
         selected: 4,
     });
 
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
 
     assert_eq!(
         app.session.selected_model.as_deref(),
@@ -128,8 +134,11 @@ async fn test_ollama_model_with_empty_levels_still_opens_thinking_selector() {
         selected: 0,
     });
 
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
 
     match app.provider_setup.as_ref() {
         Some(ProviderSetupStep::SelectThinkingLevel {
@@ -173,8 +182,11 @@ async fn test_ollama_reasoning_model_defaults_to_low_thinking() {
         selected: 0,
     });
 
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
 
     match app.provider_setup.as_ref() {
         Some(ProviderSetupStep::SelectThinkingLevel { selected, .. }) => {

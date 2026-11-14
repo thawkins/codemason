@@ -8,6 +8,8 @@
 
 pub mod adapters;
 pub mod app;
+#[doc(hidden)]
+pub mod crossterm_input;
 pub mod input;
 pub mod input_field;
 pub mod input_prompt;
@@ -1048,11 +1050,24 @@ pub async fn run_tui(
                     Some(event) => {
                         let mut got_input = false;
                         match event {
-                            CtEvent::Key(key) => { app.handle_key_event(key).await; got_input = true; }
+                            CtEvent::Key(key) => {
+                                // Key releases (reported on Windows and under
+                                // kitty event-type reporting) are not presses;
+                                // the app only ever sees presses and repeats.
+                                if key.kind != ct_event::KeyEventKind::Release
+                                    && let Some(input) = adapters::from_crossterm_key(key)
+                                {
+                                    app.handle_key(input).await;
+                                }
+                                got_input = true;
+                            }
                             CtEvent::Mouse(mouse)
                                 // Only process mouse events when mouse mode is enabled
                                 if app.mouse_enabled => {
-                                    app.handle_mouse_event(mouse); got_input = true;
+                                    if let Some(input) = adapters::from_crossterm_mouse(mouse) {
+                                        app.handle_mouse(input);
+                                    }
+                                    got_input = true;
                                 }
                             CtEvent::Paste(text) => {
                                 // Insert pasted text as a single operation.

@@ -4952,7 +4952,7 @@ impl App {
     /// (Profile / Log / Todo / Memory) are only reported when their
     /// corresponding `show_*` flag is true, so hidden panels never win
     /// hit-testing even if their cached rect is stale. This is the single
-    /// mouse hit-testing entry point used by `handle_mouse_event` for
+    /// mouse hit-testing entry point used by `handle_mouse` for
     /// left-click selection start, right-click context-menu open, and
     /// scrollbar-gutter detection (FR-013).
     pub fn pane_at(&self, col: u16, row: u16) -> Option<SelectionPane> {

@@ -1,10 +1,10 @@
 //! Keyboard input handling for the TUI.
 //!
-//! Maps terminal key events to high-level [`InputAction`]s, handling both
+//! Maps frontend-neutral key presses ([`KeyInput`]) to high-level [`InputAction`]s, handling both
 //! normal editing mode and the permission dialog intercept.
 
+use codemason_app_core::input_event::{Key, KeyInput, Modifiers};
 use codemason_types::ThinkingLevel;
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::app::{
     App, ConfiguredProvider, ContextAction, ModelPickerEntry, PROVIDER_LIST, ProviderSetupStep,
@@ -18,15 +18,14 @@ use codemason_llm::providers::router_config::Tier;
 /// `Ctrl+D` (confirm quit).
 ///
 /// The quit keys are handled before any modal interception so they work from
-/// every screen. `App::handle_key_event` intercepts a handful of overlays
+/// every screen. `App::handle_key` intercepts a handful of overlays
 /// (the run-cost banner and the history/config-save pickers) *before*
 /// delegating to [`handle_key`]; it consults this predicate so a quit key
 /// falls through to the normal handler and behaves identically no matter which
 /// overlay is active (LOW-6). Keeping the classification in one place means the
 /// global handler and the pre-dialog guard cannot drift.
-pub fn is_global_quit_key(key: KeyEvent) -> bool {
-    matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d'))
-        && key.modifiers.contains(KeyModifiers::CONTROL)
+pub fn is_global_quit_key(key: KeyInput) -> bool {
+    matches!(key.key, Key::Char('c') | Key::Char('d')) && key.mods.contains(Modifiers::CTRL)
 }
 
 /// A high-level action produced by interpreting a key event.
@@ -222,7 +221,7 @@ pub enum InputAction {
     ResearchViewLineDown,
 }
 
-/// Translate a [`KeyEvent`] into an optional [`InputAction`].
+/// Translate a [`KeyInput`] into an optional [`InputAction`].
 ///
 /// When a permission dialog is active, only `y` / `a` / `n` keys are handled
 /// (publishing a permission reply). When the provider setup dialog is active,
@@ -233,25 +232,27 @@ pub enum InputAction {
 /// # Examples
 ///
 /// ```rust,no_run
-/// # use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+/// # use codemason_app_core::input_event::{Key, KeyInput, Modifiers};
 /// # use codemason_tui::App;
 /// # use codemason_tui::input::handle_key;
 /// # async fn example(app: &mut App) {
-/// let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+/// let key = KeyInput {
+///     key: Key::Enter,
+///     mods: Modifiers::NONE,
+/// };
 /// if let Some(action) = handle_key(app, key).await {
 ///     println!("Action: {action:?}");
 /// }
 /// # }
 /// ```
-pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
-    if matches!(key.kind, KeyEventKind::Release) {
-        return None;
-    }
-
+///
+/// Key releases are filtered out by the frontend before conversion to a
+/// [`KeyInput`], so every key reaching this function is a press.
+pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
     // Always check for quit commands first, before any modal interception.
     // This ensures Ctrl+C (arm quit) and Ctrl+D (confirm quit) work globally.
     if is_global_quit_key(key) {
-        if key.code == KeyCode::Char('c') {
+        if key.key == Key::Char('c') {
             // Copy if a keyboard selection is active; otherwise arm quit.
             if app.session.kb_select_anchor.is_some() {
                 return Some(InputAction::CopyToClipboard);
@@ -264,9 +265,9 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
     // If a memory delete confirmation modal is active, intercept Enter/Esc
     // before any other dialog so the confirmation always takes precedence.
     if app.pending_memory_delete.is_some() {
-        match key.code {
-            KeyCode::Enter => return Some(InputAction::ConfirmMemoryDelete),
-            KeyCode::Esc => return Some(InputAction::CancelMemoryDelete),
+        match key.key {
+            Key::Enter => return Some(InputAction::ConfirmMemoryDelete),
+            Key::Esc => return Some(InputAction::CancelMemoryDelete),
             _ => return None,
         }
     }
@@ -274,9 +275,9 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
     // If a router save confirmation modal is active, intercept Enter/Esc
     // before any other dialog so the confirmation always takes precedence.
     if app.pending_router_save.is_some() {
-        match key.code {
-            KeyCode::Enter => return Some(InputAction::ConfirmRouterSave),
-            KeyCode::Esc => return Some(InputAction::CancelRouterSave),
+        match key.key {
+            Key::Enter => return Some(InputAction::ConfirmRouterSave),
+            Key::Esc => return Some(InputAction::CancelRouterSave),
             _ => return None,
         }
     }
@@ -284,11 +285,11 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
     // If the Alt+X stop-agent confirmation modal is active, intercept
     // Enter/Esc before any other dialog so the confirmation always takes
     // precedence. Note: like the modals above, pickers/windows handled by
-    // `handle_key_event`'s pre-checks still outrank this dialog.
+    // `App::handle_key`'s pre-checks still outrank this dialog.
     if app.session.pending_stop_confirm {
-        match key.code {
-            KeyCode::Enter => return Some(InputAction::ConfirmStopAgent),
-            KeyCode::Esc => return Some(InputAction::CancelStopAgent),
+        match key.key {
+            Key::Enter => return Some(InputAction::ConfirmStopAgent),
+            Key::Esc => return Some(InputAction::CancelStopAgent),
             _ => return None,
         }
     }
@@ -310,10 +311,10 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
     // FR-017, FR-024). Placed before the queue modals so the panel has priority while
     // it is open.
     if app.plugin_store.is_some() {
-        match key.code {
-            KeyCode::Tab => app.plugin_store_focus_next(),
-            KeyCode::BackTab => app.plugin_store_focus_prev(),
-            KeyCode::Up => {
+        match key.key {
+            Key::Tab => app.plugin_store_focus_next(),
+            Key::BackTab => app.plugin_store_focus_prev(),
+            Key::Up => {
                 if app.plugin_store_nav_focused() {
                     app.plugin_store_category_move_up();
                 } else if app.plugin_store_marketplace_focused() {
@@ -322,7 +323,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
                     app.plugin_store_move_up();
                 }
             }
-            KeyCode::Down => {
+            Key::Down => {
                 if app.plugin_store_nav_focused() {
                     app.plugin_store_category_move_down();
                 } else if app.plugin_store_marketplace_focused() {
@@ -331,7 +332,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
                     app.plugin_store_move_down();
                 }
             }
-            KeyCode::Enter => {
+            Key::Enter => {
                 if app.plugin_store_nav_focused() {
                     app.plugin_store_category_confirm();
                 } else if app.plugin_store_marketplace_focused() {
@@ -340,17 +341,17 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
                     app.plugin_store_install_selected();
                 }
             }
-            KeyCode::Char('c') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Key::Char('c') if !key.mods.contains(Modifiers::CTRL) => {
                 if app.plugin_store_marketplace_focused() {
                     app.plugin_store_clear_marketplace();
                 } else {
                     app.plugin_store_clear_category();
                 }
             }
-            KeyCode::Backspace | KeyCode::Esc => {
+            Key::Backspace | Key::Esc => {
                 app.plugin_store_edit_or_close();
             }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Key::Char(c) if !key.mods.contains(Modifiers::CTRL) => {
                 app.plugin_store_push_char(c);
             }
             _ => {}
@@ -372,10 +373,10 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
     // own search field. Every other key is swallowed and the input field stays
     // locked.
     if app.connector_store.is_some() {
-        match key.code {
-            KeyCode::Tab => app.connector_catalogue_focus_next(),
-            KeyCode::BackTab => app.connector_catalogue_focus_prev(),
-            KeyCode::Up => {
+        match key.key {
+            Key::Tab => app.connector_catalogue_focus_next(),
+            Key::BackTab => app.connector_catalogue_focus_prev(),
+            Key::Up => {
                 if app.connector_catalogue_nav_focused() {
                     app.connector_catalogue_category_move_up();
                 } else if app.connector_catalogue_marketplace_focused() {
@@ -384,7 +385,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
                     app.connector_catalogue_move_up();
                 }
             }
-            KeyCode::Down => {
+            Key::Down => {
                 if app.connector_catalogue_nav_focused() {
                     app.connector_catalogue_category_move_down();
                 } else if app.connector_catalogue_marketplace_focused() {
@@ -393,7 +394,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
                     app.connector_catalogue_move_down();
                 }
             }
-            KeyCode::Enter => {
+            Key::Enter => {
                 if app.connector_catalogue_nav_focused() {
                     app.connector_catalogue_category_confirm();
                 } else if app.connector_catalogue_marketplace_focused() {
@@ -402,17 +403,17 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
                     app.connector_catalogue_install_selected();
                 }
             }
-            KeyCode::Char('c') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Key::Char('c') if !key.mods.contains(Modifiers::CTRL) => {
                 if app.connector_catalogue_marketplace_focused() {
                     app.connector_catalogue_clear_marketplace();
                 } else {
                     app.connector_catalogue_clear_category();
                 }
             }
-            KeyCode::Backspace | KeyCode::Esc => {
+            Key::Backspace | Key::Esc => {
                 app.connector_catalogue_edit_or_close();
             }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Key::Char(c) if !key.mods.contains(Modifiers::CTRL) => {
                 app.connector_catalogue_push_char(c);
             }
             _ => {}
@@ -425,11 +426,11 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
     // active backend to the highlighted row, and `Esc` dismisses the panel. Every
     // other key is swallowed and the input field stays locked.
     if app.backend_panel.is_some() {
-        match key.code {
-            KeyCode::Up => app.backend_panel_move_up(),
-            KeyCode::Down => app.backend_panel_move_down(),
-            KeyCode::Enter => app.backend_panel_activate_selected(),
-            KeyCode::Esc => app.close_backend_panel(),
+        match key.key {
+            Key::Up => app.backend_panel_move_up(),
+            Key::Down => app.backend_panel_move_down(),
+            Key::Enter => app.backend_panel_activate_selected(),
+            Key::Esc => app.close_backend_panel(),
             _ => {}
         }
         return None;
@@ -443,12 +444,12 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
     // attachments, the running turn, and (apart from `Enter`/`Del`) the queue are
     // left untouched.
     if app.queue_show_open {
-        match key.code {
-            KeyCode::Up => app.queue_show_move_up(),
-            KeyCode::Down => app.queue_show_move_down(),
-            KeyCode::Enter => app.queue_show_promote_selected(),
-            KeyCode::Delete => app.queue_show_delete_selected(),
-            KeyCode::Esc => app.queue_show_close(),
+        match key.key {
+            Key::Up => app.queue_show_move_up(),
+            Key::Down => app.queue_show_move_down(),
+            Key::Enter => app.queue_show_promote_selected(),
+            Key::Delete => app.queue_show_delete_selected(),
+            Key::Esc => app.queue_show_close(),
             _ => {}
         }
         return None;
@@ -462,11 +463,11 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
     // attachments, the queue, and the running turn are all left untouched, and
     // the closure is painted on the next frame (NFR-008).
     if app.queue_menu_open {
-        match key.code {
-            KeyCode::Up => app.queue_menu_move_up(),
-            KeyCode::Down => app.queue_menu_move_down(),
-            KeyCode::Enter => app.queue_menu_activate_selected().await,
-            KeyCode::Esc => {
+        match key.key {
+            Key::Up => app.queue_menu_move_up(),
+            Key::Down => app.queue_menu_move_down(),
+            Key::Enter => app.queue_menu_activate_selected().await,
+            Key::Esc => {
                 app.close_queue_menu();
                 app.needs_redraw = true;
             }
@@ -483,7 +484,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
 
     // If shortcuts panel is active, only Esc or '?' dismiss it.
     if app.show_shortcuts {
-        if key.code == KeyCode::Esc || key.code == KeyCode::Char('?') {
+        if key.key == Key::Esc || key.key == Key::Char('?') {
             app.show_shortcuts = false;
         }
         return None;
@@ -523,14 +524,14 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
             .unwrap_or(false);
 
         if has_options {
-            return match key.code {
-                KeyCode::Up | KeyCode::Char('k') => {
+            return match key.key {
+                Key::Up | Key::Char('k') => {
                     if app.session.question_selected_index > 0 {
                         app.session.question_selected_index -= 1;
                     }
                     None
                 }
-                KeyCode::Down | KeyCode::Char('j') => {
+                Key::Down | Key::Char('j') => {
                     if let Some(req) = app.session.question_queue.front() {
                         if app.session.question_selected_index + 1 < req.options.len() {
                             app.session.question_selected_index += 1;
@@ -538,7 +539,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
                     }
                     None
                 }
-                KeyCode::Enter => {
+                Key::Enter => {
                     if let Some(req) = app.session.question_queue.front().cloned() {
                         // FUNC-060: clamp the selection to the current option
                         // set. A stale index (e.g. the queue advanced while the
@@ -566,7 +567,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
                     }
                     None
                 }
-                KeyCode::Esc => {
+                Key::Esc => {
                     if let Some(req) = app.session.question_queue.front().cloned() {
                         app.event_bus
                             .publish(codemason_agent::event::Event::QuestionAnswered {
@@ -585,8 +586,8 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
         }
 
         // Free-text question: accept typed input, submit on Enter, cancel on Esc.
-        return match key.code {
-            KeyCode::Enter => {
+        return match key.key {
+            Key::Enter => {
                 if let Some(req) = app.session.question_queue.front().cloned() {
                     let response = app.session.pending_question_input.trim().to_string();
                     if !response.is_empty() {
@@ -603,7 +604,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
                 }
                 None
             }
-            KeyCode::Esc => {
+            Key::Esc => {
                 if let Some(req) = app.session.question_queue.front().cloned() {
                     app.event_bus
                         .publish(codemason_agent::event::Event::QuestionAnswered {
@@ -617,11 +618,11 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
                 app.session.pending_question_input.clear();
                 None
             }
-            KeyCode::Backspace => {
+            Key::Backspace => {
                 app.session.pending_question_input.pop();
                 None
             }
-            KeyCode::Char(c) => {
+            Key::Char(c) => {
                 app.session.pending_question_input.push(c);
                 None
             }
@@ -632,8 +633,8 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
     // If permission dialog is active, intercept keys
     if !app.session.permission_queue.is_empty() {
         // Standard permission dialog: y/a/n only.
-        return match key.code {
-            KeyCode::Char('y') => {
+        return match key.key {
+            Key::Char('y') => {
                 if let Some(ref req) = app.session.permission_queue.front() {
                     tracing::info!(
                         session_id = %req.session_id,
@@ -650,7 +651,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
                 }
                 None
             }
-            KeyCode::Char('a') => {
+            Key::Char('a') => {
                 if let Some(ref req) = app.session.permission_queue.front() {
                     tracing::info!(
                         session_id = %req.session_id,
@@ -667,7 +668,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
                 }
                 None
             }
-            KeyCode::Char('n') => {
+            Key::Char('n') => {
                 if let Some(ref req) = app.session.permission_queue.front() {
                     tracing::info!(
                         session_id = %req.session_id,
@@ -693,8 +694,8 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
     // editable input buffer behind the modal. Intercepted before the confirm
     // dialogs so a notice raised over one is not reachable through it.
     if app.notice_open {
-        match key.code {
-            KeyCode::Enter | KeyCode::Esc => return Some(InputAction::DismissNotice),
+        match key.key {
+            Key::Enter | Key::Esc => return Some(InputAction::DismissNotice),
             _ => return None,
         }
     }
@@ -706,21 +707,21 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
     // `No`, `Enter` selects, `Esc` dismisses. Every other key is swallowed so
     // it cannot mutate the editable input buffer (FR-035, FR-037).
     if app.queue_clear_confirm_open {
-        match key.code {
-            KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
+        match key.key {
+            Key::Left | Key::Right | Key::Tab | Key::BackTab => {
                 app.queue_clear_confirm_toggle();
                 // NFR-011: the selection change must paint on the next frame.
                 app.needs_redraw = true;
                 return None;
             }
-            KeyCode::Enter => {
+            Key::Enter => {
                 return Some(if app.queue_clear_confirm_is_yes() {
                     InputAction::ConfirmQueueClear
                 } else {
                     InputAction::CancelQueueClear
                 });
             }
-            KeyCode::Esc => return Some(InputAction::CancelQueueClear),
+            Key::Esc => return Some(InputAction::CancelQueueClear),
             _ => return None,
         }
     }
@@ -731,20 +732,20 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
     // selects, `Esc` dismisses. Every other key is swallowed so it cannot mutate
     // the editable input buffer.
     if app.memory_clear_confirm_open {
-        match key.code {
-            KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
+        match key.key {
+            Key::Left | Key::Right | Key::Tab | Key::BackTab => {
                 app.memory_clear_confirm_toggle();
                 app.needs_redraw = true;
                 return None;
             }
-            KeyCode::Enter => {
+            Key::Enter => {
                 return Some(if app.memory_clear_confirm_is_yes() {
                     InputAction::ConfirmMemoryClear
                 } else {
                     InputAction::CancelMemoryClear
                 });
             }
-            KeyCode::Esc => return Some(InputAction::CancelMemoryClear),
+            Key::Esc => return Some(InputAction::CancelMemoryClear),
             _ => return None,
         }
     }
@@ -753,38 +754,38 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
     // `/db prune`) is active, intercept keys before any other dialog. Same
     // two-option shape as the memory dialog above.
     if app.db_prune_confirm_open {
-        match key.code {
-            KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
+        match key.key {
+            Key::Left | Key::Right | Key::Tab | Key::BackTab => {
                 app.db_prune_confirm_toggle();
                 app.needs_redraw = true;
                 return None;
             }
-            KeyCode::Enter => {
+            Key::Enter => {
                 return Some(if app.db_prune_confirm_is_yes() {
                     InputAction::ConfirmDbPrune
                 } else {
                     InputAction::CancelDbPrune
                 });
             }
-            KeyCode::Esc => return Some(InputAction::CancelDbPrune),
+            Key::Esc => return Some(InputAction::CancelDbPrune),
             _ => return None,
         }
     }
 
     // If a router save confirmation modal is active, intercept Enter/Esc
     if app.pending_router_save.is_some() {
-        match key.code {
-            KeyCode::Enter => return Some(InputAction::ConfirmRouterSave),
-            KeyCode::Esc => return Some(InputAction::CancelRouterSave),
+        match key.key {
+            Key::Enter => return Some(InputAction::ConfirmRouterSave),
+            Key::Esc => return Some(InputAction::CancelRouterSave),
             _ => return None,
         }
     }
 
     // If a forcecleanup confirmation modal is active, intercept Enter/Esc
     if app.session.pending_forcecleanup.is_some() {
-        match key.code {
-            KeyCode::Enter => return Some(InputAction::ConfirmForceCleanup),
-            KeyCode::Esc => return Some(InputAction::CancelForceCleanup),
+        match key.key {
+            Key::Enter => return Some(InputAction::ConfirmForceCleanup),
+            Key::Esc => return Some(InputAction::CancelForceCleanup),
             _ => return None,
         }
     }
@@ -794,9 +795,9 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
     // pre-loop snapshot, Esc keeps the changes. All other keys are consumed
     // so stray typing does not leak into the input box mid-decision.
     if app.session.pending_rollback.is_some() {
-        match key.code {
-            KeyCode::Enter => return Some(InputAction::ConfirmRollback),
-            KeyCode::Esc => return Some(InputAction::CancelRollback),
+        match key.key {
+            Key::Enter => return Some(InputAction::ConfirmRollback),
+            Key::Esc => return Some(InputAction::CancelRollback),
             _ => return None,
         }
     }
@@ -804,24 +805,24 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
     // If a plan approval dialog is active, intercept keys
     if let Some(ref state) = app.session.plan_approval_pending {
         let cursor_approve = state.cursor_approve;
-        match key.code {
-            KeyCode::Enter => {
+        match key.key {
+            Key::Enter => {
                 if cursor_approve {
                     return Some(InputAction::ApprovePlan);
                 } else {
                     return Some(InputAction::RejectPlan);
                 }
             }
-            KeyCode::Left | KeyCode::Right => return Some(InputAction::TogglePlanCursor),
-            KeyCode::Char('r') | KeyCode::Esc => return Some(InputAction::RejectPlan),
+            Key::Left | Key::Right => return Some(InputAction::TogglePlanCursor),
+            Key::Char('r') | Key::Esc => return Some(InputAction::RejectPlan),
             _ => return None,
         }
     }
 
     // If slash menu is active, intercept navigation keys
     if app.slash_menu.is_some() {
-        match key.code {
-            KeyCode::Up => {
+        match key.key {
+            Key::Up => {
                 if let Some(ref mut menu) = app.slash_menu {
                     if !menu.matches.is_empty() {
                         menu.selected = if menu.selected == 0 {
@@ -833,7 +834,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
                 }
                 return None;
             }
-            KeyCode::Down => {
+            Key::Down => {
                 if let Some(ref mut menu) = app.slash_menu {
                     if !menu.matches.is_empty() {
                         menu.selected = (menu.selected + 1) % menu.matches.len();
@@ -841,7 +842,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
                 }
                 return None;
             }
-            KeyCode::Enter => {
+            Key::Enter => {
                 // Slash commands are queueable like plain messages (FR-017
                 // amendment): a `SlashCommand` action is emitted while the agent
                 // executes and the submit handler enqueues it. No busy refusal.
@@ -868,16 +869,16 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
                 };
                 return Some(InputAction::SlashCommand(command));
             }
-            KeyCode::Esc => {
+            Key::Esc => {
                 app.slash_menu = None;
                 app.set_cursor_char_index_clamped(app.input_len_chars());
                 return None;
             }
-            KeyCode::Char(c) => {
+            Key::Char(c) => {
                 app.insert_char_at_cursor(c);
                 return None;
             }
-            KeyCode::Backspace => {
+            Key::Backspace => {
                 app.delete_prev_char();
                 return None;
             }
@@ -888,8 +889,8 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
     // If file menu is active, intercept navigation keys while still allowing
     // normal in-line editing and cursor motion.
     if app.file_menu.is_some() {
-        match key.code {
-            KeyCode::Up => {
+        match key.key {
+            Key::Up => {
                 if let Some(ref mut menu) = app.file_menu
                     && !menu.matches.is_empty()
                 {
@@ -907,7 +908,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
                 }
                 return None;
             }
-            KeyCode::Down => {
+            Key::Down => {
                 if let Some(ref mut menu) = app.file_menu
                     && !menu.matches.is_empty()
                 {
@@ -919,69 +920,69 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
                 }
                 return None;
             }
-            KeyCode::Tab => {
+            Key::Tab => {
                 // If the menu is showing a directory, Tab navigates into it;
                 // if it is a file, insert it and close the menu.
                 let _ = app.accept_file_menu_selection(); // INTENTIONAL: acceptance flag, not a fallible error
                 return None;
             }
-            KeyCode::Enter => {
+            Key::Enter => {
                 // Accept selection only. Sending is a separate Enter after menu closes.
                 let _ = app.accept_file_menu_selection(); // INTENTIONAL: acceptance flag, not a fallible error
                 return None;
             }
-            KeyCode::Esc => {
+            Key::Esc => {
                 app.file_menu = None;
                 return None;
             }
-            KeyCode::Char('\\') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Key::Char('\\') if key.mods.contains(Modifiers::CTRL) => {
                 app.file_menu_show_hidden = !app.file_menu_show_hidden;
                 app.refresh_input_menus();
                 return None;
             }
-            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Key::Char('a') if key.mods.contains(Modifiers::CTRL) => {
                 return Some(InputAction::MoveCursorHome);
             }
-            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Key::Char('e') if key.mods.contains(Modifiers::CTRL) => {
                 return Some(InputAction::MoveCursorEnd);
             }
-            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Key::Char('b') if key.mods.contains(Modifiers::CTRL) => {
                 return Some(InputAction::MoveCursorLeft);
             }
-            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Key::Char('f') if key.mods.contains(Modifiers::CTRL) => {
                 return Some(InputAction::MoveCursorRight);
             }
-            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Key::Char('w') if key.mods.contains(Modifiers::CTRL) => {
                 return Some(InputAction::DeletePrevWord);
             }
-            KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Key::Char('k') if key.mods.contains(Modifiers::CTRL) => {
                 return Some(InputAction::DeleteToLineEnd);
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Key::Char('u') if key.mods.contains(Modifiers::CTRL) => {
                 return Some(InputAction::ClearLine);
             }
-            KeyCode::Left if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Key::Left if key.mods.contains(Modifiers::CTRL) => {
                 return Some(InputAction::MoveCursorWordLeft);
             }
-            KeyCode::Right if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Key::Right if key.mods.contains(Modifiers::CTRL) => {
                 return Some(InputAction::MoveCursorWordRight);
             }
-            KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Key::Home if key.mods.contains(Modifiers::CTRL) => {
                 return Some(InputAction::MoveCursorHome);
             }
-            KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Key::End if key.mods.contains(Modifiers::CTRL) => {
                 return Some(InputAction::MoveCursorEnd);
             }
-            KeyCode::Left => return Some(InputAction::MoveCursorLeft),
-            KeyCode::Right => return Some(InputAction::MoveCursorRight),
-            KeyCode::Home => return Some(InputAction::MoveCursorHome),
-            KeyCode::End => return Some(InputAction::MoveCursorEnd),
-            KeyCode::Delete => return Some(InputAction::Delete),
-            KeyCode::Char(c) => {
+            Key::Left => return Some(InputAction::MoveCursorLeft),
+            Key::Right => return Some(InputAction::MoveCursorRight),
+            Key::Home => return Some(InputAction::MoveCursorHome),
+            Key::End => return Some(InputAction::MoveCursorEnd),
+            Key::Delete => return Some(InputAction::Delete),
+            Key::Char(c) => {
                 app.insert_char_at_cursor(c);
                 return None;
             }
-            KeyCode::Backspace => {
+            Key::Backspace => {
                 app.delete_prev_char();
                 return None;
             }
@@ -991,18 +992,18 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
 
     // Research markdown viewer: intercept scroll/close keys.
     if app.research_view.is_some() {
-        return match key.code {
-            KeyCode::PageUp if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        return match key.key {
+            Key::PageUp if key.mods.contains(Modifiers::CTRL) => {
                 Some(InputAction::ResearchViewToStart)
             }
-            KeyCode::PageDown if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Key::PageDown if key.mods.contains(Modifiers::CTRL) => {
                 Some(InputAction::ResearchViewToEnd)
             }
-            KeyCode::PageUp => Some(InputAction::ResearchViewPageUp),
-            KeyCode::PageDown => Some(InputAction::ResearchViewPageDown),
-            KeyCode::Up => Some(InputAction::ResearchViewLineUp),
-            KeyCode::Down => Some(InputAction::ResearchViewLineDown),
-            KeyCode::Esc => {
+            Key::PageUp => Some(InputAction::ResearchViewPageUp),
+            Key::PageDown => Some(InputAction::ResearchViewPageDown),
+            Key::Up => Some(InputAction::ResearchViewLineUp),
+            Key::Down => Some(InputAction::ResearchViewLineDown),
+            Key::Esc => {
                 app.research_view = None;
                 None
             }
@@ -1011,18 +1012,18 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
     }
 
     if app.memory_view.is_some() {
-        return match key.code {
-            KeyCode::PageUp if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        return match key.key {
+            Key::PageUp if key.mods.contains(Modifiers::CTRL) => {
                 Some(InputAction::MemoryViewToStart)
             }
-            KeyCode::PageDown if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Key::PageDown if key.mods.contains(Modifiers::CTRL) => {
                 Some(InputAction::MemoryViewToEnd)
             }
-            KeyCode::PageUp => Some(InputAction::MemoryViewPageUp),
-            KeyCode::PageDown => Some(InputAction::MemoryViewPageDown),
-            KeyCode::Up => Some(InputAction::MemoryViewLineUp),
-            KeyCode::Down => Some(InputAction::MemoryViewLineDown),
-            KeyCode::Esc => {
+            Key::PageUp => Some(InputAction::MemoryViewPageUp),
+            Key::PageDown => Some(InputAction::MemoryViewPageDown),
+            Key::Up => Some(InputAction::MemoryViewLineUp),
+            Key::Down => Some(InputAction::MemoryViewLineDown),
+            Key::Esc => {
                 app.memory_view = None;
                 None
             }
@@ -1031,23 +1032,19 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
     }
 
     if app.output_view.is_some() {
-        return match key.code {
-            KeyCode::PageUp if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        return match key.key {
+            Key::PageUp if key.mods.contains(Modifiers::CTRL) => {
                 Some(InputAction::OutputViewToStart)
             }
-            KeyCode::PageDown if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Key::PageDown if key.mods.contains(Modifiers::CTRL) => {
                 Some(InputAction::OutputViewToEnd)
             }
-            KeyCode::PageUp => Some(InputAction::OutputViewPageUp),
-            KeyCode::PageDown => Some(InputAction::OutputViewPageDown),
+            Key::PageUp => Some(InputAction::OutputViewPageUp),
+            Key::PageDown => Some(InputAction::OutputViewPageDown),
             // Alt+Down/Up cycle teammate focus even while output view is open
-            KeyCode::Down if key.modifiers.contains(KeyModifiers::ALT) => {
-                Some(InputAction::FocusNextTeammate)
-            }
-            KeyCode::Up if key.modifiers.contains(KeyModifiers::ALT) => {
-                Some(InputAction::FocusPrevTeammate)
-            }
-            KeyCode::Esc => {
+            Key::Down if key.mods.contains(Modifiers::ALT) => Some(InputAction::FocusNextTeammate),
+            Key::Up if key.mods.contains(Modifiers::ALT) => Some(InputAction::FocusPrevTeammate),
+            Key::Esc => {
                 app.close_output_view();
                 None
             }
@@ -1061,25 +1058,22 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
         return None;
     }
 
-    match key.code {
-        KeyCode::Enter
-            if key.modifiers.contains(KeyModifiers::SHIFT)
-                || key.modifiers.contains(KeyModifiers::ALT) =>
-        {
+    match key.key {
+        Key::Enter if key.mods.contains(Modifiers::SHIFT) || key.mods.contains(Modifiers::ALT) => {
             // Shift+Enter (Kitty protocol) or Alt+Enter (universal fallback):
             // insert a literal newline without sending the message.
             app.clear_kb_selection();
             app.insert_char_at_cursor('\n');
             None
         }
-        KeyCode::Enter if app.show_memory && app.session.input.is_empty() => {
+        Key::Enter if app.show_memory && app.session.input.is_empty() => {
             // With the Memory side panel visible and an empty prompt, Enter
             // opens the selected memory. When the prompt has text, Enter
             // falls through to the normal send path so the memory panel
             // does not intercept message submission.
             Some(InputAction::OpenMemoryView)
         }
-        KeyCode::Enter => {
+        Key::Enter => {
             let text = app.session.input.clone();
             if text.is_empty() {
                 return None;
@@ -1104,95 +1098,64 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
             }
             Some(InputAction::SendMessage(text))
         }
-        KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        Key::Char('x') if key.mods.contains(Modifiers::CTRL) => {
             if app.session.is_processing {
                 Some(InputAction::CancelAgent)
             } else {
                 Some(InputAction::CutToClipboard)
             }
         }
-        KeyCode::Char('v')
-            if key.modifiers.contains(KeyModifiers::CONTROL)
-                && !key.modifiers.contains(KeyModifiers::ALT) =>
+        Key::Char('v')
+            if key.mods.contains(Modifiers::CTRL) && !key.mods.contains(Modifiers::ALT) =>
         {
             Some(InputAction::PasteFromClipboard)
         }
-        KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::ALT) => {
+        Key::Char('v') if key.mods.contains(Modifiers::ALT) => {
             // Alt+V: paste image from clipboard as a staged attachment.
             app.paste_image_from_clipboard();
             None
         }
-        KeyCode::Char('?') if app.session.input.is_empty() => {
+        Key::Char('?') if app.session.input.is_empty() => {
             // Show keybindings help panel when '?' is typed on an empty input.
             app.show_shortcuts = true;
             None
         }
-        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(InputAction::SelectAll)
-        }
-        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(InputAction::MoveCursorEnd)
-        }
-        KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(InputAction::MoveCursorLeft)
-        }
-        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(InputAction::MoveCursorRight)
-        }
-        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(InputAction::DeletePrevWord)
-        }
-        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(InputAction::DeleteToLineEnd)
-        }
-        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(InputAction::ClearLine)
-        }
-        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::ALT) => {
-            Some(InputAction::ToggleLog)
-        }
-        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::ALT) => {
-            Some(InputAction::ToggleProfile)
-        }
+        Key::Char('a') if key.mods.contains(Modifiers::CTRL) => Some(InputAction::SelectAll),
+        Key::Char('e') if key.mods.contains(Modifiers::CTRL) => Some(InputAction::MoveCursorEnd),
+        Key::Char('b') if key.mods.contains(Modifiers::CTRL) => Some(InputAction::MoveCursorLeft),
+        Key::Char('f') if key.mods.contains(Modifiers::CTRL) => Some(InputAction::MoveCursorRight),
+        Key::Char('w') if key.mods.contains(Modifiers::CTRL) => Some(InputAction::DeletePrevWord),
+        Key::Char('k') if key.mods.contains(Modifiers::CTRL) => Some(InputAction::DeleteToLineEnd),
+        Key::Char('u') if key.mods.contains(Modifiers::CTRL) => Some(InputAction::ClearLine),
+        Key::Char('l') if key.mods.contains(Modifiers::ALT) => Some(InputAction::ToggleLog),
+        Key::Char('p') if key.mods.contains(Modifiers::ALT) => Some(InputAction::ToggleProfile),
         // Alt+I toggles the TODO panel (placed before generic char-insert
         // handling so the `i` is never inserted into the input buffer - NFR-002).
-        KeyCode::Char('i') if key.modifiers.contains(KeyModifiers::ALT) => {
-            Some(InputAction::ToggleTasksPanel)
-        }
+        Key::Char('i') if key.mods.contains(Modifiers::ALT) => Some(InputAction::ToggleTasksPanel),
         // Alt+M toggles the Memory side panel (placed before generic char-insert
         // handling so the `m` is never inserted into the input buffer - NFR-002,
         // FR-011).
-        KeyCode::Char('m') if key.modifiers.contains(KeyModifiers::ALT) => {
-            Some(InputAction::ToggleMemory)
-        }
+        Key::Char('m') if key.mods.contains(Modifiers::ALT) => Some(InputAction::ToggleMemory),
         // Memory panel cursor navigation: when the panel is visible, Up/Down
         // move the block cursor through memories instead of navigating input
         // history (FR-016).
-        KeyCode::Up if app.show_memory => Some(InputAction::MemoryCursorUp),
-        KeyCode::Down if app.show_memory => Some(InputAction::MemoryCursorDown),
+        Key::Up if app.show_memory => Some(InputAction::MemoryCursorUp),
+        Key::Down if app.show_memory => Some(InputAction::MemoryCursorDown),
         // Open / delete the selected memory when the Memory panel is focused.
         // Alt+O toggles autopilot mode (placed before generic char-insert handling
         // so the `o` is never inserted into the input buffer - NFR-002). The
         // Telemetry side panel is still reachable via `/telemetry_panel`.
-        KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::ALT) => {
-            Some(InputAction::ToggleAutopilot)
-        }
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::ALT) => {
+        Key::Char('o') if key.mods.contains(Modifiers::ALT) => Some(InputAction::ToggleAutopilot),
+        Key::Char('c') if key.mods.contains(Modifiers::ALT) => {
             Some(InputAction::ToggleContextPanel)
         }
-        KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::ALT) => {
-            Some(InputAction::ToggleYolo)
-        }
+        Key::Char('y') if key.mods.contains(Modifiers::ALT) => Some(InputAction::ToggleYolo),
         // Alt+E toggles edit-operation logging.
-        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::ALT) => {
-            Some(InputAction::ToggleEditLog)
-        }
+        Key::Char('e') if key.mods.contains(Modifiers::ALT) => Some(InputAction::ToggleEditLog),
         // Alt+G toggles GCF tool-result encoding (placed before generic
         // char-insert handling so the `g` is never inserted into the input
         // buffer - NFR-002).
-        KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::ALT) => {
-            Some(InputAction::ToggleGcf)
-        }
+        Key::Char('g') if key.mods.contains(Modifiers::ALT) => Some(InputAction::ToggleGcf),
         // Alt+A toggles the Agents window (spec `agentssetup` FR-022: the panel
         // is openable from the keyboard alone). It resolves to an
         // `InputAction`, not an inline mutation, so the dispatch arm can call
@@ -1201,7 +1164,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
         // generic char-insert arm so the `a` is never typed into the input
         // buffer (NFR-002). ALT was otherwise unbound for `a`, so no other key
         // behaviour changes (NFR-009).
-        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::ALT) => {
+        Key::Char('a') if key.mods.contains(Modifiers::ALT) => {
             Some(InputAction::ToggleAgentsWindow)
         }
         // Alt+T toggles the Teams window (spec `agentssetup` FR-045), the twin
@@ -1211,13 +1174,11 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
         // drift apart. Placed before the generic char-insert arm so the `t` is
         // never typed into the input buffer (NFR-002). ALT was otherwise
         // unbound for `t`, so no other key behaviour changes (NFR-009).
-        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::ALT) => {
-            Some(InputAction::ToggleTeamsWindow)
-        }
+        Key::Char('t') if key.mods.contains(Modifiers::ALT) => Some(InputAction::ToggleTeamsWindow),
         // Alt+X opens the stop-agent confirmation dialog (only while a turn
         // is running - placed before generic char-insert handling so the `x`
         // is never inserted into the input buffer - NFR-002).
-        KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::ALT) => {
+        Key::Char('x') if key.mods.contains(Modifiers::ALT) => {
             if app.session.is_processing {
                 app.session.pending_stop_confirm = true;
                 app.needs_redraw = true;
@@ -1228,10 +1189,8 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
         // Placed before the generic char-insert arm so the `q` is never typed
         // into the input buffer (FR-022, FR-031). ALT was otherwise unbound for
         // `q`, so no other key behaviour changes (NFR-009).
-        KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::ALT) => {
-            Some(InputAction::OpenQueueMenu)
-        }
-        KeyCode::Char(c) => {
+        Key::Char('q') if key.mods.contains(Modifiers::ALT) => Some(InputAction::OpenQueueMenu),
+        Key::Char(c) => {
             if app.is_input_locked() {
                 app.status = "busy - wait for the current turn to finish".to_string();
                 return None;
@@ -1244,7 +1203,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
             app.insert_char_at_cursor(c);
             None
         }
-        KeyCode::Backspace => {
+        Key::Backspace => {
             // Backspace deletes the selection when one is active.
             if let Some((start, end)) = app.kb_selection_char_range() {
                 app.remove_input_char_range(start, end);
@@ -1254,7 +1213,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
             }
             None
         }
-        KeyCode::Delete => {
+        Key::Delete => {
             // Delete removes the active selection, otherwise the character
             // under the cursor (forward delete).  When the Memory panel is
             // focused and the prompt is empty, Delete prompts to delete the
@@ -1270,62 +1229,34 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
                 None
             }
         }
-        KeyCode::Left
-            if key.modifiers.contains(KeyModifiers::CONTROL)
-                && key.modifiers.contains(KeyModifiers::SHIFT) =>
-        {
+        Key::Left if key.mods.contains(Modifiers::CTRL) && key.mods.contains(Modifiers::SHIFT) => {
             Some(InputAction::SelectWordLeft)
         }
-        KeyCode::Right
-            if key.modifiers.contains(KeyModifiers::CONTROL)
-                && key.modifiers.contains(KeyModifiers::SHIFT) =>
-        {
+        Key::Right if key.mods.contains(Modifiers::CTRL) && key.mods.contains(Modifiers::SHIFT) => {
             Some(InputAction::SelectWordRight)
         }
-        KeyCode::Left if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(InputAction::MoveCursorWordLeft)
-        }
-        KeyCode::Right if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(InputAction::MoveCursorWordRight)
-        }
-        KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(InputAction::MoveCursorHome)
-        }
-        KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(InputAction::MoveCursorEnd)
-        }
-        KeyCode::Left if key.modifiers.contains(KeyModifiers::SHIFT) => {
-            Some(InputAction::SelectCharLeft)
-        }
-        KeyCode::Right if key.modifiers.contains(KeyModifiers::SHIFT) => {
-            Some(InputAction::SelectCharRight)
-        }
-        KeyCode::Left => Some(InputAction::MoveCursorLeft),
-        KeyCode::Right => Some(InputAction::MoveCursorRight),
-        KeyCode::Home => Some(InputAction::MoveCursorHome),
-        KeyCode::End => Some(InputAction::MoveCursorEnd),
-        KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => Some(InputAction::ScrollUp),
-        KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
-            Some(InputAction::ScrollDown)
-        }
-        KeyCode::Down if key.modifiers.contains(KeyModifiers::ALT) => {
-            Some(InputAction::FocusNextTeammate)
-        }
-        KeyCode::Up if key.modifiers.contains(KeyModifiers::ALT) => {
-            Some(InputAction::FocusPrevTeammate)
-        }
-        KeyCode::Up => Some(InputAction::HistoryUp),
-        KeyCode::Down => Some(InputAction::HistoryDown),
-        KeyCode::PageUp if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(InputAction::LogScrollUp)
-        }
-        KeyCode::PageDown if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(InputAction::LogScrollDown)
-        }
-        KeyCode::PageUp => Some(InputAction::ScrollUp),
-        KeyCode::PageDown => Some(InputAction::ScrollDown),
-        KeyCode::Tab | KeyCode::BackTab => Some(InputAction::SwitchAgent),
-        KeyCode::Esc if app.session.is_processing => Some(InputAction::CancelAgent),
+        Key::Left if key.mods.contains(Modifiers::CTRL) => Some(InputAction::MoveCursorWordLeft),
+        Key::Right if key.mods.contains(Modifiers::CTRL) => Some(InputAction::MoveCursorWordRight),
+        Key::Home if key.mods.contains(Modifiers::CTRL) => Some(InputAction::MoveCursorHome),
+        Key::End if key.mods.contains(Modifiers::CTRL) => Some(InputAction::MoveCursorEnd),
+        Key::Left if key.mods.contains(Modifiers::SHIFT) => Some(InputAction::SelectCharLeft),
+        Key::Right if key.mods.contains(Modifiers::SHIFT) => Some(InputAction::SelectCharRight),
+        Key::Left => Some(InputAction::MoveCursorLeft),
+        Key::Right => Some(InputAction::MoveCursorRight),
+        Key::Home => Some(InputAction::MoveCursorHome),
+        Key::End => Some(InputAction::MoveCursorEnd),
+        Key::Up if key.mods.contains(Modifiers::SHIFT) => Some(InputAction::ScrollUp),
+        Key::Down if key.mods.contains(Modifiers::SHIFT) => Some(InputAction::ScrollDown),
+        Key::Down if key.mods.contains(Modifiers::ALT) => Some(InputAction::FocusNextTeammate),
+        Key::Up if key.mods.contains(Modifiers::ALT) => Some(InputAction::FocusPrevTeammate),
+        Key::Up => Some(InputAction::HistoryUp),
+        Key::Down => Some(InputAction::HistoryDown),
+        Key::PageUp if key.mods.contains(Modifiers::CTRL) => Some(InputAction::LogScrollUp),
+        Key::PageDown if key.mods.contains(Modifiers::CTRL) => Some(InputAction::LogScrollDown),
+        Key::PageUp => Some(InputAction::ScrollUp),
+        Key::PageDown => Some(InputAction::ScrollDown),
+        Key::Tab | Key::BackTab => Some(InputAction::SwitchAgent),
+        Key::Esc if app.session.is_processing => Some(InputAction::CancelAgent),
         _ => None,
     }
 }
@@ -1337,11 +1268,11 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Option<InputAction> {
 /// model, Azure resource, thinking level, agent, router panes) then scrolls
 /// through exactly one code path, so the wheel and `Up`/`Down` can never
 /// disagree about the cursor or the clamped window.
-pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
+pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyInput) {
     // Escape always closes non-router setup dialogs. Router dialogs handle Esc
     // internally so that the model picker can cancel back to the cluster panel
     // without discarding the whole flow.
-    if key.code == KeyCode::Esc
+    if key.key == Key::Esc
         && !matches!(
             app.provider_setup,
             Some(
@@ -1361,8 +1292,8 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
         ProviderSetupStep::SelectProvider {
             selected,
             force_key_entry,
-        } => match key.code {
-            KeyCode::Up => {
+        } => match key.key {
+            Key::Up => {
                 let new = if selected == 0 {
                     PROVIDER_LIST.len() - 1
                 } else {
@@ -1373,14 +1304,14 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     force_key_entry,
                 });
             }
-            KeyCode::Down => {
+            Key::Down => {
                 let new = (selected + 1) % PROVIDER_LIST.len();
                 app.provider_setup = Some(ProviderSetupStep::SelectProvider {
                     selected: new,
                     force_key_entry,
                 });
             }
-            KeyCode::Enter => {
+            Key::Enter => {
                 let (pid, pname) = PROVIDER_LIST[selected];
                 // If the provider is already configured and the dialog was opened
                 // via `/model` (force_key_entry == false), skip straight to the
@@ -1646,8 +1577,8 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
             mut endpoint_field,
             mut active_field,
             ..
-        } => match key.code {
-            KeyCode::Enter => {
+        } => match key.key {
+            Key::Enter => {
                 let trimmed = key_field.text().trim().to_string();
                 if trimmed.is_empty() {
                     app.provider_setup = Some(ProviderSetupStep::EnterKey {
@@ -1723,7 +1654,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     app.start_model_discovery(provider_id, provider_name);
                 }
             }
-            KeyCode::Tab if provider_id == "generic_openai" || provider_id == "azure_foundry" => {
+            Key::Tab if provider_id == "generic_openai" || provider_id == "azure_foundry" => {
                 active_field = if active_field == 0 { 1 } else { 0 };
                 app.provider_setup = Some(ProviderSetupStep::EnterKey {
                     provider_id,
@@ -1743,9 +1674,9 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                 };
                 let consumed = target.handle_key(key);
                 if !consumed
-                    && matches!(key.code, KeyCode::Char('v') | KeyCode::Char('V'))
-                    && key.modifiers.contains(KeyModifiers::CONTROL)
-                    && !key.modifiers.contains(KeyModifiers::ALT)
+                    && matches!(key.key, Key::Char('v') | Key::Char('V'))
+                    && key.mods.contains(Modifiers::CTRL)
+                    && !key.mods.contains(Modifiers::ALT)
                 {
                     target.paste_text_from_clipboard();
                 }
@@ -1763,11 +1694,11 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
             flow,
             user_code,
             verification_uri,
-        } => match key.code {
-            KeyCode::Esc => {
+        } => match key.key {
+            Key::Esc => {
                 app.provider_setup = None;
             }
-            KeyCode::Char('c') => {
+            Key::Char('c') => {
                 crate::clipboard::set_clipboard_text(&user_code);
                 app.status = "[ok] Device code copied to clipboard".to_string();
                 app.provider_setup = Some(ProviderSetupStep::DeviceFlowPending {
@@ -1792,8 +1723,8 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
             provider_name,
             models,
             selected,
-        } => match key.code {
-            KeyCode::Up => {
+        } => match key.key {
+            Key::Up => {
                 let new = if models.is_empty() {
                     0
                 } else if selected == 0 {
@@ -1808,7 +1739,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     selected: new,
                 });
             }
-            KeyCode::Down => {
+            Key::Down => {
                 let new = if models.is_empty() {
                     0
                 } else {
@@ -1821,7 +1752,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     selected: new,
                 });
             }
-            KeyCode::Enter => {
+            Key::Enter => {
                 if let Some(entry) = models.get(selected).cloned() {
                     // Ollama-family providers are boolean thinkers, but model
                     // detection of reasoning support is unreliable. Always
@@ -1881,8 +1812,8 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
             entries,
             selected,
             error,
-        } => match key.code {
-            KeyCode::Up => {
+        } => match key.key {
+            Key::Up => {
                 let new = if selected == 0 {
                     entries.len().saturating_sub(1)
                 } else {
@@ -1894,7 +1825,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     error,
                 });
             }
-            KeyCode::Down => {
+            Key::Down => {
                 let new = if entries.is_empty() {
                     0
                 } else {
@@ -1906,7 +1837,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     error,
                 });
             }
-            KeyCode::Enter => {
+            Key::Enter => {
                 if let Some(entry) = entries.get(selected) {
                     // Persist selection (include api_type for re-hydration)
                     let payload = serde_json::json!({
@@ -1972,8 +1903,8 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
             provider_name,
             model,
             selected,
-        } => match key.code {
-            KeyCode::Up => {
+        } => match key.key {
+            Key::Up => {
                 let new = if selected == 0 {
                     model.thinking_levels.len().saturating_sub(1)
                 } else {
@@ -1986,7 +1917,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     selected: new,
                 });
             }
-            KeyCode::Down => {
+            Key::Down => {
                 let new = if model.thinking_levels.is_empty() {
                     0
                 } else {
@@ -1999,7 +1930,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     selected: new,
                 });
             }
-            KeyCode::Enter => {
+            Key::Enter => {
                 let level = model
                     .thinking_levels
                     .get(selected)
@@ -2026,8 +1957,8 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
             app.provider_setup = None;
             app.check_provider_health();
         }
-        ProviderSetupStep::SelectAgent { agents, selected } => match key.code {
-            KeyCode::Up => {
+        ProviderSetupStep::SelectAgent { agents, selected } => match key.key {
+            Key::Up => {
                 let new = if agents.is_empty() {
                     0
                 } else if selected == 0 {
@@ -2040,7 +1971,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     selected: new,
                 });
             }
-            KeyCode::Down => {
+            Key::Down => {
                 let new = if agents.is_empty() {
                     0
                 } else {
@@ -2051,7 +1982,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     selected: new,
                 });
             }
-            KeyCode::Enter => {
+            Key::Enter => {
                 if let Some((name, _desc, _is_custom)) = agents.get(selected) {
                     if let Some(idx) = app.cycleable_agents.iter().position(|a| a.name == *name) {
                         app.session.current_agent_index = idx;
@@ -2069,8 +2000,8 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
         ProviderSetupStep::SelectConfiguredProvider {
             providers,
             selected,
-        } => match key.code {
-            KeyCode::Up => {
+        } => match key.key {
+            Key::Up => {
                 let new = if selected == 0 {
                     providers.len().saturating_sub(1)
                 } else {
@@ -2081,7 +2012,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     selected: new,
                 });
             }
-            KeyCode::Down => {
+            Key::Down => {
                 let new = if providers.is_empty() {
                     0
                 } else {
@@ -2092,7 +2023,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     selected: new,
                 });
             }
-            KeyCode::Enter => {
+            Key::Enter => {
                 if let Some(prov) = providers.get(selected).cloned() {
                     let prov_id = prov.id.clone();
                     let prov_name = prov.name.clone();
@@ -2132,8 +2063,8 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
         ProviderSetupStep::ShowProviderConfig {
             providers,
             selected,
-        } => match key.code {
-            KeyCode::Up => {
+        } => match key.key {
+            Key::Up => {
                 let new = if selected == 0 {
                     providers.len().saturating_sub(1)
                 } else {
@@ -2144,7 +2075,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     selected: new,
                 });
             }
-            KeyCode::Down => {
+            Key::Down => {
                 let new = if providers.is_empty() {
                     0
                 } else {
@@ -2155,7 +2086,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     selected: new,
                 });
             }
-            KeyCode::Enter => {
+            Key::Enter => {
                 if let Some(prov) = providers.get(selected).cloned() {
                     let report = if prov.id == "router" {
                         app.router_config_report(&app.provider_registry.clone())
@@ -2175,8 +2106,8 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
             }
         },
 
-        ProviderSetupStep::ResetProvider { selected } => match key.code {
-            KeyCode::Up => {
+        ProviderSetupStep::ResetProvider { selected } => match key.key {
+            Key::Up => {
                 let new = if selected == 0 {
                     PROVIDER_LIST.len() - 1
                 } else {
@@ -2184,11 +2115,11 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                 };
                 app.provider_setup = Some(ProviderSetupStep::ResetProvider { selected: new });
             }
-            KeyCode::Down => {
+            Key::Down => {
                 let new = (selected + 1) % PROVIDER_LIST.len();
                 app.provider_setup = Some(ProviderSetupStep::ResetProvider { selected: new });
             }
-            KeyCode::Enter => {
+            Key::Enter => {
                 let (pid, pname) = PROVIDER_LIST[selected];
                 let _ = app.storage.delete_provider_auth(pid); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
                 let _ = app // INTENTIONAL: fallible wiring/persistence call; the in-memory state is authoritative
@@ -2238,8 +2169,8 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
             mut token_cursor,
             mut active_field,
             error,
-        } => match key.code {
-            KeyCode::Tab | KeyCode::BackTab => {
+        } => match key.key {
+            Key::Tab | Key::BackTab => {
                 active_field = if active_field == 0 { 1 } else { 0 };
                 app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
                     url_input,
@@ -2250,7 +2181,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     error,
                 });
             }
-            KeyCode::Enter => {
+            Key::Enter => {
                 let url = url_input.trim().to_string();
                 let tok = token_input.trim().to_string();
                 if url.is_empty() || tok.is_empty() {
@@ -2271,7 +2202,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     start_gitlab_validation(app, url, tok);
                 }
             }
-            KeyCode::Char(c) => {
+            Key::Char(c) => {
                 if active_field == 0 {
                     url_input.insert(url_cursor, c);
                     url_cursor += 1;
@@ -2288,7 +2219,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     error: None,
                 });
             }
-            KeyCode::Backspace => {
+            Key::Backspace => {
                 if active_field == 0 {
                     if url_cursor > 0 {
                         url_cursor -= 1;
@@ -2307,7 +2238,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     error: None,
                 });
             }
-            KeyCode::Left => {
+            Key::Left => {
                 if active_field == 0 {
                     url_cursor = url_cursor.saturating_sub(1);
                 } else {
@@ -2322,7 +2253,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     error,
                 });
             }
-            KeyCode::Right => {
+            Key::Right => {
                 if active_field == 0 {
                     if url_cursor < url_input.len() {
                         url_cursor += 1;
@@ -2339,7 +2270,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     error,
                 });
             }
-            KeyCode::Home => {
+            Key::Home => {
                 if active_field == 0 {
                     url_cursor = 0;
                 } else {
@@ -2354,7 +2285,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     error,
                 });
             }
-            KeyCode::End => {
+            Key::End => {
                 if active_field == 0 {
                     url_cursor = url_input.len();
                 } else {
@@ -2386,7 +2317,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
             token,
         } => {
             // Esc cancels and returns to the form
-            if key.code == KeyCode::Esc {
+            if key.key == Key::Esc {
                 app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
                     url_input: instance_url,
                     url_cursor: 0,
@@ -2434,18 +2365,18 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     _ => None,
                 }
             }
-            match key.code {
-                KeyCode::Tab => {
+            match key.key {
+                Key::Tab => {
                     active_field = (active_field + 1) % 6;
                 }
-                KeyCode::BackTab => {
+                Key::BackTab => {
                     active_field = if active_field == 0 {
                         5
                     } else {
                         active_field - 1
                     };
                 }
-                KeyCode::Up | KeyCode::Down if active_field == 1 => {
+                Key::Up | Key::Down if active_field == 1 => {
                     let (next, from_port, to_port) = match protocol {
                         codemason_config::OtelProtocol::Http => {
                             (codemason_config::OtelProtocol::Grpc, ":4318", ":4317")
@@ -2464,7 +2395,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                         endpoint_field = crate::input_field::InputField::with_text(&swapped);
                     }
                 }
-                KeyCode::Enter => {
+                Key::Enter => {
                     let endpoint = endpoint_field.text().trim().to_string();
                     let interval_str = interval_field.text().trim();
                     let timeout_str = timeout_field.text().trim();
@@ -2593,7 +2524,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     }
                     return;
                 }
-                KeyCode::Char(c) if is_text_field => {
+                Key::Char(c) if is_text_field => {
                     let Some(target) = telemetry_field(
                         active_field,
                         &mut endpoint_field,
@@ -2607,7 +2538,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     };
                     target.insert_char(c);
                 }
-                KeyCode::Backspace if is_text_field => {
+                Key::Backspace if is_text_field => {
                     let Some(target) = telemetry_field(
                         active_field,
                         &mut endpoint_field,
@@ -2621,7 +2552,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     };
                     target.backspace();
                 }
-                KeyCode::Left if is_text_field => {
+                Key::Left if is_text_field => {
                     let Some(target) = telemetry_field(
                         active_field,
                         &mut endpoint_field,
@@ -2635,7 +2566,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     };
                     target.move_left();
                 }
-                KeyCode::Right if is_text_field => {
+                Key::Right if is_text_field => {
                     let Some(target) = telemetry_field(
                         active_field,
                         &mut endpoint_field,
@@ -2649,7 +2580,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     };
                     target.move_right();
                 }
-                KeyCode::Home if is_text_field => {
+                Key::Home if is_text_field => {
                     let Some(target) = telemetry_field(
                         active_field,
                         &mut endpoint_field,
@@ -2663,7 +2594,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
                     };
                     target.move_home();
                 }
-                KeyCode::End if is_text_field => {
+                Key::End if is_text_field => {
                     let Some(target) = telemetry_field(
                         active_field,
                         &mut endpoint_field,
@@ -2694,7 +2625,7 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyEvent) {
 
         ProviderSetupStep::LoadingModels { .. } => {
             // Loading state is read-only; any key besides Esc just keeps it alive.
-            if key.code == KeyCode::Esc {
+            if key.key == Key::Esc {
                 app.provider_setup = None;
                 app.model_loading_state = None;
             } else {
@@ -2860,22 +2791,22 @@ fn start_gitlab_validation(app: &mut App, instance_url: String, token: String) {
 /// `Up`/`Down` (or `k`/`j`) move the block cursor, `Space` toggles the
 /// highlighted server's enabled state, and `Esc` dismisses the dialog. The list
 /// scroll is re-clamped to keep the cursor visible at the next render.
-async fn handle_mcp_discover_key(app: &mut App, key: KeyEvent) {
-    match key.code {
+async fn handle_mcp_discover_key(app: &mut App, key: KeyInput) {
+    match key.key {
         // Dismiss on Escape
-        KeyCode::Esc => {
+        Key::Esc => {
             app.mcp_discover = None;
         }
 
         // Move the block cursor up.
-        KeyCode::Up | KeyCode::Char('k') => {
+        Key::Up | Key::Char('k') => {
             if let Some(state) = app.mcp_discover.as_mut() {
                 state.selected = state.selected.saturating_sub(1);
             }
         }
 
         // Move the block cursor down.
-        KeyCode::Down | KeyCode::Char('j') => {
+        Key::Down | Key::Char('j') => {
             if let Some(state) = app.mcp_discover.as_mut() {
                 let last = state.servers.len().saturating_sub(1);
                 if state.selected < last {
@@ -2884,20 +2815,20 @@ async fn handle_mcp_discover_key(app: &mut App, key: KeyEvent) {
             }
         }
 
-        KeyCode::Home => {
+        Key::Home => {
             if let Some(state) = app.mcp_discover.as_mut() {
                 state.selected = 0;
             }
         }
 
-        KeyCode::End => {
+        Key::End => {
             if let Some(state) = app.mcp_discover.as_mut() {
                 state.selected = state.servers.len().saturating_sub(1);
             }
         }
 
         // Toggle the highlighted server's enabled state.
-        KeyCode::Char(' ') => {
+        Key::Char(' ') => {
             let Some(srv) = app
                 .mcp_discover
                 .as_ref()
@@ -2932,22 +2863,22 @@ async fn handle_mcp_discover_key(app: &mut App, key: KeyEvent) {
 /// re-clamped to keep the cursor visible at the next render. `Space` on a
 /// non-plugin body line (a capability block or the notice row) is a no-op: only
 /// the leading table rows carry a plugin id.
-async fn handle_plugins_list_key(app: &mut App, key: KeyEvent) {
-    match key.code {
+async fn handle_plugins_list_key(app: &mut App, key: KeyInput) {
+    match key.key {
         // Dismiss on Escape
-        KeyCode::Esc => {
+        Key::Esc => {
             app.plugins_list = None;
         }
 
         // Move the block cursor up.
-        KeyCode::Up | KeyCode::Char('k') => {
+        Key::Up | Key::Char('k') => {
             if let Some(state) = app.plugins_list.as_mut() {
                 state.selected = state.selected.saturating_sub(1);
             }
         }
 
         // Move the block cursor down.
-        KeyCode::Down | KeyCode::Char('j') => {
+        Key::Down | Key::Char('j') => {
             if let Some(state) = app.plugins_list.as_mut() {
                 let last = state.view.body.len().saturating_sub(1);
                 if state.selected < last {
@@ -2956,13 +2887,13 @@ async fn handle_plugins_list_key(app: &mut App, key: KeyEvent) {
             }
         }
 
-        KeyCode::Home => {
+        Key::Home => {
             if let Some(state) = app.plugins_list.as_mut() {
                 state.selected = 0;
             }
         }
 
-        KeyCode::End => {
+        Key::End => {
             if let Some(state) = app.plugins_list.as_mut() {
                 state.selected = state.view.body.len().saturating_sub(1);
             }
@@ -2971,7 +2902,7 @@ async fn handle_plugins_list_key(app: &mut App, key: KeyEvent) {
         // Toggle the highlighted plugin's enabled state. The plugin table rows are
         // the first `view.rows.len()` body lines, so a cursor on a trailing
         // capability block has no row to toggle and is ignored.
-        KeyCode::Char(' ') => {
+        Key::Char(' ') => {
             let Some((plugin_id, currently_enabled)) = app.plugins_list.as_ref().and_then(|s| {
                 s.view
                     .rows
@@ -2996,13 +2927,13 @@ async fn handle_plugins_list_key(app: &mut App, key: KeyEvent) {
 ///
 /// Up/Down navigate items; Enter activates the highlighted item; Esc closes
 /// without acting; any other key is ignored.
-fn handle_context_menu_key(app: &mut App, key: KeyEvent) {
-    match key.code {
-        KeyCode::Esc => {
+fn handle_context_menu_key(app: &mut App, key: KeyInput) {
+    match key.key {
+        Key::Esc => {
             app.context_menu = None;
         }
 
-        KeyCode::Up => {
+        Key::Up => {
             if let Some(ref mut menu) = app.context_menu {
                 // Skip disabled items going upward.
                 let count = menu.items.len();
@@ -3017,7 +2948,7 @@ fn handle_context_menu_key(app: &mut App, key: KeyEvent) {
             }
         }
 
-        KeyCode::Down => {
+        Key::Down => {
             if let Some(ref mut menu) = app.context_menu {
                 let count = menu.items.len();
                 let mut idx = menu.selected;
@@ -3031,7 +2962,7 @@ fn handle_context_menu_key(app: &mut App, key: KeyEvent) {
             }
         }
 
-        KeyCode::Enter => {
+        Key::Enter => {
             if let Some(menu) = app.context_menu.clone() {
                 let (action, enabled): (ContextAction, bool) = menu.items[menu.selected];
                 if enabled {
@@ -3052,7 +2983,7 @@ fn handle_context_menu_key(app: &mut App, key: KeyEvent) {
 /// or out of the cluster palette. Enter opens the model picker for the selected
 /// provider and assigns the chosen model to the active bucket. Ctrl+S saves the
 /// cluster to `codemason.json`, preserving existing classifier weights/boundaries.
-fn handle_router_setup_key(app: &mut App, key: KeyEvent) {
+fn handle_router_setup_key(app: &mut App, key: KeyInput) {
     let Some(ProviderSetupStep::SetupRouter {
         providers,
         mut selected_provider_ids,
@@ -3069,16 +3000,16 @@ fn handle_router_setup_key(app: &mut App, key: KeyEvent) {
 
     let mut error: Option<String> = None;
 
-    match key.code {
-        KeyCode::Esc => {
+    match key.key {
+        Key::Esc => {
             app.provider_setup = None;
             return;
         }
-        KeyCode::Tab => {
+        Key::Tab => {
             left_pane_focused = !left_pane_focused;
             active_bucket_index = 0;
         }
-        KeyCode::Left if !left_pane_focused => {
+        Key::Left if !left_pane_focused => {
             let tiers = Tier::all();
             let idx = tiers.iter().position(|t| *t == active_bucket).unwrap_or(0);
             active_bucket = *tiers
@@ -3086,7 +3017,7 @@ fn handle_router_setup_key(app: &mut App, key: KeyEvent) {
                 .unwrap_or(&Tier::Simple);
             active_bucket_index = 0;
         }
-        KeyCode::Right if !left_pane_focused => {
+        Key::Right if !left_pane_focused => {
             let idx = Tier::all()
                 .iter()
                 .position(|t| *t == active_bucket)
@@ -3094,7 +3025,7 @@ fn handle_router_setup_key(app: &mut App, key: KeyEvent) {
             active_bucket = *Tier::all().get(idx + 1).unwrap_or(&Tier::Simple);
             active_bucket_index = 0;
         }
-        KeyCode::Up if key.modifiers.contains(KeyModifiers::CONTROL) && !left_pane_focused => {
+        Key::Up if key.mods.contains(Modifiers::CTRL) && !left_pane_focused => {
             if let Some(tier_config) = draft_config.tiers.get_mut(&active_bucket.to_string()) {
                 if active_bucket_index > 0 && active_bucket_index < tier_config.models.len() {
                     tier_config
@@ -3104,7 +3035,7 @@ fn handle_router_setup_key(app: &mut App, key: KeyEvent) {
                 }
             }
         }
-        KeyCode::Down if key.modifiers.contains(KeyModifiers::CONTROL) && !left_pane_focused => {
+        Key::Down if key.mods.contains(Modifiers::CTRL) && !left_pane_focused => {
             if let Some(tier_config) = draft_config.tiers.get_mut(&active_bucket.to_string()) {
                 if active_bucket_index + 1 < tier_config.models.len() {
                     tier_config
@@ -3114,7 +3045,7 @@ fn handle_router_setup_key(app: &mut App, key: KeyEvent) {
                 }
             }
         }
-        KeyCode::Up => {
+        Key::Up => {
             if left_pane_focused {
                 if providers.is_empty() {
                     selected_provider_index = 0;
@@ -3142,7 +3073,7 @@ fn handle_router_setup_key(app: &mut App, key: KeyEvent) {
                 }
             }
         }
-        KeyCode::Down => {
+        Key::Down => {
             if left_pane_focused {
                 if providers.is_empty() {
                     selected_provider_index = 0;
@@ -3162,7 +3093,7 @@ fn handle_router_setup_key(app: &mut App, key: KeyEvent) {
                 }
             }
         }
-        KeyCode::Char(' ') if left_pane_focused => {
+        Key::Char(' ') if left_pane_focused => {
             if let Some(provider) = providers.get(selected_provider_index) {
                 let id = provider.id.clone();
                 if selected_provider_ids.contains(&id) {
@@ -3177,7 +3108,7 @@ fn handle_router_setup_key(app: &mut App, key: KeyEvent) {
                 }
             }
         }
-        KeyCode::Enter => {
+        Key::Enter => {
             let provider = if left_pane_focused {
                 providers.get(selected_provider_index).cloned()
             } else {
@@ -3209,7 +3140,7 @@ fn handle_router_setup_key(app: &mut App, key: KeyEvent) {
                 }
             }
         }
-        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        Key::Char('s') if key.mods.contains(Modifiers::CTRL) => {
             let has_any = draft_config.tiers.values().any(|tc| !tc.models.is_empty());
             if !has_any {
                 error = Some("At least one tier must contain a model".to_string());
@@ -3228,7 +3159,7 @@ fn handle_router_setup_key(app: &mut App, key: KeyEvent) {
                 return;
             }
         }
-        KeyCode::Delete if !left_pane_focused => {
+        Key::Delete if !left_pane_focused => {
             if let Some(tier_config) = draft_config.tiers.get_mut(&active_bucket.to_string()) {
                 if active_bucket_index < tier_config.models.len() {
                     tier_config.models.remove(active_bucket_index);
@@ -3257,7 +3188,7 @@ fn handle_router_setup_key(app: &mut App, key: KeyEvent) {
 /// Esc cancels and returns to the router setup panel without assigning a model.
 /// Up/Down navigate the model list. Enter assigns the selected model to the
 /// target tier and returns to the bucket pane.
-fn handle_router_model_picker_key(app: &mut App, key: KeyEvent) {
+fn handle_router_model_picker_key(app: &mut App, key: KeyInput) {
     let Some(ProviderSetupStep::SelectRouterModel {
         provider_id,
         provider_name,
@@ -3269,8 +3200,8 @@ fn handle_router_model_picker_key(app: &mut App, key: KeyEvent) {
         return;
     };
 
-    match key.code {
-        KeyCode::Esc => {
+    match key.key {
+        Key::Esc => {
             // Restore the stashed router setup state, returning focus to the
             // provider palette.
             let draft_config = app.router_draft_config.take().unwrap_or_default();
@@ -3291,7 +3222,7 @@ fn handle_router_model_picker_key(app: &mut App, key: KeyEvent) {
             app.router_draft_providers.clear();
             app.router_draft_selected_ids.clear();
         }
-        KeyCode::Up => {
+        Key::Up => {
             let new = if models.is_empty() {
                 0
             } else if selected == 0 {
@@ -3307,7 +3238,7 @@ fn handle_router_model_picker_key(app: &mut App, key: KeyEvent) {
                 target_tier,
             });
         }
-        KeyCode::Down => {
+        Key::Down => {
             let new = if models.is_empty() {
                 0
             } else {
@@ -3321,7 +3252,7 @@ fn handle_router_model_picker_key(app: &mut App, key: KeyEvent) {
                 target_tier,
             });
         }
-        KeyCode::Enter => {
+        Key::Enter => {
             if let Some(model) = models.get(selected).cloned() {
                 let mut draft_config = app.router_draft_config.take().unwrap_or_default();
                 let tier_key = target_tier.to_string();

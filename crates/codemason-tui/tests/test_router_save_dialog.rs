@@ -1,5 +1,6 @@
 //! Tests for the Model Router save confirmation dialog.
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::collections::HashMap;
 
 use codemason_llm::providers::router_config::{RouterConfig, Tier};

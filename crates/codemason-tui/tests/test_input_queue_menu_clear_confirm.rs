@@ -12,6 +12,7 @@
 //! `Yes`-empties / `No`-leaves-unchanged gating (T-022) is covered by
 //! `test_input_queue_menu_clear_gating.rs`.
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -22,7 +23,8 @@ use ratatui::backend::TestBackend;
 
 use codemason_tui::App;
 use codemason_tui::app::{QUEUE_CLEAR_CONFIRM_NO, QUEUE_CLEAR_CONFIRM_YES, QueuedInput};
-use codemason_tui::input::{InputAction, handle_key};
+use codemason_tui::crossterm_input::handle_key;
+use codemason_tui::input::InputAction;
 use codemason_tui::layout;
 
 #[path = "support/mod.rs"]

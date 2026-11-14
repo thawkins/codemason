@@ -8,6 +8,7 @@
 //! (FR-032). The row-specific effects themselves are covered by the
 //! T-015..T-018 suites and the `Show`-panel suite.
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 

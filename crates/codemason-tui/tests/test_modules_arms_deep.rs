@@ -286,25 +286,25 @@ fn loop_dialog_checkpoints_toggle_and_cost_limit_round_trip() {
     // Walk the dialog onto the checkpoints switch and toggle it with both the
     // Up/Down keys and Space.
     for _ in 0..8 {
-        codemason_tui::app::handle_loop_setup_key(&mut app, key(KeyCode::Tab));
+        codemason_tui::crossterm_input::handle_loop_setup_key(&mut app, key(KeyCode::Tab));
     }
     let state = app.loop_setup.as_ref().expect("dialog open");
     assert_eq!(state.active_field, LoopSetupField::Checkpoints);
 
     let before = app.loop_setup.as_ref().expect("open").checkpoints;
-    codemason_tui::app::handle_loop_setup_key(&mut app, key(KeyCode::Char(' ')));
+    codemason_tui::crossterm_input::handle_loop_setup_key(&mut app, key(KeyCode::Char(' ')));
     assert_ne!(
         app.loop_setup.as_ref().expect("open").checkpoints,
         before,
         "space toggles the checkpoint switch"
     );
-    codemason_tui::app::handle_loop_setup_key(&mut app, key(KeyCode::Up));
+    codemason_tui::crossterm_input::handle_loop_setup_key(&mut app, key(KeyCode::Up));
     assert_eq!(
         app.loop_setup.as_ref().expect("open").checkpoints,
         before,
         "up toggles the checkpoint switch back"
     );
-    codemason_tui::app::handle_loop_setup_key(&mut app, key(KeyCode::Down));
+    codemason_tui::crossterm_input::handle_loop_setup_key(&mut app, key(KeyCode::Down));
     assert_ne!(app.loop_setup.as_ref().expect("open").checkpoints, before);
 
     // A cost limit entered in the dialog lands on the spec.
@@ -329,7 +329,7 @@ fn loop_dialog_start_guards_report_the_missing_configuration() {
     let mut state = LoopSetupState::new(vec![("general".to_string(), "g".to_string())], 0);
     state.goal_field = codemason_tui::input_field::InputField::with_text("ship it");
     app.loop_setup = Some(state);
-    codemason_tui::app::handle_loop_setup_key(&mut app, key(KeyCode::Enter));
+    codemason_tui::crossterm_input::handle_loop_setup_key(&mut app, key(KeyCode::Enter));
     assert_eq!(
         app.status,
         "loop: no provider configured - use /provider first"
@@ -346,7 +346,7 @@ fn loop_dialog_start_guards_report_the_missing_configuration() {
     let mut state = LoopSetupState::new(vec![("general".to_string(), "g".to_string())], 0);
     state.goal_field = codemason_tui::input_field::InputField::with_text("ship it");
     app.loop_setup = Some(state);
-    codemason_tui::app::handle_loop_setup_key(&mut app, key(KeyCode::Enter));
+    codemason_tui::crossterm_input::handle_loop_setup_key(&mut app, key(KeyCode::Enter));
     assert_eq!(app.status, "loop: no model selected - use /model first");
 }
 

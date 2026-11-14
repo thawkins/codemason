@@ -3,6 +3,7 @@
 use codemason_agent::event::Event;
 use codemason_agent::team::{MemberStatus, Task, TaskStatus, TeamConfig, TeamMember, TeamStore};
 use codemason_tui::app::{LogLevel, OutputViewTarget};
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use ratatui::{Terminal, backend::TestBackend};
 
 #[path = "support/mod.rs"]

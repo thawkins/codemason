@@ -11,6 +11,7 @@
 //! - Scroll, scrollbar, text-selection, and mutual-exclusion behaviour
 //!   preserved.
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use codemason_tui::{App, app::ScreenMode, layout};
 use ratatui::{Terminal, backend::TestBackend};
 

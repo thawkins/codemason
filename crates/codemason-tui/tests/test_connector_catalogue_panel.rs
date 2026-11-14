@@ -5,6 +5,7 @@
 //! `TestBackend` and read the painted buffer back, so no catalogue endpoint is
 //! contacted: the browser state is filled directly.
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -393,7 +394,7 @@ fn key(code: KeyCode) -> KeyEvent {
 #[tokio::test]
 async fn down_moves_the_block_cursor_to_the_next_row() {
     let mut app = open(sample(), &[], 0);
-    codemason_tui::input::handle_key(&mut app, key(KeyCode::Down)).await;
+    codemason_tui::crossterm_input::handle_key(&mut app, key(KeyCode::Down)).await;
     let terminal = render(&mut app, 100, 30);
 
     // After one Down the cursor sits on the second row. The catalogue sorts by id
@@ -410,7 +411,7 @@ async fn down_moves_the_block_cursor_to_the_next_row() {
 async fn typing_filters_the_result_rows() {
     let mut app = open(sample(), &[], 0);
     for c in "github".chars() {
-        codemason_tui::input::handle_key(&mut app, key(KeyCode::Char(c))).await;
+        codemason_tui::crossterm_input::handle_key(&mut app, key(KeyCode::Char(c))).await;
     }
     let terminal = render(&mut app, 100, 30);
     let rows = panel_rows(&terminal, &app).join("\n");
@@ -424,7 +425,7 @@ async fn typing_filters_the_result_rows() {
 #[tokio::test]
 async fn escape_on_an_empty_query_dismisses_the_panel() {
     let mut app = open(sample(), &[], 0);
-    codemason_tui::input::handle_key(&mut app, key(KeyCode::Esc)).await;
+    codemason_tui::crossterm_input::handle_key(&mut app, key(KeyCode::Esc)).await;
     assert!(
         app.connector_store.is_none(),
         "Esc on an empty query closes the panel"
@@ -434,7 +435,7 @@ async fn escape_on_an_empty_query_dismisses_the_panel() {
 #[tokio::test]
 async fn enter_on_an_empty_result_set_records_a_notice_and_installs_nothing() {
     let mut app = open(Vec::new(), &[], 0);
-    codemason_tui::input::handle_key(&mut app, key(KeyCode::Enter)).await;
+    codemason_tui::crossterm_input::handle_key(&mut app, key(KeyCode::Enter)).await;
     let browser = app.connector_store.as_ref().expect("panel still open");
     assert_eq!(
         browser.last_install.as_deref(),
@@ -447,7 +448,7 @@ async fn enter_on_an_installed_row_is_refused() {
     // The catalogue sorts by id (FR-046), so row 0 is `github`; mark it installed so
     // Enter on the highlighted row is refused.
     let mut app = open(sample(), &["github"], 0);
-    codemason_tui::input::handle_key(&mut app, key(KeyCode::Enter)).await;
+    codemason_tui::crossterm_input::handle_key(&mut app, key(KeyCode::Enter)).await;
     let browser = app.connector_store.as_ref().expect("panel still open");
     assert_eq!(
         browser.last_install.as_deref(),
@@ -534,7 +535,7 @@ async fn c_clears_the_category_filter_back_to_all() {
         let browser = app.connector_store.as_ref().expect("panel open");
         assert_eq!(browser.selected_category_label(), "developer");
     }
-    codemason_tui::input::handle_key(&mut app, key(KeyCode::Char('c'))).await;
+    codemason_tui::crossterm_input::handle_key(&mut app, key(KeyCode::Char('c'))).await;
     let browser = app.connector_store.as_ref().expect("panel open");
     assert_eq!(
         browser.selected_category_label(),
@@ -558,7 +559,7 @@ async fn tab_routes_up_down_to_the_category_navigator() {
     let mut app = open(sample(), &[], 0);
     // Result rows focused by default: Down moves the result cursor and leaves
     // the category alone.
-    codemason_tui::input::handle_key(&mut app, key(KeyCode::Down)).await;
+    codemason_tui::crossterm_input::handle_key(&mut app, key(KeyCode::Down)).await;
     {
         let browser = app.connector_store.as_ref().expect("panel open");
         assert_eq!(browser.cursor, 1, "Down moved the result cursor");
@@ -567,8 +568,8 @@ async fn tab_routes_up_down_to_the_category_navigator() {
     // Tab hands focus to the navigator: Down applies the highlighted category on
     // the same keypress. Navigator row 1 is the `Installed` pseudo-category, so
     // the first declared category (`communication`) is row 2.
-    codemason_tui::input::handle_key(&mut app, key(KeyCode::Tab)).await;
-    codemason_tui::input::handle_key(&mut app, key(KeyCode::Down)).await;
+    codemason_tui::crossterm_input::handle_key(&mut app, key(KeyCode::Tab)).await;
+    codemason_tui::crossterm_input::handle_key(&mut app, key(KeyCode::Down)).await;
     assert_eq!(
         app.connector_store
             .as_ref()
@@ -577,7 +578,7 @@ async fn tab_routes_up_down_to_the_category_navigator() {
         "Installed",
         "row 1 is the Installed pseudo-category"
     );
-    codemason_tui::input::handle_key(&mut app, key(KeyCode::Down)).await;
+    codemason_tui::crossterm_input::handle_key(&mut app, key(KeyCode::Down)).await;
     {
         let browser = app.connector_store.as_ref().expect("panel open");
         assert_eq!(
@@ -588,7 +589,7 @@ async fn tab_routes_up_down_to_the_category_navigator() {
     }
     // Enter over the navigator applies the category and hands focus back to the
     // result list; the next Down moves the result cursor again.
-    codemason_tui::input::handle_key(&mut app, key(KeyCode::Enter)).await;
+    codemason_tui::crossterm_input::handle_key(&mut app, key(KeyCode::Enter)).await;
     {
         let browser = app.connector_store.as_ref().expect("panel open");
         assert_eq!(

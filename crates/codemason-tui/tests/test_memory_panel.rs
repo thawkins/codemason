@@ -19,6 +19,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -34,7 +35,8 @@ use codemason_agent::{
 use codemason_tui::{
     App,
     app::{ContextAction, ScreenMode, ScrollbarDragPane, SelectionPane, TextSelection},
-    input::{InputAction, handle_key},
+    crossterm_input::handle_key,
+    input::InputAction,
     layout,
 };
 use serde_json::json;
@@ -1216,7 +1218,7 @@ async fn test_memory_enter_with_non_empty_input_sends_message() {
     let _ = render_app_to_string(&mut app, 140, 40);
     assert_eq!(app.memory_row_count, 1);
 
-    let action = codemason_tui::input::handle_key(
+    let action = codemason_tui::crossterm_input::handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
     )

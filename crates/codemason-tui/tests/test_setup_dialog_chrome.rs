@@ -236,8 +236,11 @@ async fn test_thinking_selector_selection_still_persists_a_level() {
         model: entry("claude-sonnet-4", "Claude Sonnet 4"),
         selected: 2,
     });
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await;
     assert_eq!(
         app.session.selected_thinking_level,
         Some(ThinkingLevel::Low)

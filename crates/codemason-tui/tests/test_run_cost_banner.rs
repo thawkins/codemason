@@ -8,6 +8,7 @@
 
 use codemason_agent::event::Event;
 use codemason_tui::app::LogLevel;
+use codemason_tui::crossterm_input::CrosstermAppExt;
 
 #[path = "support/mod.rs"]
 mod support;

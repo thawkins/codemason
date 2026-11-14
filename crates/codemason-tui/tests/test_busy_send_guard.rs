@@ -11,11 +11,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifi
 use ratatui::{Terminal, backend::TestBackend, style::Color};
 
 use codemason_agent::event::Event;
-use codemason_tui::{
-    App,
-    input::{InputAction, handle_key},
-    layout,
-};
+use codemason_tui::{App, crossterm_input::handle_key, input::InputAction, layout};
 
 #[path = "support/mod.rs"]
 mod support;

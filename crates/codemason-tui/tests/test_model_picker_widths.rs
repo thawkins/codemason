@@ -163,8 +163,11 @@ async fn test_model_picker_down_moves_selection_indicator() {
         selected: 0,
     });
 
-    codemason_tui::input::handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
-        .await;
+    codemason_tui::crossterm_input::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+    )
+    .await;
 
     let text = render_to_string(&mut app, 120, 40);
     assert!(

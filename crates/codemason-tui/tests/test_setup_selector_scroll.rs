@@ -14,6 +14,7 @@
 use codemason_llm::providers::router_config::{RouterConfig, Tier, TierConfig, TierEntry};
 use codemason_tui::App;
 use codemason_tui::app::{ConfiguredProvider, ModelPickerEntry, ProviderSetupStep, ProviderSource};
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use codemason_types::{ThinkingConfig, ThinkingLevel};
 use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::{Terminal, backend::TestBackend};

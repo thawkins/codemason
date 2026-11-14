@@ -1796,7 +1796,7 @@ fn loop_dialog_open_and_cancel_round_trip_preserves_values() {
     assert_eq!(app.status, "loop: set a goal to start");
 
     // Esc keeps the draft for a later re-open.
-    codemason_tui::app::handle_loop_setup_key(&mut app, key_event(KeyCode::Esc));
+    codemason_tui::crossterm_input::handle_loop_setup_key(&mut app, key_event(KeyCode::Esc));
     assert!(app.loop_setup.is_none());
     assert!(app.loop_setup_draft.is_some());
 
@@ -1813,21 +1813,21 @@ fn loop_dialog_key_handler_navigates_fields_and_reports_a_missing_goal() {
 
     // Tab / BackTab cycle the active field.
     let before = app.loop_setup.as_ref().expect("open").active_field;
-    codemason_tui::app::handle_loop_setup_key(&mut app, key_event(KeyCode::Tab));
+    codemason_tui::crossterm_input::handle_loop_setup_key(&mut app, key_event(KeyCode::Tab));
     let after = app.loop_setup.as_ref().expect("open").active_field;
     assert_ne!(before, after);
-    codemason_tui::app::handle_loop_setup_key(&mut app, key_event(KeyCode::BackTab));
+    codemason_tui::crossterm_input::handle_loop_setup_key(&mut app, key_event(KeyCode::BackTab));
     assert_eq!(app.loop_setup.as_ref().expect("open").active_field, before);
 
     // Up / Down move between text fields.
-    codemason_tui::app::handle_loop_setup_key(&mut app, key_event(KeyCode::Down));
-    codemason_tui::app::handle_loop_setup_key(&mut app, key_event(KeyCode::Up));
+    codemason_tui::crossterm_input::handle_loop_setup_key(&mut app, key_event(KeyCode::Down));
+    codemason_tui::crossterm_input::handle_loop_setup_key(&mut app, key_event(KeyCode::Up));
 
     // A typed character lands in the focused text field.
-    codemason_tui::app::handle_loop_setup_key(&mut app, key_event(KeyCode::Char('g')));
+    codemason_tui::crossterm_input::handle_loop_setup_key(&mut app, key_event(KeyCode::Char('g')));
 
     // Enter with an empty goal reports the missing field back into the dialog.
-    codemason_tui::app::handle_loop_setup_key(&mut app, key_event(KeyCode::Enter));
+    codemason_tui::crossterm_input::handle_loop_setup_key(&mut app, key_event(KeyCode::Enter));
     let error = app
         .loop_setup
         .as_ref()

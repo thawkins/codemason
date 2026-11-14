@@ -30,6 +30,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;

@@ -32,7 +32,7 @@ use codemason_tui::app::{
     ConfiguredProvider, LoopOverrides, LoopSetupField, ProviderSource, apply_loop_overrides,
     parse_loop_flags,
 };
-use codemason_tui::input::handle_key;
+use codemason_tui::crossterm_input::handle_key;
 
 #[path = "support/mod.rs"]
 mod support;

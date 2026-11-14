@@ -5,6 +5,7 @@
 //! heading with keys or the mouse, and checks the items and what they do.
 
 use codemason_tui::App;
+use codemason_tui::crossterm_input::CrosstermAppExt;
 use codemason_tui::session_menu::{MenuAction, MenuTarget};
 use codemason_tui::sessions_sidebar::{self, SidebarRow, SidebarState};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
