@@ -5,15 +5,17 @@
 //! window's clipboard (`Context::copy_text`).
 //!
 //! GUI assertions use egui_kittest accessibility queries and the frame's
-//! platform output. The pasted PNG lands in the process `target/temp/`
-//! (app-core's paste directory) and is removed by the test.
+//! platform output. Pasted PNGs are saved in a per-test directory under the
+//! workspace `target/temp/` (`set_paste_dir_override`), never elsewhere.
 
 #[path = "support/mod.rs"]
 mod support;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use codemason_app_core::app::{App, HistoryPickerState};
+use codemason_app_core::clipboard::set_paste_dir_override;
 use codemason_app_core::log_channel::tui_log_channel;
 use codemason_gui::Shell;
 use codemason_gui::keys::default_keymap;
@@ -46,6 +48,31 @@ fn rig(configure: impl FnOnce(&mut App)) -> (tokio::runtime::Runtime, Harness<'s
     (runtime, harness)
 }
 
+/// Saves this thread's pasted images in a fresh directory under the
+/// workspace `target/temp/` while it lives.
+struct PasteDir(PathBuf);
+
+impl PasteDir {
+    fn new(name: &str) -> Self {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/temp/gui-clipboard")
+            .join(format!("{name}-{}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).expect("clear paste dir");
+        }
+        std::fs::create_dir_all(&dir).expect("create paste dir");
+        let dir = dir.canonicalize().expect("canonical paste dir");
+        set_paste_dir_override(Some(dir.clone()));
+        Self(dir)
+    }
+}
+
+impl Drop for PasteDir {
+    fn drop(&mut self) {
+        set_paste_dir_override(None);
+    }
+}
+
 /// A 2 x 2 red image, as egui-winit hands a pasted clipboard image over.
 fn pasted_image() -> egui::Event {
     egui::Event::PasteImage(Arc::new(ColorImage::new([2, 2], vec![Color32::RED; 4])))
@@ -53,6 +80,7 @@ fn pasted_image() -> egui::Event {
 
 #[test]
 fn test_pasted_image_is_staged_as_an_attachment() {
+    let paste_dir = PasteDir::new("staged");
     let (_runtime, mut harness) = rig(|_| {});
     harness.run();
 
@@ -62,11 +90,16 @@ fn test_pasted_image_is_staged_as_an_attachment() {
     let attachments = harness.state().app().session.pending_attachments.clone();
     assert_eq!(attachments.len(), 1, "one image staged");
     let path = &attachments[0];
-    let saved = image_dims(path);
-    for path in &attachments {
-        std::fs::remove_file(path).expect("remove pasted image");
-    }
-    assert_eq!(saved, (2, 2), "the pasted pixels were saved as a PNG");
+    assert_eq!(
+        path.parent(),
+        Some(paste_dir.0.as_path()),
+        "saved in the scratch dir"
+    );
+    assert_eq!(
+        image_dims(path),
+        (2, 2),
+        "the pasted pixels were saved as a PNG"
+    );
     let name = path
         .file_name()
         .expect("file name")
@@ -79,6 +112,7 @@ fn test_pasted_image_is_staged_as_an_attachment() {
 
 #[test]
 fn test_pasted_image_while_a_dialog_owns_the_window_is_left_alone() {
+    let paste_dir = PasteDir::new("modal");
     let (_runtime, mut harness) = rig(|app| {
         app.history_picker = Some(HistoryPickerState {
             entries: vec!["newest".to_string()],
@@ -92,6 +126,11 @@ fn test_pasted_image_while_a_dialog_owns_the_window_is_left_alone() {
     harness.run();
 
     assert!(harness.state().app().session.pending_attachments.is_empty());
+    assert_eq!(
+        std::fs::read_dir(&paste_dir.0).expect("paste dir").count(),
+        0,
+        "nothing was saved"
+    );
 }
 
 #[test]

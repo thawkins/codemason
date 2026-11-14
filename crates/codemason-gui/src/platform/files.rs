@@ -7,12 +7,14 @@
 //! |---|---|---|
 //! | [`FileIntent::Attach`] | Open, several images | an image path staged for the next message (`Alt+V` with a path on the clipboard) |
 //! | [`FileIntent::OpenProject`] | Folder | `/project add <path>` |
-//! | [`FileIntent::NewProjectDir`] | Folder | `/session new <path>`, the directory `/new` then scaffolds into |
+//! | [`FileIntent::NewProjectDir`] | Folder | `/session new <path>` (`App::new_session_in_dir`, its path branch), the directory `/new` then scaffolds into |
 //!
 //! [`apply_answer`] hands a chosen path to the same app-core action the
-//! typed path reaches (`App::attach_image_path`, or the slash command run
-//! through `App::execute_slash_command`), so the two frontends cannot
-//! drift. A cancelled dialog changes nothing; one that could not be shown
+//! typed path reaches (`App::attach_image_path`, `App::new_session_in_dir`,
+//! or `/project add` run through `App::execute_slash_command`), so the two
+//! frontends cannot drift. A folder is never parsed as command text where
+//! the command splits words (`/session new` honours quotes and `--`
+//! options), so any folder name works. A cancelled dialog changes nothing; one that could not be shown
 //! is logged as a warning.
 //!
 //! [`FileDialogs`] never blocks the event loop: [`FileDialogs::ask`] queues
@@ -220,9 +222,11 @@ pub fn file_menu(ui: &mut egui::Ui, files: &mut FileDialogs, start: &Path, enabl
 ///
 /// - [`Answer::Paths`]: [`FileIntent::Attach`] stages each image with
 ///   `App::attach_image_path`; [`FileIntent::OpenProject`] runs
-///   `/project add <path>` and [`FileIntent::NewProjectDir`] runs
-///   `/session new <path>` through `App::execute_slash_command`, exactly as
-///   if the user had typed them.
+///   `/project add <path>` through `App::execute_slash_command` (which takes
+///   the rest of the line verbatim), exactly as if the user had typed it;
+///   [`FileIntent::NewProjectDir`] calls `App::new_session_in_dir`, the
+///   branch `/session new <path>` runs for a path, with the path as a
+///   `Path`.
 /// - [`Answer::Cancelled`]: nothing changes.
 /// - [`Answer::Unavailable`]: no dialog could be shown; logged as a warning.
 ///
@@ -245,29 +249,32 @@ pub async fn apply_answer(app: &mut App, intent: FileIntent, answer: Answer) {
             return;
         }
     };
-    let command = match intent {
+    let Some(first) = paths.first() else {
+        return;
+    };
+    match intent {
         FileIntent::Attach => {
             for path in &paths {
                 app.attach_image_path(path);
             }
             return;
         }
-        FileIntent::OpenProject => "/project add",
-        FileIntent::NewProjectDir => "/session new",
-    };
-    let Some(path) = paths.first() else {
-        return;
-    };
-    match path.to_str() {
+        FileIntent::NewProjectDir => {
+            app.new_session_in_dir(first);
+            return;
+        }
+        FileIntent::OpenProject => {}
+    }
+    match first.to_str() {
         Some(path) => {
-            app.execute_slash_command(&format!("{command} {path}"))
+            app.execute_slash_command(&format!("/project add {path}"))
                 .await
         }
         None => app.push_log(
             LogLevel::Warn,
             format!(
                 "[files] {} is not valid UTF-8 and cannot be used",
-                path.display()
+                first.display()
             ),
             None,
         ),

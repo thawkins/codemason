@@ -573,12 +573,20 @@ impl App {
     /// Returns a message when the path does not exist, is not a directory, or
     /// is outside every permitted root.
     pub(crate) fn allowed_session_directory(&self, path: &str) -> Result<PathBuf, String> {
-        let expanded = Self::expand_home_path(Path::new(path));
+        self.allowed_session_path(Path::new(path))
+    }
+
+    /// [`App::allowed_session_directory`] for a path that is already a
+    /// [`Path`] (a frontend's folder picker), so no quoting or option
+    /// parsing touches it.
+    fn allowed_session_path(&self, path: &Path) -> Result<PathBuf, String> {
+        let shown = path.display();
+        let expanded = Self::expand_home_path(path);
         let canonical = expanded
             .canonicalize()
-            .map_err(|e| format!("`{path}`: {e}"))?;
+            .map_err(|e| format!("`{shown}`: {e}"))?;
         if !canonical.is_dir() {
-            return Err(format!("`{path}` is not a directory"));
+            return Err(format!("`{shown}` is not a directory"));
         }
         let canonical_root = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
         let mut roots: Vec<PathBuf> = std::env::current_dir()
@@ -596,7 +604,7 @@ impl App {
             Ok(canonical)
         } else {
             Err(format!(
-                "`{path}` is outside the launch directory and every `dirs.allowed_roots` entry"
+                "`{shown}` is outside the launch directory and every `dirs.allowed_roots` entry"
             ))
         }
     }
@@ -611,6 +619,26 @@ impl App {
     pub fn open_new_session(&mut self) -> Result<(), String> {
         let directory = self.session.directory.clone();
         self.open_new_session_in(directory)
+    }
+
+    /// Start a new session in the folder `dir` and focus it, as
+    /// `/session new <dir>` does for a typed path (the same directory check,
+    /// then [`App::open_new_session_in`]), for a path a frontend's folder
+    /// picker chose: the path is never parsed as command text, so quotes,
+    /// spaces and words starting with `--` are part of the folder name.
+    /// A refusal is shown in the status line, as `/session` shows it.
+    ///
+    /// # Arguments
+    ///
+    /// * `dir` - the chosen folder.
+    pub fn new_session_in_dir(&mut self, dir: &Path) {
+        let result = self
+            .allowed_session_path(dir)
+            .and_then(|dir| self.open_new_session_in(dir));
+        if let Err(message) = result {
+            self.status = format!("session: {message}");
+        }
+        self.sidebar.dirty = true;
     }
 
     /// Starts a new session working in `directory` and focuses it; the

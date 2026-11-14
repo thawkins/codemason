@@ -68,6 +68,9 @@ fn rig(
     let harness = Harness::builder()
         .with_size(egui::vec2(1000.0, 800.0))
         .build_ui_state(|ui, shell: &mut Shell| shell.update(ui), shell);
+    // The window's fonts: a new session's startup banner draws the
+    // block-character logo, which egui's default fonts lack.
+    codemason_gui::fonts::install(&harness.ctx, craft_ui::fonts::SystemFonts::Off);
     (runtime, harness, requests)
 }
 
@@ -141,40 +144,95 @@ fn test_cancelled_dialog_changes_nothing() {
     assert_eq!(app.session.session_id.as_deref(), Some(SESSION));
 }
 
+/// The text of every message in the focused session's transcript.
+fn transcript(app: &App) -> String {
+    app.session
+        .messages
+        .iter()
+        .flat_map(|m| m.parts.iter())
+        .filter_map(|p| match p {
+            codemason_agent::message::MessagePart::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A folder named `name` inside a fresh scratch root that `harness`'s App
+/// may open sessions in (`dirs.allowed_roots`).
+fn permitted_folder(harness: &mut Harness<'static, Shell>, tag: &str, name: &str) -> PathBuf {
+    let root = scratch(tag);
+    let folder = root.join(name);
+    std::fs::create_dir_all(&folder).expect("create folder");
+    support::allow_session_root(harness.state().app(), &root);
+    folder.canonicalize().expect("canonical folder")
+}
+
 #[test]
-fn test_open_project_dialog_runs_project_add_with_the_folder() {
-    let dir = scratch("open-project");
-    let (_runtime, mut harness, requests) = rig(Answer::Paths(vec![dir.clone()]));
+fn test_open_project_dialog_registers_the_folder_as_a_project() {
+    // The permitted roots read the process cwd and config overrides.
+    let _env = crate::global_env_lock();
+    let (_runtime, mut harness, requests) = rig(Answer::Cancelled);
+    let folder = permitted_folder(&mut harness, "open-project", "Ann's App");
+    let answer = folder.clone();
+    harness
+        .state_mut()
+        .set_file_dialog_override(Some(Box::new(move |_: &Request| {
+            Answer::Paths(vec![answer.clone()])
+        })));
 
     choose(&mut harness, OPEN_PROJECT_LABEL);
 
-    let Request::File(dialog) = &requests.borrow()[0] else {
-        panic!("a file dialog was asked");
-    };
-    assert_eq!(dialog.kind, Kind::Folder);
-    let expected = format!("Executing /project add {}", dir.display());
     assert!(
-        log_lines(harness.state().app()).contains(&expected),
-        "the folder reaches `/project add` as a typed path does"
+        requests.borrow().is_empty(),
+        "the replaced override answered"
+    );
+    // `/project add` registers the checkout the folder belongs to (here
+    // the enclosing workspace repository), as it does for a typed path.
+    let text = transcript(harness.state().app());
+    let registered = text
+        .split_once("registered at `")
+        .and_then(|(_, rest)| rest.split_once('`'))
+        .map(|(path, _)| PathBuf::from(path))
+        .unwrap_or_else(|| panic!("no project was registered: {text}"));
+    assert!(
+        folder.starts_with(&registered),
+        "{} holds the chosen folder {}",
+        registered.display(),
+        folder.display()
     );
 }
 
 #[test]
-fn test_new_project_dir_dialog_runs_session_new_with_the_folder() {
-    let dir = scratch("new-project");
-    let (_runtime, mut harness, requests) = rig(Answer::Paths(vec![dir.clone()]));
+fn test_new_project_dir_dialog_opens_a_session_in_any_folder_name() {
+    // The permitted roots read the process cwd and config overrides.
+    let _env = crate::global_env_lock();
+    for (tag, name) in [
+        ("new-apostrophe", "Ann's App"),
+        ("new-spaces", "two words here"),
+        ("new-dashes", "draft --x"),
+    ] {
+        let (_runtime, mut harness, requests) = rig(Answer::Cancelled);
+        let folder = permitted_folder(&mut harness, tag, name);
+        let answer = folder.clone();
+        harness
+            .state_mut()
+            .set_file_dialog_override(Some(Box::new(move |_: &Request| {
+                Answer::Paths(vec![answer.clone()])
+            })));
 
-    choose(&mut harness, NEW_PROJECT_DIR_LABEL);
+        choose(&mut harness, NEW_PROJECT_DIR_LABEL);
 
-    let Request::File(dialog) = &requests.borrow()[0] else {
-        panic!("a file dialog was asked");
-    };
-    assert_eq!(dialog.kind, Kind::Folder);
-    let expected = format!("Executing /session new {}", dir.display());
-    assert!(
-        log_lines(harness.state().app()).contains(&expected),
-        "the folder reaches `/session new` as a typed path does"
-    );
+        assert!(requests.borrow().is_empty());
+        let app = harness.state().app();
+        assert_eq!(
+            app.session.directory, folder,
+            "{name:?}: the new session works in the chosen folder (status {:?})",
+            app.status
+        );
+        assert_eq!(app.cwd_path, folder, "{name:?}: the App moved into it");
+        assert_ne!(app.session.session_id.as_deref(), Some(SESSION));
+    }
 }
 
 #[test]

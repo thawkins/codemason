@@ -87,6 +87,21 @@ thread_local! {
     /// Text writes kept for a frontend that owns the clipboard (see
     /// [`route_copies_to_frontend`]); `None` while writes go to `arboard`.
     static FRONTEND_COPIES: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+    /// Test override for the directory pasted images are saved in (see
+    /// [`set_paste_dir_override`]).
+    static PASTE_DIR_OVERRIDE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
+/// Save this thread's pasted clipboard images in `dir` instead of the
+/// project `target/temp/` (tests point it at the workspace scratch tree);
+/// `None` restores the default.
+///
+/// # Arguments
+///
+/// * `dir` - the directory, which must exist.
+#[doc(hidden)]
+pub fn set_paste_dir_override(dir: Option<PathBuf>) {
+    PASTE_DIR_OVERRIDE.with(|d| *d.borrow_mut() = dir);
 }
 
 /// Keep this thread's clipboard text writes for the frontend instead of
@@ -391,7 +406,9 @@ pub fn clipboard_image_to_temp(img_data: &ImageData<'_>) -> Result<PathBuf> {
         anyhow::bail!("clipboard image dimensions mismatch pixel buffer");
     }
 
-    let temp_dir = project_temp_dir();
+    let temp_dir = PASTE_DIR_OVERRIDE
+        .with(|d| d.borrow().clone())
+        .unwrap_or_else(project_temp_dir);
     let tmp_file = tempfile::Builder::new()
         .prefix("codemason_paste_")
         .suffix(".png")
