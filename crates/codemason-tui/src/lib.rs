@@ -10,6 +10,7 @@ pub mod adapters;
 pub mod app;
 pub mod input;
 pub mod input_field;
+pub mod input_prompt;
 pub mod layout;
 pub mod layout_active_agents;
 pub mod layout_statusbar;

@@ -1047,7 +1047,8 @@ impl App {
                 // pending (spec `inputqueue` FR-009); the counter digits are
                 // replaced by spaces in the geometry copy so a copy can never
                 // include them as message content (FR-020, NFR-002).
-                let prefix = crate::layout::input_prompt_selection_prefix(self.input_queue_len());
+                let prefix =
+                    crate::input_prompt::input_prompt_selection_prefix(self.input_queue_len());
                 let input_text = format!("{prefix}{}", self.session.input);
                 let area = self.input_area;
                 let inner_x = area.x + 1; // inside border

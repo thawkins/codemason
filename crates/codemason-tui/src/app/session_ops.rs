@@ -1121,7 +1121,7 @@ impl App {
     /// FR-026).
     ///
     /// The halt row reads `Stop` while a turn is in flight and `Resume` once it
-    /// has stopped (FR-026). The render path in `crate::layout` and the action
+    /// has stopped (FR-026). The render path in `layout` and the action
     /// dispatch both read this one source, so the painted label can never
     /// disagree with what selecting the row does.
     pub fn queue_menu_labels(&self) -> [&'static str; 4] {
@@ -3619,7 +3619,7 @@ impl App {
         // The prompt prefix widens by two columns while the queue counter is
         // shown, so selection columns only line up with the input text when the
         // counter width is subtracted too (spec `inputqueue` NFR-002, FR-020).
-        let prefix_len = crate::layout::input_prompt_prefix_len(self.input_queue_len());
+        let prefix_len = crate::input_prompt::input_prompt_prefix_len(self.input_queue_len());
         let display_len = self.input_len_chars() + prefix_len;
         let start_disp = start_disp.min(display_len);
         let end_disp_exclusive = end_disp_exclusive.min(display_len);

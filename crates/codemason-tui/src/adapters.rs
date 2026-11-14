@@ -3,9 +3,13 @@
 //! Depends on `codemason-app-core`, `ratatui`, `crossterm` and [`crate::theme`].
 
 use codemason_app_core::geometry::Area;
-use codemason_app_core::input_event::{Key, KeyInput, Modifiers};
+use codemason_app_core::input_event::{
+    Key, KeyInput, Modifiers, MouseButton, MouseInput, MouseKind,
+};
 use codemason_app_core::styled::{StyledLine, ThemeColor};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyModifiers, MouseButton as CtMouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -51,9 +55,26 @@ pub fn to_ratatui_line(line: &StyledLine) -> Line<'static> {
     Line::from(spans)
 }
 
+/// Convert crossterm modifier flags into neutral [`Modifiers`].
+///
+/// `SUPER` maps to `cmd`; `META` and `HYPER` have no neutral equivalent and
+/// are dropped (the app binds neither).
+pub fn from_crossterm_modifiers(m: KeyModifiers) -> Modifiers {
+    Modifiers {
+        ctrl: m.contains(KeyModifiers::CONTROL),
+        alt: m.contains(KeyModifiers::ALT),
+        shift: m.contains(KeyModifiers::SHIFT),
+        cmd: m.contains(KeyModifiers::SUPER),
+    }
+}
+
 /// Convert a crossterm key event into a neutral [`KeyInput`].
 ///
-/// Returns `None` for keys with no neutral equivalent (media keys, caps lock...).
+/// The event kind (press/release/repeat) is not carried over; callers filter
+/// releases before converting. Keys with no named neutral equivalent (Insert,
+/// media keys, lone modifier presses...) become [`Key::Other`], so "any key"
+/// behaviour still sees them. Always returns `Some` today; the `Option` keeps
+/// room for frontends' unmappable events.
 pub fn from_crossterm_key(ev: KeyEvent) -> Option<KeyInput> {
     let key = match ev.code {
         KeyCode::Char(c) => Key::Char(c),
@@ -72,17 +93,38 @@ pub fn from_crossterm_key(ev: KeyEvent) -> Option<KeyInput> {
         KeyCode::PageUp => Key::PageUp,
         KeyCode::PageDown => Key::PageDown,
         KeyCode::F(n) => Key::F(n),
-        _ => return None,
+        _ => Key::Other,
     };
-    let m = ev.modifiers;
     Some(KeyInput {
         key,
-        mods: Modifiers {
-            ctrl: m.contains(KeyModifiers::CONTROL),
-            alt: m.contains(KeyModifiers::ALT),
-            shift: m.contains(KeyModifiers::SHIFT),
-            cmd: m.contains(KeyModifiers::SUPER),
-        },
+        mods: from_crossterm_modifiers(ev.modifiers),
+    })
+}
+
+/// Convert a crossterm mouse event into a neutral [`MouseInput`].
+///
+/// Returns `None` for horizontal scroll (`ScrollLeft`/`ScrollRight`), which
+/// has no neutral equivalent and no handler in the app.
+pub fn from_crossterm_mouse(ev: MouseEvent) -> Option<MouseInput> {
+    let button = |b: CtMouseButton| match b {
+        CtMouseButton::Left => MouseButton::Left,
+        CtMouseButton::Right => MouseButton::Right,
+        CtMouseButton::Middle => MouseButton::Middle,
+    };
+    let kind = match ev.kind {
+        MouseEventKind::Down(b) => MouseKind::Down(button(b)),
+        MouseEventKind::Up(b) => MouseKind::Up(button(b)),
+        MouseEventKind::Drag(b) => MouseKind::Drag(button(b)),
+        MouseEventKind::Moved => MouseKind::Moved,
+        MouseEventKind::ScrollUp => MouseKind::ScrollUp,
+        MouseEventKind::ScrollDown => MouseKind::ScrollDown,
+        MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => return None,
+    };
+    Some(MouseInput {
+        kind,
+        column: ev.column,
+        row: ev.row,
+        mods: from_crossterm_modifiers(ev.modifiers),
     })
 }
 
