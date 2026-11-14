@@ -21,6 +21,7 @@
 //!   [`styled_text`] layout.
 //! - [`fonts`] builds the font stack (block and status glyphs, a bold
 //!   face, system fonts for CJK and the rest) the window installs at start.
+//! - [`platform`] holds the native file dialogs ([`platform::files`]).
 //! - [`theme`] installs the egui visuals of the App's theme mode and
 //!   restyles the window when the mode changes.
 //! - [`bridge::spawn_event_bridge`] forwards agent events from the
@@ -28,7 +29,8 @@
 //!
 //! Dependencies: `eframe`/`egui` (the storytold forks, via the workspace
 //! `[patch.crates-io]` table), `craft-ui` (docking, IME, combo boxes),
-//! `craft-keymap` (keyboard shortcuts), `tokio`, `thiserror`
+//! `craft-keymap` (keyboard shortcuts), `craft-dialogs` (native file
+//! dialogs), `tokio`, `thiserror`
 //! and `tracing`.
 
 #![deny(unsafe_code)]
@@ -41,6 +43,7 @@ pub mod keys;
 pub mod main_thread;
 pub mod palette;
 pub mod panels;
+pub mod platform;
 pub mod shell;
 pub mod styled_text;
 pub mod theme;

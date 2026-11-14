@@ -16,6 +16,8 @@ mod test_dialogs;
 mod test_dialogs_more;
 #[path = "test_dock.rs"]
 mod test_dock;
+#[path = "test_files.rs"]
+mod test_files;
 #[path = "test_fonts.rs"]
 mod test_fonts;
 #[path = "test_housekeeping.rs"]

@@ -194,6 +194,9 @@ craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "d15bf1f35b1
 # Keyboard bindings (chords, keymap, user overrides, egui dispatch) from the
 # same craft-libs rev.
 craft-keymap = { git = "https://github.com/storytold/craft-libs", rev = "d15bf1f35b17b759870f9e5111b9a5d243f64888", features = ["egui"] }
+# Native file dialogs that never block the event loop (queued, answered on a
+# later frame) from the same craft-libs rev.
+craft-dialogs = { git = "https://github.com/storytold/craft-libs", rev = "d15bf1f35b17b759870f9e5111b9a5d243f64888" }
 
 # ── Hashing / file-locking ───────────────────────────────────────────────
 num_cpus = "1.16"

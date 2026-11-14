@@ -5241,15 +5241,7 @@ impl App {
 
             if let Some(path) = candidate {
                 if path.exists() && is_image_path(&path) {
-                    self.warn_if_path_outside_safe_scope(&path);
-                    self.push_log_no_agent(
-                        LogLevel::Info,
-                        format!(
-                            "[attach] Image attached from clipboard path: {}",
-                            path.display()
-                        ),
-                    );
-                    self.session.pending_attachments.push(path);
+                    self.stage_image_path(path, "clipboard path");
                     return;
                 }
             }
@@ -5257,27 +5249,84 @@ impl App {
 
         // --- Phase 2: try raw pixel data ---
         if let Some(img_data) = crate::clipboard::get_clipboard_image() {
-            match save_clipboard_image_to_temp(&img_data) {
-                Ok(path) => {
-                    self.push_log_no_agent(
-                        LogLevel::Info,
-                        format!("[attach] Image saved from clipboard: {}", path.display()),
-                    );
-                    self.session.pending_attachments.push(path);
-                }
-                Err(e) => {
-                    self.push_log_no_agent(
-                        LogLevel::Warn,
-                        format!("Failed to save clipboard image: {e}"),
-                    );
-                }
-            }
+            self.attach_clipboard_image(&img_data);
         } else {
             self.push_log_no_agent(
                 LogLevel::Info,
                 "No image data found in clipboard".to_string(),
             );
         }
+    }
+
+    /// Stage raw clipboard pixels as an image attachment: the pixels are
+    /// saved as a PNG under `target/temp/` (see
+    /// [`crate::clipboard::clipboard_image_to_temp`]) and the file is added
+    /// to the pending attachments, as `Alt+V` does with an image on the
+    /// clipboard. A frontend whose toolkit already read the clipboard image
+    /// (the GUI's paste) hands the pixels in here.
+    ///
+    /// # Arguments
+    ///
+    /// * `img_data` - the RGBA pixels and their dimensions.
+    ///
+    /// # Returns
+    ///
+    /// Whether the image was attached; a failure is logged.
+    pub fn attach_clipboard_image(&mut self, img_data: &arboard::ImageData<'_>) -> bool {
+        match save_clipboard_image_to_temp(img_data) {
+            Ok(path) => {
+                self.push_log_no_agent(
+                    LogLevel::Info,
+                    format!("[attach] Image saved from clipboard: {}", path.display()),
+                );
+                self.session.pending_attachments.push(path);
+                true
+            }
+            Err(e) => {
+                self.push_log_no_agent(
+                    LogLevel::Warn,
+                    format!("Failed to save clipboard image: {e}"),
+                );
+                false
+            }
+        }
+    }
+
+    /// Stage the image file at `path` as an attachment for the next
+    /// message: the path a frontend's file picker chose takes the same
+    /// steps as an image path found on the clipboard by `Alt+V` (the
+    /// out-of-scope warning, the `[attach]` log line, the pending list).
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - the chosen file.
+    ///
+    /// # Returns
+    ///
+    /// Whether it was attached. A missing file or one without an image
+    /// extension is not attached, and that is logged.
+    pub fn attach_image_path(&mut self, path: &std::path::Path) -> bool {
+        if !path.exists() || !is_image_path(path) {
+            self.push_log_no_agent(
+                LogLevel::Warn,
+                format!("[attach] Not an image file: {}", path.display()),
+            );
+            return false;
+        }
+        self.stage_image_path(path.to_path_buf(), "file dialog");
+        true
+    }
+
+    /// Add an existing image file to the pending attachments, warning when
+    /// it lies outside the working and home directories. `source` names
+    /// where the path came from in the log line.
+    fn stage_image_path(&mut self, path: std::path::PathBuf, source: &str) {
+        self.warn_if_path_outside_safe_scope(&path);
+        self.push_log_no_agent(
+            LogLevel::Info,
+            format!("[attach] Image attached from {source}: {}", path.display()),
+        );
+        self.session.pending_attachments.push(path);
     }
 
     /// Log a warning when a clipboard-resolved image path lies outside the

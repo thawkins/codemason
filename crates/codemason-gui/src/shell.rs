@@ -73,6 +73,7 @@ use crate::panels::sessions::SessionsView;
 use crate::panels::status_bar::status_bar_ui;
 use crate::panels::tasks::tasks_ui;
 use crate::panels::teams::teams_ui;
+use crate::platform::files::{self, FileDialogs, file_menu};
 use crate::theme::ThemeApplier;
 
 /// Most log records moved into the app per frame, so a burst cannot stall
@@ -112,6 +113,8 @@ pub struct Shell {
     close_keys: Vec<KeyInput>,
     /// Installs the visuals of the App's theme mode, again when it changes.
     theme: ThemeApplier,
+    /// The native file dialogs the File menu queues.
+    files: FileDialogs,
 }
 
 impl std::fmt::Debug for Shell {
@@ -154,6 +157,7 @@ impl Shell {
             key_panes: BTreeSet::new(),
             close_keys: Vec::new(),
             theme: ThemeApplier::default(),
+            files: FileDialogs::new(),
         }
     }
 
@@ -238,6 +242,12 @@ impl Shell {
         self.theme.sync(ui.ctx(), self.app.theme_mode);
         self.sync_dock(ui.ctx());
         let palette = palette_for(self.app.theme_mode);
+        let menus_enabled = !dialogs::locks_prompt(&self.app);
+        egui::Panel::top("menu_bar").show(ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
+                file_menu(ui, &mut self.files, &self.app.cwd_path, menus_enabled);
+            });
+        });
         egui::Panel::bottom("status_bar").show(ui, |ui| {
             status_bar_ui(ui, &mut self.app, &palette);
         });
@@ -429,7 +439,8 @@ impl Shell {
         self.layout_dirty = false;
     }
 
-    /// Run one whole frame: [`Self::logic`], then route the keys and draw.
+    /// Run one whole frame: [`Self::logic`], then route the keys and draw,
+    /// then show a file dialog the frame queued (with no parent window).
     ///
     /// eframe calls the two halves separately (`eframe::App::logic` and
     /// `eframe::App::ui`); harnesses that drive only a `Ui` call this.
@@ -440,6 +451,7 @@ impl Shell {
     pub fn update(&mut self, ui: &mut egui::Ui) {
         self.logic(ui.ctx());
         self.draw_frame(ui);
+        self.files.show_pending(None);
     }
 
     /// The work that must go on whether or not the window is shown: drain
@@ -461,6 +473,7 @@ impl Shell {
     /// * `ctx` - the window's context.
     pub fn logic(&mut self, ctx: &egui::Context) {
         self.drain_sources();
+        self.apply_file_answers(ctx);
         self.housekeeping(ctx);
         self.poll_timers(ctx);
         // `/quit` (or any other path that stops the app) closes the window.
@@ -484,6 +497,17 @@ impl Shell {
         }
         self.show(ui);
         self.run_dialog_keys(ui.ctx());
+    }
+
+    /// Answer every file dialog with `answer_with` instead of a native
+    /// dialog (tests and automation); `None` shows native dialogs again.
+    ///
+    /// # Arguments
+    ///
+    /// * `answer_with` - the stand-in for the user's choice.
+    #[doc(hidden)]
+    pub fn set_file_dialog_override(&mut self, answer_with: Option<craft_dialogs::Override>) {
+        self.files.set_override(answer_with);
     }
 
     /// The application state the shell renders.
@@ -598,6 +622,28 @@ impl Shell {
         ctx.request_repaint();
     }
 
+    /// Run what the answered file dialogs ask for (`files::apply_answer`):
+    /// stage the chosen images, or run `/project add` / `/session new` with
+    /// the chosen folder. The dialogs wake the window through `ctx` when
+    /// they answer. Without attached sources there is no runtime, so the
+    /// answers wait.
+    fn apply_file_answers(&mut self, ctx: &egui::Context) {
+        self.files.bind(ctx);
+        let Some(sources) = self.sources.as_ref() else {
+            return;
+        };
+        let answers = self.files.take_answers();
+        if answers.is_empty() {
+            return;
+        }
+        for (intent, answer) in answers {
+            sources
+                .runtime
+                .block_on(files::apply_answer(&mut self.app, intent, answer));
+        }
+        ctx.request_repaint();
+    }
+
     /// Move pending agent events and log records into the [`App`].
     fn drain_sources(&mut self) {
         let Some(sources) = self.sources.as_mut() else {
@@ -664,8 +710,10 @@ impl eframe::App for Shell {
         Self::logic(self, ctx);
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         // eframe has just called `logic` for this frame.
         self.draw_frame(ui);
+        // Show a dialog the File menu queued, with the window as parent.
+        self.files.show_pending(Some(frame));
     }
 }
