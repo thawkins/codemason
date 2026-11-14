@@ -46,9 +46,9 @@ use crate::app::{
     ProviderSetupStep, SelectionPane, StorePane,
 };
 use crate::widgets::message_widget::{
-    INDENT_SPACES, canonical_tool_name, capitalize_tool_name, is_agent_notice, read_line_range,
-    render_agent_notice_lines, scrub_narrated_toolcalls, tool_inline_diff, tool_input_summary,
-    tool_result_summary,
+    INDENT_SPACES, agent_notice_ratatui_lines, canonical_tool_name, capitalize_tool_name,
+    is_agent_notice, read_line_range, scrub_narrated_ratatui_lines, tool_inline_diff,
+    tool_input_summary, tool_result_summary,
 };
 use codemason_connectors::CataloguePane;
 
@@ -8221,7 +8221,7 @@ fn messages_to_lines(
                 MessagePart::Text { text } => {
                     // Agent notices are rendered in bright yellow, one item per line.
                     if msg.role == Role::Assistant && is_agent_notice(text) {
-                        lines.extend(render_agent_notice_lines(text));
+                        lines.extend(agent_notice_ratatui_lines(text));
                         continue;
                     }
 
@@ -8433,7 +8433,7 @@ fn messages_to_lines(
                                 // and executes that call, so the transcript
                                 // shows the executed call instead of the raw
                                 // narration.
-                                lines.extend(scrub_narrated_toolcalls(thought_lines));
+                                lines.extend(scrub_narrated_ratatui_lines(thought_lines));
                             }
                         } else if tool == "multiedit" || tool == "multi_edit" {
                             if let Some(file_stats) = state
@@ -8550,7 +8550,7 @@ fn messages_to_lines(
                     }
                     // Reasoning text is also a place models narrate tool-call
                     // markup into; scrub it the same way as think outputs.
-                    lines.extend(scrub_narrated_toolcalls(reasoning_lines));
+                    lines.extend(scrub_narrated_ratatui_lines(reasoning_lines));
                 }
                 MessagePart::Image(img) => {
                     let name = img

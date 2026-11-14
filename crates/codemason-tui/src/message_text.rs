@@ -1,0 +1,2781 @@
+//! Plain-text rendering of chat messages and tool calls.
+//!
+//! Tool-call header summaries, result summaries, inline diff counts, path
+//! shortening, agent-notice bubbles and narrated-tool-call scrubbing. These
+//! were the ratatui-free part of `widgets::message_widget` (which re-exports
+//! them); styled output uses the frontend-neutral [`StyledLine`].
+//!
+//! Depends on `codemason-agent`/`codemason-types` (messages, string helpers)
+//! and `codemason-app-core` (styled text).
+
+use codemason_app_core::styled::{StyledLine, StyledSpan, TextStyle, ThemeColor};
+
+use crate::app::short_id;
+use crate::text_utils::{pluralize, truncate_str};
+
+/// Sentinel prefix used to identify agent-notice chat bubbles. The event
+/// handler emits the bubble text as `Agent Notice\n<summary>` (ANTIPAT M1:
+/// the emoji prefix was replaced with the plain-text label).
+const AGENT_NOTICE_PREFIX: &str = "Agent Notice";
+
+/// Static run of spaces used to indent continuation lines of a text part.
+///
+/// PERF-047: emitting the indent as a borrowed span against this constant
+/// avoids allocating a fresh `String` (and the `format!` result) per line.
+/// The longest indent any role uses is 13 (`[compaction] `).
+pub const INDENT_SPACES: &str = "                ";
+
+/// Returns true if the text is an agent-notice bubble.
+pub fn is_agent_notice(text: &str) -> bool {
+    text.trim_start().starts_with(AGENT_NOTICE_PREFIX)
+}
+
+/// Render an agent-notice bubble as bright-yellow lines, one item per line,
+/// followed by a trailing blank line to separate the bubble from following content.
+pub fn render_agent_notice_lines(text: &str) -> Vec<StyledLine> {
+    let style = TextStyle::new().fg(ThemeColor::Yellow).bold();
+    let mut lines = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        if i == 0 {
+            lines.push(StyledLine::from(vec![
+                StyledSpan::styled("● ", style),
+                StyledSpan::styled(line.to_string(), style),
+            ]));
+        } else {
+            lines.push(StyledLine::from(StyledSpan::styled(
+                format!("{}{}", " ".repeat(2), line),
+                style,
+            )));
+        }
+    }
+    // Trailing blank line keeps the notice visually separated from what follows.
+    lines.push(StyledLine::from(StyledSpan::styled(String::new(), style)));
+    lines
+}
+
+/// [`scrub_narrated_toolcalls_by`] over [`StyledLine`]s.
+pub fn scrub_narrated_toolcalls(lines: Vec<StyledLine>) -> Vec<StyledLine> {
+    scrub_narrated_toolcalls_by(lines, StyledLine::text)
+}
+
+/// Character budget for the command echoed in a bash tool-call header.
+///
+/// Bash is the one tool whose argument *is* the action, so its inline summary
+/// gets a wider budget than the 120 characters the other tools use: a
+/// 250-character preview keeps a realistic `cd ... && cargo test ... | tail`
+/// line readable instead of clipping it to its first clause. `run_code` shares
+/// this arm because it canonicalises to `Bash`.
+pub const BASH_COMMAND_PREVIEW_CHARS: usize = 250;
+
+fn truncate_json_strings(value: &serde_json::Value, max_len: usize) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(s) => serde_json::Value::String(truncate_str(s, max_len)),
+        serde_json::Value::Array(arr) => serde_json::Value::Array(
+            arr.iter()
+                .map(|v| truncate_json_strings(v, max_len))
+                .collect(),
+        ),
+        serde_json::Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for (k, v) in map {
+                out.insert(k.clone(), truncate_json_strings(v, max_len));
+            }
+            serde_json::Value::Object(out)
+        }
+        _ => value.clone(),
+    }
+}
+
+fn summarize_tool_args(input: &serde_json::Value, max_str_len: usize) -> String {
+    let Some(obj) = input.as_object() else {
+        return String::new();
+    };
+    let truncated = truncate_json_strings(input, max_str_len);
+    let Some(tobj) = truncated.as_object() else {
+        return String::new();
+    };
+    let mut keys: Vec<&String> = obj.keys().collect();
+    keys.sort();
+    let mut parts = Vec::new();
+    for k in keys {
+        if let Some(v) = tobj.get(k) {
+            let value_text = match v {
+                serde_json::Value::String(s) => format!("\"{s}\""),
+                _ => serde_json::to_string(v).unwrap_or_else(|_| "?".to_string()),
+            };
+            parts.push(format!("{k}={value_text}"));
+        }
+    }
+    parts.join(", ")
+}
+
+/// Capitalize the first letter of a tool name for display (e.g., "read" -> "Read").
+/// Capitalise the first letter of a tool name, leaving the rest unchanged.
+pub fn capitalize_tool_name(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+    }
+}
+
+/// Map an alias tool name to its canonical equivalent for display purposes.
+///
+/// When a model calls an alias tool (e.g. `view_file` instead of `read`),
+/// both the input summary and result summary functions should produce the same
+/// rich display as the canonical tool.
+///
+/// A retired `before` spelling is resolved through the FR-023 table as well, so
+/// a session resumed from saved history - FR-028 replays a stored
+/// [`MessagePart::ToolCall`] verbatim, unrewritten - keeps its rich rendering
+/// instead of falling through to the generic argument dump.
+pub fn canonical_tool_name(tool: &str) -> &str {
+    match tool {
+        "update_file" => "Write",
+        "run_code" => "Bash",
+        other => codemason_types::tool_rename::Rename::after_of(other).unwrap_or(other),
+    }
+}
+
+/// Open/close markup pairs a model may narrate tool-call invocations with.
+/// Mirrors the agent loop's recovery dialects so what the loop can recover is
+/// also what the transcript display can scrub.
+const NARRATED_TOOLCALL_TAGS: [(&str, &str); 5] = [
+    ("\u{e5b6}call\u{e5b6}", "\u{e5b6}/call\u{e5b6}"),
+    ("<function_calls>", "</function_calls>"),
+    ("<toolcall>", "</toolcall>"),
+    ("<toolcall>", "<toolcall>"),
+    ("<tool_call>", "<tool_call>"),
+];
+
+/// Whether one display line is a piece of narrated tool-call markup.
+///
+/// A line matches when its trimmed text starts with one of the narration open
+/// tags, or it fully parses as a tool-call JSON shape (`name` plus
+/// `arguments`/`input`/`parameters`) - the latter covers an invocation the
+/// model printed as a one-line JSON object instead of tagged markup.
+fn is_toolcall_narration(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if NARRATED_TOOLCALL_TAGS
+        .iter()
+        .any(|(open, _)| trimmed.starts_with(open))
+    {
+        return true;
+    }
+    match serde_json::from_str::<serde_json::Value>(trimmed) {
+        Ok(value) => value
+            .as_object()
+            .map(|o| {
+                o.contains_key("name")
+                    && (o.contains_key("arguments")
+                        || o.contains_key("input")
+                        || o.contains_key("parameters"))
+            })
+            .unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
+/// Removes narrated tool-call markup from a rendered line list (generic over
+/// the line type; `text_of` yields a line's plain text).
+///
+/// When a model prints its next tool call as text (tagged markup or a bare
+/// JSON object), the raw narration must not appear as chat content: the
+/// agent loop recovered the invocation and executed it, and the transcript
+/// should show the executed call instead. Lines inside an open/closed markup
+/// block are dropped with the block, and one-line JSON tool-call shapes are
+/// dropped individually.
+///
+/// The `<toolcall>` spelling has TWO close forms (`</toolcall>` and the
+/// slash-dropped `<toolcall>`), so a block keeps the set of closable tags
+/// from its open match rather than one tag: when the open line already
+/// carries one of them the block is single-line, otherwise every following
+/// line is suppressed until any of the candidates appears.
+///
+/// # Arguments
+/// * `lines` - rendered lines, in order.
+/// * `text_of` - the plain text of one line.
+///
+/// # Returns
+/// `lines` without the narration lines.
+pub fn scrub_narrated_toolcalls_by<L>(lines: Vec<L>, text_of: impl Fn(&L) -> String) -> Vec<L> {
+    let mut out = Vec::with_capacity(lines.len());
+    let mut inside_block: Option<Vec<&'static str>> = None;
+    for line in lines {
+        let text = text_of(&line);
+        if let Some(close_tags) = inside_block.as_ref() {
+            if close_tags.iter().any(|close| text.contains(close)) {
+                inside_block = None;
+            }
+            continue;
+        }
+        let trimmed = text.trim();
+        // Every dialect whose open tag the line starts with: the close form
+        // cannot be known from an open tag that shares its spelling between
+        // dialects, so remember all of them.
+        let close_candidates: Vec<&'static str> = NARRATED_TOOLCALL_TAGS
+            .iter()
+            .filter(|(open, _)| trimmed.starts_with(*open))
+            .map(|(_, close)| *close)
+            .collect();
+        if !close_candidates.is_empty() {
+            // Content after the open tag (same line): a close tag visible in
+            // the remainder closes the block NOW - the single-line form.
+            let body_start = NARRATED_TOOLCALL_TAGS
+                .iter()
+                .filter_map(|(open, _)| text.find(open).map(|pos| pos + open.len()))
+                .min()
+                .unwrap_or(0);
+            let after_body = &text[body_start.min(text.len())..];
+            if close_candidates
+                .iter()
+                .any(|close| after_body.contains(close))
+            {
+                continue;
+            }
+            // The block continues on later lines; drop this line and
+            // everything until any candidate close tag arrives.
+            inside_block = Some(close_candidates);
+            continue;
+        }
+        if is_toolcall_narration(&text) {
+            continue;
+        }
+        out.push(line);
+    }
+    out
+}
+
+/// Strip the working directory prefix from a path to produce a project-relative path.
+pub fn make_relative_path(path: &str, cwd: &str) -> String {
+    // Expand ~ in cwd to the home directory for comparison
+    let expanded_cwd = if cwd.starts_with('~') {
+        if let Some(home) = std::env::var_os("HOME") {
+            format!("{}{}", home.to_string_lossy(), &cwd[1..])
+        } else {
+            cwd.to_string()
+        }
+    } else {
+        cwd.to_string()
+    };
+
+    let cwd_prefix = if expanded_cwd.ends_with('/') {
+        expanded_cwd
+    } else {
+        format!("{}/", expanded_cwd)
+    };
+    if path.starts_with(&cwd_prefix) {
+        path[cwd_prefix.len()..].to_string()
+    } else {
+        path.to_string()
+    }
+}
+
+/// Extract a brief summary from tool input for display next to the tool name.
+/// Visual Style Guide for Tool Input/Output Summaries
+///
+/// Tool categories (the leading category marker was removed, so each summary
+/// is now just the tool's own arguments/result text):
+/// - File Operations: read, Write, create, Edit, patch, rm, multiedit
+/// - Directory Operations: list, make_directory
+/// - File Info: file_info
+/// - Search Operations: search, Grep, Glob
+/// - Execution: Bash, calculator
+/// - Network: webfetch, websearch, http_request
+/// - Environment: get_env
+/// - User Interaction: question, AskUserQuestion
+/// - Reasoning: think
+/// - Planning: EnterPlanMode, ExitPlanMode
+/// - Task Management: TaskCreate, TaskUpdate, TaskGet, TaskList
+/// - Sub-agent: new_agent, cancel_agent, list_agents, wait_agents
+/// - Team Coordination: team_*
+/// - LSP/Code Intelligence: lsp_*
+/// - Document: pdf_*
+/// - GitHub: github_list_issues, github_get_issue, github_create_issue,
+///   github_comment_issue, github_close_issue, github_list_prs,
+///   github_get_pr, github_create_pr, github_merge_pr, github_review_pr
+/// - Utility: format, metadata, truncate, read_line_range
+/// - Cron Scheduler: cron_add, cron_remove, cron_list, cron_enable, cron_disable
+///
+/// Summarise a tool's input for display in the TUI log panel.
+pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> String {
+    // Resolve alias tool names to their canonical equivalents so aliases get
+    // the same rich display as canonical tools.
+    let tool = canonical_tool_name(tool);
+
+    // Helper: try multiple field names, return first that has a str value.
+    let get_str = |keys: &[&str]| -> Option<String> {
+        keys.iter()
+            .find_map(|k| input.get(*k)?.as_str().map(|s| s.to_string()))
+    };
+
+    // Helper: get path and make it relative to cwd
+    let get_relative_path = |keys: &[&str]| -> String {
+        get_str(keys)
+            .as_deref()
+            .map(|p| make_relative_path(p, cwd))
+            .unwrap_or_default()
+    };
+
+    // Helper: keep inline tool summaries compact without hiding too much of
+    // the tool arguments in the chat transcript.
+    let trunc120 = |s: &str| truncate_str(s, 120);
+
+    // Fallback: for tools that must never hide their parameters (bash/read/write/create/edit),
+    // if the structured extractor yields an empty summary (unexpected provider field names),
+    // emit a compact raw-JSON rendering so the user can always see what arguments were sent.
+    let fallback_raw_args = |tool: &str, input: &serde_json::Value| -> String {
+        match canonical_tool_name(tool) {
+            "Bash" | "read" | "Write" | "create" | "Edit" => {
+                if let Some(obj) = input.as_object()
+                    && !obj.is_empty()
+                {
+                    let compact = summarize_tool_args(input, 120);
+                    if !compact.is_empty() {
+                        compact
+                    } else {
+                        truncate_str(&serde_json::to_string(input).unwrap_or_default(), 200)
+                    }
+                } else {
+                    String::new()
+                }
+            }
+            _ => String::new(),
+        }
+    };
+
+    let specific = match tool {
+        // ===================================================================
+        //  FILE OPERATIONS
+        // ===================================================================
+        "read" => {
+            // The read tool accepts `path` as the canonical parameter name, but some
+            // providers/models emit `file_path` instead. Check both so the file name
+            // always appears in the message header.
+            //
+            // The raw-args fallback at the end of this function only fires when
+            // the provider uses entirely unexpected field names. If the known key
+            // resolves to an empty path (e.g. `{"path":""}`), we intentionally return
+            // an empty summary to preserve existing test expectations.
+            get_relative_path(&["path", "file_path"])
+        }
+        // intentionally gated on the structured extractor yielding an empty
+        // string. This preserves existing behaviour for empty/missing known
+        // parameters while still showing something useful when the provider
+        // uses unexpected field names.
+        "Write" | "create" => get_relative_path(&["path"]),
+        "Edit" | "patch" => {
+            // The edit tool's canonical parameter is `file_path`, with `path` as a
+            // deprecated legacy alias. Check both so the file name always shows
+            // in the message window header regardless of which name the model used.
+            get_relative_path(&["file_path", "path"])
+        }
+        "rm" => get_relative_path(&["path"]),
+        "multiedit" | "multi_edit" => {
+            let count = input
+                .get("edits")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            pluralize(count, "edit", "edits")
+        }
+        "append_to_file" | "append_file" => get_relative_path(&["path"]),
+        "apply_patch" => {
+            let target = get_str(&["path"]).unwrap_or_default();
+            if target.is_empty() {
+                "apply patch".to_string()
+            } else {
+                trunc120(&target)
+            }
+        }
+        "diff_files" => {
+            let a = get_str(&["path_a", "file_a", "original"]).unwrap_or_default();
+            let b = get_str(&["path_b", "file_b", "modified"]).unwrap_or_default();
+            format!(
+                "{} ↔ {}",
+                make_relative_path(&a, cwd),
+                make_relative_path(&b, cwd)
+            )
+        }
+
+        // ===================================================================
+        //  DIRECTORY OPERATIONS
+        // ===================================================================
+        "list" => {
+            // list_directory uses "directory"; canonical list uses "path".
+            get_relative_path(&["path", "directory"])
+        }
+        "make_directory" | "mkdir" => get_relative_path(&["path", "directory"]),
+
+        // ===================================================================
+        //  FILE INFO
+        // ===================================================================
+        "file_info" => get_relative_path(&["path"]),
+
+        // ===================================================================
+        //  FILE MOVE/COPY
+        // ===================================================================
+        "move_file" | "rename_file" => {
+            let src = get_str(&["source", "src", "from", "path"]).unwrap_or_default();
+            let dst = get_str(&["destination", "dst", "to"]).unwrap_or_default();
+            if dst.is_empty() {
+                make_relative_path(&src, cwd)
+            } else {
+                format!(
+                    "{} → {}",
+                    make_relative_path(&src, cwd),
+                    make_relative_path(&dst, cwd)
+                )
+            }
+        }
+        "copy_file" => {
+            let src = get_str(&["source", "src", "from", "path"]).unwrap_or_default();
+            let dst = get_str(&["destination", "dst", "to"]).unwrap_or_default();
+            format!(
+                "{} → {}",
+                make_relative_path(&src, cwd),
+                make_relative_path(&dst, cwd)
+            )
+        }
+
+        // ===================================================================
+        //  SEARCH OPERATIONS
+        // ===================================================================
+        "search" => {
+            let query = get_str(&["query", "pattern"]).unwrap_or_default();
+            let path = get_str(&["path"])
+                .as_deref()
+                .map(|p| make_relative_path(p, cwd));
+            match path {
+                Some(p) if !p.is_empty() => format!("\"{}\" in {}", trunc120(&query), p),
+                _ => format!("\"{}\"", trunc120(&query)),
+            }
+        }
+        "Grep" => {
+            let pattern = input.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
+            let path = input
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(|p| make_relative_path(p, cwd));
+            match path {
+                Some(p) if !p.is_empty() => {
+                    format!("\"{}\" in {}", trunc120(pattern), p)
+                }
+                _ => format!("\"{}\"", trunc120(pattern)),
+            }
+        }
+        "Glob" => input
+            .get("pattern")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+
+        // ===================================================================
+        //  EXECUTION
+        // ===================================================================
+        "Bash" => {
+            // Aliases may send code/cmd instead of command. Replace newlines
+            // with " ; " so multiline commands display on a single line.
+            // Bash gets the wider preview budget: the command IS the action, so
+            // a clipped `cd ... && cargo build | tail` hides which step ran.
+            get_str(&["command", "code", "cmd"])
+                .as_deref()
+                .map(|s| s.replace('\n', " ; "))
+                .map(|s| format!("$ {}", truncate_str(&s, BASH_COMMAND_PREVIEW_CHARS)))
+                .unwrap_or_else(|| "Bash".to_string())
+        }
+
+        "calculator" => {
+            let expr = get_str(&["expression", "expr", "query"]).unwrap_or_default();
+            trunc120(&expr)
+        }
+        "DateTime" => {
+            let offset = input
+                .get("timezone_offset_minutes")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
+            let sign = if offset < 0 { '-' } else { '+' };
+            let magnitude = offset.abs();
+            let zone = format!("UTC{sign}{:02}:{:02}", magnitude / 60, magnitude % 60);
+            get_str(&["format"])
+                .map(|fmt| format!("{zone} {fmt}"))
+                .unwrap_or(zone)
+        }
+
+        // ===================================================================
+        //  NETWORK
+        // ===================================================================
+        "http_request" | "web_request" => {
+            let method = get_str(&["method"]).unwrap_or_else(|| "GET".to_string());
+            let url = get_str(&["url"]).unwrap_or_default();
+            format!("{} {}", method, trunc120(&url))
+        }
+        "webfetch" => input
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(trunc120)
+            .unwrap_or_else(|| "fetch".to_string()),
+        "websearch" => input
+            .get("query")
+            .and_then(|v| v.as_str())
+            .map(|q| format!("\"{}\"", trunc120(q)))
+            .unwrap_or_else(|| "search".to_string()),
+        "mf_fetch" => input
+            .get("url")
+            .or_else(|| input.get("urls").and_then(|v| v.as_array()?.first()))
+            .and_then(|v| v.as_str())
+            .map(trunc120)
+            .unwrap_or_else(|| "fetch".to_string()),
+        "mf_crawl" => input
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(trunc120)
+            .unwrap_or_else(|| "crawl".to_string()),
+        "mf_screenshot" => input
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(trunc120)
+            .unwrap_or_else(|| "screenshot".to_string()),
+        "mf_cache_clear" => "clear cache".to_string(),
+        "mf_version" => "masterfetch version".to_string(),
+        "mf_search" => input
+            .get("query")
+            .and_then(|v| v.as_str())
+            .map(|q| format!("\"{}\"", trunc120(q)))
+            .unwrap_or_else(|| "search".to_string()),
+
+        // ===================================================================
+        //  EXTENDED SEARCH / INTELLIGENCE
+        // ===================================================================
+        "conversation_search" => {
+            let query = get_str(&["query"]).unwrap_or_default();
+            format!("session: \"{}\"", trunc120(&query))
+        }
+        "session_search" => {
+            let query = get_str(&["query"]).unwrap_or_default();
+            format!("all sessions: \"{}\"", trunc120(&query))
+        }
+
+        // ===================================================================
+        //  ENVIRONMENT
+        // ===================================================================
+        "get_env" => {
+            let key = get_str(&["key", "name", "variable"]).unwrap_or_default();
+            if key.is_empty() {
+                "all vars".to_string()
+            } else {
+                key
+            }
+        }
+        "bash_reset" => "reset shell".to_string(),
+
+        // ===================================================================
+        //  BACKGROUND PROCESS MANAGEMENT
+        // ===================================================================
+        "bg" => {
+            let action = get_str(&["action"]).unwrap_or_else(|| "list".to_string());
+            match action.as_str() {
+                "spawn" => {
+                    let cmd = get_str(&["command"]).unwrap_or_default();
+                    let first = cmd.lines().next().unwrap_or("");
+                    format!("spawn: {}", trunc120(first))
+                }
+                other => {
+                    let task = get_str(&["task_id"]).unwrap_or_default();
+                    if task.is_empty() {
+                        format!("{}", other)
+                    } else {
+                        format!("{} {}", other, short_id(&task))
+                    }
+                }
+            }
+        }
+
+        "open" => {
+            let target = get_str(&["target"]).unwrap_or_default();
+            let action = get_str(&["action"]).unwrap_or_else(|| "open".to_string());
+            format!("{} {}", action, trunc120(&target))
+        }
+        "initiative" => {
+            let action = get_str(&["action"]).unwrap_or_else(|| "list".to_string());
+            match action.as_str() {
+                "create" => {
+                    let title = get_str(&["title"]).unwrap_or_default();
+                    format!("create \"{}\"", trunc120(&title))
+                }
+                "update" | "read" | "close" | "checkpoint" => {
+                    let id = get_str(&["id"]).unwrap_or_default();
+                    format!("{} {}", action, trunc120(&id))
+                }
+                other => format!("{}", other),
+            }
+        }
+        "Skill" => {
+            let action = get_str(&["action"]).unwrap_or_else(|| "list".to_string());
+            match action.as_str() {
+                "list" | "reload" => action,
+                other => {
+                    let name = get_str(&["name"]).unwrap_or_default();
+                    format!("{} {}", other, trunc120(&name))
+                }
+            }
+        }
+
+        // ===================================================================
+        //  USER INTERACTION
+        // ===================================================================
+        "question" | "AskUserQuestion" => {
+            let q = get_str(&["question", "query"]).unwrap_or_default();
+            trunc120(&q)
+        }
+
+        // ===================================================================
+        //  REASONING
+        // ===================================================================
+        "think" => {
+            let thought = get_str(&["thought", "thinking", "text"]).unwrap_or_default();
+            trunc120(&thought)
+        }
+
+        // ===================================================================
+        //  PLANNING
+        // ===================================================================
+        "EnterPlanMode" => {
+            let task = input.get("task").and_then(|v| v.as_str()).unwrap_or("");
+            format!("→ {}", trunc120(task))
+        }
+        "ExitPlanMode" => {
+            let summary = input.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+            format!("← {}", trunc120(summary))
+        }
+
+        // ===================================================================
+        //  TASK MANAGEMENT
+        // ===================================================================
+        "TaskCreate" => {
+            let subject = get_str(&["subject"]).unwrap_or_default();
+            format!("+{}", trunc120(&subject))
+        }
+        "TaskUpdate" => {
+            let task_id = get_str(&["task_id"]).unwrap_or_default();
+            let status = get_str(&["status"]);
+            let subject = get_str(&["subject"]);
+            match (status, subject) {
+                (Some(s), _) => format!("{} → {}", task_id, s),
+                (None, Some(t)) => format!("~{} \"{}\"", task_id, trunc120(&t)),
+                (None, None) => format!("~{}", task_id),
+            }
+        }
+        "TaskGet" => {
+            let task_id = get_str(&["task_id"]).unwrap_or_default();
+            format!("get {}", task_id)
+        }
+        "TaskList" => {
+            let status = input
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("all");
+            format!("filter: {}", status)
+        }
+        // ===================================================================
+        //  SUB-AGENT
+        // ===================================================================
+        "new_agent" => {
+            let agent = input.get("agent").and_then(|v| v.as_str()).unwrap_or("?");
+            let task = input.get("task").and_then(|v| v.as_str()).unwrap_or("");
+            format!("{} → {}", agent, trunc120(&task))
+        }
+        "cancel_agent" => {
+            let task_id = input.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
+            format!("cancel {}", short_id(task_id))
+        }
+        "list_agents" => {
+            let status = input
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("all");
+            format!("filter: {}", status)
+        }
+        "wait_agents" => {
+            let task_ids = input
+                .get("task_ids")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            if task_ids > 0 {
+                format!("wait on {} task(s)", task_ids)
+            } else {
+                "wait on all tasks".to_string()
+            }
+        }
+
+        // ===================================================================
+        //  TEAM COORDINATION
+        // ===================================================================
+        "team_create" => {
+            let name = input.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("create {}", name)
+        }
+        "team_spawn" => {
+            let agent = input
+                .get("agent_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            format!("spawn {}", agent)
+        }
+        "team_status" => "status".to_string(),
+        "team_idle" => "idle".to_string(),
+        "team_cleanup" => "cleanup".to_string(),
+        "team_broadcast" => {
+            let content = input.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            if content.is_empty() {
+                "broadcast".to_string()
+            } else {
+                format!("broadcast: {}", trunc120(content))
+            }
+        }
+        "team_message" => {
+            let to = input.get("to").and_then(|v| v.as_str()).unwrap_or("?");
+            let content = input.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            format!("msg to {}: {}", to, trunc120(content))
+        }
+        "team_read_messages" => "read messages".to_string(),
+        "team_task_create" => {
+            let title = input.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            format!("task: {}", trunc120(&title))
+        }
+        "team_task_list" => "list tasks".to_string(),
+        "team_task_claim" => {
+            let task_id = input.get("task_id").and_then(|v| v.as_str());
+            match task_id {
+                Some(id) => format!("claim {}", id),
+                None => "claim next".to_string(),
+            }
+        }
+        "team_task_complete" => {
+            let task_id = input.get("task_id").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("complete {}", task_id)
+        }
+        "team_assign_task" => {
+            let task_id = input.get("task_id").and_then(|v| v.as_str()).unwrap_or("?");
+            let to = input.get("to").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("assign {} to {}", task_id, to)
+        }
+        "team_submit_plan" => "submit plan".to_string(),
+        "team_approve_plan" => {
+            let approved = input
+                .get("approved")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if approved {
+                "approve plan".to_string()
+            } else {
+                "reject plan".to_string()
+            }
+        }
+        "team_memory_read" => "read memory".to_string(),
+        "team_memory_write" => "write memory".to_string(),
+        "team_wait" => {
+            let agent_ids = input
+                .get("agent_ids")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            if agent_ids > 0 {
+                format!("wait on {} agent(s)", agent_ids)
+            } else {
+                "wait on all agents".to_string()
+            }
+        }
+        "team_shutdown_teammate" => {
+            let teammate = input
+                .get("teammate")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            format!("shutdown {}", teammate)
+        }
+        "team_shutdown_ack" => "ack shutdown".to_string(),
+
+        // ===================================================================
+        //  LSP / CODE INTELLIGENCE
+        // ===================================================================
+        "lsp_definition" | "lsp_references" => {
+            let path = get_relative_path(&["path"]);
+            let line = input.get("line").and_then(|v| v.as_u64()).unwrap_or(0);
+            let column = input.get("column").and_then(|v| v.as_u64()).unwrap_or(0);
+            if path.is_empty() {
+                format!("L{}:{}", line, column)
+            } else {
+                format!("{} L{}:{}", path, line, column)
+            }
+        }
+        "lsp_hover" => {
+            let path = get_relative_path(&["path"]);
+            let line = input.get("line").and_then(|v| v.as_u64()).unwrap_or(0);
+            let column = input.get("column").and_then(|v| v.as_u64()).unwrap_or(0);
+            if path.is_empty() {
+                format!("L{}:{}", line, column)
+            } else {
+                format!("{} L{}:{}", path, line, column)
+            }
+        }
+        "lsp_symbols" | "lsp_diagnostics" => {
+            let path = get_relative_path(&["path"]);
+            if path.is_empty() {
+                "analyze".to_string()
+            } else {
+                path
+            }
+        }
+
+        // ===================================================================
+        //  CODE INDEX
+        // ===================================================================
+        "codeindex_search" => {
+            let query = get_str(&["query"]).unwrap_or_default();
+            let kind = get_str(&["kind"]);
+            let lang = get_str(&["language"]);
+            let mut label = format!("\"{}\"", trunc120(&query));
+            if let Some(k) = kind {
+                label.push_str(&format!(" kind:{}", k));
+            }
+            if let Some(l) = lang {
+                label.push_str(&format!(" lang:{}", l));
+            }
+            label
+        }
+        "codeindex_symbols" => {
+            let name = get_str(&["name"]);
+            let kind = get_str(&["kind"]);
+            let file = get_str(&["file_path"]);
+            let mut parts = Vec::new();
+            if let Some(n) = name {
+                parts.push(format!("name:{}", trunc120(&n)));
+            }
+            if let Some(k) = kind {
+                parts.push(format!("kind:{}", k));
+            }
+            if let Some(f) = file {
+                parts.push(format!("file:{}", make_relative_path(&f, cwd)));
+            }
+            if parts.is_empty() {
+                "all symbols".to_string()
+            } else {
+                parts.join(" ")
+            }
+        }
+        "codeindex_references" => {
+            let symbol = get_str(&["symbol"]).unwrap_or_default();
+            format!("refs: {}", trunc120(&symbol))
+        }
+        "codeindex_status" => {
+            let enabled = input
+                .get("enabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let label = if enabled { "on" } else { "off" };
+            format!("status: {}", label)
+        }
+        "codeindex_reindex" => "reindex".to_string(),
+        "codeindex_dependencies" => {
+            let path = get_relative_path(&["path"]);
+            let direction = input
+                .get("direction")
+                .and_then(|v| v.as_str())
+                .unwrap_or("imports");
+            format!("{}: {}", direction, path)
+        }
+        "codeindex_godnodes" => {
+            let n = input.get("n").and_then(|v| v.as_u64()).unwrap_or(10);
+            format!("god nodes (top {})", n)
+        }
+        "codeindex_path" => {
+            let from = get_str(&["from"]).unwrap_or_default();
+            let to = get_str(&["to"]).unwrap_or_default();
+            format!("path {} → {}", trunc120(&from), trunc120(&to))
+        }
+        "codeindex_explain" => {
+            let symbol = get_str(&["symbol"]).unwrap_or_default();
+            format!("explain {}", trunc120(&symbol))
+        }
+        "codeindex_communities" => "communities".to_string(),
+
+        // ===================================================================
+        //  SPEC MANAGEMENT
+        // ===================================================================
+        "spec_list" => {
+            let status = input.get("status").and_then(|v| v.as_str());
+            match status {
+                Some(s) => format!("list ({s})"),
+                None => "list all".to_string(),
+            }
+        }
+        "spec_read" => {
+            let id = get_str(&["spec_id"]).unwrap_or_default();
+            format!("read {}", trunc120(&id))
+        }
+        "spec_search" => {
+            let query = get_str(&["query"]).unwrap_or_default();
+            format!("search \"{}\"", trunc120(&query))
+        }
+        "spec_task_update" => {
+            let id = get_str(&["spec_id"]).unwrap_or_default();
+            let task = get_str(&["task_id"]).unwrap_or_default();
+            let status = get_str(&["status"]).unwrap_or_default();
+            format!("{} {} → {}", id, task, status)
+        }
+        "spec_coverage" => {
+            let id = get_str(&["spec_id"]).unwrap_or_default();
+            format!("coverage {}", trunc120(&id))
+        }
+
+        // ===================================================================
+        //  DOCUMENT (PDF)
+        // ===================================================================
+        "pdf_read" => get_relative_path(&["path"]),
+        "pdf_write" => get_relative_path(&["path"]),
+
+        // ===================================================================
+        //  GITHUB
+        // ===================================================================
+        // ===================================================================
+        //  GIT
+        // ===================================================================
+        "git_add" => {
+            let all = input.get("all").and_then(|v| v.as_bool()).unwrap_or(false);
+            let update = input
+                .get("update")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if all {
+                "add -A".to_string()
+            } else if update {
+                "add -u".to_string()
+            } else {
+                let paths = input
+                    .get("paths")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                format!("add {} path(s)", paths)
+            }
+        }
+        "git_branch" => {
+            let all = input.get("all").and_then(|v| v.as_bool()).unwrap_or(true);
+            let _fmt = input
+                .get("format")
+                .and_then(|v| v.as_str())
+                .unwrap_or("short");
+            format!("branch list ({})", if all { "all" } else { "local" })
+        }
+        "git_checkout" => {
+            let branch = input.get("branch").and_then(|v| v.as_str());
+            let paths = input.get("paths").and_then(|v| v.as_array());
+            match (branch, paths) {
+                (Some(b), _) => format!("checkout {}", b),
+                (_, Some(p)) if !p.is_empty() => format!("checkout {} path(s)", p.len()),
+                _ => "checkout".to_string(),
+            }
+        }
+        "git_cherry_pick" => {
+            let commits = input
+                .get("commits")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            format!("cherry-pick {} commit(s)", commits)
+        }
+        "git_clone" => {
+            let url = input.get("url").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("clone {}", trunc120(url))
+        }
+        "git_commit" => {
+            let msg = input.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            let amend = input
+                .get("amend")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if amend {
+                "commit --amend".to_string()
+            } else {
+                format!("commit: {}", trunc120(msg))
+            }
+        }
+        "git_diff" => {
+            let target = input
+                .get("target")
+                .and_then(|v| v.as_str())
+                .unwrap_or("working");
+            let stat = input.get("stat").and_then(|v| v.as_bool()).unwrap_or(false);
+            if stat {
+                format!("diff --stat {}", target)
+            } else {
+                format!("diff {}", target)
+            }
+        }
+        "git_fetch" => {
+            let remote = input
+                .get("remote")
+                .and_then(|v| v.as_str())
+                .unwrap_or("origin");
+            let all = input.get("all").and_then(|v| v.as_bool()).unwrap_or(false);
+            if all {
+                "fetch --all".to_string()
+            } else {
+                format!("fetch {}", remote)
+            }
+        }
+        "git_log" => {
+            let limit = input.get("limit").and_then(|v| v.as_u64()).unwrap_or(20);
+            let branch = input.get("branch").and_then(|v| v.as_str());
+            match branch {
+                Some(b) => format!("log {} ({})", b, limit),
+                None => format!("log ({})", limit),
+            }
+        }
+        "git_merge" => {
+            let branch = input.get("branch").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("merge {}", branch)
+        }
+        "git_pull" => {
+            let remote = input
+                .get("remote")
+                .and_then(|v| v.as_str())
+                .unwrap_or("origin");
+            let rebase = input
+                .get("rebase")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if rebase {
+                format!("pull --rebase {}", remote)
+            } else {
+                format!("pull {}", remote)
+            }
+        }
+        "git_push" => {
+            let remote = input
+                .get("remote")
+                .and_then(|v| v.as_str())
+                .unwrap_or("origin");
+            let branch = input.get("branch").and_then(|v| v.as_str());
+            let force = input
+                .get("force")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let tags = input.get("tags").and_then(|v| v.as_bool()).unwrap_or(false);
+            match (tags, force, branch) {
+                (true, _, _) => format!("push --tags {}", remote),
+                (_, true, Some(b)) => format!("push --force-with-lease {}/{}", remote, b),
+                (_, true, None) => format!("push --force-with-lease {}", remote),
+                (_, _, Some(b)) => format!("push {}/{}", remote, b),
+                (_, _, None) => format!("push {}", remote),
+            }
+        }
+        "git_remote" => {
+            let action = input
+                .get("action")
+                .and_then(|v| v.as_str())
+                .unwrap_or("list");
+            let name = input.get("name").and_then(|v| v.as_str());
+            match (action, name) {
+                ("list", _) => "remote -v".to_string(),
+                ("add", Some(n)) => format!("remote add {}", n),
+                ("remove", Some(n)) => format!("remote remove {}", n),
+                ("set-url", Some(n)) => format!("remote set-url {}", n),
+                (a, Some(n)) => format!("remote {} {}", a, n),
+                (a, None) => format!("remote {}", a),
+            }
+        }
+        "git_reset" => {
+            let mode = input
+                .get("mode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("mixed");
+            let target = input.get("target").and_then(|v| v.as_str());
+            let paths = input.get("paths").and_then(|v| v.as_array());
+            match (target, paths) {
+                (Some(t), _) => format!("reset --{} {}", mode, t),
+                (_, Some(p)) if !p.is_empty() => format!("reset {} path(s)", p.len()),
+                _ => format!("reset --{}", mode),
+            }
+        }
+        "git_show" => {
+            let ref_name = input.get("ref").and_then(|v| v.as_str()).unwrap_or("HEAD");
+            format!("show {}", ref_name)
+        }
+        "git_stash" => {
+            let action = input
+                .get("action")
+                .and_then(|v| v.as_str())
+                .unwrap_or("push");
+            format!("stash {}", action)
+        }
+        "git_status" => {
+            let short = input
+                .get("short")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if short {
+                "status --short".to_string()
+            } else {
+                "status".to_string()
+            }
+        }
+        "git_tag" => {
+            let action = input
+                .get("action")
+                .and_then(|v| v.as_str())
+                .unwrap_or("list");
+            let name = input.get("name").and_then(|v| v.as_str());
+            match (action, name) {
+                ("list", _) => "tag -l".to_string(),
+                ("create", Some(n)) => format!("tag {}", n),
+                ("delete", Some(n)) => format!("tag -d {}", n),
+                (a, Some(n)) => format!("tag {} {}", a, n),
+                (a, None) => format!("tag {}", a),
+            }
+        }
+
+        // ===================================================================
+        //  GITLAB
+        // ===================================================================
+        "gitlab_list_issues" => {
+            let state = input
+                .get("state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("opened");
+            format!("issues ({})", state)
+        }
+        "gitlab_get_issue" => {
+            let iid = input.get("iid").and_then(|v| v.as_u64()).unwrap_or(0);
+            format!("issue #{}", iid)
+        }
+        "gitlab_create_issue" => {
+            let title = input.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            format!("new issue: {}", trunc120(title))
+        }
+        "gitlab_comment_issue" => {
+            let iid = input.get("iid").and_then(|v| v.as_u64()).unwrap_or(0);
+            format!("comment on #{}", iid)
+        }
+        "gitlab_close_issue" => {
+            let iid = input.get("iid").and_then(|v| v.as_u64()).unwrap_or(0);
+            format!("close #{}", iid)
+        }
+        "gitlab_list_mrs" => {
+            let state = input
+                .get("state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("opened");
+            format!("MRs ({})", state)
+        }
+        "gitlab_get_mr" => {
+            let iid = input.get("iid").and_then(|v| v.as_u64()).unwrap_or(0);
+            format!("MR #{}", iid)
+        }
+        "gitlab_create_mr" => {
+            let title = input.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            format!("new MR: {}", trunc120(title))
+        }
+        "gitlab_merge_mr" => {
+            let iid = input.get("iid").and_then(|v| v.as_u64()).unwrap_or(0);
+            format!("merge !{}", iid)
+        }
+        "gitlab_approve_mr" => {
+            let iid = input.get("iid").and_then(|v| v.as_u64()).unwrap_or(0);
+            format!("approve !{}", iid)
+        }
+        "gitlab_list_pipelines" => {
+            let status = input.get("status").and_then(|v| v.as_str());
+            match status {
+                Some(s) => format!("pipelines ({})", s),
+                None => "pipelines".to_string(),
+            }
+        }
+        "gitlab_get_pipeline" => {
+            let id = input
+                .get("pipeline_id")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            format!("pipeline #{}", id)
+        }
+        "gitlab_list_jobs" => {
+            let pipeline_id = input
+                .get("pipeline_id")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            format!("jobs for pipeline #{}", pipeline_id)
+        }
+        "gitlab_get_job" => {
+            let job_id = input.get("job_id").and_then(|v| v.as_u64()).unwrap_or(0);
+            format!("job #{}", job_id)
+        }
+        "gitlab_get_job_log" => {
+            let job_id = input.get("job_id").and_then(|v| v.as_u64()).unwrap_or(0);
+            format!("log for job #{}", job_id)
+        }
+        "gitlab_retry_job" => {
+            let job_id = input.get("job_id").and_then(|v| v.as_u64()).unwrap_or(0);
+            format!("retry job #{}", job_id)
+        }
+        "gitlab_cancel_job" => {
+            let job_id = input.get("job_id").and_then(|v| v.as_u64()).unwrap_or(0);
+            format!("cancel job #{}", job_id)
+        }
+        "gitlab_retry_pipeline" => {
+            let id = input
+                .get("pipeline_id")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            format!("retry pipeline #{}", id)
+        }
+        "gitlab_cancel_pipeline" => {
+            let id = input
+                .get("pipeline_id")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            format!("cancel pipeline #{}", id)
+        }
+
+        // ===================================================================
+        //  GITHUB
+        // ===================================================================
+        "github_list_issues" => {
+            let state = input
+                .get("state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("open");
+            format!("issues ({})", state)
+        }
+        "github_get_issue" => {
+            let number = input.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
+            format!("issue #{}", number)
+        }
+        "github_create_issue" => {
+            let title = input.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            format!("new issue: {}", trunc120(title))
+        }
+        "github_comment_issue" => {
+            let number = input.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
+            format!("comment on #{}", number)
+        }
+        "github_close_issue" => {
+            let number = input.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
+            format!("close #{}", number)
+        }
+        "github_list_prs" => {
+            let state = input
+                .get("state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("open");
+            format!("PRs ({})", state)
+        }
+        "github_get_pr" => {
+            let number = input.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
+            format!("PR #{}", number)
+        }
+        "github_create_pr" => {
+            let title = input.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            format!("new PR: {}", trunc120(title))
+        }
+        "github_merge_pr" => {
+            let number = input.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
+            format!("merge #{}", number)
+        }
+        "github_review_pr" => {
+            let number = input.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
+            format!("review #{}", number)
+        }
+        "github_get_actions" => {
+            let limit = input.get("limit").and_then(|v| v.as_u64()).unwrap_or(1);
+            format!("actions ({})", limit)
+        }
+        // ===================================================================
+        //  UTILITY
+        // ===================================================================
+        "format" => "format".to_string(),
+        "metadata" => "metadata".to_string(),
+        "truncate" => "truncate".to_string(),
+        "read_line_range" => "line range".to_string(),
+        "memory_store" => {
+            let category = get_str(&["category"]).unwrap_or_default();
+            format!("store {}", trunc120(&category))
+        }
+        "memory_recall" => {
+            let query = get_str(&["query"]).unwrap_or_default();
+            format!("recall \"{}\"", trunc120(&query))
+        }
+        "memory_forget" => {
+            let id = get_str(&["id"]).unwrap_or_default();
+            if id.is_empty() {
+                "forget".to_string()
+            } else {
+                format!("forget {}", trunc120(&id))
+            }
+        }
+
+        // ===================================================================
+        //  CRON SCHEDULER
+        // ===================================================================
+        "cron_add" => {
+            let id = get_str(&["id"]).unwrap_or_default();
+            let schedule = get_str(&["schedule"]).unwrap_or_default();
+            format!("add `{}` {}", trunc120(&id), trunc120(&schedule))
+        }
+        "cron_remove" => {
+            let id = get_str(&["id"]).unwrap_or_default();
+            format!("remove `{}`", trunc120(&id))
+        }
+        "cron_list" => "list events".to_string(),
+        "cron_enable" => {
+            let id = get_str(&["id"]).unwrap_or_default();
+            format!("enable `{}`", trunc120(&id))
+        }
+        "cron_disable" => {
+            let id = get_str(&["id"]).unwrap_or_default();
+            format!("disable `{}`", trunc120(&id))
+        }
+
+        // ===================================================================
+        //  MODEL INFO
+        // ===================================================================
+        "model_info" => {
+            let format = get_str(&["format"]).unwrap_or_else(|| "text".to_string());
+            format!("model info ({})", format)
+        }
+        "codemason_info" => {
+            let format = get_str(&["format"]).unwrap_or_else(|| "text".to_string());
+            format!("codemason build/execution info ({})", format)
+        }
+        "os_info" => {
+            let format = get_str(&["format"]);
+            // Show the probe flag only when the caller set it explicitly, so
+            // the summary reflects the supplied arguments rather than the tool
+            // default (`probe` defaults to `true` server-side).
+            let probe = input
+                .get("probe")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            match (format, probe) {
+                (Some(format), true) => format!("format: {format}, probe: true"),
+                (Some(format), false) => format!("format: {format}"),
+                (None, true) => "probe: true".to_string(),
+                (None, false) => "(no parameters)".to_string(),
+            }
+        }
+
+        // ===================================================================
+        //  AGENT COMPLETE
+        // ===================================================================
+        "agent_complete" => {
+            let summary = get_str(&["summary"]).unwrap_or_default();
+            // Only the first line goes in the compact header; embedding a
+            // multi-line summary here joins its words when rendered (ratatui
+            // strips '\n' graphemes inside a Span).  The full summary is
+            // rendered line-by-line in the result section below.
+            let first_line = summary.lines().next().unwrap_or_default();
+            trunc120(first_line)
+        }
+
+        // ===================================================================
+        // DEFAULT: Unknown tools
+        // ===================================================================
+        _ => {
+            if tool.starts_with("team_") {
+                summarize_tool_args(input, 40)
+            } else if tool.starts_with("mcp_") {
+                let server_tool = tool.strip_prefix("mcp_").unwrap_or(tool);
+                server_tool.to_string()
+            } else {
+                summarize_tool_args(input, 40)
+            }
+        }
+    };
+
+    let fallback_for = canonical_tool_name(tool);
+    let needs_fallback = matches!(fallback_for, "Bash" | "read" | "Write" | "create" | "Edit");
+
+    // If the specific extractor returned an empty summary for a parameter-heavy tool,
+    // fall back to a raw-args rendering so the input is never invisible.
+    if specific.is_empty() && needs_fallback {
+        fallback_raw_args(tool, input)
+    } else {
+        specific
+    }
+}
+
+/// Return a line-range label for the read tool (e.g. "lines 5-10").
+///
+/// Reads from the tool's output metadata which contains the actual lines read.
+/// Returns `None` when metadata is not available or tool did not complete.
+pub(crate) fn read_line_range(metadata: &Option<serde_json::Value>) -> Option<String> {
+    let meta = metadata.as_ref()?;
+    let start = meta.get("start_line").and_then(|v| v.as_u64());
+    let end = meta.get("end_line").and_then(|v| v.as_u64());
+    match (start, end) {
+        (Some(s), Some(e)) => Some(format!("lines {}-{}", s, e)),
+        (Some(s), None) => Some(format!("from line {}", s)),
+        _ => None,
+    }
+}
+
+/// Return inline diff stats `(+added, -removed)` for tools that support it.
+///
+/// Currently only the `Edit`, `multiedit`, and `patch` tools
+/// provide the necessary `old_lines` / `new_lines` metadata.
+pub(crate) fn tool_inline_diff(
+    tool: &str,
+    output: &Option<serde_json::Value>,
+) -> Option<(usize, usize)> {
+    let out = output.as_ref()?;
+    let tool = canonical_tool_name(tool);
+    match tool {
+        "Edit" => {
+            let old_lines = out.get("old_lines").and_then(|v| v.as_u64());
+            let new_lines = out.get("new_lines").and_then(|v| v.as_u64());
+            match (old_lines, new_lines) {
+                (Some(old), Some(new)) => Some((new as usize, old as usize)),
+                // create/write command: lines_added = lines written, none removed
+                _ => {
+                    let added = out.get("lines").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                    if added > 0 { Some((added, 0)) } else { None }
+                }
+            }
+        }
+        "multiedit" | "multi_edit" | "patch" => {
+            let added = out.get("lines_added").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let removed = out
+                .get("lines_removed")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            if added > 0 || removed > 0 {
+                Some((added, removed))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Generate a result summary line for a completed tool call.
+///
+/// Uses emoji icons consistent with tool_input_summary for visual alignment.
+/// Returns `None` for tools that don't produce meaningful summaries.
+pub fn tool_result_summary(
+    tool: &str,
+    output: &Option<serde_json::Value>,
+    input: &serde_json::Value,
+    cwd: &str,
+) -> Option<String> {
+    let out = output.as_ref()?;
+
+    // Resolve alias tool names to their canonical equivalents for display.
+    let tool = canonical_tool_name(tool);
+
+    // Convenience: count output lines from content when metadata has no explicit count.
+    // Tools that return structured metadata override this below.
+    let line_count = out
+        .get("lines")
+        .or_else(|| out.get("line_count"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as usize;
+    let trunc120 = |s: &str| truncate_str(s, 120);
+
+    match tool {
+        // ===================================================================
+        //  FILE OPERATIONS
+        // ===================================================================
+        "read" => {
+            let summarised = out
+                .get("summarised")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let total = out.get("total_lines").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            if summarised && total > 0 {
+                Some(format!(
+                    "{} read (summarised, {} total)",
+                    pluralize(line_count, "line", "lines"),
+                    total
+                ))
+            } else {
+                Some(format!("{} read", pluralize(line_count, "line", "lines")))
+            }
+        }
+        "Write" => {
+            let path = input["path"]
+                .as_str()
+                .map(|p| make_relative_path(p, cwd))
+                .unwrap_or_default();
+            Some(format!(
+                "{} written to {}",
+                pluralize(line_count, "line", "lines"),
+                path
+            ))
+        }
+        "create" => {
+            let path = input["path"]
+                .as_str()
+                .map(|p| make_relative_path(p, cwd))
+                .unwrap_or_default();
+            Some(format!(
+                "{} created in {}",
+                pluralize(line_count, "line", "lines"),
+                path
+            ))
+        }
+        "Edit" => {
+            // The edit tool writes the resolved path into its output metadata
+            // (`path`), so prefer that. Fall back to the input field, checking
+            // both the canonical `file_path` and the legacy `path` alias.
+            let path = out
+                .get("path")
+                .and_then(|v| v.as_str())
+                .or_else(|| input.get("file_path").and_then(|v| v.as_str()))
+                .or_else(|| input.get("path").and_then(|v| v.as_str()))
+                .map(|p| make_relative_path(p, cwd))
+                .unwrap_or_default();
+            let old_lines = out.get("old_lines").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let new_lines = out.get("new_lines").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!(
+                "Edited {}: {} → {} lines",
+                path, old_lines, new_lines
+            ))
+        }
+        "multiedit" | "multi_edit" => {
+            // Return a brief top-level summary; per-file detail rows are rendered separately.
+            let edits = out.get("edits").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let files = out.get("file_count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!(
+                "{} across {}",
+                pluralize(edits, "edit", "edits"),
+                pluralize(files, "file", "files")
+            ))
+        }
+        "patch" => {
+            let hunks = out.get("hunks").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let files = out.get("files").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!(
+                "{} applied across {}",
+                pluralize(hunks, "hunk", "hunks"),
+                pluralize(files, "file", "files")
+            ))
+        }
+        "rm" => {
+            let deleted = out
+                .get("deleted")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if deleted {
+                Some("deleted".to_string())
+            } else {
+                Some("failed".to_string())
+            }
+        }
+        "append_to_file" | "append_file" => {
+            let bytes = out.get("bytes").and_then(|v| v.as_u64()).unwrap_or(0);
+            if bytes > 0 {
+                Some(format!("{} bytes appended", bytes))
+            } else {
+                Some("appended".to_string())
+            }
+        }
+        "diff_files" => {
+            let changes = out.get("changes").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!("{} found", pluralize(changes, "change", "changes")))
+        }
+
+        // ===================================================================
+        //  DIRECTORY OPERATIONS
+        // ===================================================================
+        "list" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let path = out
+                .get("path")
+                .and_then(|v| v.as_str())
+                .or_else(|| input.get("path").and_then(|v| v.as_str()))
+                .map(|p| make_relative_path(p, cwd))
+                .unwrap_or_default();
+            Some(format!(
+                "{} in {}",
+                pluralize(count, "entry", "entries"),
+                path
+            ))
+        }
+        "make_directory" | "mkdir" => Some("directory created".to_string()),
+        // ===================================================================
+        //  FILE INFO
+        // ===================================================================
+        "file_info" => {
+            let kind = out.get("kind").and_then(|v| v.as_str()).unwrap_or("file");
+            let size = out.get("size").and_then(|v| v.as_u64());
+            match size {
+                Some(s) if s >= 1024 * 1024 => Some(format!(
+                    "{} ({:.1} MiB)",
+                    kind,
+                    s as f64 / (1024.0 * 1024.0)
+                )),
+                Some(s) if s >= 1024 => Some(format!("{} ({:.1} KiB)", kind, s as f64 / 1024.0)),
+                Some(s) => Some(format!("{} ({} bytes)", kind, s)),
+                None => Some(format!("{}", kind)),
+            }
+        }
+
+        // ===================================================================
+        //  FILE MOVE/COPY
+        // ===================================================================
+        "move_file" | "rename_file" => Some("moved".to_string()),
+        "copy_file" => {
+            let bytes = out.get("bytes").and_then(|v| v.as_u64()).unwrap_or(0);
+            if bytes > 0 {
+                Some(format!("{} bytes copied", bytes))
+            } else {
+                Some("copied".to_string())
+            }
+        }
+        // ===================================================================
+        //  SEARCH OPERATIONS
+        // ===================================================================
+        "search" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let truncated = out
+                .get("truncated")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let trunc = if truncated { "+" } else { "" };
+            Some(format!("{}{} found", count, trunc))
+        }
+        "Grep" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let files = out.get("file_count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let truncated = out
+                .get("truncated")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let trunc = if truncated { "+" } else { "" };
+            Some(format!(
+                "{}{} matched in {} searched",
+                count,
+                trunc,
+                pluralize(files, "file", "files")
+            ))
+        }
+        "Glob" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let truncated = out
+                .get("truncated")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let trunc = if truncated { "+" } else { "" };
+            Some(format!(
+                "{}{} found",
+                pluralize(count, "file", "files"),
+                trunc
+            ))
+        }
+
+        // ===================================================================
+        //  EXECUTION
+        // ===================================================================
+        "Bash" => {
+            let exit_code = out.get("exit_code").and_then(|v| v.as_i64());
+            let timed_out = out
+                .get("timed_out")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let duration_ms = out.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+            if timed_out {
+                Some(format!("timed out after {}ms", duration_ms))
+            } else if let Some(code) = exit_code {
+                Some(format!(
+                    "{}… (exit {})",
+                    pluralize(line_count, "line", "lines"),
+                    code
+                ))
+            } else {
+                Some(format!("{}…", pluralize(line_count, "line", "lines")))
+            }
+        }
+
+        "calculator" => {
+            let result = out.get("result").and_then(|v| v.as_str());
+            result.map(|r| format!("= {}", truncate_str(r, 100)))
+        }
+        "DateTime" => {
+            let text = out
+                .get("formatted")
+                .or_else(|| out.get("local"))
+                .and_then(|v| v.as_str());
+            let zone = out.get("timezone_offset").and_then(|v| v.as_str());
+            text.map(|t| match zone {
+                Some(zone) => format!("{} {}", truncate_str(t, 90), zone),
+                None => truncate_str(t, 100),
+            })
+        }
+        // ===================================================================
+        //  NETWORK
+        // ===================================================================
+        "webfetch" => {
+            let status = out.get("http_status").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!(
+                "{} (HTTP {})",
+                pluralize(line_count, "line", "lines"),
+                status
+            ))
+        }
+        "websearch" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!("{} found", pluralize(count, "result", "results")))
+        }
+        "mf_search" => {
+            let count = out
+                .get("total_results")
+                .or_else(|| out.get("count"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            Some(format!(
+                "🌐 {} found",
+                pluralize(count, "result", "results")
+            ))
+        }
+        "http_request" | "web_request" => {
+            let status = out.get("http_status").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!(
+                "HTTP {} ({})",
+                status,
+                pluralize(line_count, "line", "lines")
+            ))
+        }
+        // ===================================================================
+        //  ENVIRONMENT
+        // ===================================================================
+        "get_env" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            if count > 0 {
+                Some(pluralize(count, "var", "vars"))
+            } else {
+                Some("not found".to_string())
+            }
+        }
+        "bash_reset" => Some("shell reset".to_string()),
+        // ===================================================================
+        //  USER INTERACTION
+        // ===================================================================
+        "question" | "AskUserQuestion" => {
+            let response = out
+                .get("response")
+                .and_then(|v| v.as_str())
+                .or_else(|| out.get("content").and_then(|v| v.as_str()))
+                .unwrap_or("");
+            Some(truncate_str(response, 100))
+        }
+        // ===================================================================
+        //  REASONING
+        // ===================================================================
+        "think" => {
+            let thought = out
+                .get("thought")
+                .and_then(|v| v.as_str())
+                .or_else(|| out.get("thinking").and_then(|v| v.as_str()))
+                .or_else(|| out.get("text").and_then(|v| v.as_str()))
+                .or_else(|| input.get("thought").and_then(|v| v.as_str()))
+                .unwrap_or("");
+            if thought.is_empty() {
+                Some("Thinking ...".to_string())
+            } else {
+                Some(thought.to_string())
+            }
+        }
+        "agent_complete" => {
+            let summary = out.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+            if summary.is_empty() {
+                Some("Task complete".to_string())
+            } else {
+                Some(summary.to_string())
+            }
+        }
+        // ===================================================================
+        //  PLANNING
+        // ===================================================================
+        "EnterPlanMode" => {
+            let task = out.get("task").and_then(|v| v.as_str()).unwrap_or("plan");
+            Some(format!("delegated → {}", task))
+        }
+        "ExitPlanMode" => {
+            let len = out
+                .get("summary_length")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            Some(format!("returned ({} chars)", len))
+        }
+        // ===================================================================
+        //  TASK MANAGEMENT
+        // ===================================================================
+        "TaskCreate" => {
+            let subject = out.get("subject").and_then(|v| v.as_str());
+            let id = out.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+            match subject {
+                Some(s) => Some(format!(
+                    "created \"{}\" [{}]",
+                    truncate_str(s, 80),
+                    short_id(id)
+                )),
+                None => Some(format!("created [{}]", short_id(id))),
+            }
+        }
+        "TaskUpdate" => {
+            let id = out.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+            let status = out.get("status").and_then(|v| v.as_str());
+            let subject = out.get("subject").and_then(|v| v.as_str());
+            let unblocked = out.get("unblocked").and_then(|v| v.as_array());
+            let short_disp = short_id(id);
+            let base = match (status, subject) {
+                (Some(s), Some(t)) => {
+                    format!(
+                        "updated \"{}\" → {} [{}]",
+                        truncate_str(t, 80),
+                        s,
+                        short_disp
+                    )
+                }
+                (Some(s), None) => format!("updated → {} [{}]", s, short_disp),
+                (None, Some(t)) => format!("updated \"{}\" [{}]", truncate_str(t, 80), short_disp),
+                (None, None) => format!("updated [{}]", short_disp),
+            };
+            if let Some(ub) = unblocked
+                && !ub.is_empty()
+            {
+                let count = ub.len();
+                Some(format!("{} ({} unblocked)", base, count))
+            } else {
+                Some(base)
+            }
+        }
+        "TaskGet" => {
+            let id = out.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+            let status = out.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+            let subject = out.get("subject").and_then(|v| v.as_str()).unwrap_or("");
+            Some(format!(
+                "{} [{}] {}",
+                status,
+                short_id(id),
+                truncate_str(&subject, 80)
+            ))
+        }
+        "TaskList" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(pluralize(count, "task", "tasks"))
+        } // ===================================================================
+        //  SUB-AGENT
+        // ===================================================================
+        "new_agent" => {
+            let agent = out.get("agent").and_then(|v| v.as_str()).unwrap_or("?");
+            let background = out
+                .get("background")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let status = out
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let task_id = out
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .map(|id| format!(" ({})", short_id(id)))
+                .unwrap_or_default();
+            if background {
+                Some(format!("spawned {} agent{}", agent, task_id))
+            } else {
+                Some(format!(
+                    "{} agent {} → {}{}",
+                    status, agent, status, task_id
+                ))
+            }
+        }
+        "cancel_agent" => {
+            let cancelled = out
+                .get("cancelled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if cancelled {
+                Some("task cancelled".to_string())
+            } else {
+                Some("already completed".to_string())
+            }
+        }
+        "list_agents" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(pluralize(count, "task", "tasks"))
+        }
+        "wait_agents" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let success = out
+                .get("success")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if success {
+                Some(format!("waited on {} task(s)", count))
+            } else {
+                Some(format!("timeout waiting for {} task(s)", count))
+            }
+        }
+        // ===================================================================
+        //  TEAM COORDINATION
+        // ===================================================================
+        "team_create" => {
+            let name = out.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+            Some(format!("created {}", name))
+        }
+        "team_spawn" => {
+            let teammate = out
+                .get("teammate_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            Some(format!("spawned {}", teammate))
+        }
+        "team_status" => {
+            let members = out.get("members").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("{} member(s)", members))
+        }
+        "team_idle" => {
+            let idle_blocked = out
+                .get("idle_blocked")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if idle_blocked {
+                let task_id = out
+                    .get("blocked_by_task")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                Some(format!("blocked by task '{}'", task_id))
+            } else {
+                Some("marked idle".to_string())
+            }
+        }
+        "team_cleanup" => Some("cleanup complete".to_string()),
+        "team_broadcast" => Some("broadcast sent".to_string()),
+        "team_message" => Some("message sent".to_string()),
+        "team_read_messages" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!("{} new", pluralize(count, "message", "messages")))
+        }
+        "team_task_create" => {
+            let task_id = out.get("task_id").and_then(|v| v.as_str()).unwrap_or("?");
+            Some(format!("created task '{}'", task_id))
+        }
+        "team_task_list" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!("{} tasks", count))
+        }
+        "team_task_claim" => {
+            let claimed = out
+                .get("claimed")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let already_in_progress = out
+                .get("already_in_progress")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let task_id = out
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            if already_in_progress {
+                Some(format!("already has task '{}'", task_id))
+            } else if claimed {
+                Some(format!("claimed task '{}'", task_id))
+            } else {
+                Some("no tasks available".to_string())
+            }
+        }
+        "team_task_complete" => {
+            let completed = out
+                .get("completed")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let task_id = out
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            if completed {
+                Some(format!("completed task '{}'", task_id))
+            } else {
+                Some("task not found or already completed".to_string())
+            }
+        }
+        "team_assign_task" => {
+            let task_id = out
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let to = out.get("to").and_then(|v| v.as_str()).unwrap_or("?");
+            Some(format!("assigned '{}' to {}", task_id, to))
+        }
+        "team_submit_plan" => Some("plan submitted".to_string()),
+        "team_approve_plan" => {
+            let approved = out
+                .get("approved")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if approved {
+                Some("plan approved".to_string())
+            } else {
+                Some("plan rejected".to_string())
+            }
+        }
+        "team_memory_read" => {
+            let found = out.get("found").and_then(|v| v.as_bool()).unwrap_or(false);
+            if found {
+                Some("memory read".to_string())
+            } else {
+                Some("memory not found".to_string())
+            }
+        }
+        "team_memory_write" => Some("memory written".to_string()),
+        "team_wait" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let success = out
+                .get("success")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if success {
+                Some(format!("waited on {} agent(s)", count))
+            } else {
+                Some(format!("timeout waiting for {} agent(s)", count))
+            }
+        }
+        "team_shutdown_teammate" => Some("shutdown requested".to_string()),
+        "team_shutdown_ack" => Some("shutdown acknowledged".to_string()),
+        // ===================================================================
+        //  LSP / CODE INTELLIGENCE
+        // ===================================================================
+        "lsp_definition" | "lsp_references" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!(
+                "{} found",
+                pluralize(count, "location", "locations")
+            ))
+        }
+        "lsp_symbols" => {
+            let count = out
+                .get("symbol_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            let path = out
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(|p| make_relative_path(p, cwd))
+                .unwrap_or_default();
+            Some(format!(
+                "{} in {}",
+                pluralize(count, "symbol", "symbols"),
+                path
+            ))
+        }
+        "lsp_hover" => Some(format!(
+            "{} of info",
+            pluralize(line_count, "line", "lines")
+        )),
+        "lsp_diagnostics" => {
+            let count = out.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!(
+                "{} found",
+                pluralize(count, "diagnostic", "diagnostics")
+            ))
+        }
+        // ===================================================================
+        //  CODE INDEX
+        // ===================================================================
+        "codeindex_search" => {
+            let total = out
+                .get("total_results")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            Some(format!("{} found", pluralize(total, "result", "results")))
+        }
+        "codeindex_symbols" => {
+            let total = out
+                .get("total_results")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            Some(format!("{} found", pluralize(total, "symbol", "symbols")))
+        }
+        "codeindex_references" => {
+            let total = out
+                .get("total_results")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            Some(format!(
+                "{} found",
+                pluralize(total, "reference", "references")
+            ))
+        }
+        "codeindex_status" => {
+            let files = out
+                .get("files_indexed")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let symbols = out
+                .get("total_symbols")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            Some(format!("{} files, {} symbols", files, symbols))
+        }
+        "codeindex_reindex" => {
+            let added = out.get("files_added").and_then(|v| v.as_u64()).unwrap_or(0);
+            let updated = out
+                .get("files_updated")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let removed = out
+                .get("files_removed")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            Some(format!("+{} ~{} -{} files", added, updated, removed))
+        }
+        "codeindex_dependencies" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!(
+                "{} found",
+                pluralize(count, "dependency", "dependencies")
+            ))
+        }
+        // ===================================================================
+        //  SPEC MANAGEMENT
+        // ===================================================================
+        "spec_list" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!("{} listed", pluralize(count, "spec", "specs")))
+        }
+        "spec_read" => {
+            let req_count = out
+                .get("requirement_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let task_count = out.get("task_count").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("{} req, {} tasks", req_count, task_count))
+        }
+        "spec_search" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!("{} found", pluralize(count, "result", "results")))
+        }
+        "spec_task_update" => {
+            let spec_id = out.get("spec_id").and_then(|v| v.as_str()).unwrap_or("?");
+            let task_id = out.get("task_id").and_then(|v| v.as_str()).unwrap_or("?");
+            let status = out.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+            Some(format!("{} {} → {}", spec_id, task_id, status))
+        }
+        "spec_coverage" => {
+            let pct = out
+                .get("coverage_pct")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let req_count = out
+                .get("requirement_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let task_count = out.get("task_count").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!(
+                "{:.1}% ({} req, {} tasks)",
+                pct, req_count, task_count
+            ))
+        }
+        // ===================================================================
+        //  DOCUMENT (PDF)
+        // ===================================================================
+        "pdf_read" => Some(format!("{} read", pluralize(line_count, "line", "lines"))),
+        "pdf_write" => {
+            let path = input["path"]
+                .as_str()
+                .map(|p| make_relative_path(p, cwd))
+                .unwrap_or_default();
+            // `pdf_write` reports a page count, not a line count.
+            Some(format!("written to {}", path))
+        }
+        // ===================================================================
+        //  GITHUB
+        // ===================================================================
+        // ===================================================================
+        //  GIT
+        // ===================================================================
+        "git_add" => {
+            let all = out.get("all").and_then(|v| v.as_bool()).unwrap_or(false);
+            let update = out.get("update").and_then(|v| v.as_bool()).unwrap_or(false);
+            Some(if all {
+                "add -A".to_string()
+            } else if update {
+                "add -u".to_string()
+            } else {
+                let paths = out
+                    .get("paths")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                format!("add {} path(s)", paths)
+            })
+        }
+        "git_branch" => {
+            let all = out.get("all").and_then(|v| v.as_bool()).unwrap_or(true);
+            Some(format!(
+                "branch list ({})",
+                if all { "all" } else { "local" }
+            ))
+        }
+        "git_checkout" => {
+            let branch = out.get("branch").and_then(|v| v.as_str());
+            let paths = out.get("paths").and_then(|v| v.as_array());
+            Some(match (branch, paths) {
+                (Some(b), _) => format!("checkout {}", b),
+                (_, Some(p)) if !p.is_empty() => format!("checkout {} path(s)", p.len()),
+                _ => "checkout".to_string(),
+            })
+        }
+        "git_cherry_pick" => {
+            let commits = out
+                .get("commits")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            Some(format!("cherry-pick {} commit(s)", commits))
+        }
+        "git_clone" => {
+            let url = out.get("url").and_then(|v| v.as_str()).unwrap_or("?");
+            Some(format!("clone {}", trunc120(url)))
+        }
+        "git_commit" => {
+            let msg = out.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            let amend = out.get("amend").and_then(|v| v.as_bool()).unwrap_or(false);
+            Some(if amend {
+                "commit --amend".to_string()
+            } else {
+                format!("commit: {}", trunc120(msg))
+            })
+        }
+        "git_diff" => {
+            let target = out
+                .get("target")
+                .and_then(|v| v.as_str())
+                .unwrap_or("working");
+            let stat = out.get("stat").and_then(|v| v.as_bool()).unwrap_or(false);
+            Some(if stat {
+                format!("diff --stat {}", target)
+            } else {
+                format!("diff {}", target)
+            })
+        }
+        "git_fetch" => {
+            let remote = out
+                .get("remote")
+                .and_then(|v| v.as_str())
+                .unwrap_or("origin");
+            let all = out.get("all").and_then(|v| v.as_bool()).unwrap_or(false);
+            Some(if all {
+                "fetch --all".to_string()
+            } else {
+                format!("fetch {}", remote)
+            })
+        }
+        "git_log" => {
+            let limit = out.get("limit").and_then(|v| v.as_u64()).unwrap_or(20);
+            let branch = out.get("branch").and_then(|v| v.as_str());
+            Some(match branch {
+                Some(b) => format!("log {} ({})", b, limit),
+                None => format!("log ({})", limit),
+            })
+        }
+        "git_merge" => {
+            let branch = out.get("branch").and_then(|v| v.as_str()).unwrap_or("?");
+            Some(format!("merge {}", branch))
+        }
+        "git_pull" => {
+            let remote = out
+                .get("remote")
+                .and_then(|v| v.as_str())
+                .unwrap_or("origin");
+            let rebase = out.get("rebase").and_then(|v| v.as_bool()).unwrap_or(false);
+            Some(if rebase {
+                format!("pull --rebase {}", remote)
+            } else {
+                format!("pull {}", remote)
+            })
+        }
+        "git_push" => {
+            let remote = out
+                .get("remote")
+                .and_then(|v| v.as_str())
+                .unwrap_or("origin");
+            let branch = out.get("branch").and_then(|v| v.as_str());
+            let force = out.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+            let tags = out.get("tags").and_then(|v| v.as_bool()).unwrap_or(false);
+            Some(match (tags, force, branch) {
+                (true, _, _) => format!("push --tags {}", remote),
+                (_, true, Some(b)) => format!("push --force-with-lease {}/{}", remote, b),
+                (_, true, None) => format!("push --force-with-lease {}", remote),
+                (_, _, Some(b)) => format!("push {}/{}", remote, b),
+                (_, _, None) => format!("push {}", remote),
+            })
+        }
+        "git_remote" => {
+            let action = out.get("action").and_then(|v| v.as_str()).unwrap_or("list");
+            let name = out.get("name").and_then(|v| v.as_str());
+            Some(match (action, name) {
+                ("list", _) => "remote -v".to_string(),
+                ("add", Some(n)) => format!("remote add {}", n),
+                ("remove", Some(n)) => format!("remote remove {}", n),
+                ("set-url", Some(n)) => format!("remote set-url {}", n),
+                (a, Some(n)) => format!("remote {} {}", a, n),
+                (a, None) => format!("remote {}", a),
+            })
+        }
+        "git_reset" => {
+            let mode = out.get("mode").and_then(|v| v.as_str()).unwrap_or("mixed");
+            let target = out.get("target").and_then(|v| v.as_str());
+            let paths = out.get("paths").and_then(|v| v.as_array());
+            Some(match (target, paths) {
+                (Some(t), _) => format!("reset --{} {}", mode, t),
+                (_, Some(p)) if !p.is_empty() => format!("reset {} path(s)", p.len()),
+                _ => format!("reset --{}", mode),
+            })
+        }
+        "git_show" => {
+            let ref_name = out.get("ref").and_then(|v| v.as_str()).unwrap_or("HEAD");
+            Some(format!("show {}", ref_name))
+        }
+        "git_stash" => {
+            let action = out.get("action").and_then(|v| v.as_str()).unwrap_or("push");
+            Some(format!("stash {}", action))
+        }
+        "git_status" => {
+            let short = out.get("short").and_then(|v| v.as_bool()).unwrap_or(false);
+            Some(if short {
+                "status --short".to_string()
+            } else {
+                "status".to_string()
+            })
+        }
+        "git_tag" => {
+            let action = out.get("action").and_then(|v| v.as_str()).unwrap_or("list");
+            let name = out.get("name").and_then(|v| v.as_str());
+            Some(match (action, name) {
+                ("list", _) => "tag -l".to_string(),
+                ("create", Some(n)) => format!("tag {}", n),
+                ("delete", Some(n)) => format!("tag -d {}", n),
+                (a, Some(n)) => format!("tag {} {}", a, n),
+                (a, None) => format!("tag {}", a),
+            })
+        }
+
+        // ===================================================================
+        //  GITLAB
+        // ===================================================================
+        "gitlab_list_issues" => {
+            let state = out
+                .get("state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("opened");
+            Some(format!("issues ({})", state))
+        }
+        "gitlab_get_issue" => {
+            let iid = out.get("iid").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("issue #{}", iid))
+        }
+        "gitlab_create_issue" => {
+            let title = out.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            Some(format!("new issue: {}", trunc120(title)))
+        }
+        "gitlab_comment_issue" => {
+            let iid = out.get("iid").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("comment on #{}", iid))
+        }
+        "gitlab_close_issue" => {
+            let iid = out.get("iid").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("close #{}", iid))
+        }
+        "gitlab_list_mrs" => {
+            let state = out
+                .get("state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("opened");
+            Some(format!("MRs ({})", state))
+        }
+        "gitlab_get_mr" => {
+            let iid = out.get("iid").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("MR #{}", iid))
+        }
+        "gitlab_create_mr" => {
+            let title = out.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            Some(format!("new MR: {}", trunc120(title)))
+        }
+        "gitlab_merge_mr" => {
+            let iid = out.get("iid").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("merge !{}", iid))
+        }
+        "gitlab_approve_mr" => {
+            let iid = out.get("iid").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("approve !{}", iid))
+        }
+        "gitlab_list_pipelines" => {
+            let status = out.get("status").and_then(|v| v.as_str());
+            Some(match status {
+                Some(s) => format!("pipelines ({})", s),
+                None => "pipelines".to_string(),
+            })
+        }
+        "gitlab_get_pipeline" => {
+            let id = out.get("pipeline_id").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("pipeline #{}", id))
+        }
+        "gitlab_list_jobs" => {
+            let pipeline_id = out.get("pipeline_id").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("jobs for pipeline #{}", pipeline_id))
+        }
+        "gitlab_get_job" => {
+            let job_id = out.get("job_id").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("job #{}", job_id))
+        }
+        "gitlab_get_job_log" => {
+            let job_id = out.get("job_id").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("log for job #{}", job_id))
+        }
+        "gitlab_retry_job" => {
+            let job_id = out.get("job_id").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("retry job #{}", job_id))
+        }
+        "gitlab_cancel_job" => {
+            let job_id = out.get("job_id").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("cancel job #{}", job_id))
+        }
+        "gitlab_retry_pipeline" => {
+            let id = out.get("pipeline_id").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("retry pipeline #{}", id))
+        }
+        "gitlab_cancel_pipeline" => {
+            let id = out.get("pipeline_id").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("cancel pipeline #{}", id))
+        }
+
+        // ===================================================================
+        //  GITHUB
+        // ===================================================================
+        "github_list_issues" => {
+            let state = out.get("state").and_then(|v| v.as_str()).unwrap_or("open");
+            Some(format!("issues listed ({})", state))
+        }
+        "github_get_issue" => {
+            let number = out.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("issue #{} retrieved", number))
+        }
+        "github_create_issue" => {
+            let number = out.get("number").and_then(|v| v.as_u64());
+            match number {
+                Some(n) => Some(format!("issue #{} created", n)),
+                None => Some("issue created".to_string()),
+            }
+        }
+        "github_comment_issue" => {
+            let number = out.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("commented on #{}", number))
+        }
+        "github_close_issue" => {
+            let number = out.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("issue #{} closed", number))
+        }
+        "github_list_prs" => {
+            let state = out.get("state").and_then(|v| v.as_str()).unwrap_or("open");
+            Some(format!("PRs listed ({})", state))
+        }
+        "github_get_pr" => {
+            let number = out.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("PR #{} retrieved", number))
+        }
+        "github_create_pr" => {
+            let number = out.get("number").and_then(|v| v.as_u64());
+            match number {
+                Some(n) => Some(format!("PR #{} created", n)),
+                None => Some("PR created".to_string()),
+            }
+        }
+        "github_merge_pr" => {
+            let number = out.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("PR #{} merged", number))
+        }
+        "github_review_pr" => {
+            let number = out.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("reviewed #{}", number))
+        }
+        "github_get_actions" => {
+            let inspected = out
+                .get("runs_inspected")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            let failed = out.get("failed_runs").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let mut s = format!("{} inspected", pluralize(inspected, "run", "runs"));
+            if failed > 0 {
+                s.push_str(&format!(", {} failed", pluralize(failed, "run", "runs")));
+            }
+            Some(s)
+        }
+        // ===================================================================
+        //  UTILITY
+        // ===================================================================
+        "format" => Some("formatted".to_string()),
+        "metadata" => Some("metadata extracted".to_string()),
+        "truncate" => {
+            let original = out.get("original").and_then(|v| v.as_u64()).unwrap_or(0);
+            let truncated = out.get("truncated").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("{} → {} chars", original, truncated))
+        }
+        "read_line_range" => {
+            let start = out.get("start_line").and_then(|v| v.as_u64());
+            let end = out.get("end_line").and_then(|v| v.as_u64());
+            match (start, end) {
+                (Some(s), Some(e)) => Some(format!("lines {}-{}", s, e)),
+                (Some(s), None) => Some(format!("from line {}", s)),
+                _ => Some("line range".to_string()),
+            }
+        }
+        "memory_store" => {
+            let stored = out
+                .get("stored")
+                .and_then(|v| v.as_bool())
+                .or_else(|| out.get("id").map(|_| true))
+                .unwrap_or(false);
+            if stored {
+                Some("memory stored".to_string())
+            } else {
+                Some("memory not stored".to_string())
+            }
+        }
+        "memory_recall" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!(
+                "{} recalled",
+                pluralize(count, "memory", "memories")
+            ))
+        }
+        "memory_forget" => {
+            let deleted = out.get("deleted").and_then(|v| v.as_u64()).unwrap_or(0);
+            if deleted > 0 {
+                Some(format!(
+                    "{} forgotten",
+                    pluralize(deleted as usize, "memory", "memories")
+                ))
+            } else {
+                Some("nothing to forget".to_string())
+            }
+        }
+
+        // ===================================================================
+        //  CRON SCHEDULER
+        // ===================================================================
+        "cron_add" => {
+            let id = out.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+            Some(format!("`{}` scheduled", trunc120(id)))
+        }
+        "cron_remove" => {
+            let removed = out
+                .get("removed")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let id = out.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+            Some(if removed {
+                format!("`{}` removed", trunc120(id))
+            } else {
+                format!("`{}` not found", trunc120(id))
+            })
+        }
+        "cron_list" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!("{} listed", pluralize(count, "event", "events")))
+        }
+        "cron_enable" | "cron_disable" => {
+            let enabled = out
+                .get("enabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let id = out.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+            Some(if enabled {
+                format!("`{}` enabled", trunc120(id))
+            } else {
+                format!("`{}` disabled", trunc120(id))
+            })
+        }
+
+        // ===================================================================
+        //  MASTERFETCH
+        // ===================================================================
+        "mf_fetch" => {
+            let url = out.get("url").and_then(|v| v.as_str()).unwrap_or("?");
+            let status = out.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
+            let cached = out.get("cached").and_then(|v| v.as_bool()).unwrap_or(false);
+            Some(if cached {
+                format!("cached {}", trunc120(url))
+            } else if status > 0 {
+                format!("{} ({})", trunc120(url), status)
+            } else {
+                trunc120(url)
+            })
+        }
+        "mf_crawl" => {
+            let pages = out
+                .get("pages_fetched")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            Some(format!("{} crawled", pluralize(pages, "page", "pages")))
+        }
+        "mf_cache_clear" => {
+            let purged = out.get("purged").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!("{} purged", pluralize(purged, "entry", "entries")))
+        }
+        "mf_screenshot" => Some("screenshot captured".to_string()),
+        "mf_version" => Some("version info".to_string()),
+
+        // ===================================================================
+        //  APPLY PATCH / SKILLS / SEARCH
+        // ===================================================================
+        "apply_patch" => {
+            let ops = out.get("operations").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let added = out.get("added").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let removed = out.get("removed").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!(
+                "{} applied (+{} -{})",
+                pluralize(ops, "op", "ops"),
+                added,
+                removed
+            ))
+        }
+        "conversation_search" => {
+            let count = out
+                .get("result_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            Some(format!("{} found", pluralize(count, "match", "matches")))
+        }
+        "session_search" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!("{} found", pluralize(count, "match", "matches")))
+        }
+        "initiative" => {
+            let action = out.get("action").and_then(|v| v.as_str()).unwrap_or("done");
+            Some(action.to_string())
+        }
+        "Skill" => {
+            let action = out.get("action").and_then(|v| v.as_str()).unwrap_or("done");
+            Some(action.to_string())
+        }
+
+        // ===================================================================
+        //  BACKGROUND PROCESS
+        // ===================================================================
+        "bg" => {
+            let action = out.get("action").and_then(|v| v.as_str()).unwrap_or("done");
+            let task_id = out.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
+            if task_id.is_empty() {
+                Some(action.to_string())
+            } else {
+                Some(format!("{} {}", action, task_id))
+            }
+        }
+
+        // ===================================================================
+        //  OPEN
+        // ===================================================================
+        "open" => {
+            let target = out.get("target").and_then(|v| v.as_str()).unwrap_or("?");
+            let success = out
+                .get("success")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            Some(format!(
+                "{} ({})",
+                trunc120(target),
+                if success { "opened" } else { "failed" }
+            ))
+        }
+
+        // ===================================================================
+        //  MODEL INFO
+        // ===================================================================
+        "model_info" => {
+            let provider = out
+                .get("provider_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let model = out
+                .get("model_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            Some(format!("{} / {}", trunc120(provider), trunc120(model)))
+        }
+        "codemason_info" => {
+            let version = out.get("version").and_then(|v| v.as_str()).unwrap_or("?");
+            let built = out
+                .get("build_time")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let pid = out
+                .get("execution")
+                .and_then(|e| e.get("pid"))
+                .and_then(serde_json::Value::as_u64)
+                .map_or_else(|| "?".to_string(), |p| p.to_string());
+            Some(format!(
+                "v{} built {} (pid {})",
+                trunc120(version),
+                trunc120(built),
+                pid
+            ))
+        }
+
+        // ===================================================================
+        //  CODE INDEX GRAPH
+        // ===================================================================
+        "codeindex_godnodes" => {
+            let total = out
+                .get("total_results")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            Some(format!(
+                "{} found",
+                pluralize(total, "god node", "god nodes")
+            ))
+        }
+        "codeindex_path" => {
+            let hops = out.get("hops").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!("{} found", pluralize(hops, "hop", "hops")))
+        }
+        "codeindex_explain" => {
+            let name = out.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+            let degree = out.get("degree").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("{} (degree {})", trunc120(name), degree))
+        }
+        "codeindex_communities" => {
+            let total = out
+                .get("total_communities")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            Some(format!(
+                "{} found",
+                pluralize(total, "community", "communities")
+            ))
+        }
+
+        // ===================================================================
+        // DEFAULT: Unknown tools
+        // ===================================================================
+        _ => {
+            if tool.starts_with("team_") {
+                Some(
+                    out.get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("done")
+                        .to_string(),
+                )
+            } else {
+                None
+            }
+        }
+    }
+}

@@ -19,6 +19,7 @@ pub mod layout_statusbar;
 pub mod layout_table_rows;
 pub mod layout_teams;
 pub mod log_channel;
+pub mod message_text;
 pub mod panels;
 pub mod project_properties;
 pub mod project_properties_render;
