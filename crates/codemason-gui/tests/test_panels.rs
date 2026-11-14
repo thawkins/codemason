@@ -22,6 +22,7 @@ use codemason_gui::dialogs::session_menu::SESSION_MENU_TITLE;
 use codemason_gui::dock::{PaneId, default_layout, load_dock, load_layout, save_layout};
 use codemason_gui::keys::default_keymap;
 use codemason_gui::panels::log::LOG_LABEL;
+use codemason_gui::panels::profile::PROFILE_LABEL;
 use codemason_gui::panels::prompt::PROMPT_LABEL;
 use codemason_gui::panels::sessions::SESSIONS_LABEL;
 use codemason_gui::panels::status_bar::STATUS_BAR_LABEL;
@@ -345,13 +346,15 @@ fn test_dock_placeholder_panes_are_labelled() {
     assert!(!rig.harness.state().layout().contains(&PaneId::Profile));
 
     // Alt+P turns the profile panel on; its pane comes back in front of
-    // its tab group and shows its (labelled) placeholder.
+    // its tab group and shows its labelled panel (Task 3.4b replaced the
+    // placeholder with the profiler table).
     alt(&mut rig.harness, egui::Key::P, "p");
     rig.harness.run();
 
     assert!(rig.harness.state().app().show_profile);
     assert!(rig.harness.state().layout().contains(&PaneId::Profile));
-    rig.harness.get_by_label_contains("Profile panel");
+    rig.harness
+        .get_by_role_and_label(Role::Table, PROFILE_LABEL);
 }
 
 #[test]

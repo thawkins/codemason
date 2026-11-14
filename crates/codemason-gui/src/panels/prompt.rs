@@ -97,6 +97,7 @@ const ANY_APP_KEY: Focus = Focus::Prompt {
     completion_open: true,
     up_to_app: true,
     down_to_app: true,
+    delete_to_app: true,
     question_opens_shortcuts: true,
 };
 
@@ -169,8 +170,11 @@ impl PromptInput {
         // The focused sessions sidebar owns the keyboard, as in the TUI,
         // where it takes every key before the input does: the prompt gives
         // up the focus, and the keys reach the App as under a modal, so none
-        // is typed and Enter or Space presses no button.
-        if app.sidebar.focused && app.sidebar.visible {
+        // is typed and Enter or Space presses no button. The shown Agents or
+        // Teams window owns it the same way, as the TUI's popup does: its
+        // keys move and act on its rows, and the rest reach app-core's own
+        // input editing.
+        if app.sidebar.focused && app.sidebar.visible || window_takes_keys(app) {
             if self.composer.is_composing() {
                 self.drop_preedit(ctx, app);
             }
@@ -228,6 +232,7 @@ impl PromptInput {
             completion_open: completion_open(app),
             up_to_app,
             down_to_app,
+            delete_to_app: app.show_memory && app.session.input.is_empty(),
             question_opens_shortcuts: app.shortcuts_panel_enabled && app.session.input.is_empty(),
         }
     }
@@ -357,6 +362,13 @@ fn history_keys_to_app(app: &App) -> (bool, bool) {
         .nth(app.session.input_cursor)
         .map_or(input.len(), |(byte, _)| byte);
     (!input[..byte].contains('\n'), !input[byte..].contains('\n'))
+}
+
+/// Whether the shown Agents or Teams window takes the keyboard
+/// (`crate::dock::pane_takes_keys`), as the TUI's popup does while open.
+fn window_takes_keys(app: &App) -> bool {
+    crate::dock::pane_takes_keys(app, crate::dock::PaneId::ActiveAgents)
+        || crate::dock::pane_takes_keys(app, crate::dock::PaneId::Teams)
 }
 
 /// Whether the App has an `@` mention or `/` command menu open.

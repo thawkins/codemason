@@ -36,6 +36,7 @@ const TYPING: Focus = Focus::Prompt {
     completion_open: false,
     up_to_app: false,
     down_to_app: false,
+    delete_to_app: false,
     question_opens_shortcuts: false,
 };
 
@@ -355,6 +356,7 @@ fn test_route_leaves_ctrl_c_and_ctrl_x_to_a_prompt_selection() {
             completion_open: false,
             up_to_app: false,
             down_to_app: false,
+            delete_to_app: false,
             question_opens_shortcuts: false,
         },
     );
@@ -666,6 +668,7 @@ fn test_route_forwards_completion_keys_only_while_a_menu_is_open() {
             completion_open,
             up_to_app: false,
             down_to_app: false,
+            delete_to_app: false,
             question_opens_shortcuts: false,
         };
         let keys = router.route(&mut input, focus);
@@ -707,6 +710,7 @@ fn test_route_forwards_up_and_down_only_at_the_history_edges() {
             completion_open: false,
             up_to_app,
             down_to_app,
+            delete_to_app: false,
             question_opens_shortcuts: false,
         };
         let keys: Vec<Key> = router
@@ -910,6 +914,7 @@ fn test_route_question_mark_opens_shortcuts_only_on_an_empty_prompt() {
         completion_open: false,
         up_to_app: false,
         down_to_app: false,
+        delete_to_app: false,
         question_opens_shortcuts,
     };
     let events = || {

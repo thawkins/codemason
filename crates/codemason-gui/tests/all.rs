@@ -36,6 +36,8 @@ mod test_palette;
 mod test_panels;
 #[path = "test_prompt.rs"]
 mod test_prompt;
+#[path = "test_side_panels.rs"]
+mod test_side_panels;
 
 /// The one mutex that serialises every test mutating a process-global
 /// (environment variables, cwd) in this binary.

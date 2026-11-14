@@ -5,8 +5,11 @@
 //! modal dialog ([`dialogs::show`]). Each dock pane maps to its panel: the
 //! message transcript ([`MessagesView`]), the input queue ([`queue_ui`])
 //! above the prompt editor ([`prompt_ui`]), which edits the App's own input
-//! buffer, the sessions sidebar ([`SessionsView`]) and the log panel
-//! ([`log_ui`]); the panes later tasks fill draw a labelled placeholder.
+//! buffer, the sessions sidebar ([`SessionsView`]), the log panel
+//! ([`log_ui`]), the profiler table ([`profile_ui`]), the task list
+//! ([`tasks_ui`]), the memories ([`memory_ui`]) and the Agents and Teams
+//! window tables ([`agents_ui`], [`teams_ui`]). The queue pane, whose list
+//! is drawn above the prompt, draws a labelled placeholder.
 //!
 //! # Dock visibility and persistence
 //!
@@ -56,12 +59,17 @@ use crate::dialogs;
 use crate::dock::{self, HiddenPanes, PaneId};
 use crate::keys::{Focus, KeyRouter, default_keymap};
 use crate::palette::{Palette, palette_for};
+use crate::panels::agents::agents_ui;
 use crate::panels::log::log_ui;
+use crate::panels::memory::memory_ui;
 use crate::panels::messages::MessagesView;
+use crate::panels::profile::profile_ui;
 use crate::panels::prompt::{PromptInput, prompt_ui};
 use crate::panels::queue::queue_ui;
 use crate::panels::sessions::SessionsView;
 use crate::panels::status_bar::status_bar_ui;
+use crate::panels::tasks::tasks_ui;
+use crate::panels::teams::teams_ui;
 
 /// Most log records moved into the app per frame, so a burst cannot stall
 /// a frame (the terminal frontend uses the same limit).
@@ -338,12 +346,12 @@ impl Shell {
                     sessions_rect = Some(ui.max_rect());
                 }
                 PaneId::Log => log_ui(ui, app, palette),
-                PaneId::Profile
-                | PaneId::Tasks
-                | PaneId::Memory
-                | PaneId::ActiveAgents
-                | PaneId::Teams
-                | PaneId::Queue => placeholder(ui, *pane),
+                PaneId::Profile => profile_ui(ui, app, palette),
+                PaneId::Tasks => tasks_ui(ui, app, palette),
+                PaneId::Memory => memory_ui(ui, app, palette),
+                PaneId::ActiveAgents => agents_ui(ui, app, palette),
+                PaneId::Teams => teams_ui(ui, app, palette),
+                PaneId::Queue => placeholder(ui, *pane),
             },
         );
         if let Some(err) = output.error {
@@ -633,7 +641,8 @@ fn messages_body(ui: &mut egui::Ui, app: &mut App, messages: &mut MessagesView, 
     }
 }
 
-/// A pane whose panel a later task draws: its name, so the pane is labelled.
+/// A pane with no panel of its own (the queue, drawn above the prompt): its
+/// name, so the pane is labelled.
 fn placeholder(ui: &mut egui::Ui, pane: PaneId) {
     ui.weak(format!("{} panel", pane.label()));
 }

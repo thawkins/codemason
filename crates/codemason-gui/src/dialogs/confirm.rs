@@ -1,6 +1,9 @@
 //! The confirmation dialogs: the post-loop rollback offer, plan approval,
 //! team force-cleanup, the router configuration save, the single-button
-//! notice and the `/db prune` confirmation.
+//! notice, the `/db prune` confirmation, the destructive row-action
+//! confirmation of the Agents, Teams and Sessions panels, the Memory
+//! panel's delete confirmation, the `/memory clear` confirmation, and the
+//! full-memory view the Memory panel opens.
 //!
 //! Each is a small app-core state with keys only (`input.rs`): Enter
 //! confirms and Esc cancels, the plan approval moves its Approve/Reject
@@ -9,6 +12,11 @@
 //! rollback offer and the plan approval; here each gets one, with the same
 //! keys. The keys reach the App through the router, and each button sends
 //! the key presses that make the same choice, so the App's own arm acts.
+//!
+//! The row-action, memory-clear and `/db prune` dialogs select No when they
+//! open (app-core's default), so a stray Enter performs nothing; Left, Right
+//! and Tab move between Yes and No. The memory delete confirms with Enter and
+//! cancels with Esc, as in the TUI.
 //!
 //! The rollback offer, plan approval and force-cleanup answer something the
 //! agent (or a loop) is waiting on. Each is one `Option` slot that app-core
@@ -301,6 +309,191 @@ pub fn show_db_prune(ctx: &egui::Context, app: &mut App) -> bool {
             }
         });
         ui.weak("Left/Right move * Enter on Yes performs * Enter on No cancels * Esc cancels");
+    });
+    true
+}
+
+/// Title of the `/memory clear` confirmation (the TUI's title).
+pub const MEMORY_CLEAR_TITLE: &str = "Clear this project's memory?";
+
+/// Title of the Memory panel's delete confirmation (the TUI's heading).
+pub const MEMORY_DELETE_TITLE: &str = "Delete Memory?";
+
+/// The title of the open row-action confirmation (`App::row_action_confirm`:
+/// kill a sub-agent, cancel a background task, suspend, shut down or resume
+/// a teammate, delete sessions), without the TUI's border padding.
+///
+/// # Arguments
+///
+/// * `app` - the App whose confirmation is read.
+///
+/// # Returns
+///
+/// The title, or `None` while no row action waits for an answer.
+#[must_use]
+pub fn row_action_title(app: &App) -> Option<String> {
+    app.row_action_confirm
+        .as_ref()
+        .map(|pending| pending.action.title().trim().to_string())
+}
+
+/// Yes and No buttons over a two-option app-core dialog whose choice
+/// Right toggles: the button first moves the choice to itself, then sends
+/// Enter, which acts on the choice.
+fn yes_no_buttons(ui: &mut egui::Ui, yes_selected: bool) {
+    ui.weak(format!("Selected: {}", if yes_selected { YES } else { NO }));
+    ui.horizontal(|ui| {
+        for (label, is_yes) in [(YES, true), (NO, false)] {
+            if ui.button(label).clicked() {
+                if is_yes != yes_selected {
+                    super::send_key(ui.ctx(), plain(Key::Right));
+                }
+                super::send_key(ui.ctx(), ENTER);
+            }
+        }
+    });
+}
+
+/// Draw the `/memory clear` confirmation (`App::memory_clear_confirm_open`).
+/// No is selected when it opens, so a stray Enter clears nothing; memory is
+/// cleared only by app-core's `ConfirmMemoryClear` on Yes.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context.
+/// * `app` - the App whose confirmation is read.
+///
+/// # Returns
+///
+/// `true` while the confirmation is open.
+pub fn show_memory_clear(ctx: &egui::Context, app: &mut App) -> bool {
+    if !app.memory_clear_confirm_open {
+        return false;
+    }
+    let yes = app.memory_clear_confirm_is_yes();
+    modal(
+        ctx,
+        "codemason_memory_clear_dialog",
+        MEMORY_CLEAR_TITLE,
+        |ui| {
+            yes_no_buttons(ui, yes);
+            ui.weak("Left/Right move * Enter on Yes performs * Enter on No cancels * Esc cancels");
+        },
+    );
+    true
+}
+
+/// Draw the Memory panel's delete confirmation
+/// (`App::pending_memory_delete`): the memory's id and preview; Enter
+/// deletes it, Esc keeps it.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context.
+/// * `app` - the App whose pending delete is read.
+///
+/// # Returns
+///
+/// `true` while the confirmation is open.
+pub fn show_memory_delete(ctx: &egui::Context, app: &mut App) -> bool {
+    let Some(pending) = app.pending_memory_delete.as_ref() else {
+        return false;
+    };
+    modal(
+        ctx,
+        "codemason_memory_delete_dialog",
+        MEMORY_DELETE_TITLE,
+        |ui| {
+            ui.label(format!("Memory ID: {}", pending.id));
+            ui.weak(format!("Preview: {}", pending.preview));
+            ui.add_space(6.0);
+            key_buttons(ui, &[(CONFIRM, ENTER), (CANCEL, ESC)]);
+            ui.weak("Enter confirm  Esc cancel");
+        },
+    );
+    true
+}
+
+/// Draw the destructive row-action confirmation (`App::row_action_confirm`)
+/// the Agents, Teams and Sessions panels arm: its title names the action,
+/// its body the target. No is selected when it opens; the action runs only
+/// in app-core's `row_action_confirm_accept` on Yes.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context.
+/// * `app` - the App whose pending row action is read.
+///
+/// # Returns
+///
+/// `true` while the confirmation is open.
+pub fn show_row_action(ctx: &egui::Context, app: &mut App) -> bool {
+    let (Some(title), Some(pending)) = (row_action_title(app), app.row_action_confirm.as_ref())
+    else {
+        return false;
+    };
+    let body = pending.action.body();
+    let yes = app.row_action_confirm_is_yes();
+    modal(ctx, "codemason_row_action_dialog", &title, |ui| {
+        ui.label(body);
+        ui.add_space(6.0);
+        yes_no_buttons(ui, yes);
+        ui.weak(codemason_app_core::app::ROW_ACTION_TOGGLE_HINT);
+        ui.weak(codemason_app_core::app::ROW_ACTION_OUTCOME_HINT);
+    });
+    true
+}
+
+/// Title of the full-memory view for memory `id` in `category` (the TUI's
+/// title).
+///
+/// # Arguments
+///
+/// * `id` - the memory's id.
+/// * `category` - its category.
+///
+/// # Returns
+///
+/// The dialog title.
+#[must_use]
+pub fn memory_view_title(id: i64, category: &str) -> String {
+    format!("Memory #{id} - {category}")
+}
+
+/// Draw the full-memory view (`App::memory_view`) the Memory panel opens
+/// with Enter: the memory's id, category, confidence, source and update
+/// time, then its content. Esc (or Close) closes it through app-core.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context.
+/// * `app` - the App whose memory view is read.
+///
+/// # Returns
+///
+/// `true` while the view is open.
+pub fn show_memory_view(ctx: &egui::Context, app: &mut App) -> bool {
+    let Some(view) = app.memory_view.as_ref() else {
+        return false;
+    };
+    let row = &view.row;
+    let title = memory_view_title(row.id, &row.category);
+    modal(ctx, "codemason_memory_view_dialog", &title, |ui| {
+        ui.label(format!("ID: {}", row.id));
+        ui.label(format!("Category: {}", row.category));
+        ui.label(format!("Confidence: {:.2}", row.confidence));
+        ui.label(format!("Source: {}", row.source));
+        ui.label(format!("Updated: {}", row.updated_at));
+        ui.add_space(4.0);
+        ui.weak("Content:");
+        egui::ScrollArea::vertical()
+            .max_height((ctx.content_rect().height() * 0.6).max(120.0))
+            .show(ui, |ui| {
+                ui.label(row.content.as_str());
+            });
+        ui.add_space(6.0);
+        key_buttons(ui, &[(super::output_view::CLOSE, ESC)]);
+        ui.weak("Esc close");
     });
     true
 }

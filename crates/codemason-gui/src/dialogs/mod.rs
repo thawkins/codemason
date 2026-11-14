@@ -113,6 +113,15 @@ pub enum ActiveDialog {
     Properties,
     /// The sidebar's session menu (`sidebar.menu`).
     SessionMenu,
+    /// The destructive row-action confirmation (`App::row_action_confirm`).
+    RowAction,
+    /// The Memory panel's delete confirmation
+    /// (`App::pending_memory_delete`).
+    MemoryDelete,
+    /// The `/memory clear` confirmation (`App::memory_clear_confirm_open`).
+    MemoryClear,
+    /// The full-memory view (`App::memory_view`).
+    MemoryView,
 }
 
 /// Which dialog the App's key handling serves now, if this crate draws it.
@@ -138,8 +147,13 @@ pub fn active(app: &App) -> Option<ActiveDialog> {
     if app.history_picker.is_some() {
         return Some(ActiveDialog::HistoryPicker);
     }
-    if app.row_action_confirm.is_some() || app.pending_memory_delete.is_some() {
-        return None;
+    // `dispatch_key` serves the row-action confirmation before
+    // `input::handle_key`, which serves the memory delete first.
+    if app.row_action_confirm.is_some() {
+        return Some(ActiveDialog::RowAction);
+    }
+    if app.pending_memory_delete.is_some() {
+        return Some(ActiveDialog::MemoryDelete);
     }
     if app.pending_router_save.is_some() {
         return Some(ActiveDialog::RouterSave);
@@ -189,10 +203,12 @@ pub fn active(app: &App) -> Option<ActiveDialog> {
     if app.notice_open {
         return Some(ActiveDialog::Notice);
     }
-    // The queue panel draws the queue clear confirm; the memory clear
-    // confirm is not ported yet.
-    if app.queue_clear_confirm_open || app.memory_clear_confirm_open {
+    // The queue panel draws the queue clear confirm.
+    if app.queue_clear_confirm_open {
         return None;
+    }
+    if app.memory_clear_confirm_open {
+        return Some(ActiveDialog::MemoryClear);
     }
     if app.db_prune_confirm_open {
         return Some(ActiveDialog::DbPrune);
@@ -207,13 +223,13 @@ pub fn active(app: &App) -> Option<ActiveDialog> {
         return Some(ActiveDialog::PlanApproval);
     }
     // The prompt draws the slash and file completion menus; the research
-    // and memory views are not ported yet.
-    let later = app.slash_menu.is_some()
-        || app.file_menu.is_some()
-        || app.research_view.is_some()
-        || app.memory_view.is_some();
+    // view is not ported yet.
+    let later = app.slash_menu.is_some() || app.file_menu.is_some() || app.research_view.is_some();
     if later {
         return None;
+    }
+    if app.memory_view.is_some() {
+        return Some(ActiveDialog::MemoryView);
     }
     if app.output_view.is_some() {
         return Some(ActiveDialog::OutputView);
@@ -229,7 +245,8 @@ pub fn active(app: &App) -> Option<ActiveDialog> {
 
 /// Whether the prompt must give up the keyboard: an app-core modal locks
 /// the input (`App::is_input_locked`), or the sidebar's properties dialog,
-/// the session menu or the connector-catalogue browser is open. Those take
+/// the session menu, the connector-catalogue browser or the `/memory clear`
+/// confirmation is open. Those take
 /// every key in app-core's `handle_key` without being input locks, so the
 /// prompt treats them as locks too: the router forwards every key and the
 /// prompt stops editing.
@@ -247,6 +264,7 @@ pub fn locks_prompt(app: &App) -> bool {
         || app.sidebar.properties.is_some()
         || app.sidebar.menu.is_some()
         || app.connector_store.is_some()
+        || app.memory_clear_confirm_open
 }
 
 /// Draw the active dialog ([`active`]), if any.
@@ -309,6 +327,10 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         Some(ActiveDialog::OutputView) => output_view::show(ctx, app),
         Some(ActiveDialog::Properties) => properties::show(ctx, app),
         Some(ActiveDialog::SessionMenu) => session_menu::show(ctx, app),
+        Some(ActiveDialog::RowAction) => confirm::show_row_action(ctx, app),
+        Some(ActiveDialog::MemoryDelete) => confirm::show_memory_delete(ctx, app),
+        Some(ActiveDialog::MemoryClear) => confirm::show_memory_clear(ctx, app),
+        Some(ActiveDialog::MemoryView) => confirm::show_memory_view(ctx, app),
         None => false,
     }
 }
@@ -352,7 +374,11 @@ pub fn prepare(ctx: &egui::Context, app: &mut App) {
             | ActiveDialog::ForceCleanup
             | ActiveDialog::Rollback
             | ActiveDialog::PlanApproval
-            | ActiveDialog::SessionMenu,
+            | ActiveDialog::SessionMenu
+            | ActiveDialog::RowAction
+            | ActiveDialog::MemoryDelete
+            | ActiveDialog::MemoryClear
+            | ActiveDialog::MemoryView,
         )
         | None => {}
     }

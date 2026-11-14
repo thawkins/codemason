@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 codemason-agent = { path = "../codemason-agent" }
+codemason-storage = { path = "../codemason-storage" }
 codemason-app-core = { workspace = true }
 codemason-connectors = { workspace = true }
 codemason-plugins = { workspace = true }

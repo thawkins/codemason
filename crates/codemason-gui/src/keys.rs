@@ -401,6 +401,9 @@ fn is_field_edit_key(input: KeyInput) -> bool {
 ///   and Down likewise with `down_to_app`: the App browses the input history
 ///   (or moves the Memory panel cursor), as the TUI's `HistoryUp` and
 ///   `HistoryDown` do on the first and last logical line.
+/// - Delete without modifiers when [`Focus::Prompt`]'s `delete_to_app` is
+///   set (the Memory panel is shown and the prompt is empty): the App asks
+///   to delete the selected memory, as the TUI's `Key::Delete` arm does.
 /// - `?` without Ctrl, Alt or Cmd when [`Focus::Prompt`]'s
 ///   `question_opens_shortcuts` is set (the prompt is empty): the App opens
 ///   the keyboard shortcuts panel, as the TUI's `Key::Char('?') if
@@ -416,6 +419,7 @@ pub fn is_prompt_app_key(input: KeyInput, focus: Focus) -> bool {
         completion_open,
         up_to_app,
         down_to_app,
+        delete_to_app,
         question_opens_shortcuts,
         ..
     } = focus
@@ -430,10 +434,10 @@ pub fn is_prompt_app_key(input: KeyInput, focus: Focus) -> bool {
         }
         Key::Up => completion_open || (up_to_app && plain),
         Key::Down => completion_open || (down_to_app && plain),
+        Key::Delete => delete_to_app && plain && !input.mods.ctrl && !input.mods.cmd,
         Key::Tab | Key::BackTab | Key::Esc => completion_open,
         Key::Char(_)
         | Key::Backspace
-        | Key::Delete
         | Key::Left
         | Key::Right
         | Key::Home
@@ -511,6 +515,9 @@ pub enum Focus {
         /// Whether Down goes to the App: the caret is on the last logical
         /// line, the history is being browsed, or the Memory panel is shown.
         down_to_app: bool,
+        /// Whether Delete goes to the App to ask to delete the selected
+        /// memory: the Memory panel is shown and the prompt is empty.
+        delete_to_app: bool,
         /// Whether `?` goes to the App to open the shortcuts panel: the
         /// prompt is empty and the panel is enabled.
         question_opens_shortcuts: bool,

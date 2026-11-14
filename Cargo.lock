@@ -1595,6 +1595,7 @@ dependencies = [
  "codemason-config",
  "codemason-connectors",
  "codemason-plugins",
+ "codemason-storage",
  "codemason-tools-core",
  "codemason-types",
  "craft-keymap",
