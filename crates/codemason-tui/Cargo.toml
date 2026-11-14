@@ -15,7 +15,6 @@ chrono = { workspace = true }
 [dependencies]
 codemason-app-core = { path = "../codemason-app-core" }
 codemason-agent = { path = "../codemason-agent" }
-codemason-bench = { path = "../codemason-bench" }
 codemason-config = { path = "../codemason-config" }
 codemason-types = { path = "../codemason-types" }
 codemason-storage = { path = "../codemason-storage" }
@@ -23,37 +22,22 @@ codemason-codeindex = { path = "../codemason-codeindex" }
 # Direct dep for bash safe-command/builtin-list helpers (source-of-truth); the
 # agent-local crate::tool::bash copy is a dormant duplicate (DCREMOVALPLAN M2.3).
 codemason-tools-core = { path = "../codemason-tools-core" }
-codemason-tools-extended = { path = "../codemason-tools-extended" }
-codemason-tools-vcs = { path = "../codemason-tools-vcs" }
-codemason-server = { path = "../codemason-server" }
 codemason-telemetry = { path = "../codemason-telemetry" }
-dirs = { workspace = true }
 tokio = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
-futures = { workspace = true }
 chrono = { workspace = true }
-rand = { workspace = true }
-arboard = { workspace = true }
 pulldown-cmark = "0.13"
 
 codemason-specs = { path = "../codemason-specs" }
-codemason-research = { path = "../codemason-research" }
 codemason-llm = { path = "../codemason-llm" }
-codemason-plugins = { path = "../codemason-plugins" }
 codemason-connectors = { path = "../codemason-connectors" }
-async-trait = { workspace = true }
-fs2 = { workspace = true }
-lru = { workspace = true }
-uuid = { workspace = true }
-# Width/grapheme handling for the message/log line caches (must match
-# ratatui's WordWrapper so pre-wrapped cache rows are stable).
-unicode-segmentation = "1.12"
+# Width handling for the line caches (must match codemason-app-core's
+# unicode-width and ratatui's WordWrapper so pre-wrapped cache rows are stable).
 unicode-width = "0.2"
 
 [features]
@@ -62,6 +46,15 @@ default = []
 telemetry = []
 
 [dev-dependencies]
+codemason-bench = { path = "../codemason-bench" }
+codemason-plugins = { path = "../codemason-plugins" }
+codemason-research = { path = "../codemason-research" }
+codemason-tools-extended = { path = "../codemason-tools-extended" }
+arboard = { workspace = true }
+async-trait = { workspace = true }
+dirs = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
 tempfile = "3.5"
 axum = { workspace = true }
 criterion = { workspace = true }
@@ -84,9 +77,6 @@ harness = false
 [[bench]]
 name = "bench_panels"
 harness = false
-
-[dependencies.tempfile]
-version = "3.5"
 
 [[test]]
 name = "all"
