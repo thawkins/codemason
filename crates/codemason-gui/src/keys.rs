@@ -281,7 +281,7 @@ pub fn is_tui_alt_chord(input: KeyInput) -> bool {
 /// egui-winit drops control characters (`is_printable_char`), so Enter
 /// ("\r"), Tab, Backspace, arrows and other named keys never type a `Text`:
 /// a `Text` after one of them belongs to another press.
-fn is_key_text(input: KeyInput, text: &str) -> bool {
+pub(crate) fn is_key_text(input: KeyInput, text: &str) -> bool {
     match input.key {
         Key::Char(c) => {
             let mut buf = [0u8; 4];
@@ -332,6 +332,42 @@ fn clipboard_key_input(
     }
 }
 
+/// Whether `input` is a press the prompt editor handles: a printable key
+/// (no Ctrl, Alt or Cmd), or Backspace, Delete, the arrows, Home or End
+/// without Alt or Cmd. When one arrives while the prompt is unfocused, the
+/// prompt takes the focus so the editor applies it (by grapheme) instead of
+/// the App's char-based editing; other keys (Esc, Enter, Tab, function keys,
+/// chords) still go to the App.
+///
+/// # Arguments
+///
+/// * `input` - the key press.
+pub fn is_prompt_edit_key(input: KeyInput) -> bool {
+    let mods = input.mods;
+    if mods.alt || mods.cmd {
+        return false;
+    }
+    match input.key {
+        Key::Char(_) => !mods.ctrl,
+        Key::Backspace
+        | Key::Delete
+        | Key::Left
+        | Key::Right
+        | Key::Up
+        | Key::Down
+        | Key::Home
+        | Key::End => true,
+        Key::Enter
+        | Key::Esc
+        | Key::Tab
+        | Key::BackTab
+        | Key::PageUp
+        | Key::PageDown
+        | Key::F(_)
+        | Key::Other => false,
+    }
+}
+
 /// Whether `input` is a key the App handles for the focused prompt: it
 /// reads or edits the App's input buffer, so it is forwarded and the prompt
 /// TextEdit never sees it.
@@ -342,15 +378,32 @@ fn clipboard_key_input(
 /// - While a completion menu (`@` mention or `/` command) is open: Up, Down,
 ///   Tab, Shift+Tab and Esc move, accept or close it, as the TUI's file and
 ///   slash menus do.
+/// - Up without Shift or Alt when [`Focus::Prompt`]'s `up_to_app` is set,
+///   and Down likewise with `down_to_app`: the App browses the input history
+///   (or moves the Memory panel cursor), as the TUI's `HistoryUp` and
+///   `HistoryDown` do on the first and last logical line.
 ///
 /// # Arguments
 ///
 /// * `input` - the key press.
-/// * `completion_open` - whether the App has a completion menu open.
-pub fn is_prompt_app_key(input: KeyInput, completion_open: bool) -> bool {
+/// * `focus` - where the keyboard is; [`Focus::Elsewhere`] has no prompt
+///   keys.
+pub fn is_prompt_app_key(input: KeyInput, focus: Focus) -> bool {
+    let Focus::Prompt {
+        completion_open,
+        up_to_app,
+        down_to_app,
+        ..
+    } = focus
+    else {
+        return false;
+    };
+    let plain = !input.mods.shift && !input.mods.alt;
     match input.key {
         Key::Enter => true,
-        Key::Up | Key::Down | Key::Tab | Key::BackTab | Key::Esc => completion_open,
+        Key::Up => completion_open || (up_to_app && plain),
+        Key::Down => completion_open || (down_to_app && plain),
+        Key::Tab | Key::BackTab | Key::Esc => completion_open,
         Key::Char(_)
         | Key::Backspace
         | Key::Delete
@@ -400,6 +453,12 @@ pub enum Focus {
         /// Whether the App has an `@` mention or `/` command completion menu
         /// open (see [`is_prompt_app_key`]).
         completion_open: bool,
+        /// Whether Up goes to the App: the caret is on the first logical
+        /// line, the history is being browsed, or the Memory panel is shown.
+        up_to_app: bool,
+        /// Whether Down goes to the App: the caret is on the last logical
+        /// line, the history is being browsed, or the Memory panel is shown.
+        down_to_app: bool,
     },
 }
 
@@ -442,7 +501,8 @@ impl KeyRouter {
     /// the App's own input buffer, so the two cannot drift. The rules:
     ///
     /// - A key the App handles for the prompt ([`is_prompt_app_key`]: Enter,
-    ///   and the completion-menu keys while a menu is open) is forwarded and
+    ///   the completion-menu keys while a menu is open, and Up or Down at the
+    ///   first or last line for the history) is forwarded and
     ///   removed from `input`, so the App submits, inserts the newline or
     ///   moves the menu exactly once and the TextEdit does not act on it too.
     /// - A TUI Alt chord ([`is_tui_alt_chord`]) is forwarded and the text it
@@ -480,12 +540,9 @@ impl KeyRouter {
     /// The key presses for the App.
     pub fn route(&mut self, input: &mut egui::InputState, focus: Focus) -> Vec<KeyInput> {
         let platform = self.keymap.platform();
-        let (typing, has_selection, completion_open) = match focus {
-            Focus::Elsewhere => (false, false, false),
-            Focus::Prompt {
-                has_selection,
-                completion_open,
-            } => (true, has_selection, completion_open),
+        let (typing, has_selection) = match focus {
+            Focus::Elsewhere => (false, false),
+            Focus::Prompt { has_selection, .. } => (true, has_selection),
         };
         let active = Active {
             typing,
@@ -517,7 +574,7 @@ impl KeyRouter {
             // Text that follows in the same frame (fast typing, an IME
             // commit) is never dropped and never makes the press "typed".
             let typed_text = next_text.is_some_and(|text| is_key_text(key, text));
-            if typing && is_prompt_app_key(key, completion_open) {
+            if is_prompt_app_key(key, focus) {
                 drop[i] = true;
                 keys.push(key);
                 continue;

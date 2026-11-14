@@ -11,7 +11,8 @@ use std::path::PathBuf;
 
 use codemason_app_core::input_event::{Key, KeyInput, Modifiers};
 use codemason_gui::keys::{
-    Focus, KeyRouter, TUI_ALT_LETTERS, command_key_input, default_keymap, load_keymap, to_key_input,
+    Focus, KeyRouter, TUI_ALT_LETTERS, command_key_input, default_keymap, is_prompt_edit_key,
+    load_keymap, to_key_input,
 };
 use craft_keymap::{Binding, CommandRef, Platform};
 
@@ -33,6 +34,8 @@ fn bound(keymap: &craft_keymap::Keymap, command: &str) -> Vec<Binding> {
 const TYPING: Focus = Focus::Prompt {
     has_selection: false,
     completion_open: false,
+    up_to_app: false,
+    down_to_app: false,
 };
 
 /// An egui key press of `key` with `modifiers`.
@@ -349,6 +352,8 @@ fn test_route_leaves_ctrl_c_and_ctrl_x_to_a_prompt_selection() {
         Focus::Prompt {
             has_selection: true,
             completion_open: false,
+            up_to_app: false,
+            down_to_app: false,
         },
     );
 
@@ -657,6 +662,8 @@ fn test_route_forwards_completion_keys_only_while_a_menu_is_open() {
         let focus = Focus::Prompt {
             has_selection: false,
             completion_open,
+            up_to_app: false,
+            down_to_app: false,
         };
         let keys = router.route(&mut input, focus);
         (keys, input.events.len())
@@ -681,4 +688,63 @@ fn test_route_forwards_completion_keys_only_while_a_menu_is_open() {
     let (keys, left) = keys_for(false);
     assert_eq!(keys, Vec::new(), "with no menu the prompt edits with them");
     assert_eq!(left, 2);
+}
+
+#[test]
+fn test_route_forwards_up_and_down_only_at_the_history_edges() {
+    let route = |up_to_app: bool, down_to_app: bool| {
+        let mut router = KeyRouter::new(default_keymap(Platform::Linux));
+        let mut input = input_with(vec![
+            press(egui::Key::ArrowUp, egui::Modifiers::NONE),
+            press(egui::Key::ArrowDown, egui::Modifiers::NONE),
+            press(egui::Key::ArrowUp, egui::Modifiers::SHIFT),
+        ]);
+        let focus = Focus::Prompt {
+            has_selection: false,
+            completion_open: false,
+            up_to_app,
+            down_to_app,
+        };
+        let keys: Vec<Key> = router
+            .route(&mut input, focus)
+            .into_iter()
+            .map(|k| k.key)
+            .collect();
+        (keys, input.events.len())
+    };
+
+    assert_eq!(
+        route(true, false),
+        (vec![Key::Up], 2),
+        "first line: Up browses"
+    );
+    assert_eq!(
+        route(false, true),
+        (vec![Key::Down], 2),
+        "last line: Down browses"
+    );
+    assert_eq!(
+        route(false, false),
+        (Vec::new(), 3),
+        "middle: the prompt moves"
+    );
+    assert_eq!(
+        route(true, true).0,
+        vec![Key::Up, Key::Down],
+        "Shift+Up stays with the prompt's selection"
+    );
+}
+
+#[test]
+fn test_prompt_edit_keys_are_typing_and_caret_keys_only() {
+    let key = |key: Key, mods: Modifiers| KeyInput { key, mods };
+    assert!(is_prompt_edit_key(key(Key::Char('a'), Modifiers::NONE)));
+    assert!(is_prompt_edit_key(key(Key::Char('A'), Modifiers::SHIFT)));
+    assert!(is_prompt_edit_key(key(Key::Backspace, Modifiers::NONE)));
+    assert!(is_prompt_edit_key(key(Key::Left, Modifiers::CTRL)));
+    assert!(!is_prompt_edit_key(key(Key::Char('d'), Modifiers::CTRL)));
+    assert!(!is_prompt_edit_key(key(Key::Char('l'), Modifiers::ALT)));
+    assert!(!is_prompt_edit_key(key(Key::Esc, Modifiers::NONE)));
+    assert!(!is_prompt_edit_key(key(Key::Enter, Modifiers::NONE)));
+    assert!(!is_prompt_edit_key(key(Key::F(1), Modifiers::NONE)));
 }

@@ -65,7 +65,10 @@ impl Shell {
     /// A shell over the App's prompt and the default keymap of the platform
     /// this build runs on.
     #[must_use]
-    pub fn new(app: App) -> Self {
+    pub fn new(mut app: App) -> Self {
+        // The GUI draws no keybindings panel yet, so `?` must type, not
+        // open an invisible panel that locks the prompt.
+        app.shortcuts_panel_enabled = false;
         Self {
             app,
             prompt: PromptInput::default(),

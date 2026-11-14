@@ -13,6 +13,8 @@ mod support;
 
 use std::path::PathBuf;
 
+use codemason_gui::panels::prompt::{ATTACHMENTS_LABEL, SLASH_LABEL};
+
 use codemason_app_core::app::{App, ConfiguredProvider, ProviderSource, QueuedInput};
 use codemason_app_core::log_channel::tui_log_channel;
 use codemason_gui::Shell;
@@ -122,16 +124,21 @@ fn test_prompt_typed_text_lands_in_app_buffer_once() {
 fn test_prompt_shows_keys_typed_while_unfocused() {
     let (_rt, mut harness) = rig(|_| {});
 
-    harness.key_press(egui::Key::A);
-    harness.event(egui::Event::Text("a".to_string()));
+    // egui-winit sends a printable press and its Text in one frame.
+    harness.input_mut().events.extend([
+        key_event(egui::Key::A, true),
+        egui::Event::Text("a".to_string()),
+        key_event(egui::Key::A, false),
+    ]);
     harness.run();
 
     assert_eq!(
         harness.state().app().session.input,
         "a",
-        "the App inserts the forwarded key once; its Text is not typed again"
+        "the prompt takes the focus and types the key once"
     );
     assert_eq!(prompt_text(&harness), "a");
+    assert!(prompt(&harness).is_focused());
 }
 
 #[test]
@@ -320,4 +327,176 @@ fn test_queue_menu_shows_queued_items() {
         "Esc closes the menu"
     );
     assert!(harness.query_by_label(QUEUE_MENU_LABEL).is_none());
+}
+
+#[test]
+fn test_prompt_unfocused_text_without_key_inserts_once() {
+    let (_rt, mut harness) = rig(|_| {});
+
+    // A dead key or a layout character arrives as Text with no Key.
+    harness.event(egui::Event::Text("\u{fc}".to_string()));
+    harness.run();
+
+    assert_eq!(harness.state().app().session.input, "\u{fc}");
+    assert_eq!(prompt_text(&harness), "\u{fc}");
+    assert!(prompt(&harness).is_focused());
+}
+
+#[test]
+fn test_prompt_unfocused_ime_commit_inserts_once() {
+    let (_rt, mut harness) = rig(|_| {});
+
+    harness.event(egui::Event::Ime(egui::ImeEvent::Commit(
+        "\u{e9}t\u{e9}".to_string(),
+    )));
+    harness.run();
+
+    assert_eq!(harness.state().app().session.input, "\u{e9}t\u{e9}");
+    assert_eq!(harness.state().app().session.input_cursor, 3);
+}
+
+#[test]
+fn test_prompt_backspace_deletes_whole_grapheme() {
+    // "a", then a thumbs-up emoji with a skin-tone modifier: one grapheme of
+    // two code points.
+    let text = "a\u{1f44d}\u{1f3fd}";
+    let (_rt, mut harness) = rig_with(
+        |app| {
+            app.session.input = text.to_string();
+            app.session.input_cursor = text.chars().count();
+        },
+        Harness::builder().allow_missing_glyphs(),
+    );
+    harness.run();
+
+    // The prompt is not focused: Backspace must still edit by grapheme.
+    harness.key_press(egui::Key::Backspace);
+    harness.run();
+
+    assert_eq!(harness.state().app().session.input, "a");
+    assert_eq!(harness.state().app().session.input_cursor, 1);
+    assert!(prompt(&harness).is_focused());
+}
+
+#[test]
+fn test_prompt_left_moves_over_a_combining_sequence() {
+    // "x", then "e" with a combining acute accent: one grapheme.
+    let text = "xe\u{301}";
+    let (_rt, mut harness) = rig(|app| {
+        app.session.input = text.to_string();
+        app.session.input_cursor = 3;
+    });
+    harness.run();
+
+    harness.key_press(egui::Key::ArrowLeft);
+    harness.run();
+
+    assert_eq!(
+        harness.state().app().session.input_cursor,
+        1,
+        "the caret never stops between e and its accent"
+    );
+}
+
+#[test]
+fn test_prompt_question_mark_types_and_never_locks() {
+    let (_rt, mut harness) = rig(|_| {});
+
+    harness.input_mut().events.extend([
+        key_event(egui::Key::Questionmark, true),
+        egui::Event::Text("?".to_string()),
+    ]);
+    harness.run();
+
+    let app = harness.state().app();
+    assert_eq!(app.session.input, "?");
+    assert!(!app.show_shortcuts, "the GUI has no shortcuts panel yet");
+    assert!(!app.is_input_locked());
+}
+
+#[test]
+fn test_prompt_forwarded_question_mark_never_opens_shortcuts() {
+    let (_rt, mut harness) = rig(|app| app.session.compact_in_progress = true);
+
+    // A locked prompt forwards every key to the App.
+    harness.input_mut().events.extend([
+        key_event(egui::Key::Questionmark, true),
+        egui::Event::Text("?".to_string()),
+    ]);
+    harness.run();
+
+    assert!(!harness.state().app().show_shortcuts);
+}
+
+#[test]
+fn test_prompt_slash_menu_shows_commands_and_tab_inserts() {
+    let (_rt, mut harness) = rig(|_| {});
+    focus_prompt(&mut harness);
+
+    prompt(&harness).type_text("/hel");
+    harness.run();
+
+    harness.get_by_label(SLASH_LABEL);
+    harness.get_by_label_contains("/help");
+    let trigger = {
+        let menu = harness
+            .state()
+            .app()
+            .slash_menu
+            .as_ref()
+            .expect("slash menu");
+        menu.matches[menu.selected].trigger.clone()
+    };
+
+    harness.key_press(egui::Key::Tab);
+    harness.run();
+
+    assert_eq!(harness.state().app().session.input, format!("/{trigger} "));
+    assert!(
+        harness.query_by_label(SLASH_LABEL).is_none(),
+        "Tab accepted"
+    );
+    assert!(prompt(&harness).is_focused());
+}
+
+#[test]
+fn test_prompt_up_on_first_line_browses_history() {
+    let (_rt, mut harness) = rig(|app| app.input_history = vec!["older".to_string()]);
+    focus_prompt(&mut harness);
+    prompt(&harness).type_text("x");
+    harness.run();
+    harness.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Enter);
+    harness.run();
+    prompt(&harness).type_text("y");
+    harness.run();
+
+    harness.key_press(egui::Key::ArrowUp);
+    harness.run();
+    let app = harness.state().app();
+    assert_eq!(app.session.input, "x\ny", "Up first moves to line one");
+    assert_eq!(app.session.input_cursor, 1);
+
+    harness.key_press(egui::Key::ArrowUp);
+    harness.run();
+    assert_eq!(harness.state().app().session.input, "older");
+    assert_eq!(prompt_text(&harness), "older");
+
+    harness.key_press(egui::Key::ArrowDown);
+    harness.run();
+    assert_eq!(
+        harness.state().app().session.input,
+        "x\ny",
+        "Down while browsing returns to the draft"
+    );
+}
+
+#[test]
+fn test_prompt_shows_pending_attachments() {
+    let (_rt, mut harness) = rig(|app| {
+        app.session.pending_attachments = vec![PathBuf::from("shots/screen.png")];
+    });
+    harness.run();
+
+    harness.get_by_label(ATTACHMENTS_LABEL);
+    harness.get_by_label_contains("screen.png");
 }
