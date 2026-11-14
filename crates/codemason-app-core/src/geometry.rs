@@ -17,7 +17,7 @@ pub struct Area {
 
 impl Area {
     /// Build an area, clamping `width`/`height` so the right and bottom edges
-    /// stay within `u16` (the same rule as ratatui's `Rect::new`).
+    /// stay within `u16` (the same rule as the terminal renderer's rectangle constructor).
     ///
     /// # Arguments
     /// * `x`, `y` - top-left cell.
