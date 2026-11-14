@@ -19,13 +19,13 @@ pub use self::backend_panel::{BackendPanelRow, BackendPanelState};
 
 mod bench;
 mod compress;
-pub mod cron;
+pub use codemason_app_core::app::cron;
 mod event_handler;
 mod init;
 mod input_handler;
 mod loop_dialog;
-pub mod md_worker;
 pub use self::md_worker::MdWorker;
+pub use codemason_app_core::app::md_worker;
 
 mod connector;
 mod models;
@@ -41,7 +41,7 @@ pub use self::model_picker_cache::ModelPickerRowsCache;
 
 mod project_services;
 pub(crate) mod projects;
-pub mod prompt;
+pub use codemason_app_core::app::prompt;
 mod research;
 mod reverse;
 pub use self::project_services::ProjectServices;
@@ -53,7 +53,7 @@ pub use self::session_ops::emit_log_entry_to_tracing;
 pub use self::session_registry::SessionRegistry;
 pub use self::session_view::{Attention, SessionView};
 pub use self::sessions::title_from_prompt;
-pub mod skillgen;
+pub use codemason_app_core::app::skillgen;
 mod slash;
 
 /// Test hook: expose the `/mcp` display-list builder to the integration test
@@ -117,11 +117,11 @@ pub fn log_window_messages_for_tests(app: &App) -> Vec<String> {
     app.log_entries.iter().map(|e| e.message.clone()).collect()
 }
 mod launch;
-mod mcp_bridge;
+use codemason_app_core::app::mcp_bridge;
 mod spawn;
 mod subagent_events;
 mod swarm;
-pub mod toolchain;
+pub use codemason_app_core::app::toolchain;
 mod windows;
 
 /// Why the Agents window refuses to open with nothing to show (spec
@@ -309,7 +309,7 @@ pub use self::loop_dialog::{
 };
 
 /// Shared helpers for listing installed team blueprints.
-pub mod blueprints;
+pub use codemason_app_core::app::blueprints;
 
 // Re-export status types from theme for use in app
 pub use crate::theme::{StatusCategory, StatusHistory, StatusMessage};

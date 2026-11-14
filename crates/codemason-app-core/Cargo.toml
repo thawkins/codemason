@@ -5,12 +5,38 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Frontend-neutral styled text, input event and geometry types"
+description = "Frontend-neutral types and ratatui-free leaf modules shared by the terminal and GUI frontends"
 
 [lints]
 workspace = true
 
 [dependencies]
+codemason-agent = { path = "../codemason-agent" }
+codemason-codeindex = { path = "../codemason-codeindex" }
+codemason-config = { path = "../codemason-config" }
+codemason-connectors = { path = "../codemason-connectors" }
+codemason-research = { path = "../codemason-research" }
+codemason-storage = { path = "../codemason-storage" }
+codemason-tools-core = { path = "../codemason-tools-core" }
+codemason-types = { path = "../codemason-types" }
+anyhow = { workspace = true }
+arboard = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }
+image = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+html2text = { workspace = true }
+pulldown-cmark = "0.13"
+tempfile = "3.5"
+
+[dev-dependencies]
+codemason-llm = { path = "../codemason-llm" }
+codemason-telemetry = { path = "../codemason-telemetry" }
+parking_lot = { workspace = true }
 
 [[test]]
 name = "all"

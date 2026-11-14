@@ -973,6 +973,32 @@ dependencies = [
 [[package]]
 name = "codemason-app-core"
 version = "1.0.169"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "chrono",
+ "codemason-agent",
+ "codemason-codeindex",
+ "codemason-config",
+ "codemason-connectors",
+ "codemason-llm",
+ "codemason-research",
+ "codemason-storage",
+ "codemason-telemetry",
+ "codemason-tools-core",
+ "codemason-types",
+ "dirs",
+ "html2text",
+ "image",
+ "parking_lot",
+ "pulldown-cmark",
+ "rand 0.10.3",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "codemason-bench"
@@ -1385,8 +1411,6 @@ dependencies = [
  "filetime",
  "fs2",
  "futures",
- "html2text",
- "image",
  "lru",
  "parking_lot",
  "pulldown-cmark",

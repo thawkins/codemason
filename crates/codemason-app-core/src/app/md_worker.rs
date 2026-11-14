@@ -228,7 +228,8 @@ const RED_CLOSE: &str = "@@/codemason-red@@";
 /// `html2text` untouched and `restore_red_markers` can convert them back
 /// afterwards. The match is non-greedy and may span lines; an unclosed `[red]`
 /// is dropped.
-pub(crate) fn preprocess_red_markers(md: &str) -> String {
+#[doc(hidden)]
+pub fn preprocess_red_markers(md: &str) -> String {
     const OPEN: &str = "[red]";
     const CLOSE: &str = "[/red]";
     let mut out = String::with_capacity(md.len());
@@ -253,7 +254,8 @@ pub(crate) fn preprocess_red_markers(md: &str) -> String {
 
 /// Convert [`RED_OPEN`] / [`RED_CLOSE`] sentinels back into `[red]...[/red]`
 /// markers after the markdown pipeline has rendered the text.
-pub(crate) fn restore_red_markers(text: &str) -> String {
+#[doc(hidden)]
+pub fn restore_red_markers(text: &str) -> String {
     if !text.contains(RED_OPEN) {
         return text.to_string();
     }

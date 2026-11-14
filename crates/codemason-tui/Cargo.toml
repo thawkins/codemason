@@ -40,8 +40,6 @@ futures = { workspace = true }
 chrono = { workspace = true }
 rand = { workspace = true }
 arboard = { workspace = true }
-image = { workspace = true }
-html2text = { workspace = true }
 pulldown-cmark = "0.13"
 
 codemason-specs = { path = "../codemason-specs" }

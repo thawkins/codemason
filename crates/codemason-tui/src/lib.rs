@@ -8,9 +8,6 @@
 
 pub mod adapters;
 pub mod app;
-pub mod branch_names;
-pub mod clipboard;
-pub mod deck_progress;
 pub mod input;
 pub mod input_field;
 pub mod layout;
@@ -18,8 +15,6 @@ pub mod layout_active_agents;
 pub mod layout_statusbar;
 pub mod layout_table_rows;
 pub mod layout_teams;
-pub mod logo;
-pub mod open_in;
 pub mod panels;
 pub mod project_properties;
 pub mod research_adapter;
@@ -28,7 +23,6 @@ pub mod session_menu;
 pub mod sessions_sidebar;
 pub mod teammate_strip;
 pub mod theme;
-pub mod tips;
 pub mod tracing_layer;
 pub mod utils;
 pub mod widgets;
@@ -38,6 +32,7 @@ pub mod widgets;
 /// The binary owns the `dup2` redirection (it is the only crate that may use
 /// the approved FFI); the TUI only needs the [`Spool`] handle to attach its
 /// log-panel mirror, so it re-exports the binary-side type.
+pub use codemason_app_core::{branch_names, clipboard, deck_progress, logo, open_in, tips};
 pub use codemason_types::stderr_spool::Spool as StderrSpool;
 
 pub use app::App;
