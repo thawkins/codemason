@@ -24,6 +24,8 @@ mod test_markdown;
 mod test_messages;
 #[path = "test_palette.rs"]
 mod test_palette;
+#[path = "test_prompt.rs"]
+mod test_prompt;
 
 /// The one mutex that serialises every test mutating a process-global
 /// (environment variables, cwd) in this binary.

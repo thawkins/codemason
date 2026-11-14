@@ -11,7 +11,9 @@
 //! - [`dock`] is the dockable pane layout model (craft-ui docking).
 //! - [`keys`] is the keyboard shortcut map (craft-keymap).
 //! - [`panels`] holds the pane contents ([`panels::messages`] is the
-//!   transcript), drawn with [`palette`] colours and [`styled_text`] layout.
+//!   transcript, [`panels::prompt`] the prompt editor over the App's input
+//!   buffer, [`panels::queue`] the input queue), drawn with [`palette`]
+//!   colours and [`styled_text`] layout.
 //! - [`bridge::spawn_event_bridge`] forwards agent events from the
 //!   [`EventBus`] into the shell's queue and wakes egui.
 //!

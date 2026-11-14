@@ -332,6 +332,39 @@ fn clipboard_key_input(
     }
 }
 
+/// Whether `input` is a key the App handles for the focused prompt: it
+/// reads or edits the App's input buffer, so it is forwarded and the prompt
+/// TextEdit never sees it.
+///
+/// - Enter with any modifiers: plain (or Ctrl) Enter submits through the
+///   App's submit path; Shift+Enter and Alt+Enter insert a newline, as in
+///   `input.rs` (`Key::Enter if SHIFT || ALT`).
+/// - While a completion menu (`@` mention or `/` command) is open: Up, Down,
+///   Tab, Shift+Tab and Esc move, accept or close it, as the TUI's file and
+///   slash menus do.
+///
+/// # Arguments
+///
+/// * `input` - the key press.
+/// * `completion_open` - whether the App has a completion menu open.
+pub fn is_prompt_app_key(input: KeyInput, completion_open: bool) -> bool {
+    match input.key {
+        Key::Enter => true,
+        Key::Up | Key::Down | Key::Tab | Key::BackTab | Key::Esc => completion_open,
+        Key::Char(_)
+        | Key::Backspace
+        | Key::Delete
+        | Key::Left
+        | Key::Right
+        | Key::Home
+        | Key::End
+        | Key::PageUp
+        | Key::PageDown
+        | Key::F(_)
+        | Key::Other => false,
+    }
+}
+
 /// Whether an unbound key press that typed no text reaches the App while
 /// the prompt TextEdit has the keyboard. The TextEdit owns editing keys, so
 /// only keys it ignores go through: Esc, function keys and page scrolling.
@@ -364,6 +397,9 @@ pub enum Focus {
     Prompt {
         /// Whether the prompt has a non-empty text selection.
         has_selection: bool,
+        /// Whether the App has an `@` mention or `/` command completion menu
+        /// open (see [`is_prompt_app_key`]).
+        completion_open: bool,
     },
 }
 
@@ -402,8 +438,13 @@ impl KeyRouter {
     /// text of a TUI Alt chord forwarded from the prompt (below).
     ///
     /// While the prompt has the keyboard ([`Focus::Prompt`]), typed text is
-    /// never sent to the App, so it is never inserted twice. The rules:
+    /// never sent to the App, so it is never inserted twice. The prompt edits
+    /// the App's own input buffer, so the two cannot drift. The rules:
     ///
+    /// - A key the App handles for the prompt ([`is_prompt_app_key`]: Enter,
+    ///   and the completion-menu keys while a menu is open) is forwarded and
+    ///   removed from `input`, so the App submits, inserts the newline or
+    ///   moves the menu exactly once and the TextEdit does not act on it too.
     /// - A TUI Alt chord ([`is_tui_alt_chord`]) is forwarded and the text it
     ///   typed (`is_key_text`: the next `Text`, equal to the key's
     ///   character ignoring ASCII case) is dropped, so its letter never reaches the prompt (the TUI
@@ -439,9 +480,12 @@ impl KeyRouter {
     /// The key presses for the App.
     pub fn route(&mut self, input: &mut egui::InputState, focus: Focus) -> Vec<KeyInput> {
         let platform = self.keymap.platform();
-        let (typing, has_selection) = match focus {
-            Focus::Elsewhere => (false, false),
-            Focus::Prompt { has_selection } => (true, has_selection),
+        let (typing, has_selection, completion_open) = match focus {
+            Focus::Elsewhere => (false, false, false),
+            Focus::Prompt {
+                has_selection,
+                completion_open,
+            } => (true, has_selection, completion_open),
         };
         let active = Active {
             typing,
@@ -473,6 +517,11 @@ impl KeyRouter {
             // Text that follows in the same frame (fast typing, an IME
             // commit) is never dropped and never makes the press "typed".
             let typed_text = next_text.is_some_and(|text| is_key_text(key, text));
+            if typing && is_prompt_app_key(key, completion_open) {
+                drop[i] = true;
+                keys.push(key);
+                continue;
+            }
             if typing && is_tui_alt_chord(key) {
                 // macOS Option composes its own character (e.g. Option+A
                 // types an a-ring), so any following Text is left to the

@@ -32,6 +32,7 @@ fn bound(keymap: &craft_keymap::Keymap, command: &str) -> Vec<Binding> {
 /// The prompt has the keyboard and no selection.
 const TYPING: Focus = Focus::Prompt {
     has_selection: false,
+    completion_open: false,
 };
 
 /// An egui key press of `key` with `modifiers`.
@@ -347,6 +348,7 @@ fn test_route_leaves_ctrl_c_and_ctrl_x_to_a_prompt_selection() {
         &mut input,
         Focus::Prompt {
             has_selection: true,
+            completion_open: false,
         },
     );
 
@@ -607,4 +609,76 @@ fn test_route_keeps_unmatched_text_after_unbound_alt_letter_while_typing() {
         vec!["q".to_owned()],
         "only the unrelated q is typed"
     );
+}
+
+#[test]
+fn test_route_forwards_and_removes_enter_while_typing() {
+    let mut router = KeyRouter::new(default_keymap(Platform::Linux));
+    let mut input = input_with(vec![
+        press(egui::Key::Enter, egui::Modifiers::NONE),
+        press(egui::Key::Enter, egui::Modifiers::SHIFT),
+        press(egui::Key::Enter, egui::Modifiers::ALT),
+    ]);
+
+    let keys = router.route(&mut input, TYPING);
+
+    assert_eq!(
+        keys,
+        vec![
+            KeyInput {
+                key: Key::Enter,
+                mods: Modifiers::NONE,
+            },
+            KeyInput {
+                key: Key::Enter,
+                mods: Modifiers::SHIFT,
+            },
+            KeyInput {
+                key: Key::Enter,
+                mods: Modifiers::ALT,
+            },
+        ],
+        "the App submits or inserts the newline"
+    );
+    assert!(
+        input.events.is_empty(),
+        "the prompt does not act on Enter too"
+    );
+}
+
+#[test]
+fn test_route_forwards_completion_keys_only_while_a_menu_is_open() {
+    let keys_for = |completion_open: bool| {
+        let mut router = KeyRouter::new(default_keymap(Platform::Linux));
+        let mut input = input_with(vec![
+            press(egui::Key::ArrowDown, egui::Modifiers::NONE),
+            press(egui::Key::Tab, egui::Modifiers::NONE),
+        ]);
+        let focus = Focus::Prompt {
+            has_selection: false,
+            completion_open,
+        };
+        let keys = router.route(&mut input, focus);
+        (keys, input.events.len())
+    };
+
+    let (keys, left) = keys_for(true);
+    assert_eq!(
+        keys,
+        vec![
+            KeyInput {
+                key: Key::Down,
+                mods: Modifiers::NONE,
+            },
+            KeyInput {
+                key: Key::Tab,
+                mods: Modifiers::NONE,
+            },
+        ]
+    );
+    assert_eq!(left, 0, "the menu keys are removed from the prompt");
+
+    let (keys, left) = keys_for(false);
+    assert_eq!(keys, Vec::new(), "with no menu the prompt edits with them");
+    assert_eq!(left, 2);
 }
