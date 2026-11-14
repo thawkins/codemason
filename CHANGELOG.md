@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added - TUI to egui GUI migration plan
+
+- `docs/superpowers/plans/2026-11-14-tui-to-egui-gui-migration.md`: a
+  five-phase plan to replace the ratatui/crossterm TUI with an egui/eframe
+  desktop GUI using the storytold craft-libs UI crates (`craft-ui`,
+  `craft-keymap`, `craft-dialogs`, `craft-window`, `craft-quit`,
+  `craft-menu`), and to migrate `TUI-QUICKSTART.md` to `GUI-QUICKSTART.md`.
+  Planning only: no code, dependency or behaviour changes yet, so SPEC,
+  README, QUICKSTART and STATS are unchanged.
+
 ### Changed - project renamed from ragent to codemason; binary is `cdmn`
 
 - Every crate is renamed `ragent-*` -> `codemason-*` (directories, package
