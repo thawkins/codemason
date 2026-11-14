@@ -27,8 +27,9 @@
 //! in front for as long as it has the keyboard, so keys never go to a
 //! covered pane. A pane toggled on in the focused sidebar's tab group
 //! (`Alt+P`, `Alt+M`) takes the front instead, and the sidebar gives up the
-//! keyboard (`sessions_sidebar_state::unfocus`, as a press outside it). The other actions the dock returns (moves, resizes, tab
-//! switches, floats) are applied to the layout. With a layout file
+//! keyboard (`sessions_sidebar_state::unfocus`, as a press outside it).
+//! The other actions the dock returns (moves, resizes, tab switches,
+//! floats) are applied to the layout. With a layout file
 //! ([`Shell::with_layout_file`]) the layout and the hidden panes' places
 //! are loaded at start ([`dock::load_dock`]), and every
 //! change is saved once no pointer button is held (so a drag is saved once,
