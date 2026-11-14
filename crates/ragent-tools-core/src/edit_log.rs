@@ -1,0 +1,680 @@
+//! Edit-operation instrumentation for `Edit`, `multi_edit`, and `apply_patch`.
+//!
+//! When enabled, every `Edit`, `multi_edit`, and `apply_patch` invocation
+//! writes a single JSON line to a log file in `<working_dir>/log/editlog/edits-<timestamp>.jsonl`.
+//! Each line records the timestamp, the target file path, the search/replacement text,
+//! and the outcome.
+//!
+//! Logging is controlled by a process-wide atomic flag that is toggled via the
+//! `/editlog on|off` slash command in the TUI.
+
+use std::path::{Path, PathBuf};
+
+use regex::Regex;
+use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
+/// Returns the current edit-log enabled state.
+///
+/// The runtime flag lives in `ragent_config::edit_log` so it can be kept in
+/// sync with the `edit_log` field in `ragent.json`.
+#[must_use]
+pub fn is_edit_log_enabled() -> bool {
+    ragent_config::edit_log::is_enabled()
+}
+
+/// Enables or disables edit logging.
+pub fn set_edit_log_enabled(enabled: bool) {
+    ragent_config::edit_log::set_enabled(enabled);
+}
+
+/// Build the path to the log directory (`<working_dir>/log/editlog`).
+fn log_dir(working_dir: &Path) -> PathBuf {
+    working_dir.join("log").join("editlog")
+}
+
+/// Build a unique log file path based on the current UTC timestamp.
+fn log_file_path(log_dir: &Path) -> PathBuf {
+    let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S-%6f").to_string();
+    log_dir.join(format!("edits-{timestamp}.jsonl"))
+}
+
+/// Write a single JSON log entry for an edit operation.
+///
+/// This is a best-effort operation: failures are logged with `tracing::warn`
+/// but are never propagated to the caller, so an edit cannot fail because of a
+/// logging problem.
+///
+/// This is the plain form kept for existing callers; new call sites should
+/// prefer [`log_edit_operation_ex`] so the `match_lane` and `note` fields are
+/// populated for later analysis.
+///
+/// # Arguments
+///
+/// * `working_dir` - project working directory; the `log/` subdirectory is
+///   created here if needed.
+/// * `tool` - name of the tool that performed the edit (`"Edit"`,
+///   `"multi_edit"`, or `"apply_patch"`).
+/// * `file_path` - absolute or project-relative path of the edited file.
+/// * `old_str` - search string that was replaced.
+/// * `new_str` - replacement string that was inserted.
+/// * `outcome` - `"success"` or an error message.
+/// * `dry_run` - whether the edit was a dry-run preview.
+pub fn log_edit_operation(
+    working_dir: &Path,
+    tool: &str,
+    file_path: &Path,
+    old_str: &str,
+    new_str: &str,
+    outcome: &str,
+    dry_run: bool,
+) {
+    log_edit_operation_ex(
+        working_dir,
+        file_path,
+        EntryExtras {
+            tool,
+            old_str,
+            new_str,
+            outcome,
+            dry_run,
+            match_lane: None,
+            note: None,
+        },
+    );
+}
+
+/// Extra fields attached to an edit-log entry by [`log_edit_operation_ex`].
+#[derive(Default)]
+pub struct EntryExtras<'a> {
+    /// Name of the tool (`"Edit"`, `"multi_edit"`, `"apply_patch"`).
+    pub tool: &'a str,
+    /// Search string that was replaced.
+    pub old_str: &'a str,
+    /// Replacement string that was inserted.
+    pub new_str: &'a str,
+    /// `"success"` or an error message.
+    pub outcome: &'a str,
+    /// Whether the edit was a dry-run preview.
+    pub dry_run: bool,
+    /// Which matcher lane produced the outcome (editplan P4.12).
+    pub match_lane: Option<&'a str>,
+    /// Free-form diagnostic tag (e.g. `"no prior read"`, `"long old_str"`;
+    /// editplan P3.8 / P3.10).
+    pub note: Option<&'a str>,
+}
+
+/// Write a single JSON log entry with the extended `match_lane` / `note`
+/// fields. Identical semantics to [`log_edit_operation`] otherwise.
+pub fn log_edit_operation_ex(working_dir: &Path, file_path: &Path, extras: EntryExtras<'_>) {
+    if !is_edit_log_enabled() {
+        return;
+    }
+
+    let log_dir = log_dir(working_dir);
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        tracing::warn!(
+            "edit_log: failed to create log directory {}: {e}",
+            log_dir.display()
+        );
+        return;
+    }
+
+    // Pick an existing log file from the current session, or start a new one.
+    let path = crate::jsonl_log::pick_most_recent(&log_dir, "edits-")
+        .unwrap_or_else(|| log_file_path(&log_dir));
+
+    let mut entry = json!({
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "tool": extras.tool,
+        "file_path": file_path.display().to_string(),
+        "old_str": extras.old_str,
+        "new_str": extras.new_str,
+        "outcome": extras.outcome,
+        "dry_run": extras.dry_run,
+    });
+    if let Some(lane) = extras.match_lane {
+        entry["match_lane"] = json!(lane);
+    }
+    if let Some(note) = extras.note {
+        entry["note"] = json!(note);
+    }
+
+    if let Err(e) = crate::jsonl_log::append_json_line(&path, &entry) {
+        tracing::warn!("edit_log: failed to append to {}: {e}", path.display());
+    }
+}
+
+/// Summarise the edit log for the given working directory.
+///
+/// Returns `(count, success_count, fail_count, percentage_success)`. If no
+/// log files exist or cannot be parsed, the counts are zero.
+#[must_use]
+pub fn edit_log_summary(working_dir: &Path) -> (usize, usize, usize, f64) {
+    let log_dir = log_dir(working_dir);
+    if !log_dir.exists() {
+        return (0, 0, 0, 0.0);
+    }
+
+    let mut total = 0usize;
+    let mut success = 0usize;
+
+    let entries = match std::fs::read_dir(&log_dir) {
+        Ok(e) => e,
+        Err(_) => return (0, 0, 0, 0.0),
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if !(name_str.starts_with("edits-") && name_str.ends_with(".jsonl")) {
+            continue;
+        }
+        let content = match std::fs::read_to_string(entry.path()) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        for line in content.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Ok(value) = serde_json::from_str::<Value>(line) {
+                total += 1;
+                if value.get("outcome").and_then(|v| v.as_str()) == Some("success") {
+                    success += 1;
+                }
+            }
+        }
+    }
+
+    let fail = total.saturating_sub(success);
+    let pct = if total == 0 {
+        0.0
+    } else {
+        (success as f64 / total as f64) * 100.0
+    };
+
+    (total, success, fail, pct)
+}
+
+/// Characteristic of an `old_str` that is suspected to increase the chance of
+/// an exact-match edit failure.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum OldStrRisk {
+    /// The string contains one or more characters outside the ASCII range.
+    ContainsUtf,
+    /// The string contains a literal tab character (not just spaces).
+    ContainsTabs,
+    /// The string contains trailing or leading whitespace on any line.
+    EscapedWhitespace,
+    /// The string contains one or more blank lines.
+    ContainsBlankLines,
+    /// The string mixes `\r\n` and `\n` line endings.
+    MixedLineEndings,
+    /// The string starts or ends with whitespace (space or tab).
+    LeadingTrailingWhitespace,
+}
+
+impl OldStrRisk {
+    /// Human-readable label used in reports.
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::ContainsUtf => "contains utf characters",
+            Self::ContainsTabs => "contains tabs",
+            Self::EscapedWhitespace => "contains escaped whitespace",
+            Self::ContainsBlankLines => "contains blank lines",
+            Self::MixedLineEndings => "contains mixed line endings",
+            Self::LeadingTrailingWhitespace => "has leading or trailing whitespace",
+        }
+    }
+}
+
+/// Detect which risk characteristics are present in `old_str`.
+#[must_use]
+pub fn detect_old_str_risks(old_str: &str) -> Vec<OldStrRisk> {
+    let mut risks = Vec::new();
+
+    if !old_str.is_ascii() {
+        risks.push(OldStrRisk::ContainsUtf);
+    }
+
+    if old_str.contains('\t') {
+        risks.push(OldStrRisk::ContainsTabs);
+    }
+
+    if old_str
+        .lines()
+        .any(|line| line.starts_with(' ') || line.ends_with(' '))
+        || old_str
+            .lines()
+            .any(|line| line.starts_with('\t') || line.ends_with('\t'))
+    {
+        risks.push(OldStrRisk::EscapedWhitespace);
+    }
+
+    // `lines()` skips the trailing empty string, so a trailing blank line is
+    // detected separately below.
+    let raw_has_blank_line = old_str.split(['\n', '\r']).any(|line| line.is_empty());
+    let lines_have_blank = old_str.lines().any(|line| line.trim().is_empty());
+    if raw_has_blank_line || lines_have_blank {
+        risks.push(OldStrRisk::ContainsBlankLines);
+    }
+
+    // A bare LF not preceded by CR is implied by CRLF presence plus a lone-LF
+    // check; `has_lf` alone is implied by `has_crlf`, so only `has_crlf`
+    // matters for entering the mixed-line-endings scan.
+    let has_crlf = old_str.contains("\r\n");
+    if has_crlf {
+        // Confirm that there is at least one LF that is not part of a CRLF.
+        let lf_not_crlf = old_str
+            .chars()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .any(|w| w[0] != '\r' && w[1] == '\n');
+        if lf_not_crlf {
+            risks.push(OldStrRisk::MixedLineEndings);
+        }
+    }
+
+    if old_str
+        .chars()
+        .next()
+        .is_some_and(|c| c == ' ' || c == '\t')
+        || old_str
+            .chars()
+            .last()
+            .is_some_and(|c| c == ' ' || c == '\t')
+    {
+        risks.push(OldStrRisk::LeadingTrailingWhitespace);
+    }
+
+    risks
+}
+
+/// Risk profile for a failed edit-log entry.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct FailedEditRisk {
+    /// Tool that performed the edit.
+    pub tool: String,
+    /// Path of the edited file.
+    pub file_path: String,
+    /// Normalised outcome string.
+    pub outcome: String,
+    /// Risks detected in `old_str`.
+    pub risks: Vec<OldStrRisk>,
+    /// The `old_str` value (truncated for reporting).
+    pub old_str_preview: String,
+}
+
+/// Result of analysing the edit log for failure risk characteristics.
+#[derive(Debug, Clone, Default)]
+pub struct EditLogAnalysis {
+    /// Number of failed entries examined.
+    pub failure_count: usize,
+    /// Number of failed entries where at least one risk was detected.
+    pub risky_failure_count: usize,
+    /// Count of failures per detected risk characteristic.
+    pub risk_counts: HashMap<OldStrRisk, usize>,
+    /// Up to a few example failures per risk characteristic.
+    pub risk_examples: HashMap<OldStrRisk, Vec<FailedEditRisk>>,
+    /// Count of distinct risk-characteristic combinations observed.
+    pub combination_counts: HashMap<Vec<OldStrRisk>, usize>,
+    /// Number of succeeded edit operations per tool.
+    pub success_by_tool: HashMap<String, usize>,
+    /// Number of failed edit operations per tool.
+    pub failure_by_tool: HashMap<String, usize>,
+}
+
+impl EditLogAnalysis {
+    /// Return the risk characteristics sorted by descending frequency.
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn risks_by_frequency(&self) -> Vec<(OldStrRisk, usize)> {
+        let mut v: Vec<(OldStrRisk, usize)> = self
+            .risk_counts
+            .iter()
+            .map(|(risk, count)| (risk.clone(), *count))
+            .collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.label().cmp(b.0.label())));
+        v
+    }
+
+    /// All tools that have at least one logged operation, sorted by name.
+    #[must_use]
+    // reason: used by ragent-tui's `/alog show` via the public crate; flagged
+    // dead only when edit_log.rs is re-included into the test crate via
+    // #[path], where that UI path is not exercised.
+    #[allow(dead_code)]
+    pub fn tools_sorted(&self) -> Vec<&String> {
+        let mut tools: std::collections::HashSet<&String> = self.success_by_tool.keys().collect();
+        for t in self.failure_by_tool.keys() {
+            tools.insert(t);
+        }
+        let mut v: Vec<&String> = tools.into_iter().collect();
+        v.sort();
+        v
+    }
+
+    /// Failed-to-succeeded ratio for a tool, as a percentage.
+    ///
+    /// Returns `0.0` when the tool has no succeeded operations (i.e. the ratio
+    /// is undefined / infinite). Callers should treat the raw counts as the
+    /// source of truth; this helper is only for the summary table.
+    #[must_use]
+    pub fn failure_success_ratio_pct_for(&self, tool: &str) -> f64 {
+        let success = self.success_by_tool.get(tool).copied().unwrap_or(0);
+        if success == 0 {
+            0.0
+        } else {
+            let failure = self.failure_by_tool.get(tool).copied().unwrap_or(0);
+            (failure as f64 / success as f64) * 100.0
+        }
+    }
+}
+
+/// Scan all failed entries in the edit log and analyse their `old_str` values
+/// for characteristics that could explain exact-match failures.
+///
+/// Returns `None` if the log directory does not exist or cannot be read.
+/// Returns an empty analysis if there are no failed entries.
+#[must_use]
+pub fn edit_log_analyse(working_dir: &Path) -> Option<EditLogAnalysis> {
+    let log_dir = log_dir(working_dir);
+    if !log_dir.exists() {
+        return None;
+    }
+
+    let mut analysis = EditLogAnalysis::default();
+
+    let entries = std::fs::read_dir(&log_dir).ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if !(name_str.starts_with("edits-") && name_str.ends_with(".jsonl")) {
+            continue;
+        }
+        let content = match std::fs::read_to_string(entry.path()) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        for line in content.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let value: Value = match serde_json::from_str(line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let outcome = value
+                .get("outcome")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let normalized = normalize_outcome(outcome);
+            let tool = value
+                .get("tool")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            // Track per-tool success/failure counts for the ratio summary.
+            if normalized == "success" {
+                *analysis.success_by_tool.entry(tool.clone()).or_insert(0) += 1;
+                continue;
+            } else if normalized != "unknown" {
+                *analysis.failure_by_tool.entry(tool.clone()).or_insert(0) += 1;
+            }
+
+            if normalized == "unknown" {
+                continue;
+            }
+
+            let file_path = value
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let old_str = value.get("old_str").and_then(|v| v.as_str()).unwrap_or("");
+
+            let risks = detect_old_str_risks(old_str);
+            analysis.failure_count += 1;
+            if !risks.is_empty() {
+                analysis.risky_failure_count += 1;
+            }
+
+            // Count individual risks and collect examples.
+            let mut combination = Vec::new();
+            for risk in &risks {
+                *analysis.risk_counts.entry(risk.clone()).or_insert(0) += 1;
+                combination.push(risk.clone());
+                let examples = analysis.risk_examples.entry(risk.clone()).or_default();
+                if examples.len() < 3 {
+                    examples.push(FailedEditRisk {
+                        tool: tool.clone(),
+                        file_path: file_path.clone(),
+                        outcome: normalized.clone(),
+                        risks: risks.clone(),
+                        old_str_preview: truncate_preview(old_str, 120),
+                    });
+                }
+            }
+
+            if !combination.is_empty() {
+                combination.sort_by_key(|r| r.label());
+                *analysis.combination_counts.entry(combination).or_insert(0) += 1;
+            }
+        }
+    }
+
+    Some(analysis)
+}
+
+/// Truncate a string to a maximum visual length, appending an ellipsis if
+/// truncated. Newlines are rendered as `\n` in the preview so the output stays
+/// compact.
+fn truncate_preview(s: &str, max_len: usize) -> String {
+    let escaped = s
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t");
+    ragent_types::strutil::truncate_chars(&escaped, max_len)
+}
+
+/// Per-tool edit-log statistics.
+///
+/// `tool_counts` maps tool name -> total invocations.
+/// `outcome_counts` maps `(tool, outcome)` -> count, where `"success"` is the
+/// success outcome and any other value is a failure reason.
+/// `failure_reasons` maps failure reason -> total count across all tools.
+#[derive(Debug, Clone, Default)]
+pub struct EditLogStats {
+    /// Total invocations per tool.
+    pub tool_counts: HashMap<String, usize>,
+    /// Outcome counts per tool.
+    pub outcome_counts: HashMap<(String, String), usize>,
+    /// Failure reason counts across all tools.
+    pub failure_reasons: HashMap<String, usize>,
+}
+
+/// Normalise an outcome string for aggregation.
+///
+/// Failure messages often contain file paths (e.g. "not found in src/foo.rs"),
+/// which makes every failure appear unique in the `/editlog show` rollup.
+/// This helper removes any path-like token so that failures with the same
+/// underlying reason are counted together.
+pub fn normalize_outcome(outcome: &str) -> String {
+    static PATH_RE: OnceLock<Regex> = OnceLock::new();
+    let re = PATH_RE.get_or_init(|| {
+        // Match a run of non-whitespace characters that contains a path
+        // separator. This catches absolute paths, project-relative paths,
+        // and Windows paths without requiring knowledge of the working dir.
+        //
+        // INVARIANT: the pattern is a compile-time constant verified to be
+        // valid by the unit tests, so compilation cannot fail at runtime.
+        Regex::new(r#"[^\s'"]*[\/\\][^\s'"]*"#).expect("valid regex") // no-panic-ok: constant pattern
+    });
+    let normalized = re.replace_all(outcome, "<file>");
+    // Collapse consecutive whitespace left behind by removed tokens.
+    normalized.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+impl EditLogStats {
+    /// Total number of logged edit operations across all tools.
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn total(&self) -> usize {
+        self.tool_counts.values().sum()
+    }
+
+    /// Number of successful operations for the given tool.
+    #[must_use]
+    pub fn success_for(&self, tool: &str) -> usize {
+        self.outcome_counts
+            .get(&(tool.to_string(), "success".to_string()))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Number of failed operations for the given tool.
+    #[must_use]
+    pub fn failure_for(&self, tool: &str) -> usize {
+        let total = self.tool_counts.get(tool).copied().unwrap_or(0);
+        total.saturating_sub(self.success_for(tool))
+    }
+
+    /// Success percentage for the given tool.
+    #[must_use]
+    pub fn success_pct_for(&self, tool: &str) -> f64 {
+        let total = self.tool_counts.get(tool).copied().unwrap_or(0);
+        if total == 0 {
+            0.0
+        } else {
+            (self.success_for(tool) as f64 / total as f64) * 100.0
+        }
+    }
+}
+
+/// Build detailed edit-log statistics from all `edits-*.jsonl` files.
+///
+/// Returns `None` if the log directory does not exist or cannot be read.
+#[must_use]
+pub fn edit_log_stats(working_dir: &Path) -> Option<EditLogStats> {
+    let log_dir = log_dir(working_dir);
+    if !log_dir.exists() {
+        return None;
+    }
+
+    let mut stats = EditLogStats::default();
+
+    let entries = std::fs::read_dir(&log_dir).ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if !(name_str.starts_with("edits-") && name_str.ends_with(".jsonl")) {
+            continue;
+        }
+        let content = match std::fs::read_to_string(entry.path()) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        for line in content.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let value: Value = match serde_json::from_str(line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let tool = value
+                .get("tool")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let outcome = value
+                .get("outcome")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let normalized = normalize_outcome(outcome);
+
+            *stats.tool_counts.entry(tool.clone()).or_insert(0) += 1;
+            *stats
+                .outcome_counts
+                .entry((tool, normalized.clone()))
+                .or_insert(0) += 1;
+
+            if normalized != "success" {
+                *stats.failure_reasons.entry(normalized).or_insert(0) += 1;
+            }
+        }
+    }
+
+    Some(stats)
+}
+
+/// Delete all edit-log files in the working directory's `log/` subdirectory.
+///
+/// Returns the number of files removed. The `log/` directory itself is left
+/// intact; only matching `edits-*.jsonl` files are deleted.
+pub fn clear_edit_logs(working_dir: &Path) -> usize {
+    let log_dir = log_dir(working_dir);
+    if !log_dir.exists() {
+        return 0;
+    }
+
+    let mut removed = 0usize;
+    if let Ok(entries) = std::fs::read_dir(&log_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with("edits-")
+                && name_str.ends_with(".jsonl")
+                && std::fs::remove_file(entry.path()).is_ok()
+            {
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
+/// Empty the contents of every edit-log file without deleting the files.
+///
+/// Truncates each `edits-*.jsonl` file in the log directory to zero bytes and
+/// returns the number of files cleared. The `log/` directory itself is
+/// preserved (created if missing) so that future edit operations can keep
+/// logging to the same location.
+#[allow(dead_code)]
+pub fn clear_edit_log_contents(working_dir: &Path) -> usize {
+    let log_dir = log_dir(working_dir);
+    if !log_dir.exists() {
+        if let Err(e) = std::fs::create_dir_all(&log_dir) {
+            tracing::warn!(dir = %log_dir.display(), error = %e, "failed to create edit-log dir");
+        }
+        return 0;
+    }
+
+    let mut cleared = 0usize;
+    if let Ok(entries) = std::fs::read_dir(&log_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with("edits-")
+                && name_str.ends_with(".jsonl")
+                && let Ok(file) = std::fs::OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(entry.path())
+            {
+                drop(file);
+                cleared += 1;
+            }
+        }
+    }
+    cleared
+}
+
+#[cfg(test)]
+#[path = "../tests/inline/edit_log_tests.rs"]
+mod tests;

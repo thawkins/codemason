@@ -1,0 +1,109 @@
+//! `team_task_list` - Read all tasks and their status (read-only).
+
+use anyhow::Result;
+use serde_json::{Value, json};
+
+use super::{Tool, ToolContext, ToolOutput};
+use crate::team::{TaskStatus, TaskStore, find_team_dir};
+
+/// Returns the full task list for a team.
+pub struct TeamTaskListTool;
+
+#[async_trait::async_trait]
+impl Tool for TeamTaskListTool {
+    fn name(&self) -> &'static str {
+        "team_task_list"
+    }
+
+    fn description(&self) -> &'static str {
+        "List all tasks in the team's shared task list, including their status, \
+             assignment, and dependencies. REQUIRED parameter: 'team_name' (string). Use \
+             this to inspect the current workload before claiming, assigning, or creating \
+             new tasks. Common gotcha: this is read-only - use team_task_create, \
+             team_task_claim, and team_task_complete to modify tasks."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "team_name": {
+                    "type": "string",
+                    "description": "Name of the team (required)"
+                }
+            },
+            "required": ["team_name"],
+            "additionalProperties": false
+        })
+    }
+    fn permission_category(&self) -> &'static str {
+        "team:read"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let team_name = input
+            .get("team_name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing required parameter: team_name"))?;
+
+        let team_dir = find_team_dir(&ctx.working_dir, team_name)
+            .ok_or_else(|| anyhow::anyhow!("Team '{team_name}' not found"))?;
+        super::team_caller::resolve_caller(ctx, team_name, &team_dir)?;
+
+        let store = TaskStore::open(&team_dir)?;
+        let list = store.read()?;
+
+        if list.tasks.is_empty() {
+            return Ok(ToolOutput {
+                content: format!("No tasks in team '{team_name}' yet."),
+                metadata: Some(json!({ "team_name": team_name, "tasks": [] })),
+            });
+        }
+
+        let mut lines = vec![format!("Tasks for team '{team_name}':\n")];
+        for task in &list.tasks {
+            let status_icon = match task.status {
+                TaskStatus::Pending => ".",
+                TaskStatus::InProgress => "[refresh]",
+                TaskStatus::Completed => "[ok]",
+                TaskStatus::Cancelled => "[x]",
+            };
+            let assignee = task.assigned_to.as_deref().unwrap_or("unassigned");
+            let deps = if task.depends_on.is_empty() {
+                String::new()
+            } else {
+                format!(" [deps: {}]", task.depends_on.join(", "))
+            };
+            lines.push(format!(
+                "{status_icon} [{}] {} - {}{deps}",
+                task.id, task.title, assignee
+            ));
+            if !task.description.is_empty() {
+                lines.push(format!("   {}", task.description));
+            }
+        }
+
+        let tasks_json: Vec<Value> = list
+            .tasks
+            .iter()
+            .map(|t| {
+                json!({
+                    "id": t.id,
+                    "title": t.title,
+                    "status": t.status.as_str(),
+                    "assigned_to": t.assigned_to,
+                    "depends_on": t.depends_on
+                })
+            })
+            .collect();
+
+        Ok(ToolOutput {
+            content: lines.join("\n"),
+            metadata: Some(json!({
+                "team_name": team_name,
+                "task_count": list.tasks.len(),
+                "tasks": tasks_json
+            })),
+        })
+    }
+}

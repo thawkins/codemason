@@ -1,0 +1,2445 @@
+//! Slash command handling for the spec management system.
+//!
+//! Provides parsing and helpers for `/spec` subcommands so the TUI can delegate
+//! spec logic to this crate rather than embedding it inline.
+
+/// Parsed `/spec` subcommand.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SpecCommand {
+    /// Show the help reference.
+    Help,
+    /// Create a new spec directory with SPEC.md and PLAN.md.
+    Create {
+        /// URL-safe identifier used as the directory name.
+        specname: String,
+        /// Free-text feature description.
+        feature: String,
+        /// Optional research artifact name linked via `--from-research` (FR-010).
+        from_research: Option<String>,
+        /// Optional target project folder whose `specs/` root receives the
+        /// generated spec (`--folder <path>`). Used by `/spec reverse --folder`
+        /// chaining so the spec lands in the scaffolded project rather than the
+        /// invoking directory. `None` means the invoking directory (FR-027).
+        folder: Option<String>,
+    },
+    /// Validate a spec or all specs for EARS compliance.
+    Validate {
+        /// Optional spec ID; if omitted, validates all specs.
+        spec_id: Option<String>,
+    },
+    /// List specs with optional filtering.
+    List {
+        /// Raw filter arguments (e.g. "--status draft --prefix test").
+        args: String,
+    },
+    /// Search specs by full-text query.
+    Search {
+        /// Search query string.
+        query: String,
+    },
+    /// Show or transition a spec's status.
+    Status {
+        /// Spec identifier.
+        spec_id: String,
+        /// Optional new status to transition to.
+        new_status: Option<String>,
+    },
+    /// Manage tasks within a spec's plan.
+    Task {
+        /// Spec identifier.
+        spec_id: String,
+        /// Optional task ID to show or update.
+        task_id: Option<String>,
+        /// Optional new status to set on the task.
+        new_status: Option<String>,
+    },
+    /// Activate a spec for context injection into agent prompts.
+    Activate {
+        /// Spec identifier.
+        spec_id: String,
+    },
+    /// Deactivate the currently active spec.
+    Deactivate,
+    /// Show requirement coverage for a spec.
+    Coverage {
+        /// Spec identifier.
+        spec_id: String,
+    },
+    /// Implement a spec by executing its PLAN.md tasks in dependency order.
+    Impl {
+        /// Spec identifier.
+        spec_id: String,
+        /// Optional task ID to execute (with its transitive dependencies).
+        task_id: Option<String>,
+        /// If true, display execution plan without actually running tasks.
+        dry_run: bool,
+    },
+    /// Incrementally add requirements to an existing spec and update its plan.
+    Add {
+        /// Spec identifier.
+        spec_id: String,
+        /// Free-text feature description for the new requirements.
+        feature: String,
+    },
+    /// Regenerate PLAN.md and TESTPLAN.md from an edited SPEC.md.
+    Update {
+        /// Spec identifier (directory name under `specs/`).
+        spec_id: String,
+    },
+    /// Delete a spec directory from the workspace.
+    Delete {
+        /// Spec identifier.
+        spec_id: String,
+        /// If true, skip the confirmation prompt.
+        yes: bool,
+    },
+    /// Perform a Jobs-To-Be-Done analysis of an existing spec's SPEC.md,
+    /// writing the result to `specs/<specname>/JTBD.md`.
+    Jtbd {
+        /// Spec identifier (directory name under `specs/`).
+        spec_id: String,
+        /// If true, overwrite an existing `JTBD.md`.
+        force: bool,
+        /// Optional override agent name; if `None`, the default explore agent
+        /// is used (falling back to the currently selected agent).
+        agent: Option<String>,
+    },
+    /// Create a SPEC.md only (no PLAN.md) from a feature prompt.
+    ///
+    /// This separates the specification stage from the planning stage,
+    /// matching SDD's `/speckit.specify` workflow.
+    Specify {
+        /// URL-safe identifier used as the directory name.
+        specname: String,
+        /// Free-text feature description.
+        feature: String,
+        /// Optional research artifact name linked via `--from-research` (FR-010).
+        from_research: Option<String>,
+    },
+    /// Generate or regenerate a `PLAN.md` from an existing `SPEC.md` using
+    /// the provided technology context as guidance.
+    ///
+    /// This separates plan generation from spec creation, matching SDD's
+    /// `/speckit.plan` command. Coexists with `/spec update` which
+    /// regenerates the plan from an edited `SPEC.md` without a tech-context
+    /// argument.
+    Plan {
+        /// Spec identifier (directory name under `specs/`).
+        spec_id: String,
+        /// Free-text technology context that informs technology choices and
+        /// rationale documented in the plan.
+        tech_context: String,
+    },
+    /// Generate a `TASKS.md` file containing an ordered task list derived
+    /// from the existing `PLAN.md`.
+    ///
+    /// This creates a standalone task-list artifact distinct from the
+    /// PLAN.md task table, matching SDD's `/speckit.tasks` command.
+    Tasks {
+        /// Spec identifier (directory name under `specs/`).
+        spec_id: String,
+    },
+    /// Append a production feedback note to `specs/<spec-id>/FEEDBACK.md`
+    /// (FR-017).
+    ///
+    /// The note is advisory - it is surfaced during `/spec plan` regeneration
+    /// but does not block validation or status transitions.
+    Feedback {
+        /// Spec identifier (directory name under `specs/`).
+        spec_id: String,
+        /// Free-text feedback note (production metric, incident, user report).
+        note: String,
+    },
+
+    /// Create a project from a system architecture document (URL or local
+    /// file/folder): acquire the referenced content, extract the architecture
+    /// structure, author the spec, and scaffold the project (FR-001).
+    GovCreate {
+        /// Spec identifier (directory name under `<target-folder>/specs/`),
+        /// validated with the existing spec-ID rules (FR-002).
+        spec_id: String,
+        /// Content reference: an `http://`/`https://` URL or a local
+        /// file/folder path.
+        content_ref: String,
+        /// Target folder in which the new project is scaffolded.
+        target_folder: String,
+        /// Validated `/new` scaffold request produced by the shared
+        /// `project_scaffold::flags::parse_flags` parser (FR-002, FR-010).
+        scaffold: ragent_tools_extended::project_scaffold::ScaffoldRequest,
+        /// If true, overwrite the generated spec files on a re-run (FR-017).
+        force: bool,
+    },
+    /// A `/spec govcreate` invocation that was parseable but invalid: an
+    /// invalid spec ID or a `/new` flag validation failure (FR-002, FR-003).
+    ///
+    /// Carries the specific cause so the caller can print it alongside the
+    /// usage block; [`SpecCommand::is_usage_error`] reports `true` for it.
+    GovCreateUsage(String),
+    /// Reverse-engineer a public repository into a synthetic creation prompt
+    /// (FR-001, FR-011, FR-013).
+    ///
+    /// Produced by `parse_reverse` from a `reverse <repo> [flags]` tail. The
+    /// TUI feeds these validated values straight to the reverse handler, so the
+    /// fetch-and-generate path stays in one place.
+    Reverse {
+        /// Repository positional: an `owner/repo` shorthand, an `https://`
+        /// URL, or an SSH-style URL.
+        repo: String,
+        /// Optional `--create <name>` chain into `/spec create`.
+        create: Option<String>,
+        /// Optional tree-fetch depth (`--depth <N>`), raw string.
+        depth: Option<String>,
+        /// Validated `/new` scaffold request (`--language` + `--type`, optional
+        /// `--stack`) produced by the shared `parse_flags` parser (FR-011).
+        scaffold: Option<ragent_tools_extended::project_scaffold::ScaffoldRequest>,
+        /// Optional `--folder <path>` scaffold target; requires the scaffold
+        /// flags (FR-026).
+        folder: Option<String>,
+    },
+    /// A `/spec reverse` invocation that was parseable but invalid: an
+    /// unknown flag, a duplicate flag, or a `/new` flag validation failure
+    /// (FR-011, FR-026).
+    ///
+    /// Carries the specific cause so the caller can print it alongside the
+    /// usage block; [`SpecCommand::is_usage_error`] reports `true` for it.
+    ReverseUsage(String),
+    /// Unknown subcommand (preserves the raw name for error messages).
+    Unknown(String),
+}
+
+/// Extract `specname`, `feature`, optional `--from-research` name, and optional
+/// `--folder <path>` target from the raw argument tail of `create` or `specify`
+/// (FR-010, FR-027).
+///
+/// The `--from-research <name>` flag may appear at the end of the feature text;
+/// the `--folder <path>` flag is consumed by `/spec reverse --folder` chaining so
+/// the generated spec lands in the scaffolded project. Both flags are stripped
+/// from the feature text. The folder is returned as the fourth element (`None`
+/// when absent); `specify` ignores it.
+fn parse_feature_with_research(rest: &str) -> (String, String, Option<String>, Option<String>) {
+    let (specname, after_specname) = rest
+        .split_once(char::is_whitespace)
+        .map_or((rest, ""), |(s, r)| (s.trim(), r.trim()));
+    let (after_folder, folder) = extract_folder_flag(after_specname);
+    let (feature, from_research) = extract_from_research(&after_folder);
+    (specname.to_string(), feature, from_research, folder)
+}
+
+/// Split `--folder <path>` from the argument tail of `/spec create`.
+///
+/// Returns `(remainder_without_flag, Some(path))` when the flag is present with
+/// a value, or `(args, None)` when it is not. A dangling flag with no value is
+/// stripped so it is not passed through into the generated prompt.
+fn extract_folder_flag(args: &str) -> (String, Option<String>) {
+    let tokens: Vec<&str> = args.split_whitespace().collect();
+    let Some(flag_pos) = tokens.iter().position(|t| *t == "--folder") else {
+        return (args.to_string(), None);
+    };
+    let path = tokens
+        .get(flag_pos + 1)
+        .copied()
+        .filter(|t| !t.starts_with("--"))
+        .map(String::from);
+    // Rebuild from the tokens before the flag, keeping the tokens after the
+    // flag value so `--folder <path>` can appear mid-argument.
+    let mut before: Vec<&str> = tokens[..flag_pos].to_vec();
+    let after_start = if path.is_some() {
+        flag_pos + 2
+    } else {
+        flag_pos + 1
+    };
+    before.extend_from_slice(&tokens[after_start..]);
+    (before.join(" "), path)
+}
+
+/// Split `--from-research <name>` from the end of a feature string.
+///
+/// Returns `(feature_without_flag, Some(research_name))` when the flag is
+/// present with a name, or `(feature, None)` when it is not. A dangling flag
+/// with no name is stripped from the feature so it is not passed through into
+/// the generated prompt.
+fn extract_from_research(feature: &str) -> (String, Option<String>) {
+    // Token scan so only a standalone `--from-research` token splits the
+    // feature text (a substring find would also match prose like
+    // "the --from-research flag").
+    let tokens: Vec<&str> = feature.split_whitespace().collect();
+    let Some(flag_pos) = tokens.iter().position(|t| *t == "--from-research") else {
+        return (feature.to_string(), None);
+    };
+    let name = tokens
+        .get(flag_pos + 1)
+        .copied()
+        .filter(|t| !t.starts_with("--"))
+        .map(String::from);
+    // Rebuild the feature from the tokens before the flag; the dangling flag
+    // is always stripped, even when no name follows.
+    let before = tokens[..flag_pos].join(" ");
+    (before, name)
+}
+
+/// Split the raw `/spec govcreate` argument tail into shell-like tokens.
+///
+/// Whitespace separates tokens unless it appears inside a single- or
+/// double-quoted span, so a content reference or target folder that contains
+/// spaces can be quoted (assumption A3). The quote characters themselves are
+/// stripped; an unterminated quote runs to the end of the input.
+fn tokenize_govcreate_args(args: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut in_token = false;
+    let mut quote: Option<char> = None;
+
+    for ch in args.chars() {
+        match quote {
+            Some(opening) if ch == opening => {
+                // A closing quote that closes an empty token leaves the token
+                // closed (`""` produces no token); unquoted adjacent text keeps
+                // a non-empty token open.
+                if current.is_empty() {
+                    in_token = false;
+                }
+                quote = None;
+            }
+            Some(_) => current.push(ch),
+            None if ch == '\'' || ch == '"' => {
+                quote = Some(ch);
+                in_token = true;
+            }
+            None if ch.is_whitespace() => {
+                if in_token {
+                    tokens.push(std::mem::take(&mut current));
+                    in_token = false;
+                }
+            }
+            None => {
+                current.push(ch);
+                in_token = true;
+            }
+        }
+    }
+
+    if in_token {
+        tokens.push(current);
+    }
+    tokens
+}
+
+/// Parse the `/spec govcreate` argument tail (FR-002).
+///
+/// The first three tokens are the positionals `specid`, `content-ref`, and
+/// `target-folder` (assumption A3); the first `--flag` token ends the
+/// positional run, and the remainder are `/new` scaffold flags, with an
+/// optional `--force` that is stripped before the shared `/new` flag parser
+/// validates the rest. The `specid` is validated with the existing spec rules
+/// before any other work, so a path-traversal name can never reach the
+/// filesystem. Missing positionals produce the usage-error
+/// `Unknown("govcreate")` form; an invalid spec ID or a `/new` flag validation
+/// failure produces [`SpecCommand::GovCreateUsage`] carrying the specific cause.
+fn parse_govcreate(rest: &str) -> SpecCommand {
+    let tokens = tokenize_govcreate_args(rest);
+
+    // Positionals run until the first flag token; a flag may not be consumed as
+    // the target folder (`govcreate arch ./docs --language rust` is a missing
+    // positional, not a target folder of `--language`).
+    let positional_count = tokens
+        .iter()
+        .take_while(|token| !token.starts_with("--"))
+        .count();
+    if positional_count < 3 {
+        return SpecCommand::Unknown("govcreate".to_string());
+    }
+
+    let spec_id = tokens[0].clone();
+    let content_ref = tokens[1].clone();
+    let target_folder = tokens[2].clone();
+
+    if crate::spec::SpecId::new(spec_id.as_str()).is_none() {
+        return SpecCommand::GovCreateUsage(format!(
+            "invalid spec id '{spec_id}': spec IDs must be alphanumeric with hyphens or \
+             underscores only"
+        ));
+    }
+
+    // FR-017: `--force` is a govcreate-level flag, not a `/new` flag; strip it
+    // before delegating so the scaffold parser never sees it.
+    let mut force = false;
+    let mut flags: Vec<String> = Vec::new();
+    for token in &tokens[positional_count..] {
+        if token == "--force" {
+            force = true;
+        } else {
+            flags.push(token.clone());
+        }
+    }
+
+    // FR-002 / FR-010: delegate flag validation to the shared `/new` parser so
+    // accepted values and error text cannot drift from the `/new` surface.
+    let flag_refs: Vec<&str> = flags.iter().map(String::as_str).collect();
+    match ragent_tools_extended::project_scaffold::parse_flags(&flag_refs) {
+        Ok(scaffold) => SpecCommand::GovCreate {
+            spec_id,
+            content_ref,
+            target_folder,
+            scaffold,
+            force,
+        },
+        Err(err) => SpecCommand::GovCreateUsage(err.to_string()),
+    }
+}
+
+/// Parse the `/spec reverse` argument tail (FR-001, FR-011, FR-013, FR-026).
+///
+/// The first token is the mandatory repository positional (an `owner/repo`
+/// shorthand, an `https://` URL, or an SSH-style URL); the remainder is a flag
+/// tail. `--create <name>` and `--depth <N>` are reverse-level flags; the
+/// `/new` scaffold flags (`--language <lang>`, `--type <type>`, `--stack
+/// <name>`) are collected verbatim and validated by the shared `/new` parser
+/// so accepted values and error text cannot drift from `/new` (FR-011).
+/// `--folder <path>` names the scaffold target and `--github` / `--gitlab`
+/// request a private remote; both require the scaffold flags (FR-026).
+///
+/// A missing repository, an unknown/duplicate flag, or a `/new` validation
+/// failure produces [`SpecCommand::ReverseUsage`] carrying the specific cause.
+/// A flag token placed where `<repo>` belongs never reaches this function (the
+/// subcommand splitter hands it to `Self::Unknown`), which
+/// [`SpecCommand::is_usage_error`] reports as a usage error for `reverse`.
+fn parse_reverse(rest: &str) -> SpecCommand {
+    let tokens = tokenize_govcreate_args(rest);
+
+    // FR-002: the repository positional must be present. A bare-word tail
+    // (`--language` swallowing the `repo` slot) is rejected below, not here,
+    // so the tokenizer stays value-agnostic.
+    let Some(repo) = tokens.first() else {
+        return SpecCommand::Unknown("reverse".to_string());
+    };
+    if repo.starts_with("--") {
+        // A flag in the positional slot is a missing repository; report it as
+        // the usage-error `Unknown("reverse")` form.
+        return SpecCommand::Unknown("reverse".to_string());
+    }
+    let repo = repo.clone();
+
+    let mut create: Option<String> = None;
+    let mut depth: Option<String> = None;
+    let mut folder: Option<String> = None;
+    let mut scaffold_flags: Vec<String> = Vec::new();
+    let mut hosting_flags_only: Vec<String> = Vec::new();
+
+    let mut i = 1;
+    while i < tokens.len() {
+        let token = tokens[i].as_str();
+        match token {
+            "--create" => {
+                if create.is_some() {
+                    return SpecCommand::ReverseUsage("--create given twice".to_string());
+                }
+                i += 1;
+                let Some(value) = tokens.get(i) else {
+                    return SpecCommand::ReverseUsage(
+                        "--create requires a value, e.g. --create my-spec".to_string(),
+                    );
+                };
+                create = Some(value.clone());
+            }
+            "--depth" => {
+                if depth.is_some() {
+                    return SpecCommand::ReverseUsage("--depth given twice".to_string());
+                }
+                i += 1;
+                let Some(value) = tokens.get(i) else {
+                    return SpecCommand::ReverseUsage(
+                        "--depth requires a value, e.g. --depth 2".to_string(),
+                    );
+                };
+                depth = Some(value.clone());
+            }
+            "--folder" => {
+                if folder.is_some() {
+                    return SpecCommand::ReverseUsage("--folder given twice".to_string());
+                }
+                i += 1;
+                let Some(value) = tokens.get(i) else {
+                    return SpecCommand::ReverseUsage(
+                        "--folder requires a value, e.g. --folder ./my-app".to_string(),
+                    );
+                };
+                folder = Some(value.clone());
+            }
+            // FR-011: the /new scaffold flags are forwarded verbatim.
+            "--language" | "--type" | "--stack" => {
+                scaffold_flags.push(token.to_string());
+                i += 1;
+                let Some(value) = tokens.get(i) else {
+                    return SpecCommand::ReverseUsage(format!("{token} requires a value"));
+                };
+                scaffold_flags.push(value.clone());
+            }
+            // FR-026: bare hosting flags are forwarded verbatim; their value
+            // and mutual-exclusion rules stay owned by the shared /new parser.
+            "--github" | "--gitlab" => {
+                if !scaffold_flags.is_empty() {
+                    scaffold_flags.push(token.to_string());
+                } else {
+                    // FR-026: the hosting flags are scaffold-only. Without the
+                    // /new scaffold flags there is no recipe, and the shared
+                    // parser would report "missing required flag --language"
+                    // rather than naming the flag actually supplied.
+                    hosting_flags_only.push(token.to_string());
+                }
+            }
+            // A bare word that is not a flag is a stray positional; surfacing
+            // it keeps the invocation from being silently misinterpreted.
+            other if !other.starts_with("--") => {
+                return SpecCommand::ReverseUsage(format!("unexpected argument '{other}'"));
+            }
+            other => {
+                return SpecCommand::ReverseUsage(format!("unknown option '{other}'"));
+            }
+        }
+        i += 1;
+    }
+
+    // FR-026: --folder and the hosting flags are scaffold-only. Without the
+    // /new scaffold flags there is no recipe to scaffold with, and silently
+    // dropping the flag would be worse than refusing it.
+    if scaffold_flags.is_empty() {
+        if let Some(path) = &folder {
+            return SpecCommand::ReverseUsage(format!(
+                "--folder requires --language and --type (it scaffolds like /new): '{path}'"
+            ));
+        }
+        if let Some(flag) = hosting_flags_only.first() {
+            return SpecCommand::ReverseUsage(format!(
+                "{flag} requires --language and --type (it scaffolds like /new)"
+            ));
+        }
+    }
+
+    // A flag tail that fails /new validation keeps the command parseable and
+    // carries the shared parser's own error text, so a
+    // `/spec reverse --language` typo reports the real cause instead of being
+    // dropped by the dispatcher. The `Err` arm folds it into the usage-error
+    // `Unknown("reverse-usage")` form: a `/spec reverse` invocation whose
+    // *first* token is a flag never reaches `parse_reverse` at all (the
+    // subcommand split puts the flag in `sub`), and both shapes must report
+    // the same specific cause via a parser the caller can dispatch on.
+    let mut scaffold: Option<ragent_tools_extended::project_scaffold::ScaffoldRequest> = None;
+    if !scaffold_flags.is_empty() {
+        let flag_refs: Vec<&str> = scaffold_flags.iter().map(String::as_str).collect();
+        match ragent_tools_extended::project_scaffold::parse_flags(&flag_refs) {
+            Ok(request) => scaffold = Some(request),
+            Err(err) => {
+                return SpecCommand::Unknown(format!("reverse-usage: {}", err));
+            }
+        }
+    }
+
+    SpecCommand::Reverse {
+        repo,
+        create,
+        depth,
+        scaffold,
+        folder,
+    }
+}
+
+/// Subcommands that signal missing-argument usage errors via
+/// `Self::Unknown(<name>)`. Kept in one place so [`SpecCommand::parse`]
+/// construction sites and [`SpecCommand::is_usage_error`] stay in sync.
+const USAGE_SUBCOMMANDS: &[&str] = &[
+    "create",
+    "validate",
+    "status",
+    "task",
+    "activate",
+    "coverage",
+    "impl",
+    "add",
+    "delete",
+    "jtbd",
+    "update",
+    "specify",
+    "plan",
+    "tasks",
+    "feedback",
+    "govcreate",
+    "reverse",
+];
+
+/// Maximum length of a feedback note before it is truncated in the append log
+/// line (ANTIPAT L-3).
+const NOTE_LOG_PREVIEW_LEN: usize = 80;
+
+/// Character count kept when a feedback note exceeds [`NOTE_LOG_PREVIEW_LEN`],
+/// leaving room for the trailing `...` inside the same budget.
+const NOTE_LOG_TRUNCATED_LEN: usize = 77;
+
+impl SpecCommand {
+    /// Parse a `/spec` argument string into a command.
+    ///
+    /// The first word is treated as the subcommand; everything after the first
+    /// whitespace is the subcommand-specific payload.
+    pub fn parse(args: &str) -> Self {
+        let (sub, rest) = args
+            .split_once(char::is_whitespace)
+            .map_or((args.trim(), ""), |(s, r)| (s.trim(), r.trim()));
+
+        match sub {
+            "help" | "--help" | "-h" | "" => Self::Help,
+            "create" => {
+                let (specname, feature, from_research, folder) = parse_feature_with_research(rest);
+                if specname.is_empty() || feature.is_empty() {
+                    // Caller should treat this as a usage error.
+                    Self::Unknown("create".to_string())
+                } else if crate::spec::SpecId::new(specname.as_str()).is_none() {
+                    // SEC-ragent-specs-003 (SECTASKS T-065): the name is
+                    // interpolated into the generation prompt and every
+                    // `specs/{specname}/...` site, so validate it exactly like
+                    // `parse_govcreate` does.
+                    Self::Unknown("create".to_string())
+                } else {
+                    Self::Create {
+                        specname,
+                        feature,
+                        from_research,
+                        folder,
+                    }
+                }
+            }
+            "validate" => {
+                let spec_id = rest.trim();
+                if spec_id.is_empty() {
+                    Self::Validate { spec_id: None }
+                } else {
+                    Self::Validate {
+                        spec_id: Some(spec_id.to_string()),
+                    }
+                }
+            }
+            "list" => Self::List {
+                args: rest.trim().to_string(),
+            },
+            "search" => Self::Search {
+                query: rest.trim().to_string(),
+            },
+            "status" => {
+                let trimmed = rest.trim();
+                if trimmed.is_empty() {
+                    Self::Unknown("status".to_string())
+                } else {
+                    let parts: Vec<&str> = trimmed.splitn(2, char::is_whitespace).collect();
+                    Self::Status {
+                        spec_id: parts[0].to_string(),
+                        new_status: parts.get(1).map(|s| s.trim().to_string()),
+                    }
+                }
+            }
+            "task" => {
+                let trimmed = rest.trim();
+                if trimmed.is_empty() {
+                    Self::Unknown("task".to_string())
+                } else {
+                    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                    let spec_id = parts[0].to_string();
+                    let task_id = parts.get(1).map(|s| s.trim().to_string());
+                    let new_status = parts.get(2).map(|s| s.trim().to_string());
+                    Self::Task {
+                        spec_id,
+                        task_id,
+                        new_status,
+                    }
+                }
+            }
+            "activate" => {
+                let spec_id = rest.trim();
+                if spec_id.is_empty() {
+                    Self::Unknown("activate".to_string())
+                } else {
+                    Self::Activate {
+                        spec_id: spec_id.to_string(),
+                    }
+                }
+            }
+            "deactivate" => Self::Deactivate,
+            "coverage" => {
+                let spec_id = rest.trim();
+                if spec_id.is_empty() {
+                    Self::Unknown("coverage".to_string())
+                } else {
+                    Self::Coverage {
+                        spec_id: spec_id.to_string(),
+                    }
+                }
+            }
+            "impl" | "implement" => {
+                // Parse: /spec impl <specname> [--task <ID>] [--dry-run]
+                // Alias: /spec implement <specname> [--task <ID>] [--dry-run]
+                let trimmed = rest.trim();
+                if trimmed.is_empty() {
+                    Self::Unknown("impl".to_string())
+                } else {
+                    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                    let spec_id = parts[0].to_string();
+                    let mut task_id = None;
+                    let mut dry_run = false;
+                    let mut i = 1;
+                    while i < parts.len() {
+                        match parts[i] {
+                            "--task" => {
+                                i += 1;
+                                if let Some(tid) = parts.get(i) {
+                                    task_id = Some(tid.to_string());
+                                }
+                            }
+                            "--dry-run" => {
+                                dry_run = true;
+                            }
+                            _ => {}
+                        }
+                        i += 1;
+                    }
+                    Self::Impl {
+                        spec_id,
+                        task_id,
+                        dry_run,
+                    }
+                }
+            }
+            "add" => {
+                let (spec_id, feature) = rest
+                    .split_once(char::is_whitespace)
+                    .map_or(("", rest), |(s, r)| (s.trim(), r.trim()));
+                if spec_id.is_empty() || feature.is_empty() {
+                    Self::Unknown("add".to_string())
+                } else {
+                    Self::Add {
+                        spec_id: spec_id.to_string(),
+                        feature: feature.to_string(),
+                    }
+                }
+            }
+            "delete" => {
+                let trimmed = rest.trim();
+                if trimmed.is_empty() {
+                    Self::Unknown("delete".to_string())
+                } else {
+                    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                    let spec_id = parts[0].to_string();
+                    let yes = parts.contains(&"--yes");
+                    Self::Delete { spec_id, yes }
+                }
+            }
+            "jtbd" => {
+                // Parse: /spec jtbd <specname> [--force] [--agent <name>]
+                let trimmed = rest.trim();
+                if trimmed.is_empty() {
+                    Self::Unknown("jtbd".to_string())
+                } else {
+                    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                    let spec_id = parts[0].to_string();
+                    let mut force = false;
+                    let mut agent: Option<String> = None;
+                    let mut i = 1;
+                    while i < parts.len() {
+                        match parts[i] {
+                            "--force" => {
+                                force = true;
+                            }
+                            "--agent" => {
+                                i += 1;
+                                if let Some(name) = parts.get(i) {
+                                    agent = Some(name.to_string());
+                                }
+                            }
+                            _ => {}
+                        }
+                        i += 1;
+                    }
+                    Self::Jtbd {
+                        spec_id,
+                        force,
+                        agent,
+                    }
+                }
+            }
+            "update" => {
+                let spec_id = rest.trim();
+                if spec_id.is_empty() {
+                    Self::Unknown("update".to_string())
+                } else {
+                    Self::Update {
+                        spec_id: spec_id.to_string(),
+                    }
+                }
+            }
+            "specify" => {
+                // `--folder` is accepted by the shared parser but only
+                // `/spec create` acts on it; `specify` ignores it.
+                let (specname, feature, from_research, _folder) = parse_feature_with_research(rest);
+                if specname.is_empty() || feature.is_empty() {
+                    Self::Unknown("specify".to_string())
+                } else if crate::spec::SpecId::new(specname.as_str()).is_none() {
+                    // SEC-ragent-specs-003 (SECTASKS T-065): same validation as
+                    // the `create` arm.
+                    Self::Unknown("specify".to_string())
+                } else {
+                    Self::Specify {
+                        specname,
+                        feature,
+                        from_research,
+                    }
+                }
+            }
+            "plan" => {
+                let (spec_id, tech_context) = rest
+                    .split_once(char::is_whitespace)
+                    .map_or(("", rest), |(s, r)| (s.trim(), r.trim()));
+                if spec_id.is_empty() || tech_context.is_empty() {
+                    Self::Unknown("plan".to_string())
+                } else {
+                    Self::Plan {
+                        spec_id: spec_id.to_string(),
+                        tech_context: tech_context.to_string(),
+                    }
+                }
+            }
+            "tasks" => {
+                let spec_id = rest.trim();
+                if spec_id.is_empty() {
+                    Self::Unknown("tasks".to_string())
+                } else {
+                    Self::Tasks {
+                        spec_id: spec_id.to_string(),
+                    }
+                }
+            }
+            "feedback" => {
+                let (spec_id, note) = rest
+                    .split_once(char::is_whitespace)
+                    .map_or(("", rest), |(s, r)| (s.trim(), r.trim()));
+                if spec_id.is_empty() || note.is_empty() {
+                    Self::Unknown("feedback".to_string())
+                } else {
+                    Self::Feedback {
+                        spec_id: spec_id.to_string(),
+                        note: note.to_string(),
+                    }
+                }
+            }
+            "govcreate" => parse_govcreate(rest),
+            "reverse" => parse_reverse(rest),
+            // A `/spec reverse` invocation whose *first* token after `reverse`
+            // is a flag (no `<repo>` positional) never reaches `parse_reverse`:
+            // the subcommand split puts that flag in `sub`. Route it into the
+            // dedicated usage form so the caller reports the real cause instead
+            // of silently dropping the command. The `reverse` name itself is
+            // handled above, so `starts_with` cannot shadow it.
+            other if other.starts_with("reverse") => {
+                let hint = if other.starts_with("--") {
+                    format!(
+                        "the first argument after `/spec reverse` must be `<repo>`, got '{other}'"
+                    )
+                } else {
+                    format!("unexpected argument '{other}'")
+                };
+                Self::Unknown(format!("reverse-usage: {hint}"))
+            }
+            other => Self::Unknown(other.to_string()),
+        }
+    }
+
+    /// Returns `true` if this is a usage-error variant.
+    ///
+    /// Usage errors are represented as `Unknown(<subcommand>)` where the
+    /// subcommand is one that exists but was given missing arguments; the
+    /// accepted names come from `USAGE_SUBCOMMANDS` so they cannot drift
+    /// from the subcommands parsed above. A `/spec govcreate` invocation that
+    /// parsed but failed validation (bad spec ID or bad `/new` flags) is also a
+    /// usage error, reported as [`SpecCommand::GovCreateUsage`], and a
+    /// `/spec reverse` invocation that failed validation is reported as
+    /// [`SpecCommand::ReverseUsage`] or as the `Unknown("reverse-usage: ...")`
+    /// form when the failure was detected before a repo positional was seen.
+    #[must_use]
+    pub fn is_usage_error(&self) -> bool {
+        matches!(self, Self::GovCreateUsage(_) | Self::ReverseUsage(_))
+            || matches!(self, Self::Unknown(s) if USAGE_SUBCOMMANDS.contains(&s.as_str())
+                || s.starts_with("reverse-usage"))
+    }
+
+    /// Build the static help message shown by `/spec help`.
+    #[must_use]
+    pub const fn build_help_message() -> &'static str {
+        "From: /spec help\n\
+                    ## /spec command reference\n\n\
+                    | Command | Arguments | Description |\n\
+                    |---|---|---|\n\
+                    | `/spec help` | none | Show this command reference table. |\n\
+                    | `/spec create <specname> <feature description> [--from-research <name>]` | required `specname` + `feature description`, optional `--from-research` | Generate `specs/<specname>/SPEC.md` (EARS spec) and `specs/<specname>/PLAN.md` (implementation plan). `--from-research` pre-populates a `## Related Research` section. |\n\
+                    | `/spec govcreate <specid> <content-ref> <target-folder> [--language <lang>] [--type <type>] [--stack <name>] [--github \\| --gitlab] [--force]` | required `specid` + `content-ref` + `target-folder`, optional `/new` flags and `--force` | Create a project from an architecture document: acquire the URL or local file/folder content, extract the architecture structure, author `SPEC.md`/`PLAN.md`/`TESTPLAN.md` into `<target-folder>/specs/<specid>/`, and scaffold the project with the `/new` engine (see `/spec govcreate help` for the full usage block). Example: `/spec govcreate payments-arch https://docs.example.gov/arch ./payments-svc --language rust --type cmdline --stack axum` |\n\
+                    | `/spec reverse <repo> [--create <name>] [--depth <N>] [--language <lang> --type <type> [--stack <name>]] [--folder <path>] [--github \\| --gitlab]` | required `repo`, optional `--create` + `--depth` + the `/new` scaffold flags | Reverse-engineer a public GitHub/GitLab repository into a synthetic creation prompt; with the `/new` scaffold flags it also scaffolds the target project (`--folder`, default: the current directory) and, with `--github`/`--gitlab`, creates a private remote and pushes. `--language rust --type crate` is the additive form: it writes `crates/<name>/` into the current Cargo workspace and registers the member instead of scaffolding a new project root, so no existing project file is rewritten. Example: `/spec reverse acme/widget --language rust --type crate --folder crates/widget --create widget-spec` adds `crates/widget/` to the workspace this command runs in and writes the generated spec to `crates/widget/specs/widget-spec/`. |\n\
+                    | `/spec add <spec-id> <feature description>` | required `spec-id` + `feature description` | Incrementally add requirements to an existing spec and update its plan. |\n\
+                    | `/spec delete <spec-id> [--yes]` | required `spec-id`, optional `--yes` | Delete a spec directory. Use `--yes` to skip the confirmation prompt. |\n\
+                    | `/spec validate [specname]` | optional `specname` | Validate EARS compliance. Without argument, validates all specs. |\n\
+                    | `/spec list [--status <status>] [--prefix <prefix>]` | optional filters | List all specs with optional filtering by status or ID prefix. |\n\
+                    | `/spec search <query>` | required `query` | Full-text search across all specs. |\n\
+                    | `/spec status <spec-id> [<new-status>]` | required `spec-id`, optional `new-status` | Show current status or transition to a new status. |\n\
+                    | `/spec task <spec-id> [<task-id>] [<new-status>]` | required `spec-id`, optional `task-id` and `new-status` | List tasks, show a task, or update its status. |\n\
+                    | `/spec activate <spec-id>` | required `spec-id` | Activate a spec for context injection into agent prompts. |\n\
+                    | `/spec deactivate` | none | Deactivate the currently active spec. |\n\
+                    | `/spec coverage <spec-id>` | required `spec-id` | Show requirement coverage report. |\n\
+                    | `/spec impl <spec-id> [--task <ID>] [--dry-run]` | required `spec-id`, optional flags | Implement a spec by executing its PLAN.md tasks in dependency order. Use `--task` to run a single task, `--dry-run` to preview the plan. Alias: `/spec implement`. |\n\
+                    | `/spec jtbd <spec-id> [--force] [--agent <name>]` | required `spec-id`, optional `--force` and `--agent` | Perform a Jobs-To-Be-Done analysis of `specs/<spec-id>/SPEC.md` and write `specs/<spec-id>/JTBD.md`. Use `--force` to overwrite an existing file, `--agent <name>` to dispatch to a specific agent. |\n\
+                    | `/spec update <spec-id>` | required `spec-id` | Re-read the existing `SPEC.md` and regenerate `PLAN.md` and `TESTPLAN.md` from its current content. |\n\
+                    | `/spec specify <specname> <feature description> [--from-research <name>]` | required `specname` + `feature description`, optional `--from-research` | Generate `specs/<specname>/SPEC.md` only (EARS spec with requirements and `[NEEDS CLARIFICATION]` markers). Does NOT generate PLAN.md - use `/spec plan` after clarification. When `sdd.branch_per_spec` is enabled, also creates a `spec/<specname>` git branch. `--from-research` links the spec to a research artifact via YAML frontmatter. |\n\
+                    | `/spec plan <spec-id> <tech-context>` | required `spec-id` + `tech-context` | Generate (or regenerate) `specs/<spec-id>/PLAN.md` from the existing `SPEC.md` using the provided technology context as guidance. Coexists with `/spec update` which regenerates from an edited `SPEC.md` without tech context. |\n\
+                    | `/spec tasks <spec-id>` | required `spec-id` | Generate `specs/<spec-id>/TASKS.md` containing an ordered task list derived from the existing `PLAN.md`, plus `specs/<spec-id>/quickstart.md` with key validation scenarios derived from `SPEC.md`. |\n\
+                    | `/spec feedback <spec-id> <note>` | required `spec-id` + `note` | Append a production feedback note to `specs/<spec-id>/FEEDBACK.md`. Notes are advisory and surfaced during `/spec plan` regeneration. |\n\
+                    Example: `/spec create websocket Add a real-time collaborative editing feature using WebSockets --from-research realtime-collab`"
+    }
+    /// Build the user-facing status string for a create operation.
+    #[must_use]
+    pub fn build_create_status(specname: &str) -> String {
+        format!(
+            "spec: writing specs/{specname}/SPEC.md + specs/{specname}/PLAN.md + \
+             specs/{specname}/TESTPLAN.md..."
+        )
+    }
+
+    /// Build the assistant message shown when a spec generation starts.
+    #[must_use]
+    pub fn build_create_message(specname: &str) -> String {
+        format!(
+            "From: /spec\n[note] **Generating specification and plan...**\n\n\
+             Creating spec directory `specs/{specname}` with:\n\
+             - `specs/{specname}/SPEC.md` - EARS requirements specification\n\
+             - `specs/{specname}/PLAN.md` - implementation plan with tasks\n\
+             - `specs/{specname}/TESTPLAN.md` - manual test plan with test cases\n\n\
+             This may take a few moments.\n\
+             [!] **Tip:** After creation, you can validate with `/spec validate {specname}`."
+        )
+    }
+
+    /// Build the log entry for a create operation.
+    #[must_use]
+    pub fn build_create_log(specname: &str, feature: &str) -> String {
+        format!(
+            "Creating spec '{specname}' for feature: {feature} -> specs/{specname}/SPEC.md, \
+             specs/{specname}/PLAN.md, specs/{specname}/TESTPLAN.md"
+        )
+    }
+
+    /// Build the prompt sent to the explore agent for spec generation.
+    ///
+    /// When `from_research` is `Some(name)`, the prompt instructs the agent
+    /// to include a `research:` field in the SPEC.md YAML frontmatter linking
+    /// to the named research artifact (FR-010) and a `## Related Research`
+    /// section in the SPEC.md body (T-020).
+    #[must_use]
+    pub fn build_create_prompt(
+        specname: &str,
+        feature: &str,
+        from_research: Option<&str>,
+    ) -> String {
+        let research_frontmatter = Self::build_research_frontmatter_instruction(from_research);
+        let research_section = Self::build_research_section_instruction(from_research);
+        format!(
+            r"You are an expert specification writer. Create a specification and implementation plan for the following feature.
+          
+                         **Feature:** {feature}
+          
+                         **Spec ID:** {specname}
+          
+                         Write the following files:
+          
+                         1. `specs/{specname}/SPEC.md` - A requirements specification using EARS notation:
+                            - Use at least one of each EARS template: ubiquitous, event-driven, state-driven, optional, unwanted
+                            - Number requirements as FR-001, FR-002, etc.
+                            - Include a '## Requirements' section
+                            - Start with YAML frontmatter containing `status: draft`{research_frontmatter}{research_section}                          2. `specs/{specname}/PLAN.md` - An implementation plan with:
+                              - A '## Tasks' section with a markdown table
+                              - Columns: ID, Title, Requirement, Effort, Priority, Status, Dependencies
+                              - Task IDs as T-001, T-002, etc.
+                              - Link each task to relevant requirements
+                              - Effort values: S, M, L
+                              - Priority values: Critical, High, Medium, Low
+                              - Status values: Pending (set all new tasks to Pending)
+          
+                         3. `specs/{specname}/TESTPLAN.md` - A **manual** test plan (human-readable, not automated test code):
+                            - Start with YAML frontmatter containing `status: draft`
+                            - A `## Test Cases` section with one or more manual test cases
+                            - Each test case has an ID (`TC-001`, `TC-002`, ...), a title, preconditions, step-by-step instructions, test data to enter, and expected results
+                            - When the feature involves user-interface navigation, enumerate every UI navigation step (keys pressed, menus opened, dialogs interacted with) and the exact data to enter into each field
+                            - You MAY include a `## Prerequisites` section listing environment setup, provider configuration, or sample files needed before the manual tests can be executed
+                            - You MAY include a `## Cleanup` section describing teardown steps to run after the manual tests complete
+                            - Do NOT include automated test code, `#[test]` functions, or references to `cargo test`; this is a manual test plan only
+          
+                         Use the `Write` tool to create all three files. Ensure the spec is clear, testable, and complete."
+        )
+    }
+
+    // -- Specify helpers (FR-001) --
+
+    /// Build the user-facing status string for a specify operation.
+    #[must_use]
+    pub fn build_specify_status(specname: &str) -> String {
+        format!("spec: writing specs/{specname}/SPEC.md...")
+    }
+
+    /// Build the assistant message shown when a specify operation starts.
+    #[must_use]
+    pub fn build_specify_message(specname: &str) -> String {
+        format!(
+            "From: /spec specify\n[note] **Generating specification...**\n\n\
+       Creating spec directory `specs/{specname}` with:\n\
+       - `specs/{specname}/SPEC.md` - EARS requirements specification\n\n\
+       No PLAN.md is generated at this stage. After reviewing and resolving \
+       any `[NEEDS CLARIFICATION]` markers, use `/spec plan {specname} \
+       <tech-context>` to generate the implementation plan.\n\n\
+       This may take a few moments."
+        )
+    }
+
+    /// Build the log entry for a specify operation.
+    #[must_use]
+    pub fn build_specify_log(specname: &str, feature: &str) -> String {
+        format!(
+            "Specifying '{specname}' for feature: {feature} -> specs/{specname}/SPEC.md (no PLAN.md)"
+        )
+    }
+
+    /// Build the prompt sent to the explore agent for SPEC.md-only generation.
+    ///
+    /// Unlike `build_create_prompt`, this prompt instructs the agent to write
+    /// **only** `SPEC.md` - no `PLAN.md` or `TESTPLAN.md`. It also directs the
+    /// agent to insert `[NEEDS CLARIFICATION: <question>]` markers wherever a
+    /// requirement is ambiguous, matching FR-002.
+    ///
+    /// When `from_research` is `Some(name)`, the prompt instructs the agent
+    /// to include a `research:` field in the SPEC.md YAML frontmatter linking
+    /// to the named research artifact (FR-010) and a `## Related Research`
+    /// section in the SPEC.md body (T-020).
+    #[must_use]
+    pub fn build_specify_prompt(
+        specname: &str,
+        feature: &str,
+        from_research: Option<&str>,
+    ) -> String {
+        let research_frontmatter = Self::build_research_frontmatter_instruction(from_research);
+        let research_section = Self::build_research_section_instruction(from_research);
+        format!(
+            r"You are an expert specification writer. Create a SPECIFICATION ONLY (no implementation plan) for the following feature.
+
+**Feature:** {feature}
+
+**Spec ID:** {specname}
+
+Write the following file:
+
+1. `specs/{specname}/SPEC.md` - A requirements specification using EARS notation:
+   - Use at least one of each EARS template: ubiquitous, event-driven, state-driven, optional, unwanted
+   - Number requirements as FR-001, FR-002, etc.
+   - Include a '## Requirements' section
+   - Start with YAML frontmatter containing `status: draft`{research_frontmatter}{research_section}
+   - Where a requirement is ambiguous or lacks sufficient detail, insert a `[NEEDS CLARIFICATION: <question>]` marker on the line immediately after the requirement so it can be detected by `/spec validate`.
+
+Do NOT create `PLAN.md`, `TESTPLAN.md`, or any other file. Only write `specs/{specname}/SPEC.md`.
+
+Use the `Write` tool to create the file. Ensure the spec is clear, testable, and complete."
+        )
+    }
+
+    // -- Branch helpers (FR-009) --
+
+    /// Build the user-facing message for a branch-creation result.
+    ///
+    /// Returns a short one-line summary suitable for appending to the
+    /// assistant message after the specify prompt has been queued.
+    #[must_use]
+    pub fn build_branch_message(result: &crate::git::BranchResult) -> String {
+        use crate::git::BranchResult;
+        match result {
+            BranchResult::Created { branch_name } => {
+                format!(
+                    "[branch] **Git branch created:** `{branch_name}` - spec work is now \
+                     isolated on this branch."
+                )
+            }
+            BranchResult::NotARepo => {
+                "[i] Not a git repository - skipping branch creation.".to_string()
+            }
+            BranchResult::AlreadyExists { branch_name } => {
+                format!("[i] Branch `{branch_name}` already exists - reusing existing branch.")
+            }
+            BranchResult::Failed { msg } => {
+                format!("[!] Could not create git branch: {msg}")
+            }
+        }
+    }
+
+    /// Build the log entry for a branch-creation result.
+    #[must_use]
+    pub fn build_branch_log(specname: &str, result: &crate::git::BranchResult) -> String {
+        use crate::git::BranchResult;
+        match result {
+            BranchResult::Created { branch_name } => {
+                format!("Created git branch '{branch_name}' for spec '{specname}'")
+            }
+            BranchResult::NotARepo => {
+                format!("No git repo found - skipped branch creation for spec '{specname}'")
+            }
+            BranchResult::AlreadyExists { branch_name } => {
+                format!("Branch '{branch_name}' already exists for spec '{specname}'")
+            }
+            BranchResult::Failed { msg } => {
+                format!("Branch creation failed for spec '{specname}': {msg}")
+            }
+        }
+    }
+
+    // -- Research linking helpers (FR-010) --
+
+    /// Build the YAML frontmatter instruction for linking a research artifact.
+    ///
+    /// When `from_research` is `Some(name)`, returns a prompt instruction
+    /// telling the agent to add a `research:` field to the SPEC.md YAML
+    /// frontmatter. When `None`, returns an empty string so the prompt is
+    /// unchanged for specs without a research link.
+    #[must_use]
+    pub fn build_research_frontmatter_instruction(from_research: Option<&str>) -> String {
+        match from_research {
+            Some(name) => format!(
+                "\n                              - Include a `research:` field in the \
+                 frontmatter linking to this research artifact:\n                                \
+                 `research: [\"{name}\"]`"
+            ),
+            None => String::new(),
+        }
+    }
+
+    /// Build the prompt instruction for a `## Related Research` body section
+    /// (FR-010, T-020).
+    ///
+    /// When `from_research` is `Some(name)`, returns a prompt instruction
+    /// telling the agent to include a `## Related Research` section in the
+    /// SPEC.md body that references the research artifact. When `None`,
+    /// returns an empty string so the prompt is unchanged for specs without a
+    /// research link.
+    #[must_use]
+    pub fn build_research_section_instruction(from_research: Option<&str>) -> String {
+        match from_research {
+            Some(name) => format!(
+                "\n                              - Include a `## Related Research` section \
+                 in the body of SPEC.md referencing the research artifact:\n                                \
+                 `This spec was informed by [`{name}`](../research/{name}/RESEARCH.md).`"
+            ),
+            None => String::new(),
+        }
+    }
+
+    // -- Plan helpers (FR-004) --
+
+    /// Build the user-facing status string for a plan generation operation.
+    #[must_use]
+    pub fn build_plan_status(spec_id: &str) -> String {
+        format!("spec: writing specs/{spec_id}/PLAN.md...")
+    }
+
+    /// Build the assistant message shown when a plan generation starts.
+    ///
+    /// When `data_model_enabled` is `true`, the message also notes that a
+    /// `data-model.md` artifact may be generated if the spec involves data
+    /// entities (FR-011).  When `contracts_enabled` is `true`, the message
+    /// notes that a `contracts/` directory may be generated if the spec
+    /// defines API endpoints or inter-service contracts (FR-012).  When
+    /// `feedback_enabled` is `true`, the message notes that production
+    /// feedback notes from `FEEDBACK.md` will be considered during plan
+    /// regeneration (FR-017).
+    #[must_use]
+    pub fn build_plan_message(
+        spec_id: &str,
+        tech_context: &str,
+        data_model_enabled: bool,
+        contracts_enabled: bool,
+        feedback_enabled: bool,
+    ) -> String {
+        let data_model_note = if data_model_enabled {
+            "\n\
+             If the spec involves data entities, a `data-model.md` will also be \
+             generated describing the domain data models."
+        } else {
+            ""
+        };
+        let contracts_note = if contracts_enabled {
+            "\n\
+             If the spec defines API endpoints or inter-service contracts, a \
+             `contracts/` directory will also be generated with individual contract \
+             definition files."
+        } else {
+            ""
+        };
+        let feedback_note = if feedback_enabled {
+            "\n\
+             Production feedback notes from `FEEDBACK.md` will be considered \
+             during plan regeneration."
+        } else {
+            ""
+        };
+        format!(
+            "From: /spec plan\n[notice] **Generating implementation plan...**\n\n\
+             Reading `specs/{spec_id}/SPEC.md` and generating `specs/{spec_id}/PLAN.md` \
+             using the provided technology context:\n\
+             > {tech_context}\n\n\
+             If an existing PLAN.md is present, task statuses for unchanged task IDs \
+             will be preserved.{data_model_note}{contracts_note}{feedback_note}\n\n\
+             This may take a few moments."
+        )
+    }
+
+    /// Build the log entry for a plan generation operation.
+    #[must_use]
+    pub fn build_plan_log(spec_id: &str, tech_context: &str) -> String {
+        format!(
+            "Generating PLAN.md for spec '{spec_id}' from SPEC.md + tech context: \
+             {tech_context} -> specs/{spec_id}/PLAN.md"
+        )
+    }
+
+    /// Build the prompt sent to the explore agent for PLAN.md generation.
+    ///
+    /// Unlike `build_update_prompt`, this prompt accepts a technology-context
+    /// argument that informs technology choices and rationale documented in the
+    /// plan. The existing `SPEC.md` content is included so the agent generates a
+    /// plan matching the current requirements. If `plan_md` is non-empty, the
+    /// agent is instructed to preserve task statuses for unchanged task IDs.
+    ///
+    /// When `data_model_enabled` is `true`, the prompt also instructs the agent
+    /// to generate an optional `data-model.md` artifact if the spec involves
+    /// data entities (FR-011).  When `contracts_enabled` is `true`, the prompt
+    /// instructs the agent to generate an optional `contracts/` directory if
+    /// the spec defines API endpoints or inter-service contracts (FR-012).
+    /// When `feedback_md` is non-empty, the prompt includes production feedback
+    /// notes from `FEEDBACK.md` and instructs the agent to consider them during
+    /// plan regeneration (FR-017).
+    ///
+    /// # Arguments
+    ///
+    /// * `spec_id` - The spec identifier (directory name under `specs/`).
+    /// * `tech_context` - Free-text technology context guiding plan decisions.
+    /// * `spec_md` - The current `SPEC.md` content.
+    /// * `plan_md` - The current `PLAN.md` content (may be empty if none exists).
+    /// * `data_model_enabled` - When `true`, append a data-model.md generation
+    ///   instruction to the prompt (gated by `sdd.data_model` config flag).
+    /// * `contracts_enabled` - When `true`, append a contracts/ directory
+    ///   generation instruction to the prompt (gated by `sdd.contracts` flag).
+    /// * `feedback_md` - Production feedback notes from `FEEDBACK.md`. When
+    ///   non-empty, the notes are included in the prompt and the agent is
+    ///   instructed to address them in the regenerated plan (FR-017).
+    #[must_use]
+    pub fn build_plan_prompt(
+        spec_id: &str,
+        tech_context: &str,
+        spec_md: &str,
+        plan_md: &str,
+        data_model_enabled: bool,
+        contracts_enabled: bool,
+        feedback_md: &str,
+    ) -> String {
+        let preservation_note = if plan_md.trim().is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n\n**Existing PLAN.md content (preserve task statuses for unchanged IDs):**\n\n\
+                 {plan_md}\n"
+            )
+        };
+        let task_id_rule = if plan_md.trim().is_empty() {
+            "Task IDs as T-001, T-002, etc.".to_string()
+        } else {
+            "Task IDs as T-001, T-002, etc. Preserve the existing task IDs and their \
+             statuses where the task is unchanged; only add new tasks with the next \
+             available ID."
+                .to_string()
+        };
+        let data_model_instruction = if data_model_enabled {
+            Self::build_data_model_instruction(spec_id)
+        } else {
+            String::new()
+        };
+        let contracts_instruction = if contracts_enabled {
+            Self::build_contracts_instruction(spec_id)
+        } else {
+            String::new()
+        };
+        let feedback_instruction = if !feedback_md.trim().is_empty() {
+            Self::build_feedback_instruction(spec_id, feedback_md)
+        } else {
+            String::new()
+        };
+        format!(
+            r"You are an expert software architect. Generate an implementation plan from an existing specification and a technology context.
+
+**Spec ID:** {spec_id}
+
+**Technology context:** {tech_context}
+
+**Existing SPEC.md content:**
+
+{spec_md}{preservation_note}
+
+Write `specs/{spec_id}/PLAN.md` with:
+
+1. A `## Tasks` section with a markdown table.
+2. Columns: ID, Title, Requirement, Effort, Priority, Status, Dependencies.
+3. {task_id_rule}
+4. Link each task to relevant FR-NNN / NFR-NNN requirement IDs from the SPEC.md.
+5. Effort values: S, M, L.
+6. Priority values: Critical, High, Medium, Low.
+7. Set the Status column to `Pending` for every new task.
+8. A `## Technology Choices` section documenting the key technology decisions informed by the technology context above, with rationale.
+
+Do NOT modify `SPEC.md` or any other file. Only write `specs/{spec_id}/PLAN.md`.{data_model_instruction}{contracts_instruction}{feedback_instruction}
+
+Use the `Write` tool to create the file. Ensure the plan is clear, actionable, and complete."
+        )
+    }
+
+    // -- Data-model helpers (FR-011, T-021) --
+
+    /// Build the prompt instruction for optional `data-model.md` generation.
+    ///
+    /// Returns an instruction appended to the `/spec plan` prompt telling the
+    /// agent to analyse the SPEC.md for data entities and, if any are
+    /// identified, write a `data-model.md` file describing the domain data
+    /// models. When no data entities are present the file is not created
+    /// (FR-011).
+    ///
+    /// # Arguments
+    ///
+    /// * `spec_id` - The spec identifier (directory name under `specs/`).
+    #[must_use]
+    pub fn build_data_model_instruction(spec_id: &str) -> String {
+        format!(
+            "\n\nAdditionally, analyse the SPEC.md for data entities (domain objects, \
+             persistent state, message payloads, configuration structures). If \
+             data entities are identified, also write `specs/{spec_id}/data-model.md` \
+             with:\n\
+             \n  - A `## Entities` section listing each entity with its name, \
+             description, and key attributes.\n  - A `## Relationships` section \
+             describing how entities relate to each other.\n  - A `## Constraints` \
+             section documenting any data integrity rules or invariants.\n\
+             \nIf no data entities are identified, do NOT create `data-model.md`."
+        )
+    }
+
+    // -- Contracts helpers (FR-012, T-022) --
+
+    /// Build the prompt instruction for optional `contracts/` directory
+    /// generation.
+    ///
+    /// Returns an instruction appended to the `/spec plan` prompt telling the
+    /// agent to analyse the SPEC.md for API endpoints or inter-service
+    /// contracts and, if any are identified, create a `contracts/` directory
+    /// with individual contract definition files. When no API endpoints or
+    /// contracts are present the directory is not created (FR-012).
+    ///
+    /// # Arguments
+    ///
+    /// * `spec_id` - The spec identifier (directory name under `specs/`).
+    #[must_use]
+    pub fn build_contracts_instruction(spec_id: &str) -> String {
+        format!(
+            "\n\nAdditionally, analyse the SPEC.md for API endpoints or inter-service \
+             contracts (REST routes, gRPC services, event topics, message queues, \
+             inter-process interfaces). If any are identified, also create a \
+             `specs/{spec_id}/contracts/` directory with individual contract \
+             definition files, one per endpoint or contract. Each contract file \
+             shall document:\n  - The contract name and type (REST, gRPC, event, \
+             etc.).\n  - Request/response schemas or message payloads with field \
+             names, types, and descriptions.\n  - Error codes or failure modes.\n  \
+             - Authentication and authorisation requirements.\n\nIf no API endpoints \
+             or inter-service contracts are identified, do NOT create the \
+             `contracts/` directory."
+        )
+    }
+
+    // -- Feedback surfacing helpers (FR-017, T-033) --
+
+    /// Build the prompt instruction for surfacing production feedback notes
+    /// during plan regeneration.
+    ///
+    /// Returns an instruction appended to the `/spec plan` prompt that embeds
+    /// the `FEEDBACK.md` content and tells the agent to consider the notes
+    /// when generating or regenerating the plan. The agent is instructed to
+    /// address each feedback note by adding or adjusting tasks as needed
+    /// (FR-017).
+    ///
+    /// # Arguments
+    ///
+    /// * `spec_id` - The spec identifier (directory name under `specs/`).
+    /// * `feedback_md` - The contents of `FEEDBACK.md` (production metrics,
+    ///   incident reports, user feedback notes).
+    #[must_use]
+    pub fn build_feedback_instruction(spec_id: &str, feedback_md: &str) -> String {
+        format!(
+            "\n\n**Production feedback notes from `specs/{spec_id}/FEEDBACK.md`:**\n\n\
+             {feedback_md}\n\n\
+             Consider the above production feedback notes when generating the \
+             plan. Where a feedback note identifies an issue, gap, or improvement \
+             opportunity, add or adjust tasks to address it. Reference the \
+             relevant feedback note in the task's rationale where applicable."
+        )
+    }
+
+    // -- Tasks helpers (FR-005, T-006, FR-013, T-023) --
+
+    /// Build the user-facing status string for a tasks extraction operation.
+    #[must_use]
+    pub fn build_tasks_status(spec_id: &str) -> String {
+        format!("spec: extracting specs/{spec_id}/TASKS.md from PLAN.md...")
+    }
+
+    /// Build the assistant message shown when a tasks extraction starts.
+    #[must_use]
+    pub fn build_tasks_message(spec_id: &str) -> String {
+        format!(
+            "From: /spec tasks\n[notice] **Extracting task list...**\n\n\
+             Reading `specs/{spec_id}/PLAN.md` and generating a standalone \
+             `specs/{spec_id}/TASKS.md` with the ordered task table. \
+             Also generating `specs/{spec_id}/quickstart.md` with key \
+             validation scenarios from `SPEC.md`.\n\n\
+             This is a deterministic extraction - no LLM call required."
+        )
+    }
+
+    /// Build the log entry for a tasks extraction operation.
+    #[must_use]
+    pub fn build_tasks_log(spec_id: &str) -> String {
+        format!(
+            "Extracting TASKS.md for spec '{spec_id}' from PLAN.md -> \
+             specs/{spec_id}/TASKS.md"
+        )
+    }
+
+    /// Build the completion message shown after TASKS.md and quickstart.md are
+    /// written (FR-013, T-023).
+    #[must_use]
+    pub fn build_tasks_completion_message(spec_id: &str, task_count: usize) -> String {
+        format!(
+            "From: /spec tasks\n[ok] **TASKS.md + quickstart.md generated** - \
+             `specs/{spec_id}/TASKS.md` contains {task_count} task(s) \
+             extracted from `PLAN.md`. `specs/{spec_id}/quickstart.md` \
+             contains key validation scenarios derived from `SPEC.md`."
+        )
+    }
+
+    /// Build the error message shown when PLAN.md has no parseable tasks.
+    #[must_use]
+    pub fn build_tasks_no_tasks_error(spec_id: &str) -> String {
+        format!(
+            "From: /spec tasks\n\n**Error:** `specs/{spec_id}/PLAN.md` does \
+             not contain a valid `## Tasks` table. Ensure the plan has been \
+             generated first (e.g. via `/spec plan {spec_id} <tech-context>` \
+             or `/spec create`)."
+        )
+    }
+
+    /// Build the error message shown when PLAN.md is missing.
+    #[must_use]
+    pub fn build_tasks_no_plan_error(spec_id: &str) -> String {
+        format!(
+            "From: /spec tasks\n\n**Error:** `specs/{spec_id}/PLAN.md` not \
+             found. Generate a plan first using `/spec plan {spec_id} \
+             <tech-context>` or `/spec create {spec_id} <feature>`."
+        )
+    }
+
+    /// Generate the standalone `TASKS.md` content from a PLAN.md's task table.
+    ///
+    /// Parses the `## Tasks` section from `plan_md` using [`PlanParser`](crate::plan_parser::PlanParser) and
+    /// formats the parsed tasks into a standalone markdown file with a header,
+    /// the task table, and a footer noting the source.
+    ///
+    /// # Arguments
+    ///
+    /// * `spec_id` - The spec identifier (directory name under `specs/`).
+    /// * `title` - The spec title (extracted from SPEC.md H1).
+    /// * `plan_md` - The raw `PLAN.md` content.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(Some(tasks_md))` if tasks were found and formatted; `Ok(None)` if the
+    /// PLAN.md legitimately contains no task table; `Err` if a task table is
+    /// present but malformed, so a parse error is distinguishable from "no
+    /// tasks" (FUNC-024).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SpecError::PlanParse`](crate::error::SpecError::PlanParse) when the `## Tasks` table exists but
+    /// cannot be parsed.
+    pub fn build_tasks_md(
+        spec_id: &str,
+        title: &str,
+        plan_md: &str,
+    ) -> std::result::Result<Option<String>, crate::error::SpecError> {
+        let tasks = match crate::plan_parser::PlanParser::parse(plan_md) {
+            Ok(tasks) => tasks,
+            Err(e) => {
+                // `parse` returns an error both for "zero rows in a present
+                // table" and for a genuinely absent section. Only the latter is
+                // "no tasks" - surface the former so a malformed PLAN.md is not
+                // silently treated as having no tasks (FUNC-024).
+                if plan_md.contains("## Tasks") || plan_md.contains("### Tasks") {
+                    return Err(e);
+                }
+                return Ok(None);
+            }
+        };
+        if tasks.is_empty() {
+            return Ok(None);
+        }
+
+        let mut md = String::new();
+        md.push_str("# Tasks\n\n");
+        md.push_str(&format!("> Derived from `specs/{spec_id}/PLAN.md`\n\n"));
+        if !title.is_empty() {
+            md.push_str(&format!("**Spec:** {title}\n\n"));
+        }
+
+        md.push_str("## Task Table\n\n");
+        md.push_str("| ID | Title | Requirement | Effort | Priority | Status | Dependencies |\n");
+        md.push_str("|---|---|---|---|---|---|---|\n");
+
+        for task in &tasks {
+            md.push_str(&task.table_row());
+            md.push('\n');
+        }
+
+        md.push_str("\n---\n\n");
+        md.push_str(
+            "*This file was generated by `/spec tasks` from the \
+                      `## Tasks` table in `PLAN.md`. Edit `PLAN.md` and \
+                      re-run `/spec tasks` to update.*\n",
+        );
+
+        Ok(Some(md))
+    }
+
+    /// Generate the standalone `quickstart.md` containing key validation
+    /// scenarios derived from the spec's acceptance criteria (FR-013, T-023).
+    ///
+    /// Parses the requirements from `spec_md` using
+    /// `validate::parse_requirements` and formats each requirement into a
+    /// concise smoke-test scenario. The output is a standalone markdown file
+    /// intended for quick validation, distinct from the full `TESTPLAN.md`.
+    ///
+    /// # Arguments
+    ///
+    /// * `spec_id` - The spec identifier (directory name under `specs/`).
+    /// * `title` - The spec title (extracted from SPEC.md H1).
+    /// * `spec_md` - The raw `SPEC.md` content containing the requirements.
+    ///
+    /// # Returns
+    ///
+    /// `Some(quickstart_md)` if requirements were found, or `None` if the
+    /// SPEC.md contains no parseable requirements.
+    #[must_use]
+    pub fn build_quickstart_md(spec_id: &str, title: &str, spec_md: &str) -> Option<String> {
+        let reqs = crate::validate::parse_requirements(spec_md);
+        if reqs.is_empty() {
+            return None;
+        }
+
+        let mut md = String::new();
+        md.push_str("# Quickstart Validation Scenarios\n\n");
+        md.push_str(&format!("> Derived from `specs/{spec_id}/SPEC.md`\n\n"));
+        if !title.is_empty() {
+            md.push_str(&format!("**Spec:** {title}\n\n"));
+        }
+
+        md.push_str(
+            "These smoke-test scenarios verify the key acceptance criteria from \
+             the spec. Run through them after implementation to confirm the \
+             core functionality works before executing the full \
+             `TESTPLAN.md`.\n\n",
+        );
+
+        md.push_str("## Scenarios\n\n");
+
+        for req in &reqs {
+            md.push_str(&format!("### {}\n", req.id));
+            md.push_str(&format!("**{}**\n\n", req.title));
+            if !req.ears_text.is_empty() {
+                md.push_str(&format!("Verify that: {}\n\n", req.ears_text));
+            } else {
+                md.push_str("Verify that the requirement is satisfied.\n\n");
+            }
+        }
+
+        md.push_str("---\n\n");
+        md.push_str(
+            "*This file was generated by `/spec tasks` from the requirements \
+             in `SPEC.md`. Edit `SPEC.md` and re-run `/spec tasks` to \
+             update.*\n",
+        );
+
+        Some(md)
+    }
+
+    // -- Add helpers --
+
+    /// Build the user-facing status string for an add operation.
+    #[must_use]
+    pub fn build_add_status(spec_id: &str) -> String {
+        format!("spec: updating specs/{spec_id}/SPEC.md + specs/{spec_id}/PLAN.md...")
+    }
+
+    /// Build the assistant message shown when an incremental spec update starts.
+    #[must_use]
+    pub fn build_add_message(spec_id: &str, feature: &str) -> String {
+        format!(
+            "From: /spec add\n[note] **Adding requirements to spec...**\n\n\
+                   Updating spec `specs/{spec_id}/` with new feature:\n\
+                   > {feature}\n\n\
+                   - Reading existing `SPEC.md` and `PLAN.md`\n\
+                   - Generating incremental requirements and tasks\n\
+                   - Inserting new content without modifying existing sections\n\n\
+                   This may take a few moments."
+        )
+    }
+
+    /// Build the log entry for an add operation.
+    #[must_use]
+    pub fn build_add_log(spec_id: &str, feature: &str) -> String {
+        format!("Adding requirements to spec '{spec_id}' for feature: {feature}")
+    }
+
+    /// Build the prompt sent to the LLM agent for incremental spec updates.
+    ///
+    /// The prompt instructs the LLM to use the `read` and `Edit` tools directly
+    /// to insert new requirements into `SPEC.md` and new task rows into
+    /// `PLAN.md`.  This matches the architecture of `/spec create` and
+    /// `/spec update` - the LLM writes files via tools, eliminating the need
+    /// for fragile post-processing of delimited text blocks.
+    ///
+    /// # Arguments
+    ///
+    /// * `spec_id` - The spec identifier (e.g. `"my-feature"`).
+    /// * `feature` - The free-text feature description for the new requirements.
+    /// * `spec_md` - The current `SPEC.md` content (included for context).
+    /// * `plan_md` - The current `PLAN.md` content (included for context).
+    /// * `next_fr` - The next available `FR-NNN` number.
+    /// * `next_nfr` - The next available `NFR-NNN` number.
+    /// * `next_task` - The next available `T-NNN` number.
+    #[must_use]
+    pub fn build_add_prompt(
+        spec_id: &str,
+        feature: &str,
+        spec_md: &str,
+        plan_md: &str,
+        next_fr: u32,
+        next_nfr: u32,
+        next_task: u32,
+    ) -> String {
+        format!(
+            r"You are an expert specification writer. Incrementally add new requirements to an existing spec.
+
+**Feature to add:** {feature}
+
+**Spec ID:** {spec_id}
+
+**IMPORTANT:** You are UPDATING an existing spec, NOT creating a new one. Add ONLY new requirement blocks and task rows. Do NOT rewrite, reorder, or delete any existing content. Do NOT modify any existing FR/NFR/T IDs.
+
+**Numbering rules:**
+- New functional requirements start at **FR-{next_fr:03}** and increment sequentially.
+- New non-functional requirements start at **NFR-{next_nfr:03}** and increment sequentially.
+- New tasks start at **T-{next_task:03}** and increment sequentially.
+- Do NOT renumber or rename any existing IDs.
+
+**Steps:**
+
+1. Read `specs/{spec_id}/SPEC.md` using the `read` tool.
+2. Use the `Edit` tool to insert new requirement blocks into `specs/{spec_id}/SPEC.md`. Insert them immediately before the `## Non-Functional Requirements` heading (or at the end of the file if no NFR section exists). Each requirement should use EARS notation with the correct FR-NNN or NFR-NNN IDs. Use at least one EARS template type. Do not modify any existing content - only insert new blocks.
+
+3. Read `specs/{spec_id}/PLAN.md` using the `read` tool.
+4. Use the `Edit` tool to insert new task table rows into `specs/{spec_id}/PLAN.md`. Append them after the last existing row in the task table. Use the same markdown table format as the existing rows. Columns: | ID | Title | Requirement | Effort | Priority | Status | Dependencies |. Link each task to the new requirement IDs. Effort: S, M, L. Priority: Critical, High, Medium, Low. Status: Pending.
+5. If you add task detail subsections, use the `Edit` tool to append them after the existing task details in `specs/{spec_id}/PLAN.md`.
+
+**Existing SPEC.md content (for reference - use the `read` and `Edit` tools to modify the actual file):**
+
+{spec_md}
+
+**Existing PLAN.md content (for reference - use the `read` and `Edit` tools to modify the actual file):**
+
+{plan_md}
+
+Use the `read` and `Edit` tools to make all changes directly to the files. Ensure the spec is clear, testable, and complete.",
+        )
+    }
+
+    // -- JTBD helpers --
+
+    /// Build the user-facing status string for a JTBD analysis operation.
+    #[must_use]
+    pub fn build_jtbd_status(spec_id: &str) -> String {
+        format!("spec jtbd: {spec_id}")
+    }
+
+    /// Build the assistant message shown when a JTBD analysis starts.
+    #[must_use]
+    pub fn build_jtbd_message(spec_id: &str) -> String {
+        format!(
+            "From: /spec jtbd\n[notice] **Performing JTBD analysis...**\n\n\
+             Analyzing `specs/{spec_id}/SPEC.md` to extract Jobs-To-Be-Done.\n\n\
+             - Reading the spec's overview and numbered requirements\n\
+             - Identifying functional, emotional, and social jobs\n\
+             - Tracing each job to FR/NFR requirement IDs\n\
+             - Writing `specs/{spec_id}/JTBD.md`\n\n\
+             This may take a few moments."
+        )
+    }
+
+    /// Build the log entry for a JTBD analysis operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `spec_id` - The spec identifier being analyzed.
+    /// * `force` - Whether `--force` was supplied (overwrite existing file).
+    /// * `agent` - Optional override agent name, if `--agent` was supplied.
+    #[must_use]
+    pub fn build_jtbd_log(spec_id: &str, force: bool, agent: Option<&str>) -> String {
+        let force_tag = if force { " --force" } else { "" };
+        match agent {
+            Some(a) => format!(
+                "JTBD analysis for spec '{spec_id}'{force_tag} --agent {a} -> specs/{spec_id}/JTBD.md"
+            ),
+            None => {
+                format!("JTBD analysis for spec '{spec_id}'{force_tag} -> specs/{spec_id}/JTBD.md")
+            }
+        }
+    }
+
+    /// Build the prompt sent to the explore agent for JTBD analysis.
+    ///
+    /// The prompt instructs the agent to read the spec's `SPEC.md`, extract
+    /// jobs using the JTBD framework, trace each job to requirement IDs, and
+    /// write the result to `specs/<spec_id>/JTBD.md`.
+    ///
+    /// # Arguments
+    ///
+    /// * `spec_id` - The spec identifier (directory name under `specs/`).
+    #[must_use]
+    pub fn build_jtbd_prompt(spec_id: &str) -> String {
+        format!(
+            r#"You are an expert product analyst performing a Jobs-To-Be-Done (JTBD) analysis.
+
+**Spec ID:** {spec_id}
+
+Read the file `specs/{spec_id}/SPEC.md` using the `read` tool. If the file is very large, read it in sections. Then analyse the spec's overview and numbered requirements to identify the underlying "jobs" the feature is hired to do.
+
+Write your analysis to `specs/{spec_id}/JTBD.md` using the `Write` tool. The document must contain:
+
+1. **YAML frontmatter** with `status: draft`.
+
+2. A **`## Overview`** section summarising the spec in one or two sentences.
+
+3. A **`## Jobs`** section. For each job, use a `### Job N - <short title>` heading and include:
+
+   - **Job statement** - expressed using the grammar:
+     *"When <situation>, I want to <motivation>, so I can <expected outcome>."*
+   - **Job type** - one of: *functional*, *emotional*, or *social*.
+   - **Performer** - who is hiring the product (the spec's primary user).
+   - **Related requirements** - list every `FR-NNN` and/or `NFR-NNN` identifier from `SPEC.md` that this job traces to. If no requirement traces to the job, write *untraced* explicitly so coverage gaps are visible.
+   - **Success signals** - one or more observable indicators that the job is being fulfilled.
+
+4. A **`## Out-of-Scope Jobs`** section listing jobs explicitly rejected or deferred (if any).
+
+5. A **`## Coverage Matrix`** section with a markdown table mapping each `FR-NNN` / `NFR-NNN` to the job(s) it supports. Requirements with no corresponding job should be marked *unmapped*.
+
+Use the `Write` tool to create `specs/{spec_id}/JTBD.md`. Ensure the markdown is well-formed and every job follows the grammar above."#,
+        )
+    }
+
+    // -- Update helpers --
+
+    /// Build the user-facing status string for an update operation.
+    #[must_use]
+    pub fn build_update_status(spec_id: &str) -> String {
+        format!("spec: updating specs/{spec_id}/PLAN.md + specs/{spec_id}/TESTPLAN.md...")
+    }
+
+    /// Build the assistant message shown when a spec update starts.
+    #[must_use]
+    pub fn build_update_message(spec_id: &str) -> String {
+        format!(
+            "From: /spec update\n[refresh] **Regenerating plan and test plan...**\n\n\
+             Re-reading `specs/{spec_id}/SPEC.md` and regenerating:\n\
+             - `specs/{spec_id}/PLAN.md` - implementation plan with tasks\n\
+             - `specs/{spec_id}/TESTPLAN.md` - manual test plan with test cases\n\n\
+             The `SPEC.md` file will not be modified.\n\
+             This may take a few moments."
+        )
+    }
+
+    /// Build the log entry for an update operation.
+    #[must_use]
+    pub fn build_update_log(spec_id: &str) -> String {
+        format!("Regenerating PLAN.md + TESTPLAN.md for spec '{spec_id}' from existing SPEC.md")
+    }
+
+    /// Build the prompt sent to the LLM agent for spec plan/test-plan regeneration.
+    ///
+    /// The prompt instructs the agent to read the existing `SPEC.md` and
+    /// regenerate `PLAN.md` and `TESTPLAN.md` to match the current requirements.
+    /// It explicitly forbids modifying `SPEC.md`. The existing `PLAN.md` content
+    /// is included so the agent can preserve task statuses for unchanged task
+    /// IDs (FR-011).
+    ///
+    /// # Arguments
+    ///
+    /// * `spec_id` - The spec identifier (directory name under `specs/`).
+    /// * `plan_md` - The current `PLAN.md` content, used for status preservation.
+    ///   Empty for a SPEC-only spec (one whose plan has not been generated yet);
+    ///   the reference block is then omitted rather than emitted empty.
+    #[must_use]
+    pub fn build_update_prompt(spec_id: &str, plan_md: &str) -> String {
+        let preservation_note = if plan_md.trim().is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n\n**Existing PLAN.md content (for reference - preserve task statuses \
+                 where IDs are unchanged):**\n\n{plan_md}"
+            )
+        };
+        let status_rule = if plan_md.trim().is_empty() {
+            "Status values: Pending for all new tasks."
+        } else {
+            "Status values: Pending for all new tasks.\n     - Preserve the status of any \
+             existing task IDs that remain unchanged."
+        };
+        format!(
+            r"You are an expert specification writer. An existing spec has been updated.
+Re-read the current `specs/{spec_id}/SPEC.md` and regenerate `specs/{spec_id}/PLAN.md` and `specs/{spec_id}/TESTPLAN.md` to match.
+
+**Spec ID:** {spec_id}
+
+**IMPORTANT:** Do NOT modify the `SPEC.md` file. Only regenerate `PLAN.md` and `TESTPLAN.md`.
+
+Read `specs/{spec_id}/SPEC.md` using the `read` tool first. If the file is large, read it in sections.
+
+Then write the following files using the `Write` tool:
+
+1. `specs/{spec_id}/PLAN.md` - An implementation plan with:
+     - A `## Tasks` section with a markdown table.
+     - Columns: ID, Title, Requirement, Effort, Priority, Status, Dependencies.
+     - Task IDs as T-001, T-002, etc.
+     - Link each task to relevant requirements from `SPEC.md`.
+     - Effort values: S, M, L.
+     - Priority values: Critical, High, Medium, Low.
+     - {status_rule}
+
+2. `specs/{spec_id}/TESTPLAN.md` - A **manual** test plan (human-readable, not automated test code):
+   - YAML frontmatter with `status: draft`.
+   - A `## Test Cases` section with manual test cases.
+   - Each test case has an ID (`TC-001`, `TC-002`, ...), a title, preconditions, step-by-step instructions, test data to enter, and expected results.
+   - Do NOT include automated test code, `#[test]` functions, or references to `cargo test`.{preservation_note}
+
+Use the `Write` tool to write `PLAN.md` and `TESTPLAN.md`. Ensure the plan and test plan are clear, testable, and complete.",
+        )
+    }
+
+    // -- govcreate helpers (FR-003, FR-018, NFR-005) --
+
+    /// Build the `/spec govcreate` usage block (FR-003, NFR-005).
+    ///
+    /// Documents the positional argument order, both content-reference forms
+    /// (URL and local file/folder), the target-folder requirement, the optional
+    /// `--force` flag, and the accepted `/new` flags. The `--language` and
+    /// `--type` value lists are derived from the shared scaffold registries
+    /// (NFR-005) so they cannot drift from what `parse_flags` accepts. The
+    /// output is ASCII-only.
+    #[must_use]
+    pub fn build_govcreate_help_message() -> String {
+        let languages = ragent_tools_extended::project_scaffold::language_value_list();
+        let app_types = ragent_tools_extended::project_scaffold::app_type_value_list();
+        [
+            "From: /spec govcreate",
+            "",
+            "## /spec govcreate - architecture document to spec and project scaffold",
+            "",
+            "Usage:",
+            "  /spec govcreate <specid> <content-ref> <target-folder>",
+            "         [--language <lang>] [--type <type>] [--stack <name>]",
+            "         [--github | --gitlab] [--force]",
+            "",
+            "Argument order (positional):",
+            "  <specid>         Spec identifier; validated with the existing spec-ID rules",
+            "                   and written to <target-folder>/specs/<specid>/.",
+            "  <content-ref>    Architecture source: an http:// or https:// URL, or a local",
+            "                   file or folder path. Paths containing spaces must be quoted.",
+            "  <target-folder>  Directory in which the project is scaffolded; created if it",
+            "                   does not already exist.",
+            "",
+            "/new flags:",
+            &format!("  --language <lang>    Required. Accepted values: {languages}"),
+            &format!("  --type <type>        Required. Accepted values: {app_types}"),
+            "  --stack <name>       Optional. Layer a known framework starter on the base layout.",
+            "  --github | --gitlab  Optional (mutually exclusive). Create a private remote and push.",
+            "  --force              Optional. Overwrite an existing spec at <target-folder>/specs/<specid>/.",
+            "",
+            "Examples:",
+            "  /spec govcreate payments-arch https://docs.example.gov/architecture/payments \\",
+            "  ./payments-svc --language rust --type cmdline --stack axum",
+            "  /spec govcreate legacy-crm doc/architecture/legacy-crm-sad.pdf \\",
+            "  ./legacy-crm --language python --type library",
+        ]
+        .join("\n")
+    }
+
+    /// Build the user-facing status string for a govcreate run (NFR-005).
+    #[must_use]
+    pub fn build_govcreate_status(spec_id: &str) -> String {
+        format!("spec govcreate: {spec_id}")
+    }
+
+    /// Build the assistant message shown when a govcreate run starts
+    /// (FR-003, NFR-005).
+    #[must_use]
+    pub fn build_govcreate_message(
+        spec_id: &str,
+        content_ref: &str,
+        target_folder: &str,
+    ) -> String {
+        format!(
+            "From: /spec govcreate\n\
+             **Creating project from architecture document...**\n\n\
+             - Spec ID: `{spec_id}`\n\
+             - Content reference: `{content_ref}`\n\
+             - Target folder: `{target_folder}`\n\n\
+             The run acquires the referenced content, extracts the architecture structure, \
+             generates `specs/{spec_id}/SPEC.md`, `PLAN.md`, and `TESTPLAN.md`, then \
+             scaffolds the project. This may take a few moments."
+        )
+    }
+
+    /// Build the log entry for a govcreate run (NFR-005).
+    #[must_use]
+    pub fn build_govcreate_log(
+        spec_id: &str,
+        content_ref: &str,
+        target_folder: &str,
+        force: bool,
+    ) -> String {
+        let force_tag = if force { " --force" } else { "" };
+        format!(
+            "govcreate '{spec_id}' from {content_ref} -> \
+             {target_folder}/specs/{spec_id}/ (scaffold + spec){force_tag}"
+        )
+    }
+
+    /// Build the FR-018 invocation record for a govcreate-generated spec.
+    ///
+    /// Returns the complete YAML frontmatter block (opening and closing
+    /// `---` fences included) recording how the spec was produced so a later
+    /// command can replay or audit the run. Every free-form value is
+    /// double-quoted with backslash/quote escapes so the block stays
+    /// parseable; absent stack renders as `null`, absent hosting as `none`.
+    #[must_use]
+    pub fn build_govcreate_frontmatter(
+        spec_id: &str,
+        content_ref: &str,
+        target_folder: &str,
+        scaffold: &ragent_tools_extended::project_scaffold::ScaffoldRequest,
+    ) -> String {
+        use ragent_tools_extended::project_scaffold::HostingTarget;
+
+        let command = yaml_double_quote("/spec govcreate");
+        let content = yaml_double_quote(content_ref);
+        let target = yaml_double_quote(target_folder);
+        let stack = match scaffold.stack() {
+            Some(value) => yaml_double_quote(value),
+            None => "null".to_string(),
+        };
+        let hosting = match scaffold.hosting() {
+            Some(HostingTarget::GitHub) => "github",
+            Some(HostingTarget::GitLab) => "gitlab",
+            None => "none",
+        };
+        let language = scaffold.language();
+        let app_type = scaffold.app_type();
+        format!(
+            "---\n\
+             status: draft\n\
+             id: {spec_id}\n\
+             invocation:\n\
+             \x20 command: {command}\n\
+             \x20 content_ref: {content}\n\
+             \x20 target_folder: {target}\n\
+             \x20 language: {language}\n\
+             \x20 type: {app_type}\n\
+             \x20 stack: {stack}\n\
+             \x20 hosting: {hosting}\n\
+             ---\n"
+        )
+    }
+
+    /// Build the prompt sent to the explore agent for govcreate spec
+    /// generation (FR-008).
+    ///
+    /// Mirrors the [`SpecCommand::build_create_prompt`] file-list contract
+    /// (a `SPEC.md` EARS spec with `status: draft` frontmatter, a `PLAN.md`
+    /// task table, and a `TESTPLAN.md` of manual cases) but anchors the
+    /// generated content in the extracted `ArchitectureStructure` and
+    /// targets `<target-folder>/specs/<specid>/` instead of the workspace
+    /// `specs/` root. The prompt embeds the FR-018 invocation frontmatter so
+    /// the SPEC.md the agent writes records the exact invocation.
+    ///
+    /// The caller is responsible for FR-006: when the corpus was empty or the
+    /// model produced nothing usable, the run must stop before this prompt is
+    /// built with the acquisition or extraction cause surfaced; an empty
+    /// `structure` here therefore means the deterministic fallback ran, which
+    /// the prompt states.
+    #[must_use]
+    pub fn build_govcreate_prompt(
+        spec_id: &str,
+        structure: &ragent_tools_extended::archdoc::ArchitectureStructure,
+        content_ref: &str,
+        target_folder: &str,
+        scaffold: &ragent_tools_extended::project_scaffold::ScaffoldRequest,
+    ) -> String {
+        let structure_summary = Self::build_architecture_structure_summary(structure);
+        let frontmatter =
+            Self::build_govcreate_frontmatter(spec_id, content_ref, target_folder, scaffold);
+        let extraction_note = if structure.from_fallback {
+            "\nThe extraction stage fell back to a mechanical per-source structure \
+             because the model output was not usable; requirements must be grounded \
+             in the component names and responsibilities below, not invented detail."
+        } else {
+            ""
+        };
+        format!(
+            r"You are an expert specification writer. An architecture document was analysed and its structure extracted. Write a requirements specification and implementation plan for re-implementing that system.
+
+**Spec ID:** {spec_id}
+**Source documentation:** {content_ref}
+**Project scaffold:** language `{language}`, type `{app_type}`
+
+## Extracted architecture structure
+{structure_summary}{extraction_note}
+
+Write the following files:
+
+1. `{target_folder}/specs/{spec_id}/SPEC.md` - A requirements specification using EARS notation:
+   - Use at least one of each EARS template: ubiquitous, event-driven, state-driven, optional, unwanted
+   - Number requirements as FR-001, FR-002, etc.
+   - Derive the requirements and component descriptions from the extracted architecture structure above
+   - Start EXACTLY with this YAML frontmatter block (it records the invocation; do not alter it):
+{frontmatter_block}
+   - Include a `## Requirements` section after the frontmatter
+
+2. `{target_folder}/specs/{spec_id}/PLAN.md` - An implementation plan with:
+   - A '## Tasks' section with a markdown table
+   - Columns: ID, Title, Requirement, Effort, Priority, Status, Dependencies
+   - Task IDs as T-001, T-002, etc., one task per extracted component at minimum
+   - Link each task to relevant requirements
+   - Effort values: S, M, L
+   - Priority values: Critical, High, Medium, Low
+   - Status values: Pending (set all new tasks to Pending)
+
+3. `{target_folder}/specs/{spec_id}/TESTPLAN.md` - A **manual** test plan (human-readable, not automated test code):
+   - Start with YAML frontmatter containing `status: draft`
+   - A `## Test Cases` section with one or more manual test cases exercising the extracted components and interfaces
+   - Each test case has an ID (`TC-001`, `TC-002`, ...), a title, preconditions, step-by-step instructions, test data to enter, and expected results
+   - Do NOT include automated test code, `#[test]` functions, or references to `cargo test`; this is a manual test plan only
+
+Use the `Write` tool to create all three files. Ensure the spec is clear, testable, and complete.",
+            language = scaffold.language(),
+            app_type = scaffold.app_type(),
+            frontmatter_block = frontmatter.trim_end(),
+        )
+    }
+
+    /// Render an `ArchitectureStructure` as a compact markdown digest for
+    /// embedding in the govcreate authoring prompt (FR-008).
+    ///
+    /// Empty sections are omitted; an entirely empty structure renders a
+    /// single sentence so the prompt is never silently content-free.
+    #[must_use]
+    pub fn build_architecture_structure_summary(
+        structure: &ragent_tools_extended::archdoc::ArchitectureStructure,
+    ) -> String {
+        if structure.is_empty() {
+            return "No architecture structure was extracted from the source documentation."
+                .to_string();
+        }
+
+        let mut out = String::new();
+
+        if !structure.components.is_empty() {
+            out.push_str("### Components\n");
+            for component in &structure.components {
+                out.push_str(&format!("- **{}**", component.name));
+                if !component.responsibilities.is_empty() {
+                    out.push_str(&format!(": {}", component.responsibilities.join("; ")));
+                }
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+
+        if !structure.interfaces.is_empty() {
+            out.push_str("### Interfaces\n");
+            for interface in &structure.interfaces {
+                let between = if interface.between.is_empty() {
+                    String::from("unspecified components")
+                } else {
+                    interface.between.join(" <-> ")
+                };
+                out.push_str(&format!("- **{}** ({between})", interface.name));
+                if !interface.contract_desc.is_empty() {
+                    out.push_str(&format!(": {}", interface.contract_desc));
+                }
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+
+        if !structure.data_stores.is_empty() {
+            out.push_str("### Data stores\n");
+            for store in &structure.data_stores {
+                out.push_str(&format!("- **{}** ({})", store.name, store.kind));
+                if !store.used_by.is_empty() {
+                    out.push_str(&format!(" used by {}", store.used_by.join(", ")));
+                }
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+
+        if !structure.external_dependencies.is_empty() {
+            out.push_str("### External dependencies\n");
+            for dependency in &structure.external_dependencies {
+                out.push_str(&format!("- **{}** ({})", dependency.name, dependency.kind));
+                if !dependency.used_by.is_empty() {
+                    out.push_str(&format!(" used by {}", dependency.used_by.join(", ")));
+                }
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+
+        if !structure.relationships.is_empty() {
+            out.push_str("### Relationships\n");
+            for relationship in &structure.relationships {
+                out.push_str(&format!(
+                    "- {} -[{}]-> {}",
+                    relationship.from, relationship.kind, relationship.to
+                ));
+                if !relationship.detail.is_empty() {
+                    out.push_str(&format!(": {}", relationship.detail));
+                }
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+
+        out.trim_end().to_string()
+    }
+
+    /// Write the govcreate-authored spec files to
+    /// `<target-folder>/specs/<specid>/` (FR-009).
+    ///
+    /// Creates the directory tree when the scaffold step did not already
+    /// produce it. An existing spec directory is refused unless `force` is
+    /// set (FR-017); the refusal reports the existing path so the caller can
+    /// surface the exact cause. All three files are written atomically
+    /// (temp file, sync, rename) via [`SpecIo::atomic_write`](crate::io::SpecIo::atomic_write).
+    ///
+    /// `target_folder` and `invoking_root` are LLM/user-supplied: the folder is
+    /// resolved against `invoking_root` and refused when it escapes it, so a
+    /// `../../..` target cannot turn this create+write into an arbitrary-write
+    /// primitive (SEC-ragent-specs-00x / ANTIPAT H-1).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SpecError::Validation`](crate::error::SpecError::Validation) when the target folder escapes the
+    /// invoking root or an existing spec directory is present without
+    /// `--force`, naming the conflicting path, and [`SpecError::Io`](crate::error::SpecError::Io) on any
+    /// filesystem failure.
+    pub async fn write_govcreate_spec(
+        target_folder: &std::path::Path,
+        invoking_root: &std::path::Path,
+        spec_id: &str,
+        spec_md: &str,
+        plan_md: &str,
+        testplan_md: &str,
+        force: bool,
+    ) -> Result<std::path::PathBuf, crate::error::SpecError> {
+        use crate::error::SpecError;
+
+        // SEC-ragent-specs-005 (SECTASKS T-065): this is a public write API, so
+        // re-validate the id here rather than relying on caller discipline - the
+        // raw `&str` was joined into the output path, so a caller that forwarded
+        // a user/LLM value would get a path-traversal-capable create/write.
+        let validated = crate::spec::SpecId::new(spec_id)
+            .ok_or_else(|| SpecError::InvalidSpecId(spec_id.to_string()))?;
+        let spec_id = validated.dir_name();
+
+        // ANTIPAT H-1: the target folder reached a create + write, so it is
+        // contained to the invoking root before any filesystem mutation.
+        //
+        // The check is purely lexical (no `canonicalize`), so it works for a
+        // folder that does not exist yet *and* for an absolute path that runs
+        // outside the root. It runs BEFORE `exists()`/`canonicalize()`/
+        // `create_dir_all()`, so an escaping path is refused with a validation
+        // error rather than a raw `Permission denied` from the OS - and nothing
+        // is ever created outside the root.
+        let root_canonical = invoking_root
+            .canonicalize()
+            .map_err(|e| SpecError::Io(std::io::Error::other(e)))?;
+        let candidate: std::path::PathBuf = if target_folder.is_absolute() {
+            target_folder.to_path_buf()
+        } else {
+            invoking_root.join(target_folder)
+        };
+        if !lexically_within(&candidate, &root_canonical) {
+            return Err(SpecError::Validation(format!(
+                "target folder {} escapes the invoking root {} (ANTIPAT H-1)",
+                target_folder.display(),
+                invoking_root.display()
+            )));
+        }
+
+        // A target that already exists is additionally canonicalised and
+        // re-checked, so a symlink cannot smuggle the write out of the root.
+        if candidate.exists() {
+            let resolved = candidate
+                .canonicalize()
+                .map_err(|e| SpecError::Io(std::io::Error::other(e)))?;
+            if !resolved.starts_with(&root_canonical) {
+                return Err(SpecError::Validation(format!(
+                    "target folder {} escapes the invoking root {} (ANTIPAT H-1)",
+                    resolved.display(),
+                    root_canonical.display()
+                )));
+            }
+        }
+
+        let spec_dir = candidate.join("specs").join(spec_id);
+        let spec_dir_exists = spec_dir.is_dir();
+
+        // FR-017: refuse an existing spec without --force. The pure T-003
+        // predicate (is_forced_overwrite) is the shared decision so dispatch
+        // and tests cannot drift; an existing dir with --force is overwritten
+        // file-by-file below.
+        if !ragent_tools_extended::archdoc::is_forced_overwrite(spec_dir_exists, force)
+            && spec_dir_exists
+        {
+            return Err(SpecError::Validation(format!(
+                "spec '{}' already exists at {} (re-run with --force to overwrite)",
+                spec_id,
+                spec_dir.display()
+            )));
+        }
+
+        tokio::fs::create_dir_all(&spec_dir).await?;
+        crate::io::SpecIo::atomic_write(spec_dir.join("SPEC.md"), spec_md).await?;
+        crate::io::SpecIo::atomic_write(spec_dir.join("PLAN.md"), plan_md).await?;
+        crate::io::SpecIo::atomic_write(spec_dir.join("TESTPLAN.md"), testplan_md).await?;
+        Ok(spec_dir)
+    }
+
+    // -- Feedback helpers (FR-017, T-032) --
+
+    /// Build the user-facing status string for a feedback append operation.
+    #[must_use]
+    pub fn build_feedback_status(spec_id: &str) -> String {
+        format!("spec: appending feedback to specs/{spec_id}/FEEDBACK.md...")
+    }
+
+    /// Build the assistant message shown when a feedback note is appended.
+    #[must_use]
+    pub fn build_feedback_message(spec_id: &str, note: &str) -> String {
+        format!(
+            "From: /spec feedback\n[note] **Feedback note appended** to \
+             `specs/{spec_id}/FEEDBACK.md`.\n\n\
+             > {note}\n\n\
+             This note is advisory - it will be surfaced during the next \
+             `/spec plan` regeneration but does not block validation or \
+             status transitions."
+        )
+    }
+
+    /// Build the log entry for a feedback append operation.
+    #[must_use]
+    pub fn build_feedback_log(spec_id: &str, note: &str) -> String {
+        // Truncate very long notes in the log for readability, stopping at a
+        // character boundary (a raw byte slice panics when the cut byte falls
+        // inside a multi-byte character). The length test counts characters,
+        // like the cut: a byte test appended `...` to a short multi-byte note
+        // that was never cut.
+        let preview: String = if note.chars().count() > NOTE_LOG_PREVIEW_LEN {
+            let cut = note
+                .char_indices()
+                .nth(NOTE_LOG_TRUNCATED_LEN)
+                .map_or(note.len(), |(i, _)| i);
+            format!("{}...", &note[..cut])
+        } else {
+            note.to_string()
+        };
+        format!("Appended feedback note to specs/{spec_id}/FEEDBACK.md: {preview}")
+    }
+
+    /// Format a feedback note as a markdown table row with the current UTC date.
+    ///
+    /// The row follows the `FEEDBACK.md` template format:
+    /// `| YYYY-MM-DD | user | <note> |`.
+    #[must_use]
+    pub fn format_feedback_row(note: &str) -> String {
+        let date = current_utc_date_string();
+        // Escape pipes so they don't break the table, and flatten newlines so
+        // a multi-line note stays inside its row.
+        let escaped = note.replace('|', "\\|").replace('\n', "<br>");
+        format!("| {date} | user | {escaped} |")
+    }
+
+    /// Append a feedback note to existing `FEEDBACK.md` content.
+    ///
+    /// If `existing` is empty, a new file is generated from
+    /// [`FeedbackTemplate::generate`](crate::templates::FeedbackTemplate::generate) using `title` as the spec title, and the
+    /// note is inserted as the first real row (replacing the placeholder row).
+    ///
+    /// If `existing` already has content, the new row is inserted before the
+    /// `---` separator (or appended at the end if no separator is found).
+    #[must_use]
+    pub fn append_feedback_note(existing: &str, title: &str, note: &str) -> String {
+        let row = Self::format_feedback_row(note);
+
+        if existing.is_empty() {
+            // Generate from template and replace the placeholder row.
+            let template = crate::templates::FeedbackTemplate::generate(title);
+            return replace_placeholder_row(&template, &row);
+        }
+
+        // Try to insert before the trailing "---" separator.
+        if let Some(pos) = existing.rfind("\n---\n") {
+            let before = &existing[..pos];
+            let after = &existing[pos..];
+            // Ensure there's a blank line between the table and the separator.
+            let before_trimmed = before.trim_end();
+            format!("{before_trimmed}\n{row}\n{after}")
+        } else {
+            // No separator found - just append.
+            let trimmed = existing.trim_end();
+            format!("{trimmed}\n{row}\n")
+        }
+    }
+}
+
+/// Wrap a scalar in double quotes for a YAML frontmatter value.
+///
+/// Backslashes, double quotes, and CR/LF are escaped so a content reference,
+/// target folder, actor, or reviewer name containing them cannot break the
+/// generated block.
+///
+/// SEC-060: any value interpolated into persisted frontmatter must go through
+/// this so a `"` or newline in an actor/reviewer name cannot break out of the
+/// scalar and inject extra frontmatter lines. Shared with `manager.rs`.
+pub(crate) fn yaml_double_quote(value: &str) -> String {
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r");
+    format!("\"{escaped}\"")
+}
+
+/// Replace the placeholder row in a freshly-generated FEEDBACK.md template
+/// with the actual feedback row.
+///
+/// The template contains a row like `| [YYYY-MM-DD] | [metric/incident/user] | [Feedback note] |`.
+/// We replace that line with the real row.
+fn replace_placeholder_row(template: &str, real_row: &str) -> String {
+    template
+        .lines()
+        .map(|line| {
+            if line.starts_with("| [YYYY-MM-DD]") {
+                real_row.to_string()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Get the current UTC date as a `YYYY-MM-DD` string.
+fn current_utc_date_string() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    // Convert Unix timestamp to YYYY-MM-DD using simple date arithmetic.
+    let days = secs / 86_400;
+    date_from_days_since_epoch(days as i64)
+}
+
+/// Convert days-since-epoch to a `YYYY-MM-DD` string.
+///
+/// Uses the proleptic Gregorian calendar. Based on the well-known
+/// Howard Hinnant date algorithm.
+fn date_from_days_since_epoch(days: i64) -> String {
+    let z = days + 719_468; // days from 0000-03-01
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Whether `candidate` resolves inside `root` using only lexical components.
+///
+/// Used by [`SpecCommand::write_govcreate_spec`] to contain an LLM/user-supplied
+/// target folder to the invoking root (ANTIPAT H-1). Unlike `canonicalize`,
+/// this works for a path that does not exist yet and never returns a raw
+/// permission error for an escaping absolute path: a `..` that climbs above
+/// `root` is refused outright.
+///
+/// Both paths are compared component-by-component after `.` segments are
+/// dropped; `..` pops one component, and popping past the root fails.
+#[must_use]
+fn lexically_within(candidate: &std::path::Path, root: &std::path::Path) -> bool {
+    fn normalise(path: &std::path::Path) -> Option<Vec<std::ffi::OsString>> {
+        let mut parts: Vec<std::ffi::OsString> = Vec::new();
+        for component in path.components() {
+            match component {
+                std::path::Component::Normal(name) => parts.push(name.to_os_string()),
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    parts.pop()?;
+                }
+                std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                    parts.clear();
+                }
+            }
+        }
+        Some(parts)
+    }
+
+    let Some(root_parts) = normalise(root) else {
+        return false;
+    };
+    let Some(candidate_parts) = normalise(candidate) else {
+        return false;
+    };
+    candidate_parts.len() >= root_parts.len()
+        && candidate_parts[..root_parts.len()] == root_parts[..]
+}

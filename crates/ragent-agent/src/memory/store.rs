@@ -1,0 +1,210 @@
+//! Structured memory store with categories, tags, and confidence scoring.
+//!
+//! Structured memories are individual facts, patterns, preferences, insights,
+//! errors, or workflows stored in SQLite with metadata (category, confidence,
+//! tags, source).
+//!
+//! # Categories
+//!
+//! | Category     | Description                                    |
+//! |-------------|------------------------------------------------|
+//! | `fact`      | Objective facts about the project or tools      |
+//! | `pattern`   | Recurring code or process patterns              |
+//! | `preference`| User or project style preferences               |
+//! | `insight`   | Aha-moments and learned knowledge               |
+//! | `error`     | Bugs encountered and how they were resolved     |
+//! | `workflow`  | Step-by-step procedures for common tasks         |
+//!
+//! # Storage
+//!
+//! Structured memories are persisted in the `memories` and `memory_tags`
+//! SQLite tables. The CRUD methods live on [`crate::storage::Storage`].
+
+use serde::{Deserialize, Serialize};
+
+/// Valid categories for structured memories.
+pub const MEMORY_CATEGORIES: &[&str] = &[
+    "fact",
+    "pattern",
+    "preference",
+    "insight",
+    "error",
+    "workflow",
+];
+
+/// A structured memory with metadata.
+///
+/// This is the domain type used by the memory tools. It is converted to/from
+/// [`crate::storage::MemoryRow`] when persisting to SQLite.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StructuredMemory {
+    /// Auto-generated row ID (0 for unsaved memories).
+    #[serde(default)]
+    pub id: i64,
+    /// The memory content.
+    pub content: String,
+    /// Category: one of [`MEMORY_CATEGORIES`].
+    pub category: String,
+    /// Source of the memory (e.g., "manual", "auto-extract", tool name).
+    #[serde(default)]
+    pub source: String,
+    /// Confidence score (0.0-1.0). Higher = more certain.
+    pub confidence: f64,
+    /// Project this memory belongs to.
+    #[serde(default)]
+    pub project: String,
+    /// Session that created this memory.
+    #[serde(default)]
+    pub session_id: String,
+    /// Tags for filtering and categorisation.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// ISO 8601 creation timestamp.
+    #[serde(default)]
+    pub created_at: String,
+    /// ISO 8601 last-updated timestamp.
+    #[serde(default)]
+    pub updated_at: String,
+    /// Number of times accessed in search results.
+    #[serde(default)]
+    pub access_count: i64,
+    /// ISO 8601 timestamp of last access.
+    #[serde(default)]
+    pub last_accessed: Option<String>,
+}
+
+impl StructuredMemory {
+    /// Create a new structured memory with the given content and category.
+    ///
+    /// Confidence defaults to 0.7. Call `with_confidence()` to override.
+    pub fn new(content: impl Into<String>, category: impl Into<String>) -> Self {
+        Self {
+            id: 0,
+            content: content.into(),
+            category: category.into(),
+            source: String::new(),
+            confidence: 0.7,
+            project: String::new(),
+            session_id: String::new(),
+            tags: Vec::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            access_count: 0,
+            last_accessed: None,
+        }
+    }
+
+    /// Set the confidence score.
+    #[must_use]
+    pub fn with_confidence(mut self, confidence: f64) -> Self {
+        self.confidence = confidence.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Set the source.
+    #[must_use]
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source = source.into();
+        self
+    }
+
+    /// Set the project name.
+    #[must_use]
+    pub fn with_project(mut self, project: impl Into<String>) -> Self {
+        self.project = project.into();
+        self
+    }
+
+    /// Set the session ID.
+    #[must_use]
+    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = session_id.into();
+        self
+    }
+
+    /// Set the tags.
+    #[must_use]
+    pub fn with_tags(mut self, tags: Vec<String>) -> Self {
+        self.tags = tags;
+        self
+    }
+
+    /// Validate that the category is one of the allowed values.
+    pub fn validate_category(category: &str) -> Result<(), String> {
+        if MEMORY_CATEGORIES.contains(&category) {
+            Ok(())
+        } else {
+            Err(format!(
+                "Invalid category '{}'. Must be one of: {}",
+                category,
+                MEMORY_CATEGORIES.join(", ")
+            ))
+        }
+    }
+
+    /// Validate that the confidence is in [0.0, 1.0].
+    pub fn validate_confidence(confidence: f64) -> Result<(), String> {
+        if (0.0..=1.0).contains(&confidence) {
+            Ok(())
+        } else {
+            Err(format!(
+                "Confidence must be between 0.0 and 1.0, got {confidence}"
+            ))
+        }
+    }
+
+    /// Validate tags for structured memories.
+    pub fn validate_tags(tags: &[String]) -> Result<(), String> {
+        for tag in tags {
+            if tag.is_empty() {
+                return Err("Tag cannot be empty".to_string());
+            }
+            for ch in tag.chars() {
+                if !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-') {
+                    return Err(format!(
+                        "Tag must contain only lowercase letters, digits, and hyphens, got '{tag}'"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Filter criteria for the `memory_forget` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ForgetFilter {
+    /// Delete a specific memory by its row ID.
+    Id(i64),
+    /// Delete memories matching filter criteria.
+    Filter {
+        /// Delete memories older than this many days.
+        older_than_days: Option<u32>,
+        /// Delete memories with confidence at or below this value.
+        max_confidence: Option<f64>,
+        /// Delete memories in this category.
+        category: Option<String>,
+        /// Delete memories that have ALL of these tags.
+        tags: Option<Vec<String>>,
+    },
+}
+
+impl ForgetFilter {
+    /// Check that at least one filter criterion is set (for Filter variant only).
+    pub fn has_any_criterion(&self) -> bool {
+        match self {
+            Self::Id(_) => true,
+            Self::Filter {
+                older_than_days,
+                max_confidence,
+                category,
+                tags,
+            } => {
+                older_than_days.is_some()
+                    || max_confidence.is_some()
+                    || category.is_some()
+                    || tags.as_ref().is_some_and(|t| !t.is_empty())
+            }
+        }
+    }
+}

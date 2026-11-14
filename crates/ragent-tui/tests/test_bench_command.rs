@@ -1,0 +1,462 @@
+//! Regression tests for `/bench` slash commands.
+
+use std::time::Duration;
+
+use ragent_bench::{BenchProgressHandle, BenchRunEvent, BenchRunOutcome, BenchRunProgress};
+use ragent_tui::App;
+
+#[path = "support/mod.rs"]
+mod support;
+
+struct CwdGuard(std::path::PathBuf);
+
+impl Drop for CwdGuard {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.0);
+    }
+}
+
+fn enter_temp_project_dir() -> (tempfile::TempDir, CwdGuard) {
+    let original = std::env::current_dir().expect("cwd");
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::env::set_current_dir(temp.path()).expect("set cwd");
+    std::fs::create_dir_all(temp.path().join(".ragent")).expect("create .ragent");
+    (temp, CwdGuard(original))
+}
+
+/// Acquire the CWD test lock and move into a fresh temporary project directory.
+///
+/// Returns the lock guard first so it is dropped last, keeping the directory
+/// isolated from concurrent tests for the entire lifetime of the caller.
+// The returned `MutexGuard` is deliberately held for the whole test body,
+// including its await points: it serialises every test that mutates the
+// process working directory, which is process-global state.
+#[allow(clippy::await_holding_lock)]
+fn enter_isolated_project_dir() -> (
+    std::sync::MutexGuard<'static, ()>,
+    tempfile::TempDir,
+    CwdGuard,
+) {
+    let guard = crate::global_env_lock();
+    let (temp, cwd) = enter_temp_project_dir();
+    (guard, temp, cwd)
+}
+
+/// Return the text of the most recently appended message.
+fn last_message_text(app: &App) -> String {
+    app.session
+        .messages
+        .last()
+        .expect("at least one message")
+        .text_content()
+}
+
+/// Poll the TUI until the active benchmark task completes or a generous
+/// timeout elapses. CI runners can be slower than local machines, so the
+/// loop sleeps 50 ms between polls and waits up to 10 s.
+fn wait_for_bench_completion(app: &mut App) {
+    for _ in 0..200 {
+        app.poll_pending_bench();
+        if app.active_bench_task_id.is_none() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // One final poll so any late result is surfaced before the caller asserts.
+    app.poll_pending_bench();
+}
+
+fn configured_app() -> App {
+    let mut app = support::make_app();
+    app.session.session_id = Some("bench-test-session".to_string());
+    app.session.selected_model = Some("anthropic/claude-sonnet-4-20250514".to_string());
+    app.bench_mock_outputs = Some(vec![
+        "def solve():\n    return 'bench-output'".to_string(),
+        "def solve():\n    return 'bench-output-2'".to_string(),
+    ]);
+    app
+}
+
+fn all_message_text(app: &App) -> String {
+    app.session
+        .messages
+        .iter()
+        .map(ragent_agent::message::Message::text_content)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[tokio::test]
+async fn test_bench_list_shows_suites_and_profiles() {
+    let mut app = configured_app();
+
+    app.execute_slash_command("/bench list").await;
+
+    let text = app
+        .session
+        .messages
+        .last()
+        .expect("bench list message")
+        .text_content();
+    assert!(text.contains("Benchmark Suites"));
+    assert!(text.contains("language"));
+    assert!(text.contains("local partition") || text.contains("local partitions"));
+    assert!(text.contains("humaneval"));
+    assert!(text.contains("mbpp"));
+    assert!(text.contains("bigcode/humanevalpack"));
+    assert!(text.contains("gabeorlanski/bc-mbpp"));
+    assert!(text.contains("nuprl/MultiPL-E"));
+    assert!(text.contains("bigcodebench"));
+    assert!(text.contains("python"));
+    assert!(text.contains("diff"));
+    assert!(text.contains("rust"));
+    assert!(text.contains("Virtual Targets"));
+    assert!(text.contains("all"));
+    assert!(text.contains("full"));
+    assert!(text.contains("quick"));
+}
+
+#[tokio::test]
+async fn test_bench_help_shows_command_table_and_supported_languages() {
+    let mut app = configured_app();
+
+    app.execute_slash_command("/bench help").await;
+
+    let text = app
+        .session
+        .messages
+        .last()
+        .expect("bench help message")
+        .text_content();
+    // Each command gets its own table row.
+    assert!(text.contains("Benchmark Commands"));
+    let command_rows = text
+        .lines()
+        .filter(|line| line.starts_with("| `/bench"))
+        .count();
+    assert!(
+        command_rows >= 8,
+        "expected one table row per command, got {command_rows}: {text}"
+    );
+    for command in [
+        "/bench list",
+        "/bench show",
+        "/bench status",
+        "/bench init",
+        "/bench run",
+        "/bench open last",
+        "/bench cancel",
+        "/bench help",
+    ] {
+        assert!(
+            text.contains(command),
+            "help missing command row: {command}"
+        );
+    }
+    // Full benchmark list with supported languages.
+    assert!(text.contains("## Benchmarks"));
+    assert!(text.contains("supported languages"));
+    assert!(text.contains("humaneval"));
+    assert!(text.contains("mbpp"));
+    assert!(text.contains("bigcodebench"));
+    // Multilingual suites render their full language list.
+    assert!(text.contains("cpp"));
+    assert!(text.contains("haskell"));
+    assert!(text.contains("typescript"));
+    assert!(text.contains("diff"));
+    // Virtual targets and profiles are listed too.
+    assert!(text.contains("Virtual Targets"));
+    assert!(text.contains("quick"));
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn test_bench_init_humaneval_creates_data_root() {
+    let (_guard, _temp, _cwd) = enter_isolated_project_dir();
+    let mut app = configured_app();
+
+    app.execute_slash_command("/bench init humaneval").await;
+
+    assert!(std::path::Path::new("benches/data/humaneval/python/manifest.json").exists());
+    assert!(std::path::Path::new("benches/data/humaneval/python/dataset/cases.jsonl").exists());
+    let text = all_message_text(&app);
+    assert!(text.contains("Loading benchmark data for `humaneval` [python]"));
+    assert!(text.contains("Loaded `humaneval` [python]"));
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn test_bench_init_verify_only_reports_existing_state() {
+    let (_guard, _temp, _cwd) = enter_isolated_project_dir();
+    let mut app = configured_app();
+
+    app.execute_slash_command("/bench init humaneval").await;
+    app.execute_slash_command("/bench init humaneval --verify-only")
+        .await;
+
+    let text = app
+        .session
+        .messages
+        .last()
+        .expect("bench verify-only message")
+        .text_content();
+    assert!(text.contains("verified"));
+    assert!(std::path::Path::new("benches/data/humaneval/python/manifest.json").exists());
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn test_bench_init_all_creates_every_suite_root() {
+    let (_guard, _temp, _cwd) = enter_isolated_project_dir();
+    let mut app = configured_app();
+
+    app.execute_slash_command("/bench init all").await;
+
+    let text = app
+        .session
+        .messages
+        .last()
+        .expect("bench init all message")
+        .text_content();
+    assert!(text.contains("[ok] initialized benchmark target."));
+    assert!(text.contains("[python]"));
+    assert!(text.contains("humaneval"));
+    assert!(text.contains("bigcodebench"));
+    assert!(std::path::Path::new("benches/data/humaneval/python/manifest.json").exists());
+    assert!(std::path::Path::new("benches/data/bigcodebench/python/manifest.json").exists());
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn test_bench_init_full_reports_gated_support() {
+    let (_guard, _temp, _cwd) = enter_isolated_project_dir();
+    let mut app = configured_app();
+
+    app.execute_slash_command("/bench init full").await;
+
+    let text = app
+        .session
+        .messages
+        .last()
+        .expect("bench init full message")
+        .text_content();
+    assert!(text.contains("not ready yet"));
+    assert!(text.contains("apps"));
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn test_bench_run_humaneval_creates_workbook() {
+    let (_guard, _temp, _cwd) = enter_isolated_project_dir();
+    let mut app = configured_app();
+
+    app.execute_slash_command("/bench init humaneval").await;
+    app.execute_slash_command("/bench run humaneval").await;
+    wait_for_bench_completion(&mut app);
+
+    assert!(
+        app.active_bench_task_id.is_none(),
+        "bench task should complete"
+    );
+    assert_eq!(app.bench_last_workbooks.len(), 1);
+    assert!(
+        app.bench_last_workbooks[0].exists(),
+        "workbook should exist"
+    );
+    let text = app
+        .session
+        .messages
+        .last()
+        .expect("bench run output")
+        .text_content();
+    assert!(text.contains("sample(s)"));
+    assert!(text.contains("generated"));
+    let all_text = all_message_text(&app);
+    assert!(all_text.contains("Running `humaneval` [python]"));
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn test_bench_run_all_creates_workbooks() {
+    let (_guard, _temp, _cwd) = enter_isolated_project_dir();
+    let mut app = configured_app();
+
+    app.execute_slash_command("/bench init all").await;
+    app.execute_slash_command("/bench run all --yes").await;
+    wait_for_bench_completion(&mut app);
+
+    assert!(
+        app.active_bench_task_id.is_none(),
+        "bench task should complete"
+    );
+    assert!(
+        app.bench_last_workbooks.len() > 1,
+        "all target should produce multiple workbooks"
+    );
+    let text = app
+        .session
+        .messages
+        .last()
+        .expect("bench run all output")
+        .text_content();
+    assert!(text.contains("humaneval"));
+    assert!(text.contains("bigcodebench"));
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn test_bench_status_reports_active_run_context() {
+    let (_guard, _temp, _cwd) = enter_isolated_project_dir();
+    let mut app = configured_app();
+
+    app.execute_slash_command("/bench init humaneval").await;
+    app.execute_slash_command("/bench run humaneval").await;
+    app.execute_slash_command("/bench status").await;
+
+    let text = last_message_text(&app);
+    assert!(text.contains("Active Benchmark Run"));
+    assert!(text.contains("Task ID"));
+    assert!(text.contains("Summary"));
+}
+
+#[tokio::test]
+async fn test_bench_status_reports_case_progress() {
+    let mut app = configured_app();
+    let progress = BenchProgressHandle::default();
+    progress.set(BenchRunProgress {
+        suite_id: "humaneval".to_string(),
+        suite_index: 1,
+        total_suites: 2,
+        completed_cases: 3,
+        total_cases: 10,
+    });
+
+    app.active_bench_task_id = Some("bench-progress".to_string());
+    app.active_bench_summary = Some("`quick` on `anthropic/test-model`".to_string());
+    app.active_bench_started_at = Some(chrono::Utc::now());
+    app.active_bench_progress = Some(progress);
+
+    app.execute_slash_command("/bench status").await;
+
+    let text = last_message_text(&app);
+    assert!(text.contains("Progress"));
+    assert!(text.contains("suite `humaneval` (1/2)"));
+    assert!(text.contains("case `3/10`"));
+}
+
+#[test]
+fn test_bench_run_progress_events_show_case_id_and_status() {
+    let mut app = configured_app();
+    let progress = BenchProgressHandle::default();
+    progress.push_event(BenchRunEvent::SuiteStarted {
+        suite_id: "humaneval".to_string(),
+        language: "python".to_string(),
+        total_cases: 1,
+    });
+    progress.push_event(BenchRunEvent::CaseFinished {
+        suite_id: "humaneval".to_string(),
+        language: "python".to_string(),
+        case_id: "humaneval-sample-001".to_string(),
+        status: "passed".to_string(),
+    });
+
+    app.active_bench_task_id = Some("bench-progress".to_string());
+    app.active_bench_progress = Some(progress);
+    app.poll_pending_bench();
+
+    let text = all_message_text(&app);
+    assert!(text.contains("Running `humaneval` [python]"));
+    assert!(text.contains("humaneval-sample-001"));
+    assert!(text.contains("`passed`"));
+}
+
+#[test]
+fn test_bench_run_drains_final_progress_events_before_completion() {
+    let mut app = configured_app();
+    let progress = BenchProgressHandle::default();
+    progress.push_event(BenchRunEvent::CaseFinished {
+        suite_id: "mbpp".to_string(),
+        language: "rust".to_string(),
+        case_id: "mbpp-5".to_string(),
+        status: "passed".to_string(),
+    });
+
+    app.active_bench_task_id = Some("bench-progress".to_string());
+    app.active_bench_progress = Some(progress);
+    if let Ok(mut guard) = app.bench_result.lock() {
+        *guard = Some(Ok(BenchRunOutcome {
+            message: "From: /bench run\n## Benchmark Run\n\n- done".to_string(),
+            workbook_paths: Vec::new(),
+            summaries: Vec::new(),
+        }));
+    } else {
+        panic!("bench result lock");
+    }
+
+    app.poll_pending_bench();
+
+    let text = all_message_text(&app);
+    assert!(text.contains("mbpp-5"));
+    assert!(text.contains("`passed`"));
+    assert!(text.contains("## Benchmark Run"));
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn test_bench_open_last_shows_latest_workbook_paths() {
+    let (_guard, _temp, _cwd) = enter_isolated_project_dir();
+    let mut app = configured_app();
+
+    app.execute_slash_command("/bench init humaneval").await;
+    app.execute_slash_command("/bench run humaneval").await;
+    wait_for_bench_completion(&mut app);
+
+    app.execute_slash_command("/bench open last").await;
+
+    let text = app
+        .session
+        .messages
+        .last()
+        .expect("bench open last output")
+        .text_content();
+    assert!(text.contains("Latest Benchmark Results"));
+    assert!(text.contains(".xlsx"));
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn test_bench_cancel_requests_shutdown_for_active_run() {
+    let (_guard, _temp, _cwd) = enter_isolated_project_dir();
+    let mut app = configured_app();
+
+    app.execute_slash_command("/bench init humaneval").await;
+    app.execute_slash_command("/bench run humaneval").await;
+    app.execute_slash_command("/bench cancel").await;
+
+    let text = last_message_text(&app);
+    assert!(text.contains("Cancellation requested"));
+    assert_eq!(app.status, "[wait] bench: cancellation requested");
+    assert!(
+        app.active_bench_cancel
+            .as_ref()
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn test_bench_run_missing_data_fails_fast_with_init_hint() {
+    let (_guard, _temp, _cwd) = enter_isolated_project_dir();
+    let mut app = configured_app();
+
+    app.execute_slash_command("/bench run humaneval").await;
+
+    let text = app
+        .session
+        .messages
+        .last()
+        .expect("bench error message")
+        .text_content();
+    assert!(text.contains("/bench init humaneval"));
+    assert!(app.active_bench_task_id.is_none());
+}

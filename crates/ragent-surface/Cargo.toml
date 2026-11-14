@@ -1,0 +1,29 @@
+[package]
+name = "ragent-surface"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Shared surface helpers for the ragent plugin and connector command families (usage attribution, store-directory resolution, harness steps, and JSON-schema sample generation)"
+
+autotests = false
+
+[[test]]
+name = "all"
+path = "tests/all.rs"
+
+[dependencies]
+ragent-config = { path = "../ragent-config" }
+ragent-types = { path = "../ragent-types" }
+reqwest = { workspace = true, features = ["blocking"] }
+serde_json = "1"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.14"
+
+[lints]
+workspace = true

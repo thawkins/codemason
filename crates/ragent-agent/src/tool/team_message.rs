@@ -1,0 +1,189 @@
+//! `team_message` - Send a direct message to one team member.
+//!
+//! M4-T4: validates the recipient exists and is not `Stopped` / `Failed`
+//! before pushing, so messages to dead teammates are rejected up front
+//! rather than sitting unread forever while the sender gets a false success.
+
+use anyhow::Result;
+use serde_json::{Value, json};
+
+use super::{Tool, ToolContext, ToolOutput};
+use crate::team::{Mailbox, MailboxMessage, MessageType, TeamStore, find_team_dir};
+
+/// Sends a direct message to one team member by name.
+pub struct TeamMessageTool;
+
+#[async_trait::async_trait]
+impl Tool for TeamMessageTool {
+    fn name(&self) -> &'static str {
+        "team_message"
+    }
+
+    fn description(&self) -> &'static str {
+        "Send a direct message to one team member (teammate or lead) by agent ID or name. \
+             The recipient must be an active member of the team; messages to Stopped or Failed \
+             teammates are rejected. 'content' is capped at 262144 bytes (256 KiB); a longer \
+             body is refused with an error naming the limit and the actual size, never \
+             silently truncated - send a summary and put bulk detail in a file or team memory. \
+             REQUIRED parameters: 'team_name' (string), 'to' (string, agent ID e.g. 'tm-001' \
+             or 'lead'), and 'content' (string, message text). Common gotcha: use the exact \
+             agent ID or 'lead' for the lead; nicknames that do not match team membership \
+             will fail."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "team_name": {
+                    "type": "string",
+                    "description": "Name of the team (required)"
+                },
+                "to": {
+                    "type": "string",
+                    "description": "Recipient agent ID (e.g. 'tm-001') or 'lead' (required)"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Message text to send (required). Maximum 262144 bytes \
+                                    (256 KiB); an oversized body is refused with an error \
+                                    naming the limit and the actual size, never truncated."
+                }
+            },
+            "required": ["team_name", "to", "content"],
+            "additionalProperties": false
+        })
+    }
+    fn permission_category(&self) -> &'static str {
+        "team:communicate"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let team_name = input
+            .get("team_name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing required parameter: team_name"))?;
+
+        let to = input
+            .get("to")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing required parameter: to"))?;
+
+        let content = input
+            .get("content")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing required parameter: content"))?;
+
+        let team_dir = find_team_dir(&ctx.working_dir, team_name)
+            .ok_or_else(|| anyhow::anyhow!("Team '{team_name}' not found"))?;
+        let from = super::team_caller::resolve_caller(ctx, team_name, &team_dir)?
+            .agent_id()
+            .to_string();
+
+        // Resolve recipient agent ID if a name was given.
+        let recipient_id = resolve_agent_id(&team_dir, to)?;
+
+        // M4-T4: validate the recipient is an active member before pushing.
+        // Messages to `lead` are always allowed (the lead mailbox is always
+        // valid). For teammates, reject `Stopped` / `Failed` so the sender
+        // gets an error instead of a false success.
+        if recipient_id != "lead" {
+            let store = TeamStore::load(&team_dir)?;
+            match store.config.member_by_id(&recipient_id) {
+                None => {
+                    return Err(anyhow::anyhow!(
+                        "recipient '{to}' (id: {recipient_id}) cannot be messaged: it is not a \
+                         member of team '{team_name}'. Check the name with `team_status`, which \
+                         lists every member and its id"
+                    ));
+                }
+                Some(m) if m.status.is_terminal() => {
+                    return Err(anyhow::anyhow!(
+                        "{} and cannot receive messages in team '{team_name}': a {} teammate \
+                         has no session left to drain its mailbox. Send the message to another \
+                         member, or respawn this one with `team_spawn`",
+                        crate::team::member_status_clause(&m.name, &m.agent_id, m.status),
+                        m.status.display_label()
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        let mailbox = Mailbox::open(&team_dir, &recipient_id)?;
+        // SEC-ragent-team-003 (SECTASKS T-018): record the authenticated
+        // session id alongside the derived `from`, so the recipient can tell a
+        // genuine lead message from a forged one.
+        mailbox.push(
+            MailboxMessage::new(
+                from.clone(),
+                recipient_id.clone(),
+                MessageType::Message,
+                content,
+            )
+            .with_sender_session(&ctx.session_id),
+        )?;
+
+        Ok(ToolOutput {
+            content: format!("Message sent to '{to}' in team '{team_name}'."),
+            metadata: Some(json!({
+                "team_name": team_name,
+                "from": from,
+                "to": recipient_id,
+                "message_count": 1
+            })),
+        })
+    }
+}
+
+/// Resolve a teammate name to an agent ID by looking it up in config.json.
+///
+/// M8-T5: if `name_or_id` starts with `"tm-"`, it is validated against the
+/// actual member list before being accepted. A typo like `"tm-999"` that
+/// does not correspond to a real member now returns an error instead of
+/// silently writing to a mailbox nobody owns.
+///
+/// If `name_or_id` is `"lead"`, it is returned as-is (the lead mailbox is
+/// always valid).
+///
+/// If `name_or_id` is neither `"lead"` nor a `"tm-"` prefix, it is treated
+/// as a teammate **name** and looked up in `config.json`'s member list.
+pub(crate) fn resolve_agent_id(team_dir: &std::path::Path, name_or_id: &str) -> Result<String> {
+    if name_or_id == "lead" {
+        return Ok(name_or_id.to_string());
+    }
+    // M8-T5: validate `tm-...` IDs against the actual member list.
+    if name_or_id.starts_with("tm-") {
+        let store = TeamStore::load(team_dir)?;
+        if let Some(m) = store.config.member_by_id(name_or_id) {
+            return Ok(m.agent_id.clone());
+        }
+        return Err(anyhow::anyhow!(
+            "agent ID '{name_or_id}' is not a member of this team. Read the roster with \
+             `team_status`, or address the member by its name instead of its id"
+        ));
+    }
+    // Try to find a member with this name.
+    let store = TeamStore::load(team_dir)?;
+    let names: Vec<&str> = store
+        .config
+        .members
+        .iter()
+        .map(|m| m.name.as_str())
+        .collect();
+    store
+        .config
+        .member_by_name(name_or_id)
+        .map(|m| m.agent_id.clone())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no teammate named '{name_or_id}' in this team; known teammates: [{}]. Use one \
+                 of those names, or `lead` for the lead session",
+                if names.is_empty() {
+                    "none".to_string()
+                } else {
+                    names.join(", ")
+                }
+            )
+        })
+}

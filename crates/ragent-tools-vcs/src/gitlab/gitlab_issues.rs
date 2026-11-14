@@ -1,0 +1,472 @@
+//! GitLab issue tools - list, get, create, comment, and close issues.
+
+use anyhow::{Context, Result};
+use serde_json::{Value, json};
+
+use super::helpers::{detect_project, make_client};
+use crate::limits::{DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, NOTES_PER_PAGE};
+use crate::vocab::normalize_gitlab_issue_state;
+
+use super::{Tool, ToolContext, ToolOutput};
+
+// ---------------------------------------------------------------------------
+// 1. GitLabListIssuesTool
+// ---------------------------------------------------------------------------
+
+/// Tool that lists GitLab issues in a project.
+pub struct GitLabListIssuesTool;
+
+#[async_trait::async_trait]
+impl Tool for GitLabListIssuesTool {
+    fn name(&self) -> &'static str {
+        "gitlab_list_issues"
+    }
+
+    fn description(&self) -> &'static str {
+        "List GitLab issues in the project detected from the current working directory. \
+         No required parameters. 'state' (enum 'opened', 'closed', 'all', default 'opened') filters by issue state; \
+         both 'opened' and GitHub's 'open' spelling are accepted. \
+         'labels' (string) is a comma-separated list of label names; 'limit' (integer, default 20, max 100) caps the result count. \
+         Requires GitLab configuration and a GitLab-backed git repo (see /gitlab setup). \
+         Common gotcha: labels must exactly match existing project labels; large issue lists are capped by 'limit' without pagination. \
+         Cross-provider note: GitLab calls the item id 'iid' where GitHub uses 'number'."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "state": {
+                    "type": "string",
+                    "enum": ["opened", "closed", "all"],
+                    "description": "Filter by issue state (default: opened; GitHub's 'open' is also accepted)"
+                },
+                "labels": {
+                    "type": "string",
+                    "description": "Comma-separated label names to filter by"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max issues to return (default 20, max 100)"
+                }
+            }
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "gitlab:read"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let client = make_client(ctx)?;
+        let project = detect_project(ctx)?;
+
+        let state = normalize_gitlab_issue_state(input["state"].as_str().unwrap_or("opened"));
+        let limit = input["limit"]
+            .as_u64()
+            .unwrap_or(DEFAULT_PAGE_LIMIT)
+            .min(MAX_PAGE_LIMIT);
+
+        let mut path = format!("/projects/{project}/issues?state={state}&per_page={limit}");
+        if let Some(labels) = input["labels"].as_str()
+            && !labels.is_empty()
+        {
+            // SEC-034: percent-encode the value so `bug&per_page=100` cannot
+            // inject extra query parameters.
+            path.push_str(&format!(
+                "&labels={}",
+                crate::percent::encode_component(labels)
+            ));
+        }
+
+        let issues = client.get(&path).await?;
+        let arr = issues
+            .as_array()
+            .context("Expected array from GitLab issues endpoint")?;
+
+        if arr.is_empty() {
+            return Ok(ToolOutput {
+                content: format!("No {state} issues found."),
+                metadata: None,
+            });
+        }
+
+        let mut lines = vec![format!("Issues (state={state}):\n")];
+        for issue in arr {
+            let iid = issue["iid"].as_u64().unwrap_or(0);
+            let title = issue["title"].as_str().unwrap_or("(no title)");
+            let issue_state = issue["state"].as_str().unwrap_or("?");
+            let author = issue["author"]["username"].as_str().unwrap_or("?");
+            let notes = issue["user_notes_count"].as_u64().unwrap_or(0);
+            lines.push(format!(
+                "  #{iid} [{issue_state}] {title} (by {author}, {notes} note{})",
+                if notes == 1 { "" } else { "s" }
+            ));
+        }
+
+        Ok(ToolOutput {
+            content: lines.join("\n"),
+            metadata: Some(json!({ "count": arr.len(), "project": project })),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 2. GitLabGetIssueTool
+// ---------------------------------------------------------------------------
+
+/// Tool that retrieves a single GitLab issue by IID.
+pub struct GitLabGetIssueTool;
+
+#[async_trait::async_trait]
+impl Tool for GitLabGetIssueTool {
+    fn name(&self) -> &'static str {
+        "gitlab_get_issue"
+    }
+
+    fn description(&self) -> &'static str {
+        "Get full details of a specific GitLab issue including title, description, state, labels, assignees, and the first 10 user notes. \
+         Required parameter: 'iid' (integer) - the project-scoped issue IID. \
+         Requires GitLab configuration and a GitLab-backed git repo. \
+         Common gotcha: GitLab uses project-scoped IIDs, not globally unique IDs; use the number shown in the issue URL (e.g. #42)."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "iid": {
+                    "type": "integer",
+                    "description": "Issue IID (project-scoped number)"
+                }
+            },
+            "required": ["iid"]
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "gitlab:read"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let client = make_client(ctx)?;
+        let project = detect_project(ctx)?;
+
+        let iid = input["iid"]
+            .as_u64()
+            .context("Missing required parameter 'iid'")?;
+
+        let issue = client
+            .get(&format!("/projects/{project}/issues/{iid}"))
+            .await?;
+        let notes_val = client
+            .get(&format!(
+                "/projects/{project}/issues/{iid}/notes?per_page={NOTES_PER_PAGE}"
+            ))
+            .await?;
+
+        let title = issue["title"].as_str().unwrap_or("(no title)");
+        let state = issue["state"].as_str().unwrap_or("?");
+        let author = issue["author"]["username"].as_str().unwrap_or("?");
+        let body = issue["description"].as_str().unwrap_or("(no description)");
+        let web_url = issue["web_url"].as_str().unwrap_or("");
+
+        let labels: Vec<&str> = issue["labels"]
+            .as_array()
+            .map(|arr| arr.iter().filter_map(|l| l.as_str()).collect())
+            .unwrap_or_default();
+
+        let assignees: Vec<&str> = issue["assignees"]
+            .as_array()
+            .map(|arr| arr.iter().filter_map(|a| a["username"].as_str()).collect())
+            .unwrap_or_default();
+
+        let mut md = format!(
+            "# Issue #{iid}: {title}\n\n\
+             **State**: {state}  \n\
+             **Author**: {author}  \n\
+             **URL**: {web_url}  \n"
+        );
+
+        if !labels.is_empty() {
+            md.push_str(&format!("**Labels**: {}  \n", labels.join(", ")));
+        }
+        if !assignees.is_empty() {
+            md.push_str(&format!("**Assignees**: {}  \n", assignees.join(", ")));
+        }
+
+        md.push_str(&format!("\n## Description\n\n{body}\n"));
+
+        if let Some(notes) = notes_val.as_array() {
+            let user_notes: Vec<&Value> = notes
+                .iter()
+                .filter(|n| !n["system"].as_bool().unwrap_or(true))
+                .collect();
+            let total = user_notes.len();
+            if total > 0 {
+                md.push_str(&format!("\n## Notes ({total})\n"));
+                for note in user_notes.iter().take(NOTES_PER_PAGE as usize) {
+                    let commenter = note["author"]["username"].as_str().unwrap_or("?");
+                    let created = note["created_at"].as_str().unwrap_or("");
+                    let nbody = note["body"].as_str().unwrap_or("");
+                    md.push_str(&format!("\n**{commenter}** ({created}):\n{nbody}\n"));
+                }
+            }
+        }
+
+        Ok(ToolOutput {
+            content: md,
+            metadata: Some(json!({ "iid": iid, "project": project })),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 3. GitLabCreateIssueTool
+// ---------------------------------------------------------------------------
+
+/// Tool that creates a new GitLab issue in a project.
+pub struct GitLabCreateIssueTool;
+
+#[async_trait::async_trait]
+impl Tool for GitLabCreateIssueTool {
+    fn name(&self) -> &'static str {
+        "gitlab_create_issue"
+    }
+
+    fn description(&self) -> &'static str {
+        "Create a new GitLab issue in the project detected from the working directory. \
+         Required parameter: 'title' (string) - the issue title. \
+         Optional: 'description' (string) is the issue body in markdown; 'labels' (string) is a comma-separated list of label names; \
+         'assignee_ids' (string) is a comma-separated list of numeric user IDs to assign. \
+         Requires GitLab configuration and a GitLab-backed git repo. \
+         Common gotcha: 'assignee_ids' must be numeric GitLab user IDs, not usernames; unknown labels cause the API call to fail."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Issue title"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Issue description (markdown supported)"
+                },
+                "labels": {
+                    "type": "string",
+                    "description": "Comma-separated label names"
+                },
+                "assignee_ids": {
+                    "type": "string",
+                    "description": "Comma-separated user IDs to assign"
+                }
+            },
+            "required": ["title"]
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "gitlab:write"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let client = make_client(ctx)?;
+        let project = detect_project(ctx)?;
+
+        let title = input["title"]
+            .as_str()
+            .context("Missing required parameter 'title'")?;
+
+        let mut payload = json!({ "title": title });
+
+        if let Some(desc) = input["description"].as_str() {
+            payload["description"] = json!(desc);
+        }
+        if let Some(labels) = input["labels"].as_str() {
+            payload["labels"] = json!(labels);
+        }
+        if let Some(assignee_ids) = input["assignee_ids"].as_str() {
+            // FUNC-069: a non-numeric token must surface an error naming the
+            // bad id rather than being silently dropped - a partial assignee
+            // set is misleading (the issue is created without the requested
+            // assignee and no failure is reported).
+            let mut ids: Vec<u64> = Vec::new();
+            for raw in assignee_ids.split(',') {
+                let token = raw.trim();
+                if token.is_empty() {
+                    continue;
+                }
+                let id: u64 = token.parse().with_context(|| {
+                    format!("Invalid assignee id '{token}'; expected a numeric GitLab user id")
+                })?;
+                ids.push(id);
+            }
+            if !ids.is_empty() {
+                payload["assignee_ids"] = json!(ids);
+            }
+        }
+
+        let result = client
+            .post(&format!("/projects/{project}/issues"), &payload)
+            .await?;
+
+        let iid = result["iid"].as_u64().unwrap_or(0);
+        let web_url = result["web_url"].as_str().unwrap_or("");
+
+        Ok(ToolOutput {
+            content: format!("Created issue #{iid}\nURL: {web_url}"),
+            metadata: Some(json!({ "iid": iid, "url": web_url, "project": project })),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 4. GitLabCommentIssueTool
+// ---------------------------------------------------------------------------
+
+/// Tool that posts a note (comment) on an existing GitLab issue.
+pub struct GitLabCommentIssueTool;
+
+#[async_trait::async_trait]
+impl Tool for GitLabCommentIssueTool {
+    fn name(&self) -> &'static str {
+        "gitlab_comment_issue"
+    }
+
+    fn description(&self) -> &'static str {
+        "Add a note (comment) to an existing GitLab issue. \
+         Required parameters: 'iid' (integer) - the issue IID, and 'body' (string) - the note text (markdown supported). \
+         Requires GitLab configuration and a GitLab-backed git repo. \
+         Common gotcha: use the project-scoped IID from the issue URL; the note is attributed to the configured GitLab token's user."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "iid": {
+                    "type": "integer",
+                    "description": "Issue IID"
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Note body (markdown supported)"
+                }
+            },
+            "required": ["iid", "body"]
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "gitlab:write"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let client = make_client(ctx)?;
+        let project = detect_project(ctx)?;
+
+        let iid = input["iid"]
+            .as_u64()
+            .context("Missing required parameter 'iid'")?;
+        let body = input["body"]
+            .as_str()
+            .context("Missing required parameter 'body'")?;
+
+        let result = client
+            .post(
+                &format!("/projects/{project}/issues/{iid}/notes"),
+                &json!({ "body": body }),
+            )
+            .await?;
+
+        let note_id = result["id"].as_u64().unwrap_or(0);
+
+        Ok(ToolOutput {
+            content: format!("Note added to issue #{iid} (note id: {note_id})"),
+            metadata: Some(json!({ "note_id": note_id, "iid": iid, "project": project })),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 5. GitLabCloseIssueTool
+// ---------------------------------------------------------------------------
+
+/// Tool that closes a GitLab issue.
+pub struct GitLabCloseIssueTool;
+
+#[async_trait::async_trait]
+impl Tool for GitLabCloseIssueTool {
+    fn name(&self) -> &'static str {
+        "gitlab_close_issue"
+    }
+
+    fn description(&self) -> &'static str {
+        "Close an open GitLab issue, optionally posting a closing note first. \
+         Required parameter: 'iid' (integer) - the issue IID. \
+         Optional: 'comment' (string) - a closing note posted before the issue is closed. \
+         Requires GitLab configuration and a GitLab-backed git repo. \
+         Common gotcha: closing an already-closed issue is a no-op; only project members with sufficient permissions can change issue state."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "iid": {
+                    "type": "integer",
+                    "description": "Issue IID"
+                },
+                "comment": {
+                    "type": "string",
+                    "description": "Optional closing note"
+                }
+            },
+            "required": ["iid"]
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "gitlab:write"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let client = make_client(ctx)?;
+        let project = detect_project(ctx)?;
+
+        let iid = input["iid"]
+            .as_u64()
+            .context("Missing required parameter 'iid'")?;
+
+        if let Some(comment) = input["comment"].as_str()
+            && !comment.is_empty()
+        {
+            client
+                .post(
+                    &format!("/projects/{project}/issues/{iid}/notes"),
+                    &json!({ "body": comment }),
+                )
+                .await?;
+        }
+
+        client
+            .put(
+                &format!("/projects/{project}/issues/{iid}"),
+                &json!({ "state_event": "close" }),
+            )
+            .await?;
+
+        Ok(ToolOutput {
+            content: format!("Issue #{iid} has been closed."),
+            metadata: Some(json!({ "iid": iid, "project": project })),
+        })
+    }
+}

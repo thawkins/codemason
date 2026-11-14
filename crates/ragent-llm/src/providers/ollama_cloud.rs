@@ -1,0 +1,890 @@
+//! Ollama Cloud provider implementation.
+//!
+//! Connects to Ollama Cloud at `https://ollama.com` using the native
+//! `/api/chat` and `/api/tags` endpoints with bearer-token authentication.
+
+use anyhow::{Context, Result, bail};
+use futures::StreamExt;
+use serde::Deserialize;
+use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::pin::Pin;
+
+// Ollama Cloud supports the `think` parameter on the native `/api/chat`
+// endpoint, mirroring local Ollama. We import the binary-thinking helpers
+// to populate model metadata and set the `think` flag in requests.
+use super::ollama_shared::estimate_context_window;
+use super::thinking::{
+    binary_thinking_levels_for_model, model_supports_binary_thinking, think_flag_from_request,
+};
+use super::wire::decode::{StreamKey, ToolCallAccumulator};
+use super::wire::encode::{MessageContext, encode_message};
+use super::wire::profile_table::OLLAMA_NATIVE;
+use super::wire::trace;
+#[cfg(test)]
+use crate::llm::ChatContent;
+use crate::llm::{ChatRequest, LlmClient, StreamEvent, ToolDefinition};
+use crate::provider::http_client::{MAX_ERROR_BODY_BYTES, read_body_capped};
+use crate::{ModelInfo, Provider};
+use ragent_config::{Capabilities, Cost};
+use ragent_types::ThinkingConfig;
+use ragent_types::event::FinishReason;
+
+const DEFAULT_OLLAMA_CLOUD_HOST: &str = "https://ollama.com";
+
+/// Provider implementation for Ollama Cloud.
+pub struct OllamaCloudProvider {
+    base_url: String,
+}
+
+impl OllamaCloudProvider {
+    /// Creates a provider for the Ollama Cloud API.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::with_url(DEFAULT_OLLAMA_CLOUD_HOST)
+    }
+
+    /// Creates a provider pointing at a custom Ollama Cloud-compatible host.
+    #[must_use]
+    pub fn with_url(base_url: &str) -> Self {
+        Self {
+            base_url: base_url.trim_end_matches('/').to_string(),
+        }
+    }
+
+    async fn discover_models(&self, _api_key: &str) -> Result<Vec<OllamaModelEntry>> {
+        let url = format!("{}/api/tags", self.base_url);
+        let response = crate::provider::http_client::create_http_client()
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await
+            .inspect_err(|e| {
+                tracing::warn!(url = %url, error = %e, "Ollama Cloud model discovery failed");
+            })
+            .with_context(|| format!("Failed to connect to Ollama Cloud at {url}"))?;
+        if !response.status().is_success() {
+            bail!(
+                "Ollama Cloud API returned status {} from {}",
+                response.status(),
+                url
+            );
+        }
+
+        let body: OllamaTagsResponse = response
+            .json()
+            .await
+            .context("Failed to parse Ollama Cloud tags response")?;
+
+        Ok(body.models)
+    }
+
+    /// Fetches detailed model information via /api/show endpoint.
+    /// Returns context_length and vision capability if available.
+    /// The endpoint is public for listing model metadata, so the Authorization
+    /// header is omitted when no API key is available.
+    async fn show_model(&self, api_key: &str, model_name: &str) -> Option<OllamaShowResponse> {
+        let url = format!("{}/api/show", self.base_url);
+        let mut request = crate::provider::http_client::create_http_client()
+            .post(&url)
+            .json(&json!({ "model": model_name }))
+            .timeout(std::time::Duration::from_secs(5));
+        if !api_key.is_empty() {
+            request = request.header(
+                "Authorization",
+                ragent_types::strutil::bearer_auth_header(&api_key),
+            );
+        }
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(e) => {
+                tracing::warn!(url = %url, model = %model_name, error = %e, "/api/show request failed");
+                return None;
+            }
+        };
+
+        if !response.status().is_success() {
+            tracing::warn!(
+                url = %url,
+                model = %model_name,
+                status = %response.status(),
+                "/api/show returned non-success status"
+            );
+            return None;
+        }
+
+        match response.json().await {
+            Ok(v) => Some(v),
+            Err(e) => {
+                tracing::warn!(url = %url, model = %model_name, error = %e, "/api/show response parse failed");
+                None
+            }
+        }
+    }
+}
+
+impl Default for OllamaCloudProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaTagsResponse {
+    #[serde(default)]
+    models: Vec<OllamaModelEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaModelEntry {
+    name: String,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    details: OllamaModelDetails,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct OllamaModelDetails {
+    #[serde(default)]
+    parameter_size: String,
+    /// Model family (e.g. `"llama"`, `"qwen"`).
+    ///
+    /// Currently parsed but not used for context-window estimation, which relies
+    /// on `parameter_size`. Kept as a documented field so future routing or
+    /// display logic can use it without changing the API response schema.
+    #[serde(default)]
+    #[allow(dead_code)]
+    family: String,
+}
+
+/// Response from /api/show endpoint containing model details including context length.
+#[derive(Debug, Deserialize)]
+struct OllamaShowResponse {
+    #[serde(default)]
+    model_info: HashMap<String, Value>,
+    #[serde(default)]
+    capabilities: Vec<String>,
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
+}
+
+impl OllamaShowResponse {
+    /// Extracts the context length from model_info.
+    /// Looks for common top-level fields first, then `<architecture>.*` model_info keys.
+    fn context_length(&self) -> Option<usize> {
+        for key in [
+            "context_length",
+            "context_window",
+            "num_ctx",
+            "max_position_embeddings",
+            "max_sequence_length",
+        ] {
+            if let Some(value) = self.extra.get(key).and_then(parse_usize_value) {
+                return Some(value);
+            }
+        }
+
+        for (key, value) in &self.model_info {
+            if (key.ends_with(".context_length")
+                || key.ends_with(".context_window")
+                || key.ends_with(".num_ctx")
+                || key.ends_with(".n_ctx")
+                || key.ends_with(".max_position_embeddings")
+                || key.ends_with(".max_sequence_length"))
+                && let Some(len) = parse_usize_value(value)
+            {
+                return Some(len);
+            }
+        }
+        None
+    }
+
+    /// Checks if the model has vision capability.
+    fn has_vision(&self) -> bool {
+        self.capabilities.iter().any(|c| c == "vision")
+    }
+
+    /// Checks if the model supports thinking/reasoning.
+    ///
+    /// Detects thinking support from two sources:
+    /// 1. The `capabilities` array - Ollama may include a "thinking" capability
+    ///    for models whose template contains `{{--think}}` tags.
+    /// 2. The `template` field - models with `<!-- think -->` markers in their
+    ///    Modelfile template support the `think` parameter.
+    fn has_thinking(&self) -> bool {
+        // Check the capabilities array first (structured detection).
+        if self.capabilities.iter().any(|c| c == "thinking") {
+            return true;
+        }
+        // Fallback: inspect the template for thinking markers.
+        if let Some(template) = self.extra.get("template").and_then(|v| v.as_str())
+            && (template.contains("<!-- think -->") || template.contains("{{--think}}"))
+        {
+            return true;
+        }
+        false
+    }
+}
+
+fn parse_usize_value(value: &Value) -> Option<usize> {
+    value
+        .as_u64()
+        .and_then(|n| usize::try_from(n).ok())
+        .or_else(|| {
+            value
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .and_then(|s| s.parse::<usize>().ok())
+        })
+}
+
+fn format_model_name(name: &str, details: &OllamaModelDetails) -> String {
+    let param_size = if details.parameter_size.is_empty() {
+        infer_parameter_size(name)
+    } else {
+        Some(details.parameter_size.clone())
+    };
+
+    match param_size {
+        Some(size) if !size.is_empty() => format!("{name} ({size})"),
+        _ => name.to_string(),
+    }
+}
+
+fn infer_parameter_size(name: &str) -> Option<String> {
+    let tag = name.split_once(':')?.1;
+    let token = tag.split(['-', '_']).next().unwrap_or(tag);
+    let mut digits = String::new();
+    let mut saw_digit = false;
+    for c in token.chars() {
+        if c.is_ascii_digit() || (!saw_digit && c == '.') {
+            digits.push(c);
+            saw_digit = true;
+        } else {
+            break;
+        }
+    }
+    if digits.is_empty() {
+        return None;
+    }
+    if token[digits.len()..].starts_with('b') || token[digits.len()..].starts_with('B') {
+        Some(format!("{digits}B"))
+    } else {
+        Some(digits)
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for OllamaCloudProvider {
+    fn id(&self) -> &'static str {
+        "ollama_cloud"
+    }
+
+    fn name(&self) -> &'static str {
+        "Ollama Cloud"
+    }
+
+    fn as_any_static(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn default_models(&self) -> Vec<ModelInfo> {
+        vec![]
+    }
+
+    /// Queries Ollama Cloud `/api/tags` for live model discovery.
+    /// Authentication is not required to list public models, so discovery works
+    /// even when `OLLAMA_API_KEY` is not configured.
+    async fn discover_models(&self) -> Result<Vec<ModelInfo>> {
+        let api_key = ragent_config::credential_env::read_credential_env("OLLAMA_API_KEY")
+            .unwrap_or_default();
+        let models = list_ollama_cloud_models(&api_key, Some(&self.base_url))
+            .await
+            .with_context(|| "Ollama Cloud model discovery failed")?;
+        Ok(models)
+    }
+
+    async fn create_client(
+        &self,
+        api_key: &str,
+        base_url: Option<&str>,
+        _options: &HashMap<String, Value>,
+    ) -> Result<Box<dyn LlmClient>> {
+        let key = if api_key.is_empty() {
+            bail!("Ollama Cloud requires an API key.");
+        } else {
+            // ANTIPAT 3.6: register the key with the shared redaction registry.
+            ragent_types::sanitize::register_secret(api_key);
+            api_key.to_string()
+        };
+
+        let url = base_url
+            .unwrap_or(&self.base_url)
+            .trim_end_matches('/')
+            .to_string();
+        let client = OllamaCloudClient {
+            api_key: key,
+            base_url: url.clone(),
+            http: crate::provider::http_client::create_streaming_http_client(),
+        };
+        tracing::info!(chat_endpoint = %format!("{}/api/chat", url), models_endpoint = %format!("{}/api/tags", url), "Ollama Cloud provider connected");
+        Ok(Box::new(client))
+    }
+}
+struct OllamaCloudClient {
+    api_key: String,
+    base_url: String,
+    http: reqwest::Client,
+}
+
+impl OllamaCloudClient {
+    fn build_request_body(&self, request: &ChatRequest, tools: &[ToolDefinition]) -> Value {
+        let mut messages = Vec::new();
+
+        // Build a map of tool_use_id -> tool_name so we can include both
+        // `tool_call_id` (OpenAI format) and `tool_name` (native Ollama format)
+        // in tool result messages, satisfying whichever format the model expects.
+        let tool_id_to_name = super::wire::encode::tool_names_by_id(&request.messages);
+
+        if let Some(system) = &request.system {
+            messages.push(json!({
+                "role": "system",
+                "content": &**system
+            }));
+        }
+
+        // Only the most recent user message should carry an `images` array.
+        // Historical images remain in the chat history as `ContentPart::ImageUrl`,
+        // but sending them to a non-vision model (or on older turns) causes
+        // Ollama Cloud to reject the request with "this model does not support
+        // image input". The rule is a per-turn fact, so it is the one thing this
+        // client passes beside its profile; the per-message shape is the shared
+        // encoder (FR-006).
+        let last_user_idx = request.messages.iter().rposition(|m| m.role == "user");
+
+        for (idx, msg) in request.messages.iter().enumerate() {
+            let ctx = MessageContext {
+                tool_names: Some(&tool_id_to_name),
+                allow_images: last_user_idx == Some(idx),
+                ..MessageContext::default()
+            };
+            messages.extend(encode_message(OLLAMA_NATIVE, msg, &ctx));
+        }
+
+        // Native `/api/chat` message packing is Ollama Cloud specific; the
+        // shared builder supplies the model/stream/sampling/tools scaffold
+        // (audit T-401).
+        let mut compat = super::openai_compat::OpenAiCompat::with_messages(
+            request,
+            super::openai_compat::OpenAiCompatSpec::ollama_cloud(),
+            tools,
+            messages,
+        );
+        {
+            let body = compat.body_mut();
+            // Ollama Cloud supports the `think` boolean parameter on its
+            // native `/api/chat` endpoint, just like local Ollama.
+            if let Some(think) = think_flag_from_request(request) {
+                body["think"] = json!(think);
+            }
+        }
+
+        compat.finish()
+    }
+}
+#[async_trait::async_trait]
+impl LlmClient for OllamaCloudClient {
+    async fn chat(
+        &self,
+        request: ChatRequest,
+    ) -> Result<Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>>> {
+        let url = format!("{}/api/chat", self.base_url);
+        let body = self.build_request_body(&request, &request.tools);
+        trace::record_body(&request, &body);
+
+        tracing::debug!(
+            url = %url,
+            model = %request.model,
+            has_tools = !request.tools.is_empty(),
+            tool_count = request.tools.len(),
+            "Ollama Cloud request"
+        );
+        let timeout_secs = request
+            .stream_timeout_secs
+            .unwrap_or(super::http_client::DEFAULT_STREAM_TIMEOUT_SECS);
+        // PERF-062: serialise the request body exactly once. The debug preview
+        // is a borrowed slice of the same bytes and is only built when debug
+        // logging is actually enabled, so a disabled log costs nothing.
+        let body_bytes =
+            serde_json::to_vec(&body).context("serialise Ollama Cloud request body")?;
+        // SEC: never log the request body itself - it carries the full chat
+        // messages / prompt. Log only structural metadata (size + model) so a
+        // debug log cannot leak user content.
+        let body_len = body_bytes.len();
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            tracing::debug!(body_bytes = body_len, "Ollama Cloud request body built");
+        }
+
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            self.http
+                .post(&url)
+                .header("content-type", "application/json")
+                .header("Authorization", ragent_types::strutil::bearer_auth_header(&self.api_key))
+                .body(body_bytes)
+                .send(),
+        )
+        .await
+        .inspect_err(|e| {
+            tracing::warn!(provider = "ollama_cloud", url = %url, error = %e, "chat request timed out");
+        })
+        .map_err(|_| {
+            anyhow::anyhow!("Ollama Cloud: initial response timed out after {timeout_secs}s")
+        })?
+        .inspect_err(|e| {
+            tracing::warn!(provider = "ollama_cloud", url = %url, error = %e, "chat request failed");
+        })
+        .with_context(|| format!("Failed to connect to Ollama Cloud at {url}"))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            // ANTIPAT 3.1/3.2: capped error-body read.
+            let error_body = read_body_capped(response, MAX_ERROR_BODY_BYTES).await;
+            // SEC: redact the provider error body before logging or surfacing it.
+            let error_body = ragent_types::sanitize::redact_secrets(&error_body);
+            tracing::warn!(
+                provider = "ollama_cloud",
+                url = %url,
+                model = %request.model,
+                status = %status,
+                error = %error_body,
+                "API error"
+            );
+            bail!("Ollama Cloud API error ({status}): {error_body}");
+        }
+
+        let stream = response.bytes_stream();
+        let model_name = request.model.clone();
+        let event_stream = async_stream::stream! {
+            // PERF-063: pre-size the SSE accumulation buffer so a long stream does
+            // not repeatedly realloc/copy as it grows.
+            let mut buffer = String::with_capacity(8 * 1024);
+            // FUNC-033: hold an incomplete trailing multibyte character from the
+            // previous chunk so a UTF-8 sequence split across TCP chunks is not
+            // corrupted.
+            let mut pending_utf8: Vec<u8> = Vec::new();
+            // F6: set once any tool call is seen in the stream; later content
+            // deltas are suppressed as duplicate narration.
+            let mut tool_calls_seen = false;
+            // FR-004: the native `/api/chat` shape repeats the call id on every frame
+            // (`OLLAMA_NATIVE` is `StreamKeying::ByCallId`), so the shared accumulator
+            // owns the open calls instead of a `HashMap<String, String>` here.
+            // FR-019: a frame that omits `id` is named by a stream-scoped counter and
+            // the accumulator mints `<provider>_<counter>_<name>` for it. The counter
+            // has to be stream-scoped rather than the frame-local `idx`, which restarts
+            // at zero on every frame: two unnamed calls in two frames would both name
+            // `call@0` and the second would fold onto the first.
+            let mut acc = ToolCallAccumulator::new(OLLAMA_NATIVE, "ollama_cloud");
+            let mut unnamed_calls = 0u64;
+            let mut stream_done = false;
+            let mut line_count = 0usize;
+
+            futures::pin_mut!(stream);
+
+            while !stream_done {
+                let chunk_result = match tokio::time::timeout(
+                    std::time::Duration::from_secs(
+                        super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS,
+                    ),
+                    stream.next(),
+                )
+                .await
+                {
+                    Ok(Some(r)) => r,
+                    Ok(None) => break,
+                    Err(_) => {
+                        yield StreamEvent::Error {
+                            message: format!(
+                                "Ollama Cloud: stream stalled - no data received for {}s",
+                                super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS
+                            ),
+                        };
+                        break;
+                    }
+                };
+                let chunk = match chunk_result {
+                    Ok(c) => c,
+                    Err(e) => {
+                        yield StreamEvent::Error { message: e.to_string() };
+                        break;
+                    }
+                };
+
+                // SEC-ragent-llm-004 (SECTASKS T-028): fail the stream when a
+
+                // peer dribbles bytes without ever emitting a newline instead
+
+                // of letting the accumulation buffer grow without bound.
+
+                if let Err(e) = super::http_client::append_chunk_guarded(
+
+                    &mut buffer,
+
+                    &mut pending_utf8,
+
+                    &chunk,
+
+                    "Ollama Cloud",
+
+                ) {
+
+                    yield StreamEvent::Error {
+
+                        message: e.to_string(),
+
+                    };
+
+                    return;
+
+                }
+
+                while let Some(line) = super::http_client::take_sse_line(&mut buffer) {
+                    let line = line.trim();
+                    // ANTIPAT 5.2: standard `match line.strip_prefix("data: ")`
+                    // form. NOTE: the native Ollama `/api/chat` endpoint streams
+                    // newline-delimited JSON (NDJSON), not SSE, so each line is
+                    // itself a complete data frame; an SSE-style `data: ` prefix
+                    // from an intermediate proxy is still tolerated. A
+                    // prefix-less line IS the frame, never a line to skip.
+                    let data = match line.strip_prefix("data: ") {
+                        Some(d) => d.trim(),
+                        None => line,
+                    };
+                    if data == "[DONE]" {
+                        stream_done = true;
+                        break;
+                    }
+
+                    let parsed: Value = match serde_json::from_str(data) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            // SEC: the raw NDJSON frame carries streamed model
+                            // output; redact before logging (see ollama.rs).
+                            tracing::warn!(provider = "ollama_cloud", model=%model_name, line=%ragent_types::sanitize::redact_secrets(data), error=%e, "failed to parse stream line");
+                            continue;
+                        }
+                    };                      // Log key stream lines for diagnostics (first 3 + any with tool_calls or done)
+                      line_count += 1;
+                    let has_tool_calls = parsed
+                        .get("message")
+                        .and_then(|m| m.get("tool_calls"))
+                        .is_some();
+                    let is_done = parsed.get("done").and_then(serde_json::Value::as_bool) == Some(true);
+                    if line_count <= 3 || has_tool_calls || is_done {
+                        // Diagnostic chatter, not session activity: `DEBUG` keeps it
+                        // in the local log for a `--log-level debug` run while the
+                        // default `info` floor keeps it out of the OTLP log export.
+                        // The frame content is not lost when it matters - a done
+                        // frame that carries tool calls is still recorded at
+                        // `INFO` by the "tool_calls found in done frame" event below.
+                        tracing::debug!(
+                            model = %model_name,
+                            line = line_count,
+                            done = is_done,
+                            has_tool_calls,
+                            done_reason = parsed.get("done_reason").and_then(|v| v.as_str()).unwrap_or(""),
+                            "Ollama Cloud stream line"
+                        );
+                    }
+
+                    if let Some(message) = parsed.get("message") {
+                        // Handle thinking/reasoning content (qwen3 and similar models)
+                        if let Some(thinking) = message.get("thinking").and_then(|v| v.as_str())
+                            && !thinking.is_empty()
+                        {
+                            yield StreamEvent::ReasoningStart;
+                            yield StreamEvent::ReasoningDelta {
+                                text: thinking.to_string(),
+                            };
+                            yield StreamEvent::ReasoningEnd;
+                        }
+
+                        let has_tool_calls = message
+                            .get("tool_calls")
+                            .and_then(|v| v.as_array())
+                            .is_some_and(|a| !a.is_empty());
+                        // F6: stream-scoped suppression - once real tool calls
+                        // have been seen, later content is duplicate narration
+                        // (pre-call narration cannot be retracted).
+                        if has_tool_calls {
+                            tool_calls_seen = true;
+                        }
+
+                        if let Some(content) = message.get("content").and_then(|v| v.as_str())
+                            && !content.is_empty()
+                            && !has_tool_calls
+                            && !tool_calls_seen
+                        {
+                            yield StreamEvent::TextDelta { text: content.to_string() };
+                        }
+
+                        if has_tool_calls
+                            && let Some(tool_calls) = message.get("tool_calls").and_then(|v| v.as_array())
+                        {
+                            for tool_call in tool_calls {
+                                // FR-019: the provider's own id when it gave one; an
+                                // id-less call stays keyed by a stream-scoped counter
+                                // and the accumulator mints
+                                // `<provider>_<counter>_<name>` for it. The counter is
+                                // not the frame-local index, which restarts at zero in
+                                // every frame and would fold two unnamed calls onto the
+                                // first.
+                                let function = tool_call.get("function").unwrap_or(tool_call);
+                                let name = function
+                                    .get("name")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("tool");
+                                let key = match tool_call.get("id").and_then(|v| v.as_str()) {
+                                    Some(id) if !id.is_empty() => {
+                                        // The id is the key, so the frames after this
+                                        // one - which may repeat no id at all - reach
+                                        // the same call (FR-004).
+                                        let key = StreamKey::CallId(id.to_string());
+                                        if let Some(event) = acc.open(key.clone(), Some(id), name) {
+                                            yield event;
+                                        }
+                                        key
+                                    }
+                                    _ => {
+                                        // No id: the key is the stream-scoped counter
+                                        // and only makes the call addressable. No id
+                                        // is passed, so the accumulator mints FR-019's
+                                        // `<provider>_<counter>_<name>` for the start.
+                                        unnamed_calls += 1;
+                                        let key =
+                                            StreamKey::CallId(format!("call@{unnamed_calls}"));
+                                        if let Some(event) = acc.open(key.clone(), None, name) {
+                                            yield event;
+                                        }
+                                        key
+                                    }
+                                };
+
+                                if let Some(args) = function.get("arguments") {
+                                    let args_json = if let Some(s) = args.as_str() {
+                                        s.to_string()
+                                    } else {
+                                        args.to_string()
+                                    };
+                                    if let Some(event) = acc.delta(&key, &args_json) {
+                                        yield event;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(response) = parsed.get("response").and_then(|v| v.as_str())
+                        && !response.is_empty()
+                    {
+                        yield StreamEvent::TextDelta { text: response.to_string() };
+                    }
+
+                    if parsed.get("done").and_then(serde_json::Value::as_bool) == Some(true) {
+                        // PERF-062: only serialise the done frame for the log
+                        // when INFO logging is actually enabled.
+                        if tracing::enabled!(tracing::Level::INFO) {
+                            let done_preview = serde_json::to_string(&parsed).unwrap_or_default();
+                            // SEC-ragent-llm-006 (SECTASKS T-050): slicing at a
+                            // raw byte offset panics when it lands inside a
+                            // multibyte UTF-8 character in a server-controlled
+                            // string field (the same fix already applied in
+                            // openrouter.rs / FUNC-001).
+                            let done_preview =
+                                ragent_types::strutil::truncate_bytes_no_ellipsis(&done_preview, 500);
+                            tracing::info!(
+                                model = %model_name,
+                                open_calls = acc.open_count(),
+                                done_frame = %done_preview,
+                                "Ollama Cloud: done frame received"
+                            );
+                        }
+
+                        if let Some(prompt_tokens) = parsed.get("prompt_eval_count").and_then(serde_json::Value::as_u64)
+                        {
+                            let output_tokens = parsed.get("eval_count").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                            if prompt_tokens > 0 || output_tokens > 0 {
+                                yield StreamEvent::Usage {
+                                    input_tokens: prompt_tokens,
+                                    output_tokens,
+                                };
+                            }
+                        }
+
+                        // Also check done frame for tool_calls (some Ollama versions
+                        // batch all tool calls into the final done=true message)
+                        if let Some(msg) = parsed.get("message")
+                            && let Some(tool_calls_arr) = msg.get("tool_calls").and_then(|v| v.as_array()) {
+                                tracing::info!(
+                                    model = %model_name,
+                                    count = tool_calls_arr.len(),
+                                    "Ollama Cloud: tool_calls found in done frame"
+                                );
+                                for tool_call in tool_calls_arr {
+                                    // FR-019: same rule as the streaming arm - the
+                                    // provider's id when it gave one, otherwise a key
+                                    // from the stream-scoped counter so the
+                                    // accumulator can mint the id.
+                                    let provider_id = tool_call
+                                        .get("id")
+                                        .and_then(|v| v.as_str())
+                                        .filter(|id| !id.is_empty())
+                                        .map(ToString::to_string);
+                                    let key_id = match &provider_id {
+                                        Some(id) => id.clone(),
+                                        None => {
+                                            unnamed_calls += 1;
+                                            format!("unnamed_call_{unnamed_calls}")
+                                        }
+                                    };
+                                    let key = StreamKey::CallId(key_id.clone());
+                                    let function = tool_call.get("function").unwrap_or(tool_call);
+                                    let name = function
+                                        .get("name")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("tool");
+                                    if let Some(event) = acc.open(key.clone(), provider_id.as_deref(), name)
+                                    {
+                                        yield event;
+                                    }
+                                    if let Some(args) = function.get("arguments") {
+                                        let args_json = if let Some(s) = args.as_str() {
+                                            s.to_string()
+                                        } else {
+                                            args.to_string()
+                                        };
+                                        if let Some(event) = acc.delta(&key, &args_json) {
+                                            yield event;
+                                        }
+                                    }
+                                }
+                            }
+
+                        for event in acc.end_all() {
+                            yield event;
+                        }
+
+                        let reason = match parsed
+                            .get("done_reason")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("stop")
+                        {
+                            "tool_calls" => FinishReason::ToolUse,
+                            "length" => FinishReason::Length,
+                            "content_filter" => FinishReason::ContentFilter,
+                            _ => FinishReason::Stop,
+                        };
+                        yield StreamEvent::Finish { reason };
+                        stream_done = true;
+                    }
+                }
+            }
+        };
+
+        Ok(Box::pin(event_stream))
+    }
+}
+
+/// Queries Ollama Cloud for available models.
+/// Fetches model details via /api/show to get accurate context window sizes.
+pub async fn list_ollama_cloud_models(
+    api_key: &str,
+    base_url: Option<&str>,
+) -> Result<Vec<ModelInfo>> {
+    let provider = match base_url {
+        Some(url) => OllamaCloudProvider::with_url(url),
+        None => OllamaCloudProvider::new(),
+    };
+
+    let entries = provider
+        .discover_models(api_key)
+        .await
+        .context("Could not discover Ollama Cloud models")?;
+
+    // Fetch detailed info for each model in parallel
+    let model_names: Vec<_> = entries
+        .iter()
+        .map(|entry| entry.model.clone().unwrap_or_else(|| entry.name.clone()))
+        .collect();
+
+    let show_futures: Vec<_> = model_names
+        .iter()
+        .map(|model_name| provider.show_model(api_key, model_name))
+        .collect();
+
+    let show_results = futures::future::join_all(show_futures).await;
+
+    Ok(entries
+        .into_iter()
+        .zip(show_results)
+        .map(|(entry, show_info)| {
+            let model_id = entry.model.clone().unwrap_or_else(|| entry.name.clone());
+            let display_name = format_model_name(&entry.name, &entry.details);
+            let display_name = if model_id == entry.name {
+                display_name
+            } else {
+                format!("{display_name} ({model_id})")
+            };
+
+            // Use context_length from /api/show if available, otherwise fall back to estimate
+            let ctx = show_info
+                .as_ref()
+                .and_then(|info| info.context_length())
+                .unwrap_or_else(|| estimate_context_window(&entry.details.parameter_size));
+
+            // Check vision capability from /api/show
+            let has_vision = show_info.as_ref().is_some_and(|info| info.has_vision());
+            // Check thinking capability: prefer /api/show structured detection,
+            // fall back to model-name heuristics.
+            let has_thinking = show_info.as_ref().is_some_and(|info| info.has_thinking())
+                || model_supports_binary_thinking(&model_id);
+            let reasoning = has_thinking;
+            let thinking_levels = if has_thinking {
+                binary_thinking_levels_for_model(&model_id)
+            } else {
+                Vec::new()
+            };
+            let thinking_config = if has_thinking {
+                Some(ThinkingConfig::new(ragent_types::ThinkingLevel::Low))
+            } else {
+                None
+            };
+
+            ModelInfo {
+                id: model_id,
+                provider_id: "ollama_cloud".to_string(),
+                name: display_name,
+                cost: Cost {
+                    input: 0.0,
+                    output: 0.0,
+                },
+                capabilities: Capabilities {
+                    reasoning,
+                    streaming: true,
+                    vision: has_vision,
+                    tool_use: true,
+                    thinking_levels,
+                },
+                context_window: ctx,
+                max_output: None,
+                request_multiplier: None,
+                thinking_config,
+            }
+        })
+        .collect())
+}
+
+#[cfg(test)]
+#[path = "../../tests/inline/ollama_cloud_tests.rs"]
+mod tests;

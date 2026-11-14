@@ -1,0 +1,822 @@
+//! Concept-clustering helpers for `/research cluster` (T-003).
+//!
+//! This module reads the captured source documents under a research folder's
+//! `sources/` directory and assembles them into a single payload that respects
+//! the active LLM provider's context window (FR-003, FR-004, NFR-002).
+
+use crate::io::{ResearchIo, ResearchIoError};
+use crate::research_name::ResearchName;
+use std::path::{Path, PathBuf};
+
+/// Default context-window size in tokens, used when the active model's
+/// context window cannot be resolved.
+pub const DEFAULT_CONTEXT_WINDOW_TOKENS: usize = 128_000;
+
+/// Tokens reserved for the concept-extraction prompt, model response, and
+/// safety margin when computing the source-payload budget.
+pub const PROMPT_RESERVE_TOKENS: usize = 4_096;
+
+/// Conservative bytes-per-token estimate (FR-004). UTF-8 text averages about
+/// 4 bytes per token for English prose, so this gives a safe upper bound on the
+/// number of source bytes we can stuff into the prompt.
+pub const BYTES_PER_TOKEN_GUESS: usize = 4;
+
+/// Fixed concept-extraction prompt template used by `/research cluster`.
+///
+/// Two placeholders are replaced before the prompt is dispatched to the active
+/// LLM (FR-005, FR-006, FR-014): `[INSERT_DOCUMENTS_HERE]` with the assembled
+/// source payload, and [`CONCEPT_COUNT_INSTRUCTION_PLACEHOLDER`] with the
+/// concept-count sentence derived from the effective `--max-concepts` limit
+/// (spec `researchmax`; FR-001, FR-015). [`build_concept_extraction_prompt`]
+/// substitutes the built-in default limit; callers with an explicit limit use
+/// [`build_concept_extraction_prompt_for_limit`].
+///
+/// The prompt explicitly asks for a predictable markdown structure so the
+/// resulting `CONCEPTS.md` can be lightly normalized by
+/// [`format_concepts_md_with_sources`]. Concept headings are numbered
+/// sequentially and evidence bullets cite sources with `[#N]` markers so each
+/// concept traces back to the References Index in `RESEARCH.md`.
+pub const CONCEPT_EXTRACTION_PROMPT_TEMPLATE: &str = "You are an expert data analyst and researcher. Analyze the provided documents and extract the most important concepts, themes, and ideas across them.\n\
+    \n\
+    Instructions:\n\
+    \n\
+    1. Read all documents to understand the overall context.\n\
+    2. [CONCEPT_COUNT_INSTRUCTION] Avoid overlapping or repetitive concepts.\n\
+    3. For each concept, produce a markdown section with:\n\
+    \n\
+       - A level-2 heading (`## N. Concept Name`) with a concise label (2-4 words), where N is the concept's sequential number starting at 1.\n\
+       - A **Definition** of exactly three paragraphs, separated by a blank line, roughly 120-200 words in total: the first paragraph defines the concept and why it matters; the second expands on how it works or the key distinctions and nuance it carries; the third places it in the wider context, naming what it depends on, competes with or changes. Each paragraph must be substantive and self-contained rather than restating the previous one.\n\
+       - A **Key Evidence** bullet list with 1-2 brief examples from the text, citing the contributing documents with `[#N]` citation markers (e.g. `[#1]`, `[#7]`), where N is the number in each document header (`--- web-NN.md ---`).\n\
+    \n\
+    Output format requirements:\n\
+    \n\
+    - Begin the response with a single `# Concepts` level-1 heading.\n\
+    - Use level-2 headings (`##`) for each concept name, numbered sequentially (`## 1. First Concept`, `## 2. Second Concept`, ...).\n\
+    - Use bold labels (`**Definition:**` and `**Key Evidence:**`) inside each section.\n\
+    - Write each **Definition** as three paragraphs separated by a blank line; do not collapse them into one paragraph.\n\
+    - Keep evidence bullets short and specific, and cite sources with `[#N]` markers (N matches the number in each document's `web-NN.md` header) for each claim.\n\
+    - Focus on depth and relevance over quantity.\n\
+    \n\
+    Here are the documents:\n\
+    \n\
+    [INSERT_DOCUMENTS_HERE]\n";
+
+/// Placeholder in [`CONCEPT_EXTRACTION_PROMPT_TEMPLATE`] replaced with the
+/// concept-count instruction derived from the effective `--max-concepts` limit
+/// (spec `researchmax`; FR-001, FR-015).
+pub const CONCEPT_COUNT_INSTRUCTION_PLACEHOLDER: &str = "[CONCEPT_COUNT_INSTRUCTION]";
+
+/// Lightweight post-processor that normalizes an LLM-generated concept-extraction
+/// response into a consistent `CONCEPTS.md` layout (FR-014).
+///
+/// Normalizations applied:
+/// * Trim leading/trailing whitespace.
+/// * Collapse runs of more than two consecutive blank lines to a single blank line.
+/// * Ensure the content starts with `# Concepts` if no top-level heading is present.
+/// * Ensure a single trailing newline.
+#[must_use]
+pub fn format_concepts_md(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return "# Concepts\n\nNo concepts were extracted.\n".to_string();
+    }
+
+    // Remove leading blank lines with iterator-based stripping (avoids O(n^2)
+    // Vec::remove(0) shifts).
+    let mut lines: Vec<&str> = trimmed
+        .lines()
+        .skip_while(|l| l.trim().is_empty())
+        .collect();
+
+    // Drop trailing blank lines.
+    while lines.last().is_some_and(|l| l.trim().is_empty()) {
+        lines.pop();
+    }
+
+    // Collapse runs of blank lines to one and build the output in a single
+    // pass, avoiding per-line String allocations when the line is unchanged.
+    let mut out = String::with_capacity(trimmed.len() + 64);
+    let mut blank_run = false;
+    let mut first = true;
+    for line in lines {
+        if line.trim().is_empty() {
+            if !blank_run && !first {
+                out.push('\n');
+            }
+            blank_run = true;
+        } else {
+            if !first {
+                out.push('\n');
+            }
+            out.push_str(line);
+            blank_run = false;
+        }
+        first = false;
+    }
+    // Ensure a top-level `# Concepts` heading exists and normalize whatever
+    // level-1 heading the model used.
+    if let Some(pos) = out.find('\n') {
+        let first_line = &out[..pos];
+        if first_line.trim_start().starts_with("# ") {
+            out.replace_range(..pos, "# Concepts");
+        } else {
+            out.insert_str(0, "# Concepts\n");
+        }
+    } else if out.trim_start().starts_with("# ") {
+        out.clear();
+        out.push_str("# Concepts");
+    } else {
+        out.insert_str(0, "# Concepts\n");
+    }
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// Metadata for one captured web source, parsed from the header block of its
+/// `sources/web-NN.md` supporting file.
+///
+/// The header is the `- Key: value` list that
+/// `crate::document::render_supporting_file` writes at the top of every web
+/// source file (`URL`, `Title`, `Author(s)`, `Published (UTC)`, ...). Values
+/// the file does not expose stay empty and are omitted from the rendered
+/// `**WebSources:**` block by [`format_concepts_md_with_sources`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WebSourceMeta {
+    /// 1-based source index parsed from the `web-NN.md` filename. This is the
+    /// same number used by `[#N]` citations in `RESEARCH.md`.
+    pub index: usize,
+    /// Supporting-file basename (e.g. `web-01.md`).
+    pub file: String,
+    /// Source URL from the `- URL:` header line.
+    pub url: String,
+    /// Source title from the `- Title:` header line.
+    pub title: String,
+    /// Author name from the `- Author(s):` header line (empty when unknown).
+    pub author: String,
+    /// Publication date as `YYYY-MM-DD` parsed from the `- Published (UTC):`
+    /// header line (empty when the page exposed no date).
+    pub published: String,
+}
+
+/// Read every `web-NN.md` file under the item's `sources/` directory and
+/// parse its header block into [`WebSourceMeta`] entries, sorted by index.
+///
+/// Files without a parseable `web-NN` index are skipped. Missing metadata
+/// fields remain empty strings.
+///
+/// # Errors
+///
+/// Returns [`ResearchIoError::Io`] when the `sources/` directory or one of
+/// its files cannot be read.
+pub fn load_web_source_metadata(
+    research_root: &Path,
+    name: &ResearchName,
+) -> Result<Vec<WebSourceMeta>, ResearchIoError> {
+    static FILE_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let file_re =
+        // INVARIANT: compile-time-constant regex; the call cannot fail at runtime.
+        FILE_RE.get_or_init(|| regex::Regex::new(r"^web-(\d+)\.md$").expect("valid regex"));
+
+    let sources_dir = ResearchIo::sources_dir(research_root, name);
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(&sources_dir)? {
+        let path = entry?.path();
+        let Some(filename) = path.file_name().and_then(|f| f.to_str()) else {
+            continue;
+        };
+        let Some(caps) = file_re.captures(filename) else {
+            continue;
+        };
+        let index: usize = caps[1].parse().unwrap_or(0);
+        if index == 0 {
+            continue;
+        }
+        let body = std::fs::read_to_string(&path)?;
+        out.push(parse_web_source_header(&body, index, filename));
+    }
+    out.sort_by_key(|m| m.index);
+    Ok(out)
+}
+
+/// Parse the `- Key: value` header lines of a web source supporting file.
+///
+/// Only the lines before the first ``` fence are considered; the fenced body
+/// below the header is the captured page text, not metadata.
+fn parse_web_source_header(body: &str, index: usize, filename: &str) -> WebSourceMeta {
+    let mut meta = WebSourceMeta {
+        index,
+        file: filename.to_string(),
+        ..WebSourceMeta::default()
+    };
+    for line in body.lines() {
+        if line.trim_start().starts_with("```") {
+            break;
+        }
+        let line = line.trim();
+        if let Some(v) = line.strip_prefix("- URL: ") {
+            meta.url = v.trim().to_string();
+        } else if let Some(v) = line.strip_prefix("- Title: ") {
+            meta.title = v.trim().to_string();
+        } else if let Some(v) = line.strip_prefix("- Author(s): ") {
+            // The supporting-file header uses an em-dash placeholder for
+            // unknown authors; treat it as empty so the bullet omits it.
+            let v = v.trim();
+            meta.author = if v == "\u{2014}" || v == "--" {
+                String::new()
+            } else {
+                v.to_string()
+            };
+        } else if let Some(v) = line.strip_prefix("- Published (UTC): ") {
+            // Normalize the RFC-3339 timestamp to the YYYY-MM-DD form used in
+            // `RESEARCH.md` source bullets.
+            let v = v.trim();
+            meta.published = if v == "\u{2014}" || v == "--" {
+                String::new()
+            } else {
+                v.chars().take(10).collect()
+            };
+        }
+    }
+    meta
+}
+
+/// Render one `**WebSources:**` bullet in the exact `RESEARCH.md` Findings
+/// style: `- [N] Title [Author] - URL (published YYYY-MM-DD)`, with the
+/// author and published segments omitted when unknown. Mirrors
+/// `crate::document::render_finding_sources`.
+fn render_web_source_bullet(meta: &WebSourceMeta) -> String {
+    let title = if meta.title.is_empty() {
+        meta.url.as_str()
+    } else {
+        meta.title.as_str()
+    };
+    let mut out = format!("- [{}] {}", meta.index, title);
+    if !meta.author.is_empty() {
+        out.push_str(&format!(" [{}]", meta.author));
+    }
+    out.push_str(" - ");
+    out.push_str(&meta.url);
+    if !meta.published.is_empty() {
+        out.push_str(&format!(" (published {})", meta.published));
+    }
+    out
+}
+
+/// Normalize an LLM concept-extraction response and append a
+/// `**WebSources:**` block to every concept that cites captured sources.
+///
+/// Extends [`format_concepts_md`] with two `RESEARCH.md`-aligned passes:
+///
+/// * **Numbering** - every `## ` heading is renumbered sequentially
+///   (`## 1. ...`, `## 2. ...`, ...). Any existing leading number
+///   (`## 3. ...`, `## 3 - ...`, `## 3: ...`) is stripped first so a model
+///   that miscounts still yields a clean sequential run.
+/// * **Source mapping** - each concept section is scanned for `web-NN`
+///   filename citations (still accepted from models trained on the older
+///   prompt); matching entries from `sources` are rendered as a trailing
+///   `**WebSources:**` bullet list in the same format as the `**Sources:**`
+///   block under `## Findings` in `RESEARCH.md`. Sections with no recognized
+///   citations are left untouched.
+/// * **Citation style** - every inline `web-NN` mention in the section body is
+///   rewritten to the `[#N]` citation form used by `RESEARCH.md` so both
+///   documents share one reference style.
+///
+/// URLs are linkified to `[url](url)` Markdown form so the companion matches
+/// the clickable references in `RESEARCH.md`.
+#[must_use]
+pub fn format_concepts_md_with_sources(raw: &str, sources: &[WebSourceMeta]) -> String {
+    let formatted = format_concepts_md(raw);
+    if formatted.lines().count() <= 1 {
+        // The placeholder/empty render has no concept sections.
+        return formatted;
+    }
+
+    static HASH_REF_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let num_prefix_re = crate::limits::num_prefix_re();
+    let web_ref_re = crate::limits::web_ref_re();
+    let hash_ref_re =
+        // INVARIANT: compile-time-constant regex; the call cannot fail at runtime.
+        HASH_REF_RE.get_or_init(|| regex::Regex::new(r"\[#(\d+)\]").expect("valid regex"));
+
+    let by_index: std::collections::HashMap<usize, &WebSourceMeta> =
+        sources.iter().map(|m| (m.index, m)).collect();
+
+    // Pass 1: renumber every `## ` heading sequentially.
+    let mut numbered = String::with_capacity(formatted.len() + 64);
+    let mut concept_no = 0usize;
+    for line in formatted.lines() {
+        if line.starts_with("## ") {
+            concept_no += 1;
+            let label = num_prefix_re.replace(&line[3..], "").trim().to_string();
+            numbered.push_str(&format!("## {concept_no}. {label}\n"));
+        } else {
+            numbered.push_str(line);
+            numbered.push('\n');
+        }
+    }
+
+    // Pass 2: append a `**WebSources:**` block to sections that cite sources.
+    let mut sections: Vec<Vec<&str>> = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    for line in numbered.lines() {
+        if line.starts_with("## ") && !current.is_empty() {
+            sections.push(std::mem::take(&mut current));
+        }
+        current.push(line);
+    }
+    if !current.is_empty() {
+        sections.push(current);
+    }
+
+    let mut out = String::with_capacity(numbered.len() + 256);
+    for (i, section) in sections.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        for line in section {
+            // Rewrite inline `web-NN` citations to the unpadded `[#N]` style
+            // used by `RESEARCH.md` so both documents share one format.
+            let rewritten = web_ref_re.replace_all(line, |caps: &regex::Captures| {
+                let n = caps[1].trim_start_matches('0');
+                format!("[#{}]", if n.is_empty() { "0" } else { n })
+            });
+            out.push_str(&rewritten);
+            out.push('\n');
+        }
+        while out.ends_with("\n\n") {
+            out.pop();
+        }
+        let body = section
+            .iter()
+            .filter(|l| !l.starts_with("## "))
+            .copied()
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut indices: Vec<usize> = web_ref_re
+            .find_iter(&body)
+            .filter_map(|m| m.as_str()[4..].parse().ok())
+            .chain(
+                hash_ref_re
+                    .find_iter(&body)
+                    .filter_map(|m| m.as_str()[2..m.as_str().len() - 1].parse().ok()),
+            )
+            .collect();
+        indices.sort_unstable();
+        indices.dedup();
+        let cited: Vec<&WebSourceMeta> = indices
+            .iter()
+            .filter_map(|n| by_index.get(n).copied())
+            .collect();
+        if !cited.is_empty() {
+            out.push_str("\n**WebSources:**\n");
+            for meta in &cited {
+                out.push_str(&render_web_source_bullet(meta));
+                out.push('\n');
+            }
+        }
+    }
+    if !out.ends_with("\n\n") {
+        // Guarantee exactly one blank line between sections.
+        while out.ends_with('\n') {
+            out.pop();
+        }
+        out.push_str("\n\n");
+    }
+    let mut linked = crate::document::linkify_urls(out.trim_end());
+    linked.push('\n');
+    linked
+}
+
+/// Assembled source payload returned by [`build_cluster_payload_sync`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClusterPayload {
+    /// Concatenated markdown text, ready to be inserted into the prompt.
+    pub text: String,
+    /// Basenames of the source files that contributed to `text`.
+    pub files: Vec<String>,
+    /// Total bytes in `text` after optional truncation.
+    pub total_bytes: usize,
+    /// Maximum bytes the payload was allowed to consume.
+    pub max_bytes: usize,
+    /// `true` when one or more source bodies were truncated to fit the budget.
+    pub truncated: bool,
+}
+
+/// Convert a token context window into a byte budget for the source payload.
+#[must_use]
+pub fn estimate_max_payload_bytes(context_window_tokens: usize) -> usize {
+    let available = context_window_tokens.saturating_sub(PROMPT_RESERVE_TOKENS);
+    available.saturating_mul(BYTES_PER_TOKEN_GUESS)
+}
+
+/// Resolve the active model's context window from the provider registry.
+///
+/// Returns `None` when the model or provider is unknown so callers can fall
+/// back to [`DEFAULT_CONTEXT_WINDOW_TOKENS`].
+#[must_use]
+pub fn resolve_context_window_tokens(
+    provider_id: Option<&str>,
+    model_id: Option<&str>,
+    registry: Option<&ragent_llm::ProviderRegistry>,
+) -> Option<usize> {
+    let provider_id = provider_id?;
+    let model_id = model_id?;
+    let registry = registry?;
+    registry
+        .resolve_model(provider_id, model_id)
+        .map(|m| m.context_window)
+        .filter(|w| *w > 0)
+}
+
+fn find_source_files(sources_dir: &Path) -> Result<Vec<std::path::PathBuf>, ResearchIoError> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(sources_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("md"))
+        {
+            files.push(path);
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    let cut = ragent_types::strutil::floor_char_boundary(s, max_bytes);
+    let mut out = String::with_capacity(cut + 64);
+    out.push_str(&s[..cut]);
+    out.push_str("\n\n... _(truncated - source exceeded per-file context budget)_\n");
+    out
+}
+
+/// Synchronously read all markdown source files and assemble them into a
+/// context-window-bounded payload.
+///
+/// # Errors
+///
+/// Returns [`ResearchIoError::Io`] when the `sources/` directory cannot be
+/// read or a source file cannot be read.
+pub fn build_cluster_payload_sync(
+    research_root: &Path,
+    name: &ResearchName,
+    context_window_tokens: Option<usize>,
+) -> Result<ClusterPayload, ResearchIoError> {
+    let sources_dir = ResearchIo::sources_dir(research_root, name);
+    let max_bytes =
+        estimate_max_payload_bytes(context_window_tokens.unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS));
+    let files = find_source_files(&sources_dir)?;
+
+    let mut text = String::new();
+    let mut total_bytes = 0;
+    let mut truncated = false;
+    let mut remaining = max_bytes;
+
+    for path in &files {
+        let filename = path_filename(path);
+        let header = format!("\n\n--- {} ---\n\n", filename);
+        let header_len = header.len();
+
+        let body_budget = remaining.saturating_sub(header_len);
+        if body_budget == 0 {
+            truncated = true;
+            break;
+        }
+
+        let body = std::fs::read_to_string(path)?;
+        let was_truncated = body.len() > body_budget;
+        let body = truncate_to_char_boundary(&body, body_budget);
+        truncated |= was_truncated;
+
+        text.push_str(&header);
+        text.push_str(&body);
+        total_bytes += header_len + body.len();
+        remaining = remaining.saturating_sub(header_len + body.len());
+    }
+
+    let files = files.into_iter().map(|p| path_filename(&p)).collect();
+
+    Ok(ClusterPayload {
+        text,
+        files,
+        total_bytes,
+        max_bytes,
+        truncated,
+    })
+}
+
+fn path_filename(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Async wrapper around [`build_cluster_payload_sync`] that offloads the file
+/// reads to the blocking task pool.
+pub async fn build_cluster_payload(
+    research_root: &Path,
+    name: &ResearchName,
+    context_window_tokens: Option<usize>,
+) -> Result<ClusterPayload, ResearchIoError> {
+    let root = research_root.to_path_buf();
+    let name = name.clone();
+    let tokens = context_window_tokens;
+    tokio::task::spawn_blocking(move || build_cluster_payload_sync(&root, &name, tokens))
+        .await
+        .map_err(|e| {
+            ResearchIoError::Io(std::io::Error::other(format!(
+                "cluster payload task failed: {e}"
+            )))
+        })?
+}
+
+/// The concept-count sentence injected into the prompt for `max_concepts`.
+///
+/// A positive value asks for "up to N core concepts"; `0` means "unbounded"
+/// (FR-016) and asks for every core concept rather than a capped number.
+#[must_use]
+fn concept_count_instruction(max_concepts: usize) -> String {
+    if max_concepts == 0 {
+        "Identify every core concept that appears frequently, carries significant \
+         weight, or ties the documents together."
+            .to_string()
+    } else {
+        format!(
+            "Identify up to {max_concepts} core concepts that appear frequently, carry \
+             significant weight, or tie the documents together."
+        )
+    }
+}
+
+/// Build the concept-extraction prompt for an explicit `max_concepts` limit.
+///
+/// Substitutes [`CONCEPT_COUNT_INSTRUCTION_PLACEHOLDER`] with the instruction
+/// for `max_concepts` (0 = unbounded) and `[INSERT_DOCUMENTS_HERE]` with the
+/// assembled source payload. The returned string is ready to be dispatched to
+/// the active LLM (FR-001, FR-015).
+#[must_use]
+pub fn build_concept_extraction_prompt_for_limit(
+    payload_text: &str,
+    max_concepts: usize,
+) -> String {
+    CONCEPT_EXTRACTION_PROMPT_TEMPLATE
+        .replace(
+            CONCEPT_COUNT_INSTRUCTION_PLACEHOLDER,
+            &concept_count_instruction(max_concepts),
+        )
+        .replace("[INSERT_DOCUMENTS_HERE]", payload_text)
+}
+
+/// Build the full concept-extraction prompt by inserting the assembled source
+/// payload into the fixed [`CONCEPT_EXTRACTION_PROMPT_TEMPLATE`], using the
+/// built-in default concept limit.
+///
+/// The returned string is ready to be dispatched to the active LLM.
+#[must_use]
+pub fn build_concept_extraction_prompt(payload: &ClusterPayload) -> String {
+    build_concept_extraction_prompt_for_limit(&payload.text, crate::limits::DEFAULT_MAX_CONCEPTS)
+}
+
+/// Assemble an in-memory concept-extraction payload from the gathered source
+/// bodies of a `/research create` run.
+///
+/// Unlike [`build_cluster_payload_sync`] (which reads the on-disk
+/// `sources/web-NN.md` supporting files), this variant takes the source bodies
+/// the synthesis step already loaded, so it works mid-session before any
+/// supporting files are written. Each document block is headed
+/// `--- [#N] Title ---` where `N` is the 1-based position in the gathered
+/// source list - the same number the References Index in `RESEARCH.md` uses -
+/// so the model's `[#N]` citations resolve against that index directly.
+///
+/// Documents are appended in order until `max_bytes` is reached; a document
+/// that does not fit is truncated to the remaining budget (matching
+/// `truncate_to_char_boundary`).
+#[must_use]
+pub fn build_concepts_payload_from_bodies(
+    bodies: &[crate::analysis::SourceBody],
+    max_bytes: usize,
+) -> String {
+    let mut text = String::new();
+    let mut remaining = max_bytes;
+    for body in bodies {
+        let title = if body.title.trim().is_empty() {
+            body.path_or_url.as_str()
+        } else {
+            body.title.as_str()
+        };
+        let header = format!("\n\n--- [#{}] {} ---\n\n", body.index, title);
+        let header_len = header.len();
+        let body_budget = remaining.saturating_sub(header_len);
+        if body_budget == 0 {
+            break;
+        }
+        let doc = truncate_to_char_boundary(&body.body, body_budget);
+        text.push_str(&header);
+        text.push_str(&doc);
+        remaining = remaining.saturating_sub(header_len + doc.len());
+    }
+    text
+}
+
+/// Normalize a concept-extraction LLM response for embedding as the
+/// `## Concepts` section inside `RESEARCH.md`.
+///
+/// Transformations applied:
+///
+/// * The `# Concepts` level-1 heading is dropped (the section provides its own
+///   `## Concepts` heading in the parent document).
+/// * Every `## N. Name` concept heading is demoted to `### N. Name` so it
+///   nests correctly under the parent section.
+/// * Inline `web-NN` filename citations are rewritten to `[#M]` where `M` is
+///   the combined References Index position supplied by `web_index_map`
+///   (supporting-file number to 1-based combined index). `[#N]` citations are
+///   kept verbatim.
+///
+/// After demotion the surviving concept sections are ordered most-relevant-first
+/// with the shared reverse-relevance helper (highest cited source
+/// [`crate::source::Source::relevance_rank`] first; ties break to cited count,
+/// then the model's original order) and truncated to `max_concepts` (spec
+/// researchmax; FR-004, FR-011). The surviving `### N.` headings are renumbered
+/// contiguously from 1.
+///
+/// `max_concepts == 0` means "unbounded" (FR-016) and applies no truncation;
+/// when fewer concepts are available than the limit the list is never padded
+/// (FR-022). `sources` supplies the citation-to-rank lookup (`[#N]`/`web-NN`
+/// citations resolve against the combined References Index order).
+///
+/// Returns `None` when the response contains no concept sections, so callers
+/// can omit the parent section entirely (FR-018).
+#[must_use]
+pub fn concepts_section_for_research<S: std::hash::BuildHasher>(
+    raw: &str,
+    web_index_map: &std::collections::HashMap<usize, usize, S>,
+    sources: &[crate::source::Source],
+    max_concepts: usize,
+) -> Option<String> {
+    let web_ref_re = crate::limits::web_ref_re();
+
+    // Split the demoted output into one body per `### ` concept section,
+    // rewriting inline `web-NN` citations to `[#M]` as we go. A single interior
+    // blank line is preserved; leading and runs of blank lines are dropped.
+    let mut sections: Vec<Vec<String>> = Vec::new();
+    let mut current: Vec<String> = Vec::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        // Drop the level-1 heading the prompt asks for.
+        if trimmed.starts_with("# ") && !trimmed.starts_with("## ") {
+            continue;
+        }
+        let line = if let Some(rest) = trimmed.strip_prefix("## ") {
+            // Demote the concept heading one level.
+            format!("### {rest}")
+        } else {
+            trimmed.to_string()
+        };
+        let line = web_ref_re
+            .replace_all(&line, |caps: &regex::Captures| {
+                let file_no: usize = caps[1].parse().unwrap_or(0);
+                match web_index_map.get(&file_no) {
+                    Some(combined) => format!("[#{combined}]"),
+                    // Unknown web-NN (no combined index): keep the citation
+                    // number as-is so it at least matches the cluster-style
+                    // numbering rather than dangling as a filename.
+                    None => format!("[#{}]", caps[1].trim_start_matches('0')),
+                }
+            })
+            .into_owned();
+        if line.starts_with("### ") {
+            if !current.is_empty() {
+                sections.push(std::mem::take(&mut current));
+            }
+            current.push(line);
+        } else if line.is_empty() {
+            // Keep at most one interior blank line, never a leading one.
+            if current.last().is_some_and(|l| !l.is_empty()) {
+                current.push(String::new());
+            }
+        } else {
+            current.push(line);
+        }
+    }
+    if !current.is_empty() {
+        sections.push(current);
+    }
+    // Trim trailing blank lines and discard any section that is not a concept
+    // (stray text before the first `### ` heading).
+    for section in &mut sections {
+        while section.last().is_some_and(|l| l.is_empty()) {
+            section.pop();
+        }
+    }
+    sections.retain(|s| s.first().is_some_and(|l| l.starts_with("### ")));
+    if sections.is_empty() {
+        return None;
+    }
+
+    // Order most-relevant-first and cap to the effective concept limit. Each
+    // section is ranked on its full text (the heading alone carries no citation).
+    let bodies: Vec<String> = sections
+        .into_iter()
+        .map(|section| section.join("\n"))
+        .collect();
+    let mut ordered = crate::limits::rank_entries_by_reverse_relevance(
+        bodies,
+        String::as_str,
+        crate::limits::source_rank_lookup(sources),
+    );
+    if max_concepts > 0 {
+        ordered.truncate(max_concepts);
+    }
+
+    let joined = ordered.join("\n\n");
+    let out = renumber_concept_headings(joined.trim());
+    if out.is_empty() { None } else { Some(out) }
+}
+
+/// Renumber every `### ` concept heading contiguously from 1, preserving any
+/// existing heading text (spec researchmax; FR-011).
+fn renumber_concept_headings(body: &str) -> String {
+    let num_prefix_re = crate::limits::num_prefix_re();
+    let mut out = String::with_capacity(body.len() + 32);
+    let mut concept_no = 0usize;
+    for line in body.lines() {
+        if let Some(rest) = line.strip_prefix("### ") {
+            concept_no += 1;
+            let label = num_prefix_re.replace(rest, "").trim().to_string();
+            out.push_str(&format!("### {concept_no}. {label}\n"));
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if !out.is_empty() {
+        out.pop();
+    }
+    out
+}
+
+/// Write the LLM-generated concept extraction response as `CONCEPTS.md` in the
+/// research item folder (FR-007).
+///
+/// The captured `sources/web-NN.md` headers are parsed so the output gains the
+/// sequential concept numbering and `**WebSources:**` reference blocks applied
+/// by [`format_concepts_md_with_sources`]. If the source headers cannot be
+/// read, formatting degrades to plain [`format_concepts_md`] normalization.
+///
+/// The caller is responsible for the overwrite guard (FR-008); this function
+/// will overwrite an existing `CONCEPTS.md` if one is present. Writes are
+/// performed atomically via [`ResearchIo::atomic_write`] so readers never see
+/// a partially written file (NFR-002).
+///
+/// # Errors
+///
+/// Returns [`ResearchIoError::Io`] when the directory or file cannot be
+/// written.
+pub async fn write_concepts_md(
+    research_root: &Path,
+    name: &ResearchName,
+    content: &str,
+) -> Result<PathBuf, ResearchIoError> {
+    let path = ResearchIo::concepts_md_path(research_root, name);
+    // FUNC-052: `load_web_source_metadata` does blocking `read_dir` +
+    // `read_to_string` per file; run it on the blocking pool rather than the
+    // async worker. A read failure is logged and degrades to no source list
+    // instead of being silently discarded by `unwrap_or_default`.
+    let sources = {
+        let root = research_root.to_path_buf();
+        let name = name.clone();
+        match tokio::task::spawn_blocking(move || load_web_source_metadata(&root, &name)).await {
+            Ok(Ok(sources)) => sources,
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    error = %e,
+                    "research: could not load web source metadata for CONCEPTS.md"
+                );
+                Vec::new()
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "research: web source metadata task failed for CONCEPTS.md"
+                );
+                Vec::new()
+            }
+        }
+    };
+    let formatted = format_concepts_md_with_sources(content, &sources);
+    ResearchIo::atomic_write(&path, &formatted).await?;
+    Ok(path)
+}
+
+#[cfg(test)]
+#[path = "../tests/inline/cluster_tests.rs"]
+mod tests;

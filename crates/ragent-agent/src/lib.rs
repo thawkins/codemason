@@ -1,0 +1,94 @@
+//! Agent orchestration, session runtime, and live tool registry for ragent.
+//!
+//! This crate owns the Milestone 7 extracted orchestration layer while keeping
+//! compatibility re-exports for the shared config, storage, LLM, and runtime
+//! primitives that the moved modules still reference through `crate::*`.
+
+#![deny(unsafe_code)]
+
+/// Agent Client Protocol (ACP) client: drive an external coding agent as a
+/// subprocess over JSON-RPC on stdio (spec `openhands` FR-015, FR-022, FR-036).
+pub mod acp;
+pub mod agent;
+pub mod compaction;
+pub mod cost;
+pub mod error;
+pub mod event;
+
+pub use ragent_types::event::{Event, EventBus, FinishReason};
+pub use ragent_types::startup::StartupTimings;
+pub mod autofix;
+pub mod automation;
+pub mod backend;
+pub mod file_ops;
+pub mod goal;
+pub mod hooks;
+pub mod id;
+pub mod mcp;
+pub mod memory;
+pub mod message;
+pub mod orchestrator;
+pub mod perf;
+pub mod permission;
+/// Plugin bridging helpers: surface enabled plugins' MCP servers to the
+/// session (spec `plugins` FR-030).
+pub mod plugin;
+pub mod project;
+pub mod reference;
+/// Process resource limits - bounded concurrency for child process spawns
+/// and tool execution.
+///
+/// Re-exported from `ragent_types::resource`.
+/// Previously duplicated as a local `resource.rs` file; now a single source of
+/// truth lives in `ragent_types::resource`.
+pub use ragent_types::resource;
+/// Stateful loop cron mode - cross-run state and triage inbox tag protocol
+/// (spec `piegap` FR-004, T-005).
+pub mod loop_state;
+/// Input sanitization and secret redaction utilities.
+pub mod sanitize;
+/// LLM security analyzer: allow/ask/deny verdict with a rationale (spec
+/// `openhands` FR-006, FR-016, FR-017).
+pub mod security;
+pub mod session;
+pub mod skill;
+pub mod storage;
+pub mod task;
+pub mod team;
+pub mod telemetry;
+pub mod template;
+pub mod tool;
+pub mod trigger;
+pub mod updater;
+
+/// Shared helpers for the `!`-prefixed bang-command feature (CLI + TUI).
+pub mod bang_command;
+
+/// Background shell task service (M3).
+pub mod background;
+
+/// Shared adapter that wires the agent tool registry into the research
+/// system's web/local gatherers.
+pub mod research_adapter;
+
+pub mod dry_run;
+
+pub use ragent_config::config::StreamConfig;
+pub use ragent_config::{
+    AgentConfig, Capabilities, Config, Cost, CrossProjectConfig, GitLabIntegrationConfig,
+    McpServerConfig, McpTransport, MemoryConfig, ModelConfig, PriceEntry, ProviderConfig,
+    bash_lists, dir_lists,
+};
+pub use ragent_llm::{llm, provider};
+pub use ragent_tools_vcs::vcs_provider::{VcsProvider, parse_reverse_repo};
+pub use ragent_tools_vcs::{github, gitlab};
+
+pub use ragent_llm::{
+    AnthropicProvider, CopilotProvider, GeminiProvider, GenericOpenAiProvider, HuggingFaceProvider,
+    ModelInfo, OllamaCloudProvider, OllamaProvider, OpenAiProvider, Provider, ProviderInfo,
+    ProviderRegistry, UsageInfo, create_default_registry,
+};
+
+pub mod one_shot;
+
+pub use crate::one_shot::send_one_shot;

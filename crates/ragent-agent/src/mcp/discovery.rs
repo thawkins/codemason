@@ -1,0 +1,683 @@
+//! MCP auto-discovery - scans `PATH`, npm global packages, and well-known
+//! directories for MCP server executables.
+//!
+//! [`discover`] returns a list of [`DiscoveredMcpServer`] entries for any servers
+//! found on the system. The caller decides whether to auto-connect or just
+//! report them (e.g. via `/mcp discover`).
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use ragent_config::{McpServerConfig, McpTransport};
+
+/// Origin of a discovered MCP server.
+#[derive(Debug, Clone)]
+pub enum McpDiscoverySource {
+    /// Found on `PATH` via `which` / `where`.
+    SystemPath,
+    /// Found in npm global `node_modules`.
+    NpmGlobal {
+        /// Path to the npm prefix directory.
+        prefix_dir: PathBuf,
+    },
+    /// Found in a Claude/Cline MCP directory.
+    McpRegistry {
+        /// Path to the registry directory.
+        registry_dir: PathBuf,
+    },
+    /// Declared by an installed plugin's `mcpServers` object.
+    ///
+    /// A bridged server already has a definition, so `/mcp discover` must not
+    /// write a `ragent.json` entry for it and `/mcp remove` must refuse the id
+    /// (see `ragent_tui::app::mcp_bridge`).
+    Plugin {
+        /// Owning plugin id.
+        plugin_id: String,
+    },
+    /// Declared by an installed connector's `connector.json`.
+    ///
+    /// As with [`McpDiscoverySource::Plugin`], the definition belongs to the
+    /// owner and is managed only through `/connectors`.
+    Connector {
+        /// Owning connector id.
+        connector_id: String,
+    },
+}
+
+/// An MCP server executable discovered on the local system.
+#[derive(Debug, Clone)]
+pub struct DiscoveredMcpServer {
+    /// Suggested `id` key for `ragent.json`.
+    pub id: String,
+    /// Human-readable name/description of the server.
+    pub name: String,
+    /// Full path to the executable.
+    pub executable: PathBuf,
+    /// Arguments needed to start the server.
+    pub args: Vec<String>,
+    /// Environment variables to set when starting.
+    pub env: HashMap<String, String>,
+    /// Where the executable was found.
+    pub source: McpDiscoverySource,
+    /// The file that declares a *bridged* server (plugin `mcpServers` or
+    /// connector `connector.json`); `None` for a `PATH`/npm/registry discovery,
+    /// which has no definition file until it is persisted through
+    /// [`DiscoveredMcpServer::to_config`].
+    pub definition_file: Option<PathBuf>,
+}
+
+impl DiscoveredMcpServer {
+    /// Convert to a [`McpServerConfig`] ready to be inserted into `ragent.json`.
+    #[must_use]
+    pub fn to_config(&self) -> McpServerConfig {
+        McpServerConfig {
+            type_: McpTransport::Stdio,
+            command: Some(self.executable.to_string_lossy().into_owned()),
+            args: self.args.clone(),
+            env: self.env.clone(),
+            url: None,
+            headers: HashMap::new(),
+            disabled: true, // discovered servers are disabled until the user opts in
+            notification: ragent_config::McpNotificationMode::None,
+        }
+    }
+}
+
+/// Well-known MCP server executables and their metadata.
+struct KnownMcpServer {
+    /// Unique identifier.
+    id: &'static str,
+    /// Human-readable name.
+    name: &'static str,
+    /// Candidate executable names (tried in order).
+    executables: &'static [&'static str],
+    /// Arguments required to start the server.
+    args: &'static [&'static str],
+}
+
+const KNOWN_SERVERS: &[KnownMcpServer] = &[
+    KnownMcpServer {
+        id: "filesystem",
+        name: "Filesystem MCP Server",
+        executables: &["mcp-server-filesystem"],
+        args: &[],
+    },
+    KnownMcpServer {
+        id: "github",
+        name: "GitHub MCP Server",
+        executables: &["mcp-server-github", "gh-mcp"],
+        args: &[],
+    },
+    KnownMcpServer {
+        id: "git",
+        name: "Git MCP Server",
+        executables: &["mcp-server-git"],
+        args: &[],
+    },
+    KnownMcpServer {
+        id: "postgres",
+        name: "PostgreSQL MCP Server",
+        executables: &["mcp-server-postgres"],
+        args: &[],
+    },
+    KnownMcpServer {
+        id: "sqlite",
+        name: "SQLite MCP Server",
+        executables: &["mcp-server-sqlite"],
+        args: &[],
+    },
+    KnownMcpServer {
+        id: "memory",
+        name: "Memory MCP Server",
+        executables: &["mcp-server-memory"],
+        args: &[],
+    },
+    KnownMcpServer {
+        id: "brave-search",
+        name: "Brave Search MCP Server",
+        executables: &["mcp-server-brave-search"],
+        args: &[],
+    },
+    KnownMcpServer {
+        id: "fetch",
+        name: "Fetch MCP Server",
+        executables: &["mcp-server-fetch"],
+        args: &[],
+    },
+    KnownMcpServer {
+        id: "puppeteer",
+        name: "Puppeteer MCP Server",
+        executables: &["mcp-server-puppeteer"],
+        args: &[],
+    },
+    KnownMcpServer {
+        id: "slack",
+        name: "Slack MCP Server",
+        executables: &["mcp-server-slack"],
+        args: &[],
+    },
+    KnownMcpServer {
+        id: "google-drive",
+        name: "Google Drive MCP Server",
+        executables: &["mcp-server-gdrive"],
+        args: &[],
+    },
+    KnownMcpServer {
+        id: "google-maps",
+        name: "Google Maps MCP Server",
+        executables: &["mcp-server-google-maps"],
+        args: &[],
+    },
+    KnownMcpServer {
+        id: "sentry",
+        name: "Sentry MCP Server",
+        executables: &["mcp-server-sentry"],
+        args: &[],
+    },
+    KnownMcpServer {
+        id: "sequential-thinking",
+        name: "Sequential Thinking MCP Server",
+        executables: &["mcp-server-sequential-thinking"],
+        args: &[],
+    },
+    KnownMcpServer {
+        id: "everything",
+        name: "Everything MCP Server",
+        executables: &["mcp-server-everything"],
+        args: &[],
+    },
+    KnownMcpServer {
+        id: "time",
+        name: "Time MCP Server",
+        executables: &["mcp-server-time"],
+        args: &[],
+    },
+    KnownMcpServer {
+        id: "aws-kb-retrieval",
+        name: "AWS Knowledge Base Retrieval MCP Server",
+        executables: &["mcp-server-aws-kb-retrieval"],
+        args: &[],
+    },
+    KnownMcpServer {
+        id: "exa",
+        name: "Exa Search MCP Server",
+        executables: &["mcp-server-exa"],
+        args: &[],
+    },
+];
+
+/// A discovery location and the MCP server definitions found there.
+///
+/// Produced by [`discover_locations`] so a caller can present *where* ragent
+/// looked for MCP definitions and how many it found at each place, not just the
+/// flattened, de-duplicated list [`discover`] returns.
+#[derive(Debug, Clone)]
+pub struct McpDiscoveryLocation {
+    /// Human-readable label for the location (e.g. `PATH` or `ragent-native`).
+    pub label: String,
+    /// Filesystem path scanned, when the location is a directory. `None` for the
+    /// `PATH` and npm-global rows.
+    pub path: Option<PathBuf>,
+    /// Whether the location exists on disk. Always `true` for `PATH`; `false`
+    /// for an absent registry directory.
+    pub exists: bool,
+    /// Definitions found at this location, before de-duplication by id.
+    pub servers: Vec<DiscoveredMcpServer>,
+}
+
+/// Scan the system for installed MCP servers and return discovered entries.
+///
+/// Checks `PATH` for each known executable, then scans npm global directories
+/// and the well-known MCP registry directories. Results are de-duplicated by id,
+/// with the first location to define an id winning (locations are ordered
+/// ragent-native first).
+///
+/// Use [`discover_locations`] when you also need per-location counts.
+///
+/// # Errors
+///
+/// This function never fails - missing servers are silently skipped.
+pub async fn discover() -> Vec<DiscoveredMcpServer> {
+    let mut found: Vec<DiscoveredMcpServer> = discover_locations()
+        .await
+        .into_iter()
+        .flat_map(|location| location.servers)
+        .collect();
+
+    // Deduplicate by id (prefer earlier finds)
+    let mut seen = std::collections::HashSet::new();
+    found.retain(|s| seen.insert(s.id.clone()));
+
+    found
+}
+
+/// Scan the system and return discovered MCP servers grouped by location.
+///
+/// Unlike [`discover`], the results are **not** de-duplicated, and every
+/// location that is scanned is returned even when it holds no definitions, so a
+/// caller can show a `/mcp config`-style table of where ragent looked and what it
+/// found. The scan order matches [`discover`]: `PATH`, npm global, then each
+/// registry directory.
+///
+/// # Errors
+///
+/// This function never fails - a missing location is reported with an empty
+/// `servers` list and `exists: false`.
+pub async fn discover_locations() -> Vec<McpDiscoveryLocation> {
+    let mut locations = Vec::new();
+
+    // 1. PATH, for known executables.
+    let mut path_servers = Vec::new();
+    for server in KNOWN_SERVERS {
+        for &exe in server.executables {
+            if let Some(path) = which_async(exe).await {
+                path_servers.push(DiscoveredMcpServer {
+                    id: server.id.to_string(),
+                    name: server.name.to_string(),
+                    executable: path,
+                    args: server
+                        .args
+                        .iter()
+                        .map(std::string::ToString::to_string)
+                        .collect(),
+                    env: HashMap::new(),
+                    source: McpDiscoverySource::SystemPath,
+                    definition_file: None,
+                });
+                break; // stop at first matching executable for this server
+            }
+        }
+    }
+    locations.push(McpDiscoveryLocation {
+        label: "PATH (known executables)".to_string(),
+        path: None,
+        exists: true,
+        servers: path_servers,
+    });
+
+    // 2. npm global node_modules.
+    let (npm_dir, npm_servers) = scan_npm_global().await;
+    let npm_exists = npm_dir.as_ref().is_some_and(|d| d.exists());
+    locations.push(McpDiscoveryLocation {
+        label: "npm global".to_string(),
+        path: npm_dir,
+        exists: npm_exists,
+        servers: npm_servers,
+    });
+
+    // 3. Well-known MCP registry directories.
+    for (label, registry_dir) in mcp_registry_locations() {
+        let exists = registry_dir.is_dir();
+        let servers = scan_mcp_registry(&registry_dir).await;
+        locations.push(McpDiscoveryLocation {
+            label,
+            path: Some(registry_dir),
+            exists,
+            servers,
+        });
+    }
+
+    locations
+}
+
+/// Resolve an executable on `PATH` asynchronously.
+async fn which_async(exe: &str) -> Option<PathBuf> {
+    let exe = exe.to_string();
+    tokio::task::spawn_blocking(move || which_sync(&exe))
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Synchronous PATH lookup.
+fn which_sync(exe: &str) -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        let candidate = dir.join(exe);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        // On Windows also try .exe, .cmd, .bat
+        #[cfg(windows)]
+        {
+            for ext in &[".exe", ".cmd", ".bat"] {
+                let with_ext = dir.join(format!("{}{}", exe, ext));
+                if with_ext.is_file() {
+                    return Some(with_ext);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Scan npm global `node_modules` for MCP server packages.
+///
+/// Returns the resolved npm `node_modules` directory (when the npm prefix could
+/// be determined) alongside the discovered servers, so a caller can report the
+/// scanned location even when it yields nothing.
+async fn scan_npm_global() -> (Option<PathBuf>, Vec<DiscoveredMcpServer>) {
+    let mut found = Vec::new();
+
+    // Try to get npm prefix via `npm prefix -g`
+    let prefix = match get_npm_prefix().await {
+        Some(p) => p,
+        None => return (None, found),
+    };
+
+    // Check for common MCP package patterns in node_modules
+    let node_modules = if cfg!(windows) {
+        prefix.join("node_modules")
+    } else {
+        prefix.join("lib").join("node_modules")
+    };
+
+    if !node_modules.exists() {
+        return (Some(node_modules), found);
+    }
+
+    // Look for @modelcontextprotocol scoped packages
+    let mcp_scope = node_modules.join("@modelcontextprotocol");
+    if mcp_scope.is_dir() {
+        found.extend(scan_npm_mcp_scope(&mcp_scope, &prefix).await);
+    }
+
+    // Look for other mcp-server-* packages at top level
+    if let Ok(mut entries) = tokio::fs::read_dir(&node_modules).await {
+        loop {
+            let entry = match entries.next_entry().await {
+                Ok(Some(e)) => e,
+                Ok(None) => break,
+                Err(_) => break,
+            };
+
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if (name_str.starts_with("mcp-server-") || name_str.starts_with("mcp_server_"))
+                && let Some(server) = try_npm_mcp_package(&entry.path(), &prefix).await
+            {
+                found.push(server);
+            }
+        }
+    }
+
+    (Some(node_modules), found)
+}
+
+/// Get the npm global prefix directory.
+async fn get_npm_prefix() -> Option<PathBuf> {
+    let output = tokio::process::Command::new("npm")
+        .args(["prefix", "-g"])
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let prefix = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if prefix.is_empty() {
+        return None;
+    }
+
+    Some(PathBuf::from(prefix))
+}
+
+/// Scan @modelcontextprotocol scope for server packages.
+async fn scan_npm_mcp_scope(
+    scope_dir: &std::path::Path,
+    prefix: &PathBuf,
+) -> Vec<DiscoveredMcpServer> {
+    let mut found = Vec::new();
+
+    let mut entries = match tokio::fs::read_dir(scope_dir).await {
+        Ok(e) => e,
+        Err(_) => return found,
+    };
+
+    loop {
+        let entry = match entries.next_entry().await {
+            Ok(Some(e)) => e,
+            Ok(None) => break,
+            Err(_) => break,
+        };
+
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with("server-")
+            && let Some(server) = try_npm_mcp_package(&entry.path(), prefix).await
+        {
+            found.push(server);
+        }
+    }
+
+    found
+}
+
+/// Try to create a discovered server from an npm package directory.
+async fn try_npm_mcp_package(
+    pkg_dir: &std::path::Path,
+    prefix: &PathBuf,
+) -> Option<DiscoveredMcpServer> {
+    // Read package.json to find the bin entry
+    let pkg_json_path = pkg_dir.join("package.json");
+    let content = tokio::fs::read_to_string(&pkg_json_path).await.ok()?;
+    let pkg_json: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    let pkg_name = pkg_json.get("name")?.as_str()?;
+    let description = pkg_json
+        .get("description")
+        .and_then(|d| d.as_str())
+        .unwrap_or(pkg_name);
+
+    // Find the bin entry
+    let bin = pkg_json.get("bin")?;
+    let bin_path = match bin {
+        serde_json::Value::String(s) => pkg_dir.join(s),
+        serde_json::Value::Object(map) => {
+            // Take the first bin entry
+            let (_, path) = map.iter().next()?;
+            pkg_dir.join(path.as_str()?)
+        }
+        _ => return None,
+    };
+
+    // Derive a clean ID from the package name
+    let id = pkg_name
+        .trim_start_matches("@modelcontextprotocol/")
+        .trim_start_matches("server-")
+        .trim_start_matches("mcp-server-")
+        .trim_start_matches("mcp_server_")
+        .to_string();
+
+    Some(DiscoveredMcpServer {
+        id,
+        name: description.to_string(),
+        executable: bin_path,
+        args: Vec::new(),
+        env: HashMap::new(),
+        source: McpDiscoverySource::NpmGlobal {
+            prefix_dir: prefix.clone(),
+        },
+        definition_file: None,
+    })
+}
+
+/// Common locations of MCP registry directories, each with a human-readable
+/// label naming the ecosystem it belongs to.
+///
+/// The ragent-native location `~/.config/ragent/servers/` is checked first so
+/// its definitions win de-duplication; the remaining entries are third-party
+/// locations kept for backwards compatibility.
+fn mcp_registry_locations() -> Vec<(String, PathBuf)> {
+    let mut dirs: Vec<(String, PathBuf)> = Vec::new();
+    // ragent-native MCP server definitions
+    if let Some(ragent_dir) = ragent_config::user_dirs::global_mcp_servers_dir() {
+        dirs.push(("ragent-native".to_string(), ragent_dir));
+    }
+    if let Some(home) = dirs::home_dir() {
+        // Claude Desktop MCP servers
+        dirs.push((
+            "claude".to_string(),
+            home.join(".claude").join("mcp-servers"),
+        ));
+        // Cline MCP servers
+        dirs.push(("cline".to_string(), home.join(".cline").join("mcp-servers")));
+        // Generic MCP directory (legacy location for ragent)
+        dirs.push((
+            "mcp (legacy)".to_string(),
+            home.join(".mcp").join("servers"),
+        ));
+        // XDG config
+        if let Some(config) = dirs::config_dir() {
+            dirs.push(("xdg mcp".to_string(), config.join("mcp").join("servers")));
+            dirs.push((
+                "xdg claude".to_string(),
+                config.join("claude").join("mcp-servers"),
+            ));
+        }
+    }
+    dirs
+}
+
+/// Scan an MCP registry directory for server configurations.
+async fn scan_mcp_registry(registry_dir: &std::path::Path) -> Vec<DiscoveredMcpServer> {
+    let mut found = Vec::new();
+
+    let mut entries = match tokio::fs::read_dir(registry_dir).await {
+        Ok(e) => e,
+        Err(_) => return found,
+    };
+
+    loop {
+        let entry = match entries.next_entry().await {
+            Ok(Some(e)) => e,
+            Ok(None) => break,
+            Err(_) => break,
+        };
+
+        let path = entry.path();
+
+        // Check for server.json config files
+        if path.is_dir() {
+            let server_json = path.join("server.json");
+            if server_json.exists()
+                && let Some(server) =
+                    try_mcp_registry_entry(&path, &server_json, registry_dir).await
+            {
+                found.push(server);
+            }
+        } else if path.extension().is_some_and(|e| e == "json") {
+            // Direct JSON config file
+            if let Some(server) = try_mcp_json_config(&path, registry_dir).await {
+                found.push(server);
+            }
+        }
+    }
+
+    found
+}
+
+/// Try to create a discovered server from an MCP registry entry directory.
+async fn try_mcp_registry_entry(
+    dir: &std::path::Path,
+    config_path: &std::path::Path,
+    registry_dir: &std::path::Path,
+) -> Option<DiscoveredMcpServer> {
+    let content = tokio::fs::read_to_string(config_path).await.ok()?;
+    let config: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    let command = config.get("command")?.as_str()?;
+    let id = dir.file_name()?.to_string_lossy().to_string();
+    let name = config
+        .get("name")
+        .and_then(|n| n.as_str())
+        .unwrap_or(&id)
+        .to_string();
+
+    let args: Vec<String> = config
+        .get("args")
+        .and_then(|a| a.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let env: HashMap<String, String> = config
+        .get("env")
+        .and_then(|e| e.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Some(DiscoveredMcpServer {
+        id,
+        name,
+        executable: PathBuf::from(command),
+        args,
+        env,
+        source: McpDiscoverySource::McpRegistry {
+            registry_dir: registry_dir.to_path_buf(),
+        },
+        definition_file: None,
+    })
+}
+
+/// Try to create a discovered server from a standalone MCP JSON config.
+async fn try_mcp_json_config(
+    config_path: &std::path::Path,
+    registry_dir: &std::path::Path,
+) -> Option<DiscoveredMcpServer> {
+    let content = tokio::fs::read_to_string(config_path).await.ok()?;
+    let config: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    let command = config.get("command")?.as_str()?;
+    let id = config_path.file_stem()?.to_string_lossy().to_string();
+    let name = config
+        .get("name")
+        .and_then(|n| n.as_str())
+        .unwrap_or(&id)
+        .to_string();
+
+    let args: Vec<String> = config
+        .get("args")
+        .and_then(|a| a.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let env: HashMap<String, String> = config
+        .get("env")
+        .and_then(|e| e.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Some(DiscoveredMcpServer {
+        id,
+        name,
+        executable: PathBuf::from(command),
+        args,
+        env,
+        source: McpDiscoverySource::McpRegistry {
+            registry_dir: registry_dir.to_path_buf(),
+        },
+        definition_file: None,
+    })
+}
+
+#[cfg(test)]
+#[path = "../../tests/inline/discovery_tests.rs"]
+mod tests;

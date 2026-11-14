@@ -1,0 +1,636 @@
+//! Core data types for the code index.
+//!
+//! These types represent the entities tracked by the indexing pipeline:
+//! files, symbols, imports, references, and configuration.
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::path::PathBuf;
+use std::str::FromStr;
+
+/// Generate `Display` and `FromStr` for a string-backed enum from a single
+/// `variant => literal` table so the two directions can never drift apart.
+///
+/// The `FromStr` error is `anyhow::Error` with the message
+/// `unknown <TypeName>: <input>`.
+macro_rules! string_enum {
+    ($name:ident { $($variant:ident => $lit:literal),+ $(,)? }) => {
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let label = match self {
+                    $(Self::$variant => $lit,)+
+                };
+                write!(f, "{label}")
+            }
+        }
+
+        impl FromStr for $name {
+            type Err = anyhow::Error;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                match s {
+                    $($lit => Ok(Self::$variant),)+
+                    other => anyhow::bail!(concat!("unknown ", stringify!($name), ": {}"), other),
+                }
+            }
+        }
+    };
+}
+
+// -- Symbol Kind -------------------------------------------------------------
+
+/// The kind of a code symbol extracted by tree-sitter parsing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SymbolKind {
+    /// A standalone function.
+    Function,
+    /// A method on a type (inside an impl block).
+    Method,
+    /// A struct definition.
+    Struct,
+    /// A class definition (Python, TypeScript, Java, etc.).
+    Class,
+    /// An enum definition.
+    Enum,
+    /// A variant of an enum.
+    EnumVariant,
+    /// A trait definition (Rust).
+    Trait,
+    /// An interface definition (TypeScript, Go, Java).
+    Interface,
+    /// An impl block (Rust).
+    Impl,
+    /// A module declaration.
+    Module,
+    /// A constant binding.
+    Constant,
+    /// A static variable.
+    Static,
+    /// A type alias.
+    TypeAlias,
+    /// A struct/class field.
+    Field,
+    /// An import / use statement.
+    Import,
+    /// A macro definition.
+    Macro,
+    /// A test function.
+    Test,
+    /// An unrecognised symbol kind.
+    Unknown,
+}
+
+// Parse a `SymbolKind` from its database string representation.
+string_enum! {
+    SymbolKind {
+        Function => "function",
+        Method => "method",
+        Struct => "struct",
+        Class => "class",
+        Enum => "enum",
+        EnumVariant => "enum_variant",
+        Trait => "trait",
+        Interface => "interface",
+        Impl => "impl",
+        Module => "module",
+        Constant => "constant",
+        Static => "static",
+        TypeAlias => "type_alias",
+        Field => "field",
+        Import => "import",
+        Macro => "macro",
+        Test => "test",
+        Unknown => "unknown",
+    }
+}
+
+// -- Visibility --------------------------------------------------------------
+
+/// Visibility of a symbol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Visibility {
+    /// `pub` - visible everywhere.
+    Public,
+    /// `pub(crate)` - visible within the crate.
+    PubCrate,
+    /// `pub(super)` - visible to the parent module.
+    PubSuper,
+    /// No visibility modifier - private to the containing module.
+    Private,
+}
+
+string_enum! {
+    Visibility {
+        Public => "pub",
+        PubCrate => "pub(crate)",
+        PubSuper => "pub(super)",
+        Private => "private",
+    }
+}
+
+// -- File Entry --------------------------------------------------------------
+
+/// A tracked file in the index.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileEntry {
+    /// Relative path from the project root.
+    pub path: String,
+    /// Blake3 content hash (hex-encoded).
+    pub content_hash: String,
+    /// File size in bytes.
+    pub byte_size: u64,
+    /// Detected language (e.g. "rust", "python"), or `None` if unknown.
+    pub language: Option<String>,
+    /// When this file was last indexed.
+    pub last_indexed: DateTime<Utc>,
+    /// File modification time as nanoseconds since the Unix epoch.
+    pub mtime_ns: i64,
+    /// Number of lines in the file.
+    pub line_count: u64,
+}
+
+// -- Symbol ------------------------------------------------------------------
+
+/// A code symbol extracted from a source file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Symbol {
+    /// Unique ID (assigned by the store).
+    pub id: i64,
+    /// Foreign key to the file that contains this symbol.
+    pub file_id: i64,
+    /// Simple name (e.g. `parse_config`).
+    pub name: String,
+    /// Fully-qualified name (e.g. `crate::config::parse_config`).
+    pub qualified_name: Option<String>,
+    /// What kind of symbol this is.
+    pub kind: SymbolKind,
+    /// Visibility modifier.
+    pub visibility: Visibility,
+    /// First line of the symbol (1-based).
+    pub start_line: u32,
+    /// Last line of the symbol (1-based).
+    pub end_line: u32,
+    /// Start column (0-based byte offset).
+    pub start_col: u32,
+    /// End column (0-based byte offset).
+    pub end_col: u32,
+    /// Parent symbol ID (e.g. the impl block that contains a method).
+    pub parent_id: Option<i64>,
+    /// Signature string (e.g. `fn parse_config(path: &Path) -> Result<Config>`).
+    pub signature: Option<String>,
+    /// Documentation comment text.
+    pub doc_comment: Option<String>,
+    /// Blake3 hash of the symbol body for change detection.
+    pub body_hash: Option<String>,
+}
+
+// -- Import Entry ------------------------------------------------------------
+
+/// An import/use statement in a source file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportEntry {
+    /// Foreign key to the file that contains this import.
+    pub file_id: i64,
+    /// The imported name (e.g. `HashMap`).
+    pub imported_name: String,
+    /// Source module path (e.g. `std::collections`).
+    pub source_module: String,
+    /// Optional alias (e.g. `use Foo as Bar` -> alias = `Bar`).
+    pub alias: Option<String>,
+    /// Line number of the import statement.
+    pub line: u32,
+    /// Kind of import: "use", "mod", "extern crate", etc.
+    pub kind: String,
+}
+
+// -- Symbol Reference --------------------------------------------------------
+
+/// A reference to a symbol found in source code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolRef {
+    /// Name of the referenced symbol.
+    pub symbol_name: String,
+    /// Foreign key to the file containing the reference.
+    pub file_id: i64,
+    /// Resolved file path (populated by `find_references`, empty during parsing).
+    #[serde(default)]
+    pub file_path: String,
+    /// Line number of the reference.
+    pub line: u32,
+    /// Column of the reference.
+    pub col: u32,
+    /// Kind of reference (e.g. "call", "type", "`field_access`").
+    pub kind: String,
+}
+
+// -- Index Stats -------------------------------------------------------------
+
+/// Summary statistics for the code index.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IndexStats {
+    /// Total number of indexed files.
+    pub files_indexed: u64,
+    /// Total number of extracted symbols.
+    pub total_symbols: u64,
+    /// Total size of all indexed files in bytes.
+    pub total_bytes: u64,
+    /// Breakdown of files per language.
+    pub languages: Vec<(String, u64)>,
+    /// When the last full index completed.
+    pub last_full_index: Option<DateTime<Utc>>,
+    /// When the last incremental update completed.
+    pub last_incremental_update: Option<DateTime<Utc>>,
+    /// Size of the index database on disk in bytes.
+    pub index_size_bytes: u64,
+    /// Number of documents in the FTS (tantivy) index.
+    pub fts_doc_count: u64,
+    /// Total number of symbol references stored.
+    pub total_references: u64,
+    /// Total number of edges in the semantic edge graph (`graph_edges`
+    /// table).  Zero when the graph has not been built yet.
+    pub graph_total_edges: u64,
+    /// Number of distinct symbols appearing as a graph edge endpoint.
+    pub graph_nodes: u64,
+    /// Number of distinct communities detected by the last community run.
+    pub graph_communities: u64,
+}
+
+impl fmt::Display for IndexStats {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Files indexed: {}", self.files_indexed)?;
+        writeln!(f, "Total symbols: {}", self.total_symbols)?;
+        writeln!(f, "FTS documents: {}", self.fts_doc_count)?;
+        writeln!(f, "References:    {}", self.total_references)?;
+        writeln!(
+            f,
+            "Total size:    {:.1} KB",
+            self.total_bytes as f64 / 1024.0
+        )?;
+        if !self.languages.is_empty() {
+            write!(f, "Languages:     ")?;
+            for (i, (lang, count)) in self.languages.iter().enumerate() {
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{lang} ({count})")?;
+            }
+            writeln!(f)?;
+        }
+        if let Some(ts) = &self.last_full_index {
+            writeln!(f, "Last full:     {ts}")?;
+        }
+        if let Some(ts) = &self.last_incremental_update {
+            writeln!(f, "Last incr:     {ts}")?;
+        }
+        writeln!(
+            f,
+            "Index size:    {:.1} KB",
+            self.index_size_bytes as f64 / 1024.0
+        )?;
+        Ok(())
+    }
+}
+
+// -- Graph Status -------------------------------------------------------------
+
+/// Summary statistics for the semantic edge graph.
+///
+/// Aggregated by [`CodeIndex::graph_status`](crate::CodeIndex::graph_status)
+/// from the `graph_edges` and `communities` SQLite tables.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GraphStatus {
+    /// Total number of edges in the `graph_edges` table.
+    pub total_edges: u64,
+    /// Number of edges tagged `EXTRACTED` (read directly from source).
+    pub edges_extracted: u64,
+    /// Number of edges tagged `INFERRED` (resolved by cross-file matching).
+    pub edges_inferred: u64,
+    /// Number of distinct symbols that appear as the source or target of at
+    /// least one edge (i.e. the number of nodes in the graph).
+    pub nodes: u64,
+    /// Number of `calls` edges.
+    pub edges_calls: u64,
+    /// Number of `imports` edges.
+    pub edges_imports: u64,
+    /// Number of `inherits` edges.
+    pub edges_inherits: u64,
+    /// Number of `references` edges.
+    pub edges_references: u64,
+    /// Number of `mixes_in` edges.
+    pub edges_mixes_in: u64,
+    /// Number of `implements` edges.
+    pub edges_implements: u64,
+    /// Number of distinct communities detected.
+    pub communities: u64,
+}
+
+impl fmt::Display for GraphStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Total edges:   {}", self.total_edges)?;
+        writeln!(f, "  EXTRACTED:   {}", self.edges_extracted)?;
+        writeln!(f, "  INFERRED:    {}", self.edges_inferred)?;
+        writeln!(f, "Nodes:         {}", self.nodes)?;
+        writeln!(f, "Communities:   {}", self.communities)?;
+        writeln!(f, "By kind:")?;
+        writeln!(f, "  calls:       {}", self.edges_calls)?;
+        writeln!(f, "  imports:     {}", self.edges_imports)?;
+        writeln!(f, "  inherits:    {}", self.edges_inherits)?;
+        writeln!(f, "  references:  {}", self.edges_references)?;
+        writeln!(f, "  mixes_in:    {}", self.edges_mixes_in)?;
+        writeln!(f, "  implements:  {}", self.edges_implements)?;
+        Ok(())
+    }
+}
+
+// -- Symbol Filter -----------------------------------------------------------
+
+/// Filter criteria for querying symbols from the index.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SymbolFilter {
+    /// Filter by symbol name: a case-insensitive **leading fragment** match
+    /// (PERF-073). The name must start with the filter (e.g. `Server` matches
+    /// `Server` and `ServerProcessor`); interior-only substrings no longer
+    /// match, so SQLite can serve the query from the NOCASE name index.
+    pub name: Option<String>,
+    /// Filter by exact symbol kind.
+    pub kind: Option<SymbolKind>,
+    /// Filter by file path (substring match).
+    pub file_path: Option<String>,
+    /// Filter by language.
+    pub language: Option<String>,
+    /// Filter by visibility.
+    pub visibility: Option<Visibility>,
+    /// Maximum number of results.
+    pub limit: Option<u32>,
+}
+
+// -- Scan Config -------------------------------------------------------------
+
+/// Configuration for the file scanner.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScanConfig {
+    /// Maximum file size in bytes (files larger than this are skipped).
+    pub max_file_size: u64,
+    /// Additional directory names to exclude (beyond hardcoded defaults).
+    pub extra_exclude_dirs: Vec<String>,
+    /// Additional glob patterns to exclude.
+    pub extra_exclude_patterns: Vec<String>,
+}
+
+impl Default for ScanConfig {
+    fn default() -> Self {
+        Self {
+            max_file_size: 1_048_576, // 1 MB
+            extra_exclude_dirs: Vec::new(),
+            extra_exclude_patterns: Vec::new(),
+        }
+    }
+}
+
+// -- Scanned File ------------------------------------------------------------
+
+/// A file discovered and fingerprinted by the scanner.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScannedFile {
+    /// Relative path from the project root.
+    pub path: PathBuf,
+    /// Blake3 content hash (hex-encoded).
+    pub hash: String,
+    /// File size in bytes.
+    pub size: u64,
+    /// Detected language, if known.
+    pub language: Option<String>,
+    /// Modification time as nanoseconds since the Unix epoch.
+    pub mtime_ns: i64,
+    /// Number of lines in the file.
+    pub line_count: u64,
+}
+
+// -- Stale Diff --------------------------------------------------------------
+
+/// The result of comparing scanned files against the index.
+#[derive(Debug, Clone, Default)]
+pub struct StaleDiff {
+    /// Files that exist on disk but not in the index.
+    pub to_add: Vec<ScannedFile>,
+    /// Files whose content hash has changed since last index.
+    pub to_update: Vec<ScannedFile>,
+    /// Paths of files in the index that no longer exist on disk.
+    pub to_remove: Vec<String>,
+}
+
+impl StaleDiff {
+    /// Returns `true` if there are no changes.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.to_add.is_empty() && self.to_update.is_empty() && self.to_remove.is_empty()
+    }
+
+    /// Total number of changes.
+    #[must_use]
+    pub const fn total(&self) -> usize {
+        self.to_add.len() + self.to_update.len() + self.to_remove.len()
+    }
+}
+
+// -- Search Query ------------------------------------------------------------
+
+/// Default maximum number of results a [`SearchQuery`] returns when the caller
+/// leaves `max_results` at zero (ANTIPAT M5.3 / audit 3.3).
+pub const DEFAULT_SEARCH_LIMIT: usize = 20;
+
+/// A search request for the code index.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SearchQuery {
+    /// Free-text query string (searched via FTS).
+    pub query: String,
+    /// Optional filter by symbol kind.
+    pub kind: Option<SymbolKind>,
+    /// Optional filter by language.
+    pub language: Option<String>,
+    /// Optional filter by file path glob pattern.
+    pub file_pattern: Option<String>,
+    /// Maximum number of results to return (default: [`DEFAULT_SEARCH_LIMIT`]).
+    pub max_results: usize,
+    /// Whether to include body snippets in results.
+    pub include_body: bool,
+}
+
+impl SearchQuery {
+    /// Create a new query with just a search string and default settings.
+    pub fn new(query: impl Into<String>) -> Self {
+        Self {
+            query: query.into(),
+            max_results: DEFAULT_SEARCH_LIMIT,
+            ..Default::default()
+        }
+    }
+}
+
+// -- Index Result ------------------------------------------------------------
+
+/// Summary of an indexing operation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IndexResult {
+    /// Number of files added to the index.
+    pub files_added: usize,
+    /// Number of files updated in the index.
+    pub files_updated: usize,
+    /// Number of files removed from the index.
+    pub files_removed: usize,
+    /// Number of symbols extracted.
+    pub symbols_extracted: usize,
+    /// Total elapsed time in milliseconds.
+    pub elapsed_ms: u64,
+    /// Number of graph edges tagged `EXTRACTED` (same-file).
+    #[serde(default)]
+    pub edges_extracted: usize,
+    /// Number of graph edges tagged `INFERRED` (cross-file resolved).
+    #[serde(default)]
+    pub edges_inferred: usize,
+}
+
+impl fmt::Display for IndexResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Indexed: +{} ~{} -{} files, {} symbols in {}ms",
+            self.files_added,
+            self.files_updated,
+            self.files_removed,
+            self.symbols_extracted,
+            self.elapsed_ms,
+        )?;
+        if self.edges_extracted > 0 || self.edges_inferred > 0 {
+            write!(
+                f,
+                "; graph: {} edges ({} EXTRACTED, {} INFERRED)",
+                self.edges_extracted + self.edges_inferred,
+                self.edges_extracted,
+                self.edges_inferred,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+// -- Dependency Direction ----------------------------------------------------
+
+/// Direction for file dependency queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DepDirection {
+    /// Files that this file imports/depends on.
+    Imports,
+    /// Files that depend on / import this file.
+    Dependents,
+}
+
+// -- Graph Edge Kind ----------------------------------------------------------
+
+/// The semantic kind of a typed edge between two symbols in the code graph.
+///
+/// Edges are derived deterministically from the existing tree-sitter parse
+/// output (symbols, imports, references) - no LLM or embeddings are used.
+/// Each edge is tagged with a [`Confidence`] indicating whether it was
+/// read directly from the source (`EXTRACTED`) or resolved by cross-file
+/// name matching (`INFERRED`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum EdgeKind {
+    /// `A` calls `B` (function/method call).
+    Calls,
+    /// `A` imports `B` (use / import statement).
+    Imports,
+    /// `A` inherits from `B` (extends / superclass).
+    Inherits,
+    /// `A` references `B` (type reference, field access).
+    References,
+    /// `A` mixes in `B` (mixin / trait inclusion).
+    MixesIn,
+    /// `A` implements `B` (interface implementation).
+    Implements,
+}
+
+string_enum! {
+    EdgeKind {
+        Calls => "calls",
+        Imports => "imports",
+        Inherits => "inherits",
+        References => "references",
+        MixesIn => "mixes_in",
+        Implements => "implements",
+    }
+}
+
+// -- Confidence ---------------------------------------------------------------
+
+/// How an edge was derived: read directly from the source or inferred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Confidence {
+    /// The edge was explicitly present in the source (same-file resolution).
+    Extracted,
+    /// The edge was resolved by cross-file name matching.
+    Inferred,
+}
+
+string_enum! {
+    Confidence {
+        Extracted => "EXTRACTED",
+        Inferred => "INFERRED",
+    }
+}
+
+// -- Graph Edge ---------------------------------------------------------------
+
+/// A typed semantic edge between two indexed symbols.
+///
+/// Edges are stored in the `graph_edges` SQLite table (see [`crate::store`]).
+/// The `source_sym` and `target_sym` fields are foreign keys into the
+/// `symbols` table.  The `kind` field identifies the semantic relationship
+/// (calls, imports, inherits, references, mixes_in, implements) and the
+/// `confidence` field indicates whether the edge was explicitly present in
+/// the source (`EXTRACTED`) or resolved by cross-file name matching
+/// (`INFERRED`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct GraphEdge {
+    /// The ID of the source symbol (the caller, importer, etc.).
+    pub source_sym: i64,
+    /// The ID of the target symbol (the callee, imported symbol, etc.).
+    pub target_sym: i64,
+    /// The semantic kind of the edge.
+    pub kind: EdgeKind,
+    /// How the edge was derived.
+    pub confidence: Confidence,
+    /// The file ID where the edge originates, if known.
+    pub source_file: Option<i64>,
+    /// The line number where the edge originates, if known.
+    pub line: Option<u32>,
+}
+
+// -- Code Index Config -------------------------------------------------------
+
+/// Configuration for the code index system.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeIndexConfig {
+    /// Whether the code index is enabled.
+    pub enabled: bool,
+    /// Root directory of the project to index.
+    pub project_root: PathBuf,
+    /// Path to the index storage directory (default: `.ragent/codeindex`).
+    pub index_dir: PathBuf,
+    /// Scanner configuration.
+    pub scan_config: ScanConfig,
+}
+
+impl Default for CodeIndexConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            project_root: PathBuf::from("."),
+            index_dir: PathBuf::from(".ragent/codeindex"),
+            scan_config: ScanConfig::default(),
+        }
+    }
+}

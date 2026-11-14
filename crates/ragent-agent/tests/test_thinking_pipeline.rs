@@ -1,0 +1,193 @@
+//! Integration test for thinking propagation through the session pipeline.
+
+use std::collections::HashMap;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+
+use anyhow::Result;
+use futures::stream;
+use ragent_agent::agent::{AgentInfo, ModelRef};
+use ragent_agent::event::EventBus;
+use ragent_agent::llm::{ChatRequest, LlmClient, LlmFinishReason, StreamEvent};
+use ragent_agent::permission::PermissionChecker;
+use ragent_agent::provider::{ModelInfo, Provider, ProviderRegistry};
+use ragent_agent::session::{SessionManager, processor::SessionProcessor};
+use ragent_agent::storage::Storage;
+use ragent_agent::tool;
+use ragent_config::{Capabilities, Cost};
+use ragent_types::{ThinkingConfig, ThinkingLevel};
+
+#[derive(Clone)]
+struct MockProvider {
+    captured_requests: Arc<Mutex<Vec<ChatRequest>>>,
+}
+
+struct MockClient {
+    captured_requests: Arc<Mutex<Vec<ChatRequest>>>,
+}
+
+#[async_trait::async_trait]
+impl LlmClient for MockClient {
+    async fn chat(
+        &self,
+        request: ChatRequest,
+    ) -> Result<Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>>> {
+        self.captured_requests
+            .lock()
+            .expect("captured requests lock")
+            .push(request);
+        Ok(Box::pin(stream::iter(vec![
+            StreamEvent::TextDelta {
+                text: "ok".to_string(),
+            },
+            StreamEvent::Finish {
+                reason: LlmFinishReason::Stop,
+            },
+        ])))
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for MockProvider {
+    fn id(&self) -> &'static str {
+        "ollama"
+    }
+
+    fn name(&self) -> &'static str {
+        "Mock Ollama"
+    }
+
+    fn default_models(&self) -> Vec<ModelInfo> {
+        vec![ModelInfo {
+            id: "qwen3:latest".to_string(),
+            provider_id: "ollama".to_string(),
+            name: "Qwen3".to_string(),
+            cost: Cost {
+                input: 0.0,
+                output: 0.0,
+            },
+            capabilities: Capabilities {
+                reasoning: true,
+                streaming: true,
+                vision: false,
+                tool_use: true,
+                thinking_levels: vec![ThinkingLevel::Auto, ThinkingLevel::Off],
+            },
+            context_window: 128_000,
+            max_output: Some(8_192),
+            request_multiplier: None,
+            thinking_config: Some(ThinkingConfig::new(ThinkingLevel::Auto)),
+        }]
+    }
+
+    fn as_any_static(&self) -> &(dyn std::any::Any + 'static) {
+        self
+    }
+
+    async fn create_client(
+        &self,
+        _api_key: &str,
+        _base_url: Option<&str>,
+        _options: &HashMap<String, serde_json::Value>,
+    ) -> Result<Box<dyn LlmClient>> {
+        Ok(Box::new(MockClient {
+            captured_requests: Arc::clone(&self.captured_requests),
+        }))
+    }
+}
+
+#[tokio::test]
+async fn test_process_message_forwards_agent_thinking_to_chat_request() {
+    let captured_requests = Arc::new(Mutex::new(Vec::new()));
+    let mut provider_registry = ProviderRegistry::new();
+    provider_registry.register(Box::new(MockProvider {
+        captured_requests: Arc::clone(&captured_requests),
+    }));
+
+    let event_bus = Arc::new(EventBus::new(32));
+    let storage = Arc::new(Storage::open_in_memory().expect("in-memory storage"));
+    let session_manager = Arc::new(SessionManager::new(storage.clone(), event_bus.clone()));
+    let tool_registry = Arc::new(tool::create_default_registry());
+    let permission_checker = Arc::new(parking_lot::RwLock::new(PermissionChecker::new(vec![])));
+    let processor = SessionProcessor {
+        session_manager: session_manager.clone(),
+        provider_registry: Arc::new(provider_registry),
+        tool_registry,
+        permission_checker,
+        event_bus,
+        agent_manager: std::sync::OnceLock::new(),
+        team_manager: Default::default(),
+        mcp_client: std::sync::OnceLock::new(),
+        connector_session: tokio::sync::RwLock::new(None),
+        connector_statuses: tokio::sync::RwLock::new(None),
+        code_index: std::sync::OnceLock::new(),
+        project_code_indexes: Default::default(),
+        project_tool_registries: Default::default(),
+        active_spec: tokio::sync::RwLock::new(None),
+        spec_manager: std::sync::OnceLock::new(),
+        cached_tool_definitions: parking_lot::RwLock::new(None),
+        cached_tool_names: parking_lot::RwLock::new(None),
+        cached_tool_definition_bytes: parking_lot::RwLock::new(None),
+        llm_client_cache: parking_lot::RwLock::new(std::collections::HashMap::new()),
+        cached_config: parking_lot::Mutex::new(None),
+        team_context_cache: std::sync::Arc::new(parking_lot::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
+        tool_repeat_guard: std::sync::Arc::new(parking_lot::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
+        extraction_engine: std::sync::OnceLock::new(),
+        stream_config: ragent_agent::StreamConfig::default(),
+        auto_approve: false,
+        system_prompt_cache: parking_lot::RwLock::new(None),
+        skill_body_cache: std::sync::Arc::new(std::sync::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
+        read_timestamps: std::sync::Arc::new(std::sync::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
+        telemetry: std::sync::Arc::new(ragent_agent::telemetry::TelemetrySubsystem::disabled()),
+        bg_service: std::sync::OnceLock::new(),
+        activity_log: std::sync::OnceLock::new(),
+        activity_log_tx: tokio::sync::Mutex::new(None),
+        skill_registry_cache: parking_lot::Mutex::new(None),
+        active_loops: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+        active_loop_specs: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+        loop_telemetry_recorded: std::sync::atomic::AtomicBool::new(false),
+        active_loop_interrupts: parking_lot::RwLock::new(std::collections::HashMap::new()),
+        active_loop_captures: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+        last_message_end_reason: std::sync::RwLock::new(std::collections::HashMap::new()),
+        pending_verdicts: ragent_agent::session::pending::PendingVerdicts::new(),
+    };
+    let working_dir = tempfile::tempdir().expect("tempdir");
+    let session = session_manager
+        .create_session(working_dir.path().to_path_buf())
+        .expect("session should be created");
+
+    let mut agent = AgentInfo::new("general", "General");
+    agent.model = Some(ModelRef {
+        provider_id: "ollama".to_string(),
+        model_id: "qwen3:latest".to_string(),
+    });
+    agent.thinking = Some(ThinkingConfig::new(ThinkingLevel::High));
+
+    let reply = processor
+        .process_message(
+            &session.id,
+            "hello",
+            &agent,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .expect("process_message should succeed");
+
+    assert_eq!(reply.text_content(), "ok");
+    let captured = captured_requests.lock().expect("captured requests lock");
+    assert_eq!(captured.len(), 1);
+    assert_eq!(
+        captured[0].thinking,
+        Some(ThinkingConfig::new(ThinkingLevel::High))
+    );
+}

@@ -1,0 +1,117 @@
+//! `git_push` - Push branches and tags to remote.
+
+use anyhow::Result;
+use serde_json::{Value, json};
+
+use crate::{Tool, ToolContext, ToolOutput};
+
+/// Tool that pushes branches and tags to a remote.
+pub struct GitPushTool;
+
+#[async_trait::async_trait]
+impl Tool for GitPushTool {
+    fn name(&self) -> &'static str {
+        "git_push"
+    }
+
+    fn description(&self) -> &'static str {
+        "Push local branches and tags to a remote git repository. \
+         No required parameters. 'remote' (string, default 'origin') selects the remote; 'branch' (string) pushes a specific branch (default current branch). \
+         'force' (boolean, default false) performs a force-with-lease push; 'tags' (boolean, default false) pushes all tags. \
+         Common gotcha: 'force' is destructive and may overwrite remote history; only use it after confirming no one else has pushed the same branch."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "remote": {
+                    "type": "string",
+                    "description": "Remote name (default: origin)"
+                },
+                "branch": {
+                    "type": "string",
+                    "description": "Branch to push (default: current branch)"
+                },
+                "force": {
+                    "type": "boolean",
+                    "description": "Force push with lease (git push --force-with-lease) (default: false)"
+                },
+                "tags": {
+                    "type": "boolean",
+                    "description": "Push all tags (git push --tags) (default: false)"
+                }
+            }
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "git:write"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let remote = input["remote"].as_str().unwrap_or("origin");
+        let branch = input["branch"].as_str();
+        let force = input["force"].as_bool().unwrap_or(false);
+        let tags = input["tags"].as_bool().unwrap_or(false);
+
+        // SEC-ragent-tools-vcs-001 (SECTASKS T-022): `--receive-pack=<cmd>`
+        // turns a push into command execution, so `remote`/`branch` must not
+        // look like options.
+        crate::git::reject_option_like(remote, "remote")?;
+        if let Some(b) = branch {
+            crate::git::reject_option_like(b, "branch")?;
+        }
+
+        let mut args: Vec<String> = vec!["push".to_string()];
+
+        if force {
+            args.push("--force-with-lease".to_string());
+        }
+
+        if tags {
+            args.push("--tags".to_string());
+        }
+
+        // SEC-ragent-tools-vcs-001 (SECTASKS T-022): `--` ends option parsing
+        // for the remote and for the refspec that follows it. Both values were
+        // validated by `reject_option_like` above, so no second separator is
+        // needed - and inserting one before the refspec would make git treat
+        // it as a literal ref name (`src refspec -- does not match any`).
+        args.push("--".to_string());
+        args.push(remote.to_string());
+
+        if let Some(b) = branch {
+            args.push(b.to_string());
+        }
+
+        let (stdout, stderr) = crate::git::run_git_async(args, ctx.working_dir.clone()).await?;
+
+        if !stderr.is_empty() && stdout.trim().is_empty() {
+            return Ok(ToolOutput {
+                content: format!("git push error: {}", stderr.trim()),
+                metadata: None,
+            });
+        }
+
+        let content = if stdout.trim().is_empty() {
+            if tags {
+                format!("Pushed tags to {remote}.")
+            } else {
+                format!(
+                    "Pushed {} to {}.",
+                    branch.unwrap_or("current branch"),
+                    remote
+                )
+            }
+        } else {
+            stdout
+        };
+
+        Ok(ToolOutput {
+            content,
+            metadata: None,
+        })
+    }
+}

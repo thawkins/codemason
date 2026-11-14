@@ -1,0 +1,241 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-linux:
+    name: Build - Linux-x86_64
+    runs-on: ubuntu-latest
+
+    outputs:
+      version: ${{ steps.set-asset.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set asset name
+        id: set-asset
+        shell: bash
+        run: |
+          echo "ASSET_NAME=ragent-${{ github.ref_name }}-linux-x86_64" >> "$GITHUB_ENV"
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            dpkg-dev \
+            fakeroot \
+            rpm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Build release binary
+        run: |
+          cargo build --release --target x86_64-unknown-linux-gnu
+          cp "target/x86_64-unknown-linux-gnu/release/ragent" "${{ env.ASSET_NAME }}"
+
+      - name: Install packaging tools
+        run: |
+          cargo install cargo-deb
+          cargo install cargo-generate-rpm
+
+      - name: Build .deb package
+        run: |
+          cargo deb --target x86_64-unknown-linux-gnu --no-build --output "ragent-${{ github.ref_name }}-linux-x86_64.deb"
+
+      - name: Build .rpm package
+        run: |
+          cargo generate-rpm --target x86_64-unknown-linux-gnu --output "ragent-${{ github.ref_name }}-linux-x86_64.rpm"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ragent-${{ github.ref_name }}-linux-x86_64
+          path: |
+            ${{ env.ASSET_NAME }}
+            *.deb
+            *.rpm
+          if-no-files-found: error
+
+  build-macos-arm64:
+    name: Build - macOS-arm64
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set asset name
+        shell: bash
+        run: |
+          echo "ASSET_NAME=ragent-${{ github.ref_name }}-macos-arm64" >> "$GITHUB_ENV"
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Build release binary
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cp "target/aarch64-apple-darwin/release/ragent" "${{ env.ASSET_NAME }}"
+
+      - name: Build .pkg installer
+        run: |
+          ./scripts/macos-pkg.sh "${{ env.VERSION }}" \
+            "target/aarch64-apple-darwin/release/ragent" \
+            "$(pwd)"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ragent-${{ github.ref_name }}-macos-arm64
+          path: |
+            ${{ env.ASSET_NAME }}
+            *.pkg
+          if-no-files-found: error
+
+  build-windows:
+    name: Build - Windows-x86_64
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set asset name
+        shell: bash
+        run: |
+          echo "ASSET_NAME=ragent-${{ github.ref_name }}-windows-x86_64.exe" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build release binary
+        run: |
+          cargo build --release --target x86_64-pc-windows-msvc
+          cp "target/x86_64-pc-windows-msvc/release/ragent.exe" "$env:ASSET_NAME"
+        shell: powershell
+
+      - name: Install WiX packaging tool
+        run: cargo install cargo-wix
+
+      - name: Stage binary for WiX
+        run: |
+          New-Item -ItemType Directory -Force -Path target\release | Out-Null
+          Copy-Item "target\x86_64-pc-windows-msvc\release\ragent.exe" "target\release\ragent.exe" -Force
+        shell: powershell
+
+      - name: Create WiX source files
+        run: cargo wix init --package ragent
+        shell: powershell
+
+      - name: Build .msi package
+        run: |
+          cargo wix --no-build --package ragent --target x86_64-pc-windows-msvc --output "ragent-${{ github.ref_name }}-windows-x86_64.msi"
+        shell: powershell
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+            name: ragent-${{ github.ref_name }}-windows-x86_64
+            path: |
+              ${{ env.ASSET_NAME }}
+              *.msi
+            if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs:
+      - build-linux
+      - build-macos-arm64
+      - build-windows
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ragent-${{ github.ref_name }}-linux-x86_64
+          path: linux
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ragent-${{ github.ref_name }}-macos-arm64
+          path: macos
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ragent-${{ github.ref_name }}-windows-x86_64
+          path: windows
+
+      - name: Extract release notes from CHANGELOG.md
+        id: changelog
+        shell: bash
+        run: |
+          version="${{ needs.build-linux.outputs.version }}"
+          python3 -c '
+          import re, sys
+          ver = sys.argv[1]
+          text = open("CHANGELOG.md").read()
+          pat = re.compile(r"^(?:## \[Unreleased\] - " + re.escape(ver) + r"|## \[" + re.escape(ver) + r"\] - |## Version: " + re.escape(ver) + r")\b.*?(?=^## (?:\[.*\] - |Version: )|\Z)", re.M | re.S)
+          m = pat.search(text)
+          open("release_notes.md", "w").write(m.group(0) if m else "")
+          ' "$version"
+
+          if [[ -s release_notes.md ]]; then
+            echo "Found release notes for version $version"
+          else
+            echo "No CHANGELOG section found for version $version; release body will be empty."
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release_notes.md
+          files: |
+            linux/*
+            macos/*
+            windows/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  audit:
+    name: Dependency Audit (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo-audit
+        # This job is informational only and must not block a release.
+        # Suppressions live in .cargo/audit.toml (kept in sync with deny.toml
+        # [advisories].ignore); cargo-audit reads that file automatically.
+        run: cargo audit

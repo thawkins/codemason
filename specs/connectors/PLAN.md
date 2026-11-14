@@ -1,0 +1,676 @@
+# Implementation Plan: Connector System - Claude-Connector-Equivalent Integrations over MCP
+
+**Spec:** [SPEC.md](SPEC.md) · **Test plan:** [TESTPLAN.md](TESTPLAN.md)
+
+## Approach
+
+Add one new crate, `crates/ragent-connectors`, that owns the connector descriptor model, the
+connector store and ledger, the catalogue providers, and the session-start bridge into the
+existing MCP client. Surface it through three integration points, mirroring the plugin
+system's structure so the two subsystems read the same way:
+
+1. **`ragent-connectors` crate** - `descriptor` (the normalised connector model and its
+   validation), `store` (paths, scan, `_state.json` ledger, install/remove with
+   path-traversal-safe archive extraction), `catalogue` (HTTPS index fetch, byte cap,
+   timeout, cache, the compiled default endpoint constant, and the endpoint resolver),
+   `provider` (the per-catalogue normalisation strategy), `auth` (auth-shape handling over
+   the encrypted credential store), `bridge` (resolve enabled connectors into
+   `(bridged_server_id, McpServerConfig)` pairs), and `report`/`help` (shared wording).
+2. **MCP integration** - the bridge produces `McpServerConfig` values that the session feeds
+   to the existing `McpClient`; enablement is consulted against the durable
+   `mcp_state.json` ledger so a connector disabled once stays disabled everywhere. No new
+   transport is written: every connector resolves to stdio, SSE, or HTTP exactly as a
+   configured MCP server does.
+3. **Command surface** - a `/connectors` slash-command family in
+   `crates/ragent-tui/src/app/slash.rs` with a `crates/ragent-tui/src/app/connector.rs`
+   glue module, registered in `SLASH_COMMANDS` in `crates/ragent-tui/src/app/state.rs` and
+   documented in `/connectors help`; a `ragent connectors` CLI parity surface in
+   `src/cli.rs`. Configuration gains a `connectors` block in `ragent-config`.
+
+The store, ledger, provider, and fetch machinery deliberately reuse the shapes proven in
+`ragent-plugins` (`StoreDirs`, `StoreLedger`, `StoreProvider`, `store_fetch`,
+`ScratchSurface`): where a helper is already public, the connector crate calls it rather
+than re-deriving it, so the two subsystems cannot drift. The compiled default Claude
+connector-catalogue endpoint and its resolver mirror the plugin store's
+`DEFAULT_CLAUDE_STORE_URL` / `effective_endpoint_with_source` discipline so the two
+default-endpoint regimes read the same way.
+
+### Reuse decisions
+
+- The durable enable ledger is the **existing** `ragent_agent::mcp::enable_state`
+  (`mcp_state.json`); the connector crate adds no second enable file.
+- Catalogue indices parse through a `ConnectorProvider` trait shaped like
+  `ragent_plugins::store_provider::StoreProvider` (tolerant per-entry-skip, `skipped`
+  counter) so the browser domain stays catalogue-agnostic.
+- Bridged server ids are `<connector-id>.<server>`, the same collision-avoidance shape the
+  plugin MCP bridge uses (spec `plugins` FR-030).
+- Secrets live in the existing encrypted credential store; the connector manifest stores
+  only the credential *name* (FR-005).
+- The compiled default Claude connector-catalogue endpoint and its provenance resolver
+  mirror `ragent_plugins::store_index` (`DEFAULT_CLAUDE_STORE_URL`,
+  `effective_endpoint_with_source`, `EndpointSource`) and reuse that crate's
+  absolute-`https`-with-host guard, so a default endpoint is guarded exactly like a
+  configured one (FR-037).
+- The category filter (FR-039..FR-041) is one shared predicate applied by the browser and
+  by the `list` glue, so the browser and the textual report can never disagree about which
+  connectors a category shows.
+- The catalogue's single surface is the interactive `claude` browser (FR-010): the optional
+  `--category <name>` launch argument selects its filter, and the `c` key cycles that filter
+  over the categories the fetched catalogue declares. There is no separate `search`
+  subcommand, so there is one catalogue surface with one filter model.
+
+## Requirement Coverage Map
+
+| Requirement | Task(s) |
+| ----------- | ------- |
+| FR-001 Connector store discovery | T-003 |
+| FR-002 Normalised descriptor | T-002 |
+| FR-003 Bridge to `McpServerConfig` and registry ids | T-006 |
+| FR-004 `/connectors` command family | T-010, T-011, T-012 |
+| FR-005 Secrets in credential store | T-007 |
+| FR-006 Attribution and ASCII reports | T-010, T-014 |
+| FR-007 `connectors` config block | T-001 |
+| FR-008 Session-start loading | T-008 |
+| FR-009 `/connectors list` | T-011 |
+| FR-010 `/connectors claude` catalogue browser | T-022 |
+| FR-011 `/connectors add` install (enabled) | T-004, T-009 |
+| FR-012 `/connectors enable` | T-008, T-011 |
+| FR-013 `/connectors disable` | T-008, T-011 |
+| FR-014 `/connectors auth` | T-007, T-011 |
+| FR-015 `/connectors test` | T-013 |
+| FR-016 Connection/tool failure containment | T-006, T-008, T-013 |
+| FR-017 `/connectors help` and usage | T-012 |
+| FR-018 Disabled-connector inertness | T-008, T-011 |
+| FR-019 connect/disconnect without restart | T-008, T-011 |
+| FR-020 Tool surfacing under `mcp_<server>_<tool>` | T-006, T-008 |
+| FR-021 Master switch `connectors.enabled` | T-001, T-011 |
+| FR-022 `needs auth` reporting and refusal | T-007, T-011 |
+| FR-023 Credential requirement surfacing | T-007, T-010 |
+| FR-024 Per-catalogue endpoint override | T-001, T-005 |
+| FR-025 Unsupported-capability reporting | T-002, T-005, T-011 |
+| FR-026 Multi-server connectors | T-006, T-008 |
+| FR-027 Id-collision refusal | T-004, T-009 |
+| FR-028 Non-https refusal | T-009 |
+| FR-029 Archive path-traversal refusal | T-009 |
+| FR-030 Remove-while-enabled refusal | T-009 |
+| FR-031 Malformed/oversize catalogue refusal | T-005 |
+| FR-032 Auth-failure state and no retry loop | T-007, T-008 |
+| FR-033 Server-id collision refusal | T-006, T-008 |
+| FR-034 Compiled default Claude catalogue endpoint | T-016 |
+| FR-035 Default endpoint resolution and override precedence | T-016, T-017 |
+| FR-036 `/connectors stores` provenance tagging | T-018 |
+| FR-037 `https` guard on the default and configured endpoints | T-016, T-017 |
+| FR-038 Single source of the default-endpoint literal | T-016, T-019 |
+| FR-039 Category filter restricts displayed connectors | T-020, T-021 |
+| FR-040 `ALL` category resets the filter (default) | T-020, T-021 |
+| FR-041 `--category` argument on list/claude | T-021, T-022 |
+| FR-042 `/connectors marketplace show` report | T-024 |
+| FR-043 Marketplace add/remove/list + merged multi-marketplace fetch + per-row attribution | T-023, T-024, T-025 |
+| FR-044 Catalogue description enrichment | T-026 |
+| NFR-001 Default endpoint declared exactly once | T-019 |
+| NFR-002 Endpoint resolved per launch, no rebuild | T-016, T-017 |
+| NFR-003 Resolution is pure and offline | T-016 |
+| CLI parity | T-014 |
+| Fixtures and acceptance walk | T-015 |
+
+## Tasks
+
+| ID | Title | Requirement | Effort | Priority | Status | Dependencies |
+|----|-------|-------------|--------|----------|--------|--------------|
+| T-001 | Add `connectors` configuration block to `ragent-config` | FR-007, FR-021, FR-024 | S | High | completed | — |
+| T-002 | Define `ConnectorDescriptor` model and validation rules | FR-002, FR-025 | M | Critical | completed | — |
+| T-003 | Implement connector store paths, scan, and `_state.json` ledger | FR-001 | M | Critical | completed | T-002 |
+| T-004 | Implement connector manifest read/write and install staging | FR-002, FR-011, FR-027 | M | Critical | completed | T-002 |
+| T-005 | Implement catalogue fetch, cache, and normalisation providers | FR-024, FR-025, FR-031 | L | High | completed | T-001, T-002 |
+| T-006 | Implement the bridge: connectors to `McpServerConfig` and registry ids | FR-003, FR-020, FR-026, FR-033 | M | Critical | completed | T-002, T-003 |
+| T-007 | Implement auth-shape handling over the encrypted credential store | FR-005, FR-014, FR-022, FR-023, FR-032 | L | High | completed | T-001, T-002 |
+| T-008 | Wire session-start load, connect, and disconnect lifecycle | FR-008, FR-012, FR-013, FR-018, FR-019, FR-032, FR-033 | L | Critical | completed | T-006, T-007 |
+| T-009 | Implement install/remove command operations with refusal guards | FR-011, FR-027, FR-028, FR-029, FR-030 | M | High | completed | T-004 |
+| T-010 | Add `/connectors` command parsing, dispatch, and registration | FR-004, FR-006, FR-023 | M | High | completed | T-008 |
+| T-011 | Implement `list`, `enable`, `disable`, `connect`, `disconnect`, `auth` glue | FR-009, FR-012, FR-013, FR-014, FR-018, FR-019, FR-022, FR-025 | L | Critical | completed | T-010 |
+| T-012 | Implement `/connectors help` usage text and autocomplete metadata | FR-004, FR-017 | S | Medium | completed | T-010 |
+| T-013 | Implement `/connectors test` isolated connect-and-invoke harness | FR-015, FR-016 | M | High | completed | T-008 |
+| T-014 | Add `ragent connectors` CLI parity surface | FR-004, FR-006 | M | Medium | completed | T-011 |
+| T-015 | Fixtures, acceptance walk, and quality gates | Acceptance criteria 1-10 | M | High | completed | T-001, T-002, T-003, T-004, T-005, T-006, T-007, T-008, T-009, T-010, T-011, T-012, T-013, T-014 |
+| T-016 | Add compiled default Claude connector-catalogue endpoint constant and resolver | FR-034, FR-035, FR-037, FR-038, NFR-002, NFR-003 | M | High | completed | T-001 |
+| T-017 | Wire default endpoint resolution into catalogue fetch and store commands | FR-035, FR-037, NFR-002 | S | High | completed | T-005, T-016 |
+| T-018 | Extend `/connectors stores` to tag endpoint provenance (`default`/`config`) | FR-036 | S | Medium | completed | T-016, T-017 |
+| T-019 | Add guard check and test for the single default-endpoint literal | FR-038, NFR-001 | S | Medium | completed | T-016 |
+| T-020 | Add category filter state and category enumeration to the connector browser | FR-039, FR-040 | M | High | completed | T-002, T-003 |
+| T-021 | Wire the category filter into the `list` report and the `--category` argument | FR-039, FR-040, FR-041 | M | High | completed | T-011, T-020 |
+| T-022 | Move catalogue browsing to `/connectors claude` and add its `--category` launch filter and `c` cycle | FR-004, FR-010, FR-039, FR-040, FR-041 | M | High | completed | T-010, T-020, T-021 |
+| T-023 | `connectors.stores.marketplaces` config + source resolution + atomic config splice | FR-042, FR-043 | M | High | completed | T-001, T-016 |
+| T-024 | `/connectors marketplace` subcommand family (`show`, `claude list|add|remove`) | FR-042, FR-043 | M | High | completed | T-010, T-023 |
+| T-025 | Merge every configured marketplace into the browse fetch with per-row attribution | FR-043 | M | High | completed | T-017, T-023 |
+| T-026 | Catalogue description enrichment (off-loop, cached, injectable) | FR-044 | M | Medium | completed | T-022, T-025 |
+| T-027 | Sort every connector list alphabetically by id (shared comparator) | FR-046 | S | Medium | completed | T-002, T-011, T-020 |
+## Task Details
+
+### T-001 - Add `connectors` configuration block to `ragent-config`
+
+Add a `ConnectorsConfig` struct (master `enabled` defaulting true, optional `store_dir`,
+`stores` endpoints and shared budgets, `credentials` name map) beside the existing
+`PluginsConfig` in `crates/ragent-config/src/connectors.rs`, with `is_enabled()` and
+`stores_or_default()` helpers mirroring `PluginsConfig`. Add the optional field to the
+top-level `Config`. `connectors.enabled: false` makes the subsystem inert (FR-021).
+
+**Verify:** a partial `connectors` block overlays the compiled defaults; an absent block
+leaves the subsystem enabled with default endpoints.
+
+### T-002 - Define `ConnectorDescriptor` model and validation rules
+
+Define the descriptor (id, name, description, category, tags, source, provenance, auth
+shape, auth scopes, credential name, server list, unsupported labels) and its validation:
+a connector id is a non-empty single path component; at least one server must be declared;
+each server's transport must be representable as `McpServerConfig`. Record unexpressible
+capabilities as `unsupported` labels rather than dropping them (FR-025). This module owns
+the id-collision and server-id-collision predicates used later (FR-027, FR-033). The
+`category` field is the value the category filter compares against (FR-039).
+
+**Verify:** a descriptor with no servers and one with an unknown transport both fail
+validation with a named reason; an unexpressible capability is retained as a label.
+
+### T-003 - Implement connector store paths, scan, and `_state.json` ledger
+
+Add store paths (`<workdir>/.ragent/connectors/`, global `~/.config/ragent/connectors/`),
+a symlink-safe directory walk, and a per-store `_state.json` ledger holding per-connector
+`enabled` and telemetry counters. Project-local connectors win an id collision. Scanning
+reads manifests only and never connects (FR-001). Model the module on
+`ragent_plugins::store` so the two ledgers are recognisably the same shape.
+
+**Verify:** a connector placed only under the global store is discovered when no project
+copy exists; a project copy shadows the global one; a symlink escaping the store is skipped.
+
+### T-004 - Implement connector manifest read/write and install staging
+
+Define the on-disk connector manifest format (the serialised descriptor minus secrets) and
+the read/write helpers. Add the staging routine that copies or expands an install source
+into the store under the connector id, refusing when the id already exists unless `--force`
+(FR-027). No MCP connection is made at any point in this task (FR-011).
+
+**Verify:** staging a local directory produces a manifest in the store; a second staging of
+the same id is refused; `--force` overwrites.
+
+### T-005 - Implement catalogue fetch, cache, and normalisation providers
+
+Add the HTTPS catalogue fetch with the configured timeout and byte cap, a `cache_ttl_secs`
+cache, and a `ConnectorProvider` trait with `parse_index` implemented for the shipped
+catalogue shape. A malformed document, an unrecognised shape, or an oversize body aborts the
+fetch with a named reason and leaves the cache untouched (FR-031). An entry that cannot be
+normalised is skipped and counted, not fatal (FR-025). Per-catalogue endpoint overrides
+resolve before each fetch (FR-024). Reuse the tolerant discipline of
+`ragent_plugins::store_provider`.
+
+**Verify:** a two-entry catalogue with one unexpressible entry returns one connector and a
+`skipped` count of one; an oversize body aborts without replacing the cache.
+
+### T-006 - Implement the bridge: connectors to `McpServerConfig` and registry ids
+
+Resolve each enabled connector's server definitions into `(bridged_server_id,
+McpServerConfig)` pairs with `bridged_server_id = <connector-id>.<server>` (FR-003, FR-026).
+Reject a bridged id that collides with an existing `ragent.json` `mcp` key or with another
+connector's bridged id (FR-033). The bridge is pure over the store and ledger and performs
+no connection. Shape the module on `ragent_plugins::bridge::scanned_plugin_mcp_servers`.
+
+**Verify:** a two-server connector yields two pairs with `<id>.` prefixes; a bridged id
+colliding with a configured `mcp` key is rejected.
+
+### T-007 - Implement auth-shape handling over the encrypted credential store
+
+Implement the five auth shapes (none, env, token, oauth, password). A secret value is
+written to the encrypted credential store under the configured name and never into a
+manifest or `ragent.json` (FR-005). Report the auth state without echoing the secret
+(FR-014). Surface a catalogue entry's declared credential requirement (FR-023). A connector
+with an auth shape and no valid credential reports `needs auth` and refuses to connect
+(FR-022); a rejected or expired credential records `auth failed` and does not retry in a
+loop (FR-032).
+
+**Verify:** storing a token encrypts it and reports a non-secret state line; a connector
+with no stored token reports `needs auth` and refuses to connect.
+
+### T-008 - Wire session-start load, connect, and disconnect lifecycle
+
+On session start, load each enabled connector, consult the durable `mcp_state.json` ledger,
+connect each bridged server through the existing `McpClient`, register tools under
+`mcp_<server>_<tool>`, and record state `connected` or `errored` with the cause (FR-008,
+FR-020). Provide the connect/disconnect-without-restart entry points (FR-019) and the
+enable/disable transitions that register and deregister exactly the contributed tools
+(FR-012, FR-013). A disabled connector is fully inert (FR-018). A connect failure records
+`errored` and leaves the session running (FR-016); per-server state is independent for a
+multi-server connector (FR-026); a server-id collision is refused (FR-033); an auth failure
+records `auth failed` and stops (FR-032).
+
+**Verify:** enabling a connector surfaces its tools; disabling deregisters exactly those
+tools; a failing server on a two-server connector still reports the other as connected.
+
+**Delivered (startup wiring):**
+
+- `src/main.rs` resolves the enabled connectors through the bridge and queues their
+  bridged `(id, config)` pairs into the same background connect loop that starts the
+  configured `ragent.json` and plugin-contributed servers, so a connector's tools
+  register as the ordinary `mcp_<server>_<tool>` tools (FR-020) without a second
+  connection path. A bridged id colliding with a configured server is refused and
+  warned, not overwritten (FR-033).
+- A [`ConnectorSession`] is started against the resolved plan and published on the
+  session processor (`set_connector_session`), together with its live status snapshot
+  (`set_connector_statuses`). The processor stores both type-erased, so `ragent-agent`
+  still does not depend on `ragent-connectors`.
+- `/connectors` (TUI) now drives that published session for
+  `enable`/`disable`/`connect`/`disconnect`, reconciling the MCP tool registry after
+  the transition, and `/connectors list` takes its per-server tool counts from the live
+  MCP client (`ConnectorCommandEnv::tool_counts`), so a bridged server that connected
+  *after* startup still reports a real count instead of `?`.
+- The global `mcp_state.json` ledger is honoured per bridged id (`StartupServerLedger`
+  over `McpEnableLedger`), so a server switched off in `/mcp` is not started by a
+  connector either (FR-018).
+
+**Delivered (client-derived statuses, T-008 follow-up):**
+
+- The startup bridge connects a bridged server on the *shared* MCP client, so the
+  published session tracks nothing and `session.statuses()` is empty; `/connectors
+  list` therefore fell back to the store enable flag and printed `state enabled` /
+  `? tool(s)` even while the server was connected. `ConnectorSession::statuses_from_client_state`
+  now derives the same per-connector statuses from the client's per-bridged-server
+  connection state instead (a connector with a connected server is `connected`, an
+  enabled but wholly disconnected one is `enabled`, a store-disabled one is `disabled`).
+- `TuiConnectorEnv::statuses()` prefers the tracked snapshot and falls back to the
+  client-derived one when it is empty; `App::refresh_connector_statuses()` does the
+  same for the published snapshot and is now also driven from the housekeeping pass,
+  so a connector the startup loop connected reaches the list without a second connect.
+- The shared connect loop publishes a completion `McpStatusChanged` once every server
+  is settled, so the TUI adopts the client promptly instead of waiting out the poll
+  interval. The CLI surface keeps `enabled` / `?`: a one-shot invocation has no live
+  client by design.
+
+### T-009 - Implement install/remove command operations with refusal guards
+
+Add the install and remove operations behind the command glue: install from a catalogue id,
+a local directory, a local `.zip`/`.tar.gz`, or an `https://` URL (FR-011); refuse a
+non-`https` scheme (FR-028); refuse an archive whose entries escape the store (FR-029);
+refuse removal while enabled (FR-030); refuse an id collision without `--force` (FR-027).
+Reuse the path-traversal-safe extraction approach from the plugin store.
+
+**Verify:** a `../../escape` archive entry is refused with no write outside the store; a
+removal of an enabled connector changes nothing and instructs the user to disable first.
+
+### T-010 - Add `/connectors` command parsing, dispatch, and registration
+
+Add the `connectors` trigger to `SLASH_COMMANDS`, the dispatch arm in `app/slash.rs`, and a
+`crates/ragent-tui/src/app/connector.rs` glue module that parses the subcommand and forwards
+to the shared entry points. Reports carry the `From: /connectors <sub>` attribution and are
+ASCII-only (FR-006). A bare `/connectors` and an unknown subcommand fall through to the
+usage block. A `connectors.enabled: false` subsystem reports as disabled (FR-021). The
+parser accepts the optional `--category <name>` argument on `list` and `claude` (FR-041,
+completed in T-021 and T-022).
+
+**Verify:** `/connectors` appears in the autocomplete menu and dispatches; a disabled
+subsystem reports that fact for every non-help subcommand.
+
+### T-011 - Implement `list`, `enable`, `disable`, `connect`, `disconnect`, `auth` glue
+
+Implement the management subcommands: `list` prints one row per connector (id, name,
+category, state, auth state, server and tool counts) plus a summary and any unsupported
+labels (FR-009, FR-025); the catalogue-browsing role moved to the `claude` browser (T-022);
+`enable`/`disable` drive the lifecycle (FR-012, FR-013,
+FR-018); `connect`/`disconnect` toggle the connection without a restart (FR-019); `auth`
+drives T-007 and reports `needs auth` where applicable (FR-014, FR-022). Malformed arguments
+render an `[err]` row that changes no state. Keep the parse-and-run glue in one place so the
+TUI and CLI share one wording.
+
+**Verify:** each subcommand returns the documented report for a fixture connector; a missing
+argument renders an `[err]` row and changes no state.
+
+### T-012 - Implement `/connectors help` usage text and autocomplete metadata
+
+Add the usage block documenting every subcommand, its arguments, and the accepted `<source>`
+forms, plus the subcommand token list the autocomplete menu is seeded from. Rendering help
+is a pure string function with no store access and creates no files (FR-017). Model the
+module on `ragent_plugins::help`.
+
+**Verify:** `/connectors help`, a bare `/connectors`, and an unknown subcommand all print the
+same usage block and create no files.
+
+### T-013 - Implement `/connectors test` isolated connect-and-invoke harness
+
+Connect the connector's servers in isolation, invoke one advertised tool once with
+schema-valid sample arguments generated from the tool's JSON schema, report per-step
+`[ ok ]`/`[fail]` results with wall-clock connect time, then disconnect without touching the
+live session (FR-015). A connect or tool failure is reported per-step and never panics
+(FR-016). Model the harness on `ragent_plugins::harness`.
+
+**Verify:** a healthy connector reports `[ ok ]` connect and tool steps; a connector whose
+server fails to start reports `[fail]` on the connect step and the live session is unchanged.
+
+### T-014 - Add `ragent connectors` CLI parity surface
+
+Add the `connectors` subcommand to the CLI dispatcher so `ragent connectors <sub>` prints
+the same wording as the TUI family (FR-004, FR-006), reusing the shared parse-and-run glue
+from T-010/T-011 and honouring `--category` where the TUI does (FR-041). Model the parity on
+the `ragent plugins` CLI surface.
+
+**Verify:** `ragent connectors help` and the TUI `/connectors help` print identical usage
+text; `ragent connectors list --category <name>` prints the same rows as the TUI.
+
+### T-015 - Fixtures, acceptance walk, and quality gates
+
+Add fixture connectors and a fixture catalogue covering: a healthy stdio connector, a
+two-server connector, a connector with an auth shape, a connector with an unexpressible
+entry, and a connector whose server fails to start. Give the fixtures distinct `category`
+values so the category filter is walkable. Walk acceptance criteria 1-10 manually and record
+results. Run the workspace gates: `cargo fmt --all -- --check`,
+`cargo clippy --workspace --all-targets`, `cargo test --workspace`, and the shared guard
+scripts.
+
+**Verify:** every acceptance criterion is observed in a running session; all gates pass with
+zero warnings.
+
+**Delivered fixture inventory** - all under `assets/connectors/fixtures/`, the same
+artifacts the manual TESTPLAN walk stages:
+
+| Fixture | Cover | Category | Servers |
+| ------- | ----- | -------- | ------- |
+| `echo/connector.json` | healthy stdio connector | `productivity` | 1 |
+| `two-server/connector.json` | multi-server connector (`alpha`, `beta`) | `developer` | 2 |
+| `needs-token/connector.json` | `token` auth shape, credential `NEEDS_TOKEN_VALUE` | `data` | 1 |
+| `needs-env/connector.json` | `env` auth shape, credential `ECHO_TOKEN` | `data` | 1 |
+| `bad-server/connector.json` | command absent, so the connect step fails | `developer` | 1 |
+| `unsupported/connector.json` | `grpc` transport, unexpressible label | `developer` | 1 |
+| `duplicate/connector.json` | re-declares the id `echo` (id-collision refusal) | `data` | 1 |
+| `stores/index.json` | 3-entry fixture catalogue (`echo`, `unsupported`, `github`) | - | - |
+| `stores/index-bad.json` | truncated JSON (malformed-document case) | - | - |
+| `stores/index-big.json` | >128 KiB document (oversize-body case) | - | - |
+| `archives/echo.zip` | the `echo` fixture packaged | - | - |
+| `archives/needs-token.tar.gz` | the `needs-token` fixture packaged | - | - |
+| `archives/escape.zip` | one entry whose path escapes the store | - | - |
+
+The acceptance walk is automated in
+`crates/ragent-connectors/tests/test_connector_fixtures.rs` (18 tests: fixture inventory,
+acceptance criteria 1-10, TC-003/TC-010/TC-011/TC-012, and the TC-024 `--category` case), so
+a regression in a fixture fails the same walk the manual plan describes. The manual walk
+follows TESTPLAN.md Prerequisites 4-12, which stage these fixtures under
+`~/scratch/connectors-tests/` and point the catalogue config at `stores/index.json`.
+
+### T-016 - Add compiled default Claude connector-catalogue endpoint constant and resolver
+
+Add a single public constant for the compiled default Claude connector-catalogue endpoint
+(FR-034, FR-038) plus a resolver that returns the effective endpoint *and* its provenance:
+a non-empty `connectors.stores.claude.url` override is `config`, an absent, empty, or
+whitespace-only override falls back to the compiled default as `default`, with no error
+(FR-035). The chosen value is parsed through the same absolute-`https`-with-host guard the
+plugin store uses (`StoreEndpoint`), so both the default and configured paths are guarded
+(FR-037). Resolution is a pure offline function called once per launch (NFR-002, NFR-003).
+Model the module on `ragent_plugins::store_index` so the two default-endpoint disciplines
+read the same way.
+
+**Verify:** with no `connectors` block the resolver reports the compiled default with
+provenance `default` and performs no network access; a configured non-`https` override is
+refused with a named scheme error.
+
+### T-017 - Wire default endpoint resolution into catalogue fetch and store commands
+
+Resolve the Claude catalogue endpoint (T-016) at the catalogue-fetch call site and in the
+`/connectors stores` handler, replacing any hard-coded or duplicated endpoint literal
+(FR-035, FR-038). An absent or blank override keeps the compiled default active; a
+non-`https` value is refused before any fetch is attempted (FR-037). Resolution happens per
+launch, so a config edit takes effect without a rebuild (NFR-002).
+
+**Verify:** a fresh install with no `connectors.stores` block fetches the compiled default
+endpoint; clearing a previously configured override restores the default on the next
+launch.
+
+### T-018 - Extend `/connectors stores` to tag endpoint provenance (`default`/`config`)
+
+Extend the `/connectors stores` report so each catalogue row prints its endpoint and a
+provenance tag: `default` when the compiled default is in effect, `config` when a non-empty
+override is in effect (FR-036). Reuse the provenance value returned by the T-016 resolver so
+the tag can never disagree with the endpoint actually contacted. `--check` continues to
+probe the endpoint it reports.
+
+**Verify:** `/connectors stores` on a fresh install tags the Claude endpoint `default`; after
+setting `connectors.stores.claude.url` it tags that row `config` and shows the override.
+
+### T-019 - Add guard check and test for the single default-endpoint literal
+
+Add a test and a guard check proving the compiled default Claude connector-catalogue endpoint
+is declared exactly once and that no other module carries a second copy of the literal
+(FR-038, NFR-001). The check fails when a duplicated default-endpoint literal appears,
+mirroring the plugin-store default-endpoint guard.
+
+**Verify:** the guard passes on the current tree; introducing a second copy of the endpoint
+literal makes the guard and the test fail with the duplicated location named.
+
+### T-020 - Add category filter state and category enumeration to the connector browser
+
+Add a category-filter state to the connector browser: the distinct category set is derived
+from the loaded connector catalogue plus the installed connectors, and a sentinel `ALL`
+entry that represents "no filter" (FR-040). While a filter is active the browser displays
+only connectors whose declared category matches the selected category (FR-039). `ALL` is
+the default filter on open, so a browser with no selection shows every connector. Category
+comparison is exact and case-insensitive against the descriptor's `category` field (T-002);
+a connector with an empty category is visible only under `ALL`.
+
+**Verify:** selecting a category shows only that category's rows and the match count; the
+`ALL` entry restores every row; a browser opened with no selection is on `ALL`.
+
+### T-021 - Wire the category filter into the `list` report and the `--category` argument
+
+Parse an optional `--category <name>` argument on `/connectors list` and apply the same
+filter used by the browser (FR-039, FR-041); T-022 extends the same argument to
+`/connectors claude`.
+Each report states the active category (`ALL` when unfiltered) and the match count; a
+category with no matching connectors prints an empty-result message rather than an error
+(FR-041). `--category ALL` clears any filter and behaves identically to the unfiltered
+report (FR-040). Malformed or unknown category values render an `[err]` row and change no
+state, matching the family's error policy.
+
+**Verify:** `list --category data` prints only data-category connectors and the active
+filter; `list --category ALL` prints every connector; `list --category nosuch` prints the
+`[err]` refusal, not an error.
+
+## Risks and Mitigations
+
+| Risk | Likelihood | Impact | Mitigation |
+| ---- | ---------- | ------ | ---------- |
+| Connector and plugin MCP bridges double-register a server | Medium | High | Bridged ids are prefixed (`<owner>.<server>`); T-006 rejects a colliding id (FR-033). |
+| OAuth flow complexity exceeds a single exchange | High | Medium | Ship authorization-code first; device-code deferred (Open Question 2); a token shape is always available as the fallback. |
+| Catalogue shape varies by vendor | High | Medium | A `ConnectorProvider` per shape behind one trait; unexpressible entries are skipped and counted (FR-025). |
+| Secrets leak into reports or manifests | Low | Critical | Secrets only ever enter the encrypted store; reports render a name or a state, never a value (FR-005, FR-014). |
+| Archive extraction escapes the store | Low | Critical | Path-traversal-safe extraction with an explicit refusal case (FR-029) covered by a fixture. |
+| Default catalogue endpoint drifts or is duplicated across modules | Medium | Medium | Single public constant (FR-038) with one resolver (T-016) and a guard check that fails on a duplicate literal (T-019, NFR-001). |
+| A configured endpoint silently falls back to the default when malformed | Low | High | The default and configured paths share one guard; a malformed or non-`https` value is refused with a named reason rather than substituted (FR-037). |
+| The browser and the text report disagree about a category | Low | Medium | The category predicate is one shared function (T-020) that both the browser and the `list` glue (T-021) call. |
+| A launch `--category` names a category the catalogue does not declare | Low | Medium | The launch filter is held until the fetch lands and then validated against the fetched categories (T-022); an unknown name is reported in the panel footer with every row left visible. |
+
+## Notes on Assumptions
+
+- A1 (a connector wraps MCP servers plus metadata) keeps the session-visible tool mechanism
+  unchanged; the connector layer adds catalogue, auth, and management only.
+- A2/A3 (store and durable ledger patterned on the plugin system) means the connector store,
+  its `_state.json`, and the global `mcp_state.json` never disagree about whether a server
+  should start.
+- A5 (secrets separate from configuration) is the only place the design chooses differently
+  from a naive connector record, and it is what makes the reports safe to print.
+- A4 + the default-endpoint section: the Claude connector catalogue ships a compiled default
+  endpoint (FR-034) resolved through one connector-provider-friendly resolver (T-016), so a
+  fresh install browses the standard Claude connector catalog with no configuration, exactly
+  as the plugin browser has a compiled default Claude store endpoint.
+- FR-035 names `connectors.stores.claude.url` as the override key, so the compiled default
+  is the `claude` catalogue entry; any other catalogue (`community`) keeps its own compiled
+  default when only `claude` is overridden (FR-024).
+- Resolving the default endpoint is offline (NFR-003); the endpoint is contacted only when a
+  catalogue fetch or `/connectors stores --check` explicitly requests it, so a launch with
+  an unused catalogue makes no network call.
+- The category filter (FR-039..FR-041) is text and browser surface only: it narrows what is
+  shown, never what is discovered, enabled, or connected, so filtering cannot start or stop
+  a server.
+### T-022 - Move catalogue browsing to `/connectors claude` and add its `--category` launch filter and `c` cycle
+
+Drop the redundant `/connectors search <query>` subcommand: the interactive `claude`
+catalogue browser (T-020) already covers catalogue lookup with a richer surface, so the
+family has one catalogue surface with one filter model (FR-004, FR-010). The `ConnectorCommand`
+enum replaces its `Search` variant with a `Claude { query, category, refresh }` variant, so
+the launch arguments parse in the shared crate parser (`parse_connector_command`) and both
+surfaces understand them identically.
+
+`/connectors claude` now accepts `--category <name>` (FR-041) alongside its optional query
+and `--refresh`. Because the panel is opened before the catalogue is fetched, the requested
+category is *held* on the browser (`CatalogueBrowser::set_pending_category`) and applied once
+the entries land (`CategoryFilterState::select_when_known`), so the name is validated against
+the categories the fetched catalogue actually declares and an unknown category is reported in
+the panel footer with every row left visible rather than rendering an indistinguishable empty
+list. Inside the panel the `c` key cycles the filter over those same categories and back to
+`ALL` (FR-039, FR-040).
+
+`render_search` and the `search_catalogue` environment hook remain as the shared catalogue
+renderer/fetch seam (they are no longer reachable from a subcommand), so no renderer is lost
+to the removal.
+
+**Delivered (T-022).** `ConnectorCommand::Search` -> `Claude { query, category, refresh }`;
+`ConnectorArgError::MissingSearchQuery` removed; `CONNECTOR_SUBCOMMANDS` down to 12 tokens
+and `--refresh` added to the CLI/TUI catalog flag lists; `render_search` de-registered from
+the crate re-exports but retained for the shared catalogue renderer; the `list`-style
+category resolution (`resolve_filter`/`CategoryError`) shared unchanged.
+
+### T-023 - `connectors.stores.marketplaces` config + source resolution + atomic config splice
+
+Add a `ConnectorMarketplaceEntry` model and a `marketplaces: Vec<ConnectorMarketplaceEntry>`
+field on `ConnectorStoresConfig` (FR-043), mirroring
+`ragent_config::PluginStoresConfig::marketplaces`. Add
+`crates/ragent-connectors/src/marketplace_ops.rs`, ported from
+`ragent_plugins::marketplace_ops`: `resolve_source` accepts `owner/repo`,
+`git@github.com:owner/repo.git`, an `https://` URL (used verbatim), or a local marketplace
+directory, resolving a GitHub slug or repo URL to
+`https://raw.githubusercontent.com/<owner>/<repo>/main/.claude-plugin/marketplace.json`
+(anchored to branch `main`); `add_marketplace`/`remove_marketplace` edit the
+**user-global** `connectors.stores.marketplaces` array in `~/.config/ragent/ragent.json`
+with an atomic temp-file-plus-rename splice, refusing a duplicate name without `--force`,
+and drop the config crate's load cache after a write. No network access happens here.
+The config-splice helpers avoid `expect` entirely: every `as_object_mut` after an ensured
+object goes through `ok_or_else`, so no path panics on a hand-edited config.
+
+**Verify:** owner/repo, SSH, https, and local sources resolve offline to the expected
+(name, url) pairs; add/remove round-trip only the user-global file; a duplicate add without
+`--force` is refused and a forced add replaces.
+
+### T-024 - `/connectors marketplace` subcommand family (`show`, `claude list|add|remove`)
+
+Add `marketplace` to the `/connectors` subcommand list, usage block, and autocomplete
+tokens (FR-004, FR-017), and to the shared parser (`parse_connector_command`): `show`
+renders one section for the Claude catalogue with a `| Name | Url | Description |` table
+over the base endpoint plus every configured marketplace, tagging each
+`default`/`config`/`added` and rendering a refused endpoint as an `[err]` row (FR-042);
+`claude list` renders the same table for the one catalogue; `claude add <source> [--force]`
+and `claude remove <name>` resolve and record through `marketplace_ops` and report
+`[ok]`/`[err]` (FR-043). `show` and `list` are pure config reads - no network, no store
+scan - and a missing `connectors.stores` block still lists the compiled default. They are
+dispatched *before* the `connectors.enabled` master switch in `run_connector_subcommand`, so
+a disabled subsystem still renders them rather than reporting the subsystem inert (FR-042).
+The CLI parity surface (`ragent connectors <sub>`) prints the same wording.
+
+**Verify:** `marketplace show` with no stores block lists the compiled default tagged
+`default`; `add` then `list` shows the entry tagged `added`; `remove` drops it; a malformed
+invocation renders an `[err]` usage report that changes no state; with
+`connectors.enabled: false`, `marketplace show`/`list` still render the compiled default
+(with no `disabled` report) - covered by `test_connector_commands.rs`. The source-form
+resolver's git-ref/scheme guards in `catalogue_enrich.rs` are covered by
+`test_catalogue_enrich.rs`.
+
+### T-025 - Merge every configured marketplace into the browse fetch with per-row attribution
+
+Add `CatalogueKind::effective_endpoints_with_source` returning the base endpoint followed by
+every `connectors.stores.marketplaces` `url` for the catalogue, each parsed through the
+`https` guard, with `EndpointSource::Added` (tag `added`) for the marketplace rows (FR-043).
+A refused added URL is skipped (the first refusal is returned so the caller can warn); a
+refused base endpoint still blinds the fetch as before (FR-037). Add
+`store_ops::fetch_all_catalogues`: fetch each accepted endpoint (per-endpoint cache, so the
+base fetch cannot poison an added marketplace's cache entry), stamp each returned
+descriptor's `marketplace` field with the marketplace display name (the added marketplace's
+name, or the catalogue label for the base endpoint) via `marketplace_name_for`, matching
+pluginstores' per-row attribution, and drop
+an entry whose id was already seen (first occurrence wins, base endpoint first - document
+the ordering contract). The browser fetch worker (`session_ops.rs`) and the descriptor-fetch
+glue (`commands.rs`) call it, and a skipped marketplace surfaces as a `LogLevel::Warn`
+message-window line. The browse panel gains a marketplace column rendered from the stamped
+descriptor (`layout.rs`), the same width the plugin panel gives it.
+
+**Verify:** a base endpoint plus two added marketplaces merge into one row set in fetch
+order with duplicate ids dropped once; each row names its marketplace; a refused added
+marketplace warns and leaves the rest of the set intact.
+
+### T-026 - Catalogue description enrichment (off-loop, cached, injectable)
+
+Add `crates/ragent-connectors/src/catalogue_enrich.rs`, ported from
+`ragent_plugins::store_enrich` (FR-044): for each loaded entry whose `source` is a
+`github.com` `git+` source, derive
+`https://raw.githubusercontent.com/<owner>/<repo>/<ref>/<subpath>/connector.json` (with
+`.claude-plugin/connector.json` tried after it) and fill only a blank `description` with
+the manifest's `description` (never overwriting a catalogue-declared value). The production
+`NetworkManifestSource` is lazy (no blocking client until first lookup), `https`-only
+redirects, bounded by a 10-second timeout and a 256 KiB body cap; a per-URL process-global
+cache (positive and negative, FIFO-bounded at 1024) keeps a re-open from re-fetching;
+`enrich_into` runs across a bounded thread pool (8 workers, at most 500 entries) reporting
+each resolved `ManifestUpdate` through a `Sync` sink. The TUI wires it the way the plugin
+browser does: start enrichment after `set_entries`, poll a shared result slot each
+housekeeping frame with a generation counter discarding stale results, apply only blank
+fields via a cursor-preserving re-filter, and render `loading details...` in the panel title
+while running.
+
+**Verify:** an entry with a git source and a manifest fixture gains a description; an entry
+whose catalogue description was set keeps it; a missing or failing manifest leaves the row
+alone; the title hint clears when the worker finishes.
+
+### T-027 - Sort every connector list alphabetically by id (shared comparator)
+
+Add `compare_connector_ids` and `sort_connectors` to `descriptor.rs` (FR-046): one
+case-insensitive id comparator with a byte-wise tiebreak, shared by every connector surface.
+`CatalogueBrowser::set_entries` sorts `all` on load (so a category filter narrows the
+already-sorted set); `render_list` sorts its rows by id after applying the category filter;
+`render_search` sorts its matching rows by id. All three read the same `compare_connector_ids`
+so their order cannot drift.
+
+**Verify:** `sort_connectors`/`compare_connector_ids` order by id (case-insensitive, byte
+tiebreak); the browser and both text reports render alphabetically whether filtered or not;
+the existing browse/list/search tests updated for the sorted first row.
+
+### T-028 - Bring the browse panel onto the plugin-store design language
+
+Rework `render_connector_catalogue_panel` (`crates/ragent-tui/src/layout.rs`) onto the exact
+design language the plugin-store panels already ship (FR-047), sharing helpers rather than
+copying them:
+
+- Rename the shared chrome constants and helpers in `layout.rs` from the
+  `PLUGIN_STORE_*`/`plugin_store_*` names to neutral `STORE_*`/`store_*` names (`STORE_ACCENT`,
+  `STORE_CHROME_BG`, `STORE_BAND_BG`, `STORE_NAV_MIN`/`MAX`, `STORE_RESULT_MIN`,
+  `STORE_NAV_GAP`, `STORE_CATEGORY_TITLE`, `STORE_MARKETPLACE_TITLE`, `STORE_SEARCH_LABEL`,
+  `STORE_CLEAR_LABEL`, `STORE_SEARCH_MIN`, `STORE_INSTALLED_MARKER`, `store_nav_width`,
+  `store_flex_widths`, `store_muted_style`), and generalise `render_plugin_store_search_box`
+  into `render_store_search_box(frame, query, ...)` so both panels paint one bottom strip.
+- Frame the connector panel with `STORE_ACCENT` and cap it at 140x41, exactly as the plugin
+  panel; render a structured (`Line<'_>` of spans) title naming the catalogue badge, the
+  counts, and the `search`/`category`/`marketplace` values.
+- Split the left column into the category navigator (top half) and the marketplace navigator
+  (bottom half), each under a reversed-video title band reserved out of its pane so the
+  cached hit-test area excludes it.
+- Rebuild the result rows on the shared template: `> ` cursor gutter, one-column installed
+  lane carrying `*` in bold green, fixed id/category columns, the marketplace in the accent
+  colour (blank rendering as `-`), and the description taking every remaining column,
+  padded to the full width and zebra-banded on alternate rows.
+- Move the footer up one row and paint it on the chrome band; add the bottom search box and
+  cache the clear-button area.
+
+State (`crates/ragent-connectors/src/browse.rs`) gains the pieces the renderer needs: a
+three-variant `CataloguePane` focus enum replacing the `nav_focused` boolean, an `Installed`
+pseudo-category row (`INSTALLED_CATEGORY`, `is_installed_row_label`) pinned after `ALL`, per-row
+entry counts (`category_entry_count`/`category_row_display`, mirrored for the marketplace
+navigator), and a full marketplace navigator (`marketplaces` `CategoryFilterState` plus its
+cursor/scroll/viewport and the select/move/clear/confirm verbs). `apply_filter` composes the
+query, category, and marketplace predicates, with the `Installed` row matched against the
+store scan rather than a declared category.
+
+The TUI routes the new panes: `connector_store_marketplace_area`, `connector_store_search_area`,
+and `connector_store_clear_area` hit rects, `Tab`/`BackTab` focus cycling, pane-scoped
+`Up`/`Down`/`Enter`/`c`, and marketplace click/wheel plus the clear-button click.
+
+**Verify:** `cargo test -p ragent-tui --test all test_connector_catalogue` and
+`cargo test -p ragent-connectors --test all` pass; `cargo fmt --check` and `cargo clippy` are
+clean.

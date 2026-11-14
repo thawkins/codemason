@@ -1,0 +1,677 @@
+//! `mf_search` tool - keyless multi-engine web search with consensus ranking.
+//!
+//! Implements FR-008 through FR-010, FR-022, FR-023, FR-025, FR-026.
+//!
+//! Queries multiple public search-engine backends in parallel (`OpenAlex`,
+//! Wikipedia, and optionally more), merges and deduplicates results by
+//! normalised URL, ranks by relevance with cross-engine consensus boosting,
+//! and returns a formatted result list with structured signals.
+//!
+//! # Pipeline
+//!
+//! 1. Validate the query (non-empty after trim).
+//! 2. Build [`SearchOptions`] from the tool's input parameters (site,
+//!    `exclude_sites`, freshness, `max_results`, page).
+//! 3. Run [`SearchOrchestrator::search`] to query all backends in parallel,
+//!    merge via consensus, and cache for 5 minutes.
+//! 4. Format the ranked results as a human-readable text report.
+//! 5. Populate structured metadata with FR-009 signals: `relevance_score`,
+//!    `fetch_relevance`, `engines_consensus`, `related_queries`,
+//!    `fetch_hint`, `engine_blocked`, `cached`, `duration_ms`.
+//!
+//! # API keys
+//!
+//! The tool is **keyless by default** (FR-023): it queries the OpenAlex
+//! scholarly-works API (no API key required) and the Wikipedia REST API. An
+//! optional `openalex_email` config field or `OPENALEX_EMAIL` environment
+//! variable participates in the OpenAlex polite pool. If a `langsearch_api_key`,
+//! `tavily_api_key`, `perplexity_api_key`, `exa_api_key`, or `serper_api_key` is
+//! configured in `ragent.json` (or the corresponding environment variable is
+//! set), an optional
+//! API-backed engine is added for higher-quality results; the keys are masked in
+//! diagnostics and never logged.
+
+use anyhow::Result;
+use serde_json::{Value, json};
+
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use super::super::MASTERFETCH_VERSION;
+use super::super::search::consensus::MergeOutput;
+use super::super::search::engine::DEFAULT_MAX_RESULTS;
+use super::super::search::exa::ExaEngine;
+use super::super::search::langsearch::LangSearchEngine;
+use super::super::search::openalex::OpenAlexEngine;
+use super::super::search::perplexity::PerplexityEngine;
+use super::super::search::serper::SerperEngine;
+use super::super::search::tavily::TavilyEngine;
+use super::super::search::wikipedia::WikipediaEngine;
+use super::super::search::{Freshness, SearchEngine, SearchOptions, SearchOrchestrator};
+
+use crate::{Tool, ToolContext, ToolOutput};
+
+// ---------------------------------------------------------------------------
+// Tool struct
+// ---------------------------------------------------------------------------
+
+/// Keyless multi-engine web search with consensus ranking.
+///
+/// No API keys required. Multiple backends run in parallel; results are merged,
+/// deduplicated, and ranked with cross-engine consensus boosting. Each result
+/// carries `relevance_score`, `fetch_relevance` (high/med/low), and
+/// `engines_consensus`.
+pub struct MfSearchTool;
+
+/// Result of probing a single search backend with a fixed diagnostic query.
+///
+/// Used by the TUI `/websearch test` command to report whether each engine
+/// returned any results and how many.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EngineTestResult {
+    /// Human-readable engine name.
+    pub name: String,
+    /// Whether the engine returned at least one result.
+    pub returned_results: bool,
+    /// Number of raw results returned by the engine.
+    pub result_count: usize,
+    /// Error or blocked message, empty when the engine succeeded.
+    pub error: String,
+}
+
+/// Availability status of a single web-search backend.
+///
+/// Returned by [`MfSearchTool::engine_status`] for UI diagnostics (e.g. the
+/// TUI `/websearch show` command). `enabled` means the engine can be used with
+/// the current configuration; `in_use` means it is currently wired into the
+/// search orchestrator; `failed` means it is unavailable due to missing or
+/// invalid configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EngineStatus {
+    /// Human-readable engine name.
+    pub name: &'static str,
+    /// Whether the engine is configured and available.
+    pub enabled: bool,
+    /// Whether the engine is currently active in the orchestrator.
+    pub in_use: bool,
+    /// Whether the engine is unavailable because configuration is missing.
+    pub failed: bool,
+}
+
+impl MfSearchTool {
+    /// Build the [`SearchOrchestrator`] for this tool based on the supplied
+    /// [`ToolContext`].
+    ///
+    /// The orchestrator always includes the keyless `OpenAlex` and `Wikipedia`
+    /// backends. The OpenAlex backend is keyless (no API key) and queries the
+    /// OpenAlex scholarly-works catalog; an optional polite-pool `mailto` email
+    /// (from the `OPENALEX_EMAIL` environment variable or the `openalex_email`
+    /// config field) is appended to its requests. The Wikipedia backend is
+    /// keyless and queries the Wikipedia REST API page/summary endpoint. If
+    /// `ctx.config` contains a non-empty `langsearch_api_key`, a
+    /// [`LangSearchEngine`] is added as an additional backend. If `ctx.config`
+    /// contains a non-empty `tavily_api_key` (or `TAVILY_API_KEY` environment
+    /// variable), a [`TavilyEngine`] is added as an additional backend. If
+    /// `ctx.config` contains a non-empty `perplexity_api_key` (or
+    /// `PERPLEXITY_API_KEY` environment variable), a [`PerplexityEngine`] is
+    /// added as an additional backend. If `ctx.config` contains a non-empty
+    /// `exa_api_key` (or `EXA_API_KEY` environment variable), an
+    /// [`ExaEngine`] is added as an additional backend. If `ctx.config`
+    /// contains a non-empty `serper_api_key` (or `SERPER_API_KEY`
+    /// environment variable), a [`SerperEngine`] is added as an additional
+    /// backend.
+    ///
+    /// This helper is public so integration tests can verify backend wiring
+    /// without making network requests.
+    #[must_use]
+    pub fn build_orchestrator(ctx: &ToolContext) -> SearchOrchestrator {
+        let (langsearch_key, tavily_key, perplexity_key, exa_key, serper_key) =
+            Self::resolve_search_keys(ctx);
+        let mailto = Self::resolve_openalex_mailto(ctx);
+        let mut engines: Vec<Arc<dyn SearchEngine>> = vec![
+            Arc::new(OpenAlexEngine::with_mailto(mailto)),
+            Arc::new(WikipediaEngine::new()),
+        ];
+        if let Some(key) = langsearch_key {
+            engines.push(Arc::new(LangSearchEngine::new(key)));
+        }
+        if let Some(key) = tavily_key {
+            engines.push(Arc::new(TavilyEngine::new(key)));
+        }
+        if let Some(key) = perplexity_key {
+            engines.push(Arc::new(PerplexityEngine::new(key)));
+        }
+        if let Some(key) = exa_key {
+            engines.push(Arc::new(ExaEngine::new(&key)));
+        }
+        if let Some(key) = serper_key {
+            engines.push(Arc::new(SerperEngine::new(key)));
+        }
+        SearchOrchestrator::with_engines(engines)
+    }
+
+    /// Resolve configured API keys for optional search backends.
+    ///
+    /// Returns `(langsearch_key, tavily_key, perplexity_key, exa_key,
+    /// serper_key)` where each key is taken from its environment variable (via
+    /// the canonical trimmed credential read, so blank/whitespace counts as
+    /// unset) or, failing that, the matching `ctx.config` field.
+    fn resolve_search_keys(
+        ctx: &ToolContext,
+    ) -> (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) {
+        let cfg = ctx.config.as_ref();
+        // Env var wins; fall back to the config field; an empty value counts as
+        // unset. Route the env read through the canonical credential helper so
+        // blank/whitespace handling matches the rest of the workspace.
+        let pick = |env_var: &str, cfg_key: Option<&String>| {
+            ragent_config::credential_env::read_credential_env(env_var)
+                .or_else(|| cfg_key.cloned())
+                .filter(|k| !k.is_empty())
+        };
+        let langsearch_key = pick(
+            "LANGSEARCH_API_KEY",
+            cfg.and_then(|c| c.langsearch_api_key.as_ref()),
+        );
+        let tavily_key = pick(
+            "TAVILY_API_KEY",
+            cfg.and_then(|c| c.tavily_api_key.as_ref()),
+        );
+        let perplexity_key = pick(
+            "PERPLEXITY_API_KEY",
+            cfg.and_then(|c| c.perplexity_api_key.as_ref()),
+        );
+        let exa_key = pick("EXA_API_KEY", cfg.and_then(|c| c.exa_api_key.as_ref()));
+        let serper_key = pick(
+            "SERPER_API_KEY",
+            cfg.and_then(|c| c.serper_api_key.as_ref()),
+        );
+        (
+            langsearch_key,
+            tavily_key,
+            perplexity_key,
+            exa_key,
+            serper_key,
+        )
+    }
+
+    /// Resolve the optional OpenAlex polite-pool email.
+    ///
+    /// Returns the email from the `OPENALEX_EMAIL` environment variable, falling
+    /// back to the `openalex_email` config field. Returns an empty string when
+    /// neither is set (OpenAlex remains usable without a polite-pool email).
+    fn resolve_openalex_mailto(ctx: &ToolContext) -> String {
+        // Canonical trimmed env read (audit T-111): unset/blank falls back to
+        // the config field.
+        if let Some(env_email) =
+            ragent_config::credential_env::read_credential_env("OPENALEX_EMAIL")
+        {
+            return env_email;
+        }
+        ctx.config
+            .as_ref()
+            .and_then(|cfg| cfg.openalex_email.as_deref())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    /// Return availability status for all possible search backends.
+    ///
+    /// OpenAlex and Wikipedia are always considered available (keyless).
+    /// LangSearch, Tavily, Perplexity, Exa, and Serper require an API key and
+    /// are marked as `failed` when the key is missing. `in_use` reflects the
+    /// engines that are actually wired into the orchestrator built from the
+    /// supplied [`ToolContext`].
+    #[must_use]
+    pub fn engine_status(ctx: &ToolContext) -> Vec<EngineStatus> {
+        let orchestrator = Self::build_orchestrator(ctx);
+        let in_use: HashSet<&str> = orchestrator.engine_names().into_iter().collect();
+        // An engine is wired in iff its key was present and non-empty, so the
+        // three flags are all derivable from `in_use`.
+        let row = |name: &'static str, id: &str| {
+            let on = in_use.contains(id);
+            EngineStatus {
+                name,
+                enabled: on,
+                in_use: on,
+                failed: !on,
+            }
+        };
+        vec![
+            row("OpenAlex", "openalex"),
+            row("Wikipedia", "wikipedia"),
+            row("LangSearch", "langsearch"),
+            row("Tavily", "tavily"),
+            row("Perplexity", "perplexity"),
+            row("Exa", "exa"),
+            row("Serper", "serper"),
+        ]
+    }
+
+    /// Probe every configured search backend with a fixed diagnostic query.
+    ///
+    /// Runs the query `"what is websearch"` against each engine that is
+    /// currently wired into the orchestrator and returns per-engine counts.
+    /// This is a live network test, so it may take several seconds on a slow
+    /// connection. Engines that are not configured (e.g. missing API keys) are
+    /// omitted from the test run.
+    pub async fn engine_test(ctx: &ToolContext) -> Vec<EngineTestResult> {
+        let orchestrator = Self::build_orchestrator(ctx);
+        let opts = SearchOptions::new(5);
+        let reports = orchestrator
+            .search_per_engine("what is websearch", &opts)
+            .await;
+        reports
+            .into_iter()
+            .map(|report| {
+                let name = report.engine.clone();
+                let count = report.result_count;
+                let error = if report.engine_blocked {
+                    format!("blocked: {}", report.error)
+                } else if report.error.is_empty() {
+                    String::new()
+                } else {
+                    report.error.clone()
+                };
+                EngineTestResult {
+                    name,
+                    returned_results: count > 0,
+                    result_count: count,
+                    error,
+                }
+            })
+            .collect()
+    }
+}
+
+#[async_trait::async_trait]
+impl Tool for MfSearchTool {
+    fn name(&self) -> &'static str {
+        "mf_search"
+    }
+
+    fn description(&self) -> &'static str {
+        "Local keyless web search. Required parameter: 'query'. Multiple backends \
+                 run in parallel (OpenAlex, Wikipedia, optional LangSearch / \
+                 Tavily / Perplexity / Exa / Serper when configured via 'langsearch_api_key', \
+                 'tavily_api_key', 'perplexity_api_key', 'exa_api_key', or 'serper_api_key'). Keyless backends do \
+                 not require API keys. OpenAlex queries the scholarly-works catalog; set \
+                 'openalex_email' in ragent.json or the OPENALEX_EMAIL env var to join the polite \
+                 pool. Wikipedia queries the English Wikipedia REST API for encyclopedia \
+                 summaries. Optional 'site', 'exclude_sites', 'freshness' (day/week/month/year), \
+                 'max_results' (1-500, default 10) for the overall merge cap, and 'page' (0-10). \
+                 Optional 'per_engine_results' (1-200, default 75) caps how many results each \
+                 individual engine returns before merge/dedup. Optional 'engine' restricts the \
+                 search to a single backend (openalex, wikipedia, langsearch, \
+                 tavily, perplexity, exa, serper); when omitted all configured engines run in parallel. \
+                 Optional 'exclude_engines' removes a set of named backends before any request \
+                 is dispatched (applied on top of 'engine' when both are given; unknown names are ignored). \
+                 Each result carries relevance_score, fetch_relevance, and engines_consensus. \
+                 Engines that provide their own relevance score (e.g. OpenAlex) use it directly \
+                 in ranking."
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query"
+                },
+                "site": {
+                    "type": "string",
+                    "description": "Restrict results to this domain"
+                },
+                "exclude_sites": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Domains to exclude from results"
+                },
+                "freshness": {
+                    "type": "string",
+                    "enum": ["day", "week", "month", "year"],
+                    "description": "Time filter for results"
+                },
+                "published_after": {
+                    "type": "string",
+                    "description": "Oldest admissible publication date as YYYY-MM-DD. Engines that accept an absolute lower bound (exa, tavily, serper) drop older results server-side; this expresses an exact window that 'freshness' cannot."
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum results to return after merge/dedup (1-500, default: 10)"
+                },
+                "per_engine_results": {
+                    "type": "integer",
+                    "description": "Maximum results to request from each engine before merge (1-200, default: 75)"
+                },
+                "page": {
+                    "type": "integer",
+                    "description": "Result page (0-10, default: 0)"
+                },
+                "engine": {
+                    "type": "string",                      "enum": ["openalex", "wikipedia", "langsearch", "tavily", "perplexity", "exa", "serper"],
+                    "description": "Restrict the search to a single backend. When omitted, all configured engines run in parallel"
+                },
+                "exclude_engines": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Engine names to exclude from the search. Applied before any request; excluded engines are never queried. Unknown names are ignored"
+                }
+            },
+            "required": ["query"],
+            "additionalProperties": false
+        })
+    }
+    fn permission_category(&self) -> &'static str {
+        "web"
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error if the `query` parameter is missing or empty. Search
+    /// backend failures (rate limits, outages) are reported in `engine_blocked`
+    /// within the metadata, not as `Err`.
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let query = input["query"].as_str().unwrap_or("");
+
+        if query.trim().is_empty() {
+            anyhow::bail!("Search query must not be empty");
+        }
+
+        // Build search options from input parameters. The default comes from
+        // the engine constant so the tool and orchestrator defaults cannot drift
+        // (ANTIPAT M5.9 / 3.7).
+        let max_results = input["max_results"]
+            .as_u64()
+            .map_or(DEFAULT_MAX_RESULTS, |v| v as usize);
+        let mut opts = SearchOptions::new(max_results);
+
+        if let Some(per_engine) = input["per_engine_results"].as_u64() {
+            opts = opts.with_per_engine_results(per_engine as usize);
+        }
+
+        if let Some(site) = input["site"].as_str()
+            && !site.is_empty()
+        {
+            opts = opts.with_site(site);
+        }
+
+        if let Some(exclude) = input["exclude_sites"].as_array() {
+            let sites: Vec<String> = exclude
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !sites.is_empty() {
+                opts = opts.with_exclude_sites(sites);
+            }
+        }
+
+        if let Some(freshness) = input["freshness"].as_str()
+            && let Ok(f) = freshness.parse::<Freshness>()
+        {
+            opts = opts.with_freshness(f);
+        }
+
+        // `published_after` carries an exact window (`--age 45d`) that the
+        // coarse `freshness` buckets cannot express. Reject anything that is
+        // not a `YYYY-MM-DD` date so a malformed value cannot silently become
+        // a literal engine query parameter.
+        if let Some(date) = input["published_after"].as_str() {
+            let date = date.trim();
+            if !date.is_empty() && chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok() {
+                opts = opts.with_published_after(Some(date.to_string()));
+            } else if !date.is_empty() {
+                tracing::warn!(
+                    value = date,
+                    "mf_search: ignoring published_after that is not YYYY-MM-DD"
+                );
+            }
+        }
+
+        if let Some(page) = input["page"].as_u64() {
+            opts = opts.with_page(page as usize);
+        }
+
+        // Build the orchestrator from the tool context.
+        let orchestrator = Self::build_orchestrator(ctx);
+
+        // If the `engine` parameter is specified, restrict to that single
+        // backend. Otherwise run all configured engines in parallel.
+        let orchestrator = if let Some(engine) = input["engine"].as_str()
+            && !engine.is_empty()
+        {
+            match orchestrator.select_engine(engine) {
+                Some(filtered) => filtered,
+                None => {
+                    let available: Vec<&str> = orchestrator.engine_names();
+                    anyhow::bail!(
+                        "engine '{engine}' is not available; configured engines: {}",
+                        available.join(", ")
+                    );
+                }
+            }
+        } else {
+            orchestrator
+        };
+
+        // Apply the `exclude_engines` parameter (FR-001, FR-007). Names that do
+        // not match a registered engine are ignored (FR-008).
+        let excluded: Vec<String> = input["exclude_engines"]
+            .as_array()
+            .map(|names| {
+                names
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .filter(|n| !n.is_empty())
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Capture the configured engine names before exclusion so the
+        // all-excluded result can report what was available (NFR-004).
+        let configured: Vec<String> = orchestrator
+            .engine_names()
+            .into_iter()
+            .map(String::from)
+            .collect();
+
+        let orchestrator = if excluded.is_empty() {
+            orchestrator
+        } else {
+            orchestrator.exclude_engines(&excluded)
+        };
+
+        // FR-014: if every configured engine was removed, dispatch no
+        // requests and return an explicit result rather than a silent
+        // zero-result success (NFR-004: reflected in logs and metadata).
+        if orchestrator.engine_count() == 0 {
+            tracing::warn!(
+                query = %query,
+                excluded = ?excluded,
+                "mf_search: all configured engines excluded; no search dispatched"
+            );
+            let content = format!(
+                "mf_search: \"{query}\"\nNo engines available: all {} configured \
+                 engine(s) were excluded by 'exclude_engines' ({}).\n",
+                configured.len(),
+                excluded.join(", "),
+            );
+            let metadata = json!({
+                "query": query,
+                "results": [],
+                "total_results": 0,
+                "total_raw_results": 0,
+                "engines_used": [],
+                "engine_blocked": [],
+                "engines_with_results": 0,
+                "total_engines": 0,
+                "configured_engines": configured,
+                "excluded_engines": excluded,
+                "cached": false,
+                "duration_ms": 0,
+                "related_queries": [],
+                "site": opts.site,
+                "exclude_sites": opts.exclude_sites,
+                "freshness": opts.freshness.to_string(),
+                "page": opts.page,
+                "error": "all engines excluded by exclude_engines",
+                "version": MASTERFETCH_VERSION,
+            });
+            return Ok(ToolOutput {
+                content,
+                metadata: Some(metadata),
+            });
+        }
+
+        let output = orchestrator.search(query, &opts).await;
+
+        // Format the text report.
+        let content = format_search_report(&output.query, &output.merge, output.cached);
+
+        // Build structured metadata (FR-009).
+        let metadata = build_search_metadata(&output, &excluded);
+
+        Ok(ToolOutput { content, metadata })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Report formatting
+// ---------------------------------------------------------------------------
+
+/// Format the search results as a human-readable text report.
+///
+/// The report includes:
+/// - The query and result count.
+/// - Each ranked result with position, title, URL, snippet, relevance score,
+///   fetch tier, and consensus.
+/// - Related queries (if any).
+/// - Blocked engines (if any).
+fn format_search_report(query: &str, merge: &MergeOutput, cached: bool) -> String {
+    let mut out = String::new();
+
+    out.push_str(&format!("mf_search: \"{query}\"\n"));
+    out.push_str(&format!(
+        "Results: {} | Engines: {} ({} with results) | Cached: {}\n",
+        merge.total_merged_results, merge.total_engines, merge.engines_with_results, cached,
+    ));
+
+    if !merge.blocked_engines.is_empty() {
+        out.push_str(&format!(
+            "Blocked engines: {}\n",
+            merge.blocked_engines.join(", ")
+        ));
+    }
+
+    out.push('\n');
+
+    if merge.results.is_empty() {
+        out.push_str("No results found.\n");
+        if !merge.blocked_engines.is_empty() {
+            out.push_str(
+                "All search backends were blocked or returned no results. \
+                 Try again later or refine your query.\n",
+            );
+        }
+        return out;
+    }
+
+    for result in &merge.results {
+        out.push_str(&format!(
+            "{}. [{}] {}\n",
+            result.position, result.fetch_relevance, result.title
+        ));
+        out.push_str(&format!("   URL: {}\n", result.url));
+        if !result.snippet.is_empty() {
+            out.push_str(&format!("   {}\n", result.snippet));
+        }
+        out.push_str(&format!(
+            "   Relevance: {:.2} | Consensus: {} | Source: {}\n",
+            result.relevance_score, result.engines_consensus, result.source
+        ));
+        out.push_str(&format!("   Hint: {}\n", result.fetch_hint));
+        out.push('\n');
+    }
+
+    if !merge.related_queries.is_empty() {
+        out.push_str("Related queries:\n");
+        for rq in &merge.related_queries {
+            out.push_str(&format!("  - {rq}\n"));
+        }
+    }
+
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Metadata construction (FR-009)
+// ---------------------------------------------------------------------------
+
+/// Build the structured metadata for the search tool output.
+///
+/// Populates all FR-009 signal fields: `query`, `results` (array of
+/// `{title, url, snippet, source, position, relevance_score,
+/// fetch_relevance, engines_consensus}`), `total_results`, `engines_used`,
+/// `engine_blocked`, `cached`, `duration_ms`, `related_queries`, `error`.
+///
+/// `excluded_engines` carries the names removed by the `exclude_engines`
+/// parameter (empty when none) so operators can confirm what was skipped and
+/// why (NFR-004).
+fn build_search_metadata(
+    output: &super::super::search::SearchOutput,
+    excluded_engines: &[String],
+) -> Option<Value> {
+    let results: Vec<Value> = output
+        .merge
+        .results
+        .iter()
+        .map(|r| {
+            json!({
+                "title": r.title,
+                "url": r.url,
+                "snippet": r.snippet,
+                                    "source": r.source,
+                                    "search_tool": "mf_search",
+                                    "search_engine": r.source,
+                                    "author": r.author,
+                                    "position": r.position,
+                  "relevance_score": r.relevance_score,
+                "fetch_relevance": r.fetch_relevance,
+                "engines_consensus": r.engines_consensus,
+                "fetch_hint": r.fetch_hint,
+            })
+        })
+        .collect();
+
+    Some(json!({
+        "query": output.query,
+        "results": results,
+        "total_results": output.merge.total_merged_results,
+        "total_raw_results": output.merge.total_raw_results,
+        "engines_used": output.engines_used,
+        "engine_blocked": output.merge.blocked_engines,
+        "engines_with_results": output.merge.engines_with_results,
+        "total_engines": output.merge.total_engines,
+        "excluded_engines": excluded_engines,
+        "cached": output.cached,
+        "duration_ms": output.duration_ms,
+        "related_queries": output.merge.related_queries,
+        "max_results": output.options.max_results,
+        "per_engine_results": output.options.per_engine_results,
+        "site": output.options.site,
+        "exclude_sites": output.options.exclude_sites,
+        "freshness": output.options.freshness.to_string(),
+        "page": output.options.page,
+        "error": "",
+        "version": MASTERFETCH_VERSION,
+    }))
+}

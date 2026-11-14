@@ -1,0 +1,2070 @@
+//! ragent CLI binary.
+//!
+//! Entry point for the ragent terminal AI coding agent. Parses CLI arguments,
+//! loads configuration, initialises storage and the event bus, and dispatches
+//! to the requested sub-command (TUI, headless run, HTTP server, session
+//! management, auth, or config display).
+
+#![deny(unsafe_code)]
+
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::time::Instant;
+
+use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
+use tracing_subscriber::EnvFilter;
+
+use ragent_agent::{
+    Config, ModelInfo, StartupTimings, agent,
+    event::EventBus,
+    permission::PermissionChecker,
+    provider,
+    session::{SessionManager, processor::SessionProcessor},
+    storage::Storage,
+    telemetry::{ShutdownGuard, TelemetrySubsystem, TracingLogsLayer},
+    tool,
+};
+use ragent_connectors::{ConnectorSession, store_dirs};
+
+mod cli;
+mod cli_out;
+use crate::cli_out::{cliprint, cliprintln, cliprintln_err};
+
+mod cli_surface;
+mod connectors;
+mod crash_dump;
+mod panic_hook;
+mod plugins;
+mod stderr_spool;
+
+/// ACP server endpoint on stdio for IDE clients (spec `openhands` T-008;
+/// FR-022, FR-028).
+mod acp_server;
+
+/// Top-level CLI arguments parsed by clap.
+#[derive(Parser)]
+#[command(
+    name = "ragent",
+    about = "A Rust AI coding agent for the terminal",
+    disable_version_flag = true
+)]
+struct Cli {
+    /// Print the ragent version and exit
+    #[arg(long, short = 'V')]
+    version: bool,
+
+    /// Print the per-provider wire matrix (the declared tool-calling contract)
+    /// and exit without contacting any provider or running any tool
+    #[arg(long, global = true)]
+    wire_matrix: bool,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
+
+    /// Override model (provider/model format)
+    #[arg(long, global = true)]
+    model: Option<String>,
+
+    /// Override agent
+    #[arg(long, global = true, default_value = "general")]
+    agent: String,
+
+    /// Log level (trace, debug, info, warn, error, or all = trace everything)
+    ///
+    /// Defaults to `info`, not `warn`: the TUI log-window entries re-emitted to
+    /// `tracing` for the OTLP logs signal (spec `otel` FR-036) travel at their
+    /// own severity, and a tool call is `INFO`. A `warn` default silently
+    /// dropped every tool call from the export before the logs layer saw it,
+    /// which is why `--log-level` and `--log-level all` used to produce
+    /// different collector content for identical agent activity.
+    #[arg(long, global = true, default_value = "info")]
+    log_level: String,
+
+    /// Start a fresh TUI session instead of reopening the sessions that were
+    /// open when ragent last exited
+    #[arg(long = "new")]
+    new_session: bool,
+
+    /// Disable TUI, use plain stdout
+    #[arg(long, global = true)]
+    no_tui: bool,
+
+    /// Auto-approve all permissions
+    #[arg(long, alias = "no-prompt", global = true)]
+    yes: bool,
+
+    /// Show the log panel in the TUI
+    #[arg(long, global = true)]
+    log: bool,
+
+    /// Path to config file
+    #[arg(long, global = true)]
+    config: Option<String>,
+
+    /// Maximum number of agentic loop steps (default: 500)
+    #[arg(long, global = true)]
+    maxsteps: Option<u32>,
+
+    /// Run a readiness check without invoking any model or tool.
+    #[arg(long, global = true)]
+    dry_run: bool,
+
+    /// Emit the dry-run readiness report as JSON.
+    #[arg(long, global = true)]
+    json: bool,
+
+    /// Disable automatic git context injection
+    #[arg(long, global = true)]
+    no_git_context: bool,
+
+    /// Disable automatic README context injection
+    #[arg(long, global = true)]
+    no_readme_context: bool,
+}
+
+/// Available top-level sub-commands.
+#[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
+enum Commands {
+    /// Execute agent with prompt
+    Run {
+        /// The prompt to send
+        prompt: String,
+    },
+    /// Start HTTP server only
+    Serve {
+        /// Address to bind to
+        #[arg(long, default_value = ragent_server::DEFAULT_LISTEN_ADDR)]
+        addr: String,
+    },
+    /// Run a small orchestration example (demonstrates multi-agent coordinator)
+    Orchestrate,
+    /// Manage sessions
+    Session {
+        #[command(subcommand)]
+        command: SessionCommands,
+    },
+    /// Manage projects (a local checkout with a base model and remote)
+    Project {
+        #[command(subcommand)]
+        command: ProjectCommands,
+    },
+
+    /// Inspect and compact the session database
+    Db {
+        #[command(subcommand)]
+        command: DbCommands,
+    },
+
+    /// Manage persistent memory (list)
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommands,
+    },
+    /// Configure provider authentication
+    Auth {
+        /// Provider name
+        provider: String,
+        /// API key
+        key: String,
+    },
+    /// List available models
+    Models {
+        /// Filter by provider (e.g. "ollama", "openai", "anthropic")
+        #[arg(short, long)]
+        provider: Option<String>,
+        /// Discover models from a remote Ollama server URL
+        #[arg(long)]
+        ollama_url: Option<String>,
+    },
+    /// Show resolved configuration
+    Config {
+        #[command(subcommand)]
+        command: Option<ConfigCommands>,
+    },
+    /// Manage research items under `research/`
+    Research {
+        #[command(subcommand)]
+        command: Box<cli::ResearchCommands>,
+    },
+    /// Run spec commands from the CLI (the `/spec` slash-command parity surface)
+    Spec {
+        #[command(subcommand)]
+        command: cli::SpecCommands,
+    },
+    /// Manage plugins (the `/plugins` slash-command parity surface)
+    #[command(name = "plugins")]
+    Plugins {
+        /// Subcommand and arguments: `list|add|remove|enable|disable|test|help`
+        #[arg(value_name = "ARGS", trailing_var_arg = true, num_args = 0..)]
+        args: Vec<String>,
+    },
+    /// Manage connectors (the `/connectors` slash-command parity surface)
+    #[command(name = "connectors")]
+    Connectors {
+        /// Subcommand and arguments:
+        /// `list|search|add|remove|enable|disable|connect|disconnect|auth|test|stores|help`
+        #[arg(value_name = "ARGS", trailing_var_arg = true, num_args = 0..)]
+        args: Vec<String>,
+    },
+    /// Emit the OpenAPI 3.1 document (or `--client` for the generated typed client)
+    #[command(name = "openapi")]
+    Openapi {
+        /// Emit the generated typed TypeScript client instead of the document
+        #[arg(long)]
+        client: bool,
+    },
+    /// Manage automations (the `/automation` slash-command parity surface)
+    #[command(name = "automation")]
+    Automation {
+        /// Subcommand and arguments: `list|runs <id>|run <id>|help`
+        #[arg(value_name = "ARGS", trailing_var_arg = true, num_args = 0..)]
+        args: Vec<String>,
+    },
+    /// Serve the ACP endpoint on stdio for IDE clients (Zed, VS Code, JetBrains)
+    ///
+    /// Feature-gated and disabled by default: requires a build with the
+    /// `acp-server` feature and `acp.server_enabled: true` in the configuration
+    /// (spec `openhands` FR-022, FR-028).
+    #[command(name = "acp-server")]
+    AcpServer,
+    /// Scaffold a new project in the current directory (the `/new` command)
+    New {
+        #[command(flatten)]
+        scaffold: cli::ScaffoldArgs,
+        /// Accepted for parity with the global flags; ignored by `new`
+        #[arg(long, value_name = "MODEL", hide = true)]
+        model: Option<String>,
+        /// Accepted for parity with the global flags; ignored by `new`
+        #[arg(long, value_name = "AGENT", hide = true)]
+        agent: Option<String>,
+        /// Accepted for parity with the global flags; ignored by `new`
+        #[arg(long, value_name = "LEVEL", hide = true)]
+        log_level: Option<String>,
+        /// Accepted for parity with the global flags; ignored by `new`
+        #[arg(long, hide = true)]
+        no_tui: bool,
+        /// Accepted for parity with the global flags; ignored by `new`
+        #[arg(long, hide = true)]
+        yes: bool,
+        /// Accepted for parity with the global flags; ignored by `new`
+        #[arg(long, hide = true)]
+        log: bool,
+        /// Accepted for parity with the global flags; ignored by `new`
+        #[arg(long, value_name = "CONFIG", hide = true)]
+        config: Option<String>,
+        /// Accepted for parity with the global flags; ignored by `new`
+        #[arg(long, value_name = "MAXSTEPS", hide = true)]
+        maxsteps: Option<u32>,
+        /// Accepted for parity with the global flags; ignored by `new`
+        #[arg(long, hide = true)]
+        dry_run: bool,
+        /// Accepted for parity with the global flags; ignored by `new`
+        #[arg(long, hide = true)]
+        json: bool,
+        /// Accepted for parity with the global flags; ignored by `new`
+        #[arg(long, hide = true)]
+        no_git_context: bool,
+        /// Accepted for parity with the global flags; ignored by `new`
+        #[arg(long, hide = true)]
+        no_readme_context: bool,
+    },
+}
+
+/// CLI dispatcher for the flattened `ragent new ...` form: rebuilds the
+/// `/new` token list from the parsed [`cli::ScaffoldArgs`] and reuses the
+/// `ragent new scaffold ...` handler, keeping both spellings on one path.
+fn dispatch_new_command(scaffold: cli::ScaffoldArgs) -> Result<()> {
+    cli::handle_new_command(cli::NewCommands::Scaffold(scaffold))
+}
+
+/// Sub-commands for the `config` namespace.
+#[derive(Subcommand)]
+enum ConfigCommands {
+    /// Print the resolved configuration
+    Show,
+    /// Run a dry-run readiness check
+    Check {
+        /// Output the readiness report as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Sub-commands for the `project` namespace.
+#[derive(Subcommand)]
+enum ProjectCommands {
+    /// List projects
+    List,
+    /// Show one project
+    Show {
+        /// Project name, id or id prefix
+        name: String,
+    },
+    /// Register the project that contains a directory
+    Add {
+        /// A directory inside the project's checkout
+        path: String,
+    },
+    /// Remove a project with no live sessions from the list (files are kept)
+    Remove {
+        /// Project name, id or id prefix
+        name: String,
+    },
+}
+
+/// Sub-commands for the `session` namespace.
+#[derive(Subcommand)]
+enum SessionCommands {
+    /// List sessions grouped by project
+    List {
+        /// Only list the sessions of this project (name, id or id prefix)
+        #[arg(long)]
+        project: Option<String>,
+        /// Output the grouped listing as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Resume an existing session
+    Resume {
+        /// Session ID
+        id: String,
+    },
+    /// Export a session to a portable archive
+    ExportArchive {
+        /// Session ID
+        id: String,
+        /// Output path for the archive file
+        #[arg(long, short = 'o', default_value = "session_archive.tar.gz")]
+        output: String,
+        /// Exclude trigger rules from the archive
+        #[arg(long)]
+        no_triggers: bool,
+        /// Exclude cron jobs from the archive
+        #[arg(long)]
+        no_cron: bool,
+        /// Exclude loop state files from the archive
+        #[arg(long)]
+        no_loop_state: bool,
+        /// Include run-cost summaries in the transcript
+        #[arg(long)]
+        include_cost: bool,
+    },
+    /// Import a session from file
+    Import {
+        /// Path to session file
+        file: String,
+    },
+}
+
+/// Sub-commands for the `memory` namespace.
+#[derive(Subcommand)]
+enum MemoryCommands {
+    /// List structured memory statistics for the current project
+    List,
+}
+
+/// Sub-commands for the `db` namespace.
+#[derive(Subcommand)]
+enum DbCommands {
+    /// Delete messages older than a retention window (sessions are kept)
+    ///
+    /// Deleting rows returns their pages to SQLite's freelist; the file does
+    /// not shrink until a `VACUUM`, which needs exclusive access. Stop every
+    /// other ragent process first.
+    Prune {
+        /// Retention window in days (default: `storage.retention.message_days`)
+        #[arg(long)]
+        days: Option<u32>,
+        /// Report how many messages would be deleted without deleting them
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+/// Return the global-state directory for ragent (`~/.config/ragent/`).
+///
+/// All ragent global state - databases, logs, history, tokens - lives under
+/// this single root. Supersedes the legacy `~/.local/share/ragent/` location.
+fn data_dir() -> PathBuf {
+    ragent_config::user_dirs::global_state_dir()
+        .unwrap_or_else(|| PathBuf::from(".").join("ragent"))
+}
+
+/// Return the process working directory, falling back to `.` when the OS
+/// cannot report it.
+///
+/// Centralises the previously divergent fallbacks (three different forms
+/// across six call sites) on one consistent behaviour.
+fn working_dir() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// Print the ragent ASCII art startup banner to stdout.
+fn print_banner() {
+    for line in ragent_tui::logo::LOGO {
+        cliprintln!("{line}");
+    }
+    cliprintln!(
+        "  v{}  -  Rust AI coding agent\n",
+        env!("CARGO_PKG_VERSION")
+    );
+}
+
+/// Run the dry-run readiness check and exit the process.
+///
+/// This helper is intentionally terminal: it prints the report and calls
+/// `std::process::exit` with the readiness-derived exit code.
+async fn run_dry_run_and_exit(
+    config_path: Option<String>,
+    agent_name: &str,
+    model_override: Option<&str>,
+    json_output: bool,
+    provider_registry: Arc<ragent_agent::provider::ProviderRegistry>,
+    tool_registry: Arc<ragent_agent::tool::ToolRegistry>,
+) {
+    let config_path = config_path.map(PathBuf::from);
+    let working_dir = crate::working_dir();
+    let inputs = ragent_agent::dry_run::DryRunInputs {
+        config_path,
+        agent_name: agent_name.to_string(),
+        model_override: model_override.map(std::string::ToString::to_string),
+        provider_registry,
+        tool_registry,
+        working_dir,
+    };
+
+    let (report, exit_code) = ragent_agent::dry_run::run_dry_run(inputs).await;
+
+    if json_output {
+        match report.to_json() {
+            Ok(json) => cliprintln!("{json}"),
+            Err(e) => {
+                cliprintln_err!("Failed to serialise readiness report: {e}");
+                std::process::exit(2);
+            }
+        }
+    } else {
+        cliprint!("{}", report.to_human_string());
+    }
+
+    std::process::exit(i32::from(exit_code));
+}
+
+/// Parse CLI args, set up infrastructure, and dispatch to the selected command.
+///
+/// # Errors
+///
+/// Returns an error on configuration, storage, network, or I/O failures.
+async fn async_main() -> Result<()> {
+    let working_dir = crate::working_dir();
+
+    // `--version` / `-V` is answered before any side effect: no panic hook, no
+    // crash marker, no previous-crash warning, no TUI. Running `ragent -V` on a
+    // fresh checkout must print the version and exit cleanly, not stamp a
+    // session marker the next start would report as an unclean exit.
+    let cli = Cli::parse();
+    if cli.version {
+        cliprintln!("ragent {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
+    // `--wire-matrix` (FR-016, spec `uniformtools` T-022) is answered here, with
+    // `--version`, and before every side effect below: the panic hook, the crash
+    // marker, the config load, `Storage::open`, the secret-registry seed and the
+    // MCP connect loop. FR-016 requires the table to print without contacting any
+    // provider and without executing any tool, and the only way to guarantee that
+    // by construction is to return before the code that could do either runs.
+    if cli.wire_matrix {
+        return cli::handle_wire_matrix_command();
+    }
+
+    // Install the panic hook first so panics during startup are also captured.
+    panic_hook::install();
+
+    // Read the PREVIOUS marker FIRST. `write_record` truncates and replaces the
+    // marker with this process's pid, so checking afterwards could never see the
+    // stale record (its pid would always be this live process) and the warning
+    // below was unreachable (ANTIPAT A-01).
+    match crash_dump::previous_unclean_exit(&working_dir) {
+        Ok(Some(prev)) => {
+            cliprintln_err!(
+                "warning: previous ragent session (pid {}, started {}) exited without unwinding \
+                 - check log/panics/last-crash.json and other panic reports",
+                prev.pid,
+                prev.updated_at
+            );
+            cliprintln_err!("         {}", prev.core_dump_hint);
+        }
+        Ok(None) => {}
+        Err(e) => cliprintln_err!("warning: could not read previous crash marker: {e}"),
+    }
+
+    // Stamp the crash marker before anything else can die: an abort (stack
+    // overflow) or SIGKILL leaves the marker as "running", which the next
+    // start reports. A clean return overwrites it with "clean exit".
+    if let Err(e) = crash_dump::write_record(&working_dir, "running") {
+        cliprintln_err!("warning: failed to write crash marker: {e}");
+    }
+
+    let mut startup = StartupTimings::new();
+    let t0 = Instant::now();
+    startup.record("CLI parse", t0.elapsed());
+
+    if cli.no_git_context {
+        ragent_agent::agent::disable_git_prompt_context();
+    }
+    if cli.no_readme_context {
+        ragent_agent::agent::disable_readme_prompt_context();
+    }
+
+    // Initialize tracing.
+    //
+    // For TUI mode: install a channel-based layer so all tracing output is
+    // captured by the log panel rather than written directly to stdout (which
+    // would corrupt the alternate-screen rendering).
+    //
+    // For non-TUI modes (--no-tui, headless run, server, etc.): fall back to
+    // the normal fmt subscriber so logs appear in the terminal as usual.
+    let t0 = Instant::now();
+    // `--log-level all` is the operator's "record everything" spelling. It is
+    // not an `EnvFilter` directive, so map it to the `trace` directive before
+    // the filter is parsed: `trace` is the highest verbosity `tracing` defines,
+    // and the OTLP logs layer's own `telemetry.otel.logs.level = all` then has
+    // every record available to forward to the collector.
+    let log_directive = if cli.log_level.trim().eq_ignore_ascii_case("all") {
+        "trace"
+    } else {
+        cli.log_level.as_str()
+    };
+    let filter = EnvFilter::try_new(log_directive).unwrap_or_else(|_| {
+        // Surface the fallback: a typo'd --log-level would otherwise be
+        // silently downgraded to `warn` with no hint to the user.
+        // SEC-078: `--log-level` is untrusted argv; neutralise control chars
+        // and escape sequences before echoing it to the terminal.
+        cliprintln_err!(
+            "warning: invalid log level '{}' - falling back to 'warn'",
+            ragent_types::sanitize_terminal::sanitize_terminal(&cli.log_level)
+        );
+        EnvFilter::new("warn")
+    });
+    let tui_will_run = !cli.no_tui
+        && matches!(
+            cli.command,
+            None | Some(Commands::Session {
+                command: SessionCommands::Resume { .. }
+            })
+        );
+    // Commands whose stdout is a machine-readable document or report (`openapi`
+    // emits the OpenAPI JSON or the generated TypeScript client; `models` prints
+    // a `provider/model` line per model that both humans and the `--wire-matrix`
+    // test parse; the parity subcommands `plugins`, `connectors`, `automation`,
+    // `session`, `config`, `new`, `spec`, and `research` print a report the CLI
+    // tests parse) must not have tracing log lines interleave with that output.
+    // Route tracing to stderr for those commands so the stdout stream stays pure.
+    let machine_output = matches!(
+        cli.command,
+        Some(
+            Commands::Openapi { .. }
+                | Commands::Models { .. }
+                | Commands::Plugins { .. }
+                | Commands::Connectors { .. }
+                | Commands::Automation { .. }
+                | Commands::New { .. }
+                | Commands::Spec { .. }
+                | Commands::Session { .. }
+                | Commands::Project { .. }
+                | Commands::Db { .. }
+                | Commands::Config { .. }
+                | Commands::Research { .. }
+        )
+    );
+    // The OTLP logs layer (spec `otel` FR-036) is installed unconditionally,
+    // with an empty swap cell: the telemetry subsystem is built further down
+    // (it needs the loaded config) and hands its pipeline to this cell, and
+    // `/telemetry on|off` re-points it. The subscriber is global and can
+    // only be set once, so the layer must be in the registry from the start
+    // even when `telemetry.otel.logs.enabled` is false. While the cell is empty
+    // the layer costs one check per event and exports nothing.
+    let logs_layer = TracingLogsLayer::disabled();
+    let logs_cell = logs_layer.cell();
+    let tui_log_rx = if tui_will_run {
+        use tracing_subscriber::layer::SubscriberExt as _;
+        use tracing_subscriber::util::SubscriberInitExt as _;
+        let (tx, rx) = ragent_tui::tracing_layer::tui_log_channel(512);
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(ragent_tui::tracing_layer::TuiTracingLayer::new(tx))
+            .with(logs_layer)
+            .init();
+        Some(rx)
+    } else if machine_output {
+        use tracing_subscriber::layer::SubscriberExt as _;
+        use tracing_subscriber::util::SubscriberInitExt as _;
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_target(false)
+                    .with_writer(std::io::stderr),
+            )
+            .with(logs_layer)
+            .init();
+        None
+    } else {
+        use tracing_subscriber::layer::SubscriberExt as _;
+        use tracing_subscriber::util::SubscriberInitExt as _;
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(tracing_subscriber::fmt::layer().with_target(false))
+            .with(logs_layer)
+            .init();
+        None
+    };
+    startup.record("Tracing init", t0.elapsed());
+    tracing::info!(log_level = %cli.log_level, tui_mode = tui_will_run, "Tracing initialized");
+
+    // In TUI mode the alternate screen paints over raw stderr, so the default
+    // panic hook, `cliprintln_err!`, and any C-library diagnostic would be lost.
+    // Redirect fd 2 into a truncating spool (`log/logwindow/stderr-*.log`) and
+    // mirror it into the log panel; non-TUI modes keep writing to the terminal.
+    let stderr_spool = if tui_will_run {
+        stderr_spool::install(&working_dir.join("log").join("logwindow"))
+    } else {
+        None
+    };
+
+    // Load config
+    let t0 = Instant::now();
+    let config = if let Some(ref path_str) = cli.config {
+        let path = PathBuf::from(path_str);
+        tracing::info!(config_path = %path.display(), "Loading config from file");
+        // SEC-078: `--config <path>` is untrusted argv; neutralise control
+        // characters before the path is echoed to the terminal.
+        let raw_path = path.display().to_string();
+        let safe_path = ragent_types::sanitize_terminal::sanitize_terminal(&raw_path);
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| anyhow::anyhow!("Failed to read config file '{safe_path}': {e}"))?;
+
+        let mut parsed: Config = serde_json::from_str(&content).map_err(|e| {
+            let line = e.line();
+            let column = e.column();
+            let problematic_line = content
+                .lines()
+                .nth(line.saturating_sub(1))
+                .unwrap_or("<line not found>");
+            // SEC-ragent-config-007 (SECTASKS T-061): the echoed source line can
+            // contain a credential; redact it before it reaches the terminal/log.
+            let problematic_line = ragent_types::sanitize::redact_secrets(problematic_line);
+            // SEC-078: the echoed source line is untrusted file content; strip
+            // control characters and escape sequences before printing.
+            let problematic_line =
+                ragent_types::sanitize_terminal::sanitize_terminal(&problematic_line);
+
+            anyhow::anyhow!(
+                "Failed to parse config file '{safe_path}':\n\
+                           Error at line {}, column {}:\n\
+                           {}\n\
+                           Problematic line:\n\
+                           {}\n\
+                           {}^\n\
+                           Parse error: {}",
+                line,
+                column,
+                "─".repeat(80),
+                problematic_line,
+                " ".repeat(column.saturating_sub(1)),
+                e
+            )
+        })?;
+        // The explicit file is the only config this process loaded, so a
+        // runtime-flag toggle (`/yolo`, Alt+Y) must write back to it; the
+        // user-global `ragent.json` is never read in `--config` mode and a write
+        // there would never round-trip (the "/yolo does not persist" report).
+        ragent_config::Config::set_config_write_target(Some(path.clone()));
+        parsed.config_paths.push(path);
+        parsed
+    } else {
+        Config::load()?
+    };
+    startup.record("Config load", t0.elapsed());
+    // Keep the in-memory runtime flags in sync with the loaded config. The
+    // helper takes the already-loaded values, so no module reloads the config
+    // from disk a second time.
+    //
+    // This is the value the whole process serves permission prompts from, so an
+    // unexpected default here is worth a line: `yolo`/`edit_log`/`gcf` all
+    // default to off, and the intermittent "YOLO keeps going off" report is a
+    // silent fall back to those defaults (a config that fails to parse, or a
+    // global file that lost the key). Logging the effective flag state at
+    // startup makes such a fallback attributable instead of invisible.
+    ragent_config::sync_runtime_flags(&config);
+    tracing::info!(
+        yolo = config.yolo,
+        edit_log = config.edit_log,
+        activity_log = config.activity_log,
+        gcf = config.gcf.enabled,
+        config_paths = ?config.config_paths,
+        "Configuration loaded successfully"
+    );
+
+    let auto_extract_config = config.memory.auto_extract.clone();
+
+    // Initialize storage
+    let db_path = data_dir().join("ragent.db");
+    tracing::info!(db_path = %db_path.display(), "Opening database");
+    let t0 = Instant::now();
+    let storage = Arc::new(Storage::open(&db_path)?);
+    startup.record("Storage open", t0.elapsed());
+    tracing::info!("Storage initialized successfully");
+
+    // Message-age retention (opt-in via `storage.retention.enabled`).
+    //
+    // Off-loaded to a blocking thread: the delete is a three-table cascade and
+    // must not stall the startup critical path. Session rows are kept, so an
+    // expired transcript leaves the session listed but empty rather than
+    // vanishing from the session list.
+    {
+        let retention = config.storage.retention;
+        if retention.enabled {
+            let storage = Arc::clone(&storage);
+            tokio::task::spawn_blocking(move || {
+                let days = i64::from(retention.message_days);
+                match chrono::Duration::try_days(days)
+                    .ok_or_else(|| anyhow::anyhow!("retention window out of range: {days} days"))
+                    .and_then(|window| storage.prune_messages_older_than(window))
+                {
+                    Ok(0) => tracing::debug!(
+                        days,
+                        "Message retention: no messages older than the window"
+                    ),
+                    Ok(deleted) => {
+                        tracing::info!(deleted, days, "Expired messages past the retention window");
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, days, "Message retention failed");
+                    }
+                }
+            });
+        }
+    }
+
+    // M5: Warm the session message FTS index in the background so the
+    // conversation/session search tools return up-to-date results after
+    // startup or schema changes.
+    //
+    // Open a *separate* Storage connection for the warmup so the background
+    // FTS rebuild does not hold the main thread's `Mutex<Connection>` -
+    // which would block `get_setting` and other startup queries for the
+    // entire duration of the rebuild (10+ seconds on large histories).
+    let db_path_warm = db_path.clone();
+    tokio::task::spawn_blocking(move || match Storage::open(&db_path_warm) {
+        Ok(warm_storage) => match warm_storage.warm_message_search_index() {
+            Ok(count) => tracing::info!(indexed_messages = count, "Warmed message search index"),
+            Err(e) => tracing::warn!(error = %e, "Failed to warm message search index"),
+        },
+        Err(e) => tracing::warn!(error = %e, "Failed to open storage for FTS warmup"),
+    });
+
+    // Seed the secret registry from stored provider credentials so that
+    // redact_secrets() can mask them by exact match in all log output.
+    //
+    // This is a full scan of the `provider_auth` table with per-row
+    // deobfuscation. It only feeds log redaction, so it is off-loaded to a
+    // background thread to keep it off the startup critical path. The
+    // well-known environment variables below are still seeded synchronously
+    // so the common credential sources are redacted from the first log line.
+    let t0 = Instant::now();
+    {
+        let storage = Arc::clone(&storage);
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = storage.seed_secret_registry() {
+                tracing::warn!(error = %e, "Failed to seed secret registry from database");
+            }
+        });
+    }
+
+    // Also seed from well-known environment variables.
+    //
+    // SEC-ragent-types-004 (SECTASKS T-046): the GitLab / GitHub / Tavily
+    // credentials the tools accept from the environment were never
+    // registered, so a token echoed by a failing command could reach the log or
+    // the SSE stream in cleartext - the pattern layer does not know
+    // `glpat-...` shapes in every position.
+    for var in [
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "GENERIC_OPENAI_API_KEY",
+        "OLLAMA_API_KEY",
+        "GITLAB_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "TAVILY_API_KEY",
+        "LANGSEARCH_API_KEY",
+        "PERPLEXITY_API_KEY",
+        "EXA_API_KEY",
+        "SERPER_API_KEY",
+        // Audit high/medium findings: these live credentials were absent from
+        // the seed, so a value a child process echoed reached the log or the SSE
+        // stream in cleartext unless it happened to match a generic pattern. A
+        // bare 32-hex Azure key matches no pattern at all.
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "XAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "HF_TOKEN",
+        "AZURE_AI_FOUNDRY_API_KEY",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        // The HTTP server's own bearer token: read at startup below, and until now
+        // registered nowhere, so an echo of it survived redaction (audit medium
+        // finding).
+        "RAGENT_TOKEN",
+    ] {
+        if let Ok(val) = std::env::var(var) {
+            ragent_agent::sanitize::register_secret(&val);
+        }
+    }
+    startup.record("Secret registry seed", t0.elapsed());
+
+    // Create event bus
+    let t0 = Instant::now();
+    let event_bus = Arc::new(EventBus::new(2048));
+    tracing::debug!(capacity = 2048, "Event bus created");
+
+    // Create registries
+    let provider_registry = Arc::new(provider::create_default_registry());
+    // Attach the provider registry to the router so it can delegate to
+    // concrete providers at chat time.
+    if let Some(router_provider) = provider_registry
+        .get_as_any("router")
+        .and_then(|p| p.downcast_ref::<ragent_llm::providers::router::RouterProvider>())
+    {
+        router_provider.set_registry(Arc::clone(&provider_registry));
+        router_provider.set_storage(Arc::clone(&storage));
+    }
+    // Attach storage to the OpenRouter provider so chat clients can resolve
+    // the encrypted credential stored via `ragent auth openrouter <key>`.
+    if let Some(openrouter_provider) = provider_registry
+        .get_as_any("openrouter")
+        .and_then(|p| p.downcast_ref::<ragent_llm::providers::openrouter::OpenRouterProvider>())
+    {
+        openrouter_provider.set_storage(Arc::clone(&storage));
+    }
+    let tool_registry = Arc::new(tool::create_default_registry());
+    let provider_count = provider_registry.list().len();
+    let tool_count = tool_registry.list().len();
+    startup.record("Provider & tool registries", t0.elapsed());
+    tracing::info!(
+        providers = provider_count,
+        tools = tool_count,
+        "Registries created"
+    );
+
+    let t0 = Instant::now();
+    let permission_checker = Arc::new(parking_lot::RwLock::new(PermissionChecker::new(
+        config.permission.clone(),
+    )));
+    startup.record("Permission checker", t0.elapsed());
+
+    // Resolve the active agent
+    let agent_name = &cli.agent;
+    tracing::info!(agent = %agent_name, "Resolving agent");
+    let t0 = Instant::now();
+    let mut resolved_agent =
+        agent::resolve_agent_with_model(agent_name, &config, provider_registry.as_ref())?;
+    startup.record("Agent resolve", t0.elapsed());
+    tracing::info!(agent = %resolved_agent.name, model = ?resolved_agent.model, "Agent resolved");
+
+    // Apply CLI --maxsteps override if provided
+    if let Some(max) = cli.maxsteps {
+        Arc::make_mut(&mut resolved_agent).max_steps = Some(max);
+    }
+
+    // Apply model selection with priority:
+    //   1. --model CLI flag (provider/model format)
+    //   2. storage selected_model (saved by TUI /provider or /model command)
+    //   3. registry default order (local/self-hosted providers registered first)
+    //
+    // Skip override when the agent has model_pinned=true (custom agents that
+    // explicitly fix a model should not be overridden by global selection).
+    let t0 = Instant::now();
+    if let Some(ref model_str) = cli.model {
+        if let Some((provider, model)) = model_str.split_once('/') {
+            Arc::make_mut(&mut resolved_agent).model = Some(agent::ModelRef {
+                provider_id: provider.to_string(),
+                model_id: model.to_string(),
+            });
+            Arc::make_mut(&mut resolved_agent).model_pinned = true;
+        } else {
+            anyhow::bail!(
+                "Invalid --model format '{model_str}'. Expected 'provider/model' (e.g. 'copilot/claude-sonnet-4.5')"
+            );
+        }
+    } else if !resolved_agent.model_pinned || resolved_agent.model.is_none() {
+        // Fall back to the user's stored provider/model preference
+        if let Ok(Some(model_str)) = storage.get_setting("selected_model")
+            && let Some((provider, model)) = model_str.split_once('/')
+        {
+            Arc::make_mut(&mut resolved_agent).model = Some(agent::ModelRef {
+                provider_id: provider.to_string(),
+                model_id: model.to_string(),
+            });
+        }
+    }
+    startup.record("Model selection", t0.elapsed());
+
+    let max_background_agents = config.experimental.max_background_agents;
+    let background_agent_timeout = config.experimental.background_agent_timeout;
+    let stream_config = config.stream.clone();
+
+    let config = Arc::new(tokio::sync::RwLock::new(config));
+
+    // Initialise telemetry subsystem from configuration.
+    // A ShutdownGuard keeps the provider alive for the process lifetime and
+    // flushes pending metrics on normal or panic exit paths.
+    //
+    // SEC-ragent-telemetry-002 (SECTASKS T-020): enablement and endpoint come
+    // from user-owned configuration only. The repository-local
+    // `.ragent/ragent.json` is merged through `Config::merge_project`, which
+    // drops its `telemetry` block entirely, so a cloned project cannot turn
+    // telemetry on or point the OTLP endpoint at an attacker host.
+    let t0 = Instant::now();
+    let telemetry_config = config.read().await.telemetry.otel.clone();
+    let telemetry = match TelemetrySubsystem::new(telemetry_config) {
+        Ok(sub) => {
+            tracing::info!(
+                enabled = sub.is_enabled(),
+                endpoint = %sub.config().endpoint,
+                "Telemetry subsystem initialised"
+            );
+            Arc::new(sub)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to initialise telemetry subsystem; continuing disabled");
+            Arc::new(TelemetrySubsystem::disabled())
+        }
+    };
+    // Hand the tracing layer's swap cell to the subsystem: from here on
+    // `reconfigure` (which every `/telemetry` subcommand goes through) fills
+    // the cell in when `telemetry.otel.logs.enabled` is set and clears it when
+    // the signal is off, so log export is live-settable without a restart.
+    telemetry.attach_logs_layer(logs_cell);
+    if telemetry.is_enabled() {
+        tracing::info!(
+            logs = telemetry.logs_exporting(),
+            "OTLP log export {}",
+            if telemetry.logs_exporting() {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
+    }
+    // The guard shares the live subsystem via `Arc` - with the same handle
+    // also wired into the session processor below, the shared-instance guard
+    // flushes the actual provider rather than a disabled clone.
+    let _telemetry_guard = ShutdownGuard::new(Arc::clone(&telemetry));
+    // Export every agent-loop profiler scope as `ragent.profile.duration`
+    // (tagged with its profiler bucket) while OTel export is enabled.
+    ragent_agent::session::profiler::agent_loop_profiler().attach_telemetry(Arc::clone(&telemetry));
+    startup.record("Telemetry init", t0.elapsed());
+
+    // Create session manager and processor
+    let t0 = Instant::now();
+    let session_manager = Arc::new(SessionManager::new(storage.clone(), event_bus.clone()));
+    tracing::debug!("Session manager created");
+    let session_processor = Arc::new(SessionProcessor {
+        session_manager: session_manager.clone(),
+        provider_registry: provider_registry.clone(),
+        tool_registry: tool_registry.clone(),
+        permission_checker,
+        event_bus: event_bus.clone(),
+        agent_manager: std::sync::OnceLock::new(),
+        team_manager: Default::default(),
+        team_context_cache: std::sync::Arc::new(parking_lot::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
+        tool_repeat_guard: std::sync::Arc::new(parking_lot::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
+        mcp_client: std::sync::OnceLock::new(),
+        connector_session: tokio::sync::RwLock::new(None),
+        connector_statuses: tokio::sync::RwLock::new(None),
+        code_index: std::sync::OnceLock::new(),
+        project_code_indexes: Default::default(),
+        project_tool_registries: Default::default(),
+        bg_service: std::sync::OnceLock::new(),
+        active_spec: tokio::sync::RwLock::new(None),
+        spec_manager: std::sync::OnceLock::new(),
+        cached_tool_definitions: parking_lot::RwLock::new(None),
+        cached_tool_names: parking_lot::RwLock::new(None),
+        cached_tool_definition_bytes: parking_lot::RwLock::new(None),
+        llm_client_cache: parking_lot::RwLock::new(std::collections::HashMap::new()),
+        cached_config: parking_lot::Mutex::new(None),
+        extraction_engine: std::sync::OnceLock::new(),
+        stream_config,
+        auto_approve: cli.yes,
+        system_prompt_cache: parking_lot::RwLock::new(None),
+        skill_body_cache: std::sync::Arc::new(std::sync::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
+        read_timestamps: std::sync::Arc::new(std::sync::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
+        activity_log: std::sync::OnceLock::new(),
+        activity_log_tx: tokio::sync::Mutex::new(None),
+        telemetry,
+        skill_registry_cache: parking_lot::Mutex::new(None),
+        active_loops: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+        active_loop_specs: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+        loop_telemetry_recorded: std::sync::atomic::AtomicBool::new(false),
+        active_loop_interrupts: parking_lot::RwLock::new(std::collections::HashMap::new()),
+        active_loop_captures: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+        last_message_end_reason: std::sync::RwLock::new(std::collections::HashMap::new()),
+        pending_verdicts: ragent_agent::session::pending::PendingVerdicts::new(),
+    });
+    tracing::info!(auto_approve = cli.yes, "Session processor initialized");
+    startup.record("Session manager & processor", t0.elapsed());
+
+    let t0 = Instant::now();
+    if auto_extract_config.enabled {
+        let extraction_engine = Arc::new(ragent_agent::memory::ExtractionEngine::new(
+            auto_extract_config,
+        ));
+        let _ = session_processor.extraction_engine.set(extraction_engine); // INTENTIONAL: OnceLock set race is benign
+    }
+    // Create AgentManager and wire it into the processor (breaks circular dep via OnceLock)
+    let agent_manager = Arc::new(ragent_agent::task::AgentManager::new(
+        event_bus.clone(),
+        session_processor.clone(),
+        max_background_agents,
+        background_agent_timeout,
+    ));
+    let _ = session_processor.agent_manager.set(agent_manager); // INTENTIONAL: OnceLock set race is benign
+    tracing::debug!(max_background_agents, "Agent manager initialized");
+
+    // Wire the background task service into the processor (M3).
+    let bg_service = Arc::new(ragent_agent::background::BackgroundTaskService::new(
+        Arc::clone(&storage),
+        event_bus.clone(),
+    ));
+    let _ = session_processor.bg_service.set(bg_service); // INTENTIONAL: OnceLock set race is benign
+    tracing::debug!("Background task service initialized");
+    startup.record("Agent mgr & bg service", t0.elapsed());
+
+    // Connect MCP servers from config in the background so the TUI (or
+    // headless run) appears immediately.  Each MCP connection spawns a child
+    // process and performs a handshake + tool-list round-trip; doing this
+    // sequentially on the main task can add 5-15 seconds to startup when one
+    // or more servers are slow to start.
+    //
+    // FR-030 MCP bridge: enabled plugins also contribute MCP servers (their
+    // manifest `mcpServers` section). Configured servers take precedence on an
+    // id collision; the merged set connects exactly like before.
+    //
+    // Enable state: whether a server is started is a durable, global choice
+    // recorded in the MCP enable-state ledger. A server absent from the ledger
+    // is enabled, so a newly added server starts connected.
+    // Connector bridge (spec `connectors` T-008; FR-008, FR-020): an enabled
+    // connector's servers are resolved into bridged ids (`<connector>.<server>`)
+    // and connect through the same loop as the configured servers, so their tools
+    // surface as the ordinary `mcp_<server>_<tool>` tools of the shared client.
+    // `scan_connector_bridge` is the read-only half (store scan + collision
+    // refusal, no connection); the connect loop applies the durable per-server
+    // enable ledger to the bridged ids exactly as it does for configured servers.
+    let (mcp_configs, connector_session) = {
+        let working_dir = crate::working_dir();
+        let guard = config.read().await;
+        let mut merged = ragent_agent::plugin::plugin_mcp_servers(&working_dir, &guard.mcp);
+        let connector_session = merge_connector_bridge(&working_dir, &guard, &mut merged);
+        (merged, connector_session)
+    };
+    let mcp_server_count = mcp_configs.len();
+    if mcp_server_count > 0 {
+        tracing::info!(
+            mcp_servers = mcp_server_count,
+            "Connecting MCP servers (background)"
+        );
+
+        let sp = Arc::clone(&session_processor);
+        let bus = event_bus.clone();
+        // Publish the client *before* connecting any server: `/mcp`, the startup
+        // report and the tool registry all read it, and the first server's
+        // connect can block for seconds. The client is shared, so connecting
+        // through a second handle still publishes every server the caller sees.
+        let shared_client = Arc::new(tokio::sync::RwLock::new(ragent_agent::mcp::McpClient::new()));
+        sp.set_mcp_client(Arc::clone(&shared_client)).await;
+        // Hand the live session its lifecycle owner before the connect loop
+        // publishes any status: `/connectors enable|connect` drives this
+        // session, so a connector enabled after startup is tracked by the same
+        // object `/connectors list` reports from, and the status snapshot
+        // loaded here is what the list overlays onto the store scan (FR-009).
+        if let Some(session) = connector_session {
+            // Wrap the session in a mutex so the TUI's `/connectors` surface can
+            // mutate the same tracked session through a shared `Arc` (an
+            // `Arc::get_mut` would always fail once the processor holds a handle).
+            let session = Arc::new(tokio::sync::Mutex::new(session));
+            sp.set_connector_statuses(Some(Arc::new(session.lock().await.statuses())))
+                .await;
+            sp.set_connector_session(session).await;
+        }
+        tokio::spawn(async move {
+            let ledger = ragent_agent::mcp::McpEnableLedger::load();
+            let mut mcp_connected = 0u32;
+            for (id, cfg) in mcp_configs {
+                // A server switched off in the ledger (or in ragent.json) is
+                // registered as disabled so `/mcp` can still list it and offer
+                // to re-enable it, but no child process is spawned.
+                if !ragent_agent::mcp::is_server_enabled(&cfg, &ledger, &id) {
+                    shared_client.write().await.register_disabled(&id, cfg);
+                    bus.publish(ragent_agent::event::Event::McpServerEnabledChanged {
+                        server_id: id,
+                        enabled: false,
+                    });
+                    continue;
+                }
+                let mut mcp_client = shared_client.write().await;
+                let connected = mcp_client.connect(&id, cfg).await.is_ok();
+                if connected {
+                    mcp_connected += 1;
+                }
+                // Read the status back from the client so the published string
+                // is the single source of truth: `connected` on success, else
+                // `failed: <reason>` (the client records every failure path),
+                // matching what `/mcp` and the startup report display.
+                let status = mcp_client
+                    .servers()
+                    .iter()
+                    .find(|server| server.id == id)
+                    .map_or_else(|| "failed".to_string(), |server| server.status.to_string());
+                drop(mcp_client);
+                // Publish per-server status so the TUI (`/mcp`) reflects the
+                // real connection state instead of assuming `disabled`.
+                bus.publish(ragent_agent::event::Event::McpStatusChanged {
+                    server_id: id,
+                    status,
+                });
+            }
+            tracing::info!(
+                connected = mcp_connected,
+                total = mcp_server_count,
+                "MCP servers initialized (background)"
+            );
+            // Completion sentinel: the loop has settled every server. The TUI
+            // uses this empty-id `initialized` event to reconcile the tool
+            // registry against the shared client and to print the one-shot
+            // per-server startup report, once the write lock (which the loop held
+            // across every connect) is free. It does not wake `adopt_mcp_client_state`
+            // for its own sake, but the next housekeeping pass runs it too.
+            bus.publish(ragent_agent::event::Event::McpStatusChanged {
+                server_id: String::new(),
+                status: "initialized".to_string(),
+            });
+        });
+    }
+
+    // Initialize spec manager for all modes (TUI, serve, run, etc.)
+    let t0 = Instant::now();
+    let specs_root = crate::working_dir().join("specs");
+    let _ = session_processor // INTENTIONAL: fallible wiring/persistence call; the in-memory state is authoritative
+        .spec_manager
+        .set(Arc::new(ragent_specs::SpecManager::new(&specs_root)));
+    startup.record("Spec manager init", t0.elapsed());
+    if cli.dry_run {
+        run_dry_run_and_exit(
+            cli.config.clone(),
+            &cli.agent,
+            cli.model.as_deref(),
+            cli.json,
+            Arc::clone(&provider_registry),
+            Arc::clone(&tool_registry),
+        )
+        .await;
+    }
+
+    // Wire the activity-log store into the session processor.
+    //
+    // The handle is set unconditionally; recording is gated at each call site
+    // by `ragent_config::activity_log::is_enabled()` so `/alog off` suppresses
+    // writes without unwiring the handle. A failure to open the log is
+    // non-fatal - the agent loop simply skips recording (best-effort).
+    //
+    // The open is off-loaded to a background thread: it opens a *separate*
+    // SQLite database (`activity_log.db`) and runs its schema migration, so
+    // doing it synchronously here would stall the TUI's first frame. The
+    // handle is wired via `OnceLock` (`set_activity_log`) once the open
+    // completes; recording only begins after the session starts, by which
+    // time the background open has finished.
+    //
+    // This is intentionally placed *after* the `dry_run` early-return so a
+    // readiness check does not open (or create) the activity-log database.
+    let alog_path = ragent_agent::storage::ActivityLog::default_path(&db_path);
+    {
+        let sp = Arc::clone(&session_processor);
+        tokio::task::spawn_blocking(move || {
+            match ragent_agent::storage::ActivityLog::open(&alog_path) {
+                Ok(log) => {
+                    sp.set_activity_log(Arc::new(log));
+                    // PERF-040: start the single background writer that batches
+                    // all activity-log appends from every session.
+                    let rt = tokio::runtime::Handle::current();
+                    let sp_writer = Arc::clone(&sp);
+                    rt.spawn(async move { sp_writer.start_activity_writer().await });
+                    tracing::info!(
+                        path = %alog_path.display(),
+                        "Activity log store initialized"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        path = %alog_path.display(),
+                        "Failed to open activity log at startup; activity logging will be disabled"
+                    );
+                }
+            }
+        });
+    }
+
+    // R-23: the command dispatch below moves `storage` into the TUI (and into
+    // several handlers), so keep a handle for the graceful-shutdown WAL
+    // checkpoint at the end of this function.
+    let storage_for_shutdown = Arc::clone(&storage);
+    match cli.command {
+        None => {
+            // Default: run TUI
+            if cli.no_tui {
+                tracing::info!("Starting interactive mode (plain, no TUI)");
+                use tokio::io::AsyncBufReadExt;
+
+                let mut resolved_agent = resolved_agent.clone();
+                let config_guard = config.read().await;
+                agent::apply_fallback_thinking(
+                    Arc::make_mut(&mut resolved_agent),
+                    &config_guard,
+                    provider_registry.as_ref(),
+                );
+
+                tracing::info!("Starting ragent interactive mode (plain)");
+                let dir = std::fs::canonicalize(".")?;
+                let session = session_manager.create_session(dir)?;
+                let reader = tokio::io::BufReader::new(tokio::io::stdin());
+                let mut lines = reader.lines();
+                while let Some(line) = lines.next_line().await? {
+                    if line.is_empty() {
+                        continue;
+                    }
+                    match session_processor
+                        .process_message(
+                            &session.id,
+                            &line,
+                            &resolved_agent,
+                            Arc::new(AtomicBool::new(false)),
+                        )
+                        .await
+                    {
+                        Ok(msg) => {
+                            if !crate::cli_out::writeln_io_log(
+                                std::io::stdout().lock(),
+                                format_args!("{}", msg.text_content()),
+                            ) {
+                                return Err(cli::CliExit::failure().into());
+                            }
+                        }
+                        Err(e) => tracing::error!(error = %e, "Failed to process message"),
+                    }
+                }
+            } else {
+                // Print startup banner before entering TUI alternate screen
+                print_banner();
+                // `run_tui`'s future is large; box it so it is heap-allocated
+                // rather than inlined into this caller's future
+                // (clippy::large_futures).
+                Box::pin(ragent_tui::run_tui(
+                    event_bus,
+                    storage,
+                    provider_registry,
+                    session_processor,
+                    (*resolved_agent).clone(),
+                    cli.log,
+                    if cli.new_session {
+                        ragent_tui::StartupSession::New
+                    } else {
+                        ragent_tui::StartupSession::Restore
+                    },
+                    tui_log_rx.unwrap_or_else(|| ragent_tui::tracing_layer::tui_log_channel(1).1),
+                    db_path.clone(),
+                    config.read().await.config_paths.clone(),
+                    startup,
+                    stderr_spool.clone(),
+                ))
+                .await?;
+            }
+        }
+        Some(Commands::Run { prompt }) => {
+            // FR-013 CLI parity: a `/new` prompt is executed by the same
+            // scaffold engine as `ragent new`, not sent to the LLM. The
+            // scaffolder is a deterministic local operation; there is no
+            // agent turn to run.
+            let trimmed = prompt.trim();
+            if trimmed == "/new" || trimmed.starts_with("/new ") {
+                return cli::handle_new_prompt(trimmed.trim_start_matches("/new"));
+            }
+            tracing::info!("Starting headless run mode");
+            let mut resolved_agent = resolved_agent.clone();
+            let config_guard = config.read().await;
+            agent::apply_fallback_thinking(
+                Arc::make_mut(&mut resolved_agent),
+                &config_guard,
+                provider_registry.as_ref(),
+            );
+            let dir = std::fs::canonicalize(".")?;
+            let session = session_manager.create_session(dir.clone())?;
+
+            // If the prompt starts with `!`, run it as a shell command first
+            // and ask the model to review the output.
+            let final_prompt = if let Some(cmd) = prompt.strip_prefix('!') {
+                let cmd = cmd.trim();
+                if cmd.is_empty() {
+                    prompt.clone()
+                } else {
+                    // SEC-077: the bang command must pass the same 7-layer bash
+                    // validation the `Bash` tool applies; otherwise
+                    // `ragent run "!<cmd>"` bypassed every guard (banned tools,
+                    // directory escape, denied patterns, obfuscation).
+                    if let Err(e) = ragent_tools_core::bash::validate_shell_command(cmd, &dir).await
+                    {
+                        cliprintln_err!("command rejected: {e}");
+                        std::process::exit(2);
+                    }
+                    // Async context: spawn_blocking keeps a slow/hanging shell
+                    // command from stalling the tokio worker thread (the bash
+                    // tool applies the same principle via kill_on_drop).
+                    let owned_cmd = cmd.to_string();
+                    let output = tokio::task::spawn_blocking(move || {
+                        std::process::Command::new("sh")
+                            .arg("-c")
+                            .arg(&owned_cmd)
+                            .output()
+                    })
+                    .await
+                    .map_err(|e| anyhow::anyhow!("bang command task failed: {e}"))?;
+                    ragent_agent::bang_command::bang_command_prompt_from_output(cmd, &output)
+                }
+            } else {
+                prompt.clone()
+            };
+
+            match session_processor
+                .process_message(
+                    &session.id,
+                    &final_prompt,
+                    &resolved_agent,
+                    Arc::new(AtomicBool::new(false)),
+                )
+                .await
+            {
+                Ok(msg) => {
+                    if !crate::cli_out::writeln_io_log(
+                        std::io::stdout(),
+                        format_args!("{}", msg.text_content()),
+                    ) {
+                        return Err(cli::CliExit::failure().into());
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Run failed");
+                    // Kill any stdio MCP server children before exiting: a
+                    // leaked child outlives this one-shot run as an orphan.
+                    session_processor.shutdown_mcp().await;
+                    std::process::exit(1);
+                }
+            }
+            // Tear down MCP connections so the stdio server children ragent
+            // spawned are killed before this short-lived process exits.
+            session_processor.shutdown_mcp().await;
+        }
+        Some(Commands::Serve { addr }) => {
+            tracing::info!(address = %addr, "Starting HTTP server");
+            // FR-012, FR-024, FR-032: when the OpenAI-compatible surface is
+            // explicitly enabled, its bearer token must be configured. The token
+            // is the server's one bearer token (FR-024) - ragent does not run a
+            // second credential - resolved from `openai.token` then the ambient
+            // `RAGENT_TOKEN`, instead of the ephemeral generated one. When the
+            // surface is enabled without one, refuse to start rather than serve
+            // it unauthenticated (FR-032).
+            let (openai_enabled, openai_token) = {
+                let guard = config.read().await;
+                let enabled = guard.openai_surface_enabled();
+                let token = guard.openai_surface_token().or_else(|| {
+                    // Route the ambient fallback through the canonical
+                    // credential reader so blank/whitespace handling matches
+                    // the rest of the workspace (audit T-111).
+                    ragent_config::credential_env::read_credential_env("RAGENT_TOKEN")
+                });
+                (enabled, token)
+            };
+            let auth_token = if openai_enabled {
+                match openai_token {
+                    Some(token) => token,
+                    None => anyhow::bail!(
+                        "the OpenAI-compatible surface is enabled (openai.enabled: true) \
+                         but no bearer token is configured; set `openai.token` or \
+                         RAGENT_TOKEN, or disable the surface"
+                    ),
+                }
+            } else if let Some(token) = openai_token {
+                token
+            } else {
+                uuid::Uuid::new_v4().to_string()
+            };
+            // Automation scheduler (spec `openhands` T-016; FR-014): when the
+            // project config enables the subsystem, tick the scheduled
+            // automations for the lifetime of the served process. An
+            // unconfigured project starts no scheduler, so no runs fire. It
+            // shares the session processor, so it is set up before the state
+            // takes ownership of it.
+            let automation_config = {
+                let guard = config.read().await;
+                guard.automation_config()
+            };
+            let _automation_scheduler = if automation_config.is_enabled() {
+                let service = Arc::new(ragent_agent::automation::AutomationService::new(
+                    Arc::clone(&session_processor),
+                    automation_config,
+                    crate::working_dir(),
+                ));
+                Some(service.spawn_scheduler())
+            } else {
+                None
+            };
+            let orchestrator_registry = ragent_agent::orchestrator::AgentRegistry::new();
+            let coordinator = ragent_agent::orchestrator::Coordinator::new(orchestrator_registry);
+            let state = ragent_server::routes::AppState {
+                event_bus,
+                config,
+                storage,
+                session_processor,
+                auth_token,
+                rate_limiter: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+                coordinator: Some(coordinator),
+                research_runs: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+                research_root: Arc::new(crate::working_dir().join("research")),
+                worktree_root: Arc::new(
+                    ragent_agent::project::worktree::default_worktree_root()
+                        .unwrap_or_else(|| crate::working_dir().join(".ragent/worktrees")),
+                ),
+            };
+            ragent_server::start_server(&addr, state).await?;
+        }
+        Some(Commands::Orchestrate) => {
+            tracing::info!("Starting orchestration example");
+            cli::run_orchestration_example().await?;
+        }
+        Some(Commands::Project { command }) => {
+            use ragent_agent::project::{ProjectManager, report};
+            let github_hosts = config.read().await.vcs.github.hosts.clone();
+            let manager = ProjectManager::new(Arc::clone(&storage), Arc::clone(&event_bus))
+                .with_github_hosts(github_hosts);
+            let find = |name: &str| {
+                manager
+                    .find(name)?
+                    .ok_or_else(|| anyhow::anyhow!("no project named '{name}'"))
+            };
+            let mut stdout = std::io::stdout().lock();
+            match command {
+                ProjectCommands::List => write!(stdout, "{}", report::projects_text(&storage)?)?,
+                ProjectCommands::Show { name } => {
+                    let project = find(&name)?;
+                    let live = storage.list_project_sessions(&project.id, false)?.len();
+                    write!(stdout, "{}", report::project_text(&project, live))?;
+                }
+                ProjectCommands::Add { path } => {
+                    let dir = std::path::Path::new(&path)
+                        .canonicalize()
+                        .with_context(|| format!("cannot use '{path}'"))?;
+                    anyhow::ensure!(dir.is_dir(), "'{path}' is not a directory");
+                    let project = manager.resolve_for_dir(&dir)?;
+                    write!(stdout, "{}", report::project_text(&project, 0))?;
+                }
+                ProjectCommands::Remove { name } => {
+                    let project = find(&name)?;
+                    manager.remove(&project.id)?;
+                    writeln!(
+                        stdout,
+                        "Removed project {} from the list; its files are untouched.",
+                        project.name
+                    )?;
+                }
+            }
+        }
+        Some(Commands::Session { command }) => match command {
+            SessionCommands::List { project, json } => {
+                use ragent_agent::project::report;
+                let mut stdout = std::io::stdout().lock();
+                if json {
+                    let listing = report::grouped_sessions_json(&storage, project.as_deref())?;
+                    writeln!(stdout, "{}", serde_json::to_string_pretty(&listing)?)?;
+                } else {
+                    write!(
+                        stdout,
+                        "{}",
+                        report::grouped_sessions_text(&storage, project.as_deref())?
+                    )?;
+                }
+            }
+            SessionCommands::Resume { id } => {
+                // Verify session exists before launching TUI
+                if storage.get_session(&id)?.is_none() {
+                    anyhow::bail!("Session not found: {id}");
+                }
+                tracing::info!(session_id = %id, "Resuming session");
+                print_banner();
+                // See the `run_tui` call above: box the large future.
+                Box::pin(ragent_tui::run_tui(
+                    event_bus,
+                    storage,
+                    provider_registry,
+                    session_processor,
+                    (*resolved_agent).clone(),
+                    cli.log,
+                    ragent_tui::StartupSession::Resume(id),
+                    tui_log_rx.unwrap_or_else(|| ragent_tui::tracing_layer::tui_log_channel(1).1),
+                    db_path.clone(),
+                    config.read().await.config_paths.clone(),
+                    startup,
+                    stderr_spool.clone(),
+                ))
+                .await?;
+            }
+            SessionCommands::ExportArchive {
+                id,
+                output,
+                no_triggers,
+                no_cron,
+                no_loop_state,
+                include_cost: _,
+            } => {
+                use ragent_agent::session::archive::{ArchiveConfig, export_session_archive};
+                use std::path::Path;
+
+                let config = ArchiveConfig {
+                    include_triggers: !no_triggers,
+                    include_cron: !no_cron,
+                    include_loop_state: !no_loop_state,
+                    include_cost: false,
+                };
+
+                let output_path = Path::new(&output);
+                match export_session_archive(&storage, None, &id, output_path, &config) {
+                    Ok(archive_path) => {
+                        writeln!(
+                            std::io::stdout(),
+                            "Exported session {} to {}",
+                            id,
+                            archive_path.display()
+                        )?;
+                    }
+                    Err(e) => {
+                        cliprintln_err!("ragent session export: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            SessionCommands::Import { file } => {
+                use ragent_agent::session::archive::{ImportConfig, import_session_archive};
+                use std::path::Path;
+
+                let archive_path = Path::new(&file);
+                let config = ImportConfig {
+                    verify_checksums: true,
+                    import_triggers: false,
+                    activate_triggers: false,
+                    activate_cron: false,
+                    restore_loop_state: true,
+                };
+
+                match import_session_archive(&storage, None, archive_path, &config).await {
+                    Ok(result) => {
+                        writeln!(
+                            std::io::stdout(),
+                            "Imported session {} ({} messages, {} triggers, {} cron jobs, {} loop state files)",
+                            result.session_id,
+                            result.messages_imported,
+                            result.triggers_imported,
+                            result.cron_jobs_imported,
+                            result.loop_state_files_restored
+                        )?;
+                    }
+                    Err(e) => {
+                        cliprintln_err!("ragent session import: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+        },
+        Some(Commands::Db { command }) => match command {
+            DbCommands::Prune { days, dry_run } => {
+                let days = match days {
+                    Some(0) => {
+                        cliprintln_err!("ragent db prune: --days must be at least 1");
+                        std::process::exit(2);
+                    }
+                    Some(days) => days,
+                    None => config.read().await.storage.retention.message_days,
+                };
+                let window = chrono::Duration::try_days(i64::from(days))
+                    .ok_or_else(|| anyhow::anyhow!("retention window out of range: {days} days"))?;
+
+                if dry_run {
+                    let n = storage.count_messages_older_than(window)?;
+                    writeln!(
+                        std::io::stdout(),
+                        "Would delete {n} message(s) older than {days} day(s); sessions are kept."
+                    )?;
+                } else {
+                    let deleted = storage.prune_messages_older_than(window)?;
+                    writeln!(
+                        std::io::stdout(),
+                        "Deleted {deleted} message(s) older than {days} day(s); sessions are kept."
+                    )?;
+                    writeln!(
+                        std::io::stdout(),
+                        "The database file does not shrink until a VACUUM, which needs \
+                         exclusive access - stop every other ragent process first."
+                    )?;
+                }
+            }
+        },
+        Some(Commands::Auth { provider, key }) => {
+            storage.set_provider_auth(&provider, &key)?;
+            tracing::info!(provider = %provider, "Stored API key");
+        }
+        Some(Commands::Models {
+            provider: filter,
+            ollama_url,
+        }) => {
+            // Buffer the model listing in a `String` first: the stdout lock is
+            // not `Send`, so it must not be held across the `.await` calls
+            // below (a `future_not_send` error otherwise). The buffer is
+            // flushed to a single stdout lock once all awaits are done, so a
+            // piped consumer such as `ragent models | head` still sees a single
+            // writer.
+            use std::fmt::Write as _;
+            let mut out = String::new();
+            if filter.as_deref() == Some("ollama_cloud") {
+                let api_key = storage
+                    .get_provider_auth("ollama_cloud")
+                    .ok()
+                    .flatten()
+                    .filter(|k| !k.is_empty())
+                    .or_else(|| {
+                        ragent_config::credential_env::read_credential_env("OLLAMA_CLOUD_API_KEY")
+                    })
+                    .or_else(|| {
+                        ragent_config::credential_env::read_credential_env("OLLAMA_API_KEY")
+                    })
+                    .unwrap_or_default();
+
+                match ragent_agent::provider::ollama_cloud::list_ollama_cloud_models(
+                    &api_key,
+                    ollama_url.as_deref(),
+                )
+                .await
+                {
+                    Ok(models) if models.is_empty() => {
+                        writeln!(out, "No models found on Ollama Cloud.")?;
+                    }
+                    Ok(models) => {
+                        writeln!(out, "ollama_cloud models:")?;
+                        for m in &models {
+                            writeln!(out, "  ollama_cloud/{:<28} {}", m.id, m.name)?;
+                        }
+                        if api_key.is_empty() {
+                            writeln!(
+                                out,
+                                "\nNote: Chat requires an API key. Run `ragent auth \
+                                 ollama_cloud <key>` or set OLLAMA_API_KEY."
+                            )?;
+                        }
+                    }
+                    Err(e) => {
+                        writeln!(out, "Could not connect to Ollama Cloud: {e}")?;
+                    }
+                }
+            } else if filter.as_deref() == Some("openrouter") {
+                let api_key = storage
+                    .get_provider_auth("openrouter")
+                    .ok()
+                    .flatten()
+                    .filter(|k| !k.is_empty())
+                    .or_else(|| {
+                        ragent_config::credential_env::read_credential_env("OPENROUTER_API_KEY")
+                    })
+                    .unwrap_or_default();
+
+                if let Some(provider) = provider_registry.get("openrouter") {
+                    match provider.discover_models().await {
+                        Ok(models) if models.is_empty() => {
+                            writeln!(out, "No models found on OpenRouter.")?;
+                        }
+                        Ok(models) => {
+                            writeln!(out, "openrouter models:")?;
+                            for ModelInfo { id, name, .. } in &models {
+                                writeln!(out, "  openrouter/{:<28} {}", id, name)?;
+                            }
+                            if api_key.is_empty() {
+                                writeln!(
+                                    out,
+                                    "\nNote: Chat requires an API key. Run `ragent auth \
+                                     openrouter <key>` or set OPENROUTER_API_KEY."
+                                )?;
+                            }
+                        }
+                        Err(e) => {
+                            writeln!(out, "Could not connect to OpenRouter: {e}")?;
+                        }
+                    }
+                } else {
+                    writeln!(out, "OpenRouter provider is not registered.")?;
+                }
+            } else if filter.as_deref() == Some("ollama") || ollama_url.is_some() {
+                match ragent_agent::provider::ollama::list_ollama_models(ollama_url.as_deref())
+                    .await
+                {
+                    Ok(models) if models.is_empty() => {
+                        writeln!(
+                            out,
+                            "No models found on Ollama server. Pull models with: ollama pull <model>"
+                        )?;
+                    }
+                    Ok(models) => {
+                        writeln!(out, "ollama models:")?;
+                        for m in &models {
+                            writeln!(out, "  ollama/{:<28} {}", m.id, m.name)?;
+                        }
+                    }
+                    Err(e) => {
+                        writeln!(out, "Could not connect to Ollama: {e}")?;
+                        writeln!(out, "Is Ollama running? Start with: ollama serve")?;
+                    }
+                }
+                if filter.as_deref() != Some("ollama") {
+                    let providers = provider_registry.list();
+                    for p in &providers {
+                        if p.id == "ollama" || p.id == "ollama_cloud" {
+                            continue;
+                        }
+                        for m in &p.models {
+                            writeln!(out, "{}/{}", p.id, m.id)?;
+                        }
+                    }
+                }
+            } else {
+                let providers = provider_registry.list();
+                let providers: Vec<_> = if let Some(ref f) = filter {
+                    providers.into_iter().filter(|p| p.id == *f).collect()
+                } else {
+                    providers
+                };
+
+                if providers.is_empty() {
+                    writeln!(out, "No providers found matching filter")?;
+                } else {
+                    for p in &providers {
+                        for m in &p.models {
+                            writeln!(out, "{}/{}", p.id, m.id)?;
+                        }
+                    }
+                }
+            }
+            // Flush stdout before the runtime is shut down so a closed pipe
+            // (e.g. `ragent models | head`) cannot race the print and turn into
+            // a `Broken pipe` panic (see the note on `main`'s bounded shutdown).
+            // The `write_io_log` helper classifies EPIPE as benign and logs it at
+            // `debug` rather than propagating a
+            // `failed printing to stdout` panic.
+            let mut stdout = std::io::stdout().lock();
+            if !crate::cli_out::write_io_log(&mut stdout, format_args!("{out}"), false) {
+                return Err(cli::CliExit::failure().into());
+            }
+        }
+        Some(Commands::Config { command }) => match command {
+            Some(ConfigCommands::Check { json }) => {
+                run_dry_run_and_exit(
+                    cli.config.clone(),
+                    &cli.agent,
+                    cli.model.as_deref(),
+                    cli.json || json,
+                    Arc::clone(&provider_registry),
+                    Arc::clone(&tool_registry),
+                )
+                .await;
+            }
+            _ => {
+                let config = config.read().await;
+                cliprintln!("{:#?}", *config);
+                drop(config);
+            }
+        },
+        Some(Commands::Memory { command }) => {
+            let project_dir = crate::working_dir();
+            match command {
+                MemoryCommands::List => {
+                    let mut stdout = std::io::stdout().lock();
+
+                    // List structured memory stats scoped to the current directory.
+                    let memory_count = storage.count_memories_for_project(&project_dir)?;
+                    writeln!(stdout, "Structured memories: {memory_count}")?;
+
+                    if memory_count == 0 {
+                        writeln!(
+                            stdout,
+                            "
+No memories stored for this project yet."
+                        )?;
+                    } else {
+                        writeln!(
+                            stdout,
+                            "
+Use the TUI Memory panel (Alt+M or /memory) to browse entries."
+                        )?;
+                    }
+                }
+            }
+        }
+        Some(Commands::Research { command }) => {
+            // Use the startup config, so `--config <file>` settings apply.
+            let startup_config = Arc::new(config.read().await.clone());
+            Box::pin(cli::handle_research_command_with_model(
+                *command,
+                startup_config,
+                resolved_agent.model.clone(),
+                Some(storage.clone()),
+                Some(provider_registry.clone()),
+            ))
+            .await?;
+        }
+        Some(Commands::New { scaffold, .. }) => {
+            dispatch_new_command(scaffold)?;
+        }
+        Some(Commands::Spec { command }) => match command {
+            cli::SpecCommands::GovCreate(args) => {
+                let model_str = cli
+                    .model
+                    .clone()
+                    .or_else(|| storage.get_setting("selected_model").ok().flatten());
+                let Some(model_ref) = model_str.as_deref().and_then(|s| s.split_once('/')).map(
+                    |(provider, model)| agent::ModelRef {
+                        provider_id: provider.to_string(),
+                        model_id: model.to_string(),
+                    },
+                ) else {
+                    cliprintln_err!(
+                        "ragent spec govcreate: no model configured \
+                         - pass --model provider/model or set one via /model in the TUI"
+                    );
+                    std::process::exit(2);
+                };
+                let cwd =
+                    std::env::current_dir().map_err(|e| anyhow::anyhow!("cannot read cwd: {e}"))?;
+                let tokens = args.to_token_string();
+                cli::handle_govcreate_command(&tokens, model_ref, provider_registry, storage, cwd)
+                    .await?;
+            }
+            cli::SpecCommands::Status { spec_id, status } => {
+                let cwd =
+                    std::env::current_dir().map_err(|e| anyhow::anyhow!("cannot read cwd: {e}"))?;
+                // Use the startup config, so `--config <file>` gates apply.
+                let sdd = config.read().await.sdd.clone();
+                cli::handle_spec_status_command(&cwd, &spec_id, status.as_deref(), &sdd).await?;
+            }
+        },
+        Some(Commands::Plugins { args }) => {
+            // Sync dispatch: the ephemeral plugin session owns `!Send` rquickjs
+            // contexts, so it must not cross an `.await`. `run_cli` is fully
+            // synchronous, keeping this future `Send` for the async runtime.
+            plugins::run_cli(&args)?;
+        }
+        Some(Commands::Connectors { args }) => {
+            // The connector surface drives an ephemeral lifecycle session over
+            // the CLI connection seam and never touches a live TUI client, so it
+            // is safe to await on the main task.
+            connectors::run_cli(&args).await?;
+        }
+        Some(Commands::Automation { args }) => {
+            // Automation service CLI parity surface (spec `openhands` T-016;
+            // FR-018). Lists automations and their run history, or enqueues a
+            // manual run; the run-history reads are synchronous storage calls.
+            let config = config.read().await.clone();
+            cli::handle_automation_command(&args, Arc::clone(&storage), &config)?;
+        }
+        Some(Commands::Openapi { client }) => {
+            // FR-007 parity surface: emit the OpenAPI 3.1 document, or the
+            // generated typed client, from the same route table the server
+            // serves. Synchronous stdout writes only.
+            let mut stdout = std::io::stdout().lock();
+            if client {
+                stdout.write_all(ragent_server::routes::openapi::typescript_client().as_bytes())?;
+            } else {
+                let doc =
+                    serde_json::to_string_pretty(&ragent_server::routes::openapi::document())?;
+                stdout.write_all(doc.as_bytes())?;
+                stdout.write_all(b"\n")?;
+            }
+        }
+        Some(Commands::AcpServer) => {
+            // Spec `openhands` T-008 (FR-022, FR-028): serve the ACP endpoint on
+            // stdio for an IDE client. Off by default - `acp_server::run` refuses
+            // unless the feature is compiled in *and* `acp.server_enabled` is set.
+            acp_server::run(
+                config.read().await.clone().into(),
+                Arc::clone(&session_processor),
+                Arc::clone(&event_bus),
+                working_dir.clone(),
+            )
+            .await?;
+        }
+    }
+    // R-23: on a graceful exit, truncate the WAL so the next start does not
+    // inherit a file that grew to the high-water mark of this session's
+    // largest write burst. Best-effort: a failure here must never turn a
+    // successful command into an error exit.
+    if let Err(e) = storage_for_shutdown.checkpoint_wal() {
+        tracing::warn!(error = %e, "Failed to checkpoint WAL on shutdown");
+    }
+    Ok(())
+}
+
+/// Resolve the enabled connectors into bridged MCP server configs, append them
+/// to `merged`, and return the unconnected lifecycle session owner for the
+/// caller's shared connect loop (T-008; FR-008, FR-012, FR-018, FR-020, FR-026,
+/// FR-032, FR-033).
+///
+/// Returns `None` when the connector subsystem is switched off
+/// (`connectors.enabled: false`, FR-021); the call then creates no connector
+/// session and connects nothing.
+///
+/// The bridge's accepted `(bridged_id, config)` pairs are appended to the MCP
+/// server set the existing background connect loop will start, so a connector's
+/// tools surface as the ordinary `mcp_<server>_<tool>` tools of the shared
+/// client (FR-020) without a second connection path. A bridged id that collides
+/// with a configured `ragent.json` server (or another connector's server) is
+/// refused by the bridge and reported rather than silently overwriting (FR-033).
+///
+/// The bridge itself never connects; the returned [`ConnectorSession`] is the
+/// lifecycle owner the connect loop drives with the live per-server enable
+/// ledger consulted through [`McpConnect`], so a server switched off in `/mcp`
+/// is not started here (FR-018). The session must be kept alive for the process
+/// lifetime: dropping it would drop every connection it owns.
+fn merge_connector_bridge(
+    working_dir: &std::path::Path,
+    config: &ragent_agent::Config,
+    merged: &mut Vec<(String, ragent_agent::McpServerConfig)>,
+) -> Option<ConnectorSession> {
+    let connectors = config.connectors.clone().unwrap_or_default();
+    if !connectors.is_enabled() {
+        return None;
+    }
+
+    let dirs = store_dirs(working_dir, connectors.store_dir.as_deref());
+    let configured_ids: Vec<&str> = merged.iter().map(|(id, _)| id.as_str()).collect();
+    let plan = ragent_connectors::scanned_bridge(&dirs, configured_ids);
+    for refused in &plan.refused {
+        // FR-033: a refused bridged id is dropped with a one-line cause, never
+        // silently overwriting the server it collides with.
+        tracing::warn!(
+            connector = %refused.connector_id,
+            "bridged connector server {}",
+            refused.describe()
+        );
+    }
+
+    // The resolved servers are queued for the caller's shared connect loop, so
+    // the session is built over the no-op connect seam: letting the session
+    // connect through it too would open every bridged server twice.
+    let session = ConnectorSession::new(dirs, connectors, Vec::new());
+    for server in &plan.servers {
+        merged.push((server.server_id.clone(), server.config.clone()));
+    }
+
+    Some(session)
+}
+
+/// The OS stack the program body runs on, sized well above the Windows MSVC
+/// linker default (1 MiB for the main thread): config parsing, tool
+/// registration and the first TUI render all execute on this thread via
+/// `block_on`, and the Linux ~8 MiB rlimit headroom was sufficient there
+/// while the 1 MiB Windows reserve overflowed.
+const MAIN_THREAD_STACK_BYTES: usize = 32 * 1024 * 1024;
+
+/// Process entry point: run [`main_body`] on an explicitly sized OS thread.
+///
+/// The Windows MSVC linker gives the main thread a 1 MiB stack reserve while
+/// Linux grows the main thread stack to the ~8 MiB rlimit, so ragent aborted
+/// at startup on Windows with "thread '<main>' has overflowed its stack".
+/// Spawning the program body on its own thread with an explicit large stack
+/// gives every platform the same headroom; a panic payload raised on that
+/// thread is re-raised here with `resume_unwind` so the panic-hook output and
+/// the 101 exit code are unchanged.
+fn main() -> Result<()> {
+    std::thread::Builder::new()
+        .name("ragent-main".to_string())
+        .stack_size(MAIN_THREAD_STACK_BYTES)
+        .spawn(main_body)
+        .map_err(|e| anyhow::anyhow!("failed to spawn program body thread: {e}"))?
+        .join()
+        .unwrap_or_else(|payload| {
+            std::panic::resume_unwind(payload);
+        })
+}
+
+/// Wrap the tokio entrypoint so the runtime is shut down with a bounded
+/// grace period instead of the default unbounded drop.
+///
+/// By default, dropping the multi-thread runtime at end of main blocks until
+/// every in-flight `spawn_blocking` task completes. A stray long-running
+/// blocking task (e.g. an abandoned code-index reindex join) therefore kept
+/// the process alive burning CPU after the TUI had already exited. Arming a
+/// `shutdown_timeout` bounds that wait so the prompt returns promptly.
+fn main_body() -> Result<()> {
+    let working_dir = crate::working_dir();
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|e| anyhow::anyhow!("failed to create tokio runtime: {e}"))?;
+    let result = runtime.block_on(async_main());
+    // A normal return (including an error propagated out of `async_main`)
+    // clears the crash marker so the next start does not report a phantom
+    // abort. Process-wide state only; failure to mark is not worth failing on.
+    let _ = crate::crash_dump::write_record(&working_dir, "clean exit"); // INTENTIONAL: best-effort crash-marker cleanup on a normal exit
+    // Give leftover blocking tasks 2 seconds, then abandon (not abort) them
+    // and return: outstanding blocking tasks finish in the background while
+    // the process exits normally.
+    runtime.shutdown_timeout(std::time::Duration::from_secs(2));
+    // ANTIPAT A-04/I-05: a CLI handler's typed exit request becomes the single
+    // process exit here, *after* the clean-exit marker and the bounded runtime
+    // shutdown have run. Handlers no longer call `process::exit` directly.
+    if let Err(e) = &result
+        && let Some(exit) = e.downcast_ref::<cli::CliExit>()
+    {
+        std::process::exit(exit.code);
+    }
+    // In TUI mode stderr is redirected into the log spool, so an error that
+    // aborts startup (a config parse failure, a storage open failure) would
+    // otherwise vanish: Rust prints the `Error:` line from `main` returning
+    // `Err` to real stderr, which the spool swallows, and the process exits
+    // with no visible diagnostic. Echo it to stdout - the terminal the user is
+    // looking at - so the failure is never silent. The tracing fmt subscriber
+    // is the writer of stdout in non-TUI runs, but this is the documented
+    // CLI-presentation surface and no tracing writer is live on an error path.
+    if let Err(e) = &result
+        && stderr_spool::is_active()
+    {
+        cliprintln!("ragent: {e}");
+    }
+    result
+}

@@ -1,0 +1,408 @@
+//! `CMake` language parser using tree-sitter.
+//!
+//! Extracts function definitions, macro definitions, block definitions,
+//! foreach/while loops, if-conditions, and normal commands from `CMake`
+//! listfiles (`.cmake` and `CMakeLists.txt`).
+//!
+//! `CMake`'s language is command-based. The tree-sitter grammar represents
+//! top-level constructs as `function_def`, `macro_def`, `block_def`,
+//! `foreach_loop`, `while_loop`, `if_condition`, and `normal_command`.
+//! Each `*_command` child contains an `identifier` (the command name) and
+//! an `argument_list`. Definition nodes (`function_def`, `macro_def`)
+//! contain a `body` child with nested statements.
+
+use super::{LanguageParser, ParsedFile};
+use crate::types::{ImportEntry, Symbol, SymbolKind, SymbolRef, Visibility};
+use anyhow::{Context, Result};
+use tree_sitter::Node;
+
+/// Tree-sitter parser for the `CMake` build language.
+pub struct CmakeParser {
+    _private: (),
+}
+
+impl CmakeParser {
+    /// Create a new `CMake` parser.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { _private: () }
+    }
+
+    super::util::tree_sitter_parser!(
+        tree_sitter_cmake::LANGUAGE,
+        "failed to load CMake grammar",
+        "tree-sitter parse returned None for CMake source"
+    );
+}
+
+impl LanguageParser for CmakeParser {
+    fn language_id(&self) -> &'static str {
+        "cmake"
+    }
+
+    fn parse(&self, source: &[u8]) -> Result<ParsedFile> {
+        let tree = Self::parse_tree(source)?;
+        let root = tree.root_node();
+
+        let mut ctx = Ctx::new(source);
+
+        walk(&mut ctx, root, None);
+
+        Ok(ParsedFile {
+            symbols: ctx.symbols,
+            imports: ctx.imports,
+            references: ctx.references,
+            tree: Some(tree),
+        })
+    }
+}
+
+// -- Extraction context -----------------------------------------------------
+
+/// Mutable context threaded through recursive extraction.
+/// Parser-local alias of the shared extraction context.
+type Ctx<'a> = super::ctx::Ctx<'a>;
+
+// -- Recursive walk ----------------------------------------------------------
+
+/// Walk a tree-sitter node, extracting `CMake` symbols.
+fn walk(ctx: &mut Ctx, node: Node, parent_id: Option<i64>) {
+    let Some(_depth_guard) = super::util::TreeDepthGuard::enter(node) else {
+        return;
+    };
+
+    match node.kind() {
+        "function_def" => extract_function_def(ctx, node, parent_id),
+        "macro_def" => extract_macro_def(ctx, node, parent_id),
+        "block_def" => extract_block_def(ctx, node, parent_id),
+        "foreach_loop" => extract_foreach_loop(ctx, node, parent_id),
+        "while_loop" => extract_while_loop(ctx, node, parent_id),
+        "if_condition" => extract_if_condition(ctx, node, parent_id),
+        "normal_command" => extract_normal_command(ctx, node, parent_id),
+        _ => {
+            let cursor = &mut node.walk();
+            for child in node.children(cursor) {
+                walk(ctx, child, parent_id);
+            }
+        }
+    }
+}
+
+// -- Function definition (`function(name ...) ... endfunction()`) ----------------
+
+/// Extract a `CMake` `function()` definition.
+///
+/// A `function_def` contains a `function_command` child whose first
+/// argument is the function name, and a `body` child with nested statements.
+fn extract_function_def(ctx: &mut Ctx, node: Node, parent_id: Option<i64>) {
+    let cmd = find_child(node, "function_command");
+    let name = cmd
+        .and_then(|c| first_argument_text(ctx, c))
+        .unwrap_or_default();
+
+    if name.is_empty() {
+        return;
+    }
+
+    let args = cmd
+        .and_then(|c| argument_list_text(ctx, c))
+        .unwrap_or_default();
+    let sig = format!("function({args})");
+    let hash = hash_node(ctx, node);
+
+    let id = ctx.alloc_id();
+    ctx.symbols.push(Symbol {
+        id,
+        file_id: 0,
+        name,
+        qualified_name: None,
+        kind: SymbolKind::Function,
+        visibility: Visibility::Public,
+        start_line: node.start_position().row as u32 + 1,
+        end_line: node.end_position().row as u32 + 1,
+        start_col: node.start_position().column as u32,
+        end_col: node.end_position().column as u32,
+        parent_id,
+        signature: Some(sig),
+        doc_comment: None,
+        body_hash: Some(hash),
+    });
+
+    // Recurse into the body.
+    if let Some(body) = find_child(node, "body") {
+        let cursor = &mut body.walk();
+        for child in body.children(cursor) {
+            walk(ctx, child, Some(id));
+        }
+    }
+}
+
+// -- Macro definition (`macro(name ...) ... endmacro()`) -------------------------
+
+/// Extract a `CMake` `macro()` definition.
+fn extract_macro_def(ctx: &mut Ctx, node: Node, parent_id: Option<i64>) {
+    let cmd = find_child(node, "macro_command");
+    let name = cmd
+        .and_then(|c| first_argument_text(ctx, c))
+        .unwrap_or_default();
+
+    if name.is_empty() {
+        return;
+    }
+
+    let args = cmd
+        .and_then(|c| argument_list_text(ctx, c))
+        .unwrap_or_default();
+    let sig = format!("macro({args})");
+    let hash = hash_node(ctx, node);
+
+    let id = ctx.alloc_id();
+    ctx.symbols.push(Symbol {
+        id,
+        file_id: 0,
+        name,
+        qualified_name: None,
+        kind: SymbolKind::Macro,
+        visibility: Visibility::Public,
+        start_line: node.start_position().row as u32 + 1,
+        end_line: node.end_position().row as u32 + 1,
+        start_col: node.start_position().column as u32,
+        end_col: node.end_position().column as u32,
+        parent_id,
+        signature: Some(sig),
+        doc_comment: None,
+        body_hash: Some(hash),
+    });
+
+    if let Some(body) = find_child(node, "body") {
+        let cursor = &mut body.walk();
+        for child in body.children(cursor) {
+            walk(ctx, child, Some(id));
+        }
+    }
+}
+
+// -- Block definition (`block() ... endblock()`) -------------------------------
+
+/// Extract a `CMake` `block()` scope definition (`CMake` 3.25+).
+fn extract_block_def(ctx: &mut Ctx, node: Node, parent_id: Option<i64>) {
+    let cmd = find_child(node, "block_command");
+    let args = cmd
+        .and_then(|c| argument_list_text(ctx, c))
+        .unwrap_or_default();
+    let sig = format!("block({args})");
+    let hash = hash_node(ctx, node);
+
+    let id = ctx.alloc_id();
+    ctx.symbols.push(Symbol {
+        id,
+        file_id: 0,
+        name: "block".to_string(),
+        qualified_name: None,
+        kind: SymbolKind::Module,
+        visibility: Visibility::Public,
+        start_line: node.start_position().row as u32 + 1,
+        end_line: node.end_position().row as u32 + 1,
+        start_col: node.start_position().column as u32,
+        end_col: node.end_position().column as u32,
+        parent_id,
+        signature: Some(sig),
+        doc_comment: None,
+        body_hash: Some(hash),
+    });
+
+    if let Some(body) = find_child(node, "body") {
+        let cursor = &mut body.walk();
+        for child in body.children(cursor) {
+            walk(ctx, child, Some(id));
+        }
+    }
+}
+
+// -- Foreach loop -----------------------------------------------------------
+
+/// Extract a `CMake` `foreach()` loop.
+fn extract_foreach_loop(ctx: &mut Ctx, node: Node, parent_id: Option<i64>) {
+    let cmd = find_child(node, "foreach_command");
+    let args = cmd
+        .and_then(|c| argument_list_text(ctx, c))
+        .unwrap_or_default();
+    let sig = format!("foreach({args})");
+    let hash = hash_node(ctx, node);
+
+    let id = ctx.alloc_id();
+    ctx.symbols.push(Symbol {
+        id,
+        file_id: 0,
+        name: "foreach".to_string(),
+        qualified_name: None,
+        kind: SymbolKind::Module,
+        visibility: Visibility::Public,
+        start_line: node.start_position().row as u32 + 1,
+        end_line: node.end_position().row as u32 + 1,
+        start_col: node.start_position().column as u32,
+        end_col: node.end_position().column as u32,
+        parent_id,
+        signature: Some(sig),
+        doc_comment: None,
+        body_hash: Some(hash),
+    });
+
+    if let Some(body) = find_child(node, "body") {
+        let cursor = &mut body.walk();
+        for child in body.children(cursor) {
+            walk(ctx, child, Some(id));
+        }
+    }
+}
+
+// -- While loop -------------------------------------------------------------
+
+/// Extract a `CMake` `while()` loop.
+fn extract_while_loop(ctx: &mut Ctx, node: Node, parent_id: Option<i64>) {
+    let cmd = find_child(node, "while_command");
+    let args = cmd
+        .and_then(|c| argument_list_text(ctx, c))
+        .unwrap_or_default();
+    let sig = format!("while({args})");
+    let hash = hash_node(ctx, node);
+
+    let id = ctx.alloc_id();
+    ctx.symbols.push(Symbol {
+        id,
+        file_id: 0,
+        name: "while".to_string(),
+        qualified_name: None,
+        kind: SymbolKind::Module,
+        visibility: Visibility::Public,
+        start_line: node.start_position().row as u32 + 1,
+        end_line: node.end_position().row as u32 + 1,
+        start_col: node.start_position().column as u32,
+        end_col: node.end_position().column as u32,
+        parent_id,
+        signature: Some(sig),
+        doc_comment: None,
+        body_hash: Some(hash),
+    });
+
+    if let Some(body) = find_child(node, "body") {
+        let cursor = &mut body.walk();
+        for child in body.children(cursor) {
+            walk(ctx, child, Some(id));
+        }
+    }
+}
+
+// -- If condition -----------------------------------------------------------
+
+/// Extract a `CMake` `if()` conditional.
+fn extract_if_condition(ctx: &mut Ctx, node: Node, parent_id: Option<i64>) {
+    let cmd = find_child(node, "if_command");
+    let args = cmd
+        .and_then(|c| argument_list_text(ctx, c))
+        .unwrap_or_default();
+    let sig = format!("if({args})");
+    let hash = hash_node(ctx, node);
+
+    let id = ctx.alloc_id();
+    ctx.symbols.push(Symbol {
+        id,
+        file_id: 0,
+        name: "if".to_string(),
+        qualified_name: None,
+        kind: SymbolKind::Module,
+        visibility: Visibility::Public,
+        start_line: node.start_position().row as u32 + 1,
+        end_line: node.end_position().row as u32 + 1,
+        start_col: node.start_position().column as u32,
+        end_col: node.end_position().column as u32,
+        parent_id,
+        signature: Some(sig),
+        doc_comment: None,
+        body_hash: Some(hash),
+    });
+
+    if let Some(body) = find_child(node, "body") {
+        let cursor = &mut body.walk();
+        for child in body.children(cursor) {
+            walk(ctx, child, Some(id));
+        }
+    }
+}
+
+// -- Normal command ---------------------------------------------------------
+
+/// Extract a `CMake` normal command as a call reference.
+///
+/// Commands like `add_library`, `target_link_libraries`, `find_package`,
+/// `include()`, `add_subdirectory()` are recorded as references. The
+/// `include()` and `add_subdirectory()` commands are also treated as imports.
+fn extract_normal_command(ctx: &mut Ctx, node: Node, _parent_id: Option<i64>) {
+    let ident = find_child(node, "identifier");
+    let cmd_name = ident.map(|n| ctx.text(n).to_string()).unwrap_or_default();
+
+    if cmd_name.is_empty() {
+        return;
+    }
+
+    // Record as a call reference.
+    ctx.references.push(SymbolRef {
+        symbol_name: cmd_name.clone(),
+        file_id: 0,
+        file_path: String::new(),
+        line: node.start_position().row as u32 + 1,
+        col: node.start_position().column as u32,
+        kind: "call".to_string(),
+    });
+
+    // `include()` and `add_subdirectory()` are import-like.
+    if cmd_name == "include" || cmd_name == "add_subdirectory" {
+        let arg = first_argument_text(ctx, node).unwrap_or_default();
+        if !arg.is_empty() {
+            ctx.imports.push(ImportEntry {
+                file_id: 0,
+                imported_name: arg.clone(),
+                source_module: arg,
+                alias: None,
+                line: node.start_position().row as u32 + 1,
+                kind: cmd_name,
+            });
+        }
+    }
+}
+
+// -- Helpers ----------------------------------------------------------------
+
+/// Find the first child of a node matching the given kind.
+fn find_child<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
+    super::util::find_child(node, kind)
+}
+
+/// Get the text of the first argument in a command's `argument_list`.
+fn first_argument_text(ctx: &Ctx, cmd_node: Node<'_>) -> Option<String> {
+    let args = find_child(cmd_node, "argument_list")?;
+    let cursor = &mut args.walk();
+    for child in args.children(cursor) {
+        // The first named child in an argument_list is the first argument.
+        if child.is_named() && child.kind() != "bracket_comment" {
+            return Some(ctx.text(child).to_string());
+        }
+    }
+    None
+}
+
+/// Get the full text of a command's `argument_list` (without parentheses).
+fn argument_list_text(ctx: &Ctx, cmd_node: Node) -> Option<String> {
+    let args = find_child(cmd_node, "argument_list")?;
+    Some(ctx.text(args).to_string())
+}
+
+/// Content hash of the node's text for change detection.
+///
+/// Routes through [`super::util::node_hash`] so every parser hashes
+/// identically (ANTIPAT M5.3 / audit 3.2).
+fn hash_node(ctx: &Ctx, node: Node) -> String {
+    super::util::node_hash(ctx.source, node)
+}
+
+// -- Tests -------------------------------------------------------------------

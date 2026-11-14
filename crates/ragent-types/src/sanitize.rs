@@ -1,0 +1,513 @@
+//! Secret redaction and sanitization primitives.
+//!
+//! Provides the shared [`Regex`] patterns and helpers the workspace uses to
+//! mask credential-shaped substrings before they reach logs, events, or the
+//! UI.
+
+use std::borrow::Cow;
+use std::sync::{LazyLock, RwLock};
+
+use regex::Regex;
+
+/// The single redaction placeholder substituted for every masked secret.
+///
+/// Every redactor across the workspace (this crate's [`redact_secrets`], the
+/// server's `/config` scrubber, the TUI's `/config` renderer, the telemetry
+/// attribute guard, and the `get_env` tool) writes this exact string, so a
+/// secret can never be identified by which subsystem leaked a different
+/// sentinel (audit Quick Win 5).
+pub const REDACTION_PLACEHOLDER: &str = "[REDACTED]";
+
+/// Returns `true` when a JSON object key names a credential.
+///
+/// Matches by key-name *shape* rather than a hardcoded path list, so a
+/// newly-added `*_api_key` / `*_token` / `*_secret` config field is redacted
+/// automatically without editing the redactor. The suffix form deliberately
+/// ends in `_key` / `_token` / ... so non-secret keys such as `keywords` or
+/// `token_budget` are not caught.
+///
+/// The server's `/config` scrubber and the TUI's `/config show` renderer share
+/// this single predicate so their secret-key sets cannot drift apart (audit
+/// Medium 8).
+#[must_use]
+pub fn is_secret_json_key(key: &str) -> bool {
+    const EXACT: &[&str] = &[
+        "token",
+        "secret",
+        "password",
+        "api_key",
+        "apikey",
+        "webhook_url",
+        "client_id",
+        "client_secret",
+        "access_token",
+        "refresh_token",
+        "bot_token",
+        "private_key",
+        "credentials",
+        "openalex_email",
+        "gitlab",
+    ];
+    if EXACT
+        .iter()
+        .any(|candidate| key.eq_ignore_ascii_case(candidate))
+    {
+        return true;
+    }
+    const SUFFIXES: &[&str] = &["_key", "_token", "_secret", "_password"];
+    SUFFIXES.iter().any(|suffix| {
+        key.len() >= suffix.len()
+            && key.as_bytes()[key.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
+    })
+}
+
+/// Matches common secret patterns:
+///
+/// - `sk-` / `sk_live_` / `sk_test_` prefixed keys (`OpenAI`, Stripe, etc.)
+/// - `key-` prefixed keys
+/// - `Bearer` tokens (including JWTs with dots)
+/// - `ghp_` / `gho_` / `ghs_` / `ghu_` / `ghr_` GitHub tokens
+/// - `glpat-` GitLab personal access tokens, plus `gldt-` / `glrt-` /
+///   `glsoat-` / `glcbt-` / `glptt-` deploy/runner/agent/CI job/trigger tokens
+///   (SEC-ragent-types-004 / SECTASKS T-046)
+/// - `xoxb-` / `xoxp-` Slack tokens
+/// - `AKIA` AWS access key IDs
+/// - `hf_` Hugging Face and `npm_` npm tokens
+/// - `[?&]key=` query-string API keys (a bare `key=` is what Google's
+///   `?key=AIza...` form used, which the assignment group below did not match)
+/// - Generic long base64-like tokens following a `token` / `apikey` / `api_key` /
+///   `secret` / `password` key. This group is case-insensitive and accepts an
+///   optional quote and either `=` or `:`, so `API_KEY=...`, `"token": "..."` and
+///   `token: ...` all match (FUNC-007).
+static SECRET_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(concat!(
+        // OpenAI / Stripe sk- keys (may contain underscores, hyphens)
+        r"sk[-_][a-zA-Z0-9_\-]{20,}",
+        r"|",
+        // key- prefixed keys
+        r"key-[a-zA-Z0-9_\-]{20,}",
+        r"|",
+        // Bearer tokens including JWTs (contain dots, underscores, hyphens)
+        r"Bearer\s+[a-zA-Z0-9_\-\.]{20,}",
+        r"|",
+        // GitHub personal / OAuth / server / user / refresh tokens
+        r"gh[pousr]_[a-zA-Z0-9]{20,}",
+        r"|",
+        // GitLab personal access tokens and the other documented token types
+        // (SEC-ragent-types-004): glpat-, gldt-, glrt-, glsoat-, glcbt-, glptt-.
+        r"gl(?:pat|dt|rt|soat|cbt|ptt)-[a-zA-Z0-9_\-]{20,}",
+        r"|",
+        // Slack tokens
+        r"xox[bp]-[a-zA-Z0-9\-]{20,}",
+        r"|",
+        // AWS access key IDs (start with AKIA)
+        r"AKIA[A-Z0-9]{16,}",
+        r"|",
+        // Hugging Face and npm tokens (SEC-ragent-types-004)
+        r"hf_[a-zA-Z0-9]{20,}",
+        r"|",
+        r"npm_[a-zA-Z0-9]{20,}",
+        r"|",
+        // Query-string API keys: `?key=AIza...` / `&key=...` (the assignment group
+        // below requires a longer key name and missed a bare `key=`).
+        r"(?i:[?&]key=)[a-zA-Z0-9_\-\.]{16,}",
+        r"|",
+        // Generic token/apikey/secret/password assignments in URLs and configs.
+        // Capture group 1 holds the key + separator so the replacement keeps the
+        // key and only blanks the value (FUNC-007). Case-insensitive, with an
+        // optional quote around the key and value and either `=` or `:` as the
+        // separator, so `API_KEY=...`, `"token": "..."` and `token: ...` all match.
+        // The value charset includes `/`, `+`, `=` so base64/base64url/JWT
+        // payloads redact fully instead of leaking the tail past the first
+        // excluded byte. The 16-char value floor keeps innocuous prose out.
+        r#"(?i:((?:api[_-]?key|token|secret|password)["']?\s*[:=]\s*["']?)[a-zA-Z0-9_\-\./+=]{16,})"#,
+    ))
+    .expect("valid regex pattern") // no-panic-ok: compile-time constant pattern
+});
+
+/// Connection-string userinfo: `scheme://user:secret@host`.
+///
+/// The password half of a `DATABASE_URL`-style variable is a live credential
+/// whose name carries no credential word, so it is masked by shape rather than
+/// by key name (audit high finding). Kept as its own pattern, applied as a
+/// second pass, because the `regex` crate has no look-around: the `@` must be
+/// consumed to anchor the password's end, and folding this arm into
+/// [`SECRET_PATTERN`] would insert two capture groups ahead of the generic
+/// arm's key group and silently renumber `${1}` (which must stay the key +
+/// separator for `redact_secrets_owned`).
+///
+/// Group 1 is the scheme and user (re-emitted so the URL stays readable), and
+/// group 2 is the `@` (re-emitted so the host stays attached).
+static CONNSTRING_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"([a-z][a-z0-9+.\-]*://[^\s:/@]+:)[^\s@/]{3,}(@)").expect("valid regex pattern") // no-panic-ok: compile-time constant pattern
+});
+
+/// Global in-memory registry of known secret values.
+///
+/// Secrets registered here are redacted by exact substring match in
+/// [`redact_secrets`], complementing the regex-based pattern matching.
+/// The registry is seeded from the database on startup and updated
+/// whenever provider credentials change.
+///
+/// PERF-055: the registry is kept sorted longest-first on insert so
+/// [`redact_secrets_cow`] does not have to collect and sort it on every call.
+static SECRET_REGISTRY: LazyLock<RwLock<Vec<String>>> = LazyLock::new(|| RwLock::new(Vec::new()));
+
+/// Maximum number of exact-match secrets retained in the registry.
+///
+/// F14: on a long-lived server that re-registers credentials (for example
+/// rotating provider keys) the registry would otherwise grow without bound,
+/// and [`redact_secrets_cow`] scans it linearly on every call. Beyond this cap
+/// the oldest entries are evicted on insert so the registry stays bounded.
+pub const MAX_SECRET_REGISTRY_ENTRIES: usize = 1024;
+
+/// Registers a secret value for exact-match redaction.
+///
+/// Empty strings are ignored. The secret is stored in a global in-memory
+/// registry and will be matched by [`redact_secrets`].
+///
+/// # Examples
+///
+/// ```rust
+/// use ragent_types::sanitize::{register_secret, redact_secrets};
+///
+/// register_secret("my-custom-secret-value");
+/// let cleaned = redact_secrets("token is my-custom-secret-value here");
+/// assert!(!cleaned.contains("my-custom-secret-value"));
+/// ```
+pub fn register_secret(secret: &str) {
+    if secret.is_empty() {
+        return;
+    }
+    let mut registry = registry_write();
+    register_secret_inner(&mut registry, secret);
+}
+
+/// Removes a secret value from the exact-match redaction registry.
+///
+/// # Examples
+///
+/// ```rust
+/// use ragent_types::sanitize::{register_secret, unregister_secret, redact_secrets};
+///
+/// register_secret("temp-secret");
+/// unregister_secret("temp-secret");
+/// let result = redact_secrets("temp-secret");
+/// assert_eq!(result, "temp-secret");
+/// ```
+pub fn unregister_secret(secret: &str) {
+    registry_write().retain(|s| s != secret);
+}
+
+/// Clears all secrets from the exact-match redaction registry.
+pub fn clear_secret_registry() {
+    registry_write().clear();
+}
+
+/// Seeds the secret registry with multiple values at once.
+///
+/// Useful at startup to bulk-load secrets from the database or
+/// environment variables.
+pub fn seed_secrets(secrets: impl IntoIterator<Item = String>) {
+    let mut registry = registry_write();
+    for s in secrets {
+        if s.is_empty() || registry.iter().any(|existing| existing == &s) {
+            continue;
+        }
+        registry.push(s);
+    }
+    sort_by_len_desc(&mut registry);
+    enforce_registry_cap(&mut registry);
+}
+
+/// Bound the registry at [`MAX_SECRET_REGISTRY_ENTRIES`] (F14).
+///
+/// The registry is kept longest-first (PERF-055), so the entries past the cap
+/// are the shortest ones and are dropped. The longest secrets are the ones that
+/// must be matched first to avoid a partial replacement, so they are the
+/// entries worth retaining; dropping the shortest keeps the redaction-critical
+/// shape intact while still bounding memory and the linear scan.
+fn enforce_registry_cap(registry: &mut Vec<String>) {
+    if registry.len() > MAX_SECRET_REGISTRY_ENTRIES {
+        registry.truncate(MAX_SECRET_REGISTRY_ENTRIES);
+    }
+}
+
+/// Acquire a write guard on the registry, recovering from poison.
+///
+/// A panic while a writer held the lock poisons it; recovering the inner value
+/// keeps the registry usable instead of turning every later write into a silent
+/// no-op (FUNC-008).
+fn registry_write() -> std::sync::RwLockWriteGuard<'static, Vec<String>> {
+    SECRET_REGISTRY
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Acquire a read guard on the registry, recovering from poison.
+///
+/// Recovers the inner value on poison so exact-match redaction still consults
+/// the registered secrets - failing closed instead of leaking them (FUNC-006).
+fn registry_read() -> std::sync::RwLockReadGuard<'static, Vec<String>> {
+    SECRET_REGISTRY
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Insert `secret` (if new) and re-sort longest-first.
+fn register_secret_inner(registry: &mut Vec<String>, secret: &str) {
+    if registry.iter().any(|s| s == secret) {
+        return;
+    }
+    registry.push(secret.to_string());
+    sort_by_len_desc(registry);
+    enforce_registry_cap(registry);
+}
+
+/// Sort secrets by descending length so a shorter secret that is a substring
+/// of a longer one cannot partially replace it first.
+fn sort_by_len_desc(registry: &mut [String]) {
+    registry.sort_by(|a, b| b.len().cmp(&a.len()));
+}
+
+/// Redacts sensitive data such as API keys, secret keys, and bearer tokens
+/// from the given text, replacing each match with `[REDACTED]`.
+///
+/// Applies two layers of redaction:
+/// 1. **Exact match** - any secret registered via [`register_secret`] or
+///    [`seed_secrets`] is replaced by substring match.
+/// 2. **Regex match** - common patterns (`sk-...`, `Bearer ...`, etc.) are
+///    caught by a static regex.
+///
+/// # Examples
+///
+/// ```rust
+/// use ragent_types::sanitize::redact_secrets;
+///
+/// let input = "Authorization: Bearer abcdefghijklmnopqrstuvwxyz";
+/// let cleaned = redact_secrets(input);
+/// assert_eq!(cleaned, "Authorization: [REDACTED]");
+/// assert!(!cleaned.contains("abcdefghijklmnopqrstuvwxyz"));
+/// ```
+pub fn redact_secrets(msg: &str) -> String {
+    redact_secrets_cow(msg).into_owned()
+}
+
+/// Mask a sensitive API key for display, keeping only the last four
+/// characters (or the whole value when it is shorter than four characters).
+///
+/// This is the single shared key-fingerprint helper: providers and search
+/// backends route their key logging through it so no site hand-rolls its own
+/// partial-key format. An empty key renders as `(none)` so a log line can
+/// distinguish "no key configured" from "key present".
+///
+/// # Examples
+///
+/// ```rust
+/// use ragent_types::sanitize::mask_key;
+///
+/// assert_eq!(mask_key("sk-1234567890abcd"), "...abcd");
+/// assert_eq!(mask_key("abc"), "...abc");
+/// assert_eq!(mask_key(""), "(none)");
+/// ```
+#[must_use]
+pub fn mask_key(key: &str) -> String {
+    if key.is_empty() {
+        return String::from("(none)");
+    }
+    // Find the byte offset of the 4th character from the end (or the start of
+    // the string when it has fewer than four characters), avoiding the
+    // intermediate `Vec<char>` allocation.
+    let start = key.char_indices().rev().nth(3).map_or(0, |(i, _)| i);
+    format!("...{}", &key[start..])
+}
+
+/// Strip userinfo and the query string from a URL for safe logging.
+///
+/// Search-hit and open-access-recovered URLs regularly carry credentials or
+/// presigned tokens in the query string (`?access_token=...`) and in the
+/// userinfo component (`user:pass@host`). A log line keeps the scheme/host/path
+/// so it stays diagnostically useful while the secret-bearing components are
+/// dropped. Non-URL input is returned unchanged.
+///
+/// # Examples
+///
+/// ```rust
+/// use ragent_types::sanitize::mask_url_credentials;
+///
+/// assert_eq!(
+///     mask_url_credentials("https://user:pw@example.com/a?access_token=x"),
+///     "https://example.com/a"
+/// );
+/// assert_eq!(mask_url_credentials("not a url"), "not a url");
+/// ```
+#[must_use]
+pub fn mask_url_credentials(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let (authority, tail) = match rest.find(['/', '?', '#']) {
+        Some(pos) => (&rest[..pos], &rest[pos..]),
+        None => (rest, ""),
+    };
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    let path = match tail.find(['?', '#']) {
+        Some(pos) => &tail[..pos],
+        None => tail,
+    };
+    format!("{scheme}://{host}{path}")
+}
+
+/// Recursively redact credential-shaped strings inside a JSON value.
+///
+/// Walks every object and array and applies [`redact_secrets`] to each string
+/// value. This masks a credential that sits under a key whose *name* does not
+/// look secret - for example an MCP server's `env` variable value or a
+/// `headers` `Authorization` / `PRIVATE-TOKEN` entry - which a key-name-only
+/// redactor would miss.
+///
+/// `max_depth` bounds the walk so a deeply nested (potentially
+/// attacker-controlled) value cannot make redaction expensive; nodes below the
+/// limit are left untouched.
+///
+/// # Examples
+///
+/// ```rust
+/// use ragent_types::sanitize::redact_json_value;
+///
+/// let mut value = serde_json::json!({ "headers": { "Authorization": "Bearer abcdefghijklmnopqrstuvwxyz" } });
+/// redact_json_value(&mut value, 8);
+/// assert_eq!(value["headers"]["Authorization"], "[REDACTED]");
+/// ```
+pub fn redact_json_value(value: &mut serde_json::Value, max_depth: usize) {
+    redact_json_value_inner(value, 0, max_depth);
+}
+
+fn redact_json_value_inner(value: &mut serde_json::Value, depth: usize, max_depth: usize) {
+    if depth > max_depth {
+        return;
+    }
+    match value {
+        serde_json::Value::String(s) => {
+            // `redact_secrets_cow` borrows when nothing matches, so the common
+            // clean-string path allocates nothing (audit T-111).
+            if let Cow::Owned(redacted) = redact_secrets_cow(s) {
+                *s = redacted;
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items.iter_mut() {
+                redact_json_value_inner(item, depth + 1, max_depth);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for entry in map.values_mut() {
+                redact_json_value_inner(entry, depth + 1, max_depth);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Mask a credential for display, keeping the first and last `keep`
+/// characters and star-filling the middle.
+///
+/// A value whose length is at most `threshold` characters is fully masked; an
+/// empty value renders as an empty string. This is the single shared
+/// edge-preserving masking helper - the masterfetch API-key/email masks and the
+/// TUI secret mask all delegate here with their own `keep`/`threshold`.
+///
+/// # Examples
+///
+/// ```rust
+/// use ragent_types::sanitize::mask_edges;
+///
+/// // keep 2, threshold 6 (API-key/email shape)
+/// assert_eq!(mask_edges("ab", 2, 6), "**");
+/// assert_eq!(mask_edges("user@example.com", 2, 6), "us************om");
+/// // keep 4, threshold 12 (TUI secret shape)
+/// assert_eq!(mask_edges("abc", 4, 12), "***");
+/// assert_eq!(mask_edges("", 4, 12), "");
+/// ```
+#[must_use]
+pub fn mask_edges(text: &str, keep: usize, threshold: usize) -> String {
+    let len = text.chars().count();
+    if len == 0 {
+        return String::new();
+    }
+    if len <= threshold {
+        return "*".repeat(len);
+    }
+    let first: String = text.chars().take(keep).collect();
+    let last: String = text.chars().skip(len.saturating_sub(keep)).collect();
+    let middle = len.saturating_sub(2 * keep);
+    format!("{first}{}{last}", "*".repeat(middle))
+}
+
+/// Cow-returning variant of [`redact_secrets`] (PERF-055).
+///
+/// Returns [`Cow::Borrowed`] without allocating when the message contains no
+/// registered secret and does not match the secret regex - the common case for
+/// streaming events. Callers on hot paths (e.g. SSE serialisation) should use
+/// this and keep the borrowed slice rather than materialising a `String`.
+///
+/// # Examples
+///
+/// ```rust
+/// use std::borrow::Cow;
+/// use ragent_types::sanitize::redact_secrets_cow;
+///
+/// let clean = redact_secrets_cow("nothing sensitive here");
+/// assert!(matches!(clean, Cow::Borrowed(_)));
+/// ```
+pub fn redact_secrets_cow(msg: &str) -> Cow<'_, str> {
+    // Fail closed: a poisoned lock still holds intact data, so recover the
+    // guard rather than treating the registry as empty (which would skip the
+    // exact-match layer and leak registered secrets) (FUNC-006).
+    let registry_empty = registry_read().is_empty();
+
+    if registry_empty && !SECRET_PATTERN.is_match(msg) {
+        return Cow::Borrowed(msg);
+    }
+
+    Cow::Owned(redact_secrets_owned(msg, registry_empty))
+}
+
+/// Apply both redaction layers, allocating the result.
+fn redact_secrets_owned(msg: &str, registry_empty: bool) -> String {
+    let mut result: Cow<'_, str> = Cow::Borrowed(msg);
+
+    // Layer 1: exact-match registered secrets, already longest-first.
+    if !registry_empty {
+        let registry = registry_read();
+        for secret in registry.iter() {
+            if result.contains(secret.as_str()) {
+                let replaced = match result {
+                    Cow::Borrowed(text) => text.replace(secret.as_str(), REDACTION_PLACEHOLDER),
+                    Cow::Owned(text) => text.replace(secret.as_str(), REDACTION_PLACEHOLDER),
+                };
+                result = Cow::Owned(replaced);
+            }
+        }
+    }
+
+    // Layer 2: regex pattern matching for common secret formats. The generic
+    // token/apikey/secret/password arm captures the key + separator as group 1
+    // and re-inserts it (`${1}`) so JSON/config structure survives redaction;
+    // for every other arm group 1 is empty.
+    let pass1 = SECRET_PATTERN.replace_all(&result, "${1}[REDACTED]");
+
+    // Layer 3: connection-string passwords (`scheme://user:password@host`),
+    // which no `SECRET_PATTERN` arm covers because the variable name carries no
+    // credential word. Group 1 re-emits the scheme and user, group 2 re-emits
+    // the `@`, so only the password is blanked and the URL stays readable.
+    CONNSTRING_PATTERN
+        .replace_all(&pass1, "${1}[REDACTED]${2}")
+        .into_owned()
+}
+
+#[cfg(test)]
+#[path = "../tests/inline/sanitize_sectasks_t046_secret_pattern_tests.rs"]
+mod sectasks_t046_secret_pattern_tests;

@@ -1,0 +1,1664 @@
+//! # ragent-codeindex
+//!
+//! Codebase indexing and structured search for the ragent AI assistant.
+//!
+//! This crate provides:
+//! - **File scanning** - gitignore-aware directory walking with content hashing
+//! - **Symbol extraction** - tree-sitter-based parsing of source code into structured symbols
+//! - **Index storage** - SQLite-backed persistent store for files, symbols, and references
+//! - **Full-text search** - tantivy-backed full-text search over symbols and documentation
+//! - **Background indexing** - file watcher with debounced, batched re-indexing
+//!
+//! ## Quick Start
+//!
+//! ```no_run
+//! use ragent_codeindex::CodeIndex;
+//! use ragent_codeindex::types::{CodeIndexConfig, SearchQuery};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let config = CodeIndexConfig::default();
+//! let idx = CodeIndex::open(&config)?;
+//! let result = idx.full_reindex()?;
+//! println!("{result}");
+//!
+//! let hits = idx.search(&SearchQuery::new("parse_config"))?;
+//! for hit in &hits {
+//!     println!("{hit}");
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Modules
+//!
+//! - [`types`] - Core data types: `SymbolKind`, `FileEntry`, `Symbol`, etc.
+//! - [`scanner`] - File discovery, hashing, and language detection
+//! - [`store`] - `SQLite` index storage with incremental update support
+//! - [`parser`] - Tree-sitter parsing and symbol extraction
+//! - [`search`] - Full-text search index backed by tantivy
+//! - [`watcher`] - Filesystem event watcher
+//! - [`worker`] - Background indexing worker with debounce and batching
+
+#![deny(unsafe_code)]
+
+/// Core data types shared across the indexing pipeline.
+pub mod types;
+
+/// File scanning, content hashing, and language detection.
+pub mod scanner;
+
+/// SQLite-backed index storage for files and symbols.
+pub mod store;
+
+/// Tree-sitter-based source code parsing and symbol extraction.
+pub mod parser;
+
+/// Full-text search index backed by tantivy.
+pub mod search;
+
+/// Filesystem event watcher for real-time index updates.
+pub mod watcher;
+
+/// Background indexing worker with debounce, dedup, and batching.
+pub mod worker;
+
+/// LRU tree cache for incremental tree-sitter parsing.
+pub mod tree_cache;
+
+/// Semantic code graph: typed edges, community detection, and traversal.
+pub mod graph;
+
+use anyhow::{Context, Result};
+use parser::ParserRegistry;
+use search::{FtsIndex, FtsSymbol, SearchResult};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use store::IndexStore;
+use tracing::{debug, trace, warn};
+use tree_cache::TreeCache;
+use types::{
+    CodeIndexConfig, DEFAULT_SEARCH_LIMIT, DepDirection, FileEntry, GraphStatus, IndexResult,
+    IndexStats, ScannedFile, SearchQuery, Symbol, SymbolFilter, SymbolRef,
+};
+
+/// Over-fetch factor applied to the FTS query limit before post-FTS filtering.
+///
+/// Kind/language/file-pattern filters run after FTS, so fetch more candidates
+/// than the requested limit and then truncate (ANTIPAT M5.3 / audit 3.3).
+const FTS_OVERFETCH_FACTOR: usize = 2;
+
+/// The main entry point for the code index system.
+///
+/// Owns the `SQLite` store, tantivy FTS index, tree cache, and parser registry.
+/// Thread-safe via internal `Mutex` guards.
+pub struct CodeIndex {
+    store: Mutex<IndexStore>,
+    fts: Mutex<FtsIndex>,
+    tree_cache: Mutex<TreeCache>,
+    parsers: ParserRegistry,
+    project_root: PathBuf,
+    config: CodeIndexConfig,
+    /// Shared cancellation flag for reindex loops running on detached
+    /// threads. Set via [`CodeIndex::request_stop`] at shutdown so an
+    /// abandoned initial-reindex thread stops burning CPU after the TUI
+    /// exits instead of running until the index completes.
+    reindex_stopping: Arc<AtomicBool>,
+    /// Total files to process in the current reindex (0 when idle).
+    reindex_total: AtomicU32,
+    /// Files processed so far in the current reindex.
+    reindex_done: AtomicU32,
+    /// True while the semantic edge graph is being derived/persisted (either
+    /// by an explicit `build_graph` call or by the graph phase of
+    /// `full_reindex`). Lock-free, pollable while every mutex is held so the
+    /// UI can show a "graph building" indicator without blocking.
+    graph_busy: AtomicBool,
+    /// Files (or language-filtered files) remaining in the current graph
+    /// build (0 when idle).
+    graph_total: AtomicU32,
+    /// Files processed so far in the current graph build.
+    graph_done: AtomicU32,
+    /// M-029: cached total on-disk size of `index_dir`. Recomputing this on
+    /// every `status()` poll rescanned the whole tree; the cache is refreshed
+    /// only on a full reindex (where the size meaningfully changes).
+    cached_index_size: std::sync::Mutex<Option<u64>>,
+    /// PERF-CODEX-STATUS: `(edge_count, node_count)` from the last successful
+    /// graph node count. `graph_node_count` de-duplicates the union of both
+    /// endpoint columns of `graph_edges`, so on a large repository it is a
+    /// multi-second scan; `try_status` runs on the TUI render path and must not
+    /// pay it on every poll. The edge count is the invalidation key - edge
+    /// totals only change when the graph is rebuilt, so an unchanged edge count
+    /// means an unchanged node set.
+    cached_graph_nodes: std::sync::Mutex<Option<(u64, u64)>>,
+}
+
+impl CodeIndex {
+    /// Open (or create) a code index for the given configuration.
+    pub fn open(config: &CodeIndexConfig) -> Result<Self> {
+        let db_path = config.index_dir.join("index.db");
+        let fts_path = config.index_dir.join("fts");
+
+        // SEC-016/SEC-048: `index_dir` lives in `.ragent/codeindex` inside the
+        // untrusted project tree. A committed symlink there redirects both the
+        // SQLite db and the tantivy FTS dir (whose recovery branch deletes every
+        // entry) outside the sandbox. Refuse a symlinked dir or any `index_dir`
+        // whose existing prefix resolves outside the project root.
+        ragent_types::guard::reject_symlink_components(&config.index_dir, "index_dir")
+            .map_err(anyhow::Error::msg)?;
+        ragent_types::guard::reject_symlink_escape(
+            &config.index_dir,
+            &config.project_root,
+            "index_dir",
+        )
+        .map_err(anyhow::Error::msg)?;
+
+        let store = IndexStore::open(&db_path)
+            .with_context(|| format!("cannot open index store: {}", db_path.display()))?;
+        let fts = FtsIndex::open(&fts_path)
+            .with_context(|| format!("cannot open FTS index: {}", fts_path.display()))?;
+        let parsers = ParserRegistry::new();
+
+        Ok(Self {
+            store: Mutex::new(store),
+            fts: Mutex::new(fts),
+            tree_cache: Mutex::new(TreeCache::with_default_capacity()),
+            parsers,
+            project_root: config.project_root.clone(),
+            config: config.clone(),
+            reindex_stopping: Arc::new(AtomicBool::new(false)),
+            reindex_total: AtomicU32::new(0),
+            reindex_done: AtomicU32::new(0),
+            graph_busy: AtomicBool::new(false),
+            graph_total: AtomicU32::new(0),
+            graph_done: AtomicU32::new(0),
+            cached_index_size: std::sync::Mutex::new(None),
+            cached_graph_nodes: std::sync::Mutex::new(None),
+        })
+    }
+
+    /// Open an in-memory code index (for testing).
+    pub fn open_in_memory(config: &CodeIndexConfig) -> Result<Self> {
+        let store = IndexStore::open_in_memory()?;
+        let fts = FtsIndex::open_in_memory()?;
+        let parsers = ParserRegistry::new();
+
+        Ok(Self {
+            store: Mutex::new(store),
+            fts: Mutex::new(fts),
+            tree_cache: Mutex::new(TreeCache::with_default_capacity()),
+            parsers,
+            project_root: config.project_root.clone(),
+            config: config.clone(),
+            reindex_stopping: Arc::new(AtomicBool::new(false)),
+            reindex_total: AtomicU32::new(0),
+            reindex_done: AtomicU32::new(0),
+            graph_busy: AtomicBool::new(false),
+            graph_total: AtomicU32::new(0),
+            graph_done: AtomicU32::new(0),
+            cached_index_size: std::sync::Mutex::new(None),
+            cached_graph_nodes: std::sync::Mutex::new(None),
+        })
+    }
+
+    /// Access the FTS index directly (for testing only).
+    ///
+    /// Test-only accessor: it recovers a poisoned lock (unlike the fallible
+    /// [`Self::fts_guard`]) so a test that deliberately poisons the mutex can
+    /// still observe the underlying state. Production callers must use
+    /// [`Self::fts_guard`].
+    #[doc(hidden)]
+    pub fn fts_for_test(&self) -> std::sync::MutexGuard<'_, FtsIndex> {
+        self.fts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Try to acquire the store mutex (for testing concurrency behaviour).
+    #[doc(hidden)]
+    pub fn try_lock_store_for_test(&self) -> Option<std::sync::MutexGuard<'_, IndexStore>> {
+        self.store.try_lock().ok()
+    }
+
+    /// Set the graph-busy flag directly (for testing busy-state reporting).
+    #[doc(hidden)]
+    pub fn set_graph_busy_for_test(&self, busy: bool) {
+        self.graph_busy.store(busy, Ordering::Relaxed);
+    }
+
+    /// Set the graph-build progress counters directly (for testing).
+    #[doc(hidden)]
+    pub fn set_graph_progress_for_test(&self, done: u32, total: u32) {
+        self.graph_done.store(done, Ordering::Relaxed);
+        self.graph_total.store(total, Ordering::Relaxed);
+    }
+
+    /// Lock the store, recovering a poisoned guard so a panicking thread
+    /// during indexing cannot cascade panics into every subsequent user call.
+    ///
+    /// Poisoned-lock policy (ANTIPAT M5.3 / audit 3.1): the index guards
+    /// **recover** a poisoned lock rather than failing closed. The index is
+    /// append-oriented - a panic mid-write can leave a partially updated row,
+    /// but the store is a SQLite database whose own transactions keep it
+    /// consistent, and the FTS index is re-derivable from SQLite via
+    /// [`Self::ensure_fts_sync`]. Failing every subsequent read with a poison
+    /// error would be worse than continuing on the last consistent state, so
+    /// recovery is the deliberate choice for all three guards.
+    fn store_guard(&self) -> std::sync::MutexGuard<'_, IndexStore> {
+        self.store
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Lock the FTS index, recovering a poisoned guard.
+    ///
+    /// Uses the same recovery policy as [`Self::store_guard`] (see that method
+    /// for the rationale); the FTS index is rebuildable from SQLite, so a stale
+    /// in-memory state from a poisoned write is recoverable rather than fatal.
+    fn fts_guard(&self) -> std::sync::MutexGuard<'_, FtsIndex> {
+        self.fts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Lock the tree cache, recovering a poisoned guard.
+    ///
+    /// The tree cache is a pure in-memory parse cache: every entry is
+    /// reconstructible from disk, so a poisoned guard has no persistent effect
+    /// and recovery is strictly safer than propagating the poison (ANTIPAT
+    /// M5.3 / audit 3.1).
+    fn tree_cache_guard(&self) -> std::sync::MutexGuard<'_, TreeCache> {
+        self.tree_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    // -- Query Methods ---------------------------------------------------
+
+    /// Search the index using full-text search combined with structured filters.
+    pub fn search(&self, query: &SearchQuery) -> Result<Vec<SearchResult>> {
+        let limit = if query.max_results == 0 {
+            DEFAULT_SEARCH_LIMIT
+        } else {
+            query.max_results
+        };
+
+        // Lock order: FTS first, then (only when needed for the language
+        // filter) the SQLite store. Holding both locks in the opposite order
+        // (store then FTS) is what writers do, so acquiring FTS first and
+        // dropping it before locking store prevents deadlocks between readers
+        // and the background indexing worker.
+        let mut results = {
+            let fts = self.fts_guard();
+            trace!(
+                query = %query.query,
+                kind = ?query.kind,
+                language = ?query.language,
+                file_pattern = ?query.file_pattern,
+                limit = limit,
+                "CodeIndex search"
+            );
+            let results = fts.search(&query.query, limit * FTS_OVERFETCH_FACTOR)?;
+            debug!(
+                raw_results = results.len(),
+                "CodeIndex FTS results before filtering"
+            );
+            results
+        };
+
+        // Apply post-FTS filters.
+        if let Some(ref kind) = query.kind {
+            let kind_str = kind.to_string();
+            results.retain(|r| r.kind == kind_str);
+        }
+        if let Some(ref lang) = query.language {
+            let store = self.store_guard();
+            results.retain(|r| {
+                store
+                    .get_file(&r.file_path)
+                    .ok()
+                    .flatten()
+                    .and_then(|f| f.language)
+                    .as_deref()
+                    == Some(lang.as_str())
+            });
+        }
+        if let Some(ref pattern) = query.file_pattern {
+            results.retain(|r| r.file_path.contains(pattern.as_str()));
+        }
+
+        results.truncate(limit);
+        Ok(results)
+    }
+
+    /// Non-blocking variant of [`Self::search()`].
+    ///
+    /// Returns `None` if either the FTS or the `SQLite` store lock is currently
+    /// held by a background re-index. Callers should retry briefly or fall
+    /// back to a simpler search tool rather than blocking the agent loop.
+    pub fn try_search(&self, query: &SearchQuery) -> Result<Option<Vec<SearchResult>>> {
+        let limit = if query.max_results == 0 {
+            DEFAULT_SEARCH_LIMIT
+        } else {
+            query.max_results
+        };
+
+        let fts = match self.fts.try_lock() {
+            Ok(g) => g,
+            Err(_) => return Ok(None),
+        };
+        let mut results = fts.search(&query.query, limit * FTS_OVERFETCH_FACTOR)?;
+        drop(fts);
+
+        if let Some(ref kind) = query.kind {
+            let kind_str = kind.to_string();
+            results.retain(|r| r.kind == kind_str);
+        }
+        if let Some(ref lang) = query.language {
+            let store = match self.store.try_lock() {
+                Ok(g) => g,
+                Err(_) => return Ok(None),
+            };
+            // Resolve the language for each candidate path up front (paths are
+            // unique keys) so the retain itself does not issue SQL per result.
+            let langs: std::collections::HashMap<String, Option<String>> = results
+                .iter()
+                .map(|r| {
+                    let lang = store
+                        .get_file(&r.file_path)
+                        .ok()
+                        .flatten()
+                        .and_then(|f| f.language);
+                    (r.file_path.clone(), lang)
+                })
+                .collect();
+            results.retain(|r| {
+                langs.get(&r.file_path).and_then(|l| l.as_deref()) == Some(lang.as_str())
+            });
+        }
+        if let Some(ref pattern) = query.file_pattern {
+            results.retain(|r| r.file_path.contains(pattern.as_str()));
+        }
+
+        results.truncate(limit);
+        Ok(Some(results))
+    }
+
+    /// Query symbols from the structured `SQLite` index.
+    pub fn symbols(&self, filter: &SymbolFilter) -> Result<Vec<Symbol>> {
+        let store = self.store_guard();
+        store.query_symbols(filter)
+    }
+
+    /// Non-blocking variant of [`Self::symbols()`].
+    ///
+    /// Returns `None` if the `SQLite` store lock is currently held (e.g. by a
+    /// background reindex). Callers should retry briefly or fall back to
+    /// `Grep` rather than blocking the agent loop.
+    pub fn try_symbols(&self, filter: &SymbolFilter) -> Result<Option<Vec<Symbol>>> {
+        let store = match self.store.try_lock() {
+            Ok(g) => g,
+            Err(_) => return Ok(None),
+        };
+        Ok(Some(store.query_symbols(filter)?))
+    }
+
+    /// Find references to a symbol by name.
+    ///
+    /// PERF-074: `limit` is pushed into the SQL `LIMIT` so the store does not
+    /// materialise (and then discard) every reference row.
+    pub fn references(&self, symbol_name: &str, limit: usize) -> Result<Vec<SymbolRef>> {
+        let store = self.store_guard();
+        store.find_references_limited(symbol_name, limit)
+    }
+
+    /// Non-blocking variant of [`Self::references()`].
+    ///
+    /// Returns `None` if the `SQLite` store lock is currently held.
+    pub fn try_references(
+        &self,
+        symbol_name: &str,
+        limit: usize,
+    ) -> Result<Option<Vec<SymbolRef>>> {
+        let store = match self.store.try_lock() {
+            Ok(g) => g,
+            Err(_) => return Ok(None),
+        };
+        Ok(Some(store.find_references_limited(symbol_name, limit)?))
+    }
+
+    /// Get file dependencies in the given direction.
+    pub fn dependencies(&self, path: &str, direction: DepDirection) -> Result<Vec<String>> {
+        let store = self.store_guard();
+        dependencies_impl(&store, path, direction)
+    }
+
+    /// Non-blocking variant of [`Self::dependencies()`].
+    ///
+    /// Returns `None` if the `SQLite` store lock is currently held.
+    pub fn try_dependencies(
+        &self,
+        path: &str,
+        direction: DepDirection,
+    ) -> Result<Option<Vec<String>>> {
+        let store = match self.store.try_lock() {
+            Ok(g) => g,
+            Err(_) => return Ok(None),
+        };
+        Ok(Some(dependencies_impl(&store, path, direction)?))
+    }
+
+    /// Get index status and statistics.
+    pub fn status(&self) -> Result<IndexStats> {
+        // Lock-order note: the store guard is dropped (via the scoped block)
+        // before the FTS guard is taken. `rebuild_fts` takes them in the
+        // opposite order, so holding both here would risk an ABBA deadlock.
+        let mut stats = {
+            let store = self.store_guard();
+            store.get_stats()?
+        };
+
+        // FTS doc count from tantivy.
+        let fts = self.fts_guard();
+        stats.fts_doc_count = fts.doc_count().unwrap_or(0);
+        drop(fts);
+
+        // Graph dataset counts (edge/node/community totals for the semantic
+        // edge graph; zero when the graph has not been built yet).  The FTS
+        // guard is already dropped above, so taking the store guard here does
+        // not violate the documented lock order.
+        {
+            let store = self.store_guard();
+            stats.graph_total_edges = store.edge_count()?;
+            stats.graph_nodes = store.graph_node_count()?;
+            stats.graph_communities = store.community_count()?;
+        }
+
+        // Calculate on-disk index size if using a real directory. M-029:
+        // served from a cache (refreshed only on full reindex) so a status
+        // poll does not rescan the whole tree every time.
+        if self.config.index_dir.exists() {
+            stats.index_size_bytes = self.index_size_cached();
+        }
+
+        Ok(stats)
+    }
+
+    /// Non-blocking variant of [`Self::status()`].
+    ///
+    /// Returns `None` if the store or FTS lock is currently held (e.g. by
+    /// a background reindex).  This is intended for UI status-bar polling
+    /// so it never stalls the render loop.
+    pub fn try_status(&self) -> Option<IndexStats> {
+        let store = match self.store.try_lock() {
+            Ok(s) => s,
+            Err(_) => return None,
+        };
+        let mut stats = store.get_stats().ok()?;
+        drop(store);
+
+        if let Ok(fts) = self.fts.try_lock() {
+            stats.fts_doc_count = fts.doc_count().unwrap_or(0);
+        }
+
+        // Graph dataset counts. `edge_count` and `community_count` are plain
+        // COUNT(*)s over the indexed edge tables, but `graph_node_count` has to
+        // de-duplicate the union of both endpoint columns - on a large
+        // repository that is a multi-second scan, and this method runs on the
+        // TUI render path. So the node count is served from the last value this
+        // process computed instead of being recomputed on every status poll
+        // (PERF-CODEX-STATUS); an unchanged edge count means an unchanged node
+        // set, so the cached value is refreshed exactly when the graph moves.
+        if let Ok(store) = self.store.try_lock() {
+            if let (Ok(e), Ok(c)) = (store.edge_count(), store.community_count()) {
+                stats.graph_total_edges = e;
+                stats.graph_communities = c;
+                match self.cached_graph_nodes.lock() {
+                    Ok(mut cached) => {
+                        if let Some((edges, nodes)) = *cached
+                            && edges == e
+                        {
+                            stats.graph_nodes = nodes;
+                        } else if let Ok(n) = store.graph_node_count() {
+                            stats.graph_nodes = n;
+                            *cached = Some((e, n));
+                        }
+                    }
+                    // A poisoned cache only costs a recomputation.
+                    Err(_) => {
+                        if let Ok(n) = store.graph_node_count() {
+                            stats.graph_nodes = n;
+                        }
+                    }
+                }
+            }
+        }
+
+        if self.config.index_dir.exists() {
+            // ANTIPAT M6.4 (audit 4.5): accepted trade-off. `index_size_cached`
+            // runs the recursive `dir_size` walk while holding the
+            // `cached_index_size` mutex (see its own doc comment). The walk is
+            // bounded to `index_dir` and gated to one run per invalidation, and
+            // restructuring the walk out of the guard would add a lock-ordering
+            // hazard for no measurable gain, so it is left as-is deliberately.
+            stats.index_size_bytes = self.index_size_cached();
+        }
+
+        Some(stats)
+    }
+
+    /// M-029: return the cached on-disk size of `index_dir`, computing it on
+    /// the first call and whenever a mutation invalidates the cache.
+    ///
+    /// The (potentially expensive) `dir_size` walk runs while holding the
+    /// cache lock: the cache is a `Mutex<Option<u64>>` and the walk is
+    /// bounded by the index directory, so this is acceptable and keeps the
+    /// single-read/single-write shape simple. Callers on hot paths use
+    /// [`try_status`], which only pays it once per invalidation.
+    fn index_size_cached(&self) -> u64 {
+        let mut guard = self
+            .cached_index_size
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(size) = *guard {
+            return size;
+        }
+        let size = dir_size(&self.config.index_dir);
+        *guard = Some(size);
+        size
+    }
+
+    /// Invalidate the cached index-size (called after a full reindex or any
+    /// mutation of the FTS directory so the next status poll recomputes it).
+    fn invalidate_index_size_cache(&self) {
+        let mut guard = self
+            .cached_index_size
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = None;
+    }
+
+    /// List the top-N highest-degree (most-connected) symbols in the graph
+    /// (FR-014).
+    ///
+    /// Computes the degree of each symbol from the `graph_edges` table and
+    /// returns the top `n` sorted by degree (descending).  Blocks until the
+    /// store lock is acquired.
+    pub fn godnodes(&self, n: usize) -> Result<Vec<graph::GodNode>> {
+        let store = self.store_guard();
+        let graph = graph::SymbolGraph::new(&store);
+        graph.godnodes(n)
+    }
+
+    /// Non-blocking variant of [`Self::godnodes()`] (FR-017).
+    ///
+    /// Returns `None` if the `SQLite` store lock is currently held (e.g. by
+    /// a background reindex).  Callers should retry briefly or return a
+    /// `codeindex_busy` response rather than stalling the agent loop.
+    pub fn try_godnodes(&self, n: usize) -> Result<Option<Vec<graph::GodNode>>> {
+        let store = match self.store.try_lock() {
+            Ok(g) => g,
+            Err(_) => return Ok(None),
+        };
+        let graph = graph::SymbolGraph::new(&store);
+        Ok(Some(graph.godnodes(n)?))
+    }
+
+    /// Compute the shortest path (by hop count) between two symbols in the
+    /// semantic code graph (FR-012).
+    ///
+    /// Returns `Ok(None)` if either symbol is not found or no path exists.
+    /// Blocks until the store lock is acquired.
+    pub fn path(&self, from: &str, to: &str) -> Result<Option<graph::PathResult>> {
+        let store = self.store_guard();
+        let graph = graph::SymbolGraph::new(&store);
+        graph.path(from, to)
+    }
+
+    /// Non-blocking variant of [`Self::path()`] (FR-017).
+    ///
+    /// Returns `Ok(None)` if the `SQLite` store lock is currently held (e.g. by
+    /// a background reindex).  Returns `Ok(Some(None))` if the lock was
+    /// acquired but no path exists between the two symbols.  Returns
+    /// `Ok(Some(Some(result)))` when a path is found.  Callers should retry
+    /// briefly on `Ok(None)` or return a `codeindex_busy` response rather than
+    /// stalling the agent loop.
+    pub fn try_path(&self, from: &str, to: &str) -> Result<Option<Option<graph::PathResult>>> {
+        let store = match self.store.try_lock() {
+            Ok(g) => g,
+            Err(_) => return Ok(None),
+        };
+        let graph = graph::SymbolGraph::new(&store);
+        Ok(Some(graph.path(from, to)?))
+    }
+
+    /// Explain a symbol: show its node metadata and connections (FR-011).
+    ///
+    /// Returns `Ok(None)` if the symbol is not found.  Blocks until the store
+    /// lock is acquired.
+    pub fn explain(&self, name: &str) -> Result<Option<graph::ExplainResult>> {
+        let store = self.store_guard();
+        let graph = graph::SymbolGraph::new(&store);
+        graph.explain(name)
+    }
+
+    /// Non-blocking variant of [`Self::explain()`] (FR-017).
+    ///
+    /// Returns `Ok(None)` if the `SQLite` store lock is currently held (e.g. by
+    /// a background reindex).  Returns `Ok(Some(None))` if the lock was acquired
+    /// but the symbol was not found.  Returns `Ok(Some(Some(result)))` when
+    /// the symbol is found.
+    pub fn try_explain(&self, name: &str) -> Result<Option<Option<graph::ExplainResult>>> {
+        let store = match self.store.try_lock() {
+            Ok(g) => g,
+            Err(_) => return Ok(None),
+        };
+        let graph = graph::SymbolGraph::new(&store);
+        Ok(Some(graph.explain(name)?))
+    }
+
+    /// Run community detection over the symbol graph (FR-013).
+    ///
+    /// Runs label propagation over the `graph_edges` table, persists the
+    /// community assignments to the `communities` table, and returns a
+    /// summary of detected communities with auto-generated labels and member
+    /// counts.  Blocks until the store lock is acquired.
+    pub fn communities(&self) -> Result<Vec<graph::CommunityInfo>> {
+        let store = self.store_guard();
+        let graph = graph::SymbolGraph::new(&store);
+        graph.communities()
+    }
+
+    /// Non-blocking variant of [`Self::communities()`] (FR-017).
+    ///
+    /// Returns `Ok(None)` if the `SQLite` store lock is currently held (e.g. by
+    /// a background reindex).  Returns `Ok(Some(vec))` when the lock was
+    /// acquired and community detection completed (the vec may be empty if
+    /// the graph has no edges).
+    pub fn try_communities(&self) -> Result<Option<Vec<graph::CommunityInfo>>> {
+        let store = match self.store.try_lock() {
+            Ok(g) => g,
+            Err(_) => return Ok(None),
+        };
+        let graph = graph::SymbolGraph::new(&store);
+        Ok(Some(graph.communities()?))
+    }
+
+    /// Build (or rebuild) the semantic edge graph from the currently indexed
+    /// symbols (FR-009).
+    ///
+    /// Derives typed edges from the indexed symbols, imports, and references,
+    /// then persists them in the `graph_edges` table.  Returns a
+    /// [`graph::BuildResult`] with edge counts distinguishing `EXTRACTED` from
+    /// `INFERRED`.  Blocks until the store lock is acquired.
+    ///
+    /// The store lock is held only for two brief windows - a read snapshot of
+    /// the derivation inputs and the final single-transaction persist.  The
+    /// CPU-heavy derivation runs with **no** locks held, so FTS search and
+    /// the other store readers stay available while the graph builds (FR-026).
+    ///
+    /// While the build runs the [`CodeIndex::graph_busy`] flag is set so UIs
+    /// can show a live indicator; the flag is cleared on success and failure
+    /// alike.
+    pub fn build_graph(&self) -> Result<graph::BuildResult> {
+        self.build_graph_inner(None)
+    }
+
+    /// Build (or rebuild) the semantic edge graph restricted to symbols from a
+    /// single language (FR-018).
+    ///
+    /// Like [`Self::build_graph()`] but only derives edges for files whose detected
+    /// language matches `language`.  Useful for per-language subgraph analysis.
+    /// Lock behaviour matches [`Self::build_graph()`]: brief load + brief persist,
+    /// derivation runs lock-free (FR-026).
+    pub fn build_graph_for_language(&self, language: &str) -> Result<graph::BuildResult> {
+        self.build_graph_inner(Some(language))
+    }
+
+    /// Shared graph-build entry: owns the busy-flag prologue/epilogue around
+    /// the phased build so both public variants stay in lock-step.
+    fn build_graph_inner(&self, language: Option<&str>) -> Result<graph::BuildResult> {
+        self.graph_busy.store(true, Ordering::Relaxed);
+        self.graph_done.store(0, Ordering::Relaxed);
+        self.graph_total.store(0, Ordering::Relaxed);
+        let result = self.graph_build_phased(language);
+        self.graph_done.store(0, Ordering::Relaxed);
+        self.graph_total.store(0, Ordering::Relaxed);
+        self.graph_busy.store(false, Ordering::Relaxed);
+        result
+    }
+
+    /// Shared phased graph-build body used by [`Self::build_graph`],
+    /// [`Self::build_graph_for_language`], and the graph phase of
+    /// [`Self::full_reindex`].
+    ///
+    /// Lock discipline (FR-026): the store mutex is taken twice, briefly -
+    /// once to snapshot the derivation inputs (read-only) and once to persist
+    /// the derived edges in a single transaction.  The CPU-heavy derivation
+    /// runs with no locks held, so FTS search and the other store readers
+    /// stay available for the whole build.  Does not touch `graph_busy`; the
+    /// caller owns that flag.
+    fn graph_build_phased(&self, language: Option<&str>) -> Result<graph::BuildResult> {
+        // Phase 1: brief store lock - snapshot the derivation inputs.
+        let inputs = {
+            let store = self.store_guard();
+            graph::edges::load_graph_inputs(&store)?
+        };
+        self.graph_total
+            .store(inputs.files.len() as u32, Ordering::Relaxed);
+        // Phase 2: derive with NO lock held (store + FTS stay available).
+        let edges = match language {
+            Some(lang) => graph::edges::derive_edges_from_inputs_for_language(
+                &inputs,
+                lang,
+                Some(&self.graph_done),
+            ),
+            None => graph::edges::derive_edges_from_inputs(&inputs, Some(&self.graph_done)),
+        };
+        // Phase 3: brief store lock - persist in one transaction.
+        let store = self.store_guard();
+        graph::edges::persist_edges(&store, &edges)
+    }
+
+    /// Spawn the graph build on a dedicated OS thread.
+    ///
+    /// Returns immediately; the heavy derivation runs on a thread named
+    /// `codeindex-graph-build` so interactive callers (e.g. the TUI event
+    /// loop) stay responsive.  Fails if a graph build is already running.
+    pub fn spawn_graph_build(
+        index: std::sync::Arc<Self>,
+    ) -> std::io::Result<std::thread::JoinHandle<()>> {
+        if index.graph_busy() {
+            return Err(std::io::Error::other("graph build already running"));
+        }
+        std::thread::Builder::new()
+            .name("codeindex-graph-build".into())
+            .spawn(move || {
+                if let Err(e) = index.build_graph() {
+                    warn!("spawn_graph_build: graph build failed: {e}");
+                }
+            })
+    }
+
+    /// Returns `true` while the semantic edge graph is being (re)built.
+    ///
+    /// Lock-free (atomic read), safe to poll while every index mutex is held.
+    pub fn graph_busy(&self) -> bool {
+        self.graph_busy.load(Ordering::Relaxed)
+    }
+
+    /// Returns `(done, total)` for the current graph build.
+    ///
+    /// Both are 0 when no graph build is running.  Lock-free (atomic reads).
+    pub fn graph_build_progress(&self) -> (u32, u32) {
+        (
+            self.graph_done.load(Ordering::Relaxed),
+            self.graph_total.load(Ordering::Relaxed),
+        )
+    }
+
+    /// Return the total number of edges in the `graph_edges` table.
+    ///
+    /// Used by the TUI empty-graph guard (FR-015) to check whether the graph
+    /// has been built before running graph query sub-commands.
+    pub fn graph_edge_count(&self) -> Result<u64> {
+        let store = self.store_guard();
+        store.edge_count()
+    }
+
+    /// Shared implementation backing both [`Self::graph_status()`] (blocking, `?`
+    /// propagation) and [`try_graph_status()`] (non-blocking, error-to-None).
+    fn graph_status_from_store(store: &crate::store::IndexStore) -> Result<GraphStatus> {
+        Ok(GraphStatus {
+            total_edges: store.edge_count()?,
+            edges_extracted: store.edge_count_by_confidence_typed(types::Confidence::Extracted)?,
+            edges_inferred: store.edge_count_by_confidence_typed(types::Confidence::Inferred)?,
+            nodes: store.graph_node_count()?,
+            edges_calls: store.edge_count_by_kind("calls")?,
+            edges_imports: store.edge_count_by_kind("imports")?,
+            edges_inherits: store.edge_count_by_kind("inherits")?,
+            edges_references: store.edge_count_by_kind("references")?,
+            edges_mixes_in: store.edge_count_by_kind("mixes_in")?,
+            edges_implements: store.edge_count_by_kind("implements")?,
+            communities: store.community_count()?,
+        })
+    }
+
+    /// Return summary statistics for the semantic edge graph.
+    ///
+    /// Aggregates edge/node/community counts so the TUI `/codeindex status`
+    /// command can report on the graph data set alongside the index stats.
+    /// Blocks until the store lock is acquired.
+    pub fn graph_status(&self) -> Result<GraphStatus> {
+        let store = self.store_guard();
+        Self::graph_status_from_store(&store)
+    }
+
+    /// Non-blocking variant of [`Self::graph_status()`] (FR-017).
+    ///
+    /// Returns `None` if the `SQLite` store lock is currently held (e.g. by a
+    /// background reindex or graph build) so callers can report a busy state
+    /// immediately instead of stalling.
+    pub fn try_graph_status(&self) -> Option<GraphStatus> {
+        let store = self.store.try_lock().ok()?;
+        Self::graph_status_from_store(&store).ok()
+    }
+
+    /// Returns `(done, total)` for the current reindex operation.
+    ///
+    /// Both are 0 when no reindex is running.  Lock-free (atomic reads).
+    pub fn reindex_progress(&self) -> (u32, u32) {
+        (
+            self.reindex_done.load(Ordering::Relaxed),
+            self.reindex_total.load(Ordering::Relaxed),
+        )
+    }
+
+    /// Ensure FTS index is in sync with the `SQLite` store.
+    ///
+    /// Detects when the FTS index is empty or significantly diverged from
+    /// `SQLite` (e.g., after schema recreation, corruption, or accumulated
+    /// duplicates from multiple reindexes) and rebuilds it from `SQLite` data.
+    pub fn ensure_fts_sync(&self) -> Result<()> {
+        let store = self.store_guard();
+        let sqlite_symbols = store.symbol_count()?;
+        drop(store);
+
+        let fts = self.fts_guard();
+        let fts_docs = fts.doc_count().unwrap_or(0);
+        drop(fts);
+
+        if sqlite_symbols == 0 {
+            debug!("FTS sync: SQLite has no symbols, nothing to sync");
+            return Ok(());
+        }
+
+        if fts_docs == 0 {
+            debug!(
+                sqlite_symbols = sqlite_symbols,
+                "FTS empty but SQLite has symbols; rebuilding FTS"
+            );
+            return self.rebuild_fts();
+        }
+
+        // Detect significant divergence (accumulated duplicates or missing docs).
+        let ratio = fts_docs as f64 / sqlite_symbols as f64;
+        if !(0.5..=2.0).contains(&ratio) {
+            debug!(
+                fts_docs = fts_docs,
+                sqlite_symbols = sqlite_symbols,
+                ratio = format!("{ratio:.1}"),
+                "FTS/SQLite divergence detected; rebuilding FTS"
+            );
+            return self.rebuild_fts();
+        }
+
+        debug!(
+            fts_docs = fts_docs,
+            sqlite_symbols = sqlite_symbols,
+            "FTS in sync with SQLite"
+        );
+        Ok(())
+    }
+
+    // -- Mutation Methods ------------------------------------------------
+
+    /// Index a single file: scan, parse, and store.
+    ///
+    /// Uses the tree cache for incremental re-parsing when possible.
+    ///
+    /// Re-parses the file, updates its symbols/imports/refs in the store,
+    /// and updates the semantic edge graph for symbols in this file (FR-008).
+    pub fn index_file(&self, path: &Path) -> Result<()> {
+        let start = Instant::now();
+        let rel_path = path
+            .strip_prefix(&self.project_root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string();
+
+        // Resolve the on-disk path.  `path` may be project-relative or
+        // absolute; join against the project root only when it is relative.
+        let abs_path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.project_root.join(path)
+        };
+
+        // SEC-ragent-codeindex-001 (SECTASKS T-010): the incremental path is
+        // driven by filesystem watcher events, which `notify` produces with
+        // `follow_links(true)`. A symlinked directory inside the repository
+        // therefore surfaces paths whose canonical target is outside the
+        // project, and an absolute event path bypasses `strip_prefix` entirely.
+        // Canonicalise and refuse anything that resolves outside the root.
+        let root_canonical = self
+            .project_root
+            .canonicalize()
+            .unwrap_or_else(|_| self.project_root.clone());
+        match abs_path.canonicalize() {
+            Ok(canonical) => {
+                if !canonical.starts_with(&root_canonical) {
+                    debug!(
+                        "index_file: refusing path outside the project root: {}",
+                        abs_path.display()
+                    );
+                    return Ok(());
+                }
+                if std::fs::symlink_metadata(&abs_path)
+                    .map(|m| m.file_type().is_symlink())
+                    .unwrap_or(false)
+                {
+                    debug!(
+                        "index_file: refusing symlinked path: {}",
+                        abs_path.display()
+                    );
+                    return Ok(());
+                }
+            }
+            Err(e) => {
+                debug!(
+                    "index_file: skipping unreadable path {}: {e}",
+                    abs_path.display()
+                );
+                return Ok(());
+            }
+        }
+
+        // SEC-ragent-codeindex-002 (SECTASKS T-010): the `max_file_size` cap
+        // was enforced only on the full-reindex path (`scanner::process_file`),
+        // so a single watcher event for a large file (a build artefact, a
+        // database dump, `dd if=/dev/zero of=big.bin`) read the whole file into
+        // memory on a background thread. Apply the same policy here.
+        let size = std::fs::metadata(&abs_path).map(|m| m.len()).unwrap_or(0);
+        if size == 0 || size > self.config.scan_config.max_file_size {
+            debug!(
+                "index_file: skipping file of {size} bytes (limit {}): {}",
+                self.config.scan_config.max_file_size,
+                abs_path.display()
+            );
+            return Ok(());
+        }
+
+        // -- Read and hash the file ----------------------------------------
+        let content = std::fs::read(&abs_path)
+            .with_context(|| format!("cannot read file: {}", abs_path.display()))?;
+        // SEC-ragent-codeindex-005 (SECTASKS T-060): re-check the size against
+        // the bytes actually read - the metadata above is advisory, so a file
+        // that grows between the stat and the read would otherwise slip past
+        // the cap.
+        if content.len() as u64 > self.config.scan_config.max_file_size {
+            debug!(
+                "index_file: skipping file that grew past the cap ({} bytes): {}",
+                content.len(),
+                abs_path.display()
+            );
+            return Ok(());
+        }
+        let hash = scanner::hash_content(&content);
+        #[allow(clippy::naive_bytecount)]
+        let line_count = content.iter().filter(|&&b| b == b'\n').count() as u64;
+        let mtime_ns = std::fs::metadata(&abs_path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_nanos() as i64);
+
+        // Determine the language from the file extension.
+        let language = scanner::detect_language(path);
+        if language.is_none() {
+            debug!("index_file: skipping non-code file: {}", path.display());
+            return Ok(());
+        }
+
+        // H-007: skip re-parsing/upserting when the stored content hash
+        // already matches (the file is unchanged since the last index). This
+        // avoids always re-parsing unchanged files on every watcher event.
+        let previous_hash: Option<String> = {
+            let store = self.store_guard();
+            match store.get_file(&rel_path)? {
+                Some(existing) if existing.content_hash == hash => {
+                    return Ok(());
+                }
+                Some(existing) => Some(existing.content_hash),
+                None => None,
+            }
+        };
+
+        // -- Store the file entry ------------------------------------------
+        let file_id = {
+            let store = self.store_guard();
+            let entry = FileEntry {
+                path: rel_path.clone(),
+                content_hash: hash,
+                byte_size: content.len() as u64,
+                language: language.clone(),
+                last_indexed: chrono::Utc::now(),
+                mtime_ns,
+                line_count,
+            };
+            store.upsert_file(&entry)?
+        };
+
+        // -- Collect old symbol IDs before upsert (for edge cleanup) ----
+        let old_symbol_ids: Vec<i64> = {
+            let store = self.store_guard();
+            store
+                .get_file_symbols(file_id)?
+                .iter()
+                .map(|s| s.id)
+                .collect()
+        };
+
+        // -- Parse and store symbols/imports/refs -------------------------
+        if let Some(ref lang) = language
+            && let Some(parser) = self.parsers.get(lang)
+        {
+            match parser.parse(&content) {
+                Ok(parsed) => {
+                    let store = self.store_guard();
+                    store.upsert_symbols(file_id, &parsed.symbols)?;
+                    store.upsert_imports(file_id, &parsed.imports)?;
+                    store.upsert_refs(file_id, &parsed.references)?;
+                    let deps: Vec<(String, String)> = parsed
+                        .imports
+                        .iter()
+                        .map(|imp| (imp.source_module.clone(), imp.kind.clone()))
+                        .collect();
+                    store.set_file_deps(file_id, &deps)?;
+                    drop(store);
+
+                    // Update FTS.
+                    let fts = self.fts_guard();
+                    let fts_syms: Vec<FtsSymbol<'_>> = parsed
+                        .symbols
+                        .iter()
+                        .map(|s| symbol_to_fts(s, &rel_path))
+                        .collect();
+                    fts.batch_update(&[rel_path.as_str()], &fts_syms)?;
+                }
+                Err(e) => {
+                    warn!("index_file: parse error in {}: {e}", path.display());
+                    // H-007 guard: the file entry was already upserted with
+                    // the NEW content hash. If the hash stays, every future
+                    // event for this unchanged content is skipped and the
+                    // stale symbols persist. A transient parse failure (e.g.
+                    // a truncated read while an editor is writing the file)
+                    // must not become permanent staleness, so restore the
+                    // previous hash - the next event for this content will
+                    // re-parse and self-heal.
+                    if let Some(prev) = &previous_hash {
+                        let store = self.store_guard();
+                        let entry = FileEntry {
+                            path: rel_path.clone(),
+                            content_hash: prev.clone(),
+                            byte_size: content.len() as u64,
+                            language: language.clone(),
+                            last_indexed: chrono::Utc::now(),
+                            mtime_ns,
+                            line_count,
+                        };
+                        // FUNC-031: a failure here leaves the new (stale) hash
+                        // in the store permanently, so log it explicitly rather
+                        // than swallowing the error silently.
+                        if let Err(e) = store.upsert_file(&entry) {
+                            warn!(
+                                path = %rel_path,
+                                error = %e,
+                                "index_file: failed to restore previous content hash for self-heal; \
+                                 file may stay stale until the next change"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // -- Update graph edges for this file (FR-008) ------------------
+        // Delete edges involving this file's symbols, then re-derive
+        // edges for those symbols.
+        {
+            let store = self.store_guard();
+
+            let file_symbols = store.get_file_symbols(file_id)?;
+            // Dedup current + stale symbol ids using a HashSet to avoid the
+            // O(n) `contains` scan per element (O(n^2) overall).
+            let mut symbol_ids: Vec<i64> = file_symbols.iter().map(|s| s.id).collect();
+            let mut seen: std::collections::HashSet<i64> = symbol_ids.iter().copied().collect();
+            for old_id in &old_symbol_ids {
+                if seen.insert(*old_id) {
+                    symbol_ids.push(*old_id);
+                }
+            }
+            if !symbol_ids.is_empty() {
+                store.delete_edges_for_symbols(&symbol_ids)?;
+            }
+            if let Err(e) = graph::edges::derive_edges_for_file(&store, file_id) {
+                warn!(
+                    "index_file: graph edge update failed for {}: {e}",
+                    path.display()
+                );
+            }
+        }
+
+        debug!(
+            "index_file: {} in {}ms",
+            path.display(),
+            start.elapsed().as_millis()
+        );
+
+        Ok(())
+    }
+
+    /// Index multiple files in batch. Returns a summary.
+    pub fn index_files(&self, paths: &[&Path]) -> Result<IndexResult> {
+        let start = Instant::now();
+        let mut result = IndexResult::default();
+
+        // Set progress counters so TUI can show indexing indicator.
+        let total = paths.len() as u32;
+        self.reindex_total.store(total, Ordering::Relaxed);
+        self.reindex_done.store(0, Ordering::Relaxed);
+
+        for (i, path) in paths.iter().enumerate() {
+            match self.index_file(path) {
+                Ok(()) => {
+                    result.files_added += 1;
+                    self.reindex_done.store(i as u32 + 1, Ordering::Relaxed);
+                }
+                Err(e) => warn!("failed to index {}: {e}", path.display()),
+            }
+        }
+
+        // Count total symbols after batch.
+        let store = self.store_guard();
+        result.symbols_extracted = store.symbol_count()? as usize;
+        result.elapsed_ms = start.elapsed().as_millis() as u64;
+
+        // Clear progress counters.
+        self.reindex_total.store(0, Ordering::Relaxed);
+        self.reindex_done.store(0, Ordering::Relaxed);
+
+        Ok(result)
+    }
+
+    /// Request cancellation of any in-flight full reindex loop.
+    ///
+    /// This only guarantees that the chunk loop exits "soon" (between
+    /// chunks); a reindex that is already past its chunk loop finishes
+    /// normally. Safe to call from any thread at any time.
+    pub fn request_stop(&self) {
+        self.reindex_stopping.store(true, Ordering::Relaxed);
+    }
+
+    /// Perform a full re-index: scan the project, diff against stored state,
+    /// and update changed files.
+    pub fn full_reindex(&self) -> Result<IndexResult> {
+        let start = Instant::now();
+        let stop = Arc::clone(&self.reindex_stopping);
+
+        // Scan the project directory.
+        let scan_start = Instant::now();
+        let scanned = scanner::scan_directory(&self.project_root, &self.config.scan_config)?;
+        let scan_ms = scan_start.elapsed().as_millis();
+        debug!("scanned {} files ({}ms)", scanned.len(), scan_ms);
+        if stop.load(Ordering::Relaxed) {
+            debug!("full_reindex aborted: stop requested after scan");
+            return Err(anyhow::anyhow!("reindex cancelled"));
+        }
+
+        // Compute diff against current index.
+        let diff_start = Instant::now();
+        let diff = {
+            let store = self.store_guard();
+            store.get_stale_files(&scanned)?
+        };
+        let diff_ms = diff_start.elapsed().as_millis();
+        debug!(
+            "stale diff: {} add, {} update, {} remove ({}ms)",
+            diff.to_add.len(),
+            diff.to_update.len(),
+            diff.to_remove.len(),
+            diff_ms
+        );
+        if stop.load(Ordering::Relaxed) {
+            debug!("full_reindex aborted: stop requested after diff");
+            return Err(anyhow::anyhow!("reindex cancelled"));
+        }
+
+        // Set progress counters early so the TUI can show the percentage
+        // even while apply_diff holds the store lock.
+        let changed_count = (diff.to_add.len() + diff.to_update.len()) as u32;
+        self.reindex_total.store(changed_count, Ordering::Relaxed);
+        self.reindex_done.store(0, Ordering::Relaxed);
+
+        let mut result = IndexResult {
+            files_added: diff.to_add.len(),
+            files_updated: diff.to_update.len(),
+            files_removed: diff.to_remove.len(),
+            ..Default::default()
+        };
+
+        // Apply the diff to the SQLite store.
+        let apply_start = Instant::now();
+        {
+            let store = self.store_guard();
+            store.apply_diff(&diff)?;
+        }
+        let apply_ms = apply_start.elapsed().as_millis();
+        debug!("apply_diff done ({}ms)", apply_ms);
+
+        // Parse and store symbols for new/updated files.
+        // Process in chunks: parse all files in each chunk outside locks
+        // (CPU-heavy), then batch-write to SQLite in a single transaction
+        // and FTS in a single commit per chunk. This reduces:
+        //   - SQLite disk syncs from N to N/CHUNK_SIZE
+        //   - FTS commits from 2N to N/CHUNK_SIZE
+        //   - Lock acquisitions from 2N to 2*(N/CHUNK_SIZE)
+        // Brief yields between chunks let the TUI event loop acquire locks.
+        const CHUNK_SIZE: usize = 20;
+        const YIELD_MS: u64 = 1;
+
+        let changed: Vec<&ScannedFile> = diff.to_add.iter().chain(diff.to_update.iter()).collect();
+
+        for chunk in changed.chunks(CHUNK_SIZE) {
+            if stop.load(Ordering::Relaxed) {
+                debug!("full_reindex aborted: stop requested");
+                return Err(anyhow::anyhow!("reindex cancelled"));
+            }
+            // Phase 1: Parse all files in this chunk with NO locks held.
+            let mut parsed_results: Vec<(String, parser::ParsedFile)> = Vec::new();
+            for sf in chunk {
+                let abs_path = self.project_root.join(&sf.path);
+                let content = match std::fs::read(&abs_path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        warn!("cannot read {}: {e}", abs_path.display());
+                        continue;
+                    }
+                };
+
+                let rel_path = sf.path.to_string_lossy().to_string();
+
+                if let Some(ref lang) = sf.language
+                    && let Some(parsed) = self.parsers.parse(lang, &content)
+                {
+                    match parsed {
+                        Ok(parsed) => {
+                            parsed_results.push((rel_path, parsed));
+                        }
+                        Err(e) => {
+                            warn!("parse error for {rel_path}: {e}");
+                        }
+                    }
+                }
+            }
+
+            // Phase 2: Batch-write to SQLite in a single transaction.
+            if !parsed_results.is_empty() {
+                let store = self.store_guard();
+                store.begin_transaction()?;
+                for (rel_path, parsed) in &parsed_results {
+                    if let Some(file_id) = store.get_file_id(rel_path)? {
+                        let count = store.upsert_symbols(file_id, &parsed.symbols)?;
+                        store.upsert_imports(file_id, &parsed.imports)?;
+                        store.upsert_refs(file_id, &parsed.references)?;
+                        result.symbols_extracted += count;
+                    }
+                }
+                store.commit_transaction()?;
+                drop(store);
+            }
+
+            // Phase 3: Batch-update FTS with a single writer and commit.
+            if !parsed_results.is_empty() {
+                let fts = self.fts_guard();
+                let remove_paths: Vec<&str> =
+                    parsed_results.iter().map(|(p, _)| p.as_str()).collect();
+                let fts_syms: Vec<FtsSymbol<'_>> = parsed_results
+                    .iter()
+                    .flat_map(|(rel_path, parsed)| {
+                        parsed
+                            .symbols
+                            .iter()
+                            .map(move |s| symbol_to_fts(s, rel_path))
+                    })
+                    .collect();
+                fts.batch_update(&remove_paths, &fts_syms)?;
+                drop(fts);
+            }
+
+            // Update progress counter.
+            let done_so_far = self.reindex_done.load(Ordering::Relaxed) + chunk.len() as u32;
+            self.reindex_done.store(done_so_far, Ordering::Relaxed);
+
+            // Yield between chunks so the TUI event loop can acquire locks.
+            std::thread::sleep(Duration::from_millis(YIELD_MS));
+        }
+
+        // Remove deleted files from FTS in a single batch.
+        if !diff.to_remove.is_empty() {
+            let fts = self.fts_guard();
+            let remove_paths: Vec<&str> = diff
+                .to_remove
+                .iter()
+                .map(std::string::String::as_str)
+                .collect();
+            fts.batch_update(&remove_paths, &[])?;
+        }
+
+        // After incremental update, ensure FTS is in sync with SQLite.
+        let fts_sync_start = Instant::now();
+        if let Err(e) = self.ensure_fts_sync() {
+            warn!("FTS sync check failed after reindex: {e}");
+        }
+        let fts_sync_ms = fts_sync_start.elapsed().as_millis();
+
+        // -- Build semantic edge graph (FR-007) --------------------------
+        // The graph phase is reported separately from FTS indexing via the
+        // graph_busy flag + graph progress counters so the UI can label it
+        // ("graph building") distinctly from "indexing".  Like build_graph,
+        // the store lock is held only for the input snapshot and the final
+        // persist; derivation runs lock-free (FR-026).
+        let graph_start = Instant::now();
+        self.graph_busy.store(true, Ordering::Relaxed);
+        self.graph_done.store(0, Ordering::Relaxed);
+        self.graph_total.store(0, Ordering::Relaxed);
+        let (edges_extracted, edges_inferred) = match self.graph_build_phased(None) {
+            Ok(build_result) => {
+                debug!(
+                    "full_reindex: graph built: {} edges ({} EXTRACTED, {} INFERRED) in {}ms",
+                    build_result.edges_total,
+                    build_result.edges_extracted,
+                    build_result.edges_inferred,
+                    build_result.elapsed_ms
+                );
+                (build_result.edges_extracted, build_result.edges_inferred)
+            }
+            Err(e) => {
+                warn!("full_reindex: graph build failed: {e}");
+                (0, 0)
+            }
+        };
+        self.graph_busy.store(false, Ordering::Relaxed);
+        self.graph_total.store(0, Ordering::Relaxed);
+        self.graph_done.store(0, Ordering::Relaxed);
+        result.edges_extracted = edges_extracted;
+        result.edges_inferred = edges_inferred;
+        let graph_ms = graph_start.elapsed().as_millis();
+
+        result.elapsed_ms = start.elapsed().as_millis() as u64;
+        debug!(
+            "full_reindex: scan={}ms, diff={}ms, apply={}ms, fts_sync={}ms, graph={}ms, total={}ms",
+            scan_ms, diff_ms, apply_ms, fts_sync_ms, graph_ms, result.elapsed_ms
+        );
+
+        // Clear progress counters.
+        self.reindex_total.store(0, Ordering::Relaxed);
+        self.reindex_done.store(0, Ordering::Relaxed);
+        // M-029: the on-disk index size changed with this reindex, so the next
+        // status poll recomputes it.
+        self.invalidate_index_size_cache();
+
+        Ok(result)
+    }
+
+    /// Rebuild the FTS index from `SQLite` symbol data.
+    ///
+    /// Clears all FTS documents and re-populates from the `SQLite` symbol store.
+    /// Use this to recover from FTS/SQLite mismatches.
+    pub fn rebuild_fts(&self) -> Result<()> {
+        let fts = self.fts_guard();
+        fts.clear()?;
+
+        let store = self.store_guard();
+        let files = store.list_files()?;
+
+        // H-006: batch all symbols from all files into a single writer/commit
+        // pass instead of calling `add_symbols` (which allocates a fresh
+        // 15 MB `IndexWriter` + commits) per file. We first collect every
+        // (Symbol, file_path) pair into owned buffers so the borrowed
+        // `FtsSymbol` slice can be built once and written in a single commit.
+        let mut syms_owned: Vec<(types::Symbol, String)> = Vec::new();
+        for file in &files {
+            if let Some(file_id) = store.get_file_id(&file.path)? {
+                for s in store.get_file_symbols(file_id)? {
+                    syms_owned.push((s, file.path.clone()));
+                }
+            }
+        }
+        if !syms_owned.is_empty() {
+            let fts_syms: Vec<FtsSymbol<'_>> = syms_owned
+                .iter()
+                .map(|(s, path)| symbol_to_fts(s, path))
+                .collect();
+            fts.add_symbols(&fts_syms)?;
+        }
+
+        debug!(
+            "FTS rebuilt: {} docs from {} files",
+            fts.doc_count().unwrap_or(0),
+            files.len()
+        );
+        Ok(())
+    }
+
+    /// Remove a file from the index.
+    pub fn remove_file(&self, path: &Path) -> Result<()> {
+        let path_str = path.to_string_lossy();
+        let store = self.store_guard();
+        store.delete_file(&path_str)?;
+        drop(store);
+
+        let fts = self.fts_guard();
+        fts.remove_file(&path_str)?;
+        drop(fts);
+
+        // The on-disk FTS directory changed, so the cached index size is stale.
+        self.invalidate_index_size_cache();
+
+        // Remove from tree cache.
+        let mut tc = self.tree_cache_guard();
+        tc.remove(path);
+
+        Ok(())
+    }
+
+    /// The project root this index is bound to.
+    pub fn project_root(&self) -> &Path {
+        &self.project_root
+    }
+}
+
+// -- Watch Session ----------------------------------------------------------
+
+/// An active file-watching session that automatically re-indexes files when
+/// they change on disk.
+///
+/// Created by [`start_watching`]. Dropping the session stops the watcher and
+/// worker. You can also call [`WatchSession::stop`] explicitly.
+pub struct WatchSession {
+    worker_handle: worker::IndexWorkerHandle,
+    _watcher: watcher::CodeWatcher,
+}
+
+impl WatchSession {
+    /// Stop watching and wait for the worker to finish.
+    pub fn stop(&mut self) {
+        self.worker_handle.stop();
+    }
+
+    /// Get current worker statistics.
+    #[must_use]
+    pub fn stats(&self) -> worker::WorkerStats {
+        self.worker_handle.stats()
+    }
+
+    /// Whether the session has been stopped.
+    #[must_use]
+    pub fn is_stopped(&self) -> bool {
+        self.worker_handle.is_stopped()
+    }
+
+    /// Manually queue a single file for re-indexing.
+    ///
+    /// Returns `false` when the worker is not running and the request was
+    /// dropped (FUNC-018).
+    pub fn queue_reindex(&self, path: PathBuf) -> bool {
+        self.worker_handle.queue_reindex(path)
+    }
+
+    /// Manually trigger a full reindex.
+    ///
+    /// Returns `false` when the worker is not running (FUNC-018).
+    pub fn queue_full_reindex(&self) -> bool {
+        self.worker_handle.queue_full_reindex()
+    }
+}
+
+/// Start watching a project directory for changes and automatically re-index.
+///
+/// The `CodeIndex` is wrapped in `Arc` since the background worker needs
+/// shared ownership. `CodeIndex` has internal mutexes for thread safety.
+///
+/// Returns a [`WatchSession`] that must be kept alive for watching to continue.
+/// Dropping it stops the watcher and worker.
+///
+/// On start, performs an initial diff scan and queues changed files.
+pub fn start_watching(
+    index: std::sync::Arc<CodeIndex>,
+    config: worker::WorkerConfig,
+) -> Result<WatchSession> {
+    let project_root = index.project_root.clone();
+
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    let watcher =
+        watcher::CodeWatcher::new(&project_root, tx).context("cannot start file watcher")?;
+
+    let worker_handle = worker::IndexWorker::start(std::sync::Arc::clone(&index), rx, config);
+
+    // Perform initial diff scan in background to avoid blocking the caller.
+    let bg = std::sync::Arc::clone(&index);
+    if let Err(e) = std::thread::Builder::new()
+        .name("codeindex-init-reindex".into())
+        .spawn(move || match bg.full_reindex() {
+            Ok(result) => debug!("initial reindex on watch start: {result}"),
+            Err(e) => warn!("initial reindex failed: {e}"),
+        })
+    {
+        warn!("initial reindex thread spawn failed: {e}");
+    }
+
+    Ok(WatchSession {
+        worker_handle,
+        _watcher: watcher,
+    })
+}
+
+// -- Helpers -----------------------------------------------------------------
+
+/// Shared body of [`CodeIndex::dependencies`] and
+/// [`CodeIndex::try_dependencies`]. Requires the caller to hold the store
+/// lock (passed as a guard deref).
+///
+/// `Imports` resolves the file's own import list; `Dependents` uses a single
+/// SQL join (`list_dependent_paths`) instead of loading the whole file table
+/// to build an `id -> path` map (H-004).
+fn dependencies_impl(
+    store: &std::sync::MutexGuard<'_, crate::store::IndexStore>,
+    path: &str,
+    direction: DepDirection,
+) -> Result<Vec<String>> {
+    match direction {
+        DepDirection::Imports => {
+            let file_id = store
+                .get_file_id(path)?
+                .with_context(|| format!("file not indexed: {path}"))?;
+            let imports = store.get_file_imports(file_id)?;
+            Ok(imports.into_iter().map(|i| i.source_module).collect())
+        }
+        DepDirection::Dependents => store.list_dependent_paths(path),
+    }
+}
+
+/// Convert a `Symbol` into an `FtsSymbol` for tantivy indexing.
+fn symbol_to_fts<'a>(sym: &'a Symbol, file_path: &'a str) -> FtsSymbol<'a> {
+    FtsSymbol {
+        name: &sym.name,
+        qualified_name: sym.qualified_name.as_deref(),
+        kind: leak_kind_str(sym.kind),
+        file_path,
+        signature: sym.signature.as_deref(),
+        doc_comment: sym.doc_comment.as_deref(),
+        body_snippet: None,
+        start_line: sym.start_line,
+        end_line: sym.end_line,
+    }
+}
+
+/// Get a static str for a `SymbolKind` (avoids allocation in `FtsSymbol`).
+const fn leak_kind_str(kind: types::SymbolKind) -> &'static str {
+    match kind {
+        types::SymbolKind::Function => "function",
+        types::SymbolKind::Method => "method",
+        types::SymbolKind::Struct => "struct",
+        types::SymbolKind::Class => "class",
+        types::SymbolKind::Enum => "enum",
+        types::SymbolKind::EnumVariant => "enum_variant",
+        types::SymbolKind::Trait => "trait",
+        types::SymbolKind::Interface => "interface",
+        types::SymbolKind::Impl => "impl",
+        types::SymbolKind::Module => "module",
+        types::SymbolKind::Constant => "constant",
+        types::SymbolKind::Static => "static",
+        types::SymbolKind::TypeAlias => "type_alias",
+        types::SymbolKind::Field => "field",
+        types::SymbolKind::Import => "import",
+        types::SymbolKind::Macro => "macro",
+        types::SymbolKind::Test => "test",
+        types::SymbolKind::Unknown => "unknown",
+    }
+}
+
+/// Maximum recursion depth for [`dir_size`].
+///
+/// SEC-ragent-codeindex-044: `dir_size` walks an untrusted project tree, so a
+/// deep (or cyclically symlinked) directory could otherwise recurse without
+/// bound and exhaust the stack. The walk also refuses to follow symlinks.
+const MAX_DIR_SIZE_DEPTH: usize = 128;
+
+/// Recursively compute the size of a directory in bytes.
+///
+/// SEC-ragent-codeindex-044: symlink entries are skipped (both files and
+/// directories) so a link inside the tree cannot pull in an out-of-tree target,
+/// and recursion is bounded by [`MAX_DIR_SIZE_DEPTH`].
+fn dir_size(path: &Path) -> u64 {
+    dir_size_inner(path, 0)
+}
+
+/// Recursion body for [`dir_size`], carrying the current depth.
+fn dir_size_inner(path: &Path, depth: usize) -> u64 {
+    if depth >= MAX_DIR_SIZE_DEPTH {
+        return 0;
+    }
+    let mut size = 0u64;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            // Use the entry's own type so a symlink is neither followed nor
+            // recursed into.
+            if entry.file_type().is_ok_and(|ft| ft.is_symlink()) {
+                continue;
+            }
+            let meta = match entry.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if meta.is_file() {
+                size += meta.len();
+            } else if meta.is_dir() {
+                size += dir_size_inner(&entry.path(), depth + 1);
+            }
+        }
+    }
+    size
+}

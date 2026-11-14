@@ -1,0 +1,9 @@
+# cargo-audit configuration for ragent.
+# Kept in sync with deny.toml: only advisories that still apply to the current
+# dependency tree are listed here, so a re-introduced vulnerable crate is never
+# silently masked.
+[advisories]
+# No ignores: RUSTSEC-2024-0436 (`paste` unmaintained) no longer matches the
+# current tree, so the entry was dead configuration. cargo-deny reported it as
+# `advisory-not-detected`; the ignore was removed from both gates together.
+ignore = []

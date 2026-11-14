@@ -1,0 +1,119 @@
+//! `git_reset` - Unstage files or reset to a commit.
+
+use anyhow::Result;
+use serde_json::{Value, json};
+
+use crate::{Tool, ToolContext, ToolOutput};
+
+/// Tool that unstages files or resets the repository.
+pub struct GitResetTool;
+
+#[async_trait::async_trait]
+impl Tool for GitResetTool {
+    fn name(&self) -> &'static str {
+        "git_reset"
+    }
+
+    fn description(&self) -> &'static str {
+        "Unstage files or reset the repository to a specific commit. This tool has no universally required parameter, \
+         but you must choose one mode: either provide 'paths' (array of strings) to unstage specific files, \
+         or provide 'target' (string, default HEAD) to reset the current branch with 'mode' (enum 'soft', 'mixed', 'hard', 'keep', default 'mixed'). \
+         CAUTION: mode 'hard' discards all local working-tree changes; 'mixed' keeps changes unstaged (default), 'soft' keeps them staged, and 'keep' discards changes but aborts if they would be overwritten. \
+         Common gotcha: when 'paths' is provided, 'mode' and 'target' are ignored; when resetting, 'target' accepts a commit hash, tag, or ref."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["soft", "mixed", "hard", "keep"],
+                    "description": "Reset mode (default: mixed). Ignored when 'paths' is provided."
+                },
+                "target": {
+                    "type": "string",
+                    "description": "Commit ref to reset to (default: HEAD). Ignored when 'paths' is provided."
+                },
+                "paths": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Specific files to unstage. When provided, mode and target are ignored."
+                }
+            }
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "git:write"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let paths = input["paths"].as_array();
+
+        let mut args: Vec<String>;
+
+        if let Some(ps) = paths {
+            // Unstage specific files: git reset HEAD -- <paths>
+            if ps.is_empty() {
+                return Err(anyhow::anyhow!("Paths array is empty."));
+            }
+            args = vec!["reset".to_string(), "HEAD".to_string(), "--".to_string()];
+            for p in ps {
+                if let Some(s) = p.as_str() {
+                    args.push(s.to_string());
+                }
+            }
+        } else {
+            let mode = input["mode"].as_str().unwrap_or("mixed");
+            let target = input["target"].as_str().unwrap_or("HEAD");
+
+            // SEC-ragent-tools-vcs (SECTASKS T-022): `target` is an operand.
+            crate::git::reject_option_like(target, "target")?;
+
+            args = vec!["reset".to_string()];
+            match mode {
+                "soft" => args.push("--soft".to_string()),
+                "mixed" => {} // default
+                "hard" => args.push("--hard".to_string()),
+                "keep" => args.push("--keep".to_string()),
+                other => {
+                    return Err(anyhow::anyhow!(
+                        "Unknown reset mode: {other}. Use 'soft', 'mixed', 'hard', or 'keep'."
+                    ));
+                }
+            }
+            // No `--` before `target`: `git reset --hard -- <rev>` is
+            // rejected by git ("cannot do hard reset with paths"). The value
+            // is validated by `reject_option_like` above.
+            args.push(target.to_string());
+        }
+
+        let (stdout, stderr) = crate::git::run_git_async(args, ctx.working_dir.clone()).await?;
+
+        if !stderr.is_empty() && stdout.trim().is_empty() {
+            return Ok(ToolOutput {
+                content: format!("git reset error: {}", stderr.trim()),
+                metadata: None,
+            });
+        }
+
+        let content = if stdout.trim().is_empty() {
+            if paths.is_some() {
+                "Unstaged specified files.".to_string()
+            } else {
+                let mode = input["mode"].as_str().unwrap_or("mixed");
+                let target = input["target"].as_str().unwrap_or("HEAD");
+                format!("Reset to {target} ({mode} mode).")
+            }
+        } else {
+            stdout
+        };
+
+        Ok(ToolOutput {
+            content,
+            metadata: None,
+        })
+    }
+}

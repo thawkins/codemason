@@ -1,0 +1,260 @@
+//! Loci analysis and depth investigation (FR-005, T-008).
+//!
+//! A *locus* is a key claim or dimension that recurs across the gathered
+//! corpus. The analysis in this module is intentionally deterministic and
+//! LLM-free: it scans source bodies for a small set of research dimensions
+//! (e.g. `performance`, `cost`, `safety`) and records which sources mention
+//! each dimension and how often. The depth investigation then classifies each
+//! locus as `Surface`, `Moderate`, or `Deep` based on the number of distinct
+//! sources that support it.
+//!
+//! Like the contradiction graph, this is a starting heuristic. Later tasks
+//! can replace or augment the keyword lists while keeping the same output
+//! structures.
+
+use crate::polarity::source_body_text;
+use crate::source::Source;
+use serde::{Deserialize, Serialize};
+// PERF-080: FxHash for the short non-adversarial term keys.
+use rustc_hash::FxHashMap as HashMap;
+
+/// The keyword is matched case-insensitively against source bodies; the label is
+/// rendered in the report.
+const DIMENSIONS: &[(&str, &str)] = &[
+    ("performance", "Performance"),
+    ("cost", "Cost"),
+    ("safety", "Safety"),
+    ("efficacy", "Efficacy"),
+    ("adoption", "Adoption"),
+    ("mortality", "Mortality"),
+    ("mechanism", "Mechanism"),
+    ("risk", "Risk"),
+    ("benefit", "Benefit"),
+    ("side effects", "Side effects"),
+    ("quality", "Quality"),
+    ("usability", "Usability"),
+    ("scalability", "Scalability"),
+    ("reliability", "Reliability"),
+    ("accessibility", "Accessibility"),
+];
+
+/// Evidence-depth classification for a single locus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DepthLevel {
+    /// Only one source mentions the locus.
+    #[default]
+    Surface,
+    /// Two or three sources mention the locus.
+    Moderate,
+    /// Four or more sources mention the locus.
+    Deep,
+}
+
+impl DepthLevel {
+    /// Human-readable label for report rendering.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Surface => "surface",
+            Self::Moderate => "moderate",
+            Self::Deep => "deep",
+        }
+    }
+}
+
+/// One detected locus in the gathered corpus.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct Locus {
+    /// Short dimension keyword (e.g. `"performance"`).
+    pub keyword: String,
+    /// Human-readable label (e.g. `"Performance"`).
+    pub label: String,
+    /// 1-based indices of sources that mention this locus, in ascending order.
+    pub source_indices: Vec<usize>,
+    /// Short representative snippets from source bodies, one per source (up to
+    /// a small limit).
+    pub snippets: Vec<String>,
+    /// Total number of distinct source bodies that mention this locus.
+    pub mentions: usize,
+}
+
+/// A collection of loci discovered in the corpus.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct LocusSet {
+    /// Loci sorted from most to least supported.
+    pub loci: Vec<Locus>,
+}
+
+impl LocusSet {
+    /// Create an empty locus set.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self { loci: Vec::new() }
+    }
+
+    /// Return `true` when no loci were detected.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.loci.is_empty()
+    }
+
+    /// Number of detected loci.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.loci.len()
+    }
+}
+
+/// Depth-investigation result for a single locus.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct DepthInvestigation {
+    /// Dimension keyword this result investigates.
+    pub keyword: String,
+    /// Human-readable label for the locus.
+    pub label: String,
+    /// Classified evidence depth.
+    pub depth: DepthLevel,
+    /// Number of distinct sources that mention this locus.
+    pub source_count: usize,
+    /// Human-readable note summarising the depth and coverage.
+    pub note: String,
+    /// Up to three representative 1-based source indices.
+    pub representative_sources: Vec<usize>,
+}
+
+/// Analyse the gathered sources and return the set of detected loci.
+///
+/// The analysis is deterministic: it scans every source body for the dimension
+/// keywords in `DIMENSIONS` and counts how many distinct sources mention
+/// each keyword. The result is sorted by mention count descending, then by
+/// keyword label. Only loci with at least one source are included.
+#[must_use]
+pub fn analyze_loci(sources: &[Source]) -> LocusSet {
+    if sources.len() < 2 {
+        return LocusSet::empty();
+    }
+
+    let mut hits: HashMap<&str, Vec<(usize, String)>> = HashMap::default();
+
+    for (idx, src) in sources.iter().enumerate() {
+        let body = source_body_text(src);
+        if body.len() < 20 {
+            continue;
+        }
+        let lower = body.to_lowercase();
+        for (keyword, _label) in DIMENSIONS {
+            if lower.contains(keyword) {
+                let one_based = idx + 1;
+                let snippet = extract_snippet(&body, keyword);
+                hits.entry(keyword).or_default().push((one_based, snippet));
+            }
+        }
+    }
+
+    let mut loci: Vec<Locus> = hits
+        .into_iter()
+        .map(|(keyword, entries)| {
+            let label = dimension_label(keyword).to_string();
+            let mut indices: Vec<usize> = entries.iter().map(|(i, _)| *i).collect();
+            indices.sort_unstable();
+            indices.dedup();
+            let snippets: Vec<String> = entries
+                .into_iter()
+                .map(|(_, s)| s)
+                .filter(|s| !s.is_empty())
+                .take(3)
+                .collect();
+            let mentions = indices.len();
+            Locus {
+                keyword: keyword.to_string(),
+                label,
+                source_indices: indices,
+                snippets,
+                mentions,
+            }
+        })
+        .filter(|l| !l.source_indices.is_empty())
+        .collect();
+
+    // Sort by descending support, then label for stability.
+    loci.sort_by(|a, b| b.mentions.cmp(&a.mentions).then(a.label.cmp(&b.label)));
+    LocusSet { loci }
+}
+
+/// Investigate the depth of each detected locus.
+///
+/// Returns one [`DepthInvestigation`] per locus with a depth classification
+/// based on source coverage and a short human-readable note.
+#[must_use]
+pub fn investigate_depth(loci: &LocusSet) -> Vec<DepthInvestigation> {
+    loci.loci
+        .iter()
+        .map(|locus| {
+            let depth = match locus.source_indices.len() {
+                0 => DepthLevel::Surface, // should not happen because empty sets are filtered
+                1 => DepthLevel::Surface,
+                2 | 3 => DepthLevel::Moderate,
+                _ => DepthLevel::Deep,
+            };
+            let representative_sources = locus.source_indices.iter().copied().take(3).collect();
+            let note = format!(
+                "Detected in {} source{} (depth: {}).",
+                locus.source_indices.len(),
+                if locus.source_indices.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                depth.as_str()
+            );
+            DepthInvestigation {
+                keyword: locus.keyword.clone(),
+                label: locus.label.clone(),
+                depth,
+                source_count: locus.source_indices.len(),
+                note,
+                representative_sources,
+            }
+        })
+        .collect()
+}
+
+/// Extract a short snippet around the first occurrence of `keyword` in `body`.
+///
+/// Returns up to ~100 characters centred on the keyword, or an empty string
+/// if the keyword cannot be found.
+///
+/// The search is case-insensitive, but the match position is resolved directly
+/// against `body` (rather than against a separate lowercased copy) so that the
+/// byte offset is always a valid char boundary in `body`. This avoids panics
+/// when `to_lowercase()` changes the byte length of earlier characters (which
+/// would shift offsets and land inside a multi-byte UTF-8 sequence).
+fn extract_snippet(body: &str, keyword: &str) -> String {
+    let kw_lower = keyword.to_lowercase();
+    let Some(pos) = body
+        .char_indices()
+        .map(|(i, _)| i)
+        .find(|&i| body[i..].to_lowercase().starts_with(&kw_lower))
+    else {
+        return String::new();
+    };
+
+    let start = body.floor_char_boundary(pos.saturating_sub(40));
+    let end = body.ceil_char_boundary((pos + keyword.len() + 40).min(body.len()));
+    let snippet = &body[start..end];
+    snippet.replace('\n', " ").trim().to_string()
+}
+
+/// Look up the human-readable label for a dimension keyword.
+fn dimension_label(keyword: &str) -> &'static str {
+    DIMENSIONS
+        .iter()
+        .find(|(kw, _)| *kw == keyword)
+        .map(|(_, label)| *label)
+        .unwrap_or("Unknown")
+}
+
+#[cfg(test)]
+#[path = "../tests/inline/locus_tests.rs"]
+mod tests;

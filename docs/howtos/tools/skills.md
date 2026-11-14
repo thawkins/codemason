@@ -1,0 +1,78 @@
+# Tools — Skills
+
+Loadable skill packs (bundled or custom YAML / `SKILL.md`) that inject tools,
+prompts, and file context into agent sessions.
+
+| Tool | Description |
+|------|-------------|
+| `Skill` | List, read, load, or reload skill packs. |
+
+---
+
+## Tool restrictions (`allowed-tools`)
+
+A `SKILL.md` frontmatter block may limit the tools the run can call:
+
+```yaml
+---
+name: rename-check
+description: Check the rename landed
+allowed-tools:
+  - Bash
+  - read
+  - Grep
+  - Glob
+---
+```
+
+Resolution is a **case-insensitive name comparison** against the registry. The
+entry is stored under the registry's own spelling, so two spellings of one tool
+cannot become two keys in the allowed set. There is no translation layer, so:
+
+- the thirteen Claude Code spellings the rename adopted resolve as written -
+  `AskUserQuestion`, `Bash`, `Edit`, `EnterPlanMode`, `ExitPlanMode`, `Glob`,
+  `Grep`, `Skill`, `TaskCreate`, `TaskGet`, `TaskList`, `TaskUpdate`, `Write`;
+- the tools the rename did **not** touch keep their ragent spelling - `read`,
+  `list`, `think`, `codeindex_search`, and so on;
+- **case does not matter**: `Bash`, `bash` and `BASH` all name the registry's
+  `Bash`, and `grep` names `Grep`, so a manifest can use whatever case reads best
+  (the registry's spelling is what the restriction then holds);
+- a retired spelling that names a **different** tool (`task_create` for
+  `TaskCreate`, `Read` for `read`) still matches nothing. Case folding resolves
+  one tool; it never resolves a different one;
+- `any` (in any case) is a pseudo entry that names every tool: the restriction is
+  lifted, exactly as if the list were omitted. It is never reported as unresolved
+  because it names a policy rather than a tool, so it does not depend on a
+  registered tool of that name existing;
+- an empty list means "no restriction", not "no tools".
+
+An entry that matches no registered tool would silently remove a capability, so
+it is reported once per `(entry, skill)` pair - naming the entry and the skill -
+at the moment the skill's list becomes the restriction (`Skill`,
+`/skill <name>` / `/<name>`, and the forked-skill resolver). Fix the manifest;
+the run continues with the entries that did resolve.
+
+YAML reads a bare comma list as one scalar: `allowed-tools: Bash, ReadFile` is a
+single entry named `Bash, ReadFile`. Use the block form above.
+
+---
+
+## Skill
+
+Manage the skill registry at runtime.
+
+**Arguments**
+
+| Argument | Type | Required | Description | Typical value |
+|----------|------|----------|-------------|---------------|
+| `action` | enum | yes | `list`, `read`, `load`, `reload` | `"list"` |
+| `name` | string | yes for `read`/`load` | Skill name | `"code-audit"` |
+| `arguments` | string | no | Substituted into the skill body (`$ARGUMENTS` and friends) for `read`/`load` | `"crates/ragent-server"` |
+| `scope` | enum | no | `list` filter: `bundled`, `enterprise`, `openskills-global`, `personal`, `openskills-project`, `project` | `"project"` |
+| `include_bodies` | boolean | no | `list` includes full prompt bodies (default false: metadata only) | `false` |
+
+**Example:**
+```text
+Skill action="list"
+Skill action="load" name="code-audit" arguments="crates/ragent-server"
+```

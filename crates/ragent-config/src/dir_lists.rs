@@ -1,0 +1,465 @@
+//! Runtime directory/file allowlist / denylist management for permissions.
+//!
+//! At startup the lists are populated from the merged global (`~/.config/ragent/ragent.json`)
+//! and project (`./.ragent/ragent.json`) config files. The `/dirs add|remove` slash commands then
+//! mutate the in-memory lists and persist changes back to whichever config file the user
+//! targets (project by default, global with the `--global` flag).
+//!
+//! # Interaction with permission checking
+//!
+//! - **allowlist** entries are glob patterns. File operations matching these patterns
+//!   are automatically allowed without prompting.
+//! - **denylist** entries are glob patterns. File operations matching these patterns
+//!   are automatically denied without prompting.
+//!
+//! The permission system checks these lists before prompting the user.
+
+use std::sync::Arc;
+use std::sync::{OnceLock, RwLock};
+
+use anyhow::Result;
+use globset::{GlobSet, GlobSetBuilder};
+
+// -- Built-in directory patterns -----------------------------------------------
+
+/// Built-in allowlist: directory patterns that are automatically allowed without prompting.
+///
+/// Always empty: no directory is auto-approved out of the box (the user opts in
+/// via the config `dirs.allowlist`). Kept as a named constant so callers that
+/// display the effective lists have a stable hook.
+pub const BUILTIN_ALLOWLIST: &[&str] = &[];
+
+/// Built-in denylist: directory patterns that are automatically denied without prompting.
+///
+/// These patterns represent dangerous locations where file operations should always be blocked
+/// to prevent accidental system damage or data loss.
+pub const BUILTIN_DENYLIST: &[&str] = &[
+    // System-critical directories
+    "/bin/**",
+    "/sbin/**",
+    "/boot/**",
+    "/dev/**",
+    "/proc/**",
+    "/sys/**",
+    "/etc/**",
+    "/usr/bin/**",
+    "/usr/sbin/**",
+    "/usr/lib/**",
+    "/lib/**",
+    "/lib64/**",
+    // macOS system directories
+    "/System/**",
+    "/Library/**",
+    "/Applications/**",
+    "/private/**",
+    // Windows system directories
+    "C:/Windows/**",
+    "C:/Program Files/**",
+    "C:/Program Files (x86)/**",
+];
+
+/// Returns the built-in allowlist and denylist patterns.
+///
+/// These are the baseline patterns that are always active before user-defined
+/// patterns are applied.
+#[must_use]
+pub fn get_builtin_lists() -> (Vec<String>, Vec<String>) {
+    (
+        BUILTIN_ALLOWLIST.iter().map(|s| (*s).to_string()).collect(),
+        BUILTIN_DENYLIST.iter().map(|s| (*s).to_string()).collect(),
+    )
+}
+
+// -- Global state -------------------------------------------------------------
+
+/// In-memory snapshot of the merged directory allowlist and denylist.
+#[derive(Debug, Clone, Default)]
+pub struct DirLists {
+    /// Glob patterns for file operations automatically allowed.
+    pub allowlist: Vec<String>,
+    /// Glob patterns for file operations automatically denied.
+    pub denylist: Vec<String>,
+    /// Additional directory paths treated as valid roots for path escape checking.
+    pub allowed_roots: Vec<String>,
+}
+
+/// Compiled glob patterns for efficient matching.
+pub struct CompiledDirLists {
+    /// Compiled allowlist patterns.
+    pub allowlist: GlobSet,
+    /// Compiled denylist patterns.
+    pub denylist: GlobSet,
+}
+
+impl CompiledDirLists {
+    /// Check if a resource matches the allowlist.
+    #[must_use]
+    pub fn is_allowed(&self, resource: &str) -> bool {
+        self.allowlist.is_match(resource)
+    }
+
+    /// Check if a resource matches the denylist.
+    #[must_use]
+    pub fn is_denied(&self, resource: &str) -> bool {
+        self.denylist.is_match(resource)
+    }
+}
+
+static DIR_LISTS: OnceLock<RwLock<DirLists>> = OnceLock::new();
+static COMPILED_ALLOWLIST: OnceLock<RwLock<Arc<GlobSet>>> = OnceLock::new();
+static COMPILED_DENYLIST: OnceLock<RwLock<Arc<GlobSet>>> = OnceLock::new();
+
+fn global() -> &'static RwLock<DirLists> {
+    DIR_LISTS.get_or_init(|| RwLock::new(DirLists::default()))
+}
+
+fn compiled_allowlist() -> &'static RwLock<Arc<GlobSet>> {
+    COMPILED_ALLOWLIST.get_or_init(|| RwLock::new(Arc::new(GlobSet::empty())))
+}
+
+fn compiled_denylist() -> &'static RwLock<Arc<GlobSet>> {
+    COMPILED_DENYLIST.get_or_init(|| RwLock::new(Arc::new(GlobSet::empty())))
+}
+
+/// Recompile patterns and update the compiled allowlist cache.
+fn recompile_allowlist() -> Result<()> {
+    let g = global()
+        .read()
+        .map_err(|_| anyhow::anyhow!("lock poisoned"))?;
+    let compiled = Arc::new(compile_patterns(&g.allowlist));
+    let mut guard = compiled_allowlist()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard = compiled;
+    Ok(())
+}
+
+/// Recompile patterns and update the compiled denylist cache.
+fn recompile_denylist() -> Result<()> {
+    let g = global()
+        .read()
+        .map_err(|_| anyhow::anyhow!("lock poisoned"))?;
+    let compiled = Arc::new(compile_patterns(&g.denylist));
+    let mut guard = compiled_denylist()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard = compiled;
+    Ok(())
+}
+
+/// Compile a list of glob patterns into a `GlobSet`.
+fn compile_patterns(patterns: &[String]) -> GlobSet {
+    let mut builder = GlobSetBuilder::new();
+    for pattern in patterns {
+        if let Ok(glob) = globset::Glob::new(pattern) {
+            builder.add(glob);
+        } else {
+            tracing::warn!(pattern, "dir_lists: ignoring invalid glob pattern");
+        }
+    }
+    builder.build().unwrap_or_else(|_| GlobSet::empty())
+}
+
+// -- Initialisation ------------------------------------------------------------
+
+/// Merge a config's `dirs` lists with the built-in denylist.
+///
+/// SEC-ragent-config-006 (SECTASKS T-061): `BUILTIN_DENYLIST` was only ever
+/// handed to the TUI for *display*; the enforced compiled denylist was seeded
+/// purely from `cfg.dirs.denylist`, so the advertised system-directory
+/// protection was inert. The built-ins are merged into the enforced list
+/// (de-duplicated, built-ins first) on every path, including the config-error
+/// path (ANTIPAT H-3).
+#[must_use]
+pub fn merged_dir_lists_for(cfg: &crate::Config) -> DirLists {
+    let allowlist = cfg.dirs.allowlist.clone();
+    let mut denylist = cfg.dirs.denylist.clone();
+    let allowed_roots = cfg.dirs.allowed_roots.clone();
+
+    for pattern in BUILTIN_DENYLIST {
+        let pattern = (*pattern).to_string();
+        if !denylist.contains(&pattern) {
+            denylist.push(pattern);
+        }
+    }
+
+    DirLists {
+        allowlist,
+        denylist,
+        allowed_roots,
+    }
+}
+
+/// The enforced lists when no config could be read: built-ins only (H-3).
+#[must_use]
+pub fn builtin_only_dir_lists() -> DirLists {
+    DirLists {
+        allowlist: Vec::new(),
+        denylist: BUILTIN_DENYLIST.iter().map(|p| (*p).to_string()).collect(),
+        allowed_roots: Vec::new(),
+    }
+}
+
+/// Load the directory lists from the merged global + project config.
+///
+/// Call this once at startup. Subsequent loads (e.g. after `/reload`) replace
+/// the in-memory state.
+pub fn load_from_config() {
+    let lists = match crate::config::Config::load() {
+        Ok(cfg) => merged_dir_lists_for(&cfg),
+        Err(e) => {
+            // H-3 (ANTIPAT): a config load failure must NOT silently disable the
+            // mandatory denylist. Previously the error path returned
+            // `DirLists::default()` (empty allow/deny/roots), so the built-in
+            // system-directory protection was dropped entirely (fail-open).
+            // Seed the enforced denylist from the built-ins so protection is
+            // never weaker than the built-in floor.
+            tracing::warn!("dir_lists: failed to load config: {e}");
+            builtin_only_dir_lists()
+        }
+    };
+
+    // Compile patterns for efficient matching
+    let compiled_allow = Arc::new(compile_patterns(&lists.allowlist));
+    let compiled_deny = Arc::new(compile_patterns(&lists.denylist));
+
+    // Poison recovery: a stale snapshot is better than silently dropping the
+    // user's allow/deny list update.
+    let mut guard = global()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard = lists;
+    let mut guard = compiled_allowlist()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard = compiled_allow;
+    let mut guard = compiled_denylist()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard = compiled_deny;
+}
+// -- Read accessors ------------------------------------------------------------
+
+/// Returns a snapshot of the current allowlist.
+///
+/// A poisoned lock is logged at `warn!` before falling back to an empty list,
+/// matching the `bash_lists` accessors so a lock-poisoning bug is diagnosable
+/// rather than silent (ANTIPAT M-5).
+#[must_use]
+pub fn get_allowlist() -> Vec<String> {
+    match global().read() {
+        Ok(g) => g.allowlist.clone(),
+        Err(_) => {
+            tracing::warn!("dir_lists: allowlist lock poisoned; returning empty list");
+            Vec::new()
+        }
+    }
+}
+
+/// Returns a snapshot of the current denylist.
+///
+/// A poisoned lock is logged at `warn!` (ANTIPAT M-5).
+#[must_use]
+pub fn get_denylist() -> Vec<String> {
+    match global().read() {
+        Ok(g) => g.denylist.clone(),
+        Err(_) => {
+            tracing::warn!("dir_lists: denylist lock poisoned; returning empty list");
+            Vec::new()
+        }
+    }
+}
+
+/// Returns a snapshot of the current allowed_roots.
+///
+/// A poisoned lock is logged at `warn!` (ANTIPAT M-5).
+#[must_use]
+pub fn get_allowed_roots() -> Vec<String> {
+    match global().read() {
+        Ok(g) => g.allowed_roots.clone(),
+        Err(_) => {
+            tracing::warn!("dir_lists: allowed_roots lock poisoned; returning empty list");
+            Vec::new()
+        }
+    }
+}
+
+/// Returns the compiled allowlist for efficient matching.
+///
+/// The returned `Arc<GlobSet>` is cheap to clone and avoids recompiling
+/// patterns on every permission check. A poisoned lock is logged at `warn!`
+/// before falling back to an empty set (ANTIPAT M-5).
+#[must_use]
+pub fn get_compiled_allowlist() -> Arc<GlobSet> {
+    match compiled_allowlist().read() {
+        Ok(g) => Arc::clone(&g),
+        Err(_) => {
+            tracing::warn!("dir_lists: compiled allowlist lock poisoned; returning empty set");
+            Arc::new(GlobSet::empty())
+        }
+    }
+}
+
+/// Returns the compiled denylist for efficient matching.
+///
+/// The returned `Arc<GlobSet>` is cheap to clone and avoids recompiling
+/// patterns on every permission check. A poisoned lock is logged at `warn!`
+/// before falling back to an empty set (ANTIPAT M-5).
+#[must_use]
+pub fn get_compiled_denylist() -> Arc<GlobSet> {
+    match compiled_denylist().read() {
+        Ok(g) => Arc::clone(&g),
+        Err(_) => {
+            tracing::warn!("dir_lists: compiled denylist lock poisoned; returning empty set");
+            Arc::new(GlobSet::empty())
+        }
+    }
+}
+
+/// Invalidate both compiled caches so the next call re-reads the in-memory
+/// source patterns.  Call this after mutating the allowlist or denylist.
+pub fn invalidate_compiled_caches() {
+    // Recompile from the current in-memory pattern lists. A poisoned lock is
+    // the only failure mode; log it so a permanently stale glob cache is
+    // diagnosable rather than invisible.
+    if let Err(e) = recompile_allowlist() {
+        tracing::warn!(error = %e, "allowlist recompile failed");
+    }
+    if let Err(e) = recompile_denylist() {
+        tracing::warn!(error = %e, "denylist recompile failed");
+    }
+}
+
+// -- Write accessors -----------------------------------------------------------
+
+/// Scope for config persistence: project-local or user-global (shared with
+/// `bash_lists`, T-306).
+pub use crate::list_config::Scope;
+
+/// Add `pattern` to the allowlist. Persists to the chosen config file.
+pub fn add_allowlist(pattern: &str, scope: Scope) -> Result<()> {
+    {
+        let mut g = global()
+            .write()
+            .map_err(|_| anyhow::anyhow!("lock poisoned"))?;
+        if !g.allowlist.contains(&pattern.to_string()) {
+            g.allowlist.push(pattern.to_string());
+        }
+    }
+    recompile_allowlist()?;
+    crate::list_config::patch_config(scope, "dirs", &["allowlist", "denylist"], |dirs| {
+        if let Some(arr) = dirs["allowlist"].as_array_mut() {
+            let val = serde_json::Value::String(pattern.to_string());
+            if !arr.contains(&val) {
+                arr.push(val);
+            }
+        }
+    })
+}
+
+/// Remove `pattern` from the allowlist. Persists to the chosen config file.
+pub fn remove_allowlist(pattern: &str, scope: Scope) -> Result<bool> {
+    let removed = {
+        let mut g = global()
+            .write()
+            .map_err(|_| anyhow::anyhow!("lock poisoned"))?;
+        let before = g.allowlist.len();
+        g.allowlist.retain(|e| e != pattern);
+        g.allowlist.len() < before
+    };
+    recompile_allowlist()?;
+    crate::list_config::patch_config(scope, "dirs", &["allowlist", "denylist"], |dirs| {
+        if let Some(arr) = dirs["allowlist"].as_array_mut() {
+            arr.retain(|v| v.as_str() != Some(pattern));
+        }
+    })?;
+    Ok(removed)
+}
+
+/// Add `pattern` to the denylist. Persists to the chosen config file.
+pub fn add_denylist(pattern: &str, scope: Scope) -> Result<()> {
+    {
+        let mut g = global()
+            .write()
+            .map_err(|_| anyhow::anyhow!("lock poisoned"))?;
+        if !g.denylist.contains(&pattern.to_string()) {
+            g.denylist.push(pattern.to_string());
+        }
+    }
+    recompile_denylist()?;
+    crate::list_config::patch_config(scope, "dirs", &["allowlist", "denylist"], |dirs| {
+        if let Some(arr) = dirs["denylist"].as_array_mut() {
+            let val = serde_json::Value::String(pattern.to_string());
+            if !arr.contains(&val) {
+                arr.push(val);
+            }
+        }
+    })
+}
+
+/// Add `path` to the allowed_roots. Persists to the chosen config file.
+pub fn add_allowed_roots(path: &str, scope: Scope) -> Result<()> {
+    {
+        let mut g = global()
+            .write()
+            .map_err(|_| anyhow::anyhow!("lock poisoned"))?;
+        if !g.allowed_roots.contains(&path.to_string()) {
+            g.allowed_roots.push(path.to_string());
+        }
+    }
+    crate::list_config::patch_config(
+        scope,
+        "dirs",
+        &["allowlist", "denylist", "allowed_roots"],
+        |dirs| {
+            if let Some(arr) = dirs["allowed_roots"].as_array_mut() {
+                let val = serde_json::Value::String(path.to_string());
+                if !arr.contains(&val) {
+                    arr.push(val);
+                }
+            }
+        },
+    )
+}
+
+/// Remove `path` from the allowed_roots. Persists to the chosen config file.
+pub fn remove_allowed_roots(path: &str, scope: Scope) -> Result<bool> {
+    let removed = {
+        let mut g = global()
+            .write()
+            .map_err(|_| anyhow::anyhow!("lock poisoned"))?;
+        let before = g.allowed_roots.len();
+        g.allowed_roots.retain(|e| e != path);
+        g.allowed_roots.len() < before
+    };
+    crate::list_config::patch_config(
+        scope,
+        "dirs",
+        &["allowlist", "denylist", "allowed_roots"],
+        |dirs| {
+            if let Some(arr) = dirs["allowed_roots"].as_array_mut() {
+                arr.retain(|v| v.as_str() != Some(path));
+            }
+        },
+    )?;
+    Ok(removed)
+}
+
+/// Remove `pattern` from the denylist. Persists to the chosen config file.
+pub fn remove_denylist(pattern: &str, scope: Scope) -> Result<bool> {
+    let removed = {
+        let mut g = global()
+            .write()
+            .map_err(|_| anyhow::anyhow!("lock poisoned"))?;
+        let before = g.denylist.len();
+        g.denylist.retain(|e| e != pattern);
+        g.denylist.len() < before
+    };
+    recompile_denylist()?;
+    crate::list_config::patch_config(scope, "dirs", &["allowlist", "denylist"], |dirs| {
+        if let Some(arr) = dirs["denylist"].as_array_mut() {
+            arr.retain(|v| v.as_str() != Some(pattern));
+        }
+    })?;
+    Ok(removed)
+}

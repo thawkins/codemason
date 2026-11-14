@@ -1,0 +1,754 @@
+//! Compaction runner and message replacement (FR-005, FR-007).
+//!
+//! This module is the Rust port of OpenCode's `SessionCompaction.compactAfterOverflow`
+//! in `~/Projects/opencode/packages/core/src/session/compaction.ts`. It ties together
+//! the pieces built by the earlier compaction tasks:
+//!
+//! - [`super::serializer`] - flattens history into a transcript.
+//! - [`super::prompt`] - builds the Markdown summarisation prompt.
+//! - [`super::estimator`] - fast token estimate + trigger event helper.
+//!
+//! # Flow
+//!
+//! 1. [`select`] picks a verbatim "recent" tail within the configured
+//!    `keep_tokens` budget; everything before it is the "head" to summarise.
+//! 2. The head transcript (plus any previous compaction summary) is fed to
+//!    [`super::prompt::build_prompt`].
+//! 3. [`summarize_via_client`] sends the prompt to the LLM through a standard
+//!    [`LlmClient`] and collects the streamed text into the summary.
+//! 4. On success, [`compact`] builds a synthetic [`Role::Compaction`] message
+//!    holding the summary and returns the new message list
+//!    `[compaction_msg, ...recent]` (FR-005). The session resumes from that
+//!    compaction point, so the next turn loads the summary plus the verbatim
+//!    recent turns and any later system updates (FR-007).
+//!
+//! Integration into the agent loop's pre-send path is performed by T-008;
+//! emergency overflow invocation + single retry is T-009. This module only
+//! provides the runner itself.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
+
+use anyhow::{Result, bail};
+use futures::StreamExt;
+use tokio::time::timeout;
+use tracing::{info, warn};
+
+use ragent_config::StreamConfig;
+use ragent_config::compaction::{CompactionConfig, CompactionModelRef};
+use ragent_types::event::{Event, EventBus};
+use ragent_types::llm::{ChatContent, ChatMessage, ChatRequest, StreamEvent};
+use ragent_types::message::{Message, MessagePart, Role};
+use ragent_types::strutil::floor_char_boundary;
+
+use crate::compaction::{
+    build_prompt, estimate_text_tokens, publish_compaction_started, serialize_message,
+};
+use crate::llm::LlmClient;
+
+/// Maximum characters for the compaction summarisation prompt.
+///
+/// The prompt consists of the instruction/template plus the serialised head
+/// transcript. Capping it prevents local/small models from being swamped with
+/// a huge summarisation request that can stall for minutes. Kept at 60 k chars
+/// (~15 k tokens) to keep the LLM summarisation call tractable while still
+/// giving the model enough context for a useful summary. The verbatim recent
+/// tail (`keep_tokens`) is preserved regardless of this cap.
+const MAX_COMPACTION_PROMPT_CHARS: usize = 60_000;
+
+/// Denominator used to derive the prompt-size budget from the context window.
+///
+/// The adaptive cap is `min(60k chars, context_window * CHARS_PER_TOKEN / 2)`,
+/// so a 128k-token window still yields the full 60k-char prompt while a 20k
+/// local model gets a 40k-char prompt instead of the fixed 60k one.
+const PROMPT_CAP_DIVISOR: usize = 2;
+
+/// Hard cap on the total wall time for one compaction summarisation call.
+///
+/// Applies even when the stream config would allow more time; compaction is a
+/// background housekeeping call and must not wedge the session for minutes on
+/// an overloaded provider.
+const COMPACTION_OVERALL_TIMEOUT_SECS: u64 = 180;
+
+/// Per-chunk stall cap for the summarisation stream (seconds).
+///
+/// A provider that drip-feeds one token every 25s would previously heartbeat
+/// forever until the overall cap; now any single gap longer than this fails
+/// fast.
+const COMPACTION_STALL_TIMEOUT_SECS: u64 = 60;
+
+/// Heartbeat interval for long-running compaction summarisation.
+const SUMMARY_HEARTBEAT_SECS: u64 = 10;
+
+/// Resolve the model to use for the compaction summarisation call.
+///
+/// Prefers the explicit `compaction.model` config over the session's primary
+/// model. Returns the session model id unchanged when no override is set.
+#[must_use]
+pub fn resolve_compaction_model<'a>(
+    override_model: Option<&'a CompactionModelRef>,
+    session_model: &'a str,
+) -> &'a str {
+    override_model.map_or(session_model, |m| m.model_id.as_str())
+}
+
+/// Return the prompt-size budget (in characters) for a given context window.
+///
+/// Adaptive: `min(60k chars, context_window * CHARS_PER_TOKEN / 2)`. A small
+/// local model with a 16k-token window gets a 32k-char prompt cap; a 128k cloud
+/// model keeps the full 60k-char budget.
+#[must_use]
+pub fn compaction_prompt_cap(context_window: usize) -> usize {
+    let window_chars = context_window.saturating_mul(crate::compaction::CHARS_PER_TOKEN);
+    (window_chars / PROMPT_CAP_DIVISOR).min(MAX_COMPACTION_PROMPT_CHARS)
+}
+
+/// The verbatim-tail selection produced by [`select`].
+///
+/// `head_messages` are the messages that will be summarised (their serialised
+/// transcript feeds the LLM prompt). `recent_messages` are kept verbatim and
+/// appended after the synthetic compaction message in the new history.
+#[derive(Debug, Clone)]
+pub struct SelectedSplit {
+    /// Messages to summarise (older prefix), in original order.
+    pub head_messages: Vec<Message>,
+    /// Messages to keep verbatim (recent tail), in original order.
+    pub recent_messages: Vec<Message>,
+    /// Estimated token cost of the serialised recent tail.
+    pub recent_tokens: usize,
+    /// Pre-serialised transcript of the head messages, joined with blank lines.
+    /// Reused by [`compact`] to avoid re-serialising the head.
+    pub head_transcript: String,
+    /// Estimated token cost of the entire original message list (all
+    /// non-compaction messages). Reused by [`compact`] for the compression-ratio
+    /// stats so it does not re-serialise every message a second time.
+    pub original_tokens: usize,
+}
+
+/// Result of a successful [`compact`] run.
+#[derive(Debug, Clone)]
+pub struct CompactionOutcome {
+    /// The LLM-produced summary text (PERF-038: shared via `Arc<str>`).
+    pub summary: std::sync::Arc<str>,
+    /// The new message list: `[compaction_msg, ...recent_messages]`.
+    pub new_messages: Vec<Message>,
+    /// The synthetic compaction message (first element of `new_messages`).
+    pub compaction_message: Message,
+    /// Number of input messages before compaction.
+    pub original_message_count: usize,
+    /// Number of messages kept verbatim after compaction (excluding the
+    /// compaction message itself).
+    pub kept_message_count: usize,
+    /// Estimated token cost of the original history.
+    pub original_tokens: usize,
+    /// Estimated token cost of the new history.
+    pub compressed_tokens: usize,
+}
+
+/// Select the verbatim recent tail to preserve after compaction.
+///
+/// Walks the non-compaction messages in reverse, accumulating the estimated
+/// token cost of each serialised message until the `keep_tokens` budget is
+/// exhausted. At least the last message is always kept verbatim so the active
+/// turn is never dropped. Compaction messages in the input are dropped (their
+/// summary is passed separately via `previous_summary` to [`compact`]).
+///
+/// # Arguments
+///
+/// * `messages` - full conversation history (consumed; head and recent
+///   messages are *moved* out rather than cloned - PERF-038).
+/// * `config` - compaction configuration (supplies `keep_fraction` and
+///   `tool_output_max_chars`).
+/// * `context_window` - the model's context window in tokens, used to turn the
+///   configured `keep` fraction into an absolute token budget.
+#[must_use]
+pub fn select(
+    messages: Vec<Message>,
+    config: &CompactionConfig,
+    context_window: usize,
+) -> SelectedSplit {
+    let tool_max = config.tool_output_max_chars();
+    let keep_tokens = ((config.keep_fraction() * context_window as f64) as usize).max(1);
+
+    // (original_index, token_cost, serialised_text) for every non-compaction
+    // message with non-empty serialised content. Serialise each message once;
+    // the string is later reused for the head transcript.
+    let mut conv: Vec<(usize, usize, String)> = Vec::new();
+    for (i, m) in messages.iter().enumerate() {
+        if m.role == Role::Compaction {
+            continue;
+        }
+        let serialized = serialize_message(m, tool_max);
+        if serialized.is_empty() {
+            continue;
+        }
+        let cost = estimate_text_tokens(&serialized);
+        conv.push((i, cost, serialized));
+    }
+
+    // Total token cost of all non-compaction messages (used for compression
+    // stats in `compact` without re-serialising).
+    let original_tokens: usize = conv.iter().map(|(_, cost, _)| *cost).sum();
+
+    if conv.is_empty() {
+        return SelectedSplit {
+            head_messages: Vec::new(),
+            recent_messages: Vec::new(),
+            recent_tokens: 0,
+            head_transcript: String::new(),
+            original_tokens: 0,
+        };
+    }
+
+    // Always keep at least the last message verbatim. `conv` is non-empty
+    // here (the empty case returned above), so `last()` is Some; fall back to a
+    // zero cost rather than panicking (FUNC-043).
+    let mut total = conv.last().map_or(0, |(_, cost, _)| *cost);
+    let mut split_idx = conv.len() - 1;
+    for (idx, &(_, cost, _)) in conv.iter().enumerate().rev().skip(1) {
+        if total + cost > keep_tokens {
+            break;
+        }
+        total += cost;
+        split_idx = idx;
+    }
+
+    // If every message fit inside the keep budget, `split_idx` is 0 and the
+    // head would be empty. When there are two or more messages, force at least
+    // the oldest one into the head so the LLM has something to summarise.
+    // Without this, compaction fires (token count exceeded threshold) but
+    // immediately bails with "nothing to summarise", leaving the user stuck
+    // with an un-compactable context that will keep re-triggering.
+    if split_idx == 0 && conv.len() > 1 {
+        split_idx = 1;
+        // Recalculate the recent-token total for the reduced tail.
+        total = conv[split_idx..].iter().map(|(_, c, _)| *c).sum();
+    }
+
+    // PERF-038: build the head transcript from the strings already serialised
+    // above (no second serialisation pass), then partition the owned history in
+    // place by *moving* each retained message into either the head or the recent
+    // tail - no per-message deep clone.
+    //
+    // Join the head transcript with a single allocation pre-sized to the exact
+    // byte count (segment bytes + two separator bytes between segments).
+    let head_count = split_idx;
+    let head_bytes: usize = conv[..head_count].iter().map(|(_, _, s)| s.len()).sum();
+    let separators = head_count.saturating_sub(1) * 2;
+    let mut head_transcript = String::with_capacity(head_bytes + separators);
+    for (k, (_, _, s)) in conv[..head_count].iter().enumerate() {
+        if k > 0 {
+            head_transcript.push_str("\n\n");
+        }
+        head_transcript.push_str(s);
+    }
+
+    // Take each retained message out of its slot exactly once. `conv` already
+    // holds the original index of every retained message in order.
+    let mut slots: Vec<Option<Message>> = messages.into_iter().map(Some).collect();
+    let mut head_messages: Vec<Message> = Vec::with_capacity(head_count);
+    let mut recent_messages: Vec<Message> = Vec::with_capacity(conv.len() - head_count);
+    for (k, (idx, _, _)) in conv.iter().enumerate() {
+        // Each retained message occupies a distinct slot, so take() is Some;
+        // skip defensively rather than panicking on an index invariant
+        // violation (FUNC-043).
+        let Some(message) = slots[*idx].take() else {
+            tracing::warn!(
+                index = *idx,
+                "compaction: retained message slot was already taken"
+            );
+            continue;
+        };
+        if k < head_count {
+            head_messages.push(message);
+        } else {
+            recent_messages.push(message);
+        }
+    }
+
+    SelectedSplit {
+        head_messages,
+        recent_messages,
+        recent_tokens: total,
+        head_transcript,
+        original_tokens,
+    }
+}
+
+/// Drive an LLM streaming request to completion, collecting every
+/// [`StreamEvent::TextDelta`] into a single summary string.
+///
+/// Returns `Err` if the provider emits an [`StreamEvent::Error`], the stream
+/// stalls for longer than [`COMPACTION_STALL_TIMEOUT_SECS`] between chunks, the
+/// cooperative cancel flag fires between chunks, or the overall
+/// [`COMPACTION_OVERALL_TIMEOUT_SECS`] cap is hit.
+///
+/// Publishes an incremental progress heartbeat every [`SUMMARY_HEARTBEAT_SECS`]
+/// seconds carrying the elapsed time and accumulated character count so the UI
+/// shows real progress instead of a static spinner message.
+///
+/// # Arguments
+///
+/// * `client` - the LLM client to call.
+/// * `request` - the summarisation request (a single user message).
+/// * `stream_config` - stream timeout configuration (the per-chunk stall cap
+///   is derived from `timeout_secs`, clamped to the 60 s built-in cap).
+/// * `event_bus` - event bus for compaction progress notices.
+/// * `session_id` - session identifier used in log lines.
+/// * `cancel` - cooperative cancellation flag checked between chunks.
+///
+/// # Errors
+///
+/// Returns `Err` if the provider stream fails, stalls, is cancelled, or the
+/// overall timeout elapses.
+pub async fn summarize_via_client(
+    client: &Arc<dyn LlmClient>,
+    request: ChatRequest,
+    stream_config: &StreamConfig,
+    event_bus: &EventBus,
+    session_id: &str,
+    cancel: &AtomicBool,
+) -> Result<String> {
+    // Bound the total wall time for a summarisation call. Local models in
+    // particular can stall on huge prompts; this prevents the UI from freezing
+    // indefinitely. Hard cap of COMPACTION_OVERALL_TIMEOUT_SECS regardless of
+    // stream-config values.
+    let overall_timeout = std::time::Duration::from_secs(COMPACTION_OVERALL_TIMEOUT_SECS);
+    // Per-chunk stall timeout: the smaller of the stream config value and the
+    // built-in 60 s cap, floored at 5 s so a pathological config cannot
+    // busy-loop the stream.
+    let stall_timeout = std::time::Duration::from_secs(
+        stream_config
+            .timeout_secs
+            .min(COMPACTION_STALL_TIMEOUT_SECS)
+            .max(5),
+    );
+
+    let summary_fut = async {
+        let started = Instant::now();
+        let mut next_heartbeat = SUMMARY_HEARTBEAT_SECS;
+        let mut stream = client.chat(request).await?;
+        let mut summary = String::new();
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                bail!("compaction cancelled");
+            }
+            let event = match timeout(stall_timeout, stream.next()).await {
+                Ok(Some(ev)) => ev,
+                Ok(None) => break,
+                Err(_) => bail!(
+                    "compaction summarisation stalled: no token received in {}s",
+                    stall_timeout.as_secs()
+                ),
+            };
+            let elapsed_secs = started.elapsed().as_secs();
+            if elapsed_secs >= next_heartbeat {
+                info!(
+                    session_id,
+                    elapsed_secs,
+                    summary_chars = summary.len(),
+                    "compaction summarisation still in progress"
+                );
+                event_bus.publish(Event::AgentNotice {
+                    session_id: session_id.to_string(),
+                    message: format!(
+                        "Context compression running: {elapsed_secs}s elapsed, {} chars received",
+                        summary.len()
+                    ),
+                });
+                next_heartbeat = elapsed_secs + SUMMARY_HEARTBEAT_SECS;
+            }
+            match event {
+                StreamEvent::TextDelta { text } => summary.push_str(&text),
+                StreamEvent::Error { message } => {
+                    bail!("compaction summarisation failed: {message}")
+                }
+                StreamEvent::Finish { .. } => break,
+                // Tool calls, reasoning deltas, usage, and rate-limit events are
+                // not expected from a no-tools summarisation request and are
+                // ignored.
+                _ => {}
+            }
+        }
+        Ok(summary)
+    };
+
+    match timeout(overall_timeout, summary_fut).await {
+        Ok(result) => result,
+        Err(_) => bail!(
+            "compaction summarisation timed out after {}s; \
+             the model may be overloaded or the compaction prompt is too large",
+            COMPACTION_OVERALL_TIMEOUT_SECS
+        ),
+    }
+}
+
+/// Build the summarisation [`ChatRequest`] for a given prompt.
+///
+/// The request carries a single user message (the summary prompt), no tools,
+/// a `max_tokens` cap of `summary_output`, and the caller-supplied sampling
+/// temperature (the compaction agent sets 0.2; `None` uses the provider
+/// default).
+#[must_use]
+pub fn build_summary_request(
+    model: &str,
+    prompt: &str,
+    summary_output: u32,
+    stream_timeout_secs: Option<u64>,
+    temperature: Option<f32>,
+) -> ChatRequest {
+    ChatRequest {
+        model: model.to_string(),
+        messages: Arc::new(vec![ChatMessage {
+            role: "user".to_string(),
+            content: ChatContent::Text(prompt.to_string()),
+        }]),
+        tools: Arc::new(Vec::new()),
+        temperature,
+        top_p: None,
+        max_tokens: Some(summary_output),
+        system: None,
+        options: std::collections::HashMap::new(),
+        thinking: None,
+        session_id: None,
+        request_id: None,
+        stream_timeout_secs,
+    }
+}
+
+/// Build the synthetic [`Role::Compaction`] message holding the summary.
+///
+/// The message carries the summary as a single [`MessagePart::Text`]. The
+/// verbatim recent turns are kept as separate messages in the new history
+/// (see [`compact`]), so the compaction message itself only needs the summary
+/// text - this matches how the history loader (FR-007) reconstructs context:
+/// the compaction summary plus every message from the compaction point onward.
+#[must_use]
+pub fn build_compaction_message(session_id: &str, summary: &str) -> Message {
+    Message::new(
+        session_id,
+        Role::Compaction,
+        vec![MessagePart::Text {
+            text: summary.to_string(),
+        }],
+    )
+}
+
+/// Run a single compaction pass and return the replacement message list.
+///
+/// This is the Rust equivalent of OpenCode's `compactAfterOverflow`. It:
+///
+/// 1. Selects the verbatim recent tail via [`select`].
+/// 2. Bails out when there is nothing to summarise (empty head and no previous
+///    compaction summary to update) - mirroring OpenCode's guard.
+/// 3. Bails out when the summary prompt itself would overflow the context
+///    window minus the summary output budget.
+/// 4. Emits a compaction-started event, calls the LLM, and collects the summary.
+/// 5. On a non-empty summary, builds the synthetic compaction message and
+///    returns `[compaction_msg, ...recent]`.
+/// 6. Emits a compaction-finished event with the before/after token estimates.
+///
+/// # Arguments
+///
+/// * `session_id` - the session being compacted.
+/// * `messages` - full conversation history (consumed).
+/// * `model` - the model id to use for the summarisation call.
+/// * `context_window` - the model's context window in tokens (used for the
+///   overflow guard).
+/// * `output_tokens` - the request's max output tokens; the summary output cap
+///   is `min(output_tokens, SUMMARY_OUTPUT_TOKENS)`.
+/// * `config` - compaction configuration.
+/// * `previous_summary` - an existing compaction summary to update, if any
+///   (FR-010).
+/// * `client` - the LLM client used for the summarisation call.
+/// * `event_bus` - event bus for compaction-lifecycle events.
+/// * `reason` - compaction reason (`"auto"` for pre-send triggers, `"overflow"`
+///   for emergency triggers).
+/// * `cancel` - cooperative cancellation flag checked between stream chunks.
+///
+/// # Errors
+///
+/// Returns `Err` when there is nothing to summarise, the summary prompt would
+/// overflow, the LLM call fails or is cancelled, or the summary comes back empty.
+pub async fn compact(
+    session_id: &str,
+    messages: Vec<Message>,
+    model: &str,
+    context_window: usize,
+    output_tokens: usize,
+    config: &CompactionConfig,
+    previous_summary: Option<&str>,
+    client: &Arc<dyn crate::llm::LlmClient>,
+    event_bus: &EventBus,
+    reason: &str,
+    stream_config: &StreamConfig,
+    cancel: &AtomicBool,
+) -> Result<CompactionOutcome> {
+    let original_message_count = messages.len();
+    let non_compaction_count = messages
+        .iter()
+        .filter(|m| m.role != Role::Compaction)
+        .count();
+    let tool_max = config.tool_output_max_chars();
+
+    // 1. Select verbatim recent tail + head to summarise. `select` consumes the
+    //    history, moving the retained messages instead of cloning them
+    //    (PERF-038).
+    let split = select(messages, config, context_window);
+
+    // 2. Nothing-to-summarise guard (OpenCode:
+    //    `if (!selected || (selected.head.length === 0 && previousSummary?.
+    //    type !== "compaction")) return false`).
+    //
+    //    After the `select` fix that forces at least one message into the head
+    //    when there are 2+ messages, this guard now only fires when there is
+    //    literally a single non-compaction message - the entire conversation is
+    //    one turn. In that case compaction cannot help, so we skip silently
+    //    (debug log only) rather than showing a confusing user-visible notice.
+    if split.head_messages.is_empty() && previous_summary.is_none() {
+        tracing::debug!(
+            session_id,
+            reason,
+            non_compaction_msgs = non_compaction_count,
+            "compaction skipped: nothing to summarise (single-message context)"
+        );
+        bail!("compaction has nothing to summarise: single-message context");
+    }
+
+    // 3. Build the summarisation prompt. The head transcript was already
+    //    serialised by `select` - reuse it to avoid duplicate work. The cap
+    //    adapts to the context window so small local models get a
+    //    proportionally smaller prompt instead of a fixed 60k-char one.
+    let head_transcript = cap_head_transcript(&split.head_transcript, context_window);
+
+    let prompt = build_prompt(previous_summary, &[head_transcript.as_str()]);
+
+    // 4. Overflow guard: bail if the prompt alone would not leave room for the
+    //    summary output. The summary budget defaults to
+    //    `CompactionConfig::summary_output_tokens` and honours any explicit
+    //    `output_tokens` the caller passes as a tighter upper bound.
+    let configured_summary = config.summary_output_tokens();
+    let summary_output_cap = if output_tokens == 0 {
+        configured_summary
+    } else {
+        output_tokens.min(configured_summary)
+    };
+    let prompt_tokens = estimate_text_tokens(&prompt);
+    let prompt_budget = context_window.saturating_sub(summary_output_cap);
+    if context_window > 0 && prompt_tokens > prompt_budget {
+        let msg = format!(
+            "compaction summary prompt ({prompt_tokens} tokens) exceeds context budget ({prompt_budget})"
+        );
+        warn!(
+            prompt_tokens,
+            context_window, summary_output_cap, "compaction bail: {msg}"
+        );
+        event_bus.publish(Event::AgentNotice {
+            session_id: session_id.to_string(),
+            message: format!("Context compression skipped: {msg}"),
+        });
+        bail!("{msg}");
+    }
+
+    // 5. Emit compaction-started and call the LLM.
+    publish_compaction_started(event_bus, session_id, reason);
+    let request = build_summary_request(
+        model,
+        &prompt,
+        summary_output_cap as u32,
+        Some(stream_config.initial_response_timeout_secs),
+        Some(0.2),
+    );
+    let summary = match summarize_via_client(
+        client,
+        request,
+        stream_config,
+        event_bus,
+        session_id,
+        cancel,
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            let msg = format!("LLM summarisation call failed: {e}");
+            warn!(session_id, reason, "compaction bail: {msg}");
+            event_bus.publish(Event::AgentNotice {
+                session_id: session_id.to_string(),
+                message: format!("Context compression failed: {msg}"),
+            });
+            return Err(e);
+        }
+    };
+    let summary = summary.trim();
+    if summary.is_empty() {
+        let msg = "compaction summarisation produced an empty summary";
+        warn!(session_id, reason, "compaction bail: {msg}");
+        event_bus.publish(Event::CompressionFinished {
+            session_id: session_id.to_string(),
+            original_tokens: 0,
+            compressed_tokens: 0,
+            compression_ratio: 1.0,
+            did_compress: false,
+            reason: reason.to_string(),
+        });
+        event_bus.publish(Event::AgentNotice {
+            session_id: session_id.to_string(),
+            message: format!("Context compression failed: {msg}"),
+        });
+        bail!("{msg}");
+    }
+
+    // 6. Build the replacement message list: [compaction_msg, ...recent].
+    //    PERF-038: move the retained recent messages out of `split` and share
+    //    the summary via `Arc<str>` so it is not cloned for both the compaction
+    //    message and the returned outcome.
+    let summary: Arc<str> = Arc::from(summary);
+    let compaction_message = build_compaction_message(session_id, &summary);
+    let mut recent = split.recent_messages;
+    let kept_message_count = recent.len();
+    let mut new_messages = Vec::with_capacity(1 + kept_message_count);
+    new_messages.push(compaction_message.clone());
+    new_messages.append(&mut recent);
+
+    // 7. Token estimates for the finished event. Reuse the original_tokens
+    //    already computed by `select` to avoid re-serialising every message.
+    let original_tokens = split.original_tokens;
+    let compressed_tokens: usize = new_messages
+        .iter()
+        .map(|m| estimate_text_tokens(&serialize_message(m, tool_max)))
+        .sum();
+    let did_compress = compressed_tokens < original_tokens;
+    let compression_ratio = if compressed_tokens == 0 {
+        1.0
+    } else {
+        original_tokens as f64 / compressed_tokens as f64
+    };
+
+    info!(
+        original_tokens,
+        compressed_tokens,
+        kept_messages = kept_message_count,
+        summary_len = summary.len(),
+        "compaction complete"
+    );
+    event_bus.publish(Event::CompressionFinished {
+        session_id: session_id.to_string(),
+        original_tokens,
+        compressed_tokens,
+        compression_ratio,
+        did_compress,
+        reason: reason.to_string(),
+    });
+
+    Ok(CompactionOutcome {
+        summary,
+        new_messages,
+        compaction_message,
+        original_message_count,
+        kept_message_count,
+        original_tokens,
+        compressed_tokens,
+    })
+}
+
+/// Emergency overflow compaction (FR-004).
+///
+/// Invoked by the agent loop when a provider response fails with a context-
+/// overflow error before any assistant tokens have been produced. Runs the
+/// OpenCode-derived summarisation runner with `reason = "overflow"`, replacing
+/// `chat_messages` in place with `[compaction_msg, ...recent]`. The caller then
+/// retries the turn once with the compacted history.
+///
+/// It is `async` (it calls the LLM to produce the summary) and never silently
+/// drops structured message parts (FR-014) - the serialiser represents them
+/// textually inside the summary prompt.
+///
+/// # Arguments
+///
+/// * `session_id` - the session being compacted.
+/// * `chat_messages` - provider-facing chat history; replaced in place on
+///   success.
+/// * `model` - the model id used for the summarisation call.
+/// * `context_window`, `output_tokens`, `config` - forwarded to [`compact`].
+/// * `client` - the LLM client used for the summarisation call.
+/// * `event_bus` - event bus for compaction-lifecycle events.
+/// * `cancel` - cooperative cancellation flag forwarded to [`compact`].
+///
+/// # Errors
+///
+/// Returns `Err` when there is nothing to summarise, the summary prompt would
+/// overflow, the LLM call fails or is cancelled, or the summary comes back
+/// empty. On error the `chat_messages` slice is left unchanged so the caller
+/// can surface the original overflow error.
+pub async fn emergency_compact(
+    session_id: &str,
+    chat_messages: &mut Vec<ChatMessage>,
+    model: &str,
+    context_window: usize,
+    output_tokens: usize,
+    config: &CompactionConfig,
+    client: &Arc<dyn crate::llm::LlmClient>,
+    event_bus: &EventBus,
+    stream_config: &StreamConfig,
+    cancel: &AtomicBool,
+) -> Result<CompactionOutcome> {
+    // Convert the provider-facing chat messages into the internal `Message`
+    // form the compaction runner expects.
+    let messages = crate::compaction::convert::chat_messages_to_messages(chat_messages);
+    let previous_summary = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == Role::Compaction)
+        .map(|m| m.text_content());
+    let outcome = compact(
+        session_id,
+        messages,
+        model,
+        context_window,
+        output_tokens,
+        config,
+        previous_summary.as_deref(),
+        client,
+        event_bus,
+        "overflow",
+        stream_config,
+        cancel,
+    )
+    .await?;
+    // Replace the in-memory history in place so the caller's retry attempt
+    // sends the compacted payload.
+    let new_chat = crate::compaction::convert::messages_to_chat_messages(&outcome.new_messages);
+    *chat_messages = new_chat;
+    Ok(outcome)
+}
+
+/// Truncate the serialised head transcript so the final compaction prompt does
+/// not exceed the budget for the given `context_window` (see
+/// [`compaction_prompt_cap`]).
+///
+/// Keeps the most recent conversation content (the end of the string) and
+/// prepends a truncation marker when content is dropped.
+#[must_use]
+fn cap_head_transcript(head_transcript: &str, context_window: usize) -> String {
+    let cap_chars = compaction_prompt_cap(context_window);
+    if head_transcript.len() <= cap_chars {
+        return head_transcript.to_string();
+    }
+    let marker = "[Earlier conversation omitted due to length]\n\n";
+    let keep_len = cap_chars.saturating_sub(marker.len());
+    // Byte indexes must be snapped to UTF-8 char boundaries: the byte offset
+    // `len - keep_len` can land inside a multi-byte character (e.g. box-drawing
+    // glyphs in tool output), which would panic on slice.
+    let cut = floor_char_boundary(head_transcript, head_transcript.len() - keep_len);
+    let truncated = &head_transcript[cut..];
+    // Try to start at a message boundary so we don't cut mid-message.
+    let boundary = truncated.find("\n\n").unwrap_or(0);
+    let truncated = &truncated[boundary..];
+    format!("{marker}{truncated}")
+}
+
+#[cfg(test)]
+#[path = "../../tests/inline/test_compaction_runner.rs"]
+mod tests;

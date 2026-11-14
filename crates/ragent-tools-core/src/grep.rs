@@ -1,0 +1,359 @@
+//! Text search tool for file contents.
+//!
+//! Provides [`GrepTool`], which searches files for a regex or literal pattern
+//! using the ripgrep internal library crates:
+//!
+//! - [`ignore`] - directory walking that honours `.gitignore`, `.ignore`, and
+//!   custom include/exclude glob patterns.
+//! - [`grep_regex`] - regex matcher backed by the `regex` crate.
+//! - [`grep_searcher`] - fast line-oriented searcher with encoding detection
+//!   and automatic binary-file skipping.
+//!
+//! Results are capped at 500 matches and include the relative file path, line
+//! number, and matching line content.
+
+use anyhow::{Context, Result};
+use grep_regex::RegexMatcherBuilder;
+use grep_searcher::{Searcher, SearcherBuilder, Sink, SinkMatch};
+use ignore::WalkBuilder;
+use serde_json::{Value, json};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+use super::{Tool, ToolContext, ToolOutput};
+use crate::path_util::resolve_path;
+
+/// Maximum number of matching lines returned before results are truncated.
+const MAX_RESULTS: usize = 500;
+
+/// Searches file contents for a regex pattern across a directory tree.
+///
+/// Uses the ripgrep library crates for correct `.gitignore` handling, fast
+/// line-oriented searching, automatic binary-file skipping, and real regex
+/// support. Results are capped at [`MAX_RESULTS`] matches.
+pub struct GrepTool;
+
+#[async_trait::async_trait]
+impl Tool for GrepTool {
+    fn name(&self) -> &'static str {
+        "Grep"
+    }
+
+    fn description(&self) -> &'static str {
+        "Search file contents for a regex pattern using ripgrep, respecting \
+         `.gitignore` rules. Required parameter: `pattern` (string) in Rust \
+         regex syntax. Optional parameters: `path` (string) - directory or file \
+         to search (default: working directory); `include` (string) and \
+         `exclude` (string) - glob filters; `case_insensitive` (boolean) and \
+         `multiline` (boolean); `max_results` (integer, default and max 500). \
+         Returns matching lines with file path and line number. Skips binary \
+         files automatically."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "REQUIRED. Regex pattern to search for (Rust regex syntax)"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Directory or file to search in (default: working directory)"
+                },
+                "include": {
+                    "type": "string",
+                    "description": "Glob pattern to restrict which files are searched (e.g. '*.rs', '**/*.ts')"
+                },
+                "exclude": {
+                    "type": "string",
+                    "description": "Glob pattern of files/directories to exclude"
+                },
+                "case_insensitive": {
+                    "type": "boolean",
+                    "description": "Case-insensitive matching (default: false)"
+                },
+                "multiline": {
+                    "type": "boolean",
+                    "description": "Enable multiline mode - ^ and $ match line boundaries (default: false)"
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of matches to return (default: 500, max: 500)"
+                }
+            },
+            "required": ["pattern"],
+            "additionalProperties": false
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "file:read"
+    }
+
+    /// Searches file contents for a regex pattern using the ripgrep library.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The `pattern` parameter is missing or not a valid regex.
+    /// - The search path cannot be accessed.
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let pattern = input["pattern"]
+            .as_str()
+            .context("Missing required 'pattern' parameter")?;
+
+        let search_path = input["path"].as_str().map_or_else(
+            || ctx.working_dir.clone(),
+            |p| resolve_path(&ctx.working_dir, p),
+        );
+
+        // C-002 / FUNC-068 (ANTIPAT F-06): grep must stay inside the allowed
+        // roots. The helper falls back to `working_dir` when `allowed_roots` is
+        // empty, so the two branches below are equivalent to the old form.
+        super::check_path_within_allowed_roots_cached(
+            &search_path,
+            &ctx.working_dir,
+            &ctx.allowed_roots,
+            &ctx.canonical_cache,
+        )?;
+
+        let include_glob = input["include"].as_str().map(str::to_owned);
+        let exclude_glob = input["exclude"].as_str().map(str::to_owned);
+        let case_insensitive = input["case_insensitive"].as_bool().unwrap_or(false);
+        let multiline = input["multiline"].as_bool().unwrap_or(false);
+        let max_results = input["max_results"]
+            .as_u64()
+            .map_or(MAX_RESULTS, |n| (n as usize).min(MAX_RESULTS));
+
+        // Build the regex matcher - validates the pattern early before spawning
+        let matcher = RegexMatcherBuilder::new()
+            .case_insensitive(case_insensitive)
+            .multi_line(multiline)
+            .build(pattern)
+            .with_context(|| format!("Invalid regex pattern: '{pattern}'"))?;
+
+        // Validate and build the include/exclude glob overrides up front so an
+        // invalid user-supplied glob is surfaced as an error instead of being
+        // silently ignored (which would search unfiltered).
+        let override_opt = if include_glob.is_some() || exclude_glob.is_some() {
+            let mut ob = ignore::overrides::OverrideBuilder::new(&search_path);
+            if let Some(ref inc) = include_glob {
+                ob.add(inc)
+                    .with_context(|| format!("invalid include glob `{inc}`"))?;
+            }
+            if let Some(ref exc) = exclude_glob {
+                let neg = format!("!{exc}");
+                ob.add(&neg)
+                    .with_context(|| format!("invalid exclude glob `{exc}`"))?;
+            }
+            Some(ob.build().context("failed to build glob overrides")?)
+        } else {
+            None
+        };
+
+        // Shared accumulators used from the Sink callback on the blocking thread
+        let results: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let files_searched: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
+        let truncated: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+
+        let results_bg = Arc::clone(&results);
+        let files_bg = Arc::clone(&files_searched);
+        let truncated_bg = Arc::clone(&truncated);
+        let search_path_bg = search_path.clone();
+        tokio::task::spawn_blocking(move || {
+            // Build the walker with .gitignore / .ignore support.
+            // Keep hidden(false) so dot-files like .eslintrc are searchable, but
+            // filter the .git directory itself to avoid searching VCS internals.
+            let mut walk_builder = WalkBuilder::new(&search_path_bg);
+            walk_builder
+                .hidden(false)
+                .git_ignore(true)
+                .git_global(true)
+                .git_exclude(true)
+                .ignore(true)
+                .filter_entry(|e| e.file_name() != ".git");
+
+            // Apply the pre-validated include/exclude glob overrides
+            if let Some(ov) = override_opt {
+                walk_builder.overrides(ov);
+            }
+
+            // M-020: walk and search in parallel (the `ignore` crate's
+            // parallel walker) so large trees use all cores instead of a
+            // single thread. Each visited path is searched with a fresh
+            // per-file `Searcher` clone (they are cheap to build) and the
+            // shared capped sink.
+            let should_stop = || {
+                let r = results_bg
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if r.len() >= max_results {
+                    *truncated_bg
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+                    true
+                } else {
+                    false
+                }
+            };
+
+            // Clone the shared handles into the closure so the outer Arcs can
+            // be unwrapped after the walk completes.
+            let results_par = Arc::clone(&results_bg);
+            let files_par = Arc::clone(&files_bg);
+            let truncated_par = Arc::clone(&truncated_bg);
+            let search_path_par = search_path_bg.clone();
+            let matcher_par = matcher.clone();
+
+            walk_builder.build_parallel().run(|| {
+                let results_par = Arc::clone(&results_par);
+                let files_par = Arc::clone(&files_par);
+                let truncated_par = Arc::clone(&truncated_par);
+                let search_path_par = search_path_par.clone();
+                let matcher_par = matcher_par.clone();
+                let mut searcher = SearcherBuilder::new()
+                    .binary_detection(grep_searcher::BinaryDetection::quit(b'\x00'))
+                    .line_number(true)
+                    .build();
+                Box::new(move |entry_result| {
+                    let Ok(entry) = entry_result else {
+                        return ignore::WalkState::Continue;
+                    };
+                    // Cheap file-type filter first: directories and error
+                    // entries must not pay for the global truncation check
+                    // (which takes one or two mutexes per path).
+                    if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+                        return ignore::WalkState::Continue;
+                    }
+                    if should_stop() {
+                        return ignore::WalkState::Quit;
+                    }
+                    let path = entry.path().to_path_buf();
+                    *files_par
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
+
+                    let sink = CollectSink {
+                        path: &path,
+                        base: &search_path_par,
+                        results: &results_par,
+                        truncated: &truncated_par,
+                        max_results,
+                    };
+
+                    // Per-file errors (binary, permission denied) are silently ignored
+                    let _ = searcher.search_path(&matcher_par, &path, sink); // INTENTIONAL: per-file errors (binary, permission) are skipped by design
+                    ignore::WalkState::Continue
+                })
+            });
+        })
+        .await
+        .context("Grep search task panicked")?;
+
+        // The walker's parallel closure holds clones of `results`; after
+        // `spawn_blocking` returns (all walker threads joined) this arc is the
+        // sole owner, so try_unwrap always succeeds here.
+        let results_mutex = match Arc::try_unwrap(results) {
+            Ok(mutex) => mutex,
+            // The sole-owner invariant above makes this branch unreachable; if
+            // it ever fires, keep the shared inner value by draining it.
+            Err(_arc) => {
+                debug_assert!(false, "grep results arc unexpectedly shared");
+                std::sync::Mutex::new(Vec::new())
+            }
+        };
+        let results = results_mutex
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let files_searched = *files_searched
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let truncated = *truncated
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        if results.is_empty() {
+            Ok(ToolOutput {
+                content: format!(
+                    "No matches found for '{}' in {} ({} files searched)",
+                    pattern,
+                    search_path.display(),
+                    files_searched
+                ),
+                metadata: None,
+            })
+        } else {
+            let match_count = results.len();
+            let content = results.join("\n");
+            let summary = format!(
+                "{} match{} in {} file{} searched{}",
+                match_count,
+                if match_count == 1 { "" } else { "es" },
+                files_searched,
+                if files_searched == 1 { "" } else { "s" },
+                if truncated {
+                    " (results truncated at limit)"
+                } else {
+                    ""
+                },
+            );
+            Ok(ToolOutput {
+                content: format!("{summary}\n\n{content}"),
+                metadata: Some(json!({
+                    "count": match_count,
+                    "file_count": files_searched,
+                    "truncated": truncated,
+                    "pattern": pattern,
+                })),
+            })
+        }
+    }
+}
+
+/// [`Sink`] implementation that collects matching lines into a shared `Vec<String>`.
+///
+/// Each match is formatted as `relative/path:line_number:line_content`.
+struct CollectSink<'a> {
+    path: &'a Path,
+    base: &'a Path,
+    results: &'a Arc<Mutex<Vec<String>>>,
+    truncated: &'a Arc<Mutex<bool>>,
+    max_results: usize,
+}
+
+impl Sink for CollectSink<'_> {
+    type Error = std::io::Error;
+
+    fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
+        let mut results = self
+            .results
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        if results.len() >= self.max_results {
+            *self
+                .truncated
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+            return Ok(false); // stop searching this file
+        }
+
+        let line_num = mat.line_number().unwrap_or(0);
+        let line = std::str::from_utf8(mat.bytes())
+            .unwrap_or("")
+            .trim_end_matches(['\n', '\r']);
+
+        // Relative path for cleaner output
+        let display_path = self
+            .path
+            .strip_prefix(self.base)
+            .unwrap_or(self.path)
+            .display()
+            .to_string();
+
+        results.push(format!("{display_path}:{line_num}:{line}"));
+        Ok(true)
+    }
+}

@@ -1,0 +1,1030 @@
+//! Integration tests for the renewed `EditTool` (editrenewal spec).
+//!
+//! The renewed `Edit` tool uses **strict exact-match** replacement (FR-004):
+//! `old_string` must match the file byte-for-byte, including whitespace,
+//! indentation, and line endings. These tests cover exact match, multiple
+//! matches, missing file, stale file, create/delete/update operations,
+//! no-change rejection, snippet generation, canonical vs legacy parameter
+//! names, and deprecation-warning metadata (FR-013).
+
+use std::sync::Arc;
+use std::time::SystemTime;
+
+use ragent_tools_core::edit::EditTool;
+use ragent_tools_core::read::ReadTool;
+use ragent_tools_core::{Tool, ToolContext};
+use serde_json::json;
+use tempfile::TempDir;
+
+fn ctx(working_dir: &std::path::Path) -> ToolContext {
+    ToolContext {
+        session_id: "test".to_string(),
+        working_dir: working_dir.to_path_buf(),
+        event_bus: Arc::new(ragent_types::event::EventBus::new(64)),
+        read_timestamps: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+        canonical_cache: Arc::new(ragent_tools_core::CanonicalPathCache::new()),
+        allowed_roots: vec![working_dir.to_path_buf()],
+    }
+}
+
+fn write_file(dir: &std::path::Path, name: &str, content: &str) -> std::path::PathBuf {
+    let path = dir.join(name);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(&path, content).unwrap();
+    path
+}
+
+/// Helper: run an edit with canonical params and assert the resulting file
+/// content.
+async fn assert_edit(
+    dir: &std::path::Path,
+    file: &str,
+    initial: &str,
+    old_string: &str,
+    new_string: &str,
+    expected: &str,
+) {
+    let path = write_file(dir, file, initial);
+    let input = json!({
+        "file_path": file,
+        "old_string": old_string,
+        "new_string": new_string,
+    });
+    let _out = EditTool
+        .execute(input, &ctx(dir))
+        .await
+        .expect("edit should succeed");
+    let result = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(result, expected, "file content after edit");
+}
+
+// -- Exact match (baseline) ---------------------------------------------------
+
+#[tokio::test]
+async fn test_edit_exact_match_baseline() {
+    let tmp = TempDir::new().unwrap();
+    assert_edit(
+        tmp.path(),
+        "a.rs",
+        "fn foo() {\n    bar\n}\n",
+        "    bar\n",
+        "    baz\n",
+        "fn foo() {\n    baz\n}\n",
+    )
+    .await;
+}
+
+// -- Exact-byte matching: cascade behaviour ------------------------------------
+//
+// P2.4/P2.5: when exact matching fails, the fallback cascade retries with
+// whitespace-flexible and indent-normalised matching. Tests below verify both
+// the rescue behaviour (unique matches now succeed where strict-exact would
+// have failed) and the rejection behaviour (ambiguous / absent needles are
+// still errors).
+
+#[tokio::test]
+async fn test_edit_cascade_accepts_crlf_mismatch_via_flexible_lane() {
+    // The old exact-only matcher rejected LF needles against CRLF files. The
+    // flexible fallback lane resolves the unique match; F-1 CRLF preservation
+    // converts the caller's LF new_string to the file's CRLF style so the
+    // edited region keeps its original line endings instead of silently
+    // becoming LF-only.
+    let tmp = TempDir::new().unwrap();
+    let path = write_file(tmp.path(), "a.rs", "fn foo() {\r\n    bar\r\n}\r\n");
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "fn foo() {\n    bar\n}\n",
+        "new_string": "fn foo() {\n    baz\n}\n",
+    });
+    let out = EditTool
+        .execute(input, &ctx(tmp.path()))
+        .await
+        .expect("flexible fallback lane should resolve a unique CRLF mismatch");
+    assert_eq!(
+        out.metadata.as_ref().unwrap()["match_lane"],
+        "flexible",
+        "success should record the flexible lane"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "fn foo() {\r\n    baz\r\n}\r\n",
+        "matched span keeps the file's CRLF line endings (F-1)"
+    );
+}
+
+#[tokio::test]
+async fn test_edit_cascade_accepts_trailing_space_mismatch() {
+    // Trailing-whitespace mismatch was previously rejected by strict exact
+    // matching; the flexible fallback lane now rescues a unique match.
+    let tmp = TempDir::new().unwrap();
+    let path = write_file(tmp.path(), "a.rs", "fn foo() {\n    bar  \n}\n");
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "fn foo() {\n    bar\n}\n",
+        "new_string": "fn foo() {\n    baz\n}\n",
+    });
+    let out = EditTool
+        .execute(input, &ctx(tmp.path()))
+        .await
+        .expect("flexible fallback lane should resolve a unique trailing-whitespace mismatch");
+    assert_eq!(out.metadata.as_ref().unwrap()["match_lane"], "flexible");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "fn foo() {\n    baz\n}\n",
+    );
+}
+
+#[tokio::test]
+async fn test_edit_cascade_accepts_tab_vs_space_indentation() {
+    // A needle whose inner line omits the file's indentation is rescued by
+    // the fallback cascade (whitespace runs in the needle match the file's
+    // deeper indentation), and the caller's `new_string` is inserted
+    // verbatim.
+    let tmp = TempDir::new().unwrap();
+    let path = write_file(tmp.path(), "a.rs", "fn foo() {\n    bar\n}\n");
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "fn foo() {\nbar\n}\n",
+        "new_string": "fn foo() {\nbaz\n}\n",
+    });
+    let out = EditTool
+        .execute(input, &ctx(tmp.path()))
+        .await
+        .expect("cascade should resolve a missed-indentation mismatch");
+    assert_eq!(
+        out.metadata.as_ref().unwrap()["match_lane"],
+        "flexible",
+        "success should record the lane that matched"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "fn foo() {\nbaz\n}\n",
+        "new_string is inserted verbatim"
+    );
+}
+
+#[tokio::test]
+async fn test_edit_dry_run_previews_without_writing() {
+    let tmp = TempDir::new().unwrap();
+    let path = write_file(tmp.path(), "a.rs", "fn foo() {\n    bar\n}\n");
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "    bar\n",
+        "new_string": "    baz\n",
+        "dry_run": true,
+    });
+    let out = EditTool
+        .execute(input, &ctx(tmp.path()))
+        .await
+        .expect("dry_run edit should succeed");
+    let meta = out.metadata.unwrap();
+    assert_eq!(meta["dry_run"], true);
+    // Snippet is built from the original file content around the matched region.
+    assert!(
+        out.content.contains("bar"),
+        "dry_run snippet should show original matched region: {}",
+        out.content
+    );
+    // File must remain unchanged.
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "fn foo() {\n    bar\n}\n",
+        "dry_run must not modify the file"
+    );
+}
+
+#[tokio::test]
+async fn test_edit_not_found_includes_pass_hint() {
+    let tmp = TempDir::new().unwrap();
+    write_file(tmp.path(), "a.rs", "fn foo() { 1 }\n");
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "totally absent text",
+        "new_string": "x",
+    });
+    let err = EditTool
+        .execute(input, &ctx(tmp.path()))
+        .await
+        .expect_err("absent text must error");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("not found"),
+        "error should say not found: {msg}"
+    );
+}
+
+// -- Multiple matches (FR-004, FR-005) ----------------------------------------
+
+#[tokio::test]
+async fn test_edit_multiple_matches_errors() {
+    let tmp = TempDir::new().unwrap();
+    write_file(tmp.path(), "a.rs", "dup\nmid\ndup\n");
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "dup",
+        "new_string": "DUP",
+    });
+    let err = EditTool
+        .execute(input, &ctx(tmp.path()))
+        .await
+        .expect_err("non-unique old_string must error");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("2 times"),
+        "error should report the match count: {msg}"
+    );
+    assert!(
+        msg.contains("exactly once") || msg.contains("unique"),
+        "error should guide toward uniqueness: {msg}"
+    );
+    assert!(
+        msg.contains("   1 | dup") && msg.contains("   3 | dup"),
+        "error should list numbered candidates: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_edit_collapse_whitespace_multiple_matches_uses_decoded_needle() {
+    // Regression: when collapse_whitespace is enabled and old_string contains
+    // backslash escape sequences, the disambiguation offsets must be computed
+    // from the decoded needle, not the raw backslash characters.
+    let tmp = TempDir::new().unwrap();
+    write_file(tmp.path(), "a.rs", "alpha\nbeta\ngamma\nalpha\nbeta\n");
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "alpha\\nbeta",
+        "new_string": "ALPHA\\nBETA",
+        "collapse_whitespace": true,
+    });
+    let err = EditTool
+        .execute(input, &ctx(tmp.path()))
+        .await
+        .expect_err("non-unique old_string must error");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("2 times"),
+        "error should report the match count: {msg}"
+    );
+    assert!(
+        msg.contains("   1 | alpha") && msg.contains("   4 | alpha"),
+        "error should disambiguate with decoded line numbers: {msg}"
+    );
+}
+
+// -- NotFound (FR-004) --------------------------------------------------------
+
+#[tokio::test]
+async fn test_edit_not_found_errors() {
+    let tmp = TempDir::new().unwrap();
+    write_file(tmp.path(), "a.rs", "fn foo() { 1 }\n");
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "nonexistent code here",
+        "new_string": "x",
+    });
+    let err = EditTool
+        .execute(input, &ctx(tmp.path()))
+        .await
+        .expect_err("missing old_string must error");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("not found"),
+        "error should mention not found: {msg}"
+    );
+}
+
+// -- Create operation (FR-006): empty old_string ------------------------------
+
+#[tokio::test]
+async fn test_edit_create_new_file() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("new.rs");
+    assert!(!path.exists());
+
+    let input = json!({
+        "file_path": "new.rs",
+        "old_string": "",
+        "new_string": "fn main() {}\n",
+    });
+    let out = EditTool
+        .execute(input, &ctx(tmp.path()))
+        .await
+        .expect("create should succeed");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn main() {}\n");
+    let meta = out.metadata.unwrap();
+    assert_eq!(meta["created"], true);
+}
+
+#[tokio::test]
+async fn test_edit_create_rejects_existing_file() {
+    let tmp = TempDir::new().unwrap();
+    write_file(tmp.path(), "a.rs", "existing\n");
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "",
+        "new_string": "new content",
+    });
+    let err = EditTool
+        .execute(input, &ctx(tmp.path()))
+        .await
+        .expect_err("create on existing file must error");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("already exists"),
+        "error should say the file already exists: {msg}"
+    );
+    // File must be unchanged.
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("a.rs")).unwrap(),
+        "existing\n"
+    );
+}
+
+// -- Delete operation (FR-006): empty new_string ------------------------------
+
+#[tokio::test]
+async fn test_edit_delete_matched_text() {
+    let tmp = TempDir::new().unwrap();
+    assert_edit(
+        tmp.path(),
+        "a.rs",
+        "fn foo() {\n    bar\n}\n",
+        "    bar\n",
+        "",
+        "fn foo() {\n}\n",
+    )
+    .await;
+}
+
+// -- No-change rejection (FR-007) ---------------------------------------------
+
+#[tokio::test]
+async fn test_edit_no_change_rejected() {
+    let tmp = TempDir::new().unwrap();
+    write_file(tmp.path(), "a.rs", "fn foo() { 1 }\n");
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "fn foo() { 1 }",
+        "new_string": "fn foo() { 1 }",
+    });
+    let err = EditTool
+        .execute(input, &ctx(tmp.path()))
+        .await
+        .expect_err("identical old/new must error");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("identical") || msg.contains("No changes"),
+        "error should reject the no-op edit: {msg}"
+    );
+}
+
+// -- Stale-file detection (FR-003) --------------------------------------------
+
+#[tokio::test]
+async fn test_edit_stale_file_rejected() {
+    let tmp = TempDir::new().unwrap();
+    let path = write_file(tmp.path(), "a.rs", "fn foo() { 1 }\n");
+    let c = ctx(tmp.path());
+
+    // Simulate a prior read by recording an older timestamp.
+    {
+        let mut map = c.read_timestamps.write().unwrap();
+        map.insert(
+            path.clone(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64
+                - 5_000, // 5 seconds in the past
+        );
+    }
+
+    // Now bump the file's mtime to be newer than the recorded read time.
+    let future = SystemTime::now() + std::time::Duration::from_secs(10);
+    let _ = filetime::set_file_mtime(&path, filetime::FileTime::from_system_time(future));
+
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "fn foo() { 1 }",
+        "new_string": "fn foo() { 2 }",
+    });
+    let err = EditTool
+        .execute(input, &c)
+        .await
+        .expect_err("stale file must error");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("modified after") || msg.contains("stale"),
+        "error should report stale file: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_edit_fresh_file_accepted() {
+    let tmp = TempDir::new().unwrap();
+    let path = write_file(tmp.path(), "a.rs", "fn foo() { 1 }\n");
+    let c = ctx(tmp.path());
+
+    // Record a read timestamp at the file's current mtime (fresh).
+    let mtime = std::fs::metadata(&path)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    {
+        let mut map = c.read_timestamps.write().unwrap();
+        map.insert(path.clone(), mtime);
+    }
+
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "fn foo() { 1 }",
+        "new_string": "fn foo() { 2 }",
+    });
+    let _ = EditTool
+        .execute(input, &c)
+        .await
+        .expect("fresh file edit should succeed");
+}
+
+// -- Snippet generation (FR-008) ----------------------------------------------
+
+#[tokio::test]
+async fn test_edit_returns_snippet_with_line_numbers() {
+    let tmp = TempDir::new().unwrap();
+    let mut initial = String::new();
+    for i in 1..=12 {
+        initial.push_str(&format!("line {i}\n"));
+    }
+    write_file(tmp.path(), "a.rs", &initial);
+
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "line 6\n",
+        "new_string": "line 6 edited\n",
+    });
+    let out = EditTool.execute(input, &ctx(tmp.path())).await.unwrap();
+    let meta = out.metadata.unwrap();
+    let snippet = meta["snippet"].as_str().unwrap_or(out.content.as_str());
+
+    // Snippet should include line numbers and the edited line marker.
+    assert!(
+        snippet.contains('6'),
+        "snippet should reference line 6: {snippet}"
+    );
+    assert!(
+        snippet.contains("edited"),
+        "snippet should show the edited content: {snippet}"
+    );
+    // Should include context before (line 2) and after (line 10).
+    assert!(
+        snippet.contains("line 2"),
+        "snippet should include context before: {snippet}"
+    );
+    assert!(
+        snippet.contains("line 10"),
+        "snippet should include context after: {snippet}"
+    );
+}
+
+// -- Canonical vs legacy parameter names (FR-001, FR-012) ---------------------
+
+#[tokio::test]
+async fn test_edit_canonical_param_names() {
+    let tmp = TempDir::new().unwrap();
+    assert_edit(
+        tmp.path(),
+        "a.rs",
+        "fn foo() { 1 }\n",
+        "fn foo() { 1 }",
+        "fn foo() { 2 }",
+        "fn foo() { 2 }\n",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_edit_legacy_param_names_accepted() {
+    let tmp = TempDir::new().unwrap();
+    let path = write_file(tmp.path(), "a.rs", "fn foo() { 1 }\n");
+    let input = json!({
+        "path": "a.rs",
+        "old_str": "fn foo() { 1 }",
+        "new_str": "fn foo() { 2 }",
+    });
+    let out = EditTool
+        .execute(input, &ctx(tmp.path()))
+        .await
+        .expect("legacy params should be accepted");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn foo() { 2 }\n");
+    // Should emit a deprecation warning in metadata.
+    let meta = out.metadata.unwrap();
+    assert!(
+        meta.get("deprecation_warning").is_some(),
+        "legacy params should produce a deprecation_warning: {meta}"
+    );
+}
+
+#[tokio::test]
+async fn test_edit_canonical_params_no_deprecation_warning() {
+    let tmp = TempDir::new().unwrap();
+    write_file(tmp.path(), "a.rs", "fn foo() { 1 }\n");
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "fn foo() { 1 }",
+        "new_string": "fn foo() { 2 }",
+    });
+    let out = EditTool.execute(input, &ctx(tmp.path())).await.unwrap();
+    let meta = out.metadata.unwrap();
+    assert!(
+        meta.get("deprecation_warning").is_none(),
+        "canonical params should NOT produce a deprecation_warning: {meta}"
+    );
+}
+
+// -- Read-then-edit integration (FR-003 end-to-end) ---------------------------
+
+#[tokio::test]
+async fn test_read_then_edit_no_stale_error() {
+    let tmp = TempDir::new().unwrap();
+    let path = write_file(tmp.path(), "a.rs", "fn foo() { 1 }\n");
+    let c = ctx(tmp.path());
+
+    // Read the file first (records the timestamp).
+    let read_input = json!({ "path": "a.rs" });
+    let _ = ReadTool.execute(read_input, &c).await.unwrap();
+
+    // Immediately edit - file mtime == recorded read time, so no stale error.
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "fn foo() { 1 }",
+        "new_string": "fn foo() { 2 }",
+    });
+    let _ = EditTool
+        .execute(input, &c)
+        .await
+        .expect("read-then-edit should succeed without stale error");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn foo() { 2 }\n");
+}
+
+// -- Edit-log instrumentation (editlog spec) ---------------------------------
+
+use ragent_tools_core::edit_log::{clear_edit_logs, is_edit_log_enabled, set_edit_log_enabled};
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn test_edit_log_success_writes_jsonl() {
+    let _guard = crate::global_env_lock();
+    let tmp = TempDir::new().unwrap();
+    let log_dir = tmp.path().join("log").join("editlog");
+    set_edit_log_enabled(true);
+    assert!(is_edit_log_enabled());
+
+    assert_edit(
+        tmp.path(),
+        "a.rs",
+        "fn foo() {\n    bar\n}\n",
+        "    bar\n",
+        "    baz\n",
+        "fn foo() {\n    baz\n}\n",
+    )
+    .await;
+
+    let files: Vec<_> = std::fs::read_dir(&log_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let s = e.file_name().to_string_lossy().to_string();
+            s.starts_with("edits-")
+                && std::path::Path::new(&s)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
+        })
+        .collect();
+    assert!(
+        !files.is_empty(),
+        "log directory should contain an edits jsonl file"
+    );
+
+    let path = files.first().unwrap().path();
+    let content = std::fs::read_to_string(&path).unwrap();
+    let lines: Vec<&str> = content.lines().collect();
+    assert!(
+        !lines.is_empty(),
+        "log file should contain at least one entry"
+    );
+    let entry: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(entry["tool"], "Edit");
+    assert!(
+        entry["file_path"].as_str().unwrap().ends_with("/a.rs"),
+        "file_path should end with /a.rs: {}",
+        entry["file_path"]
+    );
+    assert_eq!(entry["old_str"], "    bar\n");
+    assert_eq!(entry["new_str"], "    baz\n");
+    assert_eq!(entry["outcome"], "success");
+    assert_eq!(entry["dry_run"], false);
+
+    set_edit_log_enabled(false);
+    clear_edit_logs(tmp.path());
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn test_edit_log_dry_run_writes_jsonl() {
+    let _guard = crate::global_env_lock();
+    let tmp = TempDir::new().unwrap();
+    let log_dir = tmp.path().join("log").join("editlog");
+    set_edit_log_enabled(true);
+
+    let path = write_file(tmp.path(), "a.rs", "fn foo() {\n    bar\n}\n");
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "    bar\n",
+        "new_string": "    baz\n",
+        "dry_run": true,
+    });
+    let _out = EditTool
+        .execute(input, &ctx(tmp.path()))
+        .await
+        .expect("dry_run edit should succeed");
+
+    let files: Vec<_> = std::fs::read_dir(&log_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let s = e.file_name().to_string_lossy().to_string();
+            s.starts_with("edits-")
+                && std::path::Path::new(&s)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
+        })
+        .collect();
+    assert!(
+        !files.is_empty(),
+        "log directory should contain an edits jsonl file"
+    );
+
+    let log_path = files.first().unwrap().path();
+    let content = std::fs::read_to_string(&log_path).unwrap();
+    let lines: Vec<&str> = content.lines().collect();
+    assert_ne!(lines, [] as [&str; 0]);
+    let entry: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(entry["tool"], "Edit");
+    assert_eq!(entry["outcome"], "success (dry-run preview)");
+    assert_eq!(entry["dry_run"], true);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "fn foo() {\n    bar\n}\n",
+        "file must remain unchanged"
+    );
+
+    set_edit_log_enabled(false);
+    clear_edit_logs(tmp.path());
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn test_edit_log_failure_writes_jsonl() {
+    let _guard = crate::global_env_lock();
+    let tmp = TempDir::new().unwrap();
+    let log_dir = tmp.path().join("log").join("editlog");
+    set_edit_log_enabled(true);
+
+    write_file(tmp.path(), "a.rs", "fn foo() { 1 }\n");
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "not in file",
+        "new_string": "x",
+    });
+    let _err = EditTool
+        .execute(input, &ctx(tmp.path()))
+        .await
+        .expect_err("absent text must error");
+
+    let files: Vec<_> = std::fs::read_dir(&log_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let s = e.file_name().to_string_lossy().to_string();
+            s.starts_with("edits-")
+                && std::path::Path::new(&s)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
+        })
+        .collect();
+    assert!(
+        !files.is_empty(),
+        "log directory should contain an edits jsonl file"
+    );
+
+    let log_path = files.first().unwrap().path();
+    let content = std::fs::read_to_string(&log_path).unwrap();
+    let lines: Vec<&str> = content.lines().collect();
+    assert_ne!(lines, [] as [&str; 0]);
+    let entry: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(entry["tool"], "Edit");
+    assert!(
+        entry["outcome"].as_str().unwrap().contains("not found"),
+        "outcome should record not-found: {}",
+        entry["outcome"]
+    );
+
+    set_edit_log_enabled(false);
+    clear_edit_logs(tmp.path());
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn test_edit_log_disabled_does_not_write() {
+    let _guard = crate::global_env_lock();
+    // Disable logging before creating the temp dir so `log/` is never created.
+    set_edit_log_enabled(false);
+    assert!(!is_edit_log_enabled());
+
+    let tmp = TempDir::new().unwrap();
+    let log_dir = tmp.path().join("log").join("editlog");
+
+    assert_edit(
+        tmp.path(),
+        "a.rs",
+        "fn foo() {\n    bar\n}\n",
+        "    bar\n",
+        "    baz\n",
+        "fn foo() {\n    baz\n}\n",
+    )
+    .await;
+
+    assert!(
+        !log_dir.exists() || std::fs::read_dir(&log_dir).unwrap().count() == 0,
+        "log directory should not contain entries when logging is disabled"
+    );
+}
+
+// -- collapse_whitespace: tool-level opt-in ---------------------------------
+
+#[tokio::test]
+async fn test_edit_collapse_whitespace_matches_runs() {
+    let tmp = TempDir::new().unwrap();
+    let path = write_file(tmp.path(), "a.rs", "fn foo() {\n        bar\n}\n");
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "fn foo() {\n    bar\n}\n",
+        "new_string": "fn foo() {\n    baz\n}\n",
+        "collapse_whitespace": true,
+    });
+    let out = EditTool
+        .execute(input, &ctx(tmp.path()))
+        .await
+        .expect("collapse_whitespace edit should succeed across indentation widths");
+    let result = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(result, "fn foo() {\n    baz\n}\n");
+    let meta = out.metadata.unwrap();
+    assert_eq!(meta["collapse_whitespace"], json!(true));
+}
+
+#[tokio::test]
+async fn test_edit_collapse_whitespace_decodes_escapes() {
+    let tmp = TempDir::new().unwrap();
+    let path = write_file(tmp.path(), "a.rs", "let a = 1;\n\tlet b = 2;\n");
+    let input = json!({
+        "file_path": "a.rs",
+        // Literal backslash escapes in the needle: \n and \t.
+        "old_string": "let a = 1;\\n\\tlet b = 2;",
+        "new_string": "let a = 1;\nlet b = 2;",
+        "collapse_whitespace": true,
+    });
+    EditTool
+        .execute(input, &ctx(tmp.path()))
+        .await
+        .expect("escaped needle should match tab-indented line");
+    let result = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(result, "let a = 1;\nlet b = 2;\n");
+}
+
+#[tokio::test]
+async fn test_edit_collapse_whitespace_default_runs_flexible_fallback() {
+    // P2.4: even without `collapse_whitespace`, the fallback cascade now
+    // retries with whitespace-flexible matching. A unique (but
+    // whitespace-different) match succeeds and records the `flexible` lane.
+    let tmp = TempDir::new().unwrap();
+    let path = write_file(tmp.path(), "a.rs", "alpha   beta\n");
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "alpha beta",
+        "new_string": "X",
+    });
+    let out = EditTool
+        .execute(input, &ctx(tmp.path()))
+        .await
+        .expect("flexible fallback lane should resolve a unique whitespace-only mismatch");
+    assert_eq!(
+        out.metadata.as_ref().unwrap()["match_lane"],
+        "flexible",
+        "metadata should record the flexible lane"
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "X\n");
+}
+
+#[tokio::test]
+async fn test_edit_collapse_whitespace_preserves_uniqueness_check() {
+    let tmp = TempDir::new().unwrap();
+    write_file(tmp.path(), "a.rs", "dup  and  dup\n");
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "dup",
+        "new_string": "DUP",
+        "collapse_whitespace": true,
+    });
+    let err = EditTool
+        .execute(input, &ctx(tmp.path()))
+        .await
+        .expect_err("duplicate needle must still be rejected in collapse mode");
+    assert!(
+        err.to_string().contains("match exactly once"),
+        "error must demand unique match: {err}"
+    );
+}
+
+// -- P2.6 line-similarity hint + P2.7 multi-match disambiguation + match_lane -
+
+#[tokio::test]
+async fn test_edit_not_found_line_similarity_hint_shows_closest_block() {
+    // P2.6: when ≥ 75 % of needle lines exist but no unique match was found,
+    // the error should name the closest block and show its current contents.
+    let tmp = TempDir::new().unwrap();
+    write_file(
+        tmp.path(),
+        "a.rs",
+        "fn alpha() { 1 }\nfn beta() { 2 }\nfn gamma() { 3 }\nfn delta() { 4 }\n",
+    );
+    let input = json!({
+        "file_path": "a.rs",
+        // 3 of 4 lines exist verbatim; "fn beta() { 2 }" is replaced by a
+        // drifted needle line, so no exact match, but 75 % line presence.
+        "old_string": "fn alpha() { 1 }\nfn beta() { 99 }\nfn gamma() { 3 }\nfn delta() { 4 }\n",
+        "new_string": "x",
+    });
+    let err = EditTool
+        .execute(input, &ctx(tmp.path()))
+        .await
+        .expect_err("partial match must still error");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("not found"),
+        "should still say not found: {msg}"
+    );
+    assert!(
+        msg.contains("almost matches"),
+        "should name the near-miss window: {msg}"
+    );
+    assert!(
+        msg.contains("fn gamma() { 3 }"),
+        "should show actual file content to guide the next attempt: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_edit_multi_match_error_lists_offsets_and_lines() {
+    // P2.7: multiple-match errors should now carry byte offsets and line
+    // numbers so the model can extend the needle precisely.
+    let tmp = TempDir::new().unwrap();
+    write_file(tmp.path(), "a.rs", "dup\nmid\ndup\n");
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "dup",
+        "new_string": "DUP",
+    });
+    let err = EditTool
+        .execute(input, &ctx(tmp.path()))
+        .await
+        .expect_err("ambiguous needle must error");
+    let msg = format!("{err}");
+    assert!(msg.contains("2 times"), "should report count: {msg}");
+    assert!(
+        msg.contains("line 1") && msg.contains("line 3"),
+        "should name the lines of both matches: {msg}"
+    );
+    assert!(
+        msg.contains("Extend old_string"),
+        "should tell the model to extend the needle: {msg}"
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn test_edit_log_captures_match_lane_for_flexible_fallback() {
+    // P4.12: the edit-log should record which matcher lane produced the
+    // outcome so future analyses can quantify fallback frequency.
+    // Guard held across await on purpose: edit-log tests run serialised to
+    // avoid one test clearing logs another just wrote.
+    let _guard = crate::global_env_lock();
+    let tmp = TempDir::new().unwrap();
+    set_edit_log_enabled(true);
+
+    write_file(tmp.path(), "a.rs", "alpha   beta\n");
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "alpha beta",
+        "new_string": "X",
+    });
+    let result = EditTool.execute(input, &ctx(tmp.path())).await;
+    set_edit_log_enabled(false);
+    result.expect("flexible fallback should succeed");
+
+    let log_dir = tmp.path().join("log").join("editlog");
+    let files: Vec<_> = std::fs::read_dir(&log_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let s = e.file_name().to_string_lossy().to_string();
+            s.starts_with("edits-")
+                && std::path::Path::new(&s)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
+        })
+        .collect();
+    assert!(
+        !files.is_empty(),
+        "log directory should contain an edits jsonl file"
+    );
+    let content = std::fs::read_to_string(files[0].path()).unwrap();
+    let entry: serde_json::Value = serde_json::from_str(content.lines().next().unwrap()).unwrap();
+    assert_eq!(entry["tool"], "Edit");
+    assert_eq!(entry["match_lane"], "flexible");
+    assert_eq!(entry["outcome"], "success");
+
+    clear_edit_logs(tmp.path());
+}
+
+#[tokio::test]
+async fn test_edit_metadata_records_buffer_stale_note() {
+    // P1.2: the success metadata should warn the model that the on-disk file
+    // now differs from any copy in its context.
+    let tmp = TempDir::new().unwrap();
+    write_file(tmp.path(), "a.rs", "let x = 1;\n");
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "1",
+        "new_string": "2",
+    });
+    let out = EditTool
+        .execute(input, &ctx(tmp.path()))
+        .await
+        .expect("edit should succeed");
+    let meta = out.metadata.expect("metadata present");
+    assert_eq!(meta["match_lane"], "exact");
+    assert!(
+        meta["buffer_note"]
+            .as_str()
+            .unwrap()
+            .contains("differs from any copy"),
+        "buffer_note should warn about stale context: {meta}"
+    );
+}
+
+#[tokio::test]
+async fn test_edit_stale_retry_succeeds_after_timestamp_refresh() {
+    // P1.3: after a stale rejection, retrying the same edit should succeed
+    // because the read timestamp was refreshed during the first rejection.
+    let tmp = TempDir::new().unwrap();
+    let path = write_file(tmp.path(), "a.rs", "fn foo() { 1 }\n");
+    let c = ctx(tmp.path());
+
+    // Arm the stale check with a read timestamp in the past.
+    {
+        let mut map = c.read_timestamps.write().unwrap();
+        map.insert(
+            path.clone(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64
+                - 5_000,
+        );
+    }
+    let future = SystemTime::now() + std::time::Duration::from_secs(10);
+    let _ = filetime::set_file_mtime(&path, filetime::FileTime::from_system_time(future));
+
+    let input = json!({
+        "file_path": "a.rs",
+        "old_string": "fn foo() { 1 }",
+        "new_string": "fn foo() { 2 }",
+    });
+    EditTool
+        .execute(input.clone(), &c)
+        .await
+        .expect_err("first attempt must be rejected as stale");
+
+    // Retry: the read timestamp was refreshed, so the same edit now succeeds
+    // without the caller manually re-reading the file.
+    EditTool
+        .execute(input, &c)
+        .await
+        .expect("retry after stale rejection should succeed");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn foo() { 2 }\n");
+}

@@ -1,0 +1,4478 @@
+//! Configuration loading, merging, and types for ragent.
+//!
+//! [`Config`] is loaded via [`Config::load`] with a layered precedence:
+//! compiled defaults -> global file -> project file -> `RAGENT_CONFIG` env ->
+//! `RAGENT_CONFIG_CONTENT` env. Provider, agent, MCP server, and permission
+//! settings are all configured here.
+
+use crate::compaction::CompactionConfig;
+use crate::gcf::GcfConfig;
+use crate::i18n::I18nConfig;
+use crate::openai::OpenAiConfig;
+use crate::retention::StorageConfig;
+use crate::security_analyzer::SecurityAnalyzerConfig;
+use crate::tools::ToolsConfig;
+use anyhow::bail;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+/// M-025: a cached resolved [`Config`] plus the mtimes and sizes of the
+/// on-disk config files that contributed to it. The cache is valid while
+/// none of those mtimes or sizes change; the env-var overrides
+/// (`RAGENT_CONFIG` / `RAGENT_CONFIG_CONTENT`) bypass the cache entirely
+/// because env vars have no mtime to track. Size is tracked because file
+/// system mtimes can be coarse (1 second granularity), so two writes within
+/// the same second would otherwise return a stale config.
+struct CachedConfigFile {
+    /// The resolved config.
+    config: Config,
+    /// `(path, mtime, size)` for each on-disk config file that contributed.
+    mtimes: Vec<(PathBuf, std::time::SystemTime, u64)>,
+    /// The cwd the cache was built for (the project config path is relative).
+    cwd: PathBuf,
+    /// The `XDG_CONFIG_HOME` value the cache was built for (it selects the
+    /// global config directory, and has no mtime to track).
+    xdg: Option<std::ffi::OsString>,
+}
+
+/// Top-level ragent configuration.
+///
+/// `Debug` is hand-written (see below) so secret-bearing fields are redacted
+/// rather than printed by a `{:?}`/`tracing::debug!(?config)`.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Config {
+    /// Display name of the user.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// Name of the agent to use when none is specified.
+    #[serde(default = "default_agent_name", alias = "defaultAgent")]
+    pub default_agent: String,
+    #[serde(skip)]
+    specified_default_agent: bool,
+    /// LLM provider configurations keyed by provider id.
+    #[serde(default)]
+    pub provider: HashMap<String, ProviderConfig>,
+    /// Global permission rules applied to all agents.
+    #[serde(default)]
+    pub permission: Vec<crate::permission::PermissionRule>,
+    /// Per-agent configuration overrides keyed by agent name.
+    #[serde(default)]
+    pub agent: HashMap<String, AgentConfig>,
+    /// Agentic loop defaults (spec `agentloop`).
+    ///
+    /// Loop-level fallbacks applied to every `/loop` run: the step budget
+    /// ([`LoopConfig::max_steps`], default 512), the token cost budget
+    /// ([`LoopConfig::cost_limit`]), the recoverable-error retry allowance
+    /// ([`LoopConfig::error_retry_allowance`], default 3), and the
+    /// destructive-action checkpoint switch ([`LoopConfig::checkpoints`],
+    /// default on).
+    #[serde(
+        default,
+        rename = "loop",
+        skip_serializing_if = "LoopConfig::is_default"
+    )]
+    pub r#loop: LoopConfig,
+    /// User-defined slash-command shortcuts.
+    #[serde(default)]
+    pub command: HashMap<String, CommandDef>,
+    /// MCP server definitions keyed by server id.
+    #[serde(default)]
+    pub mcp: HashMap<String, McpServerConfig>,
+    /// Additional instruction strings appended to agent prompts.
+    #[serde(default)]
+    pub instructions: Vec<String>,
+    /// Language the model must answer in, e.g. `"English"`.
+    ///
+    /// Injected into the system prompt as a dedicated standing section so the
+    /// model keeps answering in this language even when its training data or
+    /// the surrounding material is dominated by another one (DeepSeek models
+    /// default to Chinese without an explicit constraint).
+    ///
+    /// Defaults to `"English"`, so a config that never mentions the key still
+    /// pins the answer language. A blank value is the explicit opt-out: it
+    /// emits no section and leaves the model's own default untouched.
+    #[serde(default = "default_response_language")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_language: Option<String>,
+    /// Additional directories to scan for skill definitions.
+    #[serde(default)]
+    pub skill_dirs: Vec<String>,
+    /// Feature flags for experimental functionality.
+    #[serde(default)]
+    pub experimental: ExperimentalFlags,
+    /// Lifecycle hooks (placeholder - hooks module not yet extracted).
+    #[serde(default)]
+    pub hooks: Vec<serde_json::Value>,
+    /// User-defined bash command allowlist and denylist additions.
+    #[serde(default)]
+    pub bash: BashConfig,
+    /// User-defined directory/file path allowlist and denylist additions.
+    #[serde(default)]
+    pub dirs: DirsConfig,
+    /// Tavily search API key for the websearch tool.
+    ///
+    /// Can also be set via the `TAVILY_API_KEY` environment variable. The
+    /// environment variable takes precedence over this config field.
+    #[serde(default)]
+    pub tavily_api_key: Option<String>,
+    /// LangSearch API key for the `mf_search` tool.
+    ///
+    /// Stored in `ragent.json` (global or project). When present, `mf_search`
+    /// will query the LangSearch Web Search API as an additional backend. The
+    /// key is masked in diagnostics and never logged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub langsearch_api_key: Option<String>,
+    /// Perplexity API key for the `mf_search` tool.
+    ///
+    /// Stored in `ragent.json` (global or project). When present, `mf_search`
+    /// will query the Perplexity Sonar API as an additional backend. The key
+    /// is masked in diagnostics and never logged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub perplexity_api_key: Option<String>,
+    /// OpenAlex polite-pool email for the `mf_search` tool.
+    ///
+    /// OpenAlex is a keyless backend (no API key required), but appending a
+    /// `mailto=<email>` query parameter to each request participates in the
+    /// OpenAlex polite pool and raises the daily request limit. Can also be
+    /// set via the `OPENALEX_EMAIL` environment variable; the environment
+    /// variable takes precedence over this config field. The email is masked
+    /// in diagnostics and never logged in plain text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openalex_email: Option<String>,
+    /// Exa Search API key for the `mf_search` tool.
+    ///
+    /// Stored in `ragent.json` (global or project). When present, `mf_search`
+    /// will query the Exa Search API as an additional backend. Can also be
+    /// set via the `EXA_API_KEY` environment variable; the environment
+    /// variable takes precedence over this config field. The key is masked
+    /// in diagnostics and never logged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exa_api_key: Option<String>,
+    /// Serper (Google Search) API key for the `mf_search` tool.
+    ///
+    /// Stored in `ragent.json` (global or project). When present, `mf_search`
+    /// will query the Serper Search API as an additional backend. Can also be
+    /// set via the `SERPER_API_KEY` environment variable; the environment
+    /// variable takes precedence over this config field. The key is masked
+    /// in diagnostics and never logged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serper_api_key: Option<String>,
+    /// Code index configuration (codebase indexing & search).
+    #[serde(default)]
+    pub code_index: CodeIndexConfig,
+    /// LLM streaming configuration (timeouts, retries).
+    #[serde(default)]
+    pub stream: StreamConfig,
+    /// Sub-agent panel configuration (spec `agentssetup` FR-021, FR-036,
+    /// NFR-004).
+    ///
+    /// Carries the cap on the Agents window's completed-history section, so a
+    /// long session's panel memory stays constant in the number of tasks ever
+    /// spawned. The section is omitted from a serialised config while it is at
+    /// its defaults, so a config that has never set it round-trips unchanged.
+    #[serde(default, skip_serializing_if = "AgentsConfig::is_default")]
+    pub agents: AgentsConfig,
+    /// Memory system configuration (blocks, structured store, retrieval).
+    #[serde(default)]
+    pub memory: MemoryConfig,
+    /// Context compaction configuration (OpenCode-derived summarisation).
+    ///
+    /// When `auto` is `true`, the agent summarises conversation history before
+    /// sending a request that would exceed the configured threshold or
+    /// buffer.
+    #[serde(default)]
+    pub compaction: CompactionConfig,
+    /// GCF (Graph Compact Format) encoding of JSON tool results for the LLM
+    /// view (spec `gcf`, FR-001).
+    ///
+    /// Default: disabled - a config file with no `gcf` section means tool
+    /// results are never encoded; the `gcf` key is omitted from serialisation
+    /// while `enabled` is `false`.
+    #[serde(default, skip_serializing_if = "GcfConfig::is_default")]
+    pub gcf: GcfConfig,
+    /// Session-message retention configuration.
+    ///
+    /// Retention is opt-in: with no `storage` section no message is ever
+    /// expired. When enabled, messages older than
+    /// [`RetentionConfig::message_days`] are deleted from the session store;
+    /// session rows are kept so an old conversation remains resumable with an
+    /// empty transcript.
+    #[serde(default, skip_serializing_if = "StorageConfig::is_default")]
+    pub storage: StorageConfig,
+    /// GitLab integration configuration.
+    #[serde(default)]
+    pub gitlab: GitLabIntegrationConfig,
+    /// Pull/merge request integration: GitHub Enterprise hosts (spec
+    /// SESSIONMENU FR-21). User-global only; a project-local file cannot
+    /// set it.
+    #[serde(default, skip_serializing_if = "VcsConfig::is_default")]
+    pub vcs: VcsConfig,
+    /// Agent-loop performance configuration (AgentPerf FR-027).
+    ///
+    /// Controls the per-step wall-clock budget, the per-stream stall
+    /// timeout, the maximum number of concurrent tool calls, and the
+    /// master enable / profiling switches.  See
+    /// `specs/AgentPerf/SPEC.md` for the full schema.
+    #[serde(default)]
+    pub agent_perf: AgentPerfConfig,
+    /// Telemetry configuration for the OpenTelemetry metrics export subsystem.
+    ///
+    /// See `specs/otel/SPEC.md` for the `telemetry.otel` schema. Defaults to
+    /// disabled; the legacy `experimental.open_telemetry` flag is mapped as a
+    /// deprecated alias via [`TelemetryConfig::apply_legacy_flag`](crate::telemetry::TelemetryConfig::apply_legacy_flag).
+    #[serde(default)]
+    pub telemetry: crate::telemetry::TelemetryConfig,
+    /// YOLO mode - bypass command validation and tool restrictions.
+    #[serde(default)]
+    pub yolo: bool,
+    /// Edit-operation logging enabled for `Edit` and `multi_edit`.
+    #[serde(default)]
+    pub edit_log: bool,
+    /// Activity-log recording enabled (default: `true`).
+    ///
+    /// When `true`, agent execution events (model messages, tool calls,
+    /// tool results, permission decisions, etc.) are recorded to the
+    /// activity-log SQLite database. Toggled via `/alog on|off`.
+    #[serde(default = "default_true")]
+    pub activity_log: bool,
+    /// User-defined price overrides for cost estimation (FR-011).
+    ///
+    /// Each entry overrides the built-in price table for a specific model.
+    /// Prices are in USD per 1,000,000 tokens.
+    #[serde(default)]
+    pub prices: Vec<PriceEntry>,
+    /// Spec-Driven Development (SDD) capability toggles (FR-019).
+    ///
+    /// All flags default to `false` (opt-in). New SDD artifacts and gates are
+    /// generated only when the corresponding flag is enabled, so existing
+    /// workflows are not disrupted.
+    #[serde(default, skip_serializing_if = "SddConfig::is_empty")]
+    pub sdd: SddConfig,
+    /// Dynamic trigger rule system configuration (spec `piegap` FR-002).
+    ///
+    /// Controls the poll interval, feature gate, and maximum rules per session
+    /// for natural-language trigger rules.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::trigger::TriggerConfig::is_empty"
+    )]
+    pub trigger: crate::trigger::TriggerConfig,
+    /// Pie feature gap toggles (spec `piegap` FR-016, FR-018).
+    ///
+    /// Each flag gates a standalone pie-derived feature so that existing
+    /// workflows are not disrupted. All flags default to `false` - features are
+    /// opt-in. When a flag is disabled, the corresponding feature is inactive.
+    #[serde(default, skip_serializing_if = "PieGapConfig::is_empty")]
+    pub piegap: PieGapConfig,
+    /// Research subsystem configuration (spec `hyperresearch` FR-011, FR-012).
+    ///
+    /// Controls open-access recovery, Unpaywall contact email, and the
+    /// minimum full-text length that triggers OA recovery. All fields default to
+    /// disabled / empty so existing workflows are not disrupted.
+    #[serde(default, skip_serializing_if = "ResearchConfig::is_empty")]
+    pub research: ResearchConfig,
+    /// Plugin subsystem configuration (spec `plugins`; FR-001, FR-017).
+    ///
+    /// Loaded and merged with the same precedence as other optional config
+    /// sections: the overlay section wins when present (project config
+    /// overrides user-global). `None` means the compiled defaults apply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<crate::plugins::PluginsConfig>,
+    /// Connector subsystem configuration (spec `connectors` FR-007, FR-021,
+    /// FR-024).
+    ///
+    /// Loaded and merged with the same precedence as other optional config
+    /// sections: the overlay section wins when present (project config
+    /// overrides user-global). `None` means the compiled defaults apply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connectors: Option<crate::connectors::ConnectorsConfig>,
+    /// Automation service configuration (spec `openhands` T-016; FR-013,
+    /// FR-014, FR-033).
+    ///
+    /// Loaded and merged with the same precedence as other optional config
+    /// sections: the overlay section wins when present (project config
+    /// overrides user-global). `None` means the compiled defaults apply; the
+    /// scheduler, webhook ingress, and run history are all driven from this
+    /// block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automation: Option<crate::automation::AutomationConfig>,
+    /// Maximum number of messages the TUI message input queue may hold
+    /// (spec `inputqueue` FR-015).
+    ///
+    /// When `None` the queue falls back to [`DEFAULT_INPUT_QUEUE_CAPACITY`]
+    /// (32). Values are clamped to `1..=99` by
+    /// [`Config::effective_input_queue_capacity`]; the per-run queue is never
+    /// persisted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_queue_capacity: Option<usize>,
+    /// Execution backend a tool invocation is dispatched to (spec `openhands`
+    /// FR-001, FR-019).
+    ///
+    /// Accepts a label (`local`, `docker`, `podman`, `remote`) or an object
+    /// carrying `id` plus optional connection fields; use
+    /// [`ExecutionBackendKind`] / [`BackendConfig`] to read it.
+    /// [`Config::effective_execution_backend`] resolves the active kind and
+    /// falls back to `local` when nothing is configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_backend: Option<ExecutionBackend>,
+    /// Configured execution backends (the backend registry, FR-004).
+    ///
+    /// Entries are selectable by `execution_backend` and read by the container
+    /// backend (T-002, for image and workspace) and the registry (T-004, for
+    /// health and the TUI switcher).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub backends: Vec<BackendConfig>,
+    /// ACP (Agent Client Protocol) client configuration (spec `openhands`
+    /// FR-015, FR-022, FR-036).
+    ///
+    /// `None` means the ACP subsystem is inert: no external agent is spawned and
+    /// no ACP agent appears in the picker. When present, each registered agent is
+    /// driveable over JSON-RPC on stdio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acp: Option<AcpConfig>,
+    /// UI internationalisation configuration (spec `openhands` FR-027).
+    ///
+    /// Opt-in and omitted from the default config: when `None` the subsystem is
+    /// inert and user-facing strings render in English. When present,
+    /// [`crate::i18n::resolve`] resolves the effective locale and catalogue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub i18n: Option<I18nConfig>,
+    /// OpenAI-compatible inbound surface configuration (spec `openhands`
+    /// FR-012, FR-024, FR-032).
+    ///
+    /// Opt-in and omitted from the default config: the `/v1` endpoints are
+    /// always mounted behind the native bearer-token check, and this section
+    /// additionally carries the surface's bearer token and arms the FR-032
+    /// refuse-to-start gate when the surface is enabled without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai: Option<OpenAiConfig>,
+    /// LLM security-analyzer configuration (spec `openhands` FR-006, FR-016,
+    /// FR-017).
+    ///
+    /// Opt-in and omitted from the default config: when `None` the analyzer is
+    /// inert and the static permission rules decide alone. When present and
+    /// enabled, each proposed tool action is evaluated by an LLM that returns an
+    /// allow/ask/deny verdict with a rationale before the action is permitted or
+    /// refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security_analyzer: Option<SecurityAnalyzerConfig>,
+    /// Tool-name alias resolution, alias advertisement and the payload trace
+    /// (spec `uniformtools` FR-015, FR-017).
+    ///
+    /// Default: every switch off, and the whole section is omitted from a
+    /// serialised config while it is at those defaults, so a build that has
+    /// never seen the section writes a byte-identical `ragent.json` and
+    /// resolves every inbound name against the registry alone.
+    #[serde(default, skip_serializing_if = "ToolsConfig::is_default")]
+    pub tools: ToolsConfig,
+    /// Paths of configuration files that were loaded during [`Config::load`].
+    #[serde(skip)]
+    pub config_paths: Vec<PathBuf>,
+}
+
+/// Explicit [`Default`] for [`Config`] (ANTIPAT M-7).
+///
+/// The derive would zero every bool and leave `default_agent` empty, which
+/// drifts from the serde field defaults (`default_agent == "general"`,
+/// `activity_log == true`). Keeping the two in sync here means every
+/// `Config::default()` - including the processor's load-failure fallback -
+/// observes the same defaults as a config file with the keys omitted, so the
+/// load-time workaround is no longer needed.
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            username: None,
+            default_agent: default_agent_name(),
+            specified_default_agent: false,
+            provider: HashMap::new(),
+            permission: Vec::new(),
+            agent: HashMap::new(),
+            r#loop: LoopConfig::default(),
+            command: HashMap::new(),
+            mcp: HashMap::new(),
+            instructions: Vec::new(),
+            response_language: Some("English".to_string()),
+            skill_dirs: Vec::new(),
+            experimental: ExperimentalFlags::default(),
+            hooks: Vec::new(),
+            bash: BashConfig::default(),
+            dirs: DirsConfig::default(),
+            tavily_api_key: None,
+            langsearch_api_key: None,
+            perplexity_api_key: None,
+            openalex_email: None,
+            exa_api_key: None,
+            serper_api_key: None,
+            code_index: CodeIndexConfig::default(),
+            stream: StreamConfig::default(),
+            agents: AgentsConfig::default(),
+            memory: MemoryConfig::default(),
+            compaction: CompactionConfig::default(),
+            gcf: GcfConfig::default(),
+            storage: StorageConfig::default(),
+            gitlab: GitLabIntegrationConfig::default(),
+            vcs: VcsConfig::default(),
+            agent_perf: AgentPerfConfig::default(),
+            telemetry: crate::telemetry::TelemetryConfig::default(),
+            yolo: false,
+            edit_log: false,
+            activity_log: true,
+            prices: Vec::new(),
+            sdd: SddConfig::default(),
+            trigger: crate::trigger::TriggerConfig::default(),
+            piegap: PieGapConfig::default(),
+            research: ResearchConfig::default(),
+            plugins: None,
+            connectors: None,
+            automation: None,
+            input_queue_capacity: None,
+            execution_backend: None,
+            backends: Vec::new(),
+            acp: None,
+            i18n: None,
+            openai: None,
+            security_analyzer: None,
+            tools: ToolsConfig::default(),
+            config_paths: Vec::new(),
+        }
+    }
+}
+
+/// Redacted [`Debug`] rendering of [`Config`] (ANTIPAT H-2).
+///
+/// `Config` carries plaintext secrets (`tavily_api_key`,
+/// `langsearch_api_key`, `perplexity_api_key`, `exa_api_key`,
+/// `serper_api_key`, `gitlab.token`). A derived `Debug` printed them verbatim on any
+/// `{:?}`/`{cfg:?}`/`tracing::debug!(?cfg)`; this impl mirrors the MS-05
+/// decision to drop derived `Debug` from `ragent_types::Event`.
+///
+/// The rendering is produced by [`render_redacted`], which serialises to JSON
+/// and then routes the text through [`ragent_types::sanitize::redact_secrets`],
+/// so a secret is masked even if a new secret-bearing field is added later.
+///
+/// Implemented once for every secret-bearing config struct via
+/// [`redacted_debug_impl`], so a new type opts in with a single invocation
+/// rather than a hand-copied `Debug` body.
+macro_rules! redacted_debug_impl {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl std::fmt::Debug for $ty {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.write_str(&render_redacted(self))
+                }
+            }
+        )+
+    };
+}
+redacted_debug_impl!(Config);
+
+/// Render a config value as redacted JSON for [`Config`]'s `Debug` impl.
+///
+/// Falls back to a fixed placeholder when serialisation fails, so the impl can
+/// never panic and never leaks a partially-rendered value.
+///
+/// Public so a secret-bearing config in another crate can reuse this one
+/// implementation rather than hand-writing a second `Debug` body:
+/// `ragent_hyperresearch::Config` holds its provider API keys in a plain
+/// `Vec<(String, String)>` and routes its `Debug` through this function.
+#[must_use]
+pub fn render_redacted<T: serde::Serialize>(value: &T) -> String {
+    match serde_json::to_string_pretty(value) {
+        Ok(json) => ragent_types::sanitize::redact_secrets(&json),
+        Err(e) => format!("<config: unserialisable: {e}>"),
+    }
+}
+
+/// Default capacity of the TUI message input queue (spec `inputqueue` FR-015).
+pub const DEFAULT_INPUT_QUEUE_CAPACITY: usize = 32;
+
+/// Minimum configurable input-queue capacity.
+const MIN_INPUT_QUEUE_CAPACITY: usize = 1;
+
+/// Maximum configurable input-queue capacity.
+///
+/// Mirrors the two-digit queue counter, which clamps at `99` (FR-009).
+const MAX_INPUT_QUEUE_CAPACITY: usize = 99;
+
+/// Agent-loop performance configuration (AgentPerf FR-027).
+///
+/// All fields are optional and have sensible defaults; the agent
+/// action loop consults this struct at startup and on every step.
+///
+/// # Example
+///
+/// ```jsonc
+/// {
+///   "agent_perf": {
+///     "enabled": true,
+///     "profiling": true,
+///     "step_budget_secs": 300,
+///     "stall_timeout_secs": 60,
+///     "max_concurrent_tools": 4,
+///     "parallel_independent_tools": true
+///   }
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentPerfConfig {
+    /// Master switch for the entire perf subsystem.
+    /// When `false`, every performance optimisation short-circuits.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Emit detailed per-scope timing logs at `info` level.
+    #[serde(default)]
+    pub profiling: bool,
+    /// Maximum wall-clock seconds per agent step.
+    #[serde(default = "default_step_budget_secs")]
+    pub step_budget_secs: u64,
+    /// Maximum seconds without a stream delta before stall recovery
+    /// fires.
+    #[serde(default = "default_stall_timeout_secs")]
+    pub stall_timeout_secs: u64,
+    /// Maximum parallel tool calls per turn.
+    #[serde(default = "default_max_concurrent_tools")]
+    pub max_concurrent_tools: u32,
+    /// Execute independent tool calls in parallel.
+    #[serde(default = "default_true")]
+    pub parallel_independent_tools: bool,
+}
+
+fn default_step_budget_secs() -> u64 {
+    300
+}
+
+/// Serde default for [`Config::response_language`]: a config that omits the key
+/// still pins the answer language, so a model that would otherwise drift (a
+/// DeepSeek model reverting to Chinese) is constrained without any setup. A
+/// blank value written explicitly is the opt-out.
+fn default_response_language() -> Option<String> {
+    Some("English".to_string())
+}
+
+fn default_stall_timeout_secs() -> u64 {
+    60
+}
+
+fn default_max_concurrent_tools() -> u32 {
+    std::thread::available_parallelism()
+        .map(|n| n.get() as u32)
+        .unwrap_or(4)
+        .min(4)
+}
+
+impl Default for AgentPerfConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            profiling: false,
+            step_budget_secs: default_step_budget_secs(),
+            stall_timeout_secs: default_stall_timeout_secs(),
+            max_concurrent_tools: default_max_concurrent_tools(),
+            parallel_independent_tools: true,
+        }
+    }
+}
+
+/// Minimum allowed `agent_perf.step_budget_secs` / `stall_timeout_secs`
+/// (ANTIPAT M-11).
+///
+/// Below this a step budget or stall timeout is too small to be useful and
+/// almost certainly a misconfiguration.
+const MIN_AGENT_PERF_TIMEOUT_SECS: u64 = 5;
+
+/// Minimum allowed `agent_perf.max_concurrent_tools` (ANTIPAT M-11).
+///
+/// At least one tool must be allowed to run per turn.
+const MIN_AGENT_PERF_CONCURRENT_TOOLS: u32 = 1;
+
+impl AgentPerfConfig {
+    /// Validate the configuration and return a list of any problems.
+    ///
+    /// The agent loop calls this on startup and refuses to start
+    /// if `validate()` returns a non-empty list.
+    #[must_use]
+    pub fn validate(&self) -> Vec<String> {
+        let mut problems = Vec::new();
+        if self.step_budget_secs < MIN_AGENT_PERF_TIMEOUT_SECS {
+            problems.push(format!(
+                "agent_perf.step_budget_secs must be >= {MIN_AGENT_PERF_TIMEOUT_SECS} (got {})",
+                self.step_budget_secs
+            ));
+        }
+        if self.stall_timeout_secs < MIN_AGENT_PERF_TIMEOUT_SECS {
+            problems.push(format!(
+                "agent_perf.stall_timeout_secs must be >= {MIN_AGENT_PERF_TIMEOUT_SECS} (got {})",
+                self.stall_timeout_secs
+            ));
+        }
+        if self.max_concurrent_tools < MIN_AGENT_PERF_CONCURRENT_TOOLS {
+            problems.push(format!(
+                "agent_perf.max_concurrent_tools must be >= {MIN_AGENT_PERF_CONCURRENT_TOOLS} (got {})",
+                self.max_concurrent_tools
+            ));
+        }
+        problems
+    }
+}
+/// Agentic loop defaults (spec `agentloop`, FR-013 - FR-015).
+///
+/// Configured under the `loop` key in `ragent.json`. These are the
+/// loop-level fallbacks applied to every `/loop` run unless the setup
+/// dialog overrides them; a per-agent `agent.<name>.max_steps` still wins
+/// over the loop-level step budget:
+///
+/// ```json
+/// {
+///   "loop": {
+///     "max_steps": 512,
+///     "cost_limit": 200000,
+///     "error_retry_allowance": 3,
+///     "checkpoints": true
+///   }
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LoopConfig {
+    /// Maximum loop iterations before the loop stops with termination
+    /// status `budget_exhausted` (FR-013). Default: 512.
+    #[serde(default = "default_loop_max_steps")]
+    pub max_steps: u32,
+    /// Token cost budget: maximum accumulated tokens (input + output)
+    /// across a loop run before it stops with termination status
+    /// `budget_exhausted` (FR-014). `None` (default) means no token-cost
+    /// gate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_limit: Option<u64>,
+    /// Consecutive recoverable-failure tolerance: the loop stops with
+    /// termination status `error` once consecutive recoverable failures
+    /// exceed this count (FR-012). Default: 3.
+    #[serde(default = "default_error_retry_allowance")]
+    pub error_retry_allowance: u32,
+    /// Whether destructive-action checkpoints are forced before destructive
+    /// tool calls even when an allow rule would auto-approve them (FR-015).
+    /// Default: `true`.
+    #[serde(default = "default_true")]
+    pub checkpoints: bool,
+    /// Seconds a forced destructive-action checkpoint prompt waits for the
+    /// user's reply before the prompt is treated as denial (FR-015: the
+    /// intervention defaults to the safe choice). Default: 120.
+    #[serde(default = "default_checkpoint_timeout_secs")]
+    pub checkpoint_timeout_secs: u32,
+}
+
+/// Loop checkpoint-prompt default: 120 seconds before a timeout counts as
+/// denial (FR-015).
+pub const DEFAULT_CHECKPOINT_TIMEOUT_SECS: u32 = 120;
+
+const fn default_checkpoint_timeout_secs() -> u32 {
+    DEFAULT_CHECKPOINT_TIMEOUT_SECS
+}
+
+/// Loop step-budget default: 512 iterations (FR-013).
+pub const DEFAULT_LOOP_MAX_STEPS: u32 = 512;
+
+/// Loop retry-allowance default: 3 consecutive recoverable failures
+/// (FR-012).
+pub const DEFAULT_ERROR_RETRY_ALLOWANCE: u32 = 3;
+
+const fn default_loop_max_steps() -> u32 {
+    DEFAULT_LOOP_MAX_STEPS
+}
+
+const fn default_error_retry_allowance() -> u32 {
+    DEFAULT_ERROR_RETRY_ALLOWANCE
+}
+
+impl Default for LoopConfig {
+    fn default() -> Self {
+        Self {
+            max_steps: DEFAULT_LOOP_MAX_STEPS,
+            cost_limit: None,
+            error_retry_allowance: DEFAULT_ERROR_RETRY_ALLOWANCE,
+            checkpoints: true,
+            checkpoint_timeout_secs: DEFAULT_CHECKPOINT_TIMEOUT_SECS,
+        }
+    }
+}
+
+impl LoopConfig {
+    /// Returns `true` when every field equals the compiled default, so the
+    /// `loop` block can be omitted from the serialised `ragent.json`.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Merge `other` (the higher-precedence overlay) into `self`: fields
+    /// the overlay configured away from the compiled default take
+    /// precedence, untouched overlay fields keep the base (global) values.
+    pub fn merge(&mut self, other: &Self) {
+        if other.max_steps != DEFAULT_LOOP_MAX_STEPS {
+            self.max_steps = other.max_steps;
+        }
+        if other.cost_limit.is_some() {
+            self.cost_limit = other.cost_limit;
+        }
+        if other.error_retry_allowance != DEFAULT_ERROR_RETRY_ALLOWANCE {
+            self.error_retry_allowance = other.error_retry_allowance;
+        }
+        if !other.checkpoints {
+            self.checkpoints = false;
+        }
+        if other.checkpoint_timeout_secs != DEFAULT_CHECKPOINT_TIMEOUT_SECS {
+            self.checkpoint_timeout_secs = other.checkpoint_timeout_secs;
+        }
+    }
+}
+
+/// Configuration for LLM streaming behaviour (timeouts, retries).
+///
+/// The two timeouts serve distinct purposes:
+///
+/// - `initial_response_timeout_secs` (default 300) bounds how long the
+///   HTTP client will wait for the **first byte** from the provider after
+///   sending the request.  This covers network RTT plus provider-side
+///   cold-start / queue wait and must be generous for cloud-hosted
+///   models that may spend tens of seconds preparing the model before
+///   the first token streams.
+/// - `timeout_secs` (default 120) bounds the gap between **subsequent
+///   stream deltas** during an in-flight response.  Once tokens are
+///   flowing, an inter-delta gap larger than this is treated as a
+///   stream stall and triggers the retry/recovery path.
+///
+/// `initial_response_timeout_secs` must be greater than or equal to
+/// `timeout_secs` to avoid aborting an in-flight stream before it
+/// produces any data.
+///
+/// ```json
+/// {
+///   "stream": {
+///     "initial_response_timeout_secs": 300,
+///     "timeout_secs": 120,
+///     "max_retries": 4,
+///     "retry_backoff_secs": 2
+///   }
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StreamConfig {
+    /// Seconds the HTTP client will wait for the provider to return the
+    /// **first byte** of a streaming response (default: 300).
+    ///
+    /// This is forwarded to each provider as `ChatRequest::stream_timeout_secs`
+    /// and governs the initial-response / connection-establishment timeout,
+    /// not the per-event stall timeout (see [`Self::timeout_secs`]).
+    #[serde(default = "default_initial_response_timeout_secs")]
+    pub initial_response_timeout_secs: u64,
+    /// Seconds of silence between stream deltas before a stream is
+    /// considered stalled (default: 120).
+    ///
+    /// Used by the session processor's per-event stall detection.  The
+    /// `agent_perf.stall_timeout_secs` knob is a separate budget used by
+    /// the agent-perf profiler and should be <= this value.
+    #[serde(default = "default_stream_timeout_secs")]
+    pub timeout_secs: u64,
+    /// Maximum number of retry attempts after a stall or connection failure (default: 4).
+    #[serde(default = "default_stream_max_retries")]
+    pub max_retries: u32,
+    /// Backoff multiplier per retry attempt in seconds (default: 2).
+    /// Attempt N waits `N * retry_backoff_secs` seconds before retrying.
+    #[serde(default = "default_stream_retry_backoff_secs")]
+    pub retry_backoff_secs: u64,
+}
+
+const fn default_initial_response_timeout_secs() -> u64 {
+    300
+}
+
+const fn default_stream_timeout_secs() -> u64 {
+    120
+}
+
+const fn default_stream_max_retries() -> u32 {
+    4
+}
+
+const fn default_stream_retry_backoff_secs() -> u64 {
+    2
+}
+
+impl Default for StreamConfig {
+    fn default() -> Self {
+        Self {
+            initial_response_timeout_secs: default_initial_response_timeout_secs(),
+            timeout_secs: default_stream_timeout_secs(),
+            max_retries: default_stream_max_retries(),
+            retry_backoff_secs: default_stream_retry_backoff_secs(),
+        }
+    }
+}
+
+/// Minimum allowed `stream.initial_response_timeout_secs` / `timeout_secs`
+/// (ANTIPAT M-11).
+const MIN_STREAM_TIMEOUT_SECS: u64 = 5;
+
+/// Maximum allowed `stream.max_retries` (ANTIPAT M-11).
+///
+/// An unbounded retry count would let a single request spin for an
+/// arbitrarily long time.
+const MAX_STREAM_RETRIES: u32 = 32;
+
+impl StreamConfig {
+    /// Validate the configuration and return a list of any problems.
+    ///
+    /// Returns an empty `Vec` when all values are within their supported
+    /// ranges.  Callers (e.g. the session processor startup path) can
+    /// surface the messages and refuse to start the runtime.
+    #[must_use]
+    pub fn validate(&self) -> Vec<String> {
+        let mut problems = Vec::new();
+        if self.initial_response_timeout_secs < MIN_STREAM_TIMEOUT_SECS {
+            problems.push(format!(
+                "stream.initial_response_timeout_secs must be >= {MIN_STREAM_TIMEOUT_SECS} (got {})",
+                self.initial_response_timeout_secs
+            ));
+        }
+        if self.timeout_secs < MIN_STREAM_TIMEOUT_SECS {
+            problems.push(format!(
+                "stream.timeout_secs must be >= {MIN_STREAM_TIMEOUT_SECS} (got {})",
+                self.timeout_secs
+            ));
+        }
+        if self.initial_response_timeout_secs < self.timeout_secs {
+            problems.push(format!(
+                "stream.initial_response_timeout_secs ({}) must be >= stream.timeout_secs ({})",
+                self.initial_response_timeout_secs, self.timeout_secs
+            ));
+        }
+        if self.max_retries > MAX_STREAM_RETRIES {
+            problems.push(format!(
+                "stream.max_retries must be <= {MAX_STREAM_RETRIES} (got {})",
+                self.max_retries
+            ));
+        }
+        problems
+    }
+}
+
+/// Default cap on the Agents window's completed-history section
+/// (spec `agentssetup` FR-036, NFR-004).
+pub const DEFAULT_AGENTS_COMPLETED_HISTORY: usize = 20;
+
+/// Lowest accepted `agents.completed_history` value.
+///
+/// One row is the smallest meaningful history: `0` would silently switch the
+/// section off while still claiming to be configured, so an explicit `0` is
+/// clamped up rather than honoured.
+const MIN_AGENTS_COMPLETED_HISTORY: usize = 1;
+
+/// Highest accepted `agents.completed_history` value.
+///
+/// The cap exists to keep the panel's memory cost constant (NFR-004), so it is
+/// bounded rather than trusted: a four-figure history would defeat the purpose
+/// of the knob while still being technically "bounded".
+const MAX_AGENTS_COMPLETED_HISTORY: usize = 200;
+
+/// Default cap on concurrently launching sub-agent tasks (spec `agentssetup`
+/// D3, FR-021).
+///
+/// Replaces the single `/spawn`-only launch slot: every TUI launch path shares
+/// one bounded launch set, so a second launch is queued behind the busy ones
+/// rather than refused, and no path needs its own state machine.
+pub const DEFAULT_AGENTS_MAX_LAUNCHING: usize = 4;
+
+/// Lowest accepted `agents.max_launching` value.
+///
+/// One in-flight launch is the smallest meaningful set: `0` would make every
+/// TUI launch impossible while still claiming to be configured, so an explicit
+/// `0` is clamped up rather than honoured.
+const MIN_AGENTS_MAX_LAUNCHING: usize = 1;
+
+/// Highest accepted `agents.max_launching` value.
+///
+/// Each in-flight launch holds a registration future, so the set is bounded
+/// rather than trusted.
+const MAX_AGENTS_MAX_LAUNCHING: usize = 64;
+
+/// Sub-agent panel configuration (spec `agentssetup` FR-021, FR-036, NFR-004).
+///
+/// Corresponds to the `agents` key in `ragent.json`:
+///
+/// ```json
+/// { "agents": { "completed_history": 20, "max_launching": 4 } }
+/// ```
+///
+/// The completed-history section of the Agents window retains the most
+/// recently finished sub-agent tasks so a finished task's final status,
+/// duration and report path stay inspectable after its live row is removed
+/// (FR-021). The retained count is capped so the panel's memory cost does not
+/// grow with the number of tasks ever spawned (NFR-004).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentsConfig {
+    /// Maximum number of completed tasks the Agents window's history section
+    /// retains, newest first (default: 20).
+    ///
+    /// Values below 1 or above 200 are clamped into that range by
+    /// [`Config::effective_agents_completed_history`]; a value that is legal
+    /// but small simply evicts the oldest entry sooner (FR-036).
+    #[serde(default = "default_agents_completed_history")]
+    pub completed_history: usize,
+    /// Maximum number of sub-agent launches allowed in flight at once
+    /// (default: 4).
+    ///
+    /// This is the one launch slot every TUI launch path shares (D3): the
+    /// `/spawn` command, the Agents window and any future launcher queue behind
+    /// the busy ones instead of each hand-rolling its own "already launching"
+    /// guard. Values below 1 or above 64 are clamped into that range by
+    /// [`Config::effective_agents_max_launching`].
+    #[serde(default = "default_agents_max_launching")]
+    pub max_launching: usize,
+}
+
+/// Default for [`AgentsConfig::completed_history`].
+const fn default_agents_completed_history() -> usize {
+    DEFAULT_AGENTS_COMPLETED_HISTORY
+}
+
+/// Default for [`AgentsConfig::max_launching`].
+const fn default_agents_max_launching() -> usize {
+    DEFAULT_AGENTS_MAX_LAUNCHING
+}
+
+impl Default for AgentsConfig {
+    fn default() -> Self {
+        Self {
+            completed_history: DEFAULT_AGENTS_COMPLETED_HISTORY,
+            max_launching: DEFAULT_AGENTS_MAX_LAUNCHING,
+        }
+    }
+}
+
+impl AgentsConfig {
+    /// `true` when the section is at its default state.
+    ///
+    /// Used by the `Config` serialisation to omit the `agents` key while no
+    /// value has been chosen, so a config that has never set it round-trips
+    /// byte-identically.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        self.completed_history == DEFAULT_AGENTS_COMPLETED_HISTORY
+            && self.max_launching == DEFAULT_AGENTS_MAX_LAUNCHING
+    }
+}
+
+/// Persistent configuration for the code-index subsystem.
+///
+/// Runtime-derived fields like `project_root` and `index_dir` are
+/// resolved at startup, not stored in the config file.
+///
+/// All fields are public so callers which have a [`CodeIndexConfig`] in hand
+/// can mark a field as explicitly user-set before persisting the config.
+#[derive(Debug, Clone, Default)]
+pub struct CodeIndexSpecified {
+    /// `true` when `enabled` was explicitly set in the source JSON or via a setter.
+    pub enabled: bool,
+    /// `true` when `max_file_size` was explicitly set in the source JSON or via a setter.
+    pub max_file_size: bool,
+    /// `true` when `extra_exclude_dirs` was explicitly set in the source JSON or via a setter.
+    pub extra_exclude_dirs: bool,
+    /// `true` when `extra_exclude_patterns` was explicitly set in the source JSON or via a setter.
+    pub extra_exclude_patterns: bool,
+}
+
+/// Persistent configuration for the code-index subsystem.
+///
+/// The `enabled` field is serialised only when the user has *explicitly* set it
+/// (tracked by [`CodeIndexSpecified::enabled`]). This lets the default config
+/// omit the key so code-level default changes propagate, while ensuring that an
+/// explicit user toggle (e.g. `/codeindex on`/`/codeindex off`) is written to disk
+/// and survives a restart - even when a global config disagrees.
+#[derive(Debug, Clone)]
+pub struct CodeIndexConfig {
+    /// Whether code indexing is enabled.
+    ///
+    /// Defaults to `true`. When serialised, this field is only written if the
+    /// user explicitly set it (via [`CodeIndexConfig::set_enabled`] or by
+    /// having it present in the loaded JSON).
+    pub enabled: bool,
+    /// Maximum file size in bytes to index (default: 1 MB).
+    pub max_file_size: u64,
+    /// Additional directory names to exclude from scanning.
+    pub extra_exclude_dirs: Vec<String>,
+    /// Additional glob patterns to exclude from scanning.
+    pub extra_exclude_patterns: Vec<String>,
+    /// Tracks which fields were explicitly present in the source JSON or set
+    /// via a setter, so merge/serialise operations can distinguish "user set
+    /// this" from "this is just the default".
+    pub specified: CodeIndexSpecified,
+}
+
+impl CodeIndexConfig {
+    /// Explicitly set `enabled` and mark it as user-specified.
+    ///
+    /// Use this (rather than direct field assignment) when persisting a user
+    /// toggle such as `/codeindex on` / `/codeindex off`, so the value is written
+    /// to the config file and overrides any global-config default on reload.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+        self.specified.enabled = true;
+    }
+}
+
+const fn default_max_file_size() -> u64 {
+    1_048_576 // 1 MB
+}
+
+impl Default for CodeIndexConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            max_file_size: default_max_file_size(),
+            extra_exclude_dirs: Vec::new(),
+            extra_exclude_patterns: Vec::new(),
+            specified: CodeIndexSpecified::default(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for CodeIndexConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawCodeIndexConfig {
+            #[serde(default)]
+            enabled: Option<bool>,
+            #[serde(default)]
+            max_file_size: Option<u64>,
+            #[serde(default)]
+            extra_exclude_dirs: Option<Vec<String>>,
+            #[serde(default)]
+            extra_exclude_patterns: Option<Vec<String>>,
+        }
+
+        let raw = RawCodeIndexConfig::deserialize(deserializer)?;
+        let mut config = Self::default();
+
+        if let Some(enabled) = raw.enabled {
+            config.enabled = enabled;
+            config.specified.enabled = true;
+        }
+        if let Some(max_file_size) = raw.max_file_size {
+            config.max_file_size = max_file_size;
+            config.specified.max_file_size = true;
+        }
+        if let Some(extra_exclude_dirs) = raw.extra_exclude_dirs {
+            config.extra_exclude_dirs = extra_exclude_dirs;
+            config.specified.extra_exclude_dirs = true;
+        }
+        if let Some(extra_exclude_patterns) = raw.extra_exclude_patterns {
+            config.extra_exclude_patterns = extra_exclude_patterns;
+            config.specified.extra_exclude_patterns = true;
+        }
+
+        Ok(config)
+    }
+}
+
+impl Serialize for CodeIndexConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        // Count fields actually written: `enabled` only when explicitly set.
+        let mut count = 3; // max_file_size, extra_exclude_dirs, extra_exclude_patterns
+        if self.specified.enabled {
+            count += 1;
+        }
+        let mut s = serializer.serialize_struct("CodeIndexConfig", count)?;
+        if self.specified.enabled {
+            s.serialize_field("enabled", &self.enabled)?;
+        }
+        s.serialize_field("max_file_size", &self.max_file_size)?;
+        s.serialize_field("extra_exclude_dirs", &self.extra_exclude_dirs)?;
+        s.serialize_field("extra_exclude_patterns", &self.extra_exclude_patterns)?;
+        s.end()
+    }
+}
+
+fn default_agent_name() -> String {
+    "general".to_string()
+}
+
+/// Configuration for a single LLM provider.
+///
+/// `Debug` is hand-written (not derived) so the `api.headers` map — which can
+/// hold `Authorization` / `PRIVATE-TOKEN` values — is redacted before it is
+/// printed by any `{:?}`/`tracing::debug!(?cfg)`.
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct ProviderConfig {
+    /// Environment variable names required by this provider (e.g. API keys).
+    #[serde(default)]
+    pub env: Vec<String>,
+    /// Optional API endpoint and header overrides.
+    pub api: Option<ApiConfig>,
+    /// Default thinking/reasoning configuration for models under this provider.
+    /// Used when a per-model `thinking` override is not present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ragent_types::ThinkingConfig>,
+    /// Model definitions available through this provider.
+    #[serde(default)]
+    pub models: HashMap<String, ModelConfig>,
+    /// Arbitrary provider-specific options.
+    // TODO: Replace `Value` with typed provider option structs per-provider.
+    #[serde(default)]
+    pub options: HashMap<String, Value>,
+}
+
+/// API endpoint configuration for a provider.
+///
+/// `Debug` is hand-written (not derived) so `Authorization` / `PRIVATE-TOKEN`
+/// header values are redacted before they are printed.
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct ApiConfig {
+    /// Base URL for API requests (overrides the provider default).
+    pub base_url: Option<String>,
+    /// Extra HTTP headers sent with every request.
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
+}
+
+redacted_debug_impl!(ApiConfig, ProviderConfig);
+
+/// Metadata and pricing for a single model within a provider.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ModelConfig {
+    /// Human-readable display name for the model.
+    pub name: Option<String>,
+    /// Token pricing information.
+    pub cost: Option<Cost>,
+    /// Feature capabilities of this model.
+    pub capabilities: Option<Capabilities>,
+    /// Default thinking/reasoning configuration for this model.
+    /// When set, this overrides any provider-level default and acts as
+    /// the fallback if no user-level choice is made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ragent_types::ThinkingConfig>,
+}
+
+/// Per-token cost for a model (USD per million tokens).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Cost {
+    /// Cost per million input tokens.
+    pub input: f64,
+    /// Cost per million output tokens.
+    pub output: f64,
+}
+
+/// Feature flags describing what a model supports.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Capabilities {
+    /// Whether the model supports chain-of-thought reasoning.
+    #[serde(default)]
+    pub reasoning: bool,
+    /// Whether the model supports streaming responses.
+    #[serde(default = "default_true")]
+    pub streaming: bool,
+    /// Whether the model can process image inputs.
+    #[serde(default)]
+    pub vision: bool,
+    /// Whether the model supports tool/function calling.
+    #[serde(default = "default_true")]
+    pub tool_use: bool,
+    /// Which thinking/reasoning levels this model supports.
+    /// Empty vec means no thinking support. Populated from built-in model
+    /// definitions and may be extended by provider discovery APIs.
+    #[serde(default)]
+    pub thinking_levels: Vec<ragent_types::ThinkingLevel>,
+}
+
+/// Serde/section default of `true`, shared by every boolean field whose default
+/// is on (ANTIPAT M-8: one helper instead of a per-field copy). `pub(crate)` so
+/// the `plugins` and `trigger` sub-configs reuse it rather than declaring their
+/// own.
+pub(crate) const fn default_true() -> bool {
+    true
+}
+
+/// Serde/section default for the shared store-fetch wall-clock budget, in
+/// milliseconds. `pub(crate)` so the `connectors` and `plugins` store configs
+/// reuse one value rather than each declaring a copy (ANTIPAT M-8).
+pub(crate) const fn default_store_timeout_ms() -> u64 {
+    10_000
+}
+
+/// Serde/section default for the maximum accepted store-index size in bytes.
+/// Shared by the `connectors` and `plugins` store configs (ANTIPAT M-8).
+pub(crate) const fn default_max_index_bytes() -> u64 {
+    2 * 1024 * 1024
+}
+
+/// Serde/section default for the store-index cache TTL, in seconds. Shared by
+/// the `connectors` and `plugins` store configs (ANTIPAT M-8).
+pub(crate) const fn default_cache_ttl_secs() -> u64 {
+    3_600
+}
+
+impl Default for Capabilities {
+    fn default() -> Self {
+        Self {
+            reasoning: false,
+            streaming: true,
+            vision: false,
+            tool_use: true,
+            thinking_levels: Vec::new(),
+        }
+    }
+}
+
+/// Per-agent configuration overrides applied on top of built-in defaults.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentConfig {
+    /// Display name override.
+    pub name: Option<String>,
+    /// Model identifier in `"provider:model"` format.
+    pub model: Option<String>,
+    /// Agent variant selector.
+    pub variant: Option<String>,
+    /// System prompt override.
+    pub prompt: Option<String>,
+    /// Sampling temperature override.
+    pub temperature: Option<f32>,
+    /// Top-p (nucleus) sampling override.
+    pub top_p: Option<f32>,
+    /// Agent mode override (`"primary"`, `"subagent"`, or `"all"`).
+    pub mode: Option<String>,
+    /// Whether to hide this agent from user-facing listings.
+    #[serde(default)]
+    pub hidden: bool,
+    /// Permission rules specific to this agent.
+    #[serde(default)]
+    pub permission: Vec<crate::permission::PermissionRule>,
+    /// Maximum agentic loop iterations.
+    ///
+    /// Per-agent override of the loop step budget; when unset the
+    /// loop-level default applies ([`LoopConfig::max_steps`], default 512).
+    pub max_steps: Option<u32>,
+    /// Skill names to preload into this agent's prompt context.
+    #[serde(default)]
+    pub skills: Vec<String>,
+    /// Arbitrary agent-specific options.
+    // TODO: Replace `Value` with typed agent option structs.
+    #[serde(default)]
+    pub options: HashMap<String, Value>,
+}
+
+/// User-defined additions to the bash command allowlist and denylist.
+///
+/// Entries in `allowlist` are command prefixes that bypass the built-in
+/// banned-command check (e.g. `"curl"` to allow curl).  Entries in
+/// `denylist` are substring patterns that always reject a command (e.g.
+/// `"git push --force"`).  Both global and project configs are merged -
+/// the union of all entries is used.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BashConfig {
+    /// Command prefixes exempted from the banned-command check.
+    #[serde(default)]
+    pub allowlist: Vec<String>,
+    /// Patterns that unconditionally reject a command.
+    #[serde(default)]
+    pub denylist: Vec<String>,
+}
+
+/// Configuration for directory/file path allow and deny lists.
+///
+/// Entries in `allowlist` are glob patterns (e.g. `"src/**"`, `"*.rs"`) that
+/// automatically grant permission for read/edit operations without prompting.
+/// Entries in `denylist` are glob patterns that unconditionally reject access
+/// (e.g. `"secrets/**"`, `"/etc/**"`). The lists are unioned across trusted
+/// config sources (user-global, `--config`, environment overrides); a
+/// project-local `.ragent/ragent.json` overlay's `dirs` lists are dropped by
+/// [`Config::merge_project`](crate::Config::merge_project) rather than merged.
+///
+/// The `allowed_roots` field specifies additional directory paths that are
+/// treated as valid roots for path escape checking, allowing sub-agents and
+/// tools to access files in multiple project directories.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DirsConfig {
+    /// Glob patterns for paths that are automatically allowed (no prompt).
+    #[serde(default)]
+    pub allowlist: Vec<String>,
+    /// Glob patterns for paths that are unconditionally rejected.
+    #[serde(default)]
+    pub denylist: Vec<String>,
+    /// Additional directory paths that are treated as valid roots for path
+    /// escape checking. By default, only the session's working directory is
+    /// allowed. Add paths here to permit access to multiple project roots
+    /// (e.g., sibling directories). Paths are canonicalized at load time.
+    #[serde(default, rename = "allowed_roots")]
+    pub allowed_roots: Vec<String>,
+}
+
+/// A user-defined slash-command shortcut.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandDef {
+    /// Shell command to execute.
+    pub command: String,
+    /// Human-readable description shown in help output.
+    pub description: String,
+}
+
+/// Configuration for an MCP (Model Context Protocol) server.
+///
+/// `Debug` is hand-written (not derived) so the `env` and `headers` maps —
+/// which routinely hold API tokens and `Authorization`/`PRIVATE-TOKEN` values
+/// for HTTP/SSE transports — are redacted before they are printed.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    /// Transport mechanism used to communicate with the server.
+    ///
+    /// A server entry that omits `type` is a stdio server: that is the MCP
+    /// convention every other client follows, so a missing key must load
+    /// rather than fail.
+    #[serde(rename = "type", default)]
+    pub type_: McpTransport,
+    /// Executable path or name (for stdio transport).
+    pub command: Option<String>,
+    /// Command-line arguments passed to the server process.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Environment variables injected into the server process.
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    /// URL endpoint (for SSE or HTTP transports).
+    pub url: Option<String>,
+    /// Optional HTTP headers sent with every request for HTTP/SSE transports.
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
+    /// If `true`, this server is configured but will not be started.
+    #[serde(default)]
+    pub disabled: bool,
+    /// How push notifications from this server should be handled (FR-003).
+    ///
+    /// When set to `inject_summary` or `inject_and_run`, the MCP notification
+    /// adapter normalizes pushed notification frames into trigger envelopes
+    /// and routes them through the trigger runtime. Default: `none`.
+    #[serde(default)]
+    pub notification: crate::trigger::McpNotificationMode,
+}
+
+redacted_debug_impl!(McpServerConfig);
+
+// The `openai` section carries a bearer token; its `Debug` renders through the
+// redacting impl from this module (the struct lives in `crate::openai`).
+redacted_debug_impl!(OpenAiConfig);
+
+impl Default for McpServerConfig {
+    fn default() -> Self {
+        Self {
+            type_: McpTransport::Stdio,
+            command: None,
+            args: Vec::new(),
+            env: HashMap::new(),
+            url: None,
+            headers: HashMap::new(),
+            disabled: false,
+            notification: crate::trigger::McpNotificationMode::None,
+        }
+    }
+}
+
+/// User-defined price override for a single model (FR-011).
+///
+/// Prices are in USD per 1,000,000 tokens. When a `PriceEntry` matches a
+/// model id in the built-in price table, the entry's values take precedence.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PriceEntry {
+    /// Model identifier as returned by the provider (e.g. `"gpt-4o"`).
+    pub model: String,
+    /// Price per 1M input/prompt tokens in USD.
+    pub input_per_1m: f64,
+    /// Price per 1M output/completion tokens in USD.
+    pub output_per_1m: f64,
+}
+
+/// Transport protocol for MCP server communication.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum McpTransport {
+    /// Communicate over the server process's stdin/stdout.
+    ///
+    /// The default: an MCP server entry that declares no `type` is a stdio
+    /// server.
+    #[default]
+    Stdio,
+    /// Communicate via Server-Sent Events over HTTP.
+    Sse,
+    /// Communicate via plain HTTP request/response.
+    Http,
+}
+
+impl std::fmt::Display for McpTransport {
+    /// Render the wire-protocol label surfaces print (`stdio`, `sse`, `http`),
+    /// matching serde's lowercase names so config and display cannot drift.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stdio => f.write_str("stdio"),
+            Self::Sse => f.write_str("sse"),
+            Self::Http => f.write_str("http"),
+        }
+    }
+}
+
+/// Default per-turn wall-clock budget for an ACP agent, in seconds.
+///
+/// Bounds a single relayed turn so a subprocess that goes silent without
+/// exiting cannot block the session indefinitely (FR-036).
+#[must_use]
+pub const fn default_acp_turn_timeout_secs() -> u64 {
+    300
+}
+
+/// Configuration for the ACP (Agent Client Protocol) client (spec `openhands`
+/// FR-015, FR-022, FR-036).
+///
+/// ragent drives each registered ACP agent - Claude Code, Codex, Gemini CLI, or
+/// a custom ACP server - as a subprocess that speaks JSON-RPC over its standard
+/// input and output (FR-015). While an ACP agent is the active agent kind, its
+/// streamed updates render in the TUI and turns are not routed to a local
+/// ragent LLM provider (FR-022). An optional `default_agent` names the entry used
+/// when none is selected explicitly.
+///
+/// ```jsonc
+/// {
+///   "acp": {
+///     "default_agent": "claude",
+///     "agents": {
+///       "claude": { "id": "claude", "command": "claude-code-acp", "args": [] }
+///     }
+///   }
+/// }
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AcpConfig {
+    /// Id of the ACP agent used when no agent has been selected explicitly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_agent: Option<String>,
+    /// Registered ACP agents keyed by a stable id.
+    #[serde(default)]
+    pub agents: HashMap<String, AcpAgentConfig>,
+    /// Whether the ACP **server** endpoint is enabled (spec `openhands`
+    /// FR-022, FR-028).
+    ///
+    /// The endpoint serves ACP-capable editors (Zed, VS Code, JetBrains) over
+    /// JSON-RPC on ragent's own stdio. It is **off by default**: an editor can
+    /// only attach once the user opts in, because the server drives a full
+    /// local ragent turn and must never be an implicit attack surface on a
+    /// plain terminal launch. Enable it with `acp.server_enabled: true`.
+    #[serde(default)]
+    pub server_enabled: bool,
+    /// The agent the ACP server drives (spec `openhands` FR-022, FR-028).
+    ///
+    /// Defaults to [`AcpConfig::default_agent`] and, when that is unset too,
+    /// to [`Config::default_agent`](crate::Config::default_agent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_agent: Option<String>,
+}
+
+impl AcpConfig {
+    /// Whether the ACP subsystem has any registered agents.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.agents.is_empty()
+    }
+}
+
+/// A single external ACP agent that ragent can drive over stdio (FR-015).
+///
+/// The `command` is spawned as a subprocess; the turn is relayed over JSON-RPC
+/// on that child's stdin/stdout. `enabled: false` retires an entry without
+/// deleting it, mirroring the MCP server and plugin conventions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcpAgentConfig {
+    /// Stable identifier used to select this agent.
+    pub id: String,
+    /// Human-readable display name. Defaults to [`AcpAgentConfig::id`] when
+    /// omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Whether this agent is offered by the `/agent` picker and the ACP surface.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Executable path or name of the ACP agent to spawn.
+    pub command: String,
+    /// Command-line arguments passed to the ACP agent process.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Environment variables injected into the ACP agent process.
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    /// Working directory for the subprocess. Defaults to the session working
+    /// directory when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// Per-turn wall-clock budget in seconds, bounding a silent subprocess
+    /// (FR-036). Defaults to [`default_acp_turn_timeout_secs`].
+    #[serde(default = "default_acp_turn_timeout_secs")]
+    pub turn_timeout_secs: u64,
+    /// Optional system/instruction context sent to the agent when a session is
+    /// created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+}
+
+impl Default for AcpAgentConfig {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: None,
+            enabled: true,
+            command: String::new(),
+            args: Vec::new(),
+            env: HashMap::new(),
+            cwd: None,
+            turn_timeout_secs: default_acp_turn_timeout_secs(),
+            system_prompt: None,
+        }
+    }
+}
+
+impl AcpAgentConfig {
+    /// The name to display for this agent: the explicit `name`, or the id when
+    /// none was given.
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        self.name.as_deref().unwrap_or(&self.id)
+    }
+}
+
+/// Kind of execution backend a tool invocation is dispatched to (spec
+/// `openhands` FR-001, FR-004).
+///
+/// T-001 defines the whole set so the config key, the backend registry
+/// (T-004), and the TUI switcher (T-005) share one vocabulary from the start.
+/// Only [`ExecutionBackendKind::Local`] has an executable adapter in T-001;
+/// `Docker`/`Podman`/`Remote` parse successfully and resolve to a clear
+/// "not yet implemented" error until T-002/T-003 land.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExecutionBackendKind {
+    /// Execute tools directly on the host (the default, FR-019).
+    #[default]
+    Local,
+    /// Execute tools inside a Docker container (T-002).
+    Docker,
+    /// Execute tools inside a Podman container (T-002).
+    Podman,
+    /// Drive a remote ragent server over its REST+SSE API (T-003).
+    Remote,
+}
+
+impl ExecutionBackendKind {
+    /// The config/log label for this kind (`local`, `docker`, `podman`,
+    /// `remote`), matching serde's lowercase names so config, logs, and the
+    /// TUI cannot drift.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Docker => "docker",
+            Self::Podman => "podman",
+            Self::Remote => "remote",
+        }
+    }
+
+    /// Parse a backend-kind label (case-insensitive, trimmed).
+    ///
+    /// Unknown labels resolve to `None` so the caller decides the fallback
+    /// policy explicitly; [`Config::effective_execution_backend`] then keeps
+    /// the safe default rather than mis-resolving a typo onto a more capable
+    /// backend.
+    #[must_use]
+    pub fn from_label(label: &str) -> Option<Self> {
+        match label.trim().to_ascii_lowercase().as_str() {
+            "local" => Some(Self::Local),
+            "docker" => Some(Self::Docker),
+            "podman" => Some(Self::Podman),
+            "remote" => Some(Self::Remote),
+            _ => None,
+        }
+    }
+
+    /// Whether this kind executes on the host. Keeps the "no fallback to host
+    /// execution" rule (FR-031) explicit at call sites.
+    #[must_use]
+    pub const fn is_local(self) -> bool {
+        matches!(self, Self::Local)
+    }
+}
+
+impl std::fmt::Display for ExecutionBackendKind {
+    /// Render the config/wire label (`local`, `docker`, `podman`, `remote`).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A configured execution backend entry in the backend registry (FR-004).
+///
+/// T-001 persists the descriptor - id, display name, kind, and the
+/// kind-specific connection fields - so the registry (T-004), the TUI switcher
+/// (T-005), and the container/remote adapters (T-002/T-003) all read one shape.
+/// `kind` is a plain string so an unknown value from a newer config is
+/// preserved rather than failing the whole config parse; resolution goes
+/// through [`ExecutionBackendKind::from_label`].
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct BackendConfig {
+    /// Stable identifier used to select this backend.
+    pub id: String,
+    /// Human-readable display name. Defaults to [`BackendConfig::id`] when
+    /// omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Kind label (`local`, `docker`, `podman`, `remote`).
+    #[serde(default)]
+    pub kind: String,
+    /// Container image reference (`docker`/`podman` kinds; T-002).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// Host path mounted as the container workspace (`docker`/`podman` kinds;
+    /// T-002).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// Base URL of the remote server (`remote` kind; T-003).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// API key for the remote server (`remote` kind; T-003). Masked in
+    /// diagnostics by the redacting [`Config`] `Debug` impl.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    /// Names of encrypted-store credentials to inject at spawn time
+    /// (`docker`/`podman`/`remote` kinds; spec `openhands` T-006, FR-010).
+    ///
+    /// A name is not a secret: the value is resolved from the encrypted
+    /// credential store when the sandbox is provisioned and injected as a
+    /// container environment variable, never written into the descriptor
+    /// (FR-010, FR-035).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub credentials: Vec<String>,
+}
+
+redacted_debug_impl!(BackendConfig);
+
+impl BackendConfig {
+    /// The name to display for this backend: the explicit `name`, or the id
+    /// when none was given.
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        self.name.as_deref().unwrap_or(&self.id)
+    }
+
+    /// The parsed backend kind, or `None` when `kind` is missing/unknown.
+    #[must_use]
+    pub fn kind_parsed(&self) -> Option<ExecutionBackendKind> {
+        ExecutionBackendKind::from_label(&self.kind)
+    }
+}
+
+/// The value of the `execution_backend` config key.
+///
+/// Two spellings are accepted so the terse form stays convenient while the
+/// registry form (FR-004) can carry the connection descriptor:
+///
+/// ```jsonc
+/// { "execution_backend": "podman" }
+/// // or
+/// { "execution_backend": { "id": "box", "kind": "docker", "image": "...", "workspace": "." } }
+/// ```
+///
+/// An object entry with an `id` but no `kind` is treated as a selection of a
+/// backend already declared in `backends`; the kind is then resolved from that
+/// entry (T-004) or left unparsed for the caller to report.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ExecutionBackend {
+    /// A bare backend-kind label (`local`, `docker`, `podman`, `remote`).
+    Kind(String),
+    /// An inline backend descriptor.
+    Config(BackendConfig),
+}
+
+impl ExecutionBackend {
+    /// The parsed backend kind, or `None` when the value is a label/kind that
+    /// is absent, unknown, or (for a descriptor) not yet resolvable.
+    #[must_use]
+    pub fn kind(&self) -> Option<ExecutionBackendKind> {
+        match self {
+            Self::Kind(label) => ExecutionBackendKind::from_label(label),
+            Self::Config(cfg) => cfg.kind_parsed(),
+        }
+    }
+
+    /// The backend id when the value is an inline descriptor, or `None` for a
+    /// bare label.
+    #[must_use]
+    pub fn id(&self) -> Option<&str> {
+        match self {
+            Self::Kind(_) => None,
+            Self::Config(cfg) => Some(cfg.id.as_str()),
+        }
+    }
+
+    /// The configured kind label as written, whether bare or from a
+    /// descriptor. Used for diagnostics without forcing a parse.
+    #[must_use]
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Kind(label) => label,
+            Self::Config(cfg) => cfg.kind.as_str(),
+        }
+    }
+}
+
+impl From<ExecutionBackendKind> for ExecutionBackend {
+    /// Wrap a kind so writers (config save, `/backend`) emit the canonical
+    /// lowercase label.
+    fn from(kind: ExecutionBackendKind) -> Self {
+        Self::Kind(kind.as_str().to_string())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Flags for experimental features that are not yet stable.
+pub struct ExperimentalFlags {
+    /// Enable OpenTelemetry trace export.
+    #[serde(default)]
+    pub open_telemetry: bool,
+    /// Allow multiple tool calls from a single model turn to execute in parallel.
+    ///
+    /// Disabled by default so tool calls execute sequentially and each follow-up
+    /// prompt is based on the completed result of the previous call.
+    #[serde(default)]
+    pub parallel_tool_calls: bool,
+    /// Maximum number of concurrent background sub-agent tasks (F14).
+    #[serde(default = "default_max_background_agents")]
+    pub max_background_agents: usize,
+    /// Timeout in seconds for background sub-agent tasks (F14).
+    #[serde(default = "default_background_agent_timeout")]
+    pub background_agent_timeout: u64,
+}
+
+impl Default for ExperimentalFlags {
+    fn default() -> Self {
+        Self {
+            open_telemetry: false,
+            parallel_tool_calls: false,
+            max_background_agents: default_max_background_agents(),
+            background_agent_timeout: default_background_agent_timeout(),
+        }
+    }
+}
+
+const fn default_max_background_agents() -> usize {
+    8
+}
+
+const fn default_background_agent_timeout() -> u64 {
+    3600
+}
+
+/// Read an environment variable, treating a present-but-blank value as unset
+/// (ANTIPAT L-9).
+///
+/// This is the single env-read helper for the crate, shared by the
+/// `RAGENT_CONFIG` / `RAGENT_CONFIG_CONTENT` reads here and
+/// [`crate::github::env_token`], so a present-but-blank value is handled the
+/// same everywhere. `None` means "unset or blank".
+pub(crate) fn read_env(name: &str) -> Option<String> {
+    let value = std::env::var(name).ok()?;
+    if value.trim().is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+impl Config {
+    /// Load configuration with precedence:
+    /// compiled defaults -> global -> project -> env var -> inline content
+    ///
+    /// Provider configurations are merged deeply: each provider block is merged
+    /// per-provider, and model-level entries inside `provider.<id>.models` are
+    /// merged per-model-id so that lower-precedence settings (e.g. a global
+    /// `provider.openrouter.models.anthropic/claude-sonnet-4.name`) are preserved
+    /// when a project config only overrides a single field (e.g. `thinking`).
+    /// Model-level thinking overrides the provider-level default.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a config file cannot be read or contains invalid JSON.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ragent_config::Config;
+    ///
+    /// let config = Config::load().expect("failed to load config");
+    /// println!("default agent: {}", config.default_agent);
+    /// ```
+    pub fn load() -> anyhow::Result<Self> {
+        // M-025: cache the resolved config keyed by the mtimes and sizes of
+        // the on-disk config files (and the project cwd, since the project
+        // config path is relative) so hot uncached callers (per-turn prompt
+        // build, gitlab tool auth, slash-menu) do not re-read/re-parse on every
+        // call. The cache is bypassed when either env-var override is present.
+        // L-9: use the shared `read_env` helper so a present-but-blank override
+        // is treated the same here and in `load_uncached`.
+        let env_overrides =
+            read_env("RAGENT_CONFIG").is_some() || read_env("RAGENT_CONFIG_CONTENT").is_some();
+
+        // The `XDG_CONFIG_HOME` environment variable selects the global config
+        // directory; include it in the fast-path guard (below) so a caller that
+        // redirects it in-process is never served a config resolved for the
+        // previous location. Normalise a present-but-blank value to `None`
+        // (L-9) so it matches `dirs`/XDG handling, which treats an empty
+        // override as unset.
+        let xdg = read_env("XDG_CONFIG_HOME").map(std::ffi::OsString::from);
+
+        if env_overrides {
+            return Self::load_uncached_in(Path::new(""));
+        }
+
+        // The project config path (`.ragent/ragent.json`) is relative to the
+        // current working directory, which can change (e.g. in tests); include
+        // it in the cache key so a stale entry is never returned.
+        //
+        // L-5: an unobtainable cwd used to collapse to "" via
+        // `unwrap_or_default()`, weakening the cache key so two different
+        // directories could share an entry. Warn and skip the cache entirely
+        // rather than risk serving a config resolved for the wrong directory.
+        let cwd = match std::env::current_dir() {
+            Ok(cwd) => cwd,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "cannot determine current directory; bypassing the config load cache"
+                );
+                return Self::load_uncached_in(Path::new(""));
+            }
+        };
+        // The relative base keeps `config_paths` and the default-file write
+        // relative to the process cwd, exactly as before multi-session.
+        Self::load_cached_in(cwd, Path::new(""), xdg)
+    }
+
+    /// Loads the configuration a session working in `directory` runs under
+    /// (spec MULTISESSION M6): when the directory has its own
+    /// `.ragent/ragent.json`, the global config overlaid with it (same
+    /// project-local guard and mtime-keyed cache as [`Config::load`]);
+    /// otherwise the launch configuration, exactly [`Config::load`]. The
+    /// agent loop resolves a session's config by the same rule, so every
+    /// reader agrees on what the session runs under.
+    ///
+    /// # Arguments
+    ///
+    /// * `directory` - the session's working directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a config file cannot be read or contains invalid
+    /// JSON.
+    pub fn load_for(directory: &Path) -> anyhow::Result<Self> {
+        let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let is_cwd =
+            std::env::current_dir().is_ok_and(|cwd| canonical(&cwd) == canonical(directory));
+        let own_config = directory.join(".ragent").join("ragent.json").is_file();
+        if is_cwd || !own_config {
+            return Self::load();
+        }
+        if read_env("RAGENT_CONFIG").is_some() || read_env("RAGENT_CONFIG_CONTENT").is_some() {
+            return Self::load_uncached_in(directory);
+        }
+        let xdg = read_env("XDG_CONFIG_HOME").map(std::ffi::OsString::from);
+        Self::load_cached_in(directory.to_path_buf(), directory, xdg)
+    }
+
+    /// The M-025 cached load for one directory.
+    ///
+    /// `key` identifies the cache entry (the directory the config is for);
+    /// `base` prefixes the project config path (empty for the process cwd).
+    fn load_cached_in(
+        key: PathBuf,
+        base: &Path,
+        xdg: Option<std::ffi::OsString>,
+    ) -> anyhow::Result<Self> {
+        let cache = Self::load_cache_slot();
+        let cwd = key;
+        let global_path = Self::global_config_path();
+        let project_path = base.join(".ragent").join("ragent.json");
+        let candidates: Vec<PathBuf> = [global_path.clone(), Some(project_path.clone())]
+            .into_iter()
+            .flatten()
+            .collect();
+
+        // Fast path: cached, same cwd, and every file mtime and size unchanged.
+        // Size is included because filesystem mtimes can be coarse (1 second
+        // granularity), so two writes within the same second would otherwise
+        // be served a stale config.
+        {
+            let guard = cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(cached) = guard.get(&cwd)
+                && cached.cwd == cwd
+                && cached.xdg == xdg
+                && cached.mtimes.iter().all(|(path, mt, size)| {
+                    std::fs::metadata(path).is_ok_and(|m| {
+                        m.modified().is_ok_and(|current| current == *mt) && m.len() == *size
+                    })
+                })
+            {
+                return Ok(cached.config.clone());
+            }
+        }
+
+        // Cache miss / invalid: load, then snapshot the candidate mtimes AFTER
+        // the load (see comment below) so the new entry keys the fast path.
+        let cfg = Self::load_uncached_in(base);
+        if let Ok(cfg) = &cfg {
+            // Re-snapshot AFTER load_uncached: a first-time load in a fresh
+            // directory creates the default project config (load_uncached
+            // writes `.ragent/ragent.json`), and that file must participate
+            // in the cache key. Snapshotting before the write left `mtimes`
+            // empty, so a subsequent `save` (which writes a file absent from
+            // the snapshot) never invalidated the fast path and every later
+            // `load` in the same cwd was served the pre-save config.
+            let mtimes = Self::snapshot_candidate_mtimes(&candidates);
+            let mut guard = cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.insert(
+                cwd.clone(),
+                CachedConfigFile {
+                    config: cfg.clone(),
+                    mtimes,
+                    cwd,
+                    xdg,
+                },
+            );
+        }
+        cfg
+    }
+
+    /// Record `(path, mtime, size)` for each candidate config file that
+    /// currently exists. Used to key the M-025 load cache.
+    fn snapshot_candidate_mtimes(
+        candidates: &[PathBuf],
+    ) -> Vec<(PathBuf, std::time::SystemTime, u64)> {
+        candidates
+            .iter()
+            .filter_map(|path| {
+                let meta = std::fs::metadata(path).ok()?;
+                let mt = meta.modified().ok()?;
+                Some((path.clone(), mt, meta.len()))
+            })
+            .collect()
+    }
+
+    /// The shared M-025 cache used by [`Config::load`], [`Config::load_for`]
+    /// and [`Config::invalidate_load_cache`], one entry per directory. A
+    /// single static guarantees that an invalidation clears exactly the cache
+    /// the loaders consult.
+    fn load_cache_slot()
+    -> &'static std::sync::Mutex<std::collections::HashMap<PathBuf, CachedConfigFile>> {
+        use std::sync::OnceLock;
+        static CACHE: OnceLock<
+            std::sync::Mutex<std::collections::HashMap<PathBuf, CachedConfigFile>>,
+        > = OnceLock::new();
+        CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+    }
+
+    /// The uncached config loader (the real work behind [`Config::load`] and
+    /// [`Config::load_for`]). The project config is read from
+    /// `<base>/.ragent/ragent.json`; an empty `base` means the process cwd.
+    ///
+    /// The first-run default `ragent.json` is written only for the process
+    /// cwd (empty `base`): opening a session in another directory must never
+    /// create files in that project.
+    fn load_uncached_in(base: &Path) -> anyhow::Result<Self> {
+        // `Config::default()` implements the same defaults as the serde field
+        // attributes (`default_agent == "general"`, `activity_log == true`), so
+        // no load-time patch is needed here (ANTIPAT M-7).
+        let mut config = Self::default();
+        let mut loaded = false;
+
+        // Global config: ~/.config/ragent/ragent.json
+        if let Some(global_path) = Self::global_config_path()
+            && global_path.exists()
+        {
+            let overlay = Self::load_file(&global_path)?;
+            config = Self::merge(config, overlay);
+            config.config_paths.push(global_path);
+            loaded = true;
+        }
+
+        // Project config: ./.ragent/ragent.json
+        // SEC-ragent-config-001/002/003 (T-011): repository content is
+        // untrusted - merge it with the project-local guard so it cannot
+        // enable YOLO, widen allow-lists/roots, weaken deny rules, redirect
+        // telemetry, or inject hooks.
+        let project_path = base.join(".ragent").join("ragent.json");
+        if project_path.exists() {
+            let overlay = Self::load_file(&project_path)?;
+            config = Self::merge_project(config, overlay);
+            config.config_paths.push(project_path.clone());
+            loaded = true;
+        }
+        // If neither global nor project config exists, create a default
+        // project-level config so the user has a starting point - in the
+        // launch directory only (see above).
+        if !loaded && base.as_os_str().is_empty() {
+            let ragent_dir = base.join(".ragent");
+            std::fs::create_dir_all(&ragent_dir).map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to create project config directory '{}': {}",
+                    ragent_dir.display(),
+                    e
+                )
+            })?;
+            let default_json = serde_json::to_string_pretty(&config)
+                .map_err(|e| anyhow::anyhow!("Failed to serialise default config: {}", e))?;
+            std::fs::write(&project_path, &default_json).map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to write default config file '{}': {}",
+                    project_path.display(),
+                    e
+                )
+            })?;
+            config.config_paths.push(project_path);
+        }
+
+        // Environment variable pointing to config file
+        if let Some(env_path) = read_env("RAGENT_CONFIG") {
+            let path = PathBuf::from(&env_path);
+            if path.exists() {
+                let overlay = Self::load_file(&path)?;
+                config = Self::merge(config, overlay);
+                config.config_paths.push(path);
+            }
+        }
+
+        // Inline config from environment variable. Parsed once into a raw
+        // `Value` so the `specified_default_agent` probe and the typed
+        // conversion share a single JSON parse.
+        if let Some(content) = read_env("RAGENT_CONFIG_CONTENT") {
+            let label = "RAGENT_CONFIG_CONTENT environment variable";
+            let overlay_value: serde_json::Value = serde_json::from_str(&content)
+                .map_err(|e| Self::json_parse_error(label, &content, e))?;
+            let specified = overlay_value.get("defaultAgent").is_some()
+                || overlay_value.get("default_agent").is_some();
+            // The typed conversion deliberately re-parses from the raw text
+            // instead of `from_value`: `from_str` errors carry real
+            // line/column positions, which the diagnostic contract (and the
+            // caret rendering) requires; `from_value` errors report line 0,
+            // column 0.
+            let mut overlay: Self = serde_json::from_str(&content)
+                .map_err(|e| Self::json_parse_error(label, &content, e))?;
+            overlay.specified_default_agent = specified;
+            // FR-031: the inline route is a configuration mechanism like any
+            // other, so it refuses a retired `tools.aliases` spelling too and
+            // names the variable in place of a file path (T-042).
+            Self::reject_retired_alias_spellings(&overlay.tools, &label)?;
+            config = Self::merge(config, overlay);
+        }
+
+        Ok(config)
+    }
+
+    /// Build the actionable parse diagnostic shared by the
+    /// `RAGENT_CONFIG_CONTENT` and config-file parse paths.
+    fn json_parse_error(
+        label: impl std::fmt::Display,
+        content: &str,
+        e: serde_json::Error,
+    ) -> anyhow::Error {
+        let line = e.line();
+        let column = e.column();
+        let problematic_line = content
+            .lines()
+            .nth(line.saturating_sub(1))
+            .unwrap_or("<line not found>");
+        // SEC-ragent-config-007 (SECTASKS T-061): a credential is very often on
+        // the offending line (a stray comma beside `"tavily_api_key": "..."`),
+        // and this diagnostic is printed to the terminal and logged. Redact the
+        // echoed source line before embedding it.
+        let problematic_line = ragent_types::sanitize::redact_secrets(problematic_line);
+        anyhow::anyhow!(
+            "Failed to parse {label}:\n\
+             Error at line {}, column {}:\n\
+             {}\n\
+             Problematic line:\n\
+             {}\n\
+             {}^\n\
+             Parse error: {}",
+            line,
+            column,
+            "─".repeat(80),
+            problematic_line,
+            " ".repeat(column.saturating_sub(1)),
+            e
+        )
+    }
+
+    pub(crate) fn load_file(path: &Path) -> anyhow::Result<Self> {
+        let content = std::fs::read_to_string(path).map_err(|e| {
+            anyhow::anyhow!("Failed to read config file '{}': {}", path.display(), e)
+        })?;
+        Self::parse_file(path, &content)
+    }
+
+    /// Merge-deduplicate `src` into `dst`, preserving order: items already in
+    /// `dst` are skipped, new items are appended in source order. Used by
+    /// [`Config::merge`] for every unioned list (bash allow/deny, hidden
+    /// tools, dirs allow/deny/roots).
+    fn union_into<T: PartialEq>(dst: &mut Vec<T>, src: impl IntoIterator<Item = T>) {
+        for item in src {
+            if !dst.contains(&item) {
+                dst.push(item);
+            }
+        }
+    }
+
+    /// M-025: parse a config file's content into a [`Config`], computing
+    /// `specified_default_agent` from the already-read bytes. The content is
+    /// JSON-parsed once into a raw [`serde_json::Value`]; both the
+    /// `specified_default_agent` probe and the typed conversion derive from
+    /// that single parse.
+    ///
+    /// L-9: every environment read goes through [`read_env`], which skips
+    /// present-but-blank values, so the env handling here matches `github.rs`
+    /// (the only other env reader in the crate).
+    pub(crate) fn parse_file(path: &Path, content: &str) -> anyhow::Result<Self> {
+        let label = format!("config file '{}'", path.display());
+        let config_value: serde_json::Value = serde_json::from_str(content)
+            .map_err(|e| Self::json_parse_error(&label, content, e))?;
+        let specified = config_value.get("defaultAgent").is_some()
+            || config_value.get("default_agent").is_some();
+        // Re-parse from raw text for the typed conversion so type-mismatch
+        // errors keep real line/column positions (`from_value` errors report
+        // line 0, column 0 and would break the caret diagnostic).
+        let mut config: Self = serde_json::from_str(content)
+            .map_err(|e| Self::json_parse_error(&label, content, e))?;
+        config.specified_default_agent = specified;
+        // FR-031: a `tools.aliases` entry that names a retired ragent tool
+        // spelling is refused here, where the file is known, rather than dropped
+        // quietly (T-042).
+        Self::reject_retired_alias_spellings(&config.tools, &label)?;
+
+        Ok(config)
+    }
+
+    /// Refuses every `tools.aliases` entry that names a retired ragent tool
+    /// spelling, naming the configuration source it came from (FR-031).
+    ///
+    /// Shared by [`Config::parse_file`] - which serves the global file, the
+    /// project file and `RAGENT_CONFIG` - and the `RAGENT_CONFIG_CONTENT`
+    /// route, so both configuration paths give the same answer. `label` names
+    /// that source (`config file '<path>'`, or the environment variable), which
+    /// is the first thing the reader needs to find the entry.
+    ///
+    /// Every offending entry is listed, one per line, because a table copied
+    /// from an old dump carries several and fixing them one reload at a time is
+    /// the failure mode the message exists to avoid. A target that names no
+    /// *registered* tool is deliberately not refused: a plugin or MCP tool may
+    /// be bridged after loading, so that entry is reported once at run time and
+    /// refused when used.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming `label`, the offending spelling and its `after`
+    /// replacement when [`ToolsConfig::validate_alias_spellings`] reports any
+    /// offender.
+    pub fn reject_retired_alias_spellings(
+        tools: &crate::tools::ToolsConfig,
+        label: &str,
+    ) -> anyhow::Result<()> {
+        let offenders = tools.validate_alias_spellings();
+        if offenders.is_empty() {
+            return Ok(());
+        }
+        let mut message = format!(
+            "Invalid config in {label}: {} `tools.aliases` entr{} names a renamed ragent \
+             tool spelling, which FR-031 forbids:",
+            offenders.len(),
+            if offenders.len() == 1 { "y" } else { "ies" }
+        );
+        for offender in &offenders {
+            message.push_str("\n  - ");
+            message.push_str(&offender.reason());
+        }
+        Err(anyhow::anyhow!(message))
+    }
+
+    /// Save the config back to a file.
+    ///
+    /// Writes the current config as pretty-printed JSON. The path is the
+    /// project-local config file (`.ragent/ragent.json`) when
+    /// `prefer_project` is true, creating the `.ragent` directory if needed;
+    /// otherwise the global config file (`~/.config/ragent/ragent.json`).
+    ///
+    /// The file is only touched when the serialised JSON differs from the
+    /// existing content, avoiding unnecessary writes and timestamp churn.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be written.
+    pub fn save(&self, prefer_project: bool) -> anyhow::Result<()> {
+        let path = if prefer_project {
+            let project = PathBuf::from(".ragent/ragent.json");
+            // Ensure the project config directory exists so project-local saves
+            // do not silently fall back to the global file.
+            if let Some(parent) = project.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            project
+        } else {
+            Self::global_config_path()
+                .ok_or_else(|| anyhow::anyhow!("no config directory found"))?
+        };
+
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| anyhow::anyhow!("Failed to serialise config: {}", e))?;
+
+        let result = Self::write_config_if_changed(&path, &json);
+        // Any on-disk write can change the files the M-025 load cache is keyed
+        // on (in particular, a first-ever save creates a file that was absent
+        // from the cached mtime snapshot). Invalidate so the next `load`
+        // re-reads from disk instead of serving the pre-save config.
+        if result.is_ok() {
+            Self::invalidate_load_cache();
+        }
+        result
+    }
+
+    /// Save the config back to its original source file.
+    ///
+    /// If a project-local config (`.ragent/ragent.json`) was loaded during
+    /// [`Config::load`], this writes back to that path. Otherwise it writes
+    /// to the global config file (`~/.config/ragent/ragent.json`), or to the
+    /// explicit `--config <file>` when one was registered with
+    /// [`Config::set_config_write_target`] - that file is the only loaded source
+    /// in `--config` mode, so it is the only file whose write round-trips.
+    ///
+    /// The file is only touched when the serialised JSON differs from the
+    /// existing content, avoiding unnecessary writes and timestamp churn.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be written.
+    pub fn save_to_source(&self) -> anyhow::Result<()> {
+        let project_path = PathBuf::from(".ragent/ragent.json");
+        let was_loaded_from_project = self.config_paths.iter().any(|p| {
+            p.file_name().is_some_and(|f| f == "ragent.json")
+                && p.parent()
+                    .is_some_and(|parent| parent.file_name().is_some_and(|f| f == ".ragent"))
+        });
+        let path = if let Some(explicit) = Self::config_write_target() {
+            explicit
+        } else if was_loaded_from_project {
+            project_path
+        } else {
+            Self::global_config_path()
+                .ok_or_else(|| anyhow::anyhow!("no config directory found"))?
+        };
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| anyhow::anyhow!("Failed to serialise config: {}", e))?;
+
+        let result = Self::write_config_if_changed(&path, &json);
+        // Same M-025 cache discipline as [`Config::save`]: the write may have
+        // created or changed a file in the cache key, so drop the cached
+        // config and let the next `load` re-read from disk.
+        if result.is_ok() {
+            Self::invalidate_load_cache();
+        }
+        result
+    }
+
+    /// Drop the M-025 on-disk load cache, forcing the next [`Config::load`]
+    /// to re-read and re-parse every contributing config file.
+    ///
+    /// Called after every successful config write so a save is immediately
+    /// visible to subsequent loads in the same process (a first-ever save
+    /// creates a file that was absent from the cached mtime snapshot, which
+    /// the mtime fast path alone cannot detect).
+    pub fn invalidate_load_cache() {
+        let cache = Self::load_cache_slot();
+        let mut guard = cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.clear();
+    }
+
+    /// Resolve the global config directory (`<config_dir>/ragent`) using the
+    /// same platform-aware logic as [`Config::load`] and [`Config::save`].
+    ///
+    /// Returns `None` when the platform config directory cannot be determined
+    /// (e.g. `XDG_CONFIG_HOME` unset on a headless Linux box).
+    #[must_use]
+    pub fn global_config_dir() -> Option<PathBuf> {
+        dirs::config_dir().map(|d| d.join("ragent"))
+    }
+
+    /// Resolve the canonical base directory for all ragent global state.
+    ///
+    /// All new global state should land under this root. ragent intentionally
+    /// folds data/ and state/ into the config directory (rather than XDG
+    /// `~/.local/share` and `~/.local/state`) so that one path holds
+    /// everything: `~/.config/ragent/`.
+    ///
+    /// Legacy locations that this supersedes:
+    /// - `~/.ragent/`            (legacy home-dir root; agents, skills, teams, tokens, memory, templates)
+    /// - `~/.local/share/ragent/` (XDG data root; loop-state, inbox, embeddings, history, DBs)
+    ///
+    /// Returns `None` when the platform config directory cannot be determined
+    /// (e.g. `XDG_CONFIG_HOME` unset on a headless Linux box).
+    #[must_use]
+    pub fn global_state_dir() -> Option<PathBuf> {
+        Self::global_config_dir()
+    }
+
+    /// Resolve the path to the global `ragent.json` file.
+    ///
+    /// This is the canonical path used by [`Config::load`], [`Config::save`],
+    /// and the `/config show` / `/config save` / `/config list` slash commands,
+    /// satisfying FR-001 (single, consistent path resolution).
+    #[must_use]
+    pub fn global_config_path() -> Option<PathBuf> {
+        Self::global_config_dir().map(|d| d.join("ragent.json"))
+    }
+
+    /// The shared slot holding an explicit config-file write target.
+    fn write_target_slot() -> &'static std::sync::Mutex<Option<PathBuf>> {
+        use std::sync::OnceLock;
+        static TARGET: OnceLock<std::sync::Mutex<Option<PathBuf>>> = OnceLock::new();
+        TARGET.get_or_init(|| std::sync::Mutex::new(None))
+    }
+
+    /// Register (or clear) the file a privileged runtime-flag write must target.
+    ///
+    /// `ragent --config <file>` replaces the layered load ([`Config::load`]) with
+    /// a single explicit file, so the user-global `ragent.json` is never read in
+    /// that mode. A runtime-flag toggle (`yolo`, `edit_log`, `activity_log`) that
+    /// wrote the global file would therefore never round-trip: the next
+    /// `--config <file>` start takes its value from the explicit file, which
+    /// still holds the old one (the "/yolo does not persist" report). The binary
+    /// registers the `--config` path here after a successful parse so the flag
+    /// write lands in the file that is actually loaded.
+    ///
+    /// Passing `None` restores the default (user-global) target.
+    pub fn set_config_write_target(target: Option<PathBuf>) {
+        let mut guard = Self::write_target_slot()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = target;
+    }
+
+    /// The registered explicit config write target, if any.
+    ///
+    /// See [`Config::set_config_write_target`].
+    #[must_use]
+    pub fn config_write_target() -> Option<PathBuf> {
+        let guard = Self::write_target_slot()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.clone()
+    }
+
+    /// Snapshot the current global `ragent.json` into a timestamped backup
+    /// file inside a `saves/` subdirectory of the global config directory.
+    ///
+    /// The backup is named `ragent.json.[date].[time]` where `[date]` is
+    /// `YYYY-MM-DD` and `[time]` is `HH-MM-SS` (hyphens in the time portion
+    /// for Windows NTFS compatibility, where colons are illegal in file names).
+    /// The `saves/` directory is created if it does not already exist. The
+    /// backup is written via a temp-file-then-rename so a crash mid-write never
+    /// leaves a partial backup (FR-003). Each call produces a new, uniquely
+    /// named file - existing backups are never overwritten (FR-011).
+    ///
+    /// # Arguments
+    ///
+    /// * `config_dir` - the global config directory (e.g.
+    ///   `~/.config/ragent`). When `None`, the directory is resolved via
+    ///   [`global_config_dir`](Self::global_config_dir); an error is returned
+    ///   if it cannot be determined. Tests may pass a temp directory so the
+    ///   real global config is not touched.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - the global config directory cannot be determined and `config_dir`
+    ///   is `None`,
+    /// - the global `ragent.json` does not exist or cannot be read,
+    /// - the `saves/` directory cannot be created,
+    /// - the backup file cannot be written atomically.
+    ///
+    /// On success, returns the path to the newly created backup file.
+    pub fn backup_global_config(config_dir: Option<&Path>) -> anyhow::Result<PathBuf> {
+        let dir = match config_dir {
+            Some(d) => d.to_path_buf(),
+            None => Self::global_config_dir()
+                .ok_or_else(|| anyhow::anyhow!("no global config directory found"))?,
+        };
+        let source = dir.join("ragent.json");
+
+        // Read the current global config. If it does not exist there is nothing
+        // to back up - surface a clear error rather than creating an empty file.
+        let content = std::fs::read_to_string(&source).map_err(|e| {
+            anyhow::anyhow!("Failed to read global config '{}': {}", source.display(), e)
+        })?;
+
+        // Timestamp: YYYY-MM-DD.HH-MM-SS (hyphens in time for Windows).
+        let timestamp = chrono::Utc::now().format("%Y-%m-%d.%H-%M-%S").to_string();
+        let mut backup_name = format!("ragent.json.{timestamp}");
+
+        let saves_dir = dir.join("saves");
+        std::fs::create_dir_all(&saves_dir).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to create saves directory '{}': {}",
+                saves_dir.display(),
+                e
+            )
+        })?;
+
+        // FR-011: if multiple saves happen in the same second, append a
+        // hyphenated counter so existing backups are never overwritten.
+        let mut backup_path = saves_dir.join(&backup_name);
+        let mut counter = 1u32;
+        while backup_path.exists() {
+            backup_name = format!("ragent.json.{timestamp}-{counter}");
+            backup_path = saves_dir.join(&backup_name);
+            counter += 1;
+            if counter > 1000 {
+                bail!(
+                    "Too many backup collisions for timestamp '{}'; cannot create a unique backup name",
+                    timestamp
+                );
+            }
+        }
+
+        // Atomic write: write to a sibling temp file, then rename. A crash
+        // between the write and the rename leaves the temp file behind (which
+        // does not match the `ragent.json.*` backup pattern) but never a
+        // partial backup.
+        let tmp_path = saves_dir.join(format!("{backup_name}.tmp"));
+        // SEC-022: a backup is a byte-for-byte copy of the credential-bearing
+        // config, so it must be created owner-only (`0o600`) rather than at the
+        // process umask; the rename carries the mode to the backup itself.
+        let write_result = (|| -> std::io::Result<()> {
+            use std::io::Write as _;
+            let mut file = ragent_types::guard::open_owner_only(&tmp_path)?;
+            file.write_all(content.as_bytes())?;
+            file.sync_all()?;
+            std::fs::rename(&tmp_path, &backup_path)
+        })();
+        if let Err(e) = write_result {
+            // Best-effort cleanup of the orphaned temp file on failure.
+            let _ = std::fs::remove_file(&tmp_path); // INTENTIONAL: best-effort temp cleanup
+            return Err(anyhow::anyhow!(
+                "Failed to write backup '{}': {}",
+                backup_path.display(),
+                e
+            ));
+        }
+
+        Ok(backup_path)
+    }
+
+    /// Restore a saved backup over the global `ragent.json` atomically.
+    ///
+    /// The `backup` argument may be either a file name (e.g.
+    /// `ragent.json.2024-01-01.12-00-00`) or an absolute path. The destination is
+    /// always the global `ragent.json` inside `config_dir` (or the resolved global
+    /// config directory when `config_dir` is `None`). The restore validates that:
+    ///
+    /// - the backup file exists and is a regular file,
+    /// - the resolved destination path is exactly `<config_dir>/ragent.json`
+    ///   (FR-012: never write to an arbitrary path),
+    /// - the backup content is valid JSON (defence against restoring a corrupt
+    ///   file).
+    ///
+    /// The write uses a temp-file-then-rename so readers never see a partial
+    /// config.
+    ///
+    /// # Arguments
+    ///
+    /// * `config_dir` - the global config directory (e.g. `~/.config/ragent`).
+    ///   When `None`, resolved via [`global_config_dir`].
+    /// * `backup` - backup file name or full path inside the `saves/` subfolder.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the global config directory cannot be determined, the
+    /// backup cannot be read, the backup content is not valid JSON, or the
+    /// atomic rename fails.
+    pub fn restore_global_config(
+        config_dir: Option<&Path>,
+        backup: &Path,
+    ) -> anyhow::Result<PathBuf> {
+        let dir = match config_dir {
+            Some(d) => d.to_path_buf(),
+            None => Self::global_config_dir()
+                .ok_or_else(|| anyhow::anyhow!("no global config directory found"))?,
+        };
+        let target = dir.join("ragent.json");
+
+        // Resolve the backup path. If a bare file name is supplied, look inside
+        // the saves/ subdirectory.
+        let backup_path = if backup.file_name().is_some() && backup.components().count() == 1 {
+            dir.join("saves").join(backup)
+        } else {
+            backup.to_path_buf()
+        };
+
+        if !backup_path.exists() || !backup_path.is_file() {
+            bail!(
+                "Backup file '{}' does not exist or is not a file",
+                backup_path.display()
+            );
+        }
+
+        let content = std::fs::read_to_string(&backup_path).map_err(|e| {
+            anyhow::anyhow!("Failed to read backup '{}': {}", backup_path.display(), e)
+        })?;
+
+        // Guard against restoring corrupt/non-JSON backups.
+        let _: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
+            anyhow::anyhow!(
+                "Backup '{}' is not valid JSON: {}",
+                backup_path.display(),
+                e
+            )
+        })?;
+
+        // Atomic write to the canonical global config path, through the same
+        // owner-only, `create_new` temp form the save path uses.
+        ragent_types::guard::write_atomic(&target, content.as_bytes()).map_err(|e| {
+            anyhow::anyhow!("Failed to restore config to '{}': {}", target.display(), e)
+        })?;
+
+        Ok(target)
+    }
+
+    /// Write `json` to `path` only if the file does not already contain the same
+    /// JSON value.
+    ///
+    /// Comparing parsed [`serde_json::Value`]s prevents spurious rewrites when
+    /// map key ordering differs between serialisations.
+    ///
+    /// The write is **atomic**: the bytes land in a uniquely named temp file in
+    /// the same directory and are then renamed over the target, so a crash,
+    /// kill, or power loss mid-write can never leave a truncated config file.
+    /// That matters because [`Config::load`] treats a truncated or
+    /// parse-failing `ragent.json` as unreadable and falls back to the compiled
+    /// defaults - which would silently flip a persisted `"yolo": true` back to
+    /// the `false` default and re-enable the interactive permission prompts on
+    /// the next start (the intermittent "YOLO keeps going off" report).
+    fn write_config_if_changed(path: &Path, json: &str) -> anyhow::Result<()> {
+        let changed = match std::fs::read_to_string(path) {
+            Ok(existing) => match (
+                serde_json::from_str::<serde_json::Value>(&existing),
+                serde_json::from_str::<serde_json::Value>(json),
+            ) {
+                (Ok(existing_value), Ok(new_value)) => existing_value != new_value,
+                (Err(e), _) => {
+                    // A corrupt existing file must not be silently folded to
+                    // Null and treated as equal to the new content: log it and
+                    // force a rewrite so the persisted state is repaired.
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "config: existing file is not valid JSON; rewriting"
+                    );
+                    true
+                }
+                (_, Err(e)) => {
+                    tracing::warn!(
+                        error = %e,
+                        "config: serialised config is not valid JSON; rewriting"
+                    );
+                    true
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "config: failed to read existing file; rewriting"
+                );
+                true
+            }
+        };
+
+        if !changed {
+            return Ok(());
+        }
+
+        // SEC-022: the config holds plaintext credentials, so the shared
+        // atomic write creates its temp owner-only (`0o600`, `create_new`) and
+        // flushes it before the rename; see [`ragent_types::guard::write_atomic`].
+        ragent_types::guard::write_atomic(path, json.as_bytes()).map_err(|e| {
+            anyhow::anyhow!("Failed to write config file '{}': {}", path.display(), e)
+        })?;
+
+        Ok(())
+    }
+
+    /// Atomically set one top-level boolean key in the **user-global** config
+    /// file, preserving every other key exactly as written.
+    ///
+    /// Unlike a full [`Config::save`], which serialises the *merged* config and
+    /// can therefore drop unknown keys or rewrite unrelated values, this reads
+    /// the global file as raw JSON, sets the single key, and writes it back
+    /// through the same atomic helper as [`Config::save`]. It is the persistence
+    /// path for the privileged runtime-flag toggles (`yolo`, `edit_log`,
+    /// `activity_log`, `gcf`), whose values must round-trip without disturbing
+    /// anything else in the file.
+    ///
+    /// When the process was started with an explicit `--config <file>`, that
+    /// file - not the user-global one - is the loaded source, so it is the write
+    /// target (see [`Config::set_config_write_target`]); writing the global file
+    /// there would never be read back and the toggle would appear to be lost.
+    ///
+    /// Returns the path that was written.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config directory cannot be resolved, an existing
+    /// config file is present but not valid JSON, or the write fails.
+    pub(crate) fn set_global_bool_key(key: &str, value: bool) -> anyhow::Result<PathBuf> {
+        let path = Self::edit_global_config(|object| {
+            object.insert(key.to_string(), serde_json::Value::Bool(value));
+            Ok(true)
+        })?;
+        // Attribution trail: this is the single writer of the user-global
+        // config's privileged runtime-flag keys, so an unexplained flip on disk
+        // (the intermittent "YOLO keeps going off" report) can be tied back to
+        // the keystroke or code path that caused it.
+        tracing::info!(
+            key,
+            value,
+            path = %path.display(),
+            "setting user-global config key"
+        );
+        Ok(path)
+    }
+
+    /// Atomically edit the **user-global** config file as raw JSON, preserving
+    /// every key the editor does not touch.
+    ///
+    /// [`Config::set_global_bool_key`] is the single-key case of this; general
+    /// callers (for example `/mcp remove`, which deletes one entry from the
+    /// `mcp` object) need to read, mutate, and write back a nested structure
+    /// without serialising the *merged* config, which would drop keys this
+    /// build does not model.
+    ///
+    /// The editor returns `Ok(true)` when it changed something and `Ok(false)`
+    /// when the file already matched, so an unchanged edit writes nothing.
+    ///
+    /// Returns the path that was written.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config directory cannot be resolved, the
+    /// existing file is not a JSON object, the editor fails, or the write fails.
+    pub fn edit_global_config<F>(edit: F) -> anyhow::Result<PathBuf>
+    where
+        F: FnOnce(&mut serde_json::Map<String, serde_json::Value>) -> anyhow::Result<bool>,
+    {
+        let path = match Self::config_write_target() {
+            Some(explicit) => explicit,
+            None => Self::global_config_path()
+                .ok_or_else(|| anyhow::anyhow!("no config directory found"))?,
+        };
+        // Only a missing (or blank) file starts from an empty object. Any other
+        // read failure - permission denied, invalid UTF-8 - must propagate:
+        // treating it as empty would overwrite the user's whole file with the
+        // single edited key.
+        let mut json: serde_json::Value = match std::fs::read_to_string(&path) {
+            Ok(raw) if !raw.trim().is_empty() => serde_json::from_str(&raw).map_err(|e| {
+                anyhow::anyhow!("Failed to parse global config '{}': {}", path.display(), e)
+            })?,
+            Ok(_) => serde_json::Value::Object(serde_json::Map::new()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                serde_json::Value::Object(serde_json::Map::new())
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!(
+                    "Failed to read global config '{}': {}",
+                    path.display(),
+                    e
+                ));
+            }
+        };
+        let object = json.as_object_mut().ok_or_else(|| {
+            anyhow::anyhow!("global config '{}' is not a JSON object", path.display())
+        })?;
+        if !edit(object)? {
+            return Ok(path);
+        }
+
+        let json = serde_json::to_string_pretty(&json)
+            .map_err(|e| anyhow::anyhow!("Failed to serialise global config: {}", e))?;
+        Self::write_config_if_changed(&path, &json)?;
+        // The write changed a file the load cache is keyed on; drop it so the
+        // next `load` re-reads the new value.
+        Self::invalidate_load_cache();
+        Ok(path)
+    }
+
+    /// Resolve the message input-queue capacity (spec `inputqueue` FR-015).
+    ///
+    /// Returns the configured `input_queue_capacity`, clamped to `1..=99` (the
+    /// bound the two-digit queue counter renders, FR-009), or
+    /// [`DEFAULT_INPUT_QUEUE_CAPACITY`] (32) when the field is unset.
+    #[must_use]
+    pub fn effective_input_queue_capacity(&self) -> usize {
+        self.input_queue_capacity
+            .unwrap_or(DEFAULT_INPUT_QUEUE_CAPACITY)
+            .clamp(MIN_INPUT_QUEUE_CAPACITY, MAX_INPUT_QUEUE_CAPACITY)
+    }
+
+    /// The cap on the Agents window's completed-history section
+    /// (spec `agentssetup` FR-036, NFR-004).
+    ///
+    /// Resolves [`AgentsConfig::completed_history`] and clamps it into
+    /// `1..=200`, so an out-of-range value can never switch the section off or
+    /// let it grow without bound.
+    #[must_use]
+    pub fn effective_agents_completed_history(&self) -> usize {
+        self.agents
+            .completed_history
+            .clamp(MIN_AGENTS_COMPLETED_HISTORY, MAX_AGENTS_COMPLETED_HISTORY)
+    }
+
+    /// The cap on concurrently launching sub-agent tasks (spec `agentssetup`
+    /// D3).
+    ///
+    /// Resolves [`AgentsConfig::max_launching`] and clamps it into `1..=64`, so
+    /// an out-of-range value can never make a launch impossible or let the
+    /// in-flight set grow without bound.
+    #[must_use]
+    pub fn effective_agents_max_launching(&self) -> usize {
+        self.agents
+            .max_launching
+            .clamp(MIN_AGENTS_MAX_LAUNCHING, MAX_AGENTS_MAX_LAUNCHING)
+    }
+
+    /// The execution backend a tool invocation runs in (spec `openhands`
+    /// FR-001, FR-019).
+    ///
+    /// Resolves the configured [`Config::execution_backend`] value and falls
+    /// back to [`ExecutionBackendKind::Local`] when the key is absent or names
+    /// an unknown kind, so an unconfigured or mistyped session always executes
+    /// on the host under the existing security layers rather than failing to
+    /// resolve a backend.
+    #[must_use]
+    pub fn effective_execution_backend(&self) -> ExecutionBackendKind {
+        self.execution_backend
+            .as_ref()
+            .and_then(ExecutionBackend::kind)
+            .unwrap_or(ExecutionBackendKind::Local)
+    }
+
+    /// This config with the execution backend switched to `kind`, as a
+    /// project's own backend setting does for its sessions. The descriptor
+    /// for `kind` is the configured one (`backends`); when `kind` is already
+    /// the effective kind the config is returned unchanged, so an inline
+    /// `execution_backend` descriptor is kept.
+    #[must_use]
+    pub fn with_backend_kind(&self, kind: ExecutionBackendKind) -> Self {
+        let mut config = self.clone();
+        if self.effective_execution_backend() != kind {
+            config.execution_backend = Some(ExecutionBackend::Kind(kind.as_str().to_string()));
+        }
+        config
+    }
+
+    /// Whether [`Config::execution_backend`] was set to a value that does not
+    /// resolve to a known kind.
+    ///
+    /// `true` signals a configuration mistake (a typo or a descriptor whose
+    /// `kind` is missing) that the caller should surface; the effective
+    /// backend still resolves safely to `local` (FR-019).
+    #[must_use]
+    pub fn has_unknown_execution_backend(&self) -> bool {
+        self.execution_backend
+            .as_ref()
+            .is_some_and(|value| value.kind().is_none())
+    }
+
+    /// The configured backend entry, if any (spec `openhands` T-002; FR-001,
+    /// FR-004, FR-009).
+    ///
+    /// Handles both config spellings: an inline descriptor
+    /// ([`ExecutionBackend::Config`]) is returned as-is, while a bare
+    /// `execution_backend: "podman"` label - or an object that names a registered
+    /// entry by `id` with no `kind` - resolves against [`Config::backends`]. The
+    /// container backend reads this for the image and workspace it needs to
+    /// provision a sandbox (T-002); the backend registry (T-004) reads the same
+    /// entries for health and selection.
+    ///
+    /// Returns `None` when nothing is configured (or a label names an unknown kind
+    /// or an unregistered id), so the caller falls back to the
+    /// [`local`](ExecutionBackendKind::Local) default (FR-019).
+    #[must_use]
+    pub fn effective_backend_config(&self) -> Option<&BackendConfig> {
+        match self.execution_backend.as_ref()? {
+            ExecutionBackend::Config(descriptor) => Some(descriptor),
+            ExecutionBackend::Kind(label) => {
+                let kind = ExecutionBackendKind::from_label(label)?;
+                self.backends
+                    .iter()
+                    .find(|entry| entry.kind_parsed() == Some(kind))
+            }
+        }
+    }
+
+    /// Whether ACP agents are configured and enabled (spec `openhands` FR-015).
+    #[must_use]
+    pub fn acp_enabled(&self) -> bool {
+        self.acp
+            .as_ref()
+            .is_some_and(|acp| acp.agents.values().any(|agent| agent.enabled))
+    }
+
+    /// Iterate the enabled ACP agents, in id order (spec `openhands` FR-015,
+    /// FR-022).
+    ///
+    /// Each item is the registered id paired with its descriptor. Disabled
+    /// entries are skipped so a retired agent is not offered by the picker or
+    /// the ACP surface.
+    pub fn enabled_acp_agents(&self) -> Vec<(&str, &AcpAgentConfig)> {
+        let Some(acp) = self.acp.as_ref() else {
+            return Vec::new();
+        };
+        let mut agents: Vec<(&str, &AcpAgentConfig)> = acp
+            .agents
+            .iter()
+            .filter(|(_, agent)| agent.enabled)
+            .map(|(id, agent)| (id.as_str(), agent))
+            .collect();
+        agents.sort_by_key(|(id, _)| *id);
+        agents
+    }
+
+    /// Resolve the ACP agent to drive for a turn: the explicitly selected
+    /// `selected` id when it names an enabled agent, otherwise the configured
+    /// `default_agent`, otherwise the first enabled agent (spec `openhands`
+    /// FR-015, FR-022).
+    #[must_use]
+    pub fn resolve_acp_agent(&self, selected: Option<&str>) -> Option<&AcpAgentConfig> {
+        let enabled = self.enabled_acp_agents();
+        if let Some(id) = selected
+            && let Some((_, agent)) = enabled.iter().find(|(aid, _)| *aid == id)
+        {
+            return Some(*agent);
+        }
+        if let Some(default) = self
+            .acp
+            .as_ref()
+            .and_then(|acp| acp.default_agent.as_deref())
+            && let Some((_, agent)) = enabled.iter().find(|(aid, _)| *aid == default)
+        {
+            return Some(*agent);
+        }
+        enabled.first().map(|(_, agent)| *agent)
+    }
+
+    /// Whether the ACP server endpoint is enabled (spec `openhands` FR-022,
+    /// FR-028).
+    ///
+    /// The endpoint is **off by default**: it only runs when
+    /// `acp.server_enabled: true` is set explicitly, so a plain terminal launch
+    /// never exposes an editor-facing JSON-RPC surface.
+    #[must_use]
+    pub fn acp_server_enabled(&self) -> bool {
+        self.acp.as_ref().is_some_and(|acp| acp.server_enabled)
+    }
+
+    /// Resolve the agent name the ACP server drives (spec `openhands` FR-022,
+    /// FR-028).
+    ///
+    /// Precedence: `acp.server_agent`, then `acp.default_agent`, then the
+    /// top-level [`default_agent`](Config::default_agent).
+    #[must_use]
+    pub fn acp_server_agent(&self) -> &str {
+        self.acp
+            .as_ref()
+            .and_then(|acp| acp.server_agent.as_deref().or(acp.default_agent.as_deref()))
+            .unwrap_or(&self.default_agent)
+    }
+
+    /// The resolved automation service configuration (spec `openhands` T-016;
+    /// FR-013, FR-014).
+    ///
+    /// Returns the configured `automation` block, or the compiled defaults when
+    /// the block is absent. The defaults have no automations, so an unconfigured
+    /// project runs no scheduled or webhook automations.
+    #[must_use]
+    pub fn automation_config(&self) -> crate::automation::AutomationConfig {
+        self.automation.clone().unwrap_or_default()
+    }
+
+    /// Whether the automation service is enabled (spec `openhands` FR-013,
+    /// FR-014, FR-033).
+    ///
+    /// `true` only when an explicit `automation` block sets `enabled: true`.
+    /// An absent block leaves the service switched off, so a project that never
+    /// opted in runs no scheduler and accepts no webhooks.
+    #[must_use]
+    pub fn automation_enabled(&self) -> bool {
+        self.automation
+            .as_ref()
+            .is_some_and(crate::automation::AutomationConfig::is_enabled)
+    }
+
+    /// Whether the OpenAI-compatible surface is an explicitly enabled capability
+    /// (spec `openhands` FR-012, FR-024, FR-032).
+    ///
+    /// `true` only when `openai.enabled` is set. The endpoints are always mounted
+    /// behind the native bearer-token check; this flag additionally arms the
+    /// FR-032 startup gate.
+    #[must_use]
+    pub fn openai_surface_enabled(&self) -> bool {
+        self.openai.as_ref().is_some_and(|openai| openai.enabled)
+    }
+
+    /// Resolve the bearer token the OpenAI-compatible surface requires (spec
+    /// `openhands` FR-024, FR-032).
+    ///
+    /// Returns the configured `openai.token`, or `None` when it is absent or
+    /// blank. A `None` result is the refuse-to-start condition: when the surface
+    /// is enabled without a token the server starts no surface rather than
+    /// serving it unauthenticated (FR-032).
+    #[must_use]
+    pub fn openai_surface_token(&self) -> Option<String> {
+        self.openai
+            .as_ref()
+            .and_then(|openai| openai.token.as_deref())
+            .filter(|token| !token.trim().is_empty())
+            .map(str::to_string)
+    }
+
+    /// Deep merge two untrusted configs, with overlay taking precedence for set
+    /// fields.
+    ///
+    /// SEC-ragent-config-001/002/003 (SECTASKS T-011): a config file that lives
+    /// in the working directory (`.ragent/ragent.json`) is repository content -
+    /// untrusted - and must not be able to widen privileges. Callers merging a
+    /// project-local overlay must use [`Config::merge_project`], which strips
+    /// the privilege-widening keys first. This method applies no such
+    /// restriction and is intended for user-owned/operator sources only
+    /// (the user-global config, `--config`, `RAGENT_CONFIG`, and
+    /// `RAGENT_CONFIG_CONTENT`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ragent_config::Config;
+    ///
+    /// let base = Config::default();
+    /// let mut overlay = Config::default();
+    /// overlay.username = Some("alice".to_string());
+    ///
+    /// let merged = Config::merge(base, overlay);
+    /// assert_eq!(merged.username.as_deref(), Some("alice"));
+    /// ```
+    #[must_use]
+    pub fn merge(base: Self, overlay: Self) -> Self {
+        Self::merge_inner(base, overlay)
+    }
+
+    /// Merge a project-local (untrusted) config overlay into `base`.
+    ///
+    /// SEC-ragent-config-001/002/003 (SECTASKS T-011): the overlay is repository
+    /// content, so the privilege-widening keys it carries are stripped before
+    /// the merge:
+    ///
+    /// - `yolo` may not be enabled by the project (a project file cannot turn
+    ///   off the interactive permission prompts);
+    /// - `permission` rules that grant (`allow`) are dropped, so a project
+    ///   cannot override a user-global `deny` (deny/ask entries are kept - a
+    ///   project may always *tighten*);
+    /// - `bash.allowlist`, `bash.denylist`, `dirs.allowlist`,
+    ///   `dirs.denylist`, and `dirs.allowed_roots` are treated as
+    ///   trusted-config-only: the project's values are dropped entirely rather
+    ///   than merged. A project therefore cannot auto-approve commands/paths,
+    ///   inject denylist noise, or extend the tool escape roots beyond the
+    ///   working directory. Both denylists follow the same policy so the two
+    ///   list types are handled symmetrically (ANTIPAT M-3);
+    /// - `telemetry` is dropped entirely, so a project cannot enable telemetry
+    ///   or point the OTLP endpoint at an attacker host (SEC-ragent-telemetry-002);
+    /// - `hooks` contributed by a project are dropped: a project hook runs
+    ///   `sh -c` without ever entering the permission system;
+    /// - `mcp` servers contributed by a project are dropped: a stdio server is
+    ///   spawned as a subprocess with no permission prompt (SEC-001);
+    /// - `acp` agents contributed by a project are dropped: an ACP agent is
+    ///   spawned verbatim with attacker-chosen `command`/`env`/`cwd`, and the
+    ///   section also controls the editor-facing ACP server (SEC-002);
+    /// - every provider's `api` block is dropped, so a project cannot point a
+    ///   provider credential (`Authorization`/`x-api-key`) and the prompt stream
+    ///   at an attacker-controlled endpoint (SEC-005). The rest of the provider
+    ///   entry (`thinking`, `env`, `models`) still merges.
+    ///
+    /// Rejected keys are logged at `warn!` so the behaviour is not silent.
+    #[must_use]
+    pub fn merge_project(base: Self, mut overlay: Self) -> Self {
+        let mut rejected: Vec<&'static str> = Vec::new();
+
+        if overlay.yolo {
+            overlay.yolo = false;
+            rejected.push("yolo");
+        }
+        if !overlay.permission.is_empty() {
+            let before = overlay.permission.len();
+            overlay
+                .permission
+                .retain(|rule| rule.action != crate::permission::PermissionAction::Allow);
+            if overlay.permission.len() != before {
+                rejected.push("permission (allow rules)");
+            }
+        }
+        if !overlay.bash.allowlist.is_empty() {
+            overlay.bash.allowlist.clear();
+            rejected.push("bash.allowlist");
+        }
+        if !overlay.bash.denylist.is_empty() {
+            // A project denylist *tightens*, but a hostile project can also
+            // add entries that the union below would admit even though the
+            // user never wrote them. Treat it as untrusted and drop it so the
+            // effective policy is the user's, matching the `dirs.denylist`
+            // handling below (ANTIPAT M-3: the two denylists are symmetric).
+            overlay.bash.denylist.clear();
+            rejected.push("bash.denylist");
+        }
+        if !overlay.dirs.allowlist.is_empty() {
+            overlay.dirs.allowlist.clear();
+            rejected.push("dirs.allowlist");
+        }
+        if !overlay.dirs.denylist.is_empty() {
+            // Symmetric with `bash.denylist`: a project denylist is dropped so
+            // repository content cannot contribute enforced deny patterns that
+            // the union in `merge_inner` would otherwise admit (ANTIPAT M-3).
+            overlay.dirs.denylist.clear();
+            rejected.push("dirs.denylist");
+        }
+        if !overlay.dirs.allowed_roots.is_empty() {
+            overlay.dirs.allowed_roots.clear();
+            rejected.push("dirs.allowed_roots");
+        }
+        let default_telemetry = crate::telemetry::TelemetryConfig::default();
+        let project_has_telemetry = overlay.telemetry.otel.enabled
+            || overlay.telemetry.otel.endpoint != default_telemetry.otel.endpoint
+            || !overlay.telemetry.otel.resource_attributes.is_empty()
+            || overlay.experimental.open_telemetry;
+        if project_has_telemetry {
+            overlay.telemetry = Default::default();
+            overlay.experimental.open_telemetry = false;
+            rejected.push("telemetry");
+        }
+        if !overlay.hooks.is_empty() {
+            overlay.hooks.clear();
+            rejected.push("hooks");
+        }
+        // The OpenAI-compatible surface token is the server's bearer credential
+        // (FR-024). A project-local file must not be able to set or replace it
+        // (that would let repository content choose the credential guarding the
+        // whole API), so the whole section is dropped from the untrusted overlay.
+        if overlay.openai.is_some() {
+            overlay.openai = None;
+            rejected.push("openai");
+        }
+        // MCP servers declared by a project are spawned as subprocesses at
+        // startup (`Command::new(command).args(..).env(..)`) with no permission
+        // prompt, so a repository could execute a committed payload simply by
+        // carrying an `mcp` entry. The project leg may not contribute servers;
+        // a server intended for a repository must live in the user-global config
+        // (SEC-001).
+        if !overlay.mcp.is_empty() {
+            overlay.mcp.clear();
+            rejected.push("mcp");
+        }
+        // ACP client agents are likewise spawned verbatim (`command`, `args`,
+        // `env`, `cwd`), and the section also controls the editor-facing ACP
+        // server. Both are repository-content-controlled, so the whole section is
+        // dropped from the untrusted overlay (SEC-002).
+        if overlay.acp.is_some() {
+            overlay.acp = None;
+            rejected.push("acp");
+        }
+        // A GitHub Enterprise host entry names the API URL that receives the
+        // GitHub token. A project must not be able to point it elsewhere, so
+        // the section is dropped from the untrusted overlay (SESSIONMENU FR-21).
+        if !overlay.vcs.is_default() {
+            overlay.vcs = VcsConfig::default();
+            rejected.push("vcs");
+        }
+        // A provider `api` block redirects the endpoint that receives the
+        // provider credential. A project-local file must not be able to point
+        // the credential or the prompt stream at an attacker host, so the `api`
+        // block is dropped from every provider the overlay declares; the base
+        // (user-global) endpoint is preserved and `thinking`/`env`/`models`
+        // still merge (SEC-005).
+        let mut stripped_provider_api = false;
+        for provider in overlay.provider.values_mut() {
+            if provider.api.take().is_some() {
+                stripped_provider_api = true;
+            }
+        }
+        if stripped_provider_api {
+            rejected.push("provider.<id>.api");
+        }
+
+        if !rejected.is_empty() {
+            tracing::warn!(
+                keys = %rejected.join(", "),
+                "Ignoring privilege-widening keys from the project-local \
+                 .ragent/ragent.json; move them to the user-global config if \
+                 they are intended"
+            );
+        }
+
+        Self::merge_inner(base, overlay)
+    }
+
+    fn merge_inner(mut base: Self, overlay: Self) -> Self {
+        if overlay.username.is_some() {
+            base.username = overlay.username;
+        }
+        if overlay.specified_default_agent {
+            base.default_agent = overlay.default_agent;
+        }
+        // Merge provider config deeply so partial overlays do not discard model,
+        // API, or thinking defaults from lower-precedence config files.
+        for (k, v) in overlay.provider {
+            let merged = if let Some(existing) = base.provider.remove(&k) {
+                Self::merge_provider_config(existing, v)
+            } else {
+                v
+            };
+            base.provider.insert(k, merged);
+        }
+        for (k, v) in overlay.agent {
+            base.agent.insert(k, v);
+        }
+        for (k, v) in overlay.command {
+            base.command.insert(k, v);
+        }
+        for (k, v) in overlay.mcp {
+            base.mcp.insert(k, v);
+        }
+        // Price overrides: append entries from the overlay, replacing any
+        // existing entries with the same model id (last-wins per model).
+        for entry in overlay.prices {
+            if let Some(existing) = base.prices.iter_mut().find(|e| e.model == entry.model) {
+                *existing = entry;
+            } else {
+                base.prices.push(entry);
+            }
+        }
+        // Permissions, instructions, and skill dirs append
+        base.permission.extend(overlay.permission);
+        base.instructions.extend(overlay.instructions);
+        base.skill_dirs.extend(overlay.skill_dirs);
+        // A project-level language preference is a value, not an additive list,
+        // so an overlay that sets it wins outright.
+        if overlay.response_language.is_some() {
+            base.response_language = overlay.response_language;
+        }
+
+        if overlay.experimental.open_telemetry {
+            base.experimental.open_telemetry = true;
+        }
+        if overlay.experimental.parallel_tool_calls {
+            base.experimental.parallel_tool_calls = true;
+        }
+        // max_background_agents and background_agent_timeout are value fields
+        // (not opt-in OR-flag booleans), so the overlay must take precedence
+        // over the compiled defaults and any lower-precedence config file.
+        if overlay.experimental.max_background_agents != default_max_background_agents() {
+            base.experimental.max_background_agents = overlay.experimental.max_background_agents;
+        }
+        if overlay.experimental.background_agent_timeout != default_background_agent_timeout() {
+            base.experimental.background_agent_timeout =
+                overlay.experimental.background_agent_timeout;
+        }
+
+        // Telemetry: merge the overlay telemetry config into the base. The
+        // overlay takes precedence when it explicitly enables telemetry.
+        base.telemetry =
+            crate::telemetry::TelemetryConfig::merge(&base.telemetry, &overlay.telemetry);
+        // Legacy experimental.open_telemetry flag support: if the overlay has
+        // the legacy flag set, apply it after merging the new telemetry block.
+        if overlay.experimental.open_telemetry {
+            base.telemetry.apply_legacy_flag(true);
+        }
+
+        // Hooks append (overlay hooks are added on top of base hooks)
+        base.hooks.extend(overlay.hooks);
+
+        // Bash lists are unioned across global + project configs
+        Self::union_into(&mut base.bash.allowlist, overlay.bash.allowlist);
+        Self::union_into(&mut base.bash.denylist, overlay.bash.denylist);
+
+        // GitLab: overlay fields override base
+        if overlay.gitlab.instance_url.is_some() {
+            base.gitlab.instance_url = overlay.gitlab.instance_url;
+        }
+        if overlay.gitlab.token.is_some() {
+            base.gitlab.token = overlay.gitlab.token;
+        }
+        if overlay.gitlab.username.is_some() {
+            base.gitlab.username = overlay.gitlab.username;
+        }
+
+        // VCS hosts: an overlay that names hosts replaces the base list.
+        if !overlay.vcs.github.hosts.is_empty() {
+            base.vcs.github.hosts = overlay.vcs.github.hosts;
+        }
+        let autofix = overlay.vcs.autofix;
+        if autofix.poll_secs.is_some() {
+            base.vcs.autofix.poll_secs = autofix.poll_secs;
+        }
+        if autofix.max_attempts.is_some() {
+            base.vcs.autofix.max_attempts = autofix.max_attempts;
+        }
+        if autofix.default_on.is_some() {
+            base.vcs.autofix.default_on = autofix.default_on;
+        }
+
+        // tavily_api_key: overlay overrides base
+        if overlay.tavily_api_key.is_some() {
+            base.tavily_api_key = overlay.tavily_api_key;
+        }
+
+        // langsearch_api_key: overlay overrides base
+        if overlay.langsearch_api_key.is_some() {
+            base.langsearch_api_key = overlay.langsearch_api_key;
+        }
+
+        // perplexity_api_key: overlay overrides base
+        if overlay.perplexity_api_key.is_some() {
+            base.perplexity_api_key = overlay.perplexity_api_key;
+        }
+
+        // openalex_email: overlay overrides base
+        if overlay.openalex_email.is_some() {
+            base.openalex_email = overlay.openalex_email;
+        }
+
+        // exa_api_key: overlay overrides base
+        if overlay.exa_api_key.is_some() {
+            base.exa_api_key = overlay.exa_api_key;
+        }
+
+        // serper_api_key: overlay overrides base
+        if overlay.serper_api_key.is_some() {
+            base.serper_api_key = overlay.serper_api_key;
+        }
+
+        // code_index: overlay takes precedence only for explicitly set fields.
+        // The `specified` flags from the overlay are propagated onto the base so
+        // that a subsequent serialise (e.g. save_to_source) writes the field
+        // explicitly and the value survives a reload even when a global config
+        // disagrees.
+        if overlay.code_index.specified.enabled {
+            base.code_index.enabled = overlay.code_index.enabled;
+            base.code_index.specified.enabled = true;
+        }
+        if overlay.code_index.specified.max_file_size {
+            base.code_index.max_file_size = overlay.code_index.max_file_size;
+            base.code_index.specified.max_file_size = true;
+        }
+        if overlay.code_index.specified.extra_exclude_dirs {
+            base.code_index.extra_exclude_dirs = overlay.code_index.extra_exclude_dirs;
+            base.code_index.specified.extra_exclude_dirs = true;
+        }
+        if overlay.code_index.specified.extra_exclude_patterns {
+            base.code_index.extra_exclude_patterns = overlay.code_index.extra_exclude_patterns;
+            base.code_index.specified.extra_exclude_patterns = true;
+        }
+
+        // Tool-name aliases (spec `uniformtools` FR-015): the section merges
+        // field-wise - the two opt-in booleans OR, the alias entries union per
+        // spelling with the overlay winning a collision - so a project file can
+        // add one spelling without discarding the user-global table, and only an
+        // explicit `aliases: false` turns resolution off.
+        base.tools.merge(&overlay.tools);
+
+        // Compaction: overlay takes precedence.
+        base.compaction = overlay.compaction;
+
+        // GCF: overlay takes precedence (last-wins, same semantics as
+        // `compaction` above) so `/gcf off` in a higher-precedence config is
+        // respected rather than OR-merged back to on.
+        base.gcf = overlay.gcf;
+
+        // Agents panel (spec `agentssetup` FR-036): overlay takes precedence,
+        // so a project file can tighten the completed-history cap for its own
+        // panel without OR-merging back to the user-global value (a smaller
+        // cap is a legitimate choice, not a "switch off").
+        base.agents = overlay.agents;
+
+        if overlay.yolo {
+            base.yolo = overlay.yolo;
+        }
+
+        if overlay.edit_log {
+            base.edit_log = overlay.edit_log;
+        }
+
+        // Activity-log: the overlay wins only when it actually says so.
+        //
+        // `activity_log` defaults to `true`, so a plain `base.activity_log =
+        // overlay.activity_log` cannot distinguish "the overlay file wrote
+        // true" from "the overlay file omitted the key and serde filled in the
+        // default". The second case silently re-enabled logging for every
+        // project that had a `.ragent/ragent.json` without the key: `/alog off`
+        // was written to the user-global file, then `merge_project` overwrote it
+        // with the project file's *defaulted* `true` at the next load, so the
+        // toggle appeared not to persist. The overlay therefore takes precedence
+        // only when it explicitly set the key (`false` always wins, which is what
+        // makes `/alog off` stick); an omitted key leaves the lower layer alone.
+        if !overlay.activity_log {
+            base.activity_log = false;
+        }
+
+        // SDD flags: OR semantics - a flag enabled in either base or overlay
+        // stays enabled. All flags default to false (opt-in, FR-019).
+        base.sdd.merge(&overlay.sdd);
+
+        // Pie gap flags: OR semantics - a flag enabled in either base or overlay
+        // stays enabled. All flags default to false (opt-in, FR-016/FR-018).
+        base.piegap.merge(&overlay.piegap);
+
+        // Loop defaults: overlay takes precedence for explicitly set fields
+        // (values configured away from the compiled defaults).
+        base.r#loop.merge(&overlay.r#loop);
+
+        // Research settings: overlay takes precedence for explicitly set fields.
+        // Contact email and OA threshold override base when present; the recovery
+        // and academic-exclusion flags use OR semantics because they are opt-in.
+        base.research.open_access_recovery |= overlay.research.open_access_recovery;
+        base.research.exclude_academic_engines |= overlay.research.exclude_academic_engines;
+        if overlay.research.contact_email.is_some() {
+            base.research.contact_email = overlay.research.contact_email;
+        }
+        if overlay.research.oa_min_full_text_chars != default_oa_min_full_text_chars() {
+            base.research.oa_min_full_text_chars = overlay.research.oa_min_full_text_chars;
+        }
+        if overlay.research.max_concepts != default_max_concepts() {
+            base.research.max_concepts = overlay.research.max_concepts;
+        }
+        if overlay.research.max_findings != default_max_findings() {
+            base.research.max_findings = overlay.research.max_findings;
+        }
+        if overlay.research.max_queries != default_max_queries() {
+            base.research.max_queries = overlay.research.max_queries;
+        }
+        base.research.evaluate.merge(&overlay.research.evaluate);
+
+        // Plugins config: the overlay section wins wholesale when present, so
+        // project-level `plugins` settings are not silently discarded by an
+        // absent user-global block (spec `plugins` T-001).
+        if overlay.plugins.is_some() {
+            base.plugins = overlay.plugins;
+        }
+
+        // Connectors config: the overlay section wins wholesale when present, so
+        // project-level `connectors` settings are not silently discarded by an
+        // absent user-global block (spec `connectors` FR-007, FR-024).
+        if overlay.connectors.is_some() {
+            base.connectors = overlay.connectors;
+        }
+
+        // Automation service config (spec `openhands` T-016; FR-013, FR-014,
+        // FR-033): the overlay section wins wholesale when present, so
+        // project-level `automation` settings are not discarded by an absent
+        // user-global block. Dispatch targets name credentials, they do not
+        // carry them (FR-035), so no field-wise merge or redaction is needed.
+        if overlay.automation.is_some() {
+            base.automation = overlay.automation;
+        }
+
+        // Input-queue capacity: overlay wins when explicitly set (spec
+        // `inputqueue` FR-015), so a project-level override is not discarded by
+        // an absent user-global value.
+        if overlay.input_queue_capacity.is_some() {
+            base.input_queue_capacity = overlay.input_queue_capacity;
+        }
+
+        // Execution backend (spec `openhands` FR-001, FR-019): overlay wins
+        // whenever it explicitly sets the key, so a project-level override is
+        // not discarded by an absent user-global value. An overlay value that
+        // names an unknown kind still wins rather than silently falling through
+        // to the base, so a typo cannot quietly downgrade a session to a
+        // different backend - `effective_execution_backend` then keeps the safe
+        // `local` default and the caller can report the unknown value.
+        if overlay.execution_backend.is_some() {
+            base.execution_backend = overlay.execution_backend;
+        }
+        // Backend registry (FR-004): overlay entries replace base entries with
+        // the same id, otherwise append. Unknown/duplicate-free entries are
+        // preserved so a later config file can add or override one backend.
+        for entry in overlay.backends {
+            if let Some(existing) = base.backends.iter_mut().find(|b| b.id == entry.id) {
+                *existing = entry;
+            } else {
+                base.backends.push(entry);
+            }
+        }
+
+        // ACP client config (spec `openhands` FR-015): the registry is merged by
+        // agent id so a project-level `acp` block extends the user-global agents
+        // instead of discarding them, and an overlay entry with the same id
+        // replaces the base one. `default_agent` and the whole section win
+        // wholesale when the overlay declares them.
+        if let Some(overlay_acp) = overlay.acp {
+            match base.acp.as_mut() {
+                Some(base_acp) => {
+                    if overlay_acp.default_agent.is_some() {
+                        base_acp.default_agent = overlay_acp.default_agent;
+                    }
+                    if overlay_acp.server_agent.is_some() {
+                        base_acp.server_agent = overlay_acp.server_agent;
+                    }
+                    // The ACP server endpoint is opt-in; an overlay that sets
+                    // the flag enables it and one that omits it leaves the base
+                    // decision untouched (FR-028).
+                    if overlay_acp.server_enabled {
+                        base_acp.server_enabled = true;
+                    }
+                    for (id, entry) in overlay_acp.agents {
+                        base_acp.agents.insert(id, entry);
+                    }
+                }
+                None => base.acp = Some(overlay_acp),
+            }
+        }
+
+        // UI i18n (spec `openhands` FR-027): the overlay section wins wholesale
+        // when present, so a project-level `i18n` setting is not discarded by an
+        // absent user-global block.
+        if overlay.i18n.is_some() {
+            base.i18n = overlay.i18n;
+        }
+
+        // OpenAI-compatible surface (spec `openhands` FR-012, FR-024, FR-032): an
+        // overlay that enables the surface enables it, and an overlay token
+        // overrides the base token. An overlay that omits the section leaves the
+        // base decision untouched.
+        if let Some(overlay_openai) = overlay.openai {
+            match base.openai.as_mut() {
+                Some(base_openai) => {
+                    if overlay_openai.enabled {
+                        base_openai.enabled = true;
+                    }
+                    if overlay_openai.token.is_some() {
+                        base_openai.token = overlay_openai.token;
+                    }
+                }
+                None => base.openai = Some(overlay_openai),
+            }
+        }
+
+        // dirs: union of allowlist, denylist, and allowed_roots from both configs
+        Self::union_into(&mut base.dirs.allowlist, overlay.dirs.allowlist);
+        Self::union_into(&mut base.dirs.denylist, overlay.dirs.denylist);
+        Self::union_into(&mut base.dirs.allowed_roots, overlay.dirs.allowed_roots);
+
+        // Config provenance: the paths that contributed to the resolved config
+        // are accumulated here (the loader pushes each leg separately), so a
+        // consumer that needs to locate the active project config - for
+        // example the plugin store bridge - can read them off the value
+        // returned by `load`, not just the intermediate `config` binding.
+        for path in overlay.config_paths {
+            if !base.config_paths.contains(&path) {
+                base.config_paths.push(path);
+            }
+        }
+
+        base
+    }
+
+    fn merge_provider_config(mut base: ProviderConfig, overlay: ProviderConfig) -> ProviderConfig {
+        if overlay.thinking.is_some() {
+            base.thinking = overlay.thinking;
+        }
+        // Provider-level api/env/options come from the overlay if it
+        // specifies them; the base value is preserved otherwise.
+        if overlay.api.is_some() {
+            base.api = overlay.api;
+        }
+        if !overlay.env.is_empty() {
+            base.env = overlay.env;
+        }
+        if !overlay.options.is_empty() {
+            base.options = overlay.options;
+        }
+        // Deep-merge model-level entries so a partial overlay (e.g. project
+        // config setting `provider.openrouter.models.<id>.thinking`) does not
+        // wipe out lower-precedence model fields such as `name` or
+        // `capabilities`.  For each model id present in the overlay, overlay
+        // fields take precedence; models only in the base are preserved.
+        for (model_id, overlay_model) in overlay.models {
+            let merged = if let Some(base_model) = base.models.remove(&model_id) {
+                Self::merge_model_config(base_model, overlay_model)
+            } else {
+                overlay_model
+            };
+            base.models.insert(model_id, merged);
+        }
+        base
+    }
+
+    fn merge_model_config(mut base: ModelConfig, overlay: ModelConfig) -> ModelConfig {
+        if overlay.name.is_some() {
+            base.name = overlay.name;
+        }
+        if overlay.cost.is_some() {
+            base.cost = overlay.cost;
+        }
+        if overlay.capabilities.is_some() {
+            base.capabilities = overlay.capabilities;
+        }
+        if overlay.thinking.is_some() {
+            base.thinking = overlay.thinking;
+        }
+        base
+    }
+
+    /// Returns the configured thinking default for the given provider/model.
+    ///
+    /// Model-level configuration overrides provider-level configuration.
+    /// This is the resolved fallback used when the user has not made a
+    /// per-request `/thinking` selection and the model discovery data did not
+    /// already attach a thinking configuration.
+    ///
+    /// Model ids are matched exactly as they appear in `ragent.json`, including
+    /// vendor slugs such as `openrouter/anthropic/claude-sonnet-4`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ragent_config::Config;
+    /// use ragent_types::{ThinkingConfig, ThinkingLevel};
+    ///
+    /// let config: Config = serde_json::from_str(r#"{
+    ///     "provider": {
+    ///         "openrouter": {
+    ///             "thinking": { "enabled": true, "level": "low" },
+    ///             "models": {
+    ///                 "openrouter/anthropic/claude-sonnet-4": {
+    ///                     "thinking": { "enabled": true, "level": "high" }
+    ///                 }
+    ///             }
+    ///         }
+    ///     }
+    /// }"#).unwrap();
+    ///
+    /// assert_eq!(
+    ///     config.thinking_config_for_model("openrouter", "openrouter/anthropic/claude-sonnet-4"),
+    ///     Some(ThinkingConfig::new(ThinkingLevel::High))
+    /// );
+    /// assert_eq!(
+    ///     config.thinking_config_for_model("openrouter", "openrouter/anthropic/claude-3-5-haiku"),
+    ///     Some(ThinkingConfig::new(ThinkingLevel::Low))
+    /// );
+    /// ```
+    #[must_use]
+    pub fn thinking_config_for_model(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+    ) -> Option<ragent_types::ThinkingConfig> {
+        self.provider.get(provider_id).and_then(|provider| {
+            provider
+                .models
+                .get(model_id)
+                .and_then(|model| model.thinking.clone())
+                .or_else(|| provider.thinking.clone())
+        })
+    }
+}
+
+// -- Memory configuration -----------------------------------------------------
+
+/// Memory system configuration.
+///
+/// Controls the behaviour of the persistent memory system including
+/// structured SQLite storage and context retrieval.
+///
+/// Override in `ragent.json`:
+/// ```json
+/// {
+///   "memory": {
+///     "enabled": true
+///   }
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryConfig {
+    /// Whether the memory system is enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Structured store configuration.
+    #[serde(default)]
+    pub structured: StructuredMemoryConfig,
+    /// Retrieval configuration for prompt injection.
+    #[serde(default)]
+    pub retrieval: RetrievalConfig,
+    /// Automatic memory extraction configuration.
+    #[serde(default)]
+    pub auto_extract: AutoExtractConfig,
+    /// Confidence decay configuration.
+    #[serde(default)]
+    pub decay: DecayConfig,
+    /// Cross-project memory sharing configuration.
+    #[serde(default)]
+    pub cross_project: CrossProjectConfig,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            structured: StructuredMemoryConfig::default(),
+            retrieval: RetrievalConfig::default(),
+            auto_extract: AutoExtractConfig::default(),
+            decay: DecayConfig::default(),
+            cross_project: CrossProjectConfig::default(),
+        }
+    }
+}
+
+/// Structured memory store configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StructuredMemoryConfig {
+    /// Whether the structured store is enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl Default for StructuredMemoryConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+/// Retrieval configuration for injecting memories into the system prompt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetrievalConfig {
+    /// Maximum number of structured memories to consider for injection into
+    /// the system prompt.
+    ///
+    /// This is a safety cap on how many rows are fetched from SQLite. Within
+    /// that set, rows are included until [`max_memory_tokens`] is reached.
+    #[serde(default = "default_max_memories_per_prompt")]
+    pub max_memories_per_prompt: usize,
+    /// Approximate token budget for the memory section injected into the
+    /// system prompt.
+    ///
+    /// When `Some(n)`, memories are appended newest/highest-confidence first
+    /// until adding the next row would exceed `n` tokens. Any remaining rows
+    /// are dropped and a truncation note is appended. When `None`, the
+    /// `max_memories_per_prompt` count cap applies with no token budget.
+    #[serde(default = "default_max_memory_tokens")]
+    pub max_memory_tokens: Option<usize>,
+    /// Weight for recency when ranking memories (0.0-1.0).
+    #[serde(default = "default_recency_weight")]
+    pub recency_weight: f64,
+    /// Weight for relevance when ranking memories (0.0-1.0).
+    #[serde(default = "default_relevance_weight")]
+    pub relevance_weight: f64,
+}
+
+impl Default for RetrievalConfig {
+    fn default() -> Self {
+        Self {
+            max_memories_per_prompt: default_max_memories_per_prompt(),
+            max_memory_tokens: default_max_memory_tokens(),
+            recency_weight: default_recency_weight(),
+            relevance_weight: default_relevance_weight(),
+        }
+    }
+}
+
+fn default_max_memories_per_prompt() -> usize {
+    100
+}
+
+fn default_max_memory_tokens() -> Option<usize> {
+    Some(4_000)
+}
+
+fn default_recency_weight() -> f64 {
+    0.3
+}
+
+fn default_relevance_weight() -> f64 {
+    0.7
+}
+
+/// Automatic memory extraction configuration.
+///
+/// Controls whether the extraction engine observes tool usage and session
+/// events to propose structured memories automatically.
+///
+/// ```json
+/// {
+///   "memory": {
+///     "auto_extract": {
+///       "enabled": true,
+///       "require_confirmation": true
+///     }
+///   }
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoExtractConfig {
+    /// Whether automatic memory extraction is enabled.
+    ///
+    /// When `true`, the extraction engine observes tool executions and
+    /// session events, proposing memories for patterns, error resolutions,
+    /// and session summaries. When `false`, no automatic extraction occurs.
+    #[serde(default = "default_auto_extract_enabled")]
+    pub enabled: bool,
+    /// Whether extracted candidates require explicit confirmation before storage.
+    ///
+    /// When `true` (default), candidates are emitted as events but **not**
+    /// automatically stored. The agent or user must explicitly call
+    /// `memory_store` to persist them. When `false`, candidates are
+    /// auto-stored directly.
+    #[serde(default = "default_require_confirmation")]
+    pub require_confirmation: bool,
+}
+
+impl Default for AutoExtractConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_auto_extract_enabled(),
+            require_confirmation: default_require_confirmation(),
+        }
+    }
+}
+
+fn default_auto_extract_enabled() -> bool {
+    false
+}
+
+fn default_require_confirmation() -> bool {
+    true
+}
+
+/// Memory confidence decay configuration.
+///
+/// Memories that are not accessed gradually lose confidence over time.
+/// This keeps the memory store clean - stale, unconfirmed memories fade
+/// while frequently recalled memories maintain high confidence.
+///
+/// ```json
+/// {
+///   "memory": {
+///     "decay": {
+///       "factor": 0.95,
+///       "min_confidence": 0.1
+///     }
+///   }
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DecayConfig {
+    /// Multiplicative decay factor per day since last access.
+    ///
+    /// A value of 0.95 means confidence is reduced by 5% per day.
+    /// Set to 1.0 to disable decay entirely.
+    #[serde(default = "default_decay_factor")]
+    pub factor: f64,
+    /// Minimum confidence threshold - memories never decay below this value.
+    ///
+    /// Once a memory's confidence reaches this floor, it stays there
+    /// until explicitly deleted or re-confirmed.
+    #[serde(default = "default_decay_min_confidence")]
+    pub min_confidence: f64,
+}
+
+impl Default for DecayConfig {
+    fn default() -> Self {
+        Self {
+            factor: default_decay_factor(),
+            min_confidence: default_decay_min_confidence(),
+        }
+    }
+}
+
+fn default_decay_factor() -> f64 {
+    0.95
+}
+
+fn default_decay_min_confidence() -> f64 {
+    0.1
+}
+
+/// Stale memory eviction configuration.
+///
+/// Controls how memories that have decayed below the minimum confidence
+/// threshold are evicted from the store.
+///
+/// ```json
+/// {
+/// Cross-project memory sharing configuration.
+///
+/// When enabled, global memory blocks are accessible from any project,
+/// and search operations span both global and current project scopes.
+/// Project-specific blocks override global blocks with the same label.
+///
+/// ```json
+/// {
+///   "memory": {
+///     "cross_project": {
+///       "enabled": true,
+///       "search_global": true,
+///       "project_override": true
+///     }
+///   }
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrossProjectConfig {
+    /// Whether cross-project memory sharing is enabled.
+    ///
+    /// When `true`, global memory blocks (stored under `~/.ragent/memory/`)
+    /// are accessible from any project. Search operations include both
+    /// global and project-scoped memories. When `false` (default), only
+    /// the current project's memories are visible.
+    #[serde(default = "default_cross_project_enabled")]
+    pub enabled: bool,
+    /// Whether search operations include global memories.
+    ///
+    /// When `true` (default when cross_project is enabled), `memory_recall`
+    /// searches across both global and project scopes. The legacy `memory_search`
+    /// tool has been removed; `memory_recall` is the current structured-memory
+    /// search tool.
+    /// When `false`, even if cross_project is enabled, searches are
+    /// restricted to the current project scope.
+    #[serde(default = "default_search_global")]
+    pub search_global: bool,
+    /// Whether project-specific blocks override global blocks with the same label.
+    ///
+    /// When `true` (default), if a project has a block with the same label
+    /// as a global block, the project version takes precedence. When `false`,
+    /// global and project blocks coexist and both appear in search results.
+    #[serde(default = "default_project_override")]
+    pub project_override: bool,
+}
+
+impl Default for CrossProjectConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_cross_project_enabled(),
+            search_global: default_search_global(),
+            project_override: default_project_override(),
+        }
+    }
+}
+
+fn default_cross_project_enabled() -> bool {
+    false
+}
+
+fn default_search_global() -> bool {
+    true
+}
+
+fn default_project_override() -> bool {
+    true
+}
+
+// -- GitLab integration configuration -----------------------------------------
+
+/// GitLab integration configuration.
+///
+/// Provides connection details for a GitLab instance. Values set here
+/// override those stored in the ragent database (set via `/gitlab setup`).
+/// Environment variables (`GITLAB_TOKEN`, `GITLAB_URL`, `GITLAB_USERNAME`)
+/// take the highest priority.
+///
+/// Override in `ragent.json`:
+/// ```json
+/// {
+///   "gitlab": {
+///     "instance_url": "https://gitlab.example.com",
+///     "token": "glpat-xxxxxxxxxxxx",
+///     "username": "myuser"
+///   }
+/// }
+/// ```
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct GitLabIntegrationConfig {
+    /// GitLab instance base URL, e.g. `https://gitlab.com`.
+    pub instance_url: Option<String>,
+    /// Personal Access Token for the GitLab API.
+    pub token: Option<String>,
+    /// GitLab username / identity.
+    pub username: Option<String>,
+}
+
+redacted_debug_impl!(GitLabIntegrationConfig);
+
+/// Pull/merge request integration settings (spec SESSIONMENU FR-21).
+///
+/// Configured under the `vcs` key of the user-global `ragent.json`:
+///
+/// ```json
+/// {
+///   "vcs": {
+///     "github": {
+///       "hosts": [
+///         { "host": "github.example.com", "api_url": "https://github.example.com/api/v3" }
+///       ]
+///     },
+///     "autofix": { "poll_secs": 60, "max_attempts": 3, "default_on": false }
+///   }
+/// }
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VcsConfig {
+    /// GitHub settings.
+    #[serde(default)]
+    pub github: VcsGitHubConfig,
+    /// Auto-fix watcher settings (spec SESSIONMENU FR-21).
+    #[serde(default)]
+    pub autofix: VcsAutofixConfig,
+}
+
+/// Auto-fix settings under `vcs.autofix`. Unset fields take the defaults
+/// given by the accessor methods.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VcsAutofixConfig {
+    /// Seconds between polls; default 60, at least 30.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll_secs: Option<u64>,
+    /// Wake-ups per trigger kind per head commit before Auto-fix pauses;
+    /// default 3, at least 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_attempts: Option<u32>,
+    /// Whether a new binding starts with Auto-fix on; default `false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_on: Option<bool>,
+}
+
+impl VcsAutofixConfig {
+    /// Seconds between polls: `poll_secs`, default 60, never below 30.
+    #[must_use]
+    pub fn poll_secs(&self) -> u64 {
+        self.poll_secs.unwrap_or(60).max(30)
+    }
+
+    /// Wake-ups allowed per trigger kind per head commit: default 3, at
+    /// least 1.
+    #[must_use]
+    pub fn max_attempts(&self) -> u32 {
+        self.max_attempts.unwrap_or(3).max(1)
+    }
+
+    /// Whether new bindings start with Auto-fix on.
+    #[must_use]
+    pub fn default_on(&self) -> bool {
+        self.default_on.unwrap_or(false)
+    }
+}
+
+impl VcsConfig {
+    /// Whether nothing is configured (used to skip serialising the section).
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// GitHub settings under `vcs.github`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VcsGitHubConfig {
+    /// GitHub Enterprise Server hosts, besides `github.com`.
+    #[serde(default)]
+    pub hosts: Vec<GitHubHost>,
+}
+
+/// One GitHub Enterprise Server host.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GitHubHost {
+    /// Host name as it appears in git remotes, e.g. `github.example.com`.
+    pub host: String,
+    /// REST API base URL, e.g. `https://github.example.com/api/v3`.
+    pub api_url: String,
+}
+
+/// Spec-Driven Development (SDD) capability toggles (FR-019).
+///
+/// Each flag gates a new SDD artifact or validation check so that existing
+/// workflows are not disrupted. All flags default to `false` - capabilities are
+/// opt-in. When a flag is disabled, the corresponding artifact is not generated
+/// and the corresponding validation check is skipped.
+///
+/// Configured under the `sdd` key in `ragent.json`:
+///
+/// ```json
+/// {
+///   "sdd": {
+///     "clarification_markers": true,
+///     "quality_checklists": true,
+///     "constitution": true
+///   }
+/// }
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SddConfig {
+    /// Enable `[NEEDS CLARIFICATION]` marker detection and reporting (FR-002).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clarification_markers: bool,
+    /// Embed quality checklists in spec and plan templates (FR-006).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub quality_checklists: bool,
+    /// Generate and parse `CONSTITUTION.md` architectural-principles artifact (FR-007).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub constitution: bool,
+    /// Enable Phase -1 pre-implementation gate validation (FR-008).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub phase_minus_one_gates: bool,
+    /// Create a git branch per spec (FR-009).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub branch_per_spec: bool,
+    /// Link research artifacts into SPEC.md frontmatter (FR-010).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub research_artifacts: bool,
+    /// Generate `data-model.md` during `/spec plan` (FR-011).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub data_model: bool,
+    /// Generate `contracts/` directory during `/spec plan` (FR-012).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub contracts: bool,
+    /// Generate `quickstart.md` validation scenarios (FR-013).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub quickstart: bool,
+    /// Enforce test-first file creation ordering in plans (FR-014).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub test_first_ordering: bool,
+    /// Run ambiguity, contradiction, and gap consistency checks (FR-015).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub consistency_checks: bool,
+    /// Enable constitutional amendment process with dated changelog (FR-016).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub amendment_process: bool,
+    /// Enable production feedback loop (`FEEDBACK.md` surfacing) (FR-017).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub feedback_loop: bool,
+}
+
+impl SddConfig {
+    /// Returns `true` when no SDD flags are enabled.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        !self.clarification_markers
+            && !self.quality_checklists
+            && !self.constitution
+            && !self.phase_minus_one_gates
+            && !self.branch_per_spec
+            && !self.research_artifacts
+            && !self.data_model
+            && !self.contracts
+            && !self.quickstart
+            && !self.test_first_ordering
+            && !self.consistency_checks
+            && !self.amendment_process
+            && !self.feedback_loop
+    }
+
+    /// Canonical name for "at defaults"; equivalent to [`SddConfig::is_empty`]
+    /// (ANTIPAT L-4).
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        self.is_empty()
+    }
+
+    /// Merge another config into `self` using OR semantics - a flag enabled in
+    /// either config remains enabled. This matches the opt-in nature of the
+    /// flags: once enabled at any config layer, the capability stays on.
+    pub fn merge(&mut self, other: &Self) {
+        self.clarification_markers |= other.clarification_markers;
+        self.quality_checklists |= other.quality_checklists;
+        self.constitution |= other.constitution;
+        self.phase_minus_one_gates |= other.phase_minus_one_gates;
+        self.branch_per_spec |= other.branch_per_spec;
+        self.research_artifacts |= other.research_artifacts;
+        self.data_model |= other.data_model;
+        self.contracts |= other.contracts;
+        self.quickstart |= other.quickstart;
+        self.test_first_ordering |= other.test_first_ordering;
+        self.consistency_checks |= other.consistency_checks;
+        self.amendment_process |= other.amendment_process;
+        self.feedback_loop |= other.feedback_loop;
+    }
+}
+
+// -- Pie gap feature toggles -----------------------------------------------------
+
+/// Pie feature gap toggles (spec `piegap` FR-016, FR-018).
+///
+/// Each flag gates a standalone pie-derived feature so that existing
+/// workflows are not disrupted. All flags default to `false` - features are
+/// opt-in. When a flag is disabled, the corresponding feature is inactive.
+///
+/// Configured under the `piegap` key in `ragent.json`:
+///
+/// ```json
+/// {
+///   "piegap": {
+///     "triggers": true,
+///     "hooks": true,
+///     "inbox": true,
+///     "archive": true,
+///     "bug_report": true,
+///     "templates": true,
+///     "goal": true,
+///     "web_ui": true
+///   }
+/// }
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PieGapConfig {
+    /// Enable dynamic trigger rules (G-01, FR-002).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub triggers: bool,
+    /// Enable MCP notification push events (G-02, FR-003).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mcp_notifications: bool,
+    /// Enable stateful loops + triage inbox (G-03, FR-004).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inbox: bool,
+    /// Enable lifecycle hooks (G-04, FR-005).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hooks: bool,
+    /// Enable portable session archive export/import (G-05, FR-006).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub archive: bool,
+    /// Enable bug report generation (G-06, FR-007).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bug_report: bool,
+    /// Enable reusable prompt templates (G-07, FR-008).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub templates: bool,
+    /// Enable goal-based autonomous stop hook (G-10, FR-011).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub goal: bool,
+    /// Enable browser-based web UI (G-12, FR-013).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub web_ui: bool,
+    /// Enable `/undo` slash command (G-13, FR-014).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub undo: bool,
+    /// Enable `/name` session naming (G-14, FR-015).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub session_naming: bool,
+}
+
+impl PieGapConfig {
+    /// Returns `true` when no piegap flags are enabled.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        !self.triggers
+            && !self.mcp_notifications
+            && !self.inbox
+            && !self.hooks
+            && !self.archive
+            && !self.bug_report
+            && !self.templates
+            && !self.goal
+            && !self.web_ui
+            && !self.undo
+            && !self.session_naming
+    }
+
+    /// Canonical name for "at defaults"; equivalent to [`PieGapConfig::is_empty`]
+    /// (ANTIPAT L-4).
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        self.is_empty()
+    }
+
+    /// Merge another config into `self` using OR semantics - a flag enabled in
+    /// either config remains enabled. This matches the opt-in nature of the
+    /// flags: once enabled at any config layer, the capability stays on.
+    pub fn merge(&mut self, other: &Self) {
+        self.triggers |= other.triggers;
+        self.mcp_notifications |= other.mcp_notifications;
+        self.inbox |= other.inbox;
+        self.hooks |= other.hooks;
+        self.archive |= other.archive;
+        self.bug_report |= other.bug_report;
+        self.templates |= other.templates;
+        self.goal |= other.goal;
+        self.web_ui |= other.web_ui;
+        self.undo |= other.undo;
+        self.session_naming |= other.session_naming;
+    }
+}
+
+// -- Research subsystem configuration ---------------------------------------------
+
+/// Research subsystem configuration (spec `hyperresearch` FR-011, FR-012).
+///
+/// Configured under the `research` key in `ragent.json`:
+///
+/// ```json
+/// {
+///   "research": {
+///     "open_access_recovery": true,
+///     "exclude_academic_engines": false,
+///     "contact_email": "user@example.com",
+///     "oa_min_full_text_chars": 1000,
+///     "max_concepts": 5,
+///     "max_findings": 20
+///   }
+/// }
+/// ```
+///
+/// `open_access_recovery` defaults to `false` (opt-in). `contact_email` is
+/// required by Unpaywall's terms of service when OA recovery is enabled.
+/// `oa_min_full_text_chars` defaults to the value used by the open-access
+/// recovery layer (`ragent_research::open_access::DEFAULT_OA_MIN_FULL_TEXT_CHARS`).
+/// `exclude_academic_engines` defaults to `false`; research runs always
+/// exclude academically-classified search engines (OpenAlex) unless the
+/// per-run `--papers` flag opts them back in.
+/// `max_concepts` (default 5) and `max_findings` (default 20) cap the report's
+/// `## Concepts` and `## Findings` blocks (spec `researchmax` FR-008/FR-017);
+/// the per-run `--max-concepts` / `--max-findings` flags take precedence.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResearchConfig {
+    /// Enable open-access recovery via Unpaywall and Europe PMC for short
+    /// scholarly sources (FR-011).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub open_access_recovery: bool,
+    /// Persistently exclude academically-classified search engines (OpenAlex)
+    /// from research runs (spec `researchnoacc` FR-012). Scholarly engines are
+    /// already excluded by default; the per-run `--papers` flag opts them back
+    /// in and takes precedence over this value.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exclude_academic_engines: bool,
+    /// Contact email required by Unpaywall's terms of service (FR-012).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_email: Option<String>,
+    /// Minimum full-text length (in characters) that triggers OA recovery.
+    ///
+    /// When a scholarly source's captured body is shorter than this, the
+    /// gatherer queries OA services for a legal full-text copy.
+    #[serde(default = "default_oa_min_full_text_chars")]
+    pub oa_min_full_text_chars: usize,
+    /// Maximum number of concepts rendered in the report's `## Concepts` block
+    /// (spec `researchmax` FR-008). Defaults to 5; a per-run `--max-concepts`
+    /// flag takes precedence. `0` means "unbounded".
+    #[serde(default = "default_max_concepts")]
+    pub max_concepts: usize,
+    /// Maximum number of findings rendered in the report's `## Findings` block
+    /// (spec `researchmax` FR-008). Defaults to 20; a per-run `--max-findings`
+    /// flag takes precedence. `0` means "unbounded".
+    #[serde(default = "default_max_findings")]
+    pub max_findings: usize,
+    /// Maximum number of search queries produced by the topic-decomposition
+    /// step. Defaults to 20; a per-run `--max-queries` flag takes precedence.
+    /// `0` means "unbounded" (subject only to the decomposer's hard upper
+    /// bound).
+    #[serde(default = "default_max_queries")]
+    pub max_queries: usize,
+    /// Model selection for multi-stage research pipelines (FR-013 of
+    /// specs/opendeepresearch). Each field overrides the default model for a
+    /// specific phase when set.
+    #[serde(default, skip_serializing_if = "ResearchModelsConfig::is_empty")]
+    pub models: ResearchModelsConfig,
+    /// Supervisor multi-agent graph limits (FR-012 of specs/opendeepresearch).
+    #[serde(default, skip_serializing_if = "ResearchSupervisorConfig::is_empty")]
+    pub supervisor: ResearchSupervisorConfig,
+    /// Self-evaluation scorecard settings (FR-015 of specs/opendeepresearch).
+    #[serde(default, skip_serializing_if = "ResearchEvaluateConfig::is_empty")]
+    pub evaluate: ResearchEvaluateConfig,
+}
+
+/// Supervisor multi-agent graph limits (FR-012).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ResearchSupervisorConfig {
+    /// Maximum number of researcher agents that may run concurrently in
+    /// `supervisor` and `competitive` modes.
+    #[serde(default = "default_max_concurrent_research_units")]
+    pub max_concurrent_research_units: usize,
+}
+
+impl Default for ResearchSupervisorConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent_research_units: default_max_concurrent_research_units(),
+        }
+    }
+}
+
+impl ResearchSupervisorConfig {
+    /// Returns `true` when the supervisor config contains only default values.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.max_concurrent_research_units == default_max_concurrent_research_units()
+    }
+
+    /// Canonical name for "at defaults"; equivalent to
+    /// [`ResearchSupervisorConfig::is_empty`] (ANTIPAT L-4).
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        self.is_empty()
+    }
+}
+
+const fn default_max_concurrent_research_units() -> usize {
+    5
+}
+
+/// Self-evaluation scorecard settings (FR-015).
+///
+/// When enabled, the research pipeline appends a deterministic quality
+/// scorecard (quality, relevance, groundedness, completeness, structure) to
+/// the assembled report.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ResearchEvaluateConfig {
+    /// Enable the self-evaluation step by default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub enabled: bool,
+}
+
+impl ResearchEvaluateConfig {
+    /// Returns `true` when evaluation is disabled (the default).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        !self.enabled
+    }
+
+    /// Canonical name for "at defaults"; equivalent to
+    /// [`ResearchEvaluateConfig::is_empty`] (ANTIPAT L-4).
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        self.is_empty()
+    }
+
+    /// Merge another evaluate config into `self` using OR semantics - once
+    /// enabled at any config layer, evaluation stays on.
+    pub fn merge(&mut self, other: &Self) {
+        self.enabled |= other.enabled;
+    }
+}
+
+/// Per-phase model overrides for the research subsystem.
+///
+/// When a field is `None`, the phase falls back to the configured default
+/// model. All fields are optional.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ResearchModelsConfig {
+    /// Model used by research agents / sub-topic workers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub research_model: Option<String>,
+    /// Model used to compress or summarize intermediate findings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compression_model: Option<String>,
+    /// Model used to write the final report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_report_model: Option<String>,
+}
+
+impl ResearchModelsConfig {
+    /// Returns `true` when every model override is unset.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.research_model.is_none()
+            && self.compression_model.is_none()
+            && self.final_report_model.is_none()
+    }
+
+    /// Canonical name for "at defaults"; equivalent to
+    /// [`ResearchModelsConfig::is_empty`] (ANTIPAT L-4).
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        self.is_empty()
+    }
+}
+
+const fn default_oa_min_full_text_chars() -> usize {
+    1000
+}
+
+/// Default concept limit (spec `researchmax` FR-008): 5 concepts.
+const fn default_max_concepts() -> usize {
+    5
+}
+
+/// Default finding limit (spec `researchmax` FR-008): 20 findings.
+const fn default_max_findings() -> usize {
+    20
+}
+
+/// Default topic-decomposition query limit (`--max-queries`): 20 queries.
+const fn default_max_queries() -> usize {
+    20
+}
+
+impl ResearchConfig {
+    /// Returns `true` when the research config contains only default values and
+    /// can be omitted from the serialized `ragent.json`.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        !self.open_access_recovery
+            && !self.exclude_academic_engines
+            && self.contact_email.is_none()
+            && self.oa_min_full_text_chars == default_oa_min_full_text_chars()
+            && self.max_concepts == default_max_concepts()
+            && self.max_findings == default_max_findings()
+            && self.max_queries == default_max_queries()
+            && self.models.is_empty()
+            && self.supervisor.is_empty()
+            && self.evaluate.is_empty()
+    }
+
+    /// Canonical name for "at defaults"; equivalent to
+    /// [`ResearchConfig::is_empty`] (ANTIPAT L-4).
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        self.is_empty()
+    }
+}
+
+impl Default for ResearchConfig {
+    fn default() -> Self {
+        Self {
+            open_access_recovery: false,
+            exclude_academic_engines: false,
+            contact_email: None,
+            oa_min_full_text_chars: default_oa_min_full_text_chars(),
+            max_concepts: default_max_concepts(),
+            max_findings: default_max_findings(),
+            max_queries: default_max_queries(),
+            models: ResearchModelsConfig::default(),
+            supervisor: ResearchSupervisorConfig::default(),
+            evaluate: ResearchEvaluateConfig::default(),
+        }
+    }
+}

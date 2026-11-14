@@ -1,0 +1,2453 @@
+//! Keyboard and mouse event handling for the TUI.
+use std::sync::atomic::Ordering;
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+use ragent_agent::event::Event;
+
+use crate::input::{self, InputAction};
+
+// Prompt optimization templates
+
+/// Number of lines moved per `Shift+Up`/`Shift+Down`, mouse-wheel notch, or
+/// page-scroll key in the message window and the side panels. A single named
+/// step keeps every scroll surface moving by the same amount (LOW-4).
+const SCROLL_STEP_LINES: u16 = 3;
+
+// State types from app/state.rs
+use crate::app::state::{
+    App, ContextAction, ContextMenuState, LogLevel, ProviderSetupStep, ScrollbarDragPane,
+    SelectionPane, StorePane, TextSelection,
+};
+use ragent_connectors::CataloguePane;
+
+// Helpers
+use crate::app::helpers::short_session_id;
+
+// Re-export status types from theme
+
+/// Default autopilot wall-clock limit applied by the `Alt+O` toggle.
+///
+/// The key toggle is a one-keystroke action with no way to pass flags, so it
+/// applies a bounded limit: an unbounded autopilot started by a stray `Alt+O`
+/// would keep sending continuation turns until the agent called
+/// `task_complete`. `/autopilot on` without flags still starts an unbounded
+/// run for users who deliberately want one.
+fn alt_o_default_autopilot_time_limit() -> u64 {
+    5000
+}
+
+impl App {
+    pub(crate) fn handle_history_picker_key(&mut self, key: KeyEvent) {
+        use crossterm::event::KeyCode;
+        let picker = match self.history_picker.as_mut() {
+            Some(p) => p,
+            None => return,
+        };
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.history_picker = None;
+            }
+            KeyCode::Up | KeyCode::Char('k') if picker.selected > 0 => {
+                picker.selected -= 1;
+                if picker.selected < picker.scroll_offset {
+                    picker.scroll_offset = picker.selected;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') if picker.selected + 1 < picker.entries.len() => {
+                picker.selected += 1;
+            }
+            KeyCode::Enter => {
+                let chosen = picker.entries[picker.selected].clone();
+                self.history_picker = None;
+                self.session.input = chosen;
+                self.set_cursor_char_index_clamped(self.input_len_chars());
+            }
+            KeyCode::Char('c') => {
+                // Copy the highlighted entry to the clipboard without closing
+                // the picker, so several entries can be copied in one session.
+                let chosen = picker.entries[picker.selected].clone();
+                crate::clipboard::set_clipboard_text(&chosen);
+                self.status = "history: copied to clipboard".to_string();
+            }
+            _ => {}
+        }
+    }
+
+    /// Dispatch keyboard navigation for the `/config list` save-picker overlay.
+    ///
+    /// Mirrors the history picker: Up/Down (or k/j) move the selection,
+    /// Enter restores the highlighted backup over the global `ragent.json`,
+    /// and Esc/q close the picker without taking any action.
+    pub fn handle_config_save_picker_key(&mut self, key: KeyEvent) {
+        use crossterm::event::KeyCode;
+
+        let picker = match self.config_save_picker.as_mut() {
+            Some(p) => p,
+            None => return,
+        };
+
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.config_save_picker = None;
+                self.status = "config list: cancelled".to_string();
+            }
+            KeyCode::Up | KeyCode::Char('k') if picker.selected > 0 => {
+                picker.selected -= 1;
+                if picker.selected < picker.scroll_offset {
+                    picker.scroll_offset = picker.selected;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') if picker.selected + 1 < picker.entries.len() => {
+                picker.selected += 1;
+            }
+            KeyCode::Enter => {
+                let backup = picker.entries[picker.selected].clone();
+                let config_dir = picker.config_dir.clone();
+                self.config_save_picker = None;
+
+                match ragent_config::Config::restore_global_config(Some(&config_dir), &backup) {
+                    Ok(target) => {
+                        // The restore rewrites the global config out of band (a
+                        // direct file write, not a `Config::save`), so the M-025
+                        // on-disk load cache must be dropped before the flags are
+                        // re-read; otherwise the stale cached config is served and
+                        // the runtime flags keep their pre-restore values (the
+                        // status bar would keep showing YOLO on after restoring a
+                        // `yolo: false` backup).
+                        ragent_config::Config::invalidate_load_cache();
+                        if let Ok(reloaded) = ragent_config::Config::load_for(&self.cwd_path) {
+                            ragent_config::sync_runtime_flags(&reloaded);
+                        }
+                        self.session_processor.invalidate_config_cache();
+                        let name = backup
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("<unknown>");
+                        self.append_assistant_text(&format!(
+                            "From: /config list\n[ok] **Restored configuration from `{name}`**\n\n\
+                             Active config file updated:\n  `{}`",
+                            target.display()
+                        ));
+                        self.push_log_no_agent(
+                            LogLevel::Info,
+                            format!(
+                                "config list: restored {} -> {}",
+                                backup.display(),
+                                target.display()
+                            ),
+                        );
+                        self.status = "config: restored".to_string();
+                    }
+                    Err(e) => {
+                        let name = backup
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("<unknown>");
+                        self.append_assistant_text(&format!(
+                            "From: /config list\n[x] **Failed to restore `{name}`:**\n  {e}"
+                        ));
+                        self.push_log_no_agent(
+                            LogLevel::Error,
+                            format!("config list: restore failed: {e}"),
+                        );
+                        self.status = "config: restore error".to_string();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle a mouse event while the connector-catalogue browse panel is open.
+    ///
+    /// Same ownership and hit-testing rules as
+    /// [`Self::handle_plugin_store_mouse`]: a left-click in the navigator column
+    /// selects and applies a category row and focuses the navigator, a wheel over
+    /// the navigator scrolls its viewport without changing the active category,
+    /// and a left-click or wheel over the result column moves the result cursor
+    /// while leaving the active category unchanged. Every path is pure in-memory
+    /// bookkeeping and installs nothing. A click or wheel that lands on the modal
+    /// but outside both columns is swallowed, so nothing behind the panel reacts.
+    fn handle_connector_catalogue_mouse(&mut self, event: MouseEvent) {
+        let nav_area = self.connector_store_nav_area;
+        let marketplace_area = self.connector_store_marketplace_area;
+        let result_area = self.connector_store_result_area;
+        let clear_area = self.connector_store_clear_area;
+        let pos = (event.column, event.row).into();
+        let in_nav = nav_area.contains(pos);
+        let in_marketplace = marketplace_area.contains(pos);
+        let in_results = result_area.contains(pos);
+        let in_clear = clear_area.contains(pos);
+
+        match event.kind {
+            // A left-click on the search box's `[x] clear` button clears the live
+            // filter. Checked before the generic result/navigator cases so the
+            // button, painted in the bottom row, is never mis-attributed.
+            MouseEventKind::Down(MouseButton::Left) if in_clear => {
+                self.connector_catalogue_clear_search();
+            }
+            MouseEventKind::Down(MouseButton::Left) if in_nav => {
+                let row = event.row.saturating_sub(nav_area.y) as usize;
+                if let Some(browser) = self.connector_store.as_mut() {
+                    // Map the clicked viewport row to an absolute navigator row
+                    // through the current scroll offset; a row past the last
+                    // category is refused by `category_select_row`.
+                    let target = browser.category_scroll.saturating_add(row);
+                    browser.category_select_row(target);
+                    browser.focus = CataloguePane::Categories;
+                }
+                self.needs_redraw = true;
+            }
+            MouseEventKind::Down(MouseButton::Left) if in_marketplace => {
+                let row = event.row.saturating_sub(marketplace_area.y) as usize;
+                if let Some(browser) = self.connector_store.as_mut() {
+                    // Same viewport-to-absolute mapping as the category navigator,
+                    // with the marketplace scroll offset.
+                    let target = browser.marketplace_scroll.saturating_add(row);
+                    browser.marketplace_select_row(target);
+                    browser.focus = CataloguePane::Marketplaces;
+                }
+                self.needs_redraw = true;
+            }
+            MouseEventKind::Down(MouseButton::Left) if in_results => {
+                let row = event.row.saturating_sub(result_area.y) as usize;
+                if let Some(browser) = self.connector_store.as_mut() {
+                    // The result list scrolls as its cursor moves; an out-of-range
+                    // row is ignored. The active filters are left unchanged.
+                    let target = browser.cursor.saturating_add(row);
+                    if target < browser.filtered.len() {
+                        browser.cursor = target;
+                    }
+                    browser.focus = CataloguePane::Results;
+                }
+                self.needs_redraw = true;
+            }
+            MouseEventKind::ScrollDown if in_nav => {
+                if let Some(browser) = self.connector_store.as_mut() {
+                    browser.category_scroll_by(SCROLL_STEP_LINES as i16);
+                }
+                self.needs_redraw = true;
+            }
+            MouseEventKind::ScrollUp if in_nav => {
+                if let Some(browser) = self.connector_store.as_mut() {
+                    browser.category_scroll_by(-(SCROLL_STEP_LINES as i16));
+                }
+                self.needs_redraw = true;
+            }
+            MouseEventKind::ScrollDown if in_marketplace => {
+                if let Some(browser) = self.connector_store.as_mut() {
+                    browser.marketplace_scroll_by(SCROLL_STEP_LINES as i16);
+                }
+                self.needs_redraw = true;
+            }
+            MouseEventKind::ScrollUp if in_marketplace => {
+                if let Some(browser) = self.connector_store.as_mut() {
+                    browser.marketplace_scroll_by(-(SCROLL_STEP_LINES as i16));
+                }
+                self.needs_redraw = true;
+            }
+            MouseEventKind::ScrollDown if in_results => {
+                if let Some(browser) = self.connector_store.as_mut() {
+                    browser.scroll_results_by(SCROLL_STEP_LINES as i16);
+                }
+                self.needs_redraw = true;
+            }
+            MouseEventKind::ScrollUp if in_results => {
+                if let Some(browser) = self.connector_store.as_mut() {
+                    browser.scroll_results_by(-(SCROLL_STEP_LINES as i16));
+                }
+                self.needs_redraw = true;
+            }
+            // Anything else over the modal is swallowed so nothing behind it reacts.
+            _ => {}
+        }
+    }
+
+    /// Handle a mouse event while the plugin-store browse panel is open (spec
+    /// `catnav` FR-011, FR-012, FR-013, FR-023, FR-024, FR-028; `pluginstores`
+    /// FR-004, FR-052).
+    ///
+    /// The panel is drawn above every other surface and owns the keyboard, so it
+    /// also owns the mouse. A left-click on the bottom search box's `[x] clear`
+    /// button clears the live filter (FR-004). A left-click in the category
+    /// navigator hit-tests to a category row, moves the category cursor to it,
+    /// applies that category, and focuses the category pane (FR-011). A left-click in
+    /// the marketplace navigator does the same for a marketplace row and focuses the
+    /// marketplace pane (FR-052). A wheel over either navigator scrolls its viewport
+    /// without changing the active filter (FR-012). A left-click or wheel over the
+    /// result column moves the result cursor while leaving the active filters
+    /// unchanged (FR-013). Every path is a convenience over the keyboard path and
+    /// installs, downloads, or executes nothing (FR-024); it is pure in-memory
+    /// bookkeeping, so it cannot block the event loop (FR-028).
+    ///
+    /// A click or wheel that lands on the modal but outside every column is
+    /// swallowed, so it can never start a message text selection or open a context
+    /// menu on a surface hidden behind the panel.
+    fn handle_plugin_store_mouse(&mut self, event: MouseEvent) {
+        let nav_area = self.plugin_store_nav_area;
+        let marketplace_area = self.plugin_store_marketplace_area;
+        let result_area = self.plugin_store_result_area;
+        let clear_area = self.plugin_store_clear_area;
+        let pos = (event.column, event.row).into();
+        let in_nav = nav_area.contains(pos);
+        let in_marketplace = marketplace_area.contains(pos);
+        let in_results = result_area.contains(pos);
+        let in_clear = clear_area.contains(pos);
+
+        match event.kind {
+            // A left-click on the search box's `[x] clear` button clears the live
+            // filter (FR-004). Checked before the generic result/navigator cases so
+            // the button, painted in the bottom row, is never mis-attributed.
+            MouseEventKind::Down(MouseButton::Left) if in_clear => {
+                self.plugin_store_clear_search();
+            }
+            MouseEventKind::Down(MouseButton::Left) if in_nav => {
+                let row = event.row.saturating_sub(nav_area.y) as usize;
+                if let Some(browser) = self.plugin_store.as_mut() {
+                    // Map the clicked viewport row to an absolute navigator row
+                    // through the current scroll offset; a row past the last category
+                    // is refused by `category_select_row`, so the selection cannot
+                    // change (FR-011, FR-027).
+                    let target = browser.category_scroll.saturating_add(row);
+                    browser.category_select_row(target);
+                    browser.focus = StorePane::Categories;
+                }
+                self.needs_redraw = true;
+            }
+            MouseEventKind::Down(MouseButton::Left) if in_marketplace => {
+                let row = event.row.saturating_sub(marketplace_area.y) as usize;
+                if let Some(browser) = self.plugin_store.as_mut() {
+                    // Same viewport-to-absolute mapping as the category navigator, with
+                    // the marketplace scroll offset (FR-052).
+                    let target = browser.marketplace_scroll.saturating_add(row);
+                    browser.marketplace_select_row(target);
+                    browser.focus = StorePane::Marketplaces;
+                }
+                self.needs_redraw = true;
+            }
+            MouseEventKind::Down(MouseButton::Left) if in_results => {
+                let row = event.row.saturating_sub(result_area.y) as usize;
+                if let Some(browser) = self.plugin_store.as_mut() {
+                    // The result list scrolls as its cursor moves, so the row-to-index
+                    // mapping accounts for the current scroll offset; an out-of-range
+                    // row is ignored. The active filters are left unchanged (FR-013).
+                    let target = browser.scroll.saturating_add(row);
+                    if target < browser.filtered.len() {
+                        browser.cursor = target;
+                    }
+                }
+                self.needs_redraw = true;
+            }
+            MouseEventKind::ScrollDown if in_nav => {
+                if let Some(browser) = self.plugin_store.as_mut() {
+                    browser.category_scroll_by(SCROLL_STEP_LINES as i16);
+                }
+                self.needs_redraw = true;
+            }
+            MouseEventKind::ScrollUp if in_nav => {
+                if let Some(browser) = self.plugin_store.as_mut() {
+                    browser.category_scroll_by(-(SCROLL_STEP_LINES as i16));
+                }
+                self.needs_redraw = true;
+            }
+            MouseEventKind::ScrollDown if in_marketplace => {
+                if let Some(browser) = self.plugin_store.as_mut() {
+                    browser.marketplace_scroll_by(SCROLL_STEP_LINES as i16);
+                }
+                self.needs_redraw = true;
+            }
+            MouseEventKind::ScrollUp if in_marketplace => {
+                if let Some(browser) = self.plugin_store.as_mut() {
+                    browser.marketplace_scroll_by(-(SCROLL_STEP_LINES as i16));
+                }
+                self.needs_redraw = true;
+            }
+            MouseEventKind::ScrollDown if in_results => {
+                if let Some(browser) = self.plugin_store.as_mut() {
+                    browser.scroll_results_by(SCROLL_STEP_LINES as i16);
+                }
+                self.needs_redraw = true;
+            }
+            MouseEventKind::ScrollUp if in_results => {
+                if let Some(browser) = self.plugin_store.as_mut() {
+                    browser.scroll_results_by(-(SCROLL_STEP_LINES as i16));
+                }
+                self.needs_redraw = true;
+            }
+            // Anything else over the modal is swallowed so nothing behind it reacts.
+            _ => {}
+        }
+    }
+
+    /// Route a wheel notch to the open provider/model setup dialog.
+    ///
+    /// A notch over the dialog moves its cursor through the same key handler the
+    /// keyboard uses ([`crate::input::handle_provider_setup_key`]), so one notch
+    /// scrolls a selector by exactly one entry and the window, legend and cursor
+    /// stay in step. A notch outside the dialog is swallowed while it is open:
+    /// the modal owns the wheel, so nothing behind it scrolls under an anchored
+    /// overlay.
+    ///
+    /// Only wheel events are intercepted - clicks, drags and right-clicks keep
+    /// their existing routing, because the API-key and GitLab forms rely on the
+    /// right-click paste menu.
+    ///
+    /// # Arguments
+    /// - `event` - the mouse event to inspect.
+    ///
+    /// # Returns
+    /// `true` when the event was a wheel notch, whether or not it landed on the
+    /// dialog; `false` for every other mouse event so normal routing continues.
+    fn handle_provider_setup_mouse(&mut self, event: MouseEvent) -> bool {
+        let code = match event.kind {
+            MouseEventKind::ScrollUp => KeyCode::Up,
+            MouseEventKind::ScrollDown => KeyCode::Down,
+            _ => return false,
+        };
+        // Only the list-bearing selectors react to a notch. A form, a spinner or
+        // the success card would otherwise treat the notch as "any key" and
+        // dismiss itself (`Done` closes on any key), so those steps swallow it.
+        let steppable = matches!(
+            self.provider_setup,
+            Some(
+                ProviderSetupStep::SelectProvider { .. }
+                    | ProviderSetupStep::SelectModel { .. }
+                    | ProviderSetupStep::SelectRouterModel { .. }
+                    | ProviderSetupStep::SelectAzureResource { .. }
+                    | ProviderSetupStep::SelectThinkingLevel { .. }
+                    | ProviderSetupStep::SelectAgent { .. }
+                    | ProviderSetupStep::SelectConfiguredProvider { .. }
+                    | ProviderSetupStep::ShowProviderConfig { .. }
+                    | ProviderSetupStep::ResetProvider { .. }
+                    | ProviderSetupStep::SetupRouter { .. }
+            )
+        );
+        if steppable
+            && self
+                .provider_setup_area
+                .contains((event.column, event.row).into())
+        {
+            let key = KeyEvent::new(code, KeyModifiers::empty());
+            input::handle_provider_setup_key(self, key);
+            self.needs_redraw = true;
+        }
+        true
+    }
+
+    /// Dispatch a mouse event to the appropriate UI region, updating the input
+    /// buffer / cursor / scroll / context menu as needed. Asserts UI
+    /// invariants and logs the transition for diagnostics.
+    pub fn handle_mouse_event(&mut self, event: MouseEvent) {
+        let before_input = self.session.input.clone();
+        let before_cursor = self.session.input_cursor;
+        // While the destructive row-action confirmation dialog is open it owns
+        // the mouse as the topmost modal (spec `agentui` T-009): a click inside
+        // the painted dialog picks the option whose half of the dialog row the
+        // pointer landed in, and every other mouse event is swallowed so no
+        // surface beneath the modal can react (FR-036, FR-037, FR-040, FR-070).
+        if self.row_action_confirm_open() {
+            let area = self.row_action_confirm_area;
+            if event.kind == MouseEventKind::Down(MouseButton::Left)
+                && area.width > 0
+                && area.contains((event.column, event.row).into())
+            {
+                if event.column < area.x + area.width / 2 {
+                    self.row_action_confirm_accept();
+                } else {
+                    self.row_action_confirm_cancel();
+                }
+            }
+            self.assert_ui_invariants();
+            self.debug_log_input_transition(
+                "mouse-row-action-confirm",
+                &before_input,
+                before_cursor,
+            );
+            return;
+        }
+        // While the plugin-store browse panel is open it owns the mouse as well as
+        // the keyboard: every mouse event is routed to the panel and swallowed, so a
+        // click in the navigator can never start a text selection behind the modal
+        // (spec `catnav` FR-011, FR-023).
+        if self.plugin_store.is_some() {
+            self.handle_plugin_store_mouse(event);
+            self.assert_ui_invariants();
+            self.debug_log_input_transition("mouse-plugin-store", &before_input, before_cursor);
+            return;
+        }
+        // While the connector-catalogue browse panel is open it owns the mouse as
+        // well as the keyboard, exactly as the plugin-store panel does: every
+        // mouse event is routed to the panel and swallowed.
+        if self.connector_store.is_some() {
+            self.handle_connector_catalogue_mouse(event);
+            self.assert_ui_invariants();
+            self.debug_log_input_transition(
+                "mouse-connector-catalogue",
+                &before_input,
+                before_cursor,
+            );
+            return;
+        }
+        // Self-heal any selection/menu anchored on a panel that a recent
+        // toggle (e.g. Alt+I) dismissed - the render pass zeroes those
+        // areas, and a stale reference would trip assert_ui_invariants.
+        self.prune_stale_selection();
+        // While a provider/model setup dialog is open, a wheel notch belongs to
+        // the dialog: over the dialog it moves the list's cursor, outside it the
+        // notch is swallowed, so the panes behind the modal never scroll under it.
+        // Every other mouse gesture keeps its normal routing.
+        if self.provider_setup.is_some() && self.handle_provider_setup_mouse(event) {
+            self.assert_ui_invariants();
+            self.debug_log_input_transition("mouse-provider-setup", &before_input, before_cursor);
+            return;
+        }
+        // If context menu is open, intercept clicks.
+        if self.context_menu.is_some() {
+            if let MouseEventKind::Down(MouseButton::Left) = event.kind {
+                self.handle_context_menu_click(event.column, event.row);
+            } else if let MouseEventKind::Down(MouseButton::Right) = event.kind {
+                // Second right-click dismisses the menu.
+                self.context_menu = None;
+            }
+            self.assert_ui_invariants();
+            self.debug_log_input_transition("mouse-context", &before_input, before_cursor);
+            return;
+        }
+        // Session sidebar (spec MULTISESSION M5): clicks, wheel and border
+        // drags inside it are its own; a click elsewhere drops its focus and
+        // falls through to the normal routing.
+        if crate::sessions_sidebar::handle_mouse(self, event) {
+            self.assert_ui_invariants();
+            self.debug_log_input_transition("mouse-sidebar", &before_input, before_cursor);
+            return;
+        }
+
+        match event.kind {
+            // The output overlay is the topmost scrollable surface, so its
+            // wheel arms precede the popup arms: a wheel over the 90-cent
+            // overlay also lies inside the Agents/Teams popup area beneath it,
+            // and those earlier arms used to steal the event, leaving the
+            // overlay pinned to its newest page (bug report, fixed as T-021).
+            // Research/memory keep their own later arms but are listed after
+            // the overlay for the same z-order reason.
+            MouseEventKind::ScrollUp
+                if self.output_view.is_some()
+                    && self
+                        .output_view_area
+                        .contains((event.column, event.row).into()) =>
+            {
+                self.scroll_output_view_by(SCROLL_STEP_LINES as i16);
+                self.needs_redraw = true;
+            }
+            MouseEventKind::ScrollDown
+                if self.output_view.is_some()
+                    && self
+                        .output_view_area
+                        .contains((event.column, event.row).into()) =>
+            {
+                self.scroll_output_view_by(-(SCROLL_STEP_LINES as i16));
+                self.needs_redraw = true;
+            }
+            // While an agentui popup table is open its wheel owns the scroll:
+            // the offset moves by SCROLL_STEP_LINES and re-clamps to the
+            // maximum the renderer computed (render clamps the painted slice,
+            // so the two can never disagree). The popups are topmost, so these
+            // arms precede the research/output-view and pane checks; a wheel
+            // over the popup can thus never scroll the surface beneath it
+            // (spec `agentui` FR-008, FR-059, T-017).
+            MouseEventKind::ScrollUp
+                if self.active_agents_area.contains((event.column, event.row).into()) =>
+            {
+                self.active_agents_scroll_offset = (self
+                    .active_agents_scroll_offset
+                    .saturating_add(SCROLL_STEP_LINES))
+                .min(self.active_agents_max_scroll);
+                self.needs_redraw = true;
+            }
+            MouseEventKind::ScrollDown
+                if self.active_agents_area.contains((event.column, event.row).into()) =>
+            {
+                self.active_agents_scroll_offset =
+                    self.active_agents_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
+                self.needs_redraw = true;
+            }
+            MouseEventKind::ScrollUp
+                if self.teams_area.contains((event.column, event.row).into()) =>
+            {
+                self.teams_scroll_offset = (self.teams_scroll_offset.saturating_add(
+                    SCROLL_STEP_LINES,
+                ))
+                .min(self.teams_max_scroll);
+                self.needs_redraw = true;
+            }
+            MouseEventKind::ScrollDown
+                if self.teams_area.contains((event.column, event.row).into()) =>
+            {
+                self.teams_scroll_offset =
+                    self.teams_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
+                self.needs_redraw = true;
+            }
+            MouseEventKind::ScrollUp => {
+                if self.research_view.is_some()
+                    && self
+                        .research_view_area
+                        .contains((event.column, event.row).into())
+                {
+                    self.scroll_research_view_by(SCROLL_STEP_LINES as i16);
+                } else {
+                    match self.pane_at(event.column, event.row) {
+                        Some(SelectionPane::Messages) => {
+                            self.session.scroll_offset =
+                                self.session.scroll_offset.saturating_add(SCROLL_STEP_LINES);
+                        }
+                        Some(SelectionPane::Log) => {
+                            self.log_scroll_offset =
+                                self.log_scroll_offset.saturating_add(SCROLL_STEP_LINES);
+                        }
+                        Some(SelectionPane::Profile) => {
+                            self.profile_scroll_offset =
+                                self.profile_scroll_offset.saturating_add(SCROLL_STEP_LINES);
+                        }
+                        Some(SelectionPane::Tasks) => {
+                            self.tasks_scroll_offset =
+                                self.tasks_scroll_offset.saturating_add(SCROLL_STEP_LINES);
+                        }
+                        Some(SelectionPane::Memory) => {
+                            self.memory_scroll_offset =
+                                self.memory_scroll_offset.saturating_add(SCROLL_STEP_LINES);
+                        }
+                        Some(SelectionPane::Telemetry) => {
+                            self.telemetry_scroll_offset =
+                                self.telemetry_scroll_offset.saturating_add(SCROLL_STEP_LINES);
+                        }
+                        Some(SelectionPane::ContextPanel) => {
+                            self.context_scroll_offset =
+                                self.context_scroll_offset.saturating_add(SCROLL_STEP_LINES);
+                        }
+                        Some(SelectionPane::Input) | None => {}
+                    }
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                if self.research_view.is_some()
+                    && self
+                        .research_view_area
+                        .contains((event.column, event.row).into())
+                {
+                    self.scroll_research_view_by(-(SCROLL_STEP_LINES as i16));
+                } else {
+                    match self.pane_at(event.column, event.row) {
+                        Some(SelectionPane::Messages) => {
+                            self.session.scroll_offset =
+                                self.session.scroll_offset.saturating_sub(SCROLL_STEP_LINES);
+                        }
+                        Some(SelectionPane::Log) => {
+                            self.log_scroll_offset =
+                                self.log_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
+                        }
+                        Some(SelectionPane::Profile) => {
+                            self.profile_scroll_offset =
+                                self.profile_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
+                        }
+                        Some(SelectionPane::Tasks) => {
+                            self.tasks_scroll_offset =
+                                self.tasks_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
+                        }
+                        Some(SelectionPane::Memory) => {
+                            self.memory_scroll_offset =
+                                self.memory_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
+                        }
+                        Some(SelectionPane::Telemetry) => {
+                            self.telemetry_scroll_offset =
+                                self.telemetry_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
+                        }
+                        Some(SelectionPane::ContextPanel) => {
+                            self.context_scroll_offset =
+                                self.context_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
+                        }
+                        Some(SelectionPane::Input) | None => {}
+                    }
+                }
+            }
+            // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+            MouseEventKind::Down(MouseButton::Left) => {
+                let pos = (event.column, event.row);
+                if self.agents_button_area.contains(pos.into()) {
+                    self.toggle_agents_window();
+                    return;
+                }
+                if self.teams_button_area.contains(pos.into()) {
+                    self.toggle_teams_window();
+                    return;
+                }
+                // Scrollbar-gutter drag for the two popup tables: a click on
+                // the painted scrollbar's column starts a thumb drag (with
+                // jump-to-position), and the drag arm keeps it moving until
+                // the button is released (FR-059). Checked before the popup
+                // consume arms, which would otherwise swallow the click.
+                if self.active_agents_max_scroll > 0
+                    && self.active_agents_area.height > 0
+                    && event.column == self.active_agents_area.right().saturating_sub(1)
+                    && self.active_agents_area.contains(pos.into())
+                {
+                    self.scrollbar_drag = Some(ScrollbarDragPane::AgentsWindow);
+                    self.apply_scrollbar_drag(event.row, ScrollbarDragPane::AgentsWindow);
+                    return;
+                }
+                if self.teams_max_scroll > 0
+                    && self.teams_area.height > 0
+                    && event.column == self.teams_area.right().saturating_sub(1)
+                    && self.teams_area.contains(pos.into())
+                {
+                    self.scrollbar_drag = Some(ScrollbarDragPane::TeamsWindow);
+                    self.apply_scrollbar_drag(event.row, ScrollbarDragPane::TeamsWindow);
+                    return;
+                }
+                if self.research_view.is_some() {
+                    if self.research_view_area.contains(pos.into()) {
+                        return;
+                    }
+                    self.research_view = None;
+                    return;
+                }
+                if self.output_view.is_some()
+                    && self
+                        .output_view_area
+                        .contains((event.column, event.row).into())
+                {
+                    return;
+                }
+                if self.output_view.is_some() {
+                    self.close_output_view();
+                }
+                if self
+                    .active_agents_area
+                    .contains((event.column, event.row).into())
+                {
+                    // Click-to-select: the click moves the block cursor onto
+                    // the clicked row, so the mouse and keyboard share the
+                    // same selection; Space/Del/Enter remain the only actions
+                    // (keyboard-first FR-055 with the click half restored).
+                    let absolute_row = event
+                        .row
+                        .saturating_sub(self.active_agents_area.y)
+                        .saturating_add(
+                            self.active_agents_scroll_offset
+                                .min(self.active_agents_max_scroll),
+                        )
+                        as usize;
+                    self.agents_cursor_from_click(absolute_row);
+                    return;
+                }
+
+                if self.teams_area.contains((event.column, event.row).into()) {
+                    // Same click-to-select contract for the Teams window.
+                    let absolute_row = event
+                        .row
+                        .saturating_sub(self.teams_area.y)
+                        .saturating_add(self.teams_scroll_offset.min(self.teams_max_scroll))
+                        as usize;
+                    self.teams_cursor_from_click(absolute_row);
+                    return;
+                }
+
+                    // Scrollbar drag takes priority (rightmost column of pane)
+                                                    if self.message_area.height > 0
+                                                        && event.column == self.message_area.right().saturating_sub(1)
+                                                        && self.message_area.contains(pos.into())
+                                                        && self.session.message_max_scroll > 0
+                                                    {                    self.scrollbar_drag = Some(ScrollbarDragPane::Messages);
+                    self.text_selection = None;
+                    self.apply_scrollbar_drag(event.row, ScrollbarDragPane::Messages);
+                } else if self.show_log
+                    && self.log_area.height > 0
+                    && event.column == self.log_area.right().saturating_sub(1)
+                    && self.log_area.contains(pos.into())
+                    && self.log_max_scroll > 0
+                {
+                    self.scrollbar_drag = Some(ScrollbarDragPane::Log);
+                    self.text_selection = None;
+                    self.apply_scrollbar_drag(event.row, ScrollbarDragPane::Log);
+                } else if self.show_profile
+                    && self.profile_area.height > 0
+                    && event.column == self.profile_area.right().saturating_sub(1)
+                    && self.profile_area.contains(pos.into())
+                    && self.profile_max_scroll > 0
+                {
+                    self.scrollbar_drag = Some(ScrollbarDragPane::Profile);
+                    self.text_selection = None;
+                    self.apply_scrollbar_drag(event.row, ScrollbarDragPane::Profile);
+                } else if self.show_tasks_panel
+                    && self.tasks_area.height > 0
+                    && event.column == self.tasks_area.right().saturating_sub(1)
+                    && self.tasks_area.contains(pos.into())
+                    && self.tasks_max_scroll > 0
+                {
+                    self.scrollbar_drag = Some(ScrollbarDragPane::Tasks);
+                    self.text_selection = None;
+                    self.apply_scrollbar_drag(event.row, ScrollbarDragPane::Tasks);
+                                  } else if self.show_memory
+                                      && self.memory_area.height > 0
+                                      && event.column == self.memory_area.right().saturating_sub(1)
+                                      && self.memory_area.contains(pos.into())
+                                      && self.memory_max_scroll > 0
+                                  {
+                                      // Click on the Memory panel scrollbar gutter (rightmost
+                                      // column of `memory_area`) initiates a scrollbar drag so
+                                      // the user can jump-scroll the Memory pane the same way as
+                                      // the Log / Profile / TODO panels (FR-013 hit-testing).
+                                      self.scrollbar_drag = Some(ScrollbarDragPane::Memory);
+                                      self.text_selection = None;
+                                      self.apply_scrollbar_drag(event.row, ScrollbarDragPane::Memory);                                    } else if self.show_telemetry
+                                        && self.telemetry_area.height > 0
+                                        && event.column == self.telemetry_area.right().saturating_sub(1)
+                                        && self.telemetry_area.contains(pos.into())
+                                        && self.telemetry_max_scroll > 0
+                                    {
+                                        // Click on the Telemetry panel scrollbar gutter initiates
+                                        // a scrollbar drag, mirroring the other side panels.
+                                        self.scrollbar_drag = Some(ScrollbarDragPane::Telemetry);
+                                        self.text_selection = None;
+                                        self.apply_scrollbar_drag(event.row, ScrollbarDragPane::Telemetry);
+                                    } else if self.show_context_panel
+                                        && self.context_panel_area.height > 0
+                                        && event.column
+                                            == self.context_panel_area.right().saturating_sub(1)
+                                        && self.context_panel_area.contains(pos.into())
+                                        && self.context_panel_max_scroll > 0
+                                    {
+                                        // Click on the Context panel scrollbar gutter initiates a
+                                        // scrollbar drag, mirroring the other side panels.
+                                        self.scrollbar_drag = Some(ScrollbarDragPane::ContextPanel);
+                                        self.text_selection = None;
+                                        self.apply_scrollbar_drag(
+                                            event.row,
+                                            ScrollbarDragPane::ContextPanel,
+                                        );
+                                    } else {                    // If the file menu is open and the click falls within its popup,
+                    // handle file/directory selection via mouse.
+                    if let Some(_menu_state) = self.file_menu.as_ref() {
+                        // Compute popup rect used by the renderer so clicks map to rows.
+                    }
+
+                    if self.file_menu.is_some() {
+                        // Recompute popup geometry identical to layout::render_file_menu
+                        let Some(menu) = self.file_menu.as_ref() else {
+                            return;
+                        };
+                        let input_area = self.active_input_widget_area();
+                        let item_count = menu.matches.len() as u16;
+                        let visible_items = item_count.max(1).min(8);
+                        let height = (visible_items + 1 + 2).min(input_area.y);
+                        let width = input_area.width.min(60);
+                        let popup_x = input_area.x;
+                        let popup_y = input_area.y.saturating_sub(height);
+
+                        // If click is inside the popup, determine which row was clicked.
+                        if event.column >= popup_x
+                            && event.column < popup_x.saturating_add(width)
+                            && event.row >= popup_y
+                            && event.row < popup_y.saturating_add(height)
+                        {
+                            // Content lines start one row below the popup top (inside the border)
+                            let clicked_row = event.row.saturating_sub(popup_y + 1) as usize;
+                            let absolute_row = menu.scroll_offset + clicked_row;
+                            if absolute_row < menu.matches.len() {
+                                // Set the selected index (drop borrow immediately)
+                                {
+                                    if let Some(ref mut m) = self.file_menu.as_mut() {
+                                        m.selected = absolute_row;
+                                    }
+                                }
+
+                                // Accept the selection: this will navigate into directories
+                                // or insert a file path into the input. We do not auto-send
+                                // the message on mouse click; pressing Enter still sends.
+                                let _ = self.accept_file_menu_selection();  // INTENTIONAL: acceptance flag, not a fallible error
+                                return;
+                            }
+                        } else {
+                            // Click outside popup dismisses the file menu.
+                            self.file_menu = None;
+                            return;
+                        }
+                    }
+
+                    // Start text selection in whichever pane the click is in
+                    let pane = self.pane_at(event.column, event.row);
+                    if let Some(pane) = pane {
+                        self.text_selection = Some(TextSelection {
+                            pane,
+                            anchor: pos,
+                            endpoint: pos,
+                        });
+                    } else {
+                        self.text_selection = None;
+                    }
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if let Some(pane) = self.scrollbar_drag {
+                    self.apply_scrollbar_drag(event.row, pane);
+                } else if let Some(ref mut sel) = self.text_selection {
+                    sel.endpoint = (event.column, event.row);
+                }
+            }
+
+            // Mouse move -> used for hover highlighting of file menu entries
+            MouseEventKind::Moved
+                // If file menu is open, update the highlighted row under the cursor.
+                if self.file_menu.is_some() => {
+                    // Snapshot needed values without holding immutable borrows while mutating.
+                    let input_area = self.active_input_widget_area();
+                    let item_count = self
+                        .file_menu
+                        .as_ref()
+                        .map(|m| m.matches.len())
+                        .unwrap_or(0) as u16;
+                    let visible_items = item_count.max(1).min(8);
+                    let height = (visible_items + 1 + 2).min(input_area.y);
+                    let width = input_area.width.min(60);
+                    let popup_x = input_area.x;
+                    let popup_y = input_area.y.saturating_sub(height);
+
+                    if event.column >= popup_x
+                        && event.column < popup_x.saturating_add(width)
+                        && event.row >= popup_y
+                        && event.row < popup_y.saturating_add(height)
+                    {
+                        let hovered_row = event.row.saturating_sub(popup_y + 1) as usize;
+                        let absolute_row = self
+                            .file_menu
+                            .as_ref()
+                            .map(|m| m.scroll_offset)
+                            .unwrap_or(0)
+                            + hovered_row;
+                        if absolute_row < (item_count as usize) {
+                            // Update selection if changed.
+                            if let Some(ref mut m) = self.file_menu.as_mut() {
+                                if m.selected != absolute_row {
+                                    m.selected = absolute_row;
+                                }
+                            }
+                        }
+                    }
+                }
+
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.scrollbar_drag = None;
+                // Keep text_selection alive so it stays highlighted until right-click or next click
+            }
+            MouseEventKind::Down(MouseButton::Right) => {
+                // Right-click contract: always open context menu when inside a pane.
+                // Actions are enabled only when valid for that pane + selection context.
+                let col = event.column;
+                let row = event.row;
+                let Some(pane) = self.pane_at(col, row) else {
+                    self.context_menu = None;
+                    return;
+                };
+
+                let selection_for_pane =
+                    self.text_selection.as_ref().is_some_and(|s| s.pane == pane);
+                let in_input = matches!(pane, SelectionPane::Input);
+                let has_clipboard = Self::get_clipboard().is_some_and(|s| !s.is_empty());
+                                  let provider_setup_input = matches!(
+                                      self.provider_setup,
+                                      Some(ProviderSetupStep::EnterKey { .. })
+                                          | Some(ProviderSetupStep::GitLabSetup { .. })
+                                          | Some(ProviderSetupStep::TelemetrySetup { .. })
+                                  );
+                let items = vec![
+                    (ContextAction::Cut, selection_for_pane && in_input),
+                    (ContextAction::Copy, selection_for_pane),
+                    (
+                        ContextAction::Paste,
+                        if provider_setup_input {
+                            true
+                        } else {
+                            in_input && has_clipboard
+                        },
+                    ),
+                ];
+                let selected = items.iter().position(|(_, en)| *en).unwrap_or(0);
+
+                self.context_menu = Some(ContextMenuState {
+                    x: col,
+                    y: row,
+                    pane,
+                    selected,
+                    items,
+                });
+            }
+            _ => {}
+        }
+        self.assert_ui_invariants();
+        self.debug_log_input_transition("mouse", &before_input, before_cursor);
+    }
+
+    pub(crate) fn copy_selection(&mut self, consume_selection: bool) {
+        let sel = match self.text_selection.clone() {
+            Some(s) => s,
+            None => return,
+        };
+        if consume_selection {
+            self.text_selection = None;
+        }
+        let ((start_col, mut start_row), (end_col, mut end_row)) = sel.normalized();
+
+        // Account for pane scroll: the visible viewport starts at a scroll
+        // offset, not at content line 0. Without this adjustment, selecting
+        // text after scrolling copies from the wrong part of the buffer.
+        let scroll_top = match sel.pane {
+            SelectionPane::Messages => self
+                .session
+                .message_max_scroll
+                .saturating_sub(self.session.scroll_offset),
+            SelectionPane::Log => self.log_max_scroll.saturating_sub(self.log_scroll_offset),
+            SelectionPane::Profile => self
+                .profile_max_scroll
+                .saturating_sub(self.profile_scroll_offset),
+            SelectionPane::Tasks => self
+                .tasks_max_scroll
+                .saturating_sub(self.tasks_scroll_offset),
+            SelectionPane::Memory => self
+                .memory_max_scroll
+                .saturating_sub(self.memory_scroll_offset),
+            SelectionPane::Telemetry => self
+                .telemetry_max_scroll
+                .saturating_sub(self.telemetry_scroll_offset),
+            SelectionPane::ContextPanel => self
+                .context_panel_max_scroll
+                .saturating_sub(self.context_scroll_offset),
+            _ => 0,
+        };
+        start_row = start_row.saturating_add(scroll_top);
+        end_row = end_row.saturating_add(scroll_top);
+
+        // PERF-041: the Messages pane's copy buffer is rebuilt on demand
+        // instead of every frame, so refresh it here if it is stale before
+        // reading the selected rows.
+        if sel.pane == SelectionPane::Messages {
+            self.ensure_copy_content_lines();
+        }
+
+        let lines: &[String] = match sel.pane {
+            SelectionPane::Messages => &self.session.message_content_lines,
+            SelectionPane::Log => &self.log_content_lines,
+            SelectionPane::Profile => &self.profile_content_lines,
+            SelectionPane::Tasks => &self.tasks_content_lines,
+            SelectionPane::Memory => &self.memory_content_lines,
+            SelectionPane::Telemetry => &self.telemetry_content_lines,
+            SelectionPane::ContextPanel => &self.context_content_lines,
+            SelectionPane::Input => {
+                // For input widgets, build the painted content from `app.input`.
+                // The prompt prefix carries the queue counter while entries are
+                // pending (spec `inputqueue` FR-009); the counter digits are
+                // replaced by spaces in the geometry copy so a copy can never
+                // include them as message content (FR-020, NFR-002).
+                let prefix = crate::layout::input_prompt_selection_prefix(self.input_queue_len());
+                let input_text = format!("{prefix}{}", self.session.input);
+                let area = self.input_area;
+                let inner_x = area.x + 1; // inside border
+                let inner_y = area.y + 1;
+                let inner_w = area.width.saturating_sub(2).max(1) as usize;
+                // Wrap the input text into display lines (character-width based).
+                let chars: Vec<char> = input_text.chars().collect();
+                let mut wrapped: Vec<String> = Vec::new();
+                let mut start = 0usize;
+                while start < chars.len() {
+                    let end = (start + inner_w).min(chars.len());
+                    wrapped.push(chars[start..end].iter().collect::<String>());
+                    start = end;
+                }
+                if wrapped.is_empty() {
+                    wrapped.push(String::new());
+                }
+                let text = Self::extract_text_from_lines(
+                    &wrapped, inner_x, inner_y, start_col, start_row, end_col, end_row,
+                );
+                if !text.is_empty() {
+                    Self::set_clipboard(&text);
+                    self.push_log_no_agent(LogLevel::Info, format!("Copied {} chars", text.len()));
+                }
+                return;
+            }
+        };
+
+        let area = match sel.pane {
+            SelectionPane::Messages => self.message_area,
+            SelectionPane::Log => self.log_area,
+            SelectionPane::Profile => self.profile_area,
+            SelectionPane::Tasks => self.tasks_area,
+            SelectionPane::Memory => self.memory_area,
+            SelectionPane::Telemetry => self.telemetry_area,
+            SelectionPane::ContextPanel => self.context_panel_area,
+            // FUNC-043: unknown/input pane has no text-selection area; skip the
+            // selection rather than panicking.
+            _ => {
+                return;
+            }
+        };
+        // Inner area (accounting for borders)
+        let inner_x = if sel.pane == SelectionPane::Messages {
+            area.x + 1 // LEFT border only
+        } else {
+            area.x + 1 // ALL borders
+        };
+        let inner_y = if sel.pane == SelectionPane::Messages {
+            area.y + 1 // Messages pane has a top border
+        } else {
+            area.y + 1 // ALL borders on side panels
+        };
+
+        let text = Self::extract_text_from_lines(
+            lines, inner_x, inner_y, start_col, start_row, end_col, end_row,
+        );
+        if !text.is_empty() {
+            Self::set_clipboard(&text);
+            self.push_log_no_agent(LogLevel::Info, format!("Copied {} chars", text.len()));
+        }
+    }
+
+    pub(crate) fn handle_context_menu_click(&mut self, col: u16, row: u16) {
+        if let Some(menu) = self.context_menu.clone() {
+            // Menu geometry: x, y is top-left; rows are y+1..y+1+items.len()
+            let menu_x = menu.x;
+            let menu_y = menu.y;
+            let menu_w = 12u16; // matches render_context_menu width
+            let item_count = menu.items.len() as u16;
+            let menu_h = item_count + 2; // border top + items + border bottom
+
+            if col >= menu_x && col < menu_x + menu_w && row >= menu_y && row < menu_y + menu_h {
+                // Row inside border
+                if row > menu_y && row < menu_y + menu_h - 1 {
+                    let item_idx = (row - menu_y - 1) as usize;
+                    if item_idx < menu.items.len() {
+                        let (action, enabled) = menu.items[item_idx];
+                        if enabled {
+                            self.execute_context_action(action);
+                        } else {
+                            self.context_menu = None;
+                        }
+                    }
+                }
+            } else {
+                // Click outside menu dismisses it.
+                self.context_menu = None;
+            }
+        }
+    }
+
+    /// Halt the running agent turn (Esc / Ctrl+X / confirmed Alt+X): set the
+    /// turn cancel flag and raise the goal-driven loop interrupt (FR-016).
+    /// A no-op when no turn is running (`cancel_flag` unset).
+    pub(crate) fn halt_running_agent(&mut self) {
+        if let Some(ref flag) = self.session.cancel_flag {
+            flag.store(true, Ordering::Relaxed);
+            // T-011 (FR-016): an active goal-driven loop stops at
+            // the next inter-stage safe point with status
+            // `interrupted` instead of dying silently.
+            if let Some(ref sid) = self.session.session_id
+                && self.session_processor.request_loop_interrupt(sid)
+            {
+                self.status =
+                    "loop: interrupt requested - stopping after the current stage...".to_string();
+            } else {
+                self.status = "halting agent...".to_string();
+            }
+            self.push_log_no_agent(
+                LogLevel::Warn,
+                "User pressed Esc or Ctrl+X - halting agent".to_string(),
+            );
+        }
+    }
+
+    /// Dispatch a key event to the active UI region (history picker, agent /
+    /// teams dialog, slash menu, context menu, or the main input editor).
+    /// Asserts UI invariants and logs the transition for diagnostics.
+    pub async fn handle_key_event(&mut self, key: KeyEvent) {
+        let before_input = self.session.input.clone();
+        let before_cursor = self.session.input_cursor;
+        // Self-heal any selection/menu anchored on a panel that a recent
+        // toggle dismissed (the render pass may have zeroed its area since
+        // the last input cycle).
+        self.prune_stale_selection();
+        // Dismiss the transient run-cost banner on any keypress (FR-012).
+        // Non-character keys (Esc, arrows, Enter, modifier-only, etc.) are
+        // consumed solely to clear the banner.  A plain printable character,
+        // however, is the user starting to type their next message - we clear
+        // the banner but let the character fall through to normal input
+        // processing so the first keystroke is not lost.
+        if self.session.run_cost_banner.take().is_some() {
+            self.session.run_cost_banner_at = None;
+            self.needs_redraw = true;
+            let is_plain_char = matches!(key.code, KeyCode::Char(_))
+                && !key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::ALT);
+            // Alt+X (open the stop dialog) and every key while the stop
+            // dialog or the destructive row-action confirmation is open fall
+            // through to normal processing instead of being consumed by the
+            // banner - a confirmation dialog must never appear dead mid-run,
+            // or its `Enter`/`Esc` answer swallowed by the banner's dismissal.
+            let is_stop_confirm = self.session.pending_stop_confirm
+                || self.row_action_confirm_open()
+                || (matches!(key.code, KeyCode::Char('x'))
+                    && key.modifiers.contains(KeyModifiers::ALT));
+            // The always-on quit keys (Ctrl+C/Ctrl+D) also fall through, so
+            // quitting works identically while the cost banner is showing
+            // (LOW-6).
+            if !is_plain_char && !is_stop_confirm && !input::is_global_quit_key(key) {
+                return;
+            }
+        }
+        // Config-save picker intercepts all keys while it is open - except the
+        // global quit keys, which must keep working from every screen (LOW-6).
+        if self.config_save_picker.is_some() && !input::is_global_quit_key(key) {
+            self.handle_config_save_picker_key(key);
+            self.assert_ui_invariants();
+            self.debug_log_input_transition("key-config-save-picker", &before_input, before_cursor);
+            return;
+        }
+        // History picker intercepts all keys while it is open - except the
+        // global quit keys, which must keep working from every screen (LOW-6).
+        if self.history_picker.is_some() && !input::is_global_quit_key(key) {
+            self.handle_history_picker_key(key);
+            self.assert_ui_invariants();
+            self.debug_log_input_transition("key-history-picker", &before_input, before_cursor);
+            return;
+        }
+        // Destructive row-action confirmation dialog (spec `agentui` T-009):
+        // while it is open it owns the keyboard, before the Agents/Teams arms
+        // so no `Space`/`Shift+K` can perform or repeat the destructive action
+        // behind it, and before the input buffer so no keystroke leaks
+        // (FR-036, FR-037, FR-040, FR-069). `Left`/`Right`/`Tab`/`BackTab`
+        // move between `Yes` and `No`, `Enter` selects, `Esc` dismisses;
+        // everything else is swallowed so nothing reaches the input buffer.
+        if self.row_action_confirm_open() {
+            match key.code {
+                KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
+                    self.row_action_confirm_toggle();
+                }
+                KeyCode::Enter => {
+                    if self.row_action_confirm_is_yes() {
+                        self.row_action_confirm_accept();
+                    } else {
+                        self.row_action_confirm_cancel();
+                    }
+                }
+                KeyCode::Esc => self.row_action_confirm_cancel(),
+                _ => {}
+            }
+            self.assert_ui_invariants();
+            self.debug_log_input_transition("key-row-action-confirm", &before_input, before_cursor);
+            return;
+        }
+        // Agent / Teams dialog keyboard shortcuts. The popup owns the keyboard
+        // for its navigation keys only (FR-055): unmapped keys still reach the
+        // input editor, and while the output overlay sits on top of the popup
+        // its own keys (Esc close, PgUp/PgDn scroll) keep working.
+        if self.show_agents_window && self.output_view.is_none() {
+            let consumed = match key.code {
+                KeyCode::Up => {
+                    self.move_agents_cursor(-1);
+                    true
+                }
+                KeyCode::Down => {
+                    self.move_agents_cursor(1);
+                    true
+                }
+                KeyCode::PageUp => {
+                    self.page_agents_cursor(-1);
+                    true
+                }
+                KeyCode::PageDown => {
+                    self.page_agents_cursor(1);
+                    true
+                }
+                KeyCode::Char(' ') => {
+                    self.agents_cursor_toggle_stop_resume();
+                    true
+                }
+                KeyCode::Delete => {
+                    self.agents_cursor_kill();
+                    true
+                }
+                KeyCode::Enter => {
+                    self.agents_cursor_open_output();
+                    true
+                }
+                KeyCode::Char('K') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                    self.agents_cursor_kill();
+                    true
+                }
+                // `Esc` is the window's only dismissal: the modal carries no
+                // Close button, so the footer legend ends with `Esc close`.
+                KeyCode::Esc => {
+                    self.close_agents_window();
+                    true
+                }
+                _ => false,
+            };
+            if consumed {
+                self.assert_ui_invariants();
+                self.debug_log_input_transition("key-agents-window", &before_input, before_cursor);
+                return;
+            }
+        }
+        if self.show_teams_window && self.output_view.is_none() {
+            let consumed = match key.code {
+                KeyCode::Up => {
+                    self.move_teams_cursor(-1);
+                    true
+                }
+                KeyCode::Down => {
+                    self.move_teams_cursor(1);
+                    true
+                }
+                KeyCode::PageUp => {
+                    self.page_teams_cursor(-1);
+                    true
+                }
+                KeyCode::PageDown => {
+                    self.page_teams_cursor(1);
+                    true
+                }
+                KeyCode::Char(' ') => {
+                    self.teams_cursor_toggle_stop_resume();
+                    true
+                }
+                KeyCode::Delete => {
+                    self.teams_cursor_shutdown();
+                    true
+                }
+                KeyCode::Enter => {
+                    self.teams_cursor_focus();
+                    true
+                }
+                KeyCode::Char('K') | KeyCode::Char('k') => {
+                    self.teams_cursor_shutdown();
+                    true
+                }
+                // Mirror the Agents window: `Esc` dismisses, since there is no
+                // Close button to click.
+                KeyCode::Esc => {
+                    self.close_teams_window();
+                    true
+                }
+                _ => false,
+            };
+            if consumed {
+                self.assert_ui_invariants();
+                self.debug_log_input_transition("key-teams-window", &before_input, before_cursor);
+                return;
+            }
+        }
+
+        if let Some(action) = input::handle_key(self, key).await {
+            match action {
+                InputAction::BangCommand(text) => {
+                    // Create session if needed, then run the command.
+                    if self.session.session_id.is_none() {
+                        let dir = self.cwd_path.clone();
+                        match self.session_processor.session_manager.create_session(dir) {
+                            Ok(session) => {
+                                self.session.session_id = Some(session.id.clone());
+                                // A fresh session starts with an empty queue (NFR-005).
+                                self.clear_input_queue();
+                                let short_sid = short_session_id(&session.id);
+                                self.sid_to_display_name
+                                    .insert(short_sid, self.session.agent_name.clone());
+                            }
+                            Err(e) => {
+                                self.status = format!("error: {e}");
+                                return;
+                            }
+                        }
+                    }
+                    self.dispatch_bang_command(text);
+                }
+                InputAction::SendMessage(text) => {
+                    // FR-058 (amended): teammate focus no longer redirects the
+                    // input box. Enter always addresses the lead session, so a
+                    // focused teammate's output view can be read while the user
+                    // keeps talking to the primary agent; a teammate is reached
+                    // only through `/team message <name> <text>`.
+                    // Block sending if no provider/model is configured
+                    if self.configured_provider.is_none() {
+                        self.status =
+                            "[!] No provider configured - use /provider to set up".to_string();
+                        return;
+                    }
+                    if self.session.selected_model.is_none() {
+                        self.status = "[!] No model selected - use /model to choose".to_string();
+                        return;
+                    }
+                    // FR-002/FR-005/FR-012: while the primary agent is
+                    // executing the input field stays live; a plain message is
+                    // accepted and queued instead of being rejected.
+                    // FR-016: never queue a compaction-pending send or overlap
+                    // a running turn.
+                    if self.is_input_blocked() {
+                        let image_paths: Vec<std::path::PathBuf> =
+                            std::mem::take(&mut self.session.pending_attachments);
+                        if let Err(rejected) = self.enqueue_input(text, image_paths) {
+                            // FR-004: the queue is at capacity. The submission
+                            // is rejected, but the typed text and staged
+                            // attachments must not be lost.
+                            self.session.input = rejected.text;
+                            self.session.input_cursor = self.input_len_chars();
+                            self.session.pending_attachments = rejected.image_paths;
+                        }
+                        return;
+                    }
+                    // Create session if needed
+                    if self.session.session_id.is_none() {
+                        let dir = self.cwd_path.clone();
+                        match self.session_processor.session_manager.create_session(dir) {
+                            Ok(session) => {
+                                self.session.session_id = Some(session.id.clone());
+                                // A fresh session starts with an empty queue (NFR-005).
+                                self.clear_input_queue();
+                                // Map the primary session's short_sid to the current agent name
+                                let short_sid = short_session_id(&session.id);
+                                self.sid_to_display_name
+                                    .insert(short_sid, self.session.agent_name.clone());
+                            }
+                            Err(e) => {
+                                self.status = format!("error: {}", e);
+                                return;
+                            }
+                        }
+                    }
+
+                    // Take image attachments once; either queue for auto-compaction
+                    // or send immediately.
+                    let image_paths: Vec<std::path::PathBuf> =
+                        std::mem::take(&mut self.session.pending_attachments);
+                    if self.should_auto_compact_before_send() {
+                        self.session.pending_send_after_compact = Some((text, image_paths));
+                        if !self.start_compaction(true) {
+                            // If compaction could not start, fall back to direct send.
+                            if let Some((queued_text, queued_images)) =
+                                self.session.pending_send_after_compact.take()
+                            {
+                                self.dispatch_user_message(queued_text, queued_images);
+                            }
+                        }
+                        return;
+                    }
+                    self.dispatch_user_message(text, image_paths);
+                }
+                InputAction::Quit => {
+                    self.quit_armed = true;
+                    self.status = "Press Ctrl+D to quit (or use /quit or /exit)".to_string();
+                }
+                InputAction::ConfirmQuit => {
+                    if self.quit_armed {
+                        self.is_running = false;
+                    } else {
+                        self.status = "Press Ctrl+C first, then Ctrl+D to quit".to_string();
+                    }
+                }
+                InputAction::ScrollUp => {
+                    self.session.scroll_offset =
+                        self.session.scroll_offset.saturating_add(SCROLL_STEP_LINES);
+                }
+                InputAction::ScrollDown => {
+                    self.session.scroll_offset =
+                        self.session.scroll_offset.saturating_sub(SCROLL_STEP_LINES);
+                }
+                InputAction::LogScrollUp => {
+                    if self.show_log {
+                        self.log_scroll_offset =
+                            self.log_scroll_offset.saturating_add(SCROLL_STEP_LINES);
+                    } else if self.show_profile {
+                        self.profile_scroll_offset =
+                            self.profile_scroll_offset.saturating_add(SCROLL_STEP_LINES);
+                    } else if self.show_tasks_panel {
+                        self.tasks_scroll_offset =
+                            self.tasks_scroll_offset.saturating_add(SCROLL_STEP_LINES);
+                    } else if self.show_memory {
+                        // Memory panel shares the LogScrollUp / LogScrollDown
+                        // key bindings with the other side panels (FR-009).
+                        self.memory_scroll_offset =
+                            self.memory_scroll_offset.saturating_add(SCROLL_STEP_LINES);
+                    } else if self.show_telemetry {
+                        self.telemetry_scroll_offset = self
+                            .telemetry_scroll_offset
+                            .saturating_add(SCROLL_STEP_LINES);
+                    } else if self.show_context_panel {
+                        self.context_scroll_offset =
+                            self.context_scroll_offset.saturating_add(SCROLL_STEP_LINES);
+                    }
+                }
+                InputAction::LogScrollDown => {
+                    if self.show_log {
+                        self.log_scroll_offset =
+                            self.log_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
+                    } else if self.show_profile {
+                        self.profile_scroll_offset =
+                            self.profile_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
+                    } else if self.show_tasks_panel {
+                        self.tasks_scroll_offset =
+                            self.tasks_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
+                    } else if self.show_memory {
+                        self.memory_scroll_offset =
+                            self.memory_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
+                    } else if self.show_telemetry {
+                        self.telemetry_scroll_offset = self
+                            .telemetry_scroll_offset
+                            .saturating_sub(SCROLL_STEP_LINES);
+                    } else if self.show_context_panel {
+                        self.context_scroll_offset =
+                            self.context_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
+                    }
+                }
+                InputAction::ToggleLog => {
+                    self.show_log = !self.show_log;
+                    if self.show_log {
+                        // Entering log mode: dismiss the other side panels so
+                        // only one occupies the side column (FR-012).
+                        self.show_profile = false;
+                        self.show_tasks_panel = false;
+                        self.show_memory = false;
+                        self.show_telemetry = false;
+                        self.show_context_panel = false;
+                        self.spool_log_window_history();
+                    } else {
+                        if self
+                            .text_selection
+                            .as_ref()
+                            .is_some_and(|s| s.pane == SelectionPane::Log)
+                        {
+                            self.text_selection = None;
+                        }
+                        if self
+                            .context_menu
+                            .as_ref()
+                            .is_some_and(|m| m.pane == SelectionPane::Log)
+                        {
+                            self.context_menu = None;
+                        }
+                    }
+                    self.status = if self.show_log {
+                        "log panel visible".to_string()
+                    } else {
+                        "log panel hidden".to_string()
+                    };
+                }
+                InputAction::ToggleProfile => {
+                    let enabled = !self.show_profile;
+                    self.set_profile_panel_enabled(enabled);
+                    if !enabled {
+                        self.show_context_panel = false;
+                        if self
+                            .text_selection
+                            .as_ref()
+                            .is_some_and(|s| s.pane == SelectionPane::Profile)
+                        {
+                            self.text_selection = None;
+                        }
+                        if self
+                            .context_menu
+                            .as_ref()
+                            .is_some_and(|m| m.pane == SelectionPane::Profile)
+                        {
+                            self.context_menu = None;
+                        }
+                    }
+                }
+                InputAction::ToggleYolo => {
+                    match ragent_config::yolo::toggle_persist() {
+                        Ok(enabled) => {
+                            self.status = if enabled {
+                                "YOLO mode enabled".to_string()
+                            } else {
+                                "YOLO mode disabled".to_string()
+                            };
+                            self.push_log_no_agent(
+                                if enabled {
+                                    LogLevel::Warn
+                                } else {
+                                    LogLevel::Info
+                                },
+                                format!(
+                                    "YOLO mode {}",
+                                    if enabled { "enabled" } else { "disabled" }
+                                ),
+                            );
+                        }
+                        Err(e) => {
+                            self.status = format!("[!] failed to persist YOLO mode: {e}");
+                            self.push_log_no_agent(
+                                LogLevel::Error,
+                                format!("YOLO persist failed: {e}"),
+                            );
+                        }
+                    }
+                    self.needs_redraw = true;
+                }
+                InputAction::ToggleTasksPanel => {
+                    // Toggle the TASKS side panel visibility (Alt+I). Implements
+                    // FR-002 (toggle) and FR-003 (mutual exclusion of side
+                    // panels - only one of log/profile/tasks is visible at a
+                    // time, matching the `/log` and `/profile` slash commands
+                    // in app/slash.rs). On hide, any active Tasks-pane text
+                    // selection or context menu is cleared.
+                    self.show_tasks_panel = !self.show_tasks_panel;
+                    if self.show_tasks_panel {
+                        // Entering TASKS mode: dismiss the other side panels so
+                        // only one occupies the side column (FR-012/SPEC
+                        // mutual-exclusion policy). Force a cache refresh on the
+                        // next render so the panel is always up-to-date when
+                        // first shown.
+                        self.session.tasks_cache_dirty = true;
+                        self.show_log = false;
+                        self.show_profile = false;
+                        self.show_memory = false;
+                        self.show_telemetry = false;
+                        self.show_context_panel = false;
+                    } else {
+                        // Leaving TODO mode: clear Todo-pane selection state.
+                        if self
+                            .text_selection
+                            .as_ref()
+                            .is_some_and(|s| s.pane == SelectionPane::Tasks)
+                        {
+                            self.text_selection = None;
+                        }
+                        if self
+                            .context_menu
+                            .as_ref()
+                            .is_some_and(|m| m.pane == SelectionPane::Tasks)
+                        {
+                            self.context_menu = None;
+                        }
+                    }
+                    self.status = if self.show_tasks_panel {
+                        "tasks panel visible".to_string()
+                    } else {
+                        "tasks panel hidden".to_string()
+                    };
+                    self.needs_redraw = true;
+                }
+                // Alt+M toggles the Memory side panel (FR-003). Implements
+                // mutual exclusion with the log / profile / TODO panels
+                // (FR-004): when the Memory panel becomes visible the other
+                // side panels are dismissed so only one occupies the side
+                // column. On hide, any active Memory-pane text selection or
+                // context menu is cleared (FR-005). A status-bar message is
+                // set describing the new state (FR-014).
+                InputAction::ToggleMemory => {
+                    self.show_memory = !self.show_memory;
+                    if self.show_memory {
+                        // Entering Memory mode: dismiss the other side panels
+                        // so only one occupies the side column (FR-004).
+                        self.show_log = false;
+                        self.show_profile = false;
+                        self.show_tasks_panel = false;
+                        self.show_telemetry = false;
+                        self.show_context_panel = false;
+                        // Reset cursor to the first memory whenever the panel is opened.
+                        self.memory_cursor = 0;
+                        self.memory_scroll_offset = 0;
+                    } else {
+                        if self
+                            .text_selection
+                            .as_ref()
+                            .is_some_and(|s| s.pane == SelectionPane::Memory)
+                        {
+                            self.text_selection = None;
+                        }
+                        if self
+                            .context_menu
+                            .as_ref()
+                            .is_some_and(|m| m.pane == SelectionPane::Memory)
+                        {
+                            self.context_menu = None;
+                        }
+                    }
+                    self.status = if self.show_memory {
+                        "memory panel visible".to_string()
+                    } else {
+                        "memory panel hidden".to_string()
+                    };
+                    self.needs_redraw = true;
+                }
+                InputAction::MemoryCursorUp => {
+                    self.move_memory_cursor(-1);
+                }
+                InputAction::MemoryCursorDown => {
+                    self.move_memory_cursor(1);
+                }
+                InputAction::OpenMemoryView => {
+                    self.open_memory_view_from_cursor();
+                }
+                InputAction::PromptMemoryDelete => {
+                    self.prompt_memory_delete_from_cursor();
+                }
+                InputAction::ConfirmMemoryDelete => {
+                    self.confirm_memory_delete();
+                }
+                InputAction::CancelMemoryDelete => {
+                    self.pending_memory_delete = None;
+                    self.status = "memory delete cancelled".to_string();
+                }
+                InputAction::MemoryViewPageUp => {
+                    self.scroll_memory_view_by(5);
+                }
+                InputAction::MemoryViewPageDown => {
+                    self.scroll_memory_view_by(-5);
+                }
+                InputAction::MemoryViewToStart => {
+                    self.jump_memory_view_start();
+                }
+                InputAction::MemoryViewToEnd => {
+                    self.jump_memory_view_end();
+                }
+                InputAction::MemoryViewLineUp => {
+                    self.scroll_memory_view_by(1);
+                }
+                InputAction::MemoryViewLineDown => {
+                    self.scroll_memory_view_by(-1);
+                }
+                InputAction::ToggleAutopilot => {
+                    // Toggle autopilot mode (Alt+O) - the same state machine as
+                    // `/autopilot on|off`. Enabling applies a default time limit so
+                    // the run cannot spin forever; `/autopilot on` (no flags) leaves
+                    // the limit disabled for a fully unbounded run.
+                    if self.session.autopilot_enabled {
+                        self.stop_autopilot();
+                        self.append_assistant_text(
+                            "From: Alt+O\n **Autopilot OFF** - returning to interactive mode.",
+                        );
+                        self.push_log_no_agent(LogLevel::Info, "autopilot disabled".to_string());
+                    } else {
+                        self.start_autopilot(None, Some(alt_o_default_autopilot_time_limit()));
+                        self.append_assistant_text(&format!(
+                            "From: Alt+O\n **Autopilot ON** - agent will run autonomously. \
+                             Time limit: {}s.\nCall `task_complete` to signal completion, or \
+                             press Alt+O again to stop.",
+                            alt_o_default_autopilot_time_limit()
+                        ));
+                        self.push_log_no_agent(LogLevel::Info, "autopilot enabled".to_string());
+                    }
+                    self.needs_redraw = true;
+                }
+                InputAction::ToggleContextPanel => {
+                    // Toggle the Context side panel visibility (Alt+C). Mutually
+                    // exclusive with the other side panels so only one occupies the
+                    // side column. On hide, clear any active context-panel text
+                    // selection or context menu.
+                    self.show_context_panel = !self.show_context_panel;
+                    if self.show_context_panel {
+                        self.show_log = false;
+                        self.show_profile = false;
+                        self.show_tasks_panel = false;
+                        self.show_memory = false;
+                        self.show_telemetry = false;
+                        // T-013/FR-015: refresh the snapshot off the UI
+                        // thread as soon as the panel opens.
+                        self.schedule_context_snapshot_refresh();
+                    } else {
+                        if self
+                            .text_selection
+                            .as_ref()
+                            .is_some_and(|s| s.pane == SelectionPane::ContextPanel)
+                        {
+                            self.text_selection = None;
+                        }
+                        if self
+                            .context_menu
+                            .as_ref()
+                            .is_some_and(|m| m.pane == SelectionPane::ContextPanel)
+                        {
+                            self.context_menu = None;
+                        }
+                    }
+                    self.status = if self.show_context_panel {
+                        "context panel visible".to_string()
+                    } else {
+                        "context panel hidden".to_string()
+                    };
+                    self.needs_redraw = true;
+                }
+                InputAction::ToggleEditLog => {
+                    match ragent_config::edit_log::toggle_persist() {
+                        Ok(enabled) => {
+                            self.status = if enabled {
+                                "Edit log enabled".to_string()
+                            } else {
+                                "Edit log disabled".to_string()
+                            };
+                            self.push_log_no_agent(
+                                LogLevel::Info,
+                                format!(
+                                    "Edit log {}",
+                                    if enabled { "enabled" } else { "disabled" }
+                                ),
+                            );
+                        }
+                        Err(e) => {
+                            self.status = format!("[!] failed to persist edit log state: {e}");
+                            self.push_log_no_agent(
+                                LogLevel::Error,
+                                format!("Edit log persist failed: {e}"),
+                            );
+                        }
+                    }
+                    self.needs_redraw = true;
+                }
+                InputAction::ToggleGcf => {
+                    // Alt+G: toggle GCF tool-result encoding and persist the
+                    // new state (same semantics as Alt+Y / Alt+E and `/gcf
+                    // on|off`). The status-bar indicator reads the runtime
+                    // flag directly, so it reflects the toggle immediately.
+                    match ragent_config::gcf::toggle_persist() {
+                        Ok(enabled) => {
+                            self.status = if enabled {
+                                "GCF encoding enabled".to_string()
+                            } else {
+                                "GCF encoding disabled".to_string()
+                            };
+                            self.push_log_no_agent(
+                                LogLevel::Info,
+                                format!(
+                                    "GCF encoding {}",
+                                    if enabled { "enabled" } else { "disabled" }
+                                ),
+                            );
+                        }
+                        Err(e) => {
+                            self.status = format!("[!] failed to persist GCF state: {e}");
+                            self.push_log_no_agent(
+                                LogLevel::Error,
+                                format!("GCF persist failed: {e}"),
+                            );
+                        }
+                    }
+                    self.needs_redraw = true;
+                }
+                InputAction::ToggleAgentsWindow => {
+                    // Alt+A: toggle the Agents window (spec `agentssetup`
+                    // FR-022). This calls the very same
+                    // `App::toggle_agents_window` the Agents button's left
+                    // click calls, so the keyboard and the mouse share one
+                    // visibility path - including the named refusal when the
+                    // window has no subject to open on, the Teams-window
+                    // exclusion, and the redraw flag. Nothing else is touched:
+                    // the input buffer, staged attachments and a running turn
+                    // are left as they were.
+                    self.toggle_agents_window();
+                }
+                InputAction::ToggleTeamsWindow => {
+                    // Alt+T: toggle the Teams window (spec `agentssetup`
+                    // FR-045). The exact mirror of the Alt+A arm above - it
+                    // calls the same `App::toggle_teams_window` the Teams
+                    // button's click calls, so the keyboard and the mouse share
+                    // one visibility path: an open window always closes, an
+                    // open with no team is refused and named, and a successful
+                    // open closes the Agents window. The input buffer, staged
+                    // attachments and a running turn are left untouched.
+                    self.toggle_teams_window();
+                }
+                // Alt+Q opens the queue-control menu overlay (spec `inputqueue`
+                // FR-021). Opening it only flips the menu flag and resets the
+                // selection; the input buffer, staged attachments, and running
+                // turn are left untouched (FR-022) and the change is painted on
+                // the next frame (NFR-008/NFR-009).
+                InputAction::OpenQueueMenu => {
+                    self.queue_menu_open = true;
+                    self.queue_menu_selected = 0;
+                    self.needs_redraw = true;
+                }
+                InputAction::OutputViewPageUp => {
+                    self.scroll_output_view_by(5);
+                }
+                InputAction::OutputViewPageDown => {
+                    self.scroll_output_view_by(-5);
+                }
+                InputAction::OutputViewToStart => {
+                    self.jump_output_view_start();
+                }
+                InputAction::OutputViewToEnd => {
+                    self.jump_output_view_end();
+                }
+                InputAction::ResearchViewPageUp => {
+                    self.scroll_research_view_by(5);
+                }
+                InputAction::ResearchViewPageDown => {
+                    self.scroll_research_view_by(-5);
+                }
+                InputAction::ResearchViewToStart => {
+                    self.jump_research_view_start();
+                }
+                InputAction::ResearchViewToEnd => {
+                    self.jump_research_view_end();
+                }
+                InputAction::ResearchViewLineUp => {
+                    self.scroll_research_view_by(1);
+                }
+                InputAction::ResearchViewLineDown => {
+                    self.scroll_research_view_by(-1);
+                }
+                InputAction::HistoryUp => {
+                    // Within a multiline input, Up moves to the previous logical line.
+                    // Only navigate history when already on the first logical line.
+                    if self.session.history_index.is_none() && !self.cursor_on_first_logical_line()
+                    {
+                        self.cursor_move_up_logical_line();
+                        return;
+                    }
+                    if self.input_history.is_empty() {
+                        return;
+                    }
+                    match self.session.history_index {
+                        None => {
+                            self.session.history_draft = self.session.input.clone();
+                            let idx = self.input_history.len() - 1;
+                            self.session.history_index = Some(idx);
+                            self.session.input = self.input_history[idx].clone();
+                        }
+                        Some(idx) if idx > 0 => {
+                            let idx = idx - 1;
+                            self.session.history_index = Some(idx);
+                            self.session.input = self.input_history[idx].clone();
+                        }
+                        _ => {}
+                    }
+                    self.session.input_cursor = self.input_len_chars();
+                }
+                InputAction::HistoryDown => {
+                    // Within a multiline input (while not browsing history), Down moves
+                    // to the next logical line before navigating history.
+                    if self.session.history_index.is_none() && !self.cursor_on_last_logical_line() {
+                        self.cursor_move_down_logical_line();
+                        return;
+                    }
+                    match self.session.history_index {
+                        Some(idx) if idx + 1 < self.input_history.len() => {
+                            let idx = idx + 1;
+                            self.session.history_index = Some(idx);
+                            self.session.input = self.input_history[idx].clone();
+                            self.session.input_cursor = self.input_len_chars();
+                        }
+                        Some(_) => {
+                            self.session.history_index = None;
+                            self.session.input = self.session.history_draft.clone();
+                            self.session.history_draft.clear();
+                            self.session.input_cursor = self.input_len_chars();
+                        }
+                        None => {}
+                    }
+                }
+                InputAction::MoveCursorLeft => {
+                    // Standard: if selection active, jump to left boundary and clear.
+                    if let Some((start, _)) = self.kb_selection_char_range() {
+                        self.session.kb_select_anchor = None;
+                        self.set_cursor_char_index_clamped(start);
+                    } else {
+                        self.cursor_move_left();
+                    }
+                }
+                InputAction::MoveCursorRight => {
+                    // Standard: if selection active, jump to right boundary and clear.
+                    if let Some((_, end)) = self.kb_selection_char_range() {
+                        self.session.kb_select_anchor = None;
+                        self.set_cursor_char_index_clamped(end);
+                    } else {
+                        self.cursor_move_right();
+                    }
+                }
+                InputAction::MoveCursorWordLeft => {
+                    self.clear_kb_selection();
+                    self.cursor_move_word_left();
+                }
+                InputAction::MoveCursorWordRight => {
+                    self.clear_kb_selection();
+                    self.cursor_move_word_right();
+                }
+                InputAction::MoveCursorHome => {
+                    self.clear_kb_selection();
+                    self.cursor_move_home();
+                }
+                InputAction::MoveCursorEnd => {
+                    self.clear_kb_selection();
+                    self.cursor_move_end();
+                }
+                InputAction::Delete => {
+                    if let Some((start, end)) = self.kb_selection_char_range() {
+                        self.remove_input_char_range(start, end);
+                        self.session.kb_select_anchor = None;
+                    } else {
+                        self.delete_next_char();
+                    }
+                }
+                InputAction::DeletePrevWord => {
+                    self.clear_kb_selection();
+                    self.delete_prev_word();
+                }
+                InputAction::DeleteToLineEnd => {
+                    self.clear_kb_selection();
+                    self.delete_to_end_of_line();
+                }
+                InputAction::SelectAll => {
+                    self.session.kb_select_anchor = Some(0);
+                    self.cursor_move_end();
+                }
+                InputAction::SelectCharLeft => {
+                    if self.session.kb_select_anchor.is_none() {
+                        self.session.kb_select_anchor = Some(self.session.input_cursor);
+                    }
+                    self.cursor_move_left();
+                }
+                InputAction::SelectCharRight => {
+                    if self.session.kb_select_anchor.is_none() {
+                        self.session.kb_select_anchor = Some(self.session.input_cursor);
+                    }
+                    self.cursor_move_right();
+                }
+                InputAction::SelectWordLeft => {
+                    if self.session.kb_select_anchor.is_none() {
+                        self.session.kb_select_anchor = Some(self.session.input_cursor);
+                    }
+                    self.cursor_move_word_left();
+                }
+                InputAction::SelectWordRight => {
+                    if self.session.kb_select_anchor.is_none() {
+                        self.session.kb_select_anchor = Some(self.session.input_cursor);
+                    }
+                    self.cursor_move_word_right();
+                }
+                InputAction::CopyToClipboard => {
+                    self.copy_kb_selection();
+                }
+                InputAction::CutToClipboard => {
+                    self.cut_kb_selection();
+                }
+                InputAction::PasteFromClipboard => {
+                    self.paste_text_from_clipboard();
+                }
+                InputAction::SwitchAgent => {
+                    if self.cycleable_agents.len() > 1 {
+                        let prev = self.session.agent_name.clone();
+                        self.session.current_agent_index =
+                            (self.session.current_agent_index + 1) % self.cycleable_agents.len();
+                        self.session.agent_info =
+                            self.cycleable_agents[self.session.current_agent_index].clone();
+                        self.session.agent_name = self.session.agent_info.name.clone();
+                        self.status = format!("agent: {}", self.session.agent_name);
+                        self.push_log_no_agent(
+                            LogLevel::Info,
+                            format!(
+                                "Switched to: {} ({})",
+                                self.session.agent_name, self.session.agent_info.description
+                            ),
+                        );
+
+                        if let Some(ref sid) = self.session.session_id {
+                            self.event_bus.publish(Event::AgentSwitched {
+                                session_id: sid.clone(),
+                                from: prev,
+                                to: self.session.agent_name.clone(),
+                            });
+                        }
+                    }
+                }
+                InputAction::SlashCommand(cmd) => {
+                    // FR-017 (amended)/FR-005: a slash command submitted while
+                    // the primary agent is executing is queued like a plain
+                    // message and runs at the next turn boundary. Only when the
+                    // turn is free does it dispatch immediately.
+                    if self.is_input_blocked() {
+                        if let Err(rejected) = self.enqueue_input(cmd, Vec::new()) {
+                            // FR-004: the queue is at capacity. The submission is
+                            // rejected, but the typed command must not be lost.
+                            self.session.input = rejected.text;
+                            self.session.input_cursor = self.input_len_chars();
+                        }
+                    } else {
+                        self.execute_slash_command(&cmd).await;
+                    }
+                }
+                InputAction::CancelAgent => {
+                    // govdoc T-014/FR-019: when a govcreate run is live,
+                    // Esc cancels it at the next stage boundary instead of
+                    // hitting the (absent) agent turn.
+                    if self.govcreate_run_active() {
+                        self.poll_govcreate_cancel();
+                    }
+                    self.halt_running_agent();
+                }
+                InputAction::ConfirmForceCleanup => {
+                    if self.session.pending_forcecleanup.is_some() {
+                        // Clear pending modal state and invoke forcecleanup with confirm arg.
+                        self.session.pending_forcecleanup = None;
+                        self.execute_slash_command("/team forcecleanup confirm")
+                            .await;
+                    }
+                }
+                InputAction::CancelForceCleanup => {
+                    if self.session.pending_forcecleanup.is_some() {
+                        self.session.pending_forcecleanup = None;
+                        self.append_assistant_text(
+                            "From: /team forcecleanup\nForce-cleanup cancelled.",
+                        );
+                        self.push_log_no_agent(
+                            LogLevel::Info,
+                            "forcecleanup cancelled".to_string(),
+                        );
+                        self.status = "forcecleanup cancelled".to_string();
+                    }
+                }
+                InputAction::ConfirmRollback => {
+                    if let Some(offer) = self.session.pending_rollback.take() {
+                        // FR-020 / T-013: restore the workspace from the
+                        // pre-loop capture. The processor drops the capture
+                        // on success and keeps it on restore failure so a
+                        // retry is possible.
+                        let sid = offer.session_id.clone();
+                        let processor = self.session_processor.clone();
+                        let results = self.session.rollback_result.clone();
+                        self.status = "rolling back to pre-loop snapshot...".to_string();
+                        self.push_log_no_agent(
+                            LogLevel::Info,
+                            format!(
+                                "rollback accepted * restoring {}",
+                                crate::app::helpers::plural(offer.files.len() as u64, "file")
+                            ),
+                        );
+                        tokio::spawn(async move {
+                            // The task only logs; the outcome is deposited in
+                            // `rollback_result` for `poll_rollback_result` so
+                            // the UI status cannot stay stuck at "rolling
+                            // back..." and a failed restore is visible in the
+                            // message window.
+                            match processor.rollback_loop(&sid).await {
+                                Ok(outcome) => {
+                                    tracing::info!(
+                                        session_id = %sid,
+                                        "rollback finished (FR-020), restored={}",
+                                        outcome
+                                    );
+                                    if let Ok(mut guard) = results.lock() {
+                                        *guard = Some(Ok(outcome));
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        session_id = %sid,
+                                        error = %e,
+                                        "rollback failed; the capture is kept for retry"
+                                    );
+                                    if let Ok(mut guard) = results.lock() {
+                                        *guard = Some(Err(e.to_string()));
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+                InputAction::CancelRollback => {
+                    if self.session.pending_rollback.take().is_some() {
+                        // FR-020 / T-013: declining keeps every change the
+                        // loop made; the pending capture is dropped so no
+                        // later rollback can resurrect it.
+                        let processor = self.session_processor.clone();
+                        tokio::spawn(async move {
+                            processor.clear_loop_captures().await;
+                        });
+                        self.append_assistant_text(
+                            "Rollback declined - all changes made by the loop are kept.",
+                        );
+                        self.push_log_no_agent(
+                            LogLevel::Info,
+                            "rollback declined; changes kept".to_string(),
+                        );
+                        self.status = "rollback declined - changes kept".to_string();
+                        self.needs_redraw = true;
+                    }
+                }
+                InputAction::ConfirmStopAgent => {
+                    if self.session.pending_stop_confirm {
+                        self.session.pending_stop_confirm = false;
+                        self.halt_running_agent();
+                    }
+                }
+                InputAction::CancelStopAgent => {
+                    if self.session.pending_stop_confirm {
+                        self.session.pending_stop_confirm = false;
+                        self.status = "stop cancelled - agent still running".to_string();
+                    }
+                }
+                // `Clear the input queue?` confirmation dialog (spec `inputqueue`
+                // T-021/T-022, FR-033/FR-034/FR-036). Opened by
+                // `queue_menu_select_clear`; the entries are removed only here,
+                // on an explicit `Yes` (FR-036/FR-037).
+                InputAction::ConfirmQueueClear => {
+                    if self.queue_clear_confirm_open {
+                        self.queue_clear_confirm_open = false;
+                        self.queue_clear_confirm_selected = crate::app::QUEUE_CLEAR_CONFIRM_NO;
+                        // FR-036: `Yes` drains every entry and refreshes the
+                        // counter (clear_input_queue sets needs_redraw).
+                        self.clear_input_queue();
+                        // NFR-011: the closure must paint on the next frame.
+                        self.needs_redraw = true;
+                    }
+                }
+                InputAction::CancelQueueClear => {
+                    if self.queue_clear_confirm_open {
+                        self.queue_clear_confirm_open = false;
+                        self.queue_clear_confirm_selected = crate::app::QUEUE_CLEAR_CONFIRM_NO;
+                        // FR-035: dismissing with `No`/`Esc` leaves the queue
+                        // unchanged; only the dialog state is reset.
+                        self.needs_redraw = true;
+                    }
+                }
+                // The single-button notice dialog only reports a message; both
+                // `Enter` and `Esc` close it and nothing else changes.
+                InputAction::DismissNotice => {
+                    if self.notice_open {
+                        self.dismiss_notice();
+                    }
+                }
+                // `Clear this project's memory?` confirmation dialog (opened by
+                // `/memory clear`). Memory is removed only here, on an explicit
+                // `Yes`.
+                InputAction::ConfirmMemoryClear => {
+                    if self.memory_clear_confirm_open {
+                        self.close_memory_clear_confirm();
+                        self.clear_project_memory();
+                    }
+                }
+                InputAction::CancelMemoryClear => {
+                    if self.memory_clear_confirm_open {
+                        // Dismissing with `No`/`Esc` leaves memory unchanged.
+                        self.close_memory_clear_confirm();
+                    }
+                }
+                // `Prune messages older than N days?` confirmation dialog
+                // (opened by `/db prune`). Messages are deleted only here, on
+                // an explicit `Yes`. The armed window must be captured BEFORE
+                // `close_db_prune_confirm()` clears it, otherwise
+                // `run_confirmed_db_prune()` has nothing to apply and
+                // silently does nothing.
+                InputAction::ConfirmDbPrune => {
+                    if self.db_prune_confirm_open && self.db_prune_confirm_is_yes() {
+                        self.run_confirmed_db_prune();
+                        self.close_db_prune_confirm();
+                    } else if self.db_prune_confirm_open {
+                        // `No` is the default selection: treat it as a cancel
+                        // rather than deleting on a dialog the user did not
+                        // explicitly accept.
+                        self.close_db_prune_confirm();
+                    }
+                }
+                InputAction::CancelDbPrune => {
+                    if self.db_prune_confirm_open {
+                        // Dismissing with `No`/`Esc` leaves the database
+                        // unchanged; only the dialog state is reset.
+                        self.close_db_prune_confirm();
+                    }
+                }
+                InputAction::ConfirmRouterSave => {
+                    if let Some(draft) = self.pending_router_save.take() {
+                        match self.save_router_config(&draft) {
+                            Ok(()) => {
+                                self.select_router_as_active();
+                                self.router_enabled = true;
+                                self.status =
+                                    "[ok] Router cluster saved - Model Router active".to_string();
+                                self.provider_setup = None;
+                            }
+                            Err(e) => {
+                                self.status = format!("error: {e}");
+                                self.push_log_no_agent(LogLevel::Error, e.clone());
+                                if let Some(ProviderSetupStep::SetupRouter { error, .. }) =
+                                    self.provider_setup.as_mut()
+                                {
+                                    *error = Some(e);
+                                }
+                            }
+                        }
+                    }
+                }
+                InputAction::CancelRouterSave => {
+                    if self.pending_router_save.take().is_some() {
+                        self.status = "Router save cancelled".to_string();
+                    }
+                }
+                InputAction::ApprovePlan => {
+                    if let Some(state) = self.session.plan_approval_pending.take() {
+                        if let Some(ref session_id) = self.session.session_id.clone() {
+                            self.push_log_no_agent(LogLevel::Info, "plan approved".to_string());
+                            self.execute_plan_restore(session_id, &state.plan_text);
+                        }
+                    }
+                }
+                InputAction::RejectPlan => {
+                    if let Some(state) = self.session.plan_approval_pending.take() {
+                        if let Some(ref session_id) = self.session.session_id.clone() {
+                            self.push_log_no_agent(
+                                LogLevel::Info,
+                                "plan rejected - re-delegating".to_string(),
+                            );
+                            self.append_assistant_text(
+                                "From: /plan\n[refresh] **Plan rejected** - re-delegating to plan agent for revision.\n",
+                            );
+                            self.execute_plan_delegation(
+                                session_id,
+                                "Revise the plan based on this feedback: please provide an improved plan".to_string(),
+                                state.plan_text,
+                            );
+                        }
+                    }
+                }
+                InputAction::TogglePlanCursor => {
+                    if let Some(ref mut state) = self.session.plan_approval_pending {
+                        state.cursor_approve = !state.cursor_approve;
+                    }
+                }
+                InputAction::FocusNextTeammate => {
+                    self.cycle_focused_teammate(true);
+                }
+                InputAction::FocusPrevTeammate => {
+                    self.cycle_focused_teammate(false);
+                }
+                InputAction::InsertNewline => {
+                    self.insert_char_at_cursor('\n');
+                }
+                InputAction::ClearLine => {
+                    self.session.input.clear();
+                    self.session.input_cursor = 0;
+                    self.session.kb_select_anchor = None;
+                }
+            }
+        }
+        self.assert_ui_invariants();
+        self.debug_log_input_transition("key", &before_input, before_cursor);
+    }
+}
+
+impl App {
+    /// Move the Memory panel cursor by `delta` rows and scroll the panel so
+    /// the selected row stays visible.
+    pub(crate) fn move_memory_cursor(&mut self, delta: i16) {
+        let count = self.memory_row_count;
+        if count == 0 {
+            self.memory_cursor = 0;
+            return;
+        }
+        let new_cursor = if delta < 0 {
+            self.memory_cursor.saturating_sub((-delta) as usize)
+        } else {
+            (self.memory_cursor + delta as usize).min(count - 1)
+        };
+        self.memory_cursor = new_cursor;
+        self.scroll_memory_cursor_into_view();
+        self.needs_redraw = true;
+    }
+
+    /// Scroll the Memory panel so the cursor's preview line is within the
+    /// visible window. Uses the line indices computed by `render_memory_panel`.
+    fn scroll_memory_cursor_into_view(&mut self) {
+        let line = self
+            .memory_row_line_indices
+            .get(self.memory_cursor)
+            .copied()
+            .unwrap_or(0);
+        let visible = self.memory_area.height as usize;
+        if visible == 0 {
+            return;
+        }
+        let max_scroll = self.memory_max_scroll as usize;
+        let scroll = self.memory_scroll_offset as usize;
+        if line < scroll {
+            self.memory_scroll_offset = line as u16;
+        } else if line >= scroll + visible {
+            let target = (line + 1).saturating_sub(visible).min(max_scroll);
+            self.memory_scroll_offset = target as u16;
+        }
+    }
+
+    /// Open the memory currently under the Alt+M cursor in the full-memory
+    /// overlay view.
+    pub(crate) fn open_memory_view_from_cursor(&mut self) {
+        let count = self.memory_row_count;
+        if count == 0 {
+            self.status = "no memory selected".to_string();
+            return;
+        }
+        let idx = self.memory_cursor.min(count - 1);
+        let Some(row) = self.memory_cache_entries.get(idx).cloned() else {
+            self.status = "memory not found".to_string();
+            return;
+        };
+        self.memory_view = Some(crate::app::MemoryViewState {
+            row,
+            scroll_offset: 0,
+            max_scroll: 0,
+            line_cache: crate::app::OutputViewLineCache {
+                wrapped_lines: Vec::new(),
+                content_lines: Vec::new(),
+                wrapped_count: 0,
+                cache_width: 0,
+                source_generation: 0,
+            },
+        });
+        self.needs_redraw = true;
+    }
+
+    /// Show the delete-confirmation dialog for the memory under the cursor.
+    pub(crate) fn prompt_memory_delete_from_cursor(&mut self) {
+        let count = self.memory_row_count;
+        if count == 0 {
+            self.status = "no memory selected".to_string();
+            return;
+        }
+        let idx = self.memory_cursor.min(count - 1);
+        let Some(row) = self.memory_cache_entries.get(idx) else {
+            self.status = "memory not found".to_string();
+            return;
+        };
+        let preview = ragent_types::strutil::truncate_bytes(&row.content, 60);
+        self.pending_memory_delete = Some(crate::app::PendingMemoryDelete {
+            id: row.id,
+            preview,
+        });
+        self.needs_redraw = true;
+    }
+
+    /// Confirm and execute a pending memory deletion.
+    pub(crate) fn confirm_memory_delete(&mut self) {
+        let Some(pending) = self.pending_memory_delete.take() else {
+            return;
+        };
+        match self.storage.delete_memory(pending.id) {
+            Ok(true) => {
+                self.memory_cache_dirty = true;
+                // Clamp cursor so it remains valid after refresh.
+                if self.memory_row_count > 0 {
+                    self.memory_cursor = self.memory_cursor.min(self.memory_row_count - 1);
+                } else {
+                    self.memory_cursor = 0;
+                }
+                self.status = format!("memory #{} deleted", pending.id);
+                self.push_log_no_agent(
+                    LogLevel::Info,
+                    format!("memory #{} deleted from panel", pending.id),
+                );
+            }
+            Ok(false) => {
+                self.status = format!("memory #{} not found", pending.id);
+            }
+            Err(e) => {
+                self.status = format!("failed to delete memory #{}: {e}", pending.id);
+                self.push_log_no_agent(LogLevel::Error, format!("memory delete failed: {e}"));
+            }
+        }
+        self.needs_redraw = true;
+    }
+}

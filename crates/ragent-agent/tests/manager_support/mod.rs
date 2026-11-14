@@ -1,0 +1,148 @@
+//! Shared helper for constructing a real `TeamManager` over a stub
+//! `SessionProcessor` so the manager's disk-backed coordination paths
+//! (tasks, plan approval, adoption, hooks) can be exercised from an external
+//! test crate without a live model or provider.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use ragent_agent::event::EventBus;
+use ragent_agent::permission::PermissionChecker;
+use ragent_agent::session::SessionManager;
+use ragent_agent::session::processor::SessionProcessor;
+use ragent_agent::storage::Storage;
+use ragent_agent::team::TeamManager;
+use ragent_agent::tool::create_default_registry;
+use ragent_config::Config as RagentConfig;
+use tempfile::TempDir;
+
+/// Build a `SessionProcessor` with in-memory storage and no provider. Only the
+/// `session_manager` / `event_bus` fields are ever touched by the team manager.
+pub fn stub_processor(event_bus: Arc<EventBus>) -> Arc<SessionProcessor> {
+    let storage = Arc::new(Storage::open_in_memory().expect("in-memory storage"));
+    let session_manager = Arc::new(SessionManager::new(storage, event_bus.clone()));
+    let config: RagentConfig = serde_json::from_str("{}").expect("valid config JSON");
+
+    Arc::new(SessionProcessor {
+        session_manager,
+        provider_registry: Arc::new(ragent_agent::provider::ProviderRegistry::new()),
+        tool_registry: Arc::new(create_default_registry()),
+        permission_checker: Arc::new(parking_lot::RwLock::new(PermissionChecker::new(vec![]))),
+        event_bus,
+        agent_manager: std::sync::OnceLock::new(),
+        team_manager: Default::default(),
+        team_context_cache: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+        tool_repeat_guard: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+        mcp_client: std::sync::OnceLock::new(),
+        connector_session: tokio::sync::RwLock::new(None),
+        connector_statuses: tokio::sync::RwLock::new(None),
+        code_index: std::sync::OnceLock::new(),
+        project_code_indexes: Default::default(),
+        project_tool_registries: Default::default(),
+        active_spec: tokio::sync::RwLock::new(None),
+        spec_manager: std::sync::OnceLock::new(),
+        cached_tool_definitions: parking_lot::RwLock::new(None),
+        cached_tool_names: parking_lot::RwLock::new(None),
+        cached_tool_definition_bytes: parking_lot::RwLock::new(None),
+        llm_client_cache: parking_lot::RwLock::new(HashMap::new()),
+        cached_config: parking_lot::Mutex::new(Some(
+            ragent_agent::session::processor::CachedConfig {
+                config: Arc::new(config),
+                file_mtimes: Vec::new(),
+                env_overrides_present: false,
+            },
+        )),
+        extraction_engine: std::sync::OnceLock::new(),
+        stream_config: Default::default(),
+        auto_approve: false,
+        system_prompt_cache: parking_lot::RwLock::new(None),
+        skill_body_cache: Arc::new(std::sync::RwLock::new(HashMap::new())),
+        read_timestamps: Arc::new(std::sync::RwLock::new(HashMap::new())),
+        telemetry: Arc::new(ragent_agent::telemetry::TelemetrySubsystem::disabled()),
+        bg_service: std::sync::OnceLock::new(),
+        activity_log: std::sync::OnceLock::new(),
+        activity_log_tx: tokio::sync::Mutex::new(None),
+        skill_registry_cache: parking_lot::Mutex::new(None),
+        active_loops: tokio::sync::RwLock::new(HashMap::new()),
+        active_loop_specs: tokio::sync::RwLock::new(HashMap::new()),
+        loop_telemetry_recorded: std::sync::atomic::AtomicBool::new(false),
+        active_loop_interrupts: parking_lot::RwLock::new(HashMap::new()),
+        active_loop_captures: tokio::sync::RwLock::new(HashMap::new()),
+        last_message_end_reason: std::sync::RwLock::new(HashMap::new()),
+        pending_verdicts: ragent_agent::session::pending::PendingVerdicts::new(),
+    })
+}
+
+/// A `TeamManager` together with the temp dir that owns its team directory.
+///
+/// The manager holds the (strong) `Arc<EventBus>` and a `Weak` processor; the
+/// returned `TempDir` must be kept alive for the test body.
+///
+/// `#[allow(dead_code)]`: this helper is `#[path]`-included by every test file
+/// that needs a manager, so each inclusion is its own module and the files that
+/// only want [`stub_processor`] would otherwise report it unused.
+#[allow(dead_code)]
+pub fn team_manager(
+    team_name: &str,
+    lead_session: &str,
+    project_local: bool,
+) -> (Arc<TeamManager>, TempDir, Arc<EventBus>) {
+    let bus = Arc::new(EventBus::new(256));
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workspace = tmp.path().join("ws");
+    std::fs::create_dir_all(workspace.join(".ragent")).expect("create .ragent");
+
+    let mut store =
+        ragent_agent::team::TeamStore::create(team_name, "old-lead", &workspace, project_local)
+            .expect("create team");
+    // Give the team one member so adoption / plan logic has something to act on.
+    //
+    // The member starts `Working`: nothing is spawning a freshly created team,
+    // and `Spawning` has no edge to the parked or shutdown statuses (FR-003), so
+    // a `Spawning` fixture would make `suspend_teammate` / `shutdown_teammate`
+    // tests assert against fixture state instead of the behaviour under test.
+    let mut member = ragent_agent::team::TeamMember::new("alice", "tm-001", "general");
+    member.status = ragent_agent::team::config::MemberStatus::Working;
+    store.add_member(member).expect("add member");
+    let team_dir = store.dir.clone();
+    drop(store);
+
+    let processor = stub_processor(bus.clone());
+    let manager = TeamManager::into_arc(TeamManager::new(
+        team_name,
+        lead_session,
+        team_dir,
+        processor,
+        bus.clone(),
+    ));
+    // Nothing spawned this member, so it has no handle; register one so a test
+    // that needs a live (or a returned) agent loop has somewhere to record it.
+    manager.register_handle_for_test("tm-001");
+    (manager, tmp, bus)
+}
+
+/// A `TeamManager` over an **existing** team directory.
+///
+/// [`team_manager`] always creates its own team, which is the wrong fixture when
+/// a test needs the cached (`TeamManager`) and uncached (`TaskStore`) claim paths
+/// to read one `tasks.json`: both halves must resolve the same directory. This
+/// builds the manager over `team_dir` and adds nothing to it, so the caller's
+/// fixture is the only state the manager sees. The returned `TempDir` is only a
+/// placeholder workspace root and must be kept alive beside the manager's own.
+#[allow(dead_code)]
+pub fn team_manager_for(team_dir: &std::path::Path) -> (Arc<TeamManager>, TempDir, Arc<EventBus>) {
+    let bus = Arc::new(EventBus::new(256));
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let processor = stub_processor(bus.clone());
+    let name = ragent_agent::team::TeamStore::load(team_dir)
+        .map(|store| store.config.name.clone())
+        .unwrap_or_else(|_| "team".to_string());
+    let manager = TeamManager::into_arc(TeamManager::new(
+        name,
+        "lead-session",
+        team_dir.to_path_buf(),
+        processor,
+        bus.clone(),
+    ));
+    (manager, tmp, bus)
+}

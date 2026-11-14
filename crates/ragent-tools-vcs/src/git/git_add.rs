@@ -1,0 +1,107 @@
+//! `git_add` - Stage files for commit.
+
+use anyhow::Result;
+use serde_json::{Value, json};
+
+use crate::{Tool, ToolContext, ToolOutput};
+
+/// Tool that stages files for commit.
+pub struct GitAddTool;
+
+#[async_trait::async_trait]
+impl Tool for GitAddTool {
+    fn name(&self) -> &'static str {
+        "git_add"
+    }
+
+    fn description(&self) -> &'static str {
+        "Stage files for the next git commit. All parameters are optional but you must provide at least one action: \
+         specify 'paths' (array of file or directory paths) to stage specific items, set 'all' to true to stage every change (git add -A), \
+         or set 'update' to true to stage changes only to already-tracked files (git add -u). \
+         Common gotcha: without 'paths', 'all', or 'update' the call will fail with an error."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "paths": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Files or directories to stage"
+                },
+                "all": {
+                    "type": "boolean",
+                    "description": "Stage all changes (git add -A). Overrides paths. (default: false)"
+                },
+                "update": {
+                    "type": "boolean",
+                    "description": "Stage changes only to tracked files (git add -u). Overrides paths. (default: false)"
+                }
+            }
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "git:write"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let all = input["all"].as_bool().unwrap_or(false);
+        let update = input["update"].as_bool().unwrap_or(false);
+
+        let mut args: Vec<String> = vec!["add".to_string()];
+
+        if all {
+            args.push("-A".to_string());
+        } else if update {
+            args.push("-u".to_string());
+        } else if let Some(paths) = input["paths"].as_array() {
+            if paths.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "No paths provided. Specify 'paths', set 'all' to true, or set 'update' to true."
+                ));
+            }
+            for p in paths {
+                if let Some(s) = p.as_str() {
+                    // SEC-ragent-tools-vcs-00x (ANTIPAT A-1): an LLM-supplied
+                    // path beginning with `-` would be parsed by git as an
+                    // option rather than a pathspec.
+                    crate::git::reject_option_like(s, "paths[]")?;
+                    args.push(s.to_string());
+                }
+            }
+        } else {
+            return Err(anyhow::anyhow!(
+                "No paths provided. Specify 'paths', set 'all' to true, or set 'update' to true."
+            ));
+        }
+
+        let (stdout, stderr) = crate::git::run_git_async(args, ctx.working_dir.clone()).await?;
+
+        if !stderr.is_empty() && stdout.trim().is_empty() {
+            return Ok(ToolOutput {
+                content: format!("git add error: {}", stderr.trim()),
+                metadata: None,
+            });
+        }
+
+        let content = if stdout.trim().is_empty() {
+            if all {
+                "Staged all changes.".to_string()
+            } else if update {
+                "Staged changes to tracked files.".to_string()
+            } else {
+                "Staged specified files.".to_string()
+            }
+        } else {
+            stdout
+        };
+
+        Ok(ToolOutput {
+            content,
+            metadata: None,
+        })
+    }
+}

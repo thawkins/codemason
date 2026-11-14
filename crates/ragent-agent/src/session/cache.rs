@@ -1,0 +1,709 @@
+//! Performance optimizations for session processing.
+//!
+//! This module implements Milestone 3 from perfplan.md:
+//! - System prompt component caching
+//! - Incremental history management
+//! - Context window pre-compression
+
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use rustc_hash::FxHasher;
+
+use crate::agent::AgentInfo;
+use crate::llm::{ChatMessage, ToolDefinition};
+use crate::session::history::history_version_of;
+use crate::tool::{TeamContext, ToolRegistry};
+use ragent_types::ThinkingConfig;
+
+/// Cache version counter for global invalidation tracking.
+static CACHE_VERSION: AtomicU64 = AtomicU64::new(1);
+
+/// Increment the global cache version to invalidate all caches.
+pub fn invalidate_all_caches() {
+    CACHE_VERSION.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Get the current global cache version.
+#[must_use]
+pub fn current_cache_version() -> u64 {
+    CACHE_VERSION.load(Ordering::SeqCst)
+}
+
+/// A cached value with version tracking for a specific component.
+#[derive(Debug, Clone)]
+pub struct Cached<T> {
+    /// The cached value
+    value: Option<T>,
+    /// Cache version when this was last computed
+    version: u64,
+    /// Component-specific generation counter
+    generation: u64,
+}
+
+impl<T> Default for Cached<T> {
+    fn default() -> Self {
+        Self {
+            value: None,
+            version: 0,
+            generation: 0,
+        }
+    }
+}
+
+impl<T: Clone> Cached<T> {
+    /// Create a new empty cache entry.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Check if the cache is valid given the current global version.
+    #[must_use]
+    pub fn is_valid(&self, current_version: u64) -> bool {
+        self.value.is_some() && self.version == current_version
+    }
+
+    /// Get the cached value if valid, otherwise return None.
+    #[must_use]
+    pub fn get(&self, current_version: u64) -> Option<T> {
+        if self.is_valid(current_version) {
+            self.value.clone()
+        } else {
+            None
+        }
+    }
+
+    /// Store a new value in the cache with the current global version.
+    pub fn set(&mut self, value: T) {
+        self.value = Some(value);
+        self.version = current_cache_version();
+    }
+
+    /// Invalidate this cache entry by clearing its value.
+    pub fn invalidate(&mut self) {
+        self.value = None;
+        self.generation += 1;
+    }
+}
+
+/// Hashable key for agent prompt cache.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct AgentPromptKey {
+    agent_name: String,
+    agent_prompt_hash: u64,
+}
+
+/// Cache key for the tool-definition lists (FR-015).
+///
+/// The registry version alone is not enough: `tools.expose_alias_names` and the
+/// alias table are per-turn config values that change what the outbound list
+/// contains without a tool being registered, so both are part of the key.
+type ToolCacheKey = (u64, bool, crate::tool::alias_table::AliasTable);
+
+/// System prompt cache that tracks components separately for efficient invalidation.
+///
+/// Each component is cached independently so that changes to one component
+/// don't require rebuilding all others.
+#[derive(Debug)]
+pub struct SystemPromptCache {
+    /// Agent base prompts keyed by (agent_name, prompt_hash)
+    agent_prompts: Mutex<HashMap<AgentPromptKey, Cached<String>>>,
+    /// Tool reference section - changes only on tool registration
+    tool_reference: Mutex<Cached<String>>,
+    /// Sorted tool definition cache - changes only on tool registration.
+    ///
+    /// The key is `(tool-registry version, expose_alias_names, the alias
+    /// table)`: FR-015's advertising switch is a per-turn config value that the
+    /// registry version does not observe, so it is part of the key rather than a
+    /// silent staleness.
+    tool_definitions: Mutex<Option<(ToolCacheKey, Arc<Vec<ToolDefinition>>)>>,
+    /// PERF-034: the subagent wire surface (tool definitions with interactive
+    /// tools removed), keyed the same way. Sub-agent turns share one immutable
+    /// filtered vector instead of rebuilding it every step.
+    subagent_tool_definitions: Mutex<Option<(ToolCacheKey, Arc<Vec<ToolDefinition>>)>>,
+    /// Codeindex guidance section - changes only on index state change
+    codeindex_guidance: Mutex<Cached<String>>,
+    /// Team guidance section - changes only on team membership change
+    team_guidance: Mutex<Cached<String>>,
+    /// Current cache version (monotonically increasing)
+    cache_version: AtomicU64,
+    /// Tool registry version for detecting tool changes (PERF-012).
+    ///
+    /// Stores the [`ToolRegistry::version`] observed at the time the
+    /// tool-reference cache was last populated. The next `get_tool_reference`
+    /// call compares the registry's current version against this value in
+    /// O(1) instead of re-hashing all ~111 tool definitions.
+    last_tool_registry_version: Mutex<u64>,
+    /// Last known code index state
+    last_codeindex_active: Mutex<bool>,
+    /// Last known team context hash
+    last_team_hash: Mutex<u64>,
+    /// P-24: cached rendered active-spec section keyed by `(spec_id,
+    /// spec.modified_at)`. The spec content is stable across turns, so
+    /// re-reading and re-rendering it every turn is pure I/O + formatting.
+    /// Invalidated by [`invalidate_spec_cache`] (call after `/spec activate`
+    /// or any spec write).
+    cached_spec_section: Mutex<Option<(String, u64, String)>>,
+}
+
+impl Default for SystemPromptCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SystemPromptCache {
+    /// Create a new empty system prompt cache.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            agent_prompts: Mutex::new(HashMap::new()),
+            tool_reference: Mutex::new(Cached::new()),
+            tool_definitions: Mutex::new(None),
+            subagent_tool_definitions: Mutex::new(None),
+            codeindex_guidance: Mutex::new(Cached::new()),
+            team_guidance: Mutex::new(Cached::new()),
+            cache_version: AtomicU64::new(current_cache_version()),
+            last_tool_registry_version: Mutex::new(0),
+            last_codeindex_active: Mutex::new(false),
+            last_team_hash: Mutex::new(0),
+            cached_spec_section: Mutex::new(None),
+        }
+    }
+
+    /// Get the current cache version.
+    #[must_use]
+    pub fn version(&self) -> u64 {
+        self.cache_version.load(Ordering::SeqCst)
+    }
+
+    /// Check if the cache version has changed and update internal state.
+    fn refresh_version(&self) {
+        let global_version = current_cache_version();
+        let local_version = self.cache_version.load(Ordering::SeqCst);
+        if global_version != local_version {
+            self.cache_version.store(global_version, Ordering::SeqCst);
+        }
+    }
+
+    /// Get or compute the cached agent prompt.
+    pub fn get_agent_prompt<F>(&self, agent: &AgentInfo, compute: F) -> Option<String>
+    where
+        F: FnOnce(&AgentInfo) -> Option<String>,
+    {
+        self.refresh_version();
+        let version = self.version();
+
+        // Compute hash of agent's prompt
+        // PERF-031: FxHash (~2-5x faster than `DefaultHasher` for short
+        // non-adversarial cache keys).
+        let prompt_hash = agent
+            .prompt
+            .as_ref()
+            .map(|p| {
+                use std::hash::Hasher;
+                let mut hasher = FxHasher::default();
+                p.hash(&mut hasher);
+                hasher.finish()
+            })
+            .unwrap_or(0);
+
+        let key = AgentPromptKey {
+            agent_name: agent.name.clone(),
+            agent_prompt_hash: prompt_hash,
+        };
+
+        let mut cache = self.agent_prompts.lock().ok()?;
+
+        // Check if we have a valid cached entry
+        if let Some(cached) = cache.get(&key) {
+            if let Some(value) = cached.get(version) {
+                return Some(value);
+            }
+        }
+
+        // Compute and cache the value
+        let value = compute(agent)?;
+        let mut entry = Cached::new();
+        entry.set(value.clone());
+        cache.insert(key, entry);
+
+        Some(value)
+    }
+
+    /// Get or compute the cached tool reference section.
+    pub fn get_tool_reference<F>(
+        &self,
+        tool_registry: &ToolRegistry,
+        compute_reference: F,
+    ) -> Option<String>
+    where
+        F: FnOnce(&[ToolDefinition]) -> String,
+    {
+        self.refresh_version();
+        let version = self.version();
+
+        // PERF-012: compare the registry's monotonic version counter
+        // (O(1)) instead of hashing all ~111 tool definitions (O(n)).
+        let current_version = tool_registry.version();
+
+        let mut last_version = self.last_tool_registry_version.lock().ok()?;
+        let mut cache = self.tool_reference.lock().ok()?;
+
+        // Check if tools changed or cache is invalid
+        if *last_version == current_version {
+            if let Some(value) = cache.get(version) {
+                return Some(value);
+            }
+        }
+
+        // Compute and cache
+        let defs = tool_registry.definitions();
+        let value = compute_reference(&defs);
+        cache.set(value.clone());
+        *last_version = current_version;
+
+        Some(value)
+    }
+
+    /// Get or compute the cached sorted tool definitions.
+    ///
+    /// `alias_table` and `expose_alias_names` are the FR-015 advertising inputs:
+    /// a cache entry is reused only while the registry version **and** both of
+    /// them are unchanged, so switching `tools.expose_alias_names` on takes
+    /// effect on the next turn instead of serving a stale list.
+    pub fn get_tool_definitions(
+        &self,
+        tool_registry: &ToolRegistry,
+        alias_table: &crate::tool::alias_table::AliasTable,
+        expose_alias_names: bool,
+    ) -> Option<Arc<Vec<ToolDefinition>>> {
+        let current_version = tool_registry.version();
+        let mut cache = self.tool_definitions.lock().ok()?;
+
+        if let Some((key, defs)) = cache.as_ref() {
+            if key.0 == current_version && key.1 == expose_alias_names && key.2 == *alias_table {
+                return Some(Arc::clone(defs));
+            }
+        }
+
+        let defs =
+            alias_table.outbound_definitions(&tool_registry.definitions(), expose_alias_names);
+        let key = (current_version, expose_alias_names, alias_table.clone());
+        *cache = Some((key, Arc::clone(&defs)));
+        Some(defs)
+    }
+
+    /// PERF-034: get or compute the subagent wire surface - the tool
+    /// definitions with interactive tools removed, keyed by the tool-registry
+    /// version so repeated sub-agent steps share one immutable vector.
+    pub fn get_subagent_tool_definitions(
+        &self,
+        tool_registry: &ToolRegistry,
+        alias_table: &crate::tool::alias_table::AliasTable,
+        expose_alias_names: bool,
+    ) -> Option<Arc<Vec<ToolDefinition>>> {
+        let current_version = tool_registry.version();
+        let mut cache = self.subagent_tool_definitions.lock().ok()?;
+
+        if let Some((key, defs)) = cache.as_ref() {
+            if key.0 == current_version && key.1 == expose_alias_names && key.2 == *alias_table {
+                return Some(Arc::clone(defs));
+            }
+        }
+
+        let filtered: Arc<Vec<ToolDefinition>> = Arc::new(
+            alias_table
+                .outbound_definitions(&tool_registry.definitions(), expose_alias_names)
+                .iter()
+                .filter(|def| !crate::session::permissions::is_interactive_tool(&def.name))
+                .cloned()
+                .collect(),
+        );
+        let key = (current_version, expose_alias_names, alias_table.clone());
+        *cache = Some((key, Arc::clone(&filtered)));
+        Some(filtered)
+    }
+
+    /// Get or compute the cached codeindex guidance section.
+    ///
+    /// The two compute closures are passed as a single `compute` callback
+    /// that receives a `bool` indicating the active/disabled state, which
+    /// sidesteps the "no two closures have the same type" issue without
+    /// requiring callers to box their closures.
+    pub fn get_codeindex_guidance<F>(&self, code_index_active: bool, compute: F) -> Option<String>
+    where
+        F: FnOnce(bool) -> String,
+    {
+        self.refresh_version();
+        let version = self.version();
+
+        let mut last_active = self.last_codeindex_active.lock().ok()?;
+        let mut cache = self.codeindex_guidance.lock().ok()?;
+
+        if *last_active == code_index_active {
+            if let Some(value) = cache.get(version) {
+                return Some(value);
+            }
+        }
+
+        let value = compute(code_index_active);
+        cache.set(value.clone());
+        *last_active = code_index_active;
+
+        Some(value)
+    }
+
+    /// Backwards-compatible wrapper that accepts two separate closures.
+    /// Provided so existing call sites that already pass two closures
+    /// continue to work after the API change to `get_codeindex_guidance`.
+    pub fn get_codeindex_guidance_with<F>(
+        &self,
+        code_index_active: bool,
+        compute_active: F,
+        compute_disabled: F,
+    ) -> Option<String>
+    where
+        F: FnOnce() -> String,
+    {
+        self.get_codeindex_guidance(code_index_active, |is_active| {
+            if is_active {
+                compute_active()
+            } else {
+                compute_disabled()
+            }
+        })
+    }
+
+    /// Get or compute the cached team guidance section.
+    pub fn get_team_guidance<F>(
+        &self,
+        team_context: Option<&TeamContext>,
+        compute: F,
+    ) -> Option<String>
+    where
+        F: FnOnce(Option<&TeamContext>) -> String,
+    {
+        self.refresh_version();
+        let version = self.version();
+
+        // Compute hash of team context
+        let current_hash = team_context.map(Self::hash_team_context).unwrap_or(0);
+
+        let mut last_hash = self.last_team_hash.lock().ok()?;
+        let mut cache = self.team_guidance.lock().ok()?;
+
+        if *last_hash == current_hash {
+            if let Some(value) = cache.get(version) {
+                return Some(value);
+            }
+        }
+
+        let value = compute(team_context);
+        cache.set(value.clone());
+        *last_hash = current_hash;
+
+        Some(value)
+    }
+
+    /// Invalidate all cached components.
+    pub fn invalidate_all(&self) {
+        invalidate_all_caches();
+        self.cache_version
+            .store(current_cache_version(), Ordering::SeqCst);
+
+        if let Ok(mut cache) = self.tool_reference.lock() {
+            cache.invalidate();
+        }
+        if let Ok(mut cache) = self.codeindex_guidance.lock() {
+            cache.invalidate();
+        }
+        if let Ok(mut cache) = self.team_guidance.lock() {
+            cache.invalidate();
+        }
+        if let Ok(mut cache) = self.agent_prompts.lock() {
+            cache.clear();
+        }
+    }
+
+    /// Invalidate only the tool reference cache (call when tools change).
+    pub fn invalidate_tool_cache(&self) {
+        if let Ok(mut cache) = self.tool_reference.lock() {
+            cache.invalidate();
+        }
+        // PERF-012: reset the stored version so the next lookup sees a
+        // mismatch and rebuilds. Using `0` as the sentinel works because the
+        // registry version starts at `0` and is bumped on every `register()`,
+        // so any live registry will have `version > 0` after the first tool
+        // is registered.
+        if let Ok(mut version) = self.last_tool_registry_version.lock() {
+            *version = 0; // Force recompute
+        }
+    }
+
+    /// Invalidate only the codeindex guidance cache (call when index state changes).
+    pub fn invalidate_codeindex_cache(&self) {
+        if let Ok(mut cache) = self.codeindex_guidance.lock() {
+            cache.invalidate();
+        }
+    }
+
+    /// Invalidate only the team guidance cache (call when team membership changes).
+    pub fn invalidate_team_cache(&self) {
+        if let Ok(mut cache) = self.team_guidance.lock() {
+            cache.invalidate();
+        }
+        if let Ok(mut hash) = self.last_team_hash.lock() {
+            *hash = 0; // Force recompute
+        }
+    }
+
+    /// P-24: invalidate the cached rendered spec section. Call this after
+    /// `/spec activate` or any spec write so the next turn re-reads the spec.
+    pub fn invalidate_spec_cache(&self) {
+        if let Ok(mut cache) = self.cached_spec_section.lock() {
+            *cache = None;
+        }
+    }
+
+    /// P-24: return the cached rendered spec section when `(spec_id,
+    /// spec_modified_at)` matches the cached entry, or `None` otherwise.
+    #[must_use]
+    pub fn get_spec_section(&self, spec_id: &str, spec_modified_at: u64) -> Option<String> {
+        let cache = self.cached_spec_section.lock().ok()?;
+        match *cache {
+            Some((ref id, modified_at, ref section))
+                if id == spec_id && modified_at == spec_modified_at =>
+            {
+                Some(section.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// P-24: store the rendered spec section keyed by `(spec_id,
+    /// spec_modified_at)` so subsequent turns with the same spec can skip
+    /// the disk read and re-render.
+    pub fn store_spec_section(&self, spec_id: String, spec_modified_at: u64, section: String) {
+        if let Ok(mut cache) = self.cached_spec_section.lock() {
+            *cache = Some((spec_id, spec_modified_at, section));
+        }
+    }
+
+    /// Compute a hash of the team context for change detection.
+    /// PERF-031: FxHash for short non-adversarial cache keys.
+    fn hash_team_context(context: &TeamContext) -> u64 {
+        use std::hash::Hasher;
+        let mut hasher = FxHasher::default();
+        context.is_lead.hash(&mut hasher);
+        context.team_name.hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+/// Session state with incremental history management.
+///
+/// Maintains a cached version of the chat message list and only
+/// recomputes the parts that have changed since the last access.
+#[derive(Debug)]
+pub struct SessionState {
+    /// Cached chat messages (converted from internal Message format).
+    ///
+    /// PERF-032: held as an `Arc` so handing it out on a cache hit (and
+    /// storing a freshly-built list) is an O(1) refcount operation rather
+    /// than a deep clone of the whole transcript.
+    cached_chat_messages: Arc<Vec<ChatMessage>>,
+    /// Number of messages last time we checked
+    last_message_count: usize,
+    /// Count of internal history messages the cached transcript was built from.
+    ///
+    /// PERF-033: together with `cached_prefix_version` this lets the loop
+    /// detect a pure append (the incoming history grew and the cached prefix is
+    /// unchanged) and convert only the newly appended messages instead of
+    /// rebuilding the whole vector.
+    cached_history_len: usize,
+    /// Version of the cached internal-history prefix (`messages[..cached_history_len]`)
+    /// recorded when the transcript was stored (PERF-033).
+    cached_prefix_version: u64,
+    /// Last time the cache was updated
+    last_updated: std::time::Instant,
+    /// Session ID this state belongs to
+    session_id: String,
+    /// Current session-level thinking configuration.
+    thinking: ThinkingConfig,
+    /// History version last time the cache was populated.
+    ///
+    /// FR-006 / FR-007 (AgentPerf T-007): the agent loop computes a
+    /// `history_version` (count, last-id, last-modified-ms) at the start
+    /// of each step and only re-runs `history_to_chat_messages` when the
+    /// version changes.  This avoids re-converting the same message list
+    /// to provider-specific chat messages on every iteration of the
+    /// tool-call loop.
+    last_history_version: u64,
+    /// Cached serialised form of the most recent `ChatRequest` whose
+    /// history did not change.  Used by the FR-007 fast path so a step
+    /// that does not mutate the history can skip the JSON serialisation
+    /// step as well.
+    cached_serialised: Option<Vec<u8>>,
+    /// Provider-reported input token count from the most recent LLM request.
+    ///
+    /// Persisted across turns so the start-of-turn pre-send compaction check
+    /// can use the same usage value shown in the TUI status bar instead of
+    /// falling back to the tool-heavy local estimate every turn.
+    last_reported_input_tokens: u64,
+}
+
+impl SessionState {
+    /// Create a new session state for the given session ID.
+    #[must_use]
+    pub fn new(session_id: impl Into<String>) -> Self {
+        Self {
+            cached_chat_messages: Arc::new(Vec::new()),
+            last_message_count: 0,
+            cached_history_len: 0,
+            cached_prefix_version: 0,
+            last_updated: std::time::Instant::now(),
+            session_id: session_id.into(),
+            thinking: ThinkingConfig::default(),
+            last_history_version: 0,
+            cached_serialised: None,
+            last_reported_input_tokens: 0,
+        }
+    }
+
+    /// Get the session ID.
+    #[must_use]
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    /// Get the session's current thinking configuration.
+    #[must_use]
+    pub fn thinking(&self) -> &ThinkingConfig {
+        &self.thinking
+    }
+
+    /// Update the session's thinking configuration.
+    pub fn set_thinking(&mut self, thinking: ThinkingConfig) {
+        self.thinking = thinking;
+    }
+
+    /// Clear all cached state (e.g., after compression or reset).
+    pub fn clear(&mut self) {
+        self.cached_chat_messages = Arc::new(Vec::new());
+        self.last_message_count = 0;
+        self.cached_history_len = 0;
+        self.cached_prefix_version = 0;
+        self.last_updated = std::time::Instant::now();
+        self.last_history_version = 0;
+        self.cached_serialised = None;
+        self.last_reported_input_tokens = 0;
+    }
+
+    /// Return the provider-reported input token count from the most recent LLM request.
+    #[must_use]
+    pub fn last_reported_input_tokens(&self) -> u64 {
+        self.last_reported_input_tokens
+    }
+
+    /// Update the provider-reported input token count from the most recent LLM request.
+    pub fn set_last_reported_input_tokens(&mut self, tokens: u64) {
+        self.last_reported_input_tokens = tokens;
+    }
+
+    /// Return the cached chat-message list when the supplied history
+    /// version is unchanged (FR-006).
+    ///
+    /// The caller is responsible for computing the version (typically
+    /// `(count, last_id, last_modified_ms)`).  When the version matches
+    /// the cached one, the previously-converted list is returned
+    /// without re-running `history_to_chat_messages`.  When it differs,
+    /// the version is recorded and `None` is returned, signalling that
+    /// the caller should rebuild the list.
+    ///
+    /// PERF-032: the cache-hit path returns a refcount bump on the cached
+    /// `Arc`, never a copy of the transcript.
+    pub fn cached_chat_messages_for_version(
+        &mut self,
+        history_version: u64,
+    ) -> Option<Arc<Vec<ChatMessage>>> {
+        if self.last_history_version == history_version && !self.cached_chat_messages.is_empty() {
+            Some(Arc::clone(&self.cached_chat_messages))
+        } else {
+            self.last_history_version = history_version;
+            None
+        }
+    }
+
+    /// PERF-033: take the cached transcript for a pure-append rebuild.
+    ///
+    /// Returns `Some((cached, base_len))` only when the cached transcript is
+    /// non-empty, the incoming history is longer, and the cached prefix
+    /// (`messages[..base_len]`) still hashes to the version recorded when the
+    /// transcript was stored. The cached `Arc` is *moved out* of the state (its
+    /// refcount drops to one) so the caller can extend it in place and hand it
+    /// back to [`Self::store_chat_messages`] without any full-vector copy.
+    pub fn take_cached_for_append(
+        &mut self,
+        messages: &[crate::message::Message],
+    ) -> Option<(Arc<Vec<ChatMessage>>, usize)> {
+        let base_len = self.cached_history_len;
+        if base_len == 0
+            || self.cached_chat_messages.is_empty()
+            || messages.len() <= base_len
+            || history_version_of(&messages[..base_len]) != self.cached_prefix_version
+        {
+            return None;
+        }
+        let cached = std::mem::take(&mut self.cached_chat_messages);
+        Some((cached, base_len))
+    }
+
+    /// Record the internal-history prefix a freshly stored transcript was built
+    /// from (PERF-033). Companion to [`Self::store_chat_messages`]: call it with
+    /// the same history slice used to build the transcript so the next turn can
+    /// detect a pure append.
+    pub fn record_history_base(&mut self, history: &[crate::message::Message]) {
+        self.cached_prefix_version = history_version_of(history);
+        self.cached_history_len = history.len();
+    }
+
+    /// Store the rebuilt chat-message list and a serialised snapshot for
+    /// the FR-007 fast path.  Companion to
+    /// [`Self::cached_chat_messages_for_version`].
+    ///
+    /// PERF-032: takes the `Arc<Vec<ChatMessage>>` the caller already holds so
+    /// the just-built list is shared by refcount instead of deep-cloned.
+    pub fn store_chat_messages(
+        &mut self,
+        messages: Arc<Vec<ChatMessage>>,
+        serialised: Option<Vec<u8>>,
+    ) {
+        self.last_message_count = messages.len();
+        self.cached_chat_messages = messages;
+        self.cached_serialised = serialised;
+    }
+
+    /// Return the cached serialised `ChatRequest` body from the previous
+    /// step, if any (FR-007).
+    #[must_use]
+    pub fn cached_serialised(&self) -> Option<&[u8]> {
+        self.cached_serialised.as_deref()
+    }
+}
+
+/// Extension trait to add caching support to SessionProcessor.
+///
+/// This trait provides methods that use the cached versions of
+/// system prompt components for improved performance.
+pub trait CachedSessionProcessor {
+    /// Get the system prompt cache (if available).
+    fn system_prompt_cache(&self) -> Option<&SystemPromptCache>;
+
+    /// Get the session state cache for a given session ID.
+    fn session_state(&self, session_id: &str) -> Option<std::sync::MutexGuard<'_, SessionState>>;
+}

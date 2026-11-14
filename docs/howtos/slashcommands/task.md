@@ -1,0 +1,89 @@
+# /task
+
+> Toggle the TASKS side panel, or list/help tasks: /task [list|help]
+
+## Overview
+
+`/task` has two roles. With no arguments it toggles the TASKS side panel on or
+off; showing the panel hides the log, profile, memory, and telemetry panels so
+only one side panel is visible at a time. With arguments it operates on session
+tasks: `list` renders the task table, `add`/`create`/`update`/`get` route to
+the `TaskCreate`, `TaskUpdate`, and `TaskGet` tools.
+
+## Syntax
+
+```
+/task
+/task list [status]
+/task add <subject>
+/task create <subject>
+/task update <id> <status>
+/task get <id>
+/task help
+```
+
+## Options / Subcommands
+
+| Form | Description |
+|------|-------------|
+| (bare) | Toggle the Tasks side panel |
+| `list [status]` | Render the task table, optionally filtered by status |
+| `add <subject>` | Create a task via `TaskCreate` |
+| `create <subject>` | Alias for `add` |
+| `update <id> <status>` | Change a task's status via `TaskUpdate` |
+| `get <id>` | Inspect one task via `TaskGet` |
+| `help` | Show this subcommand table |
+
+Valid statuses for `update` and the `list` filter are the session tracker's
+`pending`, `in_progress`, and `completed`.
+
+## Examples
+
+```
+From: /task
+tasks panel visible
+(The panel opens; a second bare /task hides it.)
+```
+
+```
+From: /task list
+| ID | Status | Subject |
+| T-1 | [wait] pending | Write migration script |
+| T-2 | [sync] in_progress | Update SPEC.md |
+```
+
+```
+From: /task list completed
+Only completed tasks are shown.
+```
+
+```
+From: /task add Update the changelog
+A new session task is created via TaskCreate and appears in /task list.
+```
+
+```
+From: /task update T-1 completed
+TaskUpdate marks T-1 completed; dependent tasks are re-evaluated.
+```
+
+```
+From: /task get T-1
+TaskGet returns the full record: description, owner, blocked_by.
+```
+
+## Output
+
+The bare form prints `tasks panel visible` or `tasks panel hidden`. `list`
+renders the task table with status icons `[wait]` pending, `[sync]` in
+progress, `[ok]` completed. The add/update/get forms show the tool's result
+in the message window.
+
+The TASKS side panel renders one row per session task as
+`[STATUS] <id> title`, so the task identifier is visible without opening
+`/task get`. The panel takes 50% of the window width.
+
+## Related
+
+- `TaskCreate`, `TaskUpdate`, `TaskGet`, `TaskList` tools
+- Spec tracking: `spec_task_update` mirrors into the same session tracker

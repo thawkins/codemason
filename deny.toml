@@ -1,0 +1,79 @@
+# cargo-deny configuration for ragent.
+# See https://embarkstudios.github.io/cargo-deny/ for full documentation.
+# Schema updated for cargo-deny >=0.19 (older keys like vulnerability/unmaintained removed).
+
+[advisories]
+# Report `informational = "unsound"` advisories as failures too (default is
+# "none", which silently skips them), so a re-introduced unsound dependency is
+# never silently masked.
+unsound = "all"
+# Ignore advisories for vulnerabilities in transitive deps we cannot directly control.
+ignore = [
+    # Kept identical to `.cargo/audit.toml` so both gates agree on the ignore
+    # set - a divergence lets a re-introduced advisory pass one gate and fail
+    # the other.
+    #
+    # (RUSTSEC-2024-0436 `paste` is no longer ignored: cargo-deny reports
+    #  `advisory-not-detected`, so no advisory matches the current tree even
+    #  though `paste` 1.0.15 is still a `tokenizers` dependency. An ignore that
+    #  matches nothing is dead configuration and is removed on both gates.)
+    # (RUSTSEC-2026-0002 is no longer ignored: the affected lru 0.12.5 copy is
+    #  gone, and the remaining 0.16.4 copy pulled by tantivy is >= the 0.16.3
+    #  patched floor.)
+    # (RUSTSEC-2024-0384 is no longer ignored: `instant` is absent from the
+    #  current tree; the notify-types dependency line that pulled it is gone.)
+    # (RUSTSEC-2025-0134 is no longer ignored: rustls-pemfile is absent now that
+    #  the opentelemetry-otlp / tonic migration moved off tonic 0.12.)
+    # (RUSTSEC-2026-0187 is no longer ignored: the affected lopdf 0.39 copy is
+    #  gone; the tree now carries lopdf 0.44.0, above the >= 0.42.0 patched
+    #  floor.)
+    # (RUSTSEC-2026-0192 is no longer ignored: ttf-parser is absent from the
+    #  current tree.)
+    # (RUSTSEC-2026-0367 / -0368 / -0369 are no longer ignored: the zip
+    #  extraction hardening advisories no longer match the tree.)
+    # (RUSTSEC-2026-0194 / -0195 are no longer ignored: quick-xml was bumped
+    #  from 0.39 to 0.42, so both DoS advisories are fixed in the tree. The
+    #  earlier justification citing an `ooxmlsdk` compatibility constraint was
+    #  stale - ooxmlsdk was not a dependency.)
+    # (RUSTSEC-2026-0253 is no longer ignored: tantivy was upgraded from 0.26
+    #  to 0.27, which drops the lru ^0.16.3 requirement, so the only lru left
+    #  in the tree is 0.18.5 - above the 0.18.2 patched floor.)
+]
+
+[licenses]
+# Only allow these license families.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "BSL-1.0",
+    "CC0-1.0",
+    "MPL-2.0",
+    # webpki-roots uses CDLA-Permissive-2.0 (Community Data License Agreement — permissive).
+    "CDLA-Permissive-2.0",
+]
+
+# ring uses a custom ISC-style license.
+[[licenses.clarify]]
+name = "ring"
+expression = "ISC AND MIT AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[bans]
+# Warn on multiple versions of the same crate (common in large trees).
+multiple-versions = "warn"
+# Warn on wildcard deps (workspace-internal path deps are flagged here; deny for external wildcards
+# is enforced by convention rather than this setting to avoid false-positives on workspace members).
+wildcards = "warn"
+
+[sources]
+# Only allow crates from crates.io and local paths.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# No git dependencies are allowed; all third-party crates come from crates.io.
+allow-git = []

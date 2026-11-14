@@ -1,0 +1,4795 @@
+//! Message processing pipeline for agent sessions.
+//!
+//! [`SessionProcessor`] orchestrates the agentic loop: it accepts a user message,
+//! streams an LLM response, executes any requested tool calls, and iterates
+//! until the model signals completion or the step limit is reached.
+//!
+//! The free-standing helpers that support the loop live in sibling modules:
+//! - [`crate::session::stream_buffer`] - stream buffering and stall detection,
+//! - [`crate::session::prompt_builders`] - system-prompt / tool-reference builders,
+//! - [`crate::session::permissions`] - bash splitting and permission prompting,
+//! - [`crate::session::history`] - history<->chat conversion, token-overflow and
+//!   stream-error classification.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::RwLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
+use anyhow::{Result, bail};
+use serde_json::Value;
+use tracing::{debug, warn};
+use uuid::Uuid;
+
+use crate::agent::AgentInfo;
+use crate::cost::{UsageRecord, compute_run_cost, merged_prices};
+use crate::error::classify_message;
+use crate::event::{Event, EventBus, FinishReason};
+use crate::llm::{ChatContent, ChatMessage, ContentPart, ToolDefinition};
+use crate::message::{Message, MessagePart, Role, ToolCallState, ToolCallStatus};
+use crate::permission::PermissionChecker;
+use crate::provider::ProviderRegistry;
+use crate::session::SessionManager;
+use crate::session::cache::SystemPromptCache;
+use crate::session::dispatch::{
+    ToolDispatchContext, ToolDispatchPipeline, canonical_dispatch_name, resolve_tool_call,
+};
+use crate::session::history::PendingToolCall;
+use crate::session::loop_state::LoopSpec;
+use crate::session::permissions::{
+    extract_command_name, extract_resource_from_input, split_bash_command,
+};
+use crate::telemetry::{LlmRecorder, SessionRecorder};
+use crate::tool::alias_table::AliasTable;
+use crate::tool::{ToolContext, ToolRegistry};
+
+// Re-export the public helpers that external callers (tests, benches) import
+// from `session::processor::...` so the extraction does not break those paths.
+pub use crate::session::history::{
+    chat_request_payload_bytes, estimate_request_bytes, estimate_tool_definition_bytes,
+    history_to_chat_messages, is_permanent_llm_api_error, is_token_overflow_error_message,
+    should_retry_stream_error, stream_has_meaningful_partial_output, tool_result_content_for_llm,
+};
+pub use crate::session::permissions::check_permission_with_prompt;
+pub use crate::session::prompt_builders::build_detailed_tool_reference_section;
+
+/// Maximum wall-clock time a single tool call may run before the watchdog
+/// aborts it and terminates the agent run (5000 seconds).
+const TOOL_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(5000); // ~= 83m 20s
+
+/// Nudge injected when a sub-agent's loop terminates with a short text-only
+/// response after prior tool-use steps. The model often produces narration
+/// ("Now let me check ...") as a text-only message without a tool call, causing
+/// the loop to treat it as the final answer - even though no findings report
+/// was ever produced. This nudge asks the model to emit its complete findings
+/// immediately and then end the run with `agent_complete` (the mandatory
+/// sub-agent completion signal) so the deliverable is not lost.
+const SUBAGENT_SUMMARY_NUDGE: &str = "System note: you stopped calling tools \
+     and produced a short narrative message instead of your findings report. \
+     Do NOT call any other tools. Produce your complete written findings \
+     report NOW - all issues, ranked by impact, with file, line numbers, and \
+     concrete fixes. This is the deliverable. Then end your run with \
+     agent_complete(summary: \"<the findings>\") as your final action.";
+
+/// Sub-agent responses shorter than this many bytes after tool-use steps
+/// are treated as narration, not findings, and trigger a summary nudge.
+const SUBAGENT_NARRATION_BYTE_LIMIT: usize = 2000;
+
+/// Build the watchdog-timeout error message for a tool that stalled past
+/// [`TOOL_WATCHDOG_TIMEOUT`].
+fn watchdog_timeout_msg(tool_name: &str, call_id: &str) -> String {
+    format!(
+        "Tool call '{tool_name}' ({call_id}) stalled for over {}s \
+         (watchdog timeout); aborting the run.",
+        TOOL_WATCHDOG_TIMEOUT.as_secs()
+    )
+}
+
+/// Error type for a spawned tool-execution task in the agent loop.
+///
+/// Distinguishes a tokio join failure (panic or external abort) from a
+/// watchdog-forced abort after [`TOOL_WATCHDOG_TIMEOUT`]. The loop must tell
+/// these apart because a watchdog abort terminates the whole run while a
+/// join failure is logged and skipped.
+#[derive(Debug, thiserror::Error)]
+enum ToolTaskError {
+    /// The spawned tool task failed to join (panic or external abort).
+    #[error("tool task join error: {0}")]
+    Join(#[from] tokio::task::JoinError),
+    /// The tool task exceeded the watchdog timeout and was aborted.
+    #[error("tool execution aborted: exceeded the watchdog timeout")]
+    WatchdogAbort,
+}
+
+/// Structured identity of a tool call whose watchdog fired, captured BEFORE
+/// the per-call future moves `tc` so the drain loop can publish `ToolCallEnd`
+/// with the real call id without re-parsing a display string.
+type WatchdogIdentity = (String, String);
+
+/// Returns `true` when at least one of `tool_calls` is a file-writing tool
+/// whose path argument resolves inside the given spec directory.
+///
+/// Guards the auto task-completion heuristic so writes elsewhere in the
+/// workspace cannot complete spec tasks.
+fn writes_in_spec_dir(
+    tool_calls: &[crate::session::history::PendingToolCall],
+    working_dir: &std::path::Path,
+    specs_root: &std::path::Path,
+    spec_id: &ragent_specs::spec::SpecId,
+) -> bool {
+    let spec_dir = specs_root.join(spec_id.as_str());
+    tool_calls.iter().any(|tc| {
+        if !matches!(
+            tc.name.as_str(),
+            "Write"
+                | "Edit"
+                | "multiedit"
+                | "multi_edit"
+                | "patch"
+                | "apply_patch"
+                | "create"
+                | "append_to_file"
+        ) {
+            return false;
+        }
+        // FR-007: the shared decoder, so this check reads the same argument
+        // object the call ran with (an encoded-string payload included) rather
+        // than carrying a second JSON rule of its own.
+        let Ok(args) = ragent_types::tool_args::decode_tool_arguments(&tc.args_json) else {
+            tracing::warn!(
+                tool = %tc.name,
+                "unparseable args in spec-dir write check; treating as no-match"
+            );
+            // Fail-safe: do not auto-complete on a write whose args cannot be read.
+            return false;
+        };
+        let mut args_paths = ["path", "file_path"]
+            .iter()
+            .filter_map(|k| args[k].as_str())
+            .chain(
+                // The multiedit family carries one path per edit entry.
+                args["edits"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|e| ["path", "file_path"].iter().filter_map(|k| e[k].as_str())),
+            );
+        args_paths.any(|p| {
+            let resolved = if std::path::Path::new(p).is_absolute() {
+                std::path::PathBuf::from(p)
+            } else {
+                working_dir.join(p)
+            };
+            resolved.starts_with(&spec_dir)
+        })
+    })
+}
+
+/// Whether a dispatched call's result may be appended to history (FR-013 of
+/// spec `uniformtools`).
+///
+/// The one reading of the unresolved-approval tracker
+/// ([`crate::session::pending::PendingVerdicts`]) on the tool phase's append
+/// path: a result is appended only for a call whose permission verdict has
+/// resolved. It is a free function rather than a closure capture because the
+/// tool phase's result handler already borrows three step-local buffers
+/// mutably, and a handler that owned the tracker would have to take those
+/// buffers with it.
+///
+/// `session_id` and `call_id` together name the call, so a verdict recorded for
+/// one session can never unblock another session's call.
+#[must_use]
+fn result_is_appendable(
+    pending: &crate::session::pending::PendingVerdicts,
+    session_id: &str,
+    call_id: &str,
+) -> bool {
+    !pending.is_unresolved(session_id, call_id)
+}
+
+/// Test-only handle on [`result_is_appendable`] (FR-013).
+///
+/// Integration tests live in a separate crate and cannot reach a private free
+/// function, and the FR-013 guard is only worth having if its decision can be
+/// exercised: the call is made by the tool phase's result handler, which no
+/// integration test can invoke directly.
+#[doc(hidden)]
+#[must_use]
+pub fn result_is_appendable_for_test(
+    pending: &crate::session::pending::PendingVerdicts,
+    session_id: &str,
+    call_id: &str,
+) -> bool {
+    result_is_appendable(pending, session_id, call_id)
+}
+
+/// Dispatch a tool invocation through the active execution backend
+/// (spec `openhands` FR-001, FR-019, FR-020, FR-026, FR-031).
+///
+/// The backend is resolved from the session config on each dispatch: an absent
+/// or unknown `execution_backend` key resolves to `local`, the host adapter that
+/// runs the tool exactly as before. A configured `docker`/`podman` entry resolves
+/// to a real [`ContainerBackend`](crate::backend::ContainerBackend) that runs the
+/// invocation inside a sandbox (FR-020); any other non-local kind without an
+/// adapter fails the call instead of running it on the host (FR-031). The 7-layer
+/// bash validation and permission checks have already run in the caller
+/// ([`dispatch_tool_with_permissions`]) and are unaffected by this choice
+/// (FR-002, FR-037).
+///
+/// The session's encrypted credential store is passed through so a container or
+/// remote sandbox resolves its credentials at spawn time (FR-010); the values are
+/// never read from the config.
+async fn dispatch_tool_leaf(
+    tool: &std::sync::Arc<dyn crate::tool::Tool>,
+    tool_input: Value,
+    tool_ctx: &ToolContext,
+) -> anyhow::Result<crate::tool::ToolOutput> {
+    let backend = tool_ctx.config.as_ref().map_or_else(
+        || crate::backend::resolve_backend(ragent_config::ExecutionBackendKind::Local),
+        |config| {
+            crate::backend::resolve_backend_with_secrets(
+                config,
+                &tool_ctx.working_dir,
+                tool_ctx.storage.clone(),
+            )
+        },
+    );
+    backend
+        .execute_tool(crate::backend::BackendToolCall {
+            tool: tool.as_ref(),
+            input: tool_input,
+            ctx: tool_ctx,
+        })
+        .await
+}
+
+/// B3: dispatches a validated tool call through the permission layer.
+///
+/// Extracted from the inline task body so the schema-validation gate and the
+/// permission checks live in one readable place. The behaviour is unchanged
+/// from the previous inline implementation.
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+pub(crate) async fn dispatch_tool_with_permissions(
+    tool: &std::sync::Arc<dyn crate::tool::Tool>,
+    tool_input: Value,
+    tc: &crate::session::history::PendingToolCall,
+    tool_ctx: &ToolContext,
+    permission_checker: &Arc<parking_lot::RwLock<crate::permission::PermissionChecker>>,
+    event_bus: &Arc<EventBus>,
+    session_id_for_perm: &str,
+    auto_approve: Option<bool>,
+    checkpoint_forced: bool,
+    checkpoint_timeout_secs: u64,
+    // SEC-ragent-agent-001 (SECTASKS T-007): `true` when a `pre_tool_use` hook
+    // explicitly approved this call. Checked against the policy verdict below
+    // so a hook can satisfy an `Ask` but never override an explicit `Deny`.
+    hook_approved: bool,
+    // T-015 (FR-006, FR-017): `true` when the LLM security analyzer returned an
+    // `allow` verdict for this call. Applied after the hook approval so it can
+    // satisfy a bare `Ask` but never override an explicit policy `Deny` or a
+    // forced destructive-action checkpoint.
+    security_approved: bool,
+    // `true` when this call is a write-capable tool in an unattended sub-agent
+    // run: the automatic sub-agent YOLO scope
+    // ([`subagent_yolo_bypasses_prompt`]). Threaded to every
+    // `check_permission_with_prompt` call below, including the per-sub-command
+    // ones a `Bash` call raises.
+    subagent_yolo: bool,
+) -> anyhow::Result<crate::tool::ToolOutput> {
+    let perm_category = tool.permission_category();
+    if perm_category.is_empty() || perm_category == "none" {
+        return dispatch_tool_leaf(tool, tool_input, tool_ctx).await;
+    }
+    let resource = extract_resource_from_input(&tool_input, &tc.name);
+    if tc.name == "Bash" {
+        let sub_commands = split_bash_command(&resource);
+        use ragent_tools_core::bash::is_safe_command;
+        // SEC-011: judge the *full* sub-command, not its first token. Passing
+        // only `extract_command_name(cmd)` let `ls & rm -rf docs/` through on the
+        // `ls` prefix; `is_safe_command` inspects the whole string for a
+        // separator, so the compound statement is correctly held for a prompt.
+        let all_safe = sub_commands.iter().all(|cmd| is_safe_command(cmd));
+        if all_safe {
+            return dispatch_tool_leaf(tool, tool_input, tool_ctx).await;
+        }
+        let mut all_approved = true;
+        for sub_cmd in &sub_commands {
+            let cmd_name = extract_command_name(sub_cmd);
+            let permission_action = check_permission_with_prompt(
+                permission_checker,
+                event_bus,
+                session_id_for_perm,
+                perm_category,
+                &cmd_name,
+                &tc.name,
+                auto_approve,
+                Some(&tool_ctx.canonical_cache),
+                checkpoint_forced,
+                checkpoint_timeout_secs,
+                security_approved,
+                subagent_yolo,
+                &tool_ctx.working_dir,
+            )
+            .await;
+            match permission_action {
+                Ok(crate::permission::PermissionAction::Allow) => continue,
+                Ok(
+                    crate::permission::PermissionAction::Deny
+                    | crate::permission::PermissionAction::Ask,
+                )
+                | Err(_) => {
+                    all_approved = false;
+                    break;
+                }
+            }
+        }
+        if all_approved {
+            return dispatch_tool_leaf(tool, tool_input, tool_ctx).await;
+        }
+        // SEC-ragent-agent-001 (SECTASKS T-007): a hook approval may satisfy
+        // the sub-command prompts - but only when no explicit rule denies any
+        // of them (the policy verdict is re-checked here rather than assumed).
+        if hook_approved
+            && !checkpoint_forced
+            && !policy_has_explicit_verdict(permission_checker, &sub_commands, perm_category)
+        {
+            tracing::info!(
+                tool = %tc.name,
+                "PreToolUse hook approval satisfied the bash permission prompt"
+            );
+            return dispatch_tool_leaf(tool, tool_input, tool_ctx).await;
+        }
+        return Err(anyhow::anyhow!(
+            "Permission denied for one or more sub-commands"
+        ));
+    }
+    let permission_action = check_permission_with_prompt(
+        permission_checker,
+        event_bus,
+        session_id_for_perm,
+        perm_category,
+        &resource,
+        &tc.name,
+        auto_approve,
+        Some(&tool_ctx.canonical_cache),
+        checkpoint_forced,
+        checkpoint_timeout_secs,
+        security_approved,
+        subagent_yolo,
+        &tool_ctx.working_dir,
+    )
+    .await;
+    // SEC-ragent-agent-001 (SECTASKS T-007): a hook approval may satisfy the
+    // prompt when the policy has no explicit verdict for this call. It never
+    // rescues a `Deny` (an explicit rule) and never bypasses a forced
+    // destructive-action checkpoint.
+    if hook_approved
+        && !checkpoint_forced
+        && matches!(
+            permission_action,
+            Ok(crate::permission::PermissionAction::Ask)
+        )
+    {
+        tracing::info!(
+            tool = %tc.name,
+            "PreToolUse hook approval satisfied the permission prompt"
+        );
+        return dispatch_tool_leaf(tool, tool_input, tool_ctx).await;
+    }
+    match permission_action {
+        Ok(crate::permission::PermissionAction::Allow) => {
+            dispatch_tool_leaf(tool, tool_input, tool_ctx).await
+        }
+        Ok(crate::permission::PermissionAction::Deny) => {
+            // T-010 (FR-015): when the denial comes from a forced
+            // destructive-action checkpoint (timeout or refusal), surface
+            // the checkpoint explanation so the model understands the
+            // safe-default intervention.
+            if checkpoint_forced {
+                Err(anyhow::anyhow!(
+                    crate::session::permissions::checkpoint_reason(&tc.name, &resource)
+                ))
+            } else {
+                Err(anyhow::anyhow!("Permission denied by user or policy"))
+            }
+        }
+        // FR-013 (T-016): an `Ask` that survived the permission layer is one
+        // whose verdict never resolved - the layer either prompts and returns a
+        // decision or turns a timeout into a `Deny`. It is refused here as an
+        // error, never reported as a success, so the tool phase can only append
+        // a denial observation and never an unapproved call's output. (The tool
+        // phase separately refuses an append for a call the tracker still names
+        // unresolved; see `result_is_appendable`.)
+        Ok(crate::permission::PermissionAction::Ask) => Err(anyhow::anyhow!(
+            "Permission check returned Ask (internal error)"
+        )),
+        Err(e) => Err(e),
+    }
+}
+
+/// Whether an explicit policy rule (allow/deny) exists for any bash
+/// sub-command of `tool_input`, i.e. the verdict is not a bare `Ask`.
+///
+/// SEC-ragent-agent-001 (SECTASKS T-007): used to decide whether a
+/// `pre_tool_use` hook approval may stand in for the bash sub-command prompts.
+/// A hook approval is only valid when the policy itself has nothing explicit
+/// to say; an explicit rule (in particular a `Deny`) always wins.
+fn policy_has_explicit_verdict(
+    checker: &Arc<parking_lot::RwLock<crate::permission::PermissionChecker>>,
+    sub_commands: &[String],
+    category: &str,
+) -> bool {
+    sub_commands.iter().any(|cmd| {
+        let name = extract_command_name(cmd);
+        let c = checker.read();
+        !matches!(
+            c.check(category, &name),
+            crate::permission::PermissionAction::Ask
+        )
+    })
+}
+
+/// The cache key for [`SessionProcessor::cached_tool_definitions`] (FR-015).
+///
+/// The tool-registry version alone does not describe the outbound list: the
+/// `tools.expose_alias_names` switch and the turn's alias table both change which
+/// names the list carries while the registry is untouched, so all three are part
+/// of the key and a config change takes effect on the next call.
+type ToolDefinitionCacheKey = (u64, bool, AliasTable);
+
+/// A project's own MCP client and the tool registry its sessions use
+/// (spec MULTISESSION M8).
+///
+/// The registry is the processor's base registry without the launch
+/// project's MCP tools, plus the tools of this project's servers. It is
+/// rebuilt whenever the base registry changes (a plugin, skill or connector
+/// registered a tool at runtime).
+pub struct ProjectToolRegistry {
+    /// The project's MCP client (its configured servers only).
+    pub client: Arc<tokio::sync::RwLock<crate::mcp::McpClient>>,
+    /// The bridged tools of the project's connected servers.
+    pub wrappers: Vec<Arc<dyn crate::tool::Tool>>,
+    /// The registry the project's turns read.
+    pub registry: Arc<ToolRegistry>,
+    /// The base registry version `registry` was built from.
+    pub base_version: u64,
+}
+
+impl std::fmt::Debug for ProjectToolRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProjectToolRegistry")
+            .field("wrappers", &self.wrappers.len())
+            .field("base_version", &self.base_version)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Builds a project registry: every base tool that is not an MCP wrapper,
+/// plus `wrappers`.
+fn build_project_registry(
+    base: &ToolRegistry,
+    wrappers: &[Arc<dyn crate::tool::Tool>],
+) -> Arc<ToolRegistry> {
+    let registry = ToolRegistry::new();
+    for tool in base.all_tools() {
+        if tool.mcp_wrapper_info().is_none() {
+            registry.register(tool);
+        }
+    }
+    for wrapper in wrappers {
+        registry.register(Arc::clone(wrapper));
+    }
+    Arc::new(registry)
+}
+
+/// Drives the agentic conversation loop for a single session.
+///
+/// Holds shared references to the session manager, LLM provider registry,
+/// tool registry, permission checker, and event bus.
+pub struct SessionProcessor {
+    /// Manages session persistence and lifecycle.
+    pub session_manager: Arc<SessionManager>,
+    /// Registry of available LLM providers.
+    pub provider_registry: Arc<ProviderRegistry>,
+    /// Registry of available tools the agent may invoke.
+    pub tool_registry: Arc<ToolRegistry>,
+    /// Checks whether a tool invocation is permitted.
+    pub permission_checker: Arc<parking_lot::RwLock<PermissionChecker>>,
+    /// Bus for broadcasting session and processing events.
+    pub event_bus: Arc<EventBus>,
+    /// Optional agent manager for sub-agent spawning (F13/F14).
+    /// Uses `OnceLock` to break the circular dependency with `AgentManager`.
+    pub agent_manager: std::sync::OnceLock<Arc<crate::task::AgentManager>>,
+    /// The team runtime this session processor is bound to, if any. A
+    /// rebindable slot (not a `OnceLock`) so a later team gets its own
+    /// manager once the bound team is gone.
+    pub team_manager: crate::team::TeamManagerSlot,
+    /// M8-T1: cache for `resolve_team_context_for_session`. Maps session id
+    /// -> `(TeamContext, Instant)` with a 5-second TTL. Invalidated on team
+    /// create/join/leave. Avoids scanning every team directory on every
+    /// message (O(teams) -> O(1) amortised).
+    pub team_context_cache: std::sync::Arc<
+        parking_lot::RwLock<
+            std::collections::HashMap<String, (crate::tool::TeamContext, std::time::Instant)>,
+        >,
+    >,
+    /// Tool-repeat guard (FR-044): per-session trackers for consecutive
+    /// identical tool calls. After [`TOOL_REPEAT_LIMIT`] identical calls the
+    /// guard prompts the user (primary runs) or denies the call with a
+    /// corrective observation (subagent / auto-approve runs).
+    pub tool_repeat_guard: std::sync::Arc<
+        parking_lot::Mutex<HashMap<String, crate::session::permissions::RepeatTracker>>,
+    >,
+    /// Optional MCP client for dynamic MCP tool registration.
+    /// Set once after startup via [`SessionProcessor::set_mcp_client`].
+    pub mcp_client: std::sync::OnceLock<Arc<tokio::sync::RwLock<crate::mcp::McpClient>>>,
+    /// The connector lifecycle session, owned here so a `/connectors
+    /// enable|connect` invocation drives the same tracked connectors
+    /// session-start loaded (spec `connectors` T-008; FR-008, FR-012, FR-013,
+    /// FR-018, FR-019).
+    ///
+    /// `ragent-agent` must not depend on `ragent-connectors`, so the session is
+    /// type-erased: the owner stores an `Arc<dyn Any + Send + Sync>` and callers
+    /// downcast through [`connector_session`](Self::connector_session).
+    pub connector_session: tokio::sync::RwLock<Option<Arc<dyn std::any::Any + Send + Sync>>>,
+    /// The live connector lifecycle snapshot (`connected` / `errored` and the
+    /// per-server tool lists) behind `/connectors list` (FR-009).
+    ///
+    /// Also type-erased as an `Arc<dyn Any + Send + Sync>` holding a
+    /// `Vec<ConnectorStatus>`; `None` means no session has loaded the connectors
+    /// yet, so a list render falls back to the persisted store state.
+    pub connector_statuses: tokio::sync::RwLock<Option<Arc<dyn std::any::Any + Send + Sync>>>,
+    /// Optional code index for codebase search and symbol lookup.
+    /// Uses `OnceLock` so it can be set after the processor is constructed.
+    /// This is the launch project's index; see [`Self::code_index_for`].
+    pub code_index: std::sync::OnceLock<Arc<ragent_codeindex::CodeIndex>>,
+    /// Code indexes of other open projects, keyed by project root
+    /// (`ragent_storage::project_root`). Registered and released by the
+    /// surface that owns the sessions (spec MULTISESSION M8).
+    pub project_code_indexes:
+        parking_lot::Mutex<std::collections::HashMap<PathBuf, Arc<ragent_codeindex::CodeIndex>>>,
+    /// MCP clients and tool registries of other open projects that have
+    /// their own MCP configuration, keyed by project root
+    /// (spec MULTISESSION M8).
+    pub project_tool_registries:
+        parking_lot::Mutex<std::collections::HashMap<PathBuf, ProjectToolRegistry>>,
+    /// Optional background task service for the `bg` tool (M3).
+    /// Uses `OnceLock` so it can be set after storage is created.
+    pub bg_service: std::sync::OnceLock<Arc<crate::background::BackgroundTaskService>>,
+    /// Active spec ID for context injection into agent prompts.
+    /// Set via `/spec activate` in the TUI or via programmatic API.
+    pub active_spec: tokio::sync::RwLock<Option<String>>,
+    /// Optional spec manager for reading and updating specifications.
+    /// Uses `OnceLock` so it can be set after the processor is constructed.
+    pub spec_manager: std::sync::OnceLock<Arc<ragent_specs::SpecManager>>,
+    /// Cached tool definitions for the agent loop. Populated after MCP client
+    /// registration via [`set_mcp_client`] and invalidated when tools change.
+    ///
+    /// FR-015: the entry is keyed by `(tool-registry version,
+    /// expose_alias_names, the alias table)`, because the advertising switch and
+    /// the alias table change the outbound list without a tool being registered.
+    pub cached_tool_definitions:
+        parking_lot::RwLock<Option<(ToolDefinitionCacheKey, Arc<Vec<ToolDefinition>>)>>,
+    /// Cached tool *names* for the `ToolsSent` event (PERF-003).
+    ///
+    /// Mirrors [`cached_tool_definitions`]: the comma-joined name list is built
+    /// once when the definitions cache is populated and reused on every loop
+    /// step, avoiding the 111-String-per-step allocation on the hot path.
+    /// Invalidated together with [`cached_tool_definitions`] by
+    /// [`invalidate_tool_cache`].
+    pub cached_tool_names: parking_lot::RwLock<Option<Arc<[String]>>>,
+    /// Cached total serialised byte size of the cached tool definitions
+    /// (P-7 / PERF-014). Populated alongside [`cached_tool_definitions`] so
+    /// the per-step request-size estimate can reuse the sum instead of
+    /// re-serialising ~111 `ToolDefinition::parameters` JSON schemas on every
+    /// step. Invalidated together with [`cached_tool_definitions`] by
+    /// [`invalidate_tool_cache`].
+    pub cached_tool_definition_bytes: parking_lot::RwLock<Option<u64>>,
+    /// H2: cache of warm LLM clients keyed by `provider/model`. Providers
+    /// rebuild their `reqwest::Client` (and thus their connection pool / TLS /
+    /// keep-alive state) inside `create_client`, which `prepare_client` used
+    /// to call on every turn. Caching the resulting `Arc<dyn LlmClient>` here
+    /// lets a session reuse one warm client across all its turns and loop
+    /// steps instead of re-establishing connections each time.
+    pub llm_client_cache:
+        parking_lot::RwLock<std::collections::HashMap<String, Arc<dyn crate::llm::LlmClient>>>,
+    /// LLM stream configuration (timeouts, retries, backoff).
+    pub stream_config: crate::StreamConfig,
+    /// Memory extraction engine for automatic memory candidate generation.
+    pub extraction_engine: std::sync::OnceLock<Arc<crate::memory::ExtractionEngine>>,
+    /// Auto-approve all permissions without prompting (set by --yes / --no-prompt CLI flag).
+    pub auto_approve: bool,
+    /// Cached per-component system-prompt builders (FR-008, FR-009).
+    ///
+    /// Sharing a single cache across all turns of a session lets the
+    /// `tool_reference`, `codeindex_guidance`, and `team_guidance` strings
+    /// be computed at most once per process-user-message, instead of once
+    /// per step.  Treated as a best-effort cache: a miss is always
+    /// acceptable, the cache exists only to skip the work when inputs are
+    /// unchanged.
+    pub system_prompt_cache: parking_lot::RwLock<Option<Arc<SystemPromptCache>>>,
+    /// Read timestamps (mtime in milliseconds since UNIX epoch) for files
+    /// that have been read by this session. Shared with edit tools via
+    /// [`crate::tool::ToolContext`] so they can detect stale-file edits
+    /// (editrenewal FR-003).
+    pub read_timestamps: Arc<RwLock<HashMap<PathBuf, u64>>>,
+    /// P-2: cache of the resolved [`ragent_config::Config`] keyed by the
+    /// modification times of every config file that contributed to it. The
+    /// config is immutable for the lifetime of a session, so re-reading
+    /// `ragent.json` from disk on every `process_user_message` call is pure
+    /// I/O. This cache reloads only when one of the contributing files
+    /// changes on disk (or when an environment-variable override
+    /// (`RAGENT_CONFIG` / `RAGENT_CONFIG_CONTENT`) is present, which
+    /// disables the cache because env vars have no mtime to track).
+    pub cached_config: parking_lot::Mutex<Option<CachedConfig>>,
+    /// Telemetry subsystem for recording LLM, tool, session, and permission
+    /// metrics. Wired into the binary unconditionally.
+    pub telemetry: Arc<crate::telemetry::TelemetrySubsystem>,
+    /// Per-session cache of invoked skill bodies (FR-008).
+    ///
+    /// Maps skill name -> processed body text. Populated on demand when a skill
+    /// is invoked, so repeated invocations of the same skill within a session
+    /// avoid re-reading the `SKILL.md` body from disk. The cache is a
+    /// best-effort optimisation: a miss simply triggers a fresh load.
+    pub skill_body_cache: Arc<RwLock<HashMap<String, String>>>,
+    /// Optional activity-log store for agent execution events.
+    ///
+    /// Set once after construction via [`SessionProcessor::set_activity_log`],
+    /// matching the `OnceLock` pattern used by `code_index`, `bg_service`,
+    /// etc. Recording is gated at call sites by
+    /// [`ragent_config::activity_log::is_enabled`] so that `/alog off`
+    /// suppresses all writes without unwiring the handle.
+    ///
+    /// PERF-040: when a store is wired, a single background writer task
+    /// ([`SessionProcessor::start_activity_writer`]) owns it and serialises
+    /// `ActivityLog::append` calls from all sessions over one
+    /// `std::sync::Mutex<Connection>`, draining them with `recv_many` so N
+    /// per-event `spawn_blocking`s collapse into one blocking thread. When no
+    /// store is wired the writer is absent; `record_activity_event` is then a
+    /// no-op and never spawns a task.
+    pub activity_log: std::sync::OnceLock<Arc<ragent_storage::ActivityLog>>,
+    /// PERF-040: the per-process activity-log writer task handle plus the
+    /// channel every `record_activity_event` clone sends its append closure
+    /// over. `start_activity_writer` initialises it once with the wired store;
+    /// the `Option` is `None` until then (and forever when logging is off).
+    pub activity_log_tx: tokio::sync::Mutex<
+        Option<
+            tokio::sync::mpsc::UnboundedSender<
+                Box<dyn FnOnce(&ragent_storage::ActivityLog) + Send + 'static>,
+            >,
+        >,
+    >,
+    /// C-001: cached skill registry keyed by the mtimes of the scanned
+    /// skill directories plus the `extra_dirs` list. `SkillRegistry::load`
+    /// scans the ordered roots from `skill::loader::discovery_roots` - including
+    /// the AgentSkills `.agents/skills/` project and `~/.agents/skills/` user
+    /// directories (FR-005) - and does synchronous `std::fs` walks +
+    /// `serde_norway` parses across up to 8 directories on every turn; caching it
+    /// here (invalidated when any contributing directory's mtime changes)
+    /// eliminates that per-turn disk I/O.
+    pub skill_registry_cache: parking_lot::Mutex<Option<CachedSkillRegistry>>,
+    /// Active goal-driven loop runs (spec `agentloop`), keyed by session id.
+    ///
+    /// Set via [`SessionProcessor::start_loop`] when a loop is launched (TUI
+    /// `/loop` or HTTP `POST /loop`), and removed on termination. Plain chat
+    /// turns have no entry and behave exactly as before; loop runs enforce
+    /// the loop stop conditions (FR-010, FR-013, FR-014) in the agent loop.
+    pub active_loops: tokio::sync::RwLock<HashMap<String, crate::session::loop_state::LoopTracker>>,
+    /// The [`LoopSpec`] of each active goal-driven loop run, keyed by session
+    /// id (spec `agentloop` T-009).
+    ///
+    /// Maintained alongside [`SessionProcessor::active_loops`]: inserted by
+    /// [`SessionProcessor::start_loop`], removed on termination and by
+    /// [`SessionProcessor::clear_loop`]. The permission layer consults the
+    /// spec before every tool execution to enforce the loop's tool-set
+    /// restriction (FR-008/FR-009), read-only constraints (FR-021), and
+    /// scope boundaries (FR-022) - denials return observations to the model.
+    /// T-003: the stored spec carries the resolved budgets (spec value or
+    /// the `loop` config default) so consumers see effective limits.
+    pub active_loop_specs:
+        tokio::sync::RwLock<HashMap<String, Arc<crate::session::loop_state::LoopSpec>>>,
+    /// FR-025: set to `true` when the loop telemetry record
+    /// ([`SessionRecorder::record_agent_loop`] plus the per-run tool-call
+    /// total) has been published for the current loop run, so it is recorded
+    /// exactly once per run. Cleared by [`SessionProcessor::start_loop`]
+    /// when a new run starts.
+    pub loop_telemetry_recorded: std::sync::atomic::AtomicBool,
+    /// FR-016 (T-011): the human-interrupt flag for each active goal-driven
+    /// loop run, keyed by session id. Raised by
+    /// [`SessionProcessor::request_loop_interrupt`] (the TUI `Esc` path) and
+    /// consulted at every inter-stage safe point in the agent loop; a set
+    /// flag stops the run with [`StopCondition::HumanIntervention`]
+    /// (termination status `interrupted`). Created by
+    /// [`SessionProcessor::start_loop`], removed on termination and by
+    /// [`SessionProcessor::clear_loop`].
+    pub active_loop_interrupts: parking_lot::RwLock<HashMap<String, Arc<AtomicBool>>>,
+    /// FR-018 (T-012): the pre-loop workspace capture of each goal-driven
+    /// loop run, keyed by session id. Armed lazily by
+    /// [`SessionProcessor::ensure_pre_loop_capture`] immediately before the
+    /// loop's first write action, consulted on termination to compute the
+    /// change summary ([`Event::LoopChangeSummary`], FR-019), and consumed
+    /// by the rollback flow ([`SessionProcessor::rollback_loop`], FR-020).
+    /// Survives termination until rollback or an explicit
+    /// [`SessionProcessor::clear_loop`] so the post-loop rollback offer can
+    /// still restore it.
+    pub active_loop_captures:
+        tokio::sync::RwLock<HashMap<String, crate::session::loop_capture::LoopCapture>>,
+    /// Terminal [`FinishReason`] of the most recently ended `MessageEnd` on
+    /// each session, recorded right before the event is published so parent
+    /// contexts (the task registry's `SubagentComplete` publisher, team
+    /// telemetry) can report the real loop outcome instead of a hard-coded
+    /// `"stop"`. Inserted at every turn finalise; cleared at run entry.
+    pub last_message_end_reason:
+        std::sync::RwLock<HashMap<String, ragent_types::event::FinishReason>>,
+    /// The tool calls whose permission verdict has not resolved, per session
+    /// (FR-013 of spec `uniformtools`).
+    ///
+    /// The dispatch pipeline's permission stage marks a call unresolved
+    /// immediately before a prompt is published and settles it when the verdict
+    /// resolves, so [`SessionProcessor`] never appends a tool result for a call
+    /// that is still awaiting approval. Holding the tracker here - rather than
+    /// inside one call's dispatch - is what makes it a *state* the tool phase can
+    /// read rather than a property of one call's local flow; see
+    /// [`crate::session::pending`].
+    pub pending_verdicts: crate::session::pending::PendingVerdicts,
+}
+
+/// C-001: a cached [`crate::skill::SkillRegistry`] plus the inputs used to
+/// build it. `working_dir`, `extra_dirs`, and the mtimes of every skill
+/// directory are recorded so the cache reloads only when a skill directory
+/// changes on disk (a new `SKILL.md` or subdirectory updates its parent's
+/// mtime).
+#[derive(Clone)]
+pub struct CachedSkillRegistry {
+    /// The loaded registry.
+    pub registry: crate::skill::SkillRegistry,
+    /// `(directory, mtime)` pairs for every scanned skill directory.
+    pub dir_mtimes: Vec<(PathBuf, std::time::SystemTime)>,
+    /// The `extra_dirs` config list used to build the registry.
+    pub extra_dirs: Vec<String>,
+    /// The working directory the registry was built for.
+    pub working_dir: PathBuf,
+}
+
+/// P-2: the cached resolved config plus the inputs used to build it.
+///
+/// `file_mtines` records `(path, mtime)` for every entry in
+/// [`Config::config_paths`]. The cache is valid while none of those mtimes
+/// change. `env_overrides_present` records whether either
+/// `RAGENT_CONFIG` or `RAGENT_CONFIG_CONTENT` was set at load time - when
+/// set, the cache is bypassed on the next load because env vars have no
+/// mtime to track.
+#[derive(Clone)]
+pub struct CachedConfig {
+    /// The resolved configuration wrapped in `Arc` for cheap cloning.
+    pub config: Arc<ragent_config::Config>,
+    /// `(path, mtime)` pairs for each contributing config file.
+    pub file_mtimes: Vec<(PathBuf, std::time::SystemTime)>,
+    /// Whether env-var overrides were present when this entry was built.
+    pub env_overrides_present: bool,
+}
+
+impl SessionProcessor {
+    /// Bind a [`TeamManager`](crate::team::TeamManager) for the team this
+    /// session leads, if no manager is bound yet.
+    ///
+    /// The TUI binds one when it sees a team created; the other entry points
+    /// (`run`, `serve`, ACP) had nothing that did, so `team_spawn` there could
+    /// never start a teammate. This runs before tool dispatch. A manager whose
+    /// team is gone is unbound; a live manager of another team is kept, so
+    /// concurrent sessions leading different teams do not fight over the slot.
+    /// It is a no-op when the manager already drives this session's team, when
+    /// the session leads no team, or when
+    /// no [`AgentManager`](crate::task::AgentManager) is wired (it supplies the
+    /// owning `Arc` of this processor that a `TeamManager` needs). Members left
+    /// in `Spawning` (queued by blueprint seeding before the runtime existed)
+    /// are reconciled, and the watchdog is started.
+    ///
+    /// # Arguments
+    /// * `team_context` - the session's resolved team identity, if any.
+    /// * `working_dir` - the session's working directory (team discovery root).
+    /// * `model` - the lead's active model, inherited by reconciled teammates.
+    pub fn ensure_team_manager(
+        &self,
+        team_context: Option<&crate::tool::TeamContext>,
+        working_dir: &std::path::Path,
+        model: &crate::agent::ModelRef,
+    ) {
+        let Some(tc) = team_context.filter(|tc| tc.is_lead) else {
+            return;
+        };
+        if let Some(bound) = self.team_manager.get() {
+            // Team context resolves only `Active` teams, so a manager already
+            // driving this session's team is live: nothing to do, no disk read.
+            if bound.team_name == tc.team_name {
+                return;
+            }
+            // A live manager of another team is kept. One processor serves
+            // many sessions in `serve` mode; replacing it whenever a session
+            // leading a different team ran a step would flip the binding back
+            // and forth and strand each team's running teammates. That team's
+            // `team_spawn` is refused by the manager until it is gone.
+            if bound.team_is_live() {
+                return;
+            }
+            // Its team was closed, deleted or cleaned up: unbind it, unless
+            // another session already rebound the slot meanwhile.
+            tracing::info!(team = %bound.team_name, "unbinding the TeamManager of a team that is gone");
+            self.team_manager.clear_if(&bound);
+        }
+        let Some(agent_manager) = self.agent_manager.get() else {
+            return;
+        };
+        let Ok(store) = crate::team::TeamStore::load_by_name(&tc.team_name, working_dir) else {
+            return;
+        };
+        let mut manager = crate::team::TeamManager::new(
+            tc.team_name.clone(),
+            store.config.lead_session_id.clone(),
+            store.dir.clone(),
+            Arc::clone(agent_manager.processor()),
+            self.event_bus.clone(),
+        );
+        manager.active_model = Some(model.clone());
+        let manager = manager.into_arc();
+        // `set` binds only into an empty slot, so a manager another session
+        // bound in the meantime wins and this one is dropped unused.
+        if self.team_manager.set(Arc::clone(&manager)).is_ok() {
+            tracing::info!(team = %tc.team_name, "TeamManager bound for the lead session");
+            Arc::clone(&manager).reconcile_spawning_members();
+            manager.start_watchdog();
+        }
+    }
+
+    /// Set the activity-log store.
+    ///
+    /// Called once after construction (matching the `OnceLock` pattern for
+    /// `code_index`, `bg_service`, etc.). Recording is gated at each call
+    /// site by [`ragent_config::activity_log::is_enabled`], so the handle
+    /// can be wired unconditionally and `/alog off` simply suppresses writes.
+    pub fn set_activity_log(&self, log: Arc<ragent_storage::ActivityLog>) {
+        let _ = self.activity_log.set(log);
+    }
+
+    /// PERF-040: start the background activity-log writer for the wired store.
+    ///
+    /// Spawns one task that owns the `ActivityLog` and drains every queued
+    /// append closure, batching with `recv_many` so many events collapse into a
+    /// single blocking-thread hop. Called once by the binary right after
+    /// [`Self::set_activity_log`]; a no-op when no store is wired.
+    pub async fn start_activity_writer(&self) {
+        let Some(log) = self.activity_log.get().cloned() else {
+            return;
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        *self.activity_log_tx.lock().await = Some(tx);
+        tokio::spawn(async move {
+            let mut batch: Vec<Box<dyn FnOnce(&ragent_storage::ActivityLog) + Send + 'static>> =
+                Vec::with_capacity(64);
+            loop {
+                // Block for the first event, then opportunistically drain any
+                // others that are already queued so a burst becomes one batch.
+                match rx.recv_many(&mut batch, 64).await {
+                    0 => break, // all senders dropped
+                    _ => {}
+                }
+                if let Err(e) = tokio::task::spawn_blocking({
+                    let log = log.clone();
+                    let batch = std::mem::take(&mut batch);
+                    move || {
+                        for record in batch {
+                            record(&log);
+                        }
+                    }
+                })
+                .await
+                {
+                    tracing::warn!(error = %e, "activity_log: writer task join failed");
+                }
+                batch.clear();
+            }
+        });
+    }
+
+    /// Start a goal-driven loop run for `session_id` (spec `agentloop`).
+    ///
+    ///
+    /// Registers a [`LoopTracker`] initialised from `spec` so the agent
+    /// loop enforces the loop stop conditions (FR-010, FR-013, FR-014).
+    /// T-003: budget fallbacks are resolved here - when the spec leaves a
+    /// budget unset, the loop config defaults (`ragent-config` T-002:
+    /// `loop.max_steps`, `loop.cost_limit`) apply, so the pre-request
+    /// budget gates in the agent loop always have limits to enforce. An
+    /// explicitly configured spec value wins over the config default.
+    /// Starting a loop for a session that already has one replaces the
+    /// previous tracker. The tracker is removed when the loop terminates
+    /// (any stop condition) - plain chat turns have no entry and behave
+    /// exactly as before.
+    pub async fn start_loop(&self, session_id: &str, mut spec: LoopSpec) {
+        // T-003 (FR-013, FR-014): a `None` budget in the spec means "the
+        // config default applies" (T-002 semantics); resolve it here so
+        // the tracker's budget_breach gates are always armed.
+        let loop_defaults = self.load_config_cached().r#loop.clone();
+        if spec.max_steps.is_none() {
+            spec.max_steps = Some(loop_defaults.max_steps);
+        }
+        if spec.cost_limit.is_none() {
+            spec.cost_limit = loop_defaults.cost_limit;
+        }
+        // Checkpoint-prompt timeout: a `None` spec value resolves to the
+        // config default so `active_loop_specs` always holds the effective
+        // value (the permission layer reads it from the spec).
+        if spec.checkpoint_timeout_secs.is_none() {
+            spec.checkpoint_timeout_secs = Some(loop_defaults.checkpoint_timeout_secs);
+        }
+        // T-017 (FR-025): a fresh run must publish its own telemetry record,
+        // so clear the exactly-once flag here.
+        self.loop_telemetry_recorded
+            .store(false, std::sync::atomic::Ordering::Release);
+        let tracker = crate::session::loop_state::LoopTracker::new(&spec);
+        {
+            let mut loops = self.active_loops.write().await;
+            loops.insert(session_id.to_string(), tracker);
+        }
+        // T-009: record the spec so the permission layer can enforce the
+        // loop's tool-set/scope/constraint restrictions on every tool call.
+        let mut specs = self.active_loop_specs.write().await;
+        specs.insert(session_id.to_string(), Arc::new(spec));
+        // T-011 (FR-016): arm a fresh human-interrupt flag for this run.
+        self.active_loop_interrupts
+            .write()
+            .insert(session_id.to_string(), Arc::new(AtomicBool::new(false)));
+        // T-012 (FR-018): record the workspace's git state when the session
+        // directory sits inside a repository; when it does not, warn that
+        // rollback will be snapshot-only so the user can confirm before the
+        // loop writes anything. The capture itself is deferred to
+        // `ensure_pre_loop_capture` (the first-write safe point).
+        let working_dir = self
+            .session_manager
+            .get_session(session_id)
+            .ok()
+            .flatten()
+            .map(|session| session.directory)
+            .unwrap_or_default();
+        let git = crate::session::loop_capture::git_state(&working_dir).await;
+        match &git {
+            Some(state) => tracing::info!(
+                session_id = %session_id,
+                git = %state.describe(),
+                "loop workspace git state recorded (FR-018)"
+            ),
+            None => {
+                tracing::warn!(
+                    session_id = %session_id,
+                    "loop workspace is not inside a git repository (FR-018); \
+                     rollback will be snapshot-only"
+                );
+                self.event_bus.publish(Event::AgentNotice {
+                    session_id: session_id.to_string(),
+                    message: "loop: workspace is not inside a git repository \
+                              - rollback will be snapshot-only. Confirm to \
+                              continue."
+                        .to_string(),
+                });
+            }
+        }
+        self.active_loop_captures.write().await.insert(
+            session_id.to_string(),
+            crate::session::loop_capture::LoopCapture {
+                snapshot: None,
+                git,
+            },
+        );
+    }
+
+    /// Whether a goal-driven loop is active for `session_id`.
+    pub async fn loop_active(&self, session_id: &str) -> bool {
+        self.active_loops.read().await.contains_key(session_id)
+    }
+
+    /// Drop every pending pre-loop capture (FR-020, T-013).
+    ///
+    /// Called when the user declines a rollback offer: there is no pending
+    /// offer left to honour, so the captures are discarded and no later
+    /// rollback can resurrect them. A no-op when no captures are pending.
+    pub async fn clear_loop_captures(&self) {
+        self.active_loop_captures.write().await.clear();
+    }
+
+    /// Remove the active loop tracker for `session_id`, if any.
+    ///
+    /// Called after termination so subsequent plain chat turns do not
+    /// consult loop budgets (FR-017: no iteration after a stop condition).
+    pub async fn clear_loop(&self, session_id: &str) {
+        self.active_loops.write().await.remove(session_id);
+        self.active_loop_specs.write().await.remove(session_id);
+        self.active_loop_interrupts.write().remove(session_id);
+        // T-012: an explicit clear discards the pre-loop capture as well -
+        // there is no pending rollback offer to honour.
+        self.active_loop_captures.write().await.remove(session_id);
+    }
+
+    /// Raise the human-interrupt flag for `session_id`'s active goal-driven
+    /// loop (FR-016, T-011).
+    ///
+    /// Called when the user presses `Esc` while a loop is running: the agent
+    /// loop aborts at the next inter-stage safe point and terminates with
+    /// termination status `interrupted`, leaving the session persisted and
+    /// resumable. A no-op returning `false` when no loop is active for the
+    /// session (plain turns cancel through the cancel flag alone, exactly as
+    /// before).
+    ///
+    /// Returns `true` when an active loop's interrupt flag was raised.
+    pub fn request_loop_interrupt(&self, session_id: &str) -> bool {
+        let flag = self.active_loop_interrupts.read().get(session_id).cloned();
+        match flag {
+            Some(flag) => {
+                flag.store(true, Ordering::Relaxed);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Arm the pre-loop workspace capture for `session_id`'s loop run
+    /// (FR-018, T-012), unless it is already armed.
+    ///
+    /// Called at the first-write safe point - immediately before the loop's
+    /// first write action executes - so the snapshot records the workspace
+    /// exactly as the loop found it. A no-op when no loop run exists for the
+    /// session or when the capture already holds a snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the storage-backed snapshot write fails; the
+    /// caller surfaces the failure as a tool error observation.
+    pub async fn ensure_pre_loop_capture(
+        &self,
+        session_id: &str,
+        working_dir: &std::path::Path,
+        message_id: &str,
+    ) -> Result<(), anyhow::Error> {
+        let Some(capture) = self
+            .active_loop_captures
+            .read()
+            .await
+            .get(session_id)
+            .cloned()
+        else {
+            return Ok(()); // No loop run: plain chat turn, nothing to capture.
+        };
+        if capture.snapshot.is_some() {
+            return Ok(()); // Already captured before an earlier write action.
+        }
+        let snapshot = crate::session::loop_capture::capture_pre_loop_snapshot(
+            session_id,
+            message_id,
+            working_dir,
+        )
+        .await?;
+        tracing::info!(
+            session_id = %session_id,
+            files = snapshot.as_ref().map_or(0, |s| s.files.len()),
+            "pre-loop workspace snapshot captured (FR-018)"
+        );
+        // Only the snapshot slot is updated; the recorded git state stays.
+        let mut updated = capture;
+        updated.snapshot = snapshot;
+        self.active_loop_captures
+            .write()
+            .await
+            .insert(session_id.to_string(), updated);
+        Ok(())
+    }
+
+    /// Restore the workspace from `session_id`'s pre-loop capture (FR-020,
+    /// T-013) and drop the capture.
+    ///
+    /// Returns `true` when a capture existed and was restored; `false` when
+    /// no capture is pending (nothing was written, or rollback already ran).
+    ///
+    /// The capture is removed only *after* the restore has fully completed:
+    /// the TUI's spawned rollback task deposits its outcome into the
+    /// `rollback_result` mailbox when this call returns, and the UI then reads
+    /// the workspace files - a caller that observes the capture map becoming
+    /// empty must already see the pre-loop contents on disk (CI regression:
+    /// `test_rollback_accept_restores_snapshot`; cover:
+    /// `test_rollback_loop_file_is_restored_when_the_call_returns`). On a
+    /// failed restore the entry was never removed, so the caller can retry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the snapshot restore fails; the capture is
+    /// kept so the caller can retry.
+    pub async fn rollback_loop(&self, session_id: &str) -> Result<bool, anyhow::Error> {
+        let Some(capture) = self
+            .active_loop_captures
+            .read()
+            .await
+            .get(session_id)
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        if let Err(e) = crate::session::loop_capture::rollback_to_capture(capture).await {
+            tracing::warn!(
+                session_id = %session_id,
+                error = %e,
+                "loop rollback failed; the capture is kept for retry (FR-020)"
+            );
+            return Err(e);
+        }
+        self.active_loop_captures.write().await.remove(session_id);
+        tracing::info!(
+            session_id = %session_id,
+            "workspace rolled back to the pre-loop snapshot (FR-020)"
+        );
+        Ok(true)
+    }
+
+    /// Publish [`Event::LoopChangeSummary`] for a terminated loop run
+    /// (FR-019), comparing the live workspace against the pre-loop capture.
+    ///
+    /// A no-op when the session has no capture (the capture is armed lazily
+    /// before the first write action, so read-only loops never publish a
+    /// summary).
+    async fn publish_loop_change_summary(
+        &self,
+        session_id: &str,
+        status: &str,
+        iterations: u64,
+        working_dir: &std::path::Path,
+    ) {
+        let Some(capture) = self
+            .active_loop_captures
+            .read()
+            .await
+            .get(session_id)
+            .cloned()
+        else {
+            return;
+        };
+        let dir_owned = working_dir.to_path_buf();
+        // A panicked or aborted change-summary computation must not be
+        // published as an all-zero summary (misleading UI data); warn and
+        // skip the event instead.
+        let summary = match tokio::task::spawn_blocking(move || {
+            crate::session::loop_capture::compute_change_summary(&capture, &dir_owned)
+        })
+        .await
+        {
+            Ok(summary) => summary,
+            Err(e) => {
+                tracing::warn!(
+                    session_id = %session_id,
+                    error = %e,
+                    "loop change summary computation failed; summary not published",
+                );
+                return;
+            }
+        };
+        tracing::info!(
+            session_id = %session_id,
+            status,
+            modified = summary.modified,
+            created = summary.created,
+            deleted = summary.deleted,
+            diffstat = %summary.diffstat(),
+            "loop change summary published (FR-019)"
+        );
+        self.event_bus.publish(Event::LoopChangeSummary {
+            session_id: session_id.to_string(),
+            status: status.to_string(),
+            iterations,
+            files_modified: summary.modified,
+            files_created: summary.created,
+            files_deleted: summary.deleted,
+            diffstat: summary.diffstat(),
+            files: summary.files,
+        });
+    }
+
+    /// Terminate the loop for `session_id` with `condition` (FR-010-FR-013):
+    /// stop the tracker, publish [`Event::LoopTerminated`], and remove the
+    /// tracker so no further stage can run (FR-017). The published `status`
+    /// is the stable termination label (`completed`, `error`,
+    /// `budget_exhausted`, `interrupted`).
+    ///
+    /// Returns the effective stop condition, or `None` when no loop is
+    /// active for the session.
+    ///
+    /// Note: this external path carries no run-start instant, so the
+    /// FR-025 telemetry record is not published here; in-run termination
+    /// paths (inside [`SessionProcessor::process_user_message`]) record it.
+    pub async fn terminate_loop(
+        &self,
+        session_id: &str,
+        condition: crate::session::loop_state::StopCondition,
+        verification: Option<String>,
+        reason: Option<String>,
+    ) -> Option<crate::session::loop_state::StopCondition> {
+        self.terminate_loop_inner(
+            session_id,
+            condition,
+            None,
+            None,
+            verification,
+            reason,
+            None,
+        )
+        .await
+    }
+
+    /// Shared termination path: take the tracker out of the active map,
+    /// optionally tally the final exchange's tokens, apply the stop
+    /// condition (first stop wins, FR-017), publish
+    /// [`Event::LoopTerminated`] exactly once, and - T-017 (FR-025) -
+    /// record the loop telemetry (`iterations` + `duration_ms`) exactly
+    /// once per run when `run_start` is supplied.
+    ///
+    /// T-012 (FR-019): when the run captured a pre-loop workspace snapshot,
+    /// a [`Event::LoopChangeSummary`] is published after the termination
+    /// event with the modified/created/deleted counts and the diffstat. The
+    /// capture survives termination so the rollback offer (T-013) can still
+    /// restore it; `clear_loop` discards it.
+    async fn terminate_loop_inner(
+        &self,
+        session_id: &str,
+        condition: crate::session::loop_state::StopCondition,
+        run_start: Option<Instant>,
+        final_tokens: Option<(u64, u64)>,
+        verification: Option<String>,
+        reason: Option<String>,
+        working_dir: Option<&std::path::Path>,
+    ) -> Option<crate::session::loop_state::StopCondition> {
+        let mut tracker = self.active_loops.write().await.remove(session_id)?;
+        self.active_loop_specs.write().await.remove(session_id);
+        // T-011 (FR-016): the run is over - drop its interrupt flag.
+        self.active_loop_interrupts.write().remove(session_id);
+        if let Some((input_tokens, output_tokens)) = final_tokens {
+            tracker.record_tokens(input_tokens, output_tokens);
+        }
+        // First stop condition wins (FR-017); a tracker that already
+        // stopped keeps its original condition.
+        let effective = tracker.stop(condition);
+        let iterations = tracker.steps();
+        let tokens = tracker.tokens();
+        let status = effective.as_str();
+        self.event_bus.publish(Event::LoopTerminated {
+            session_id: session_id.to_string(),
+            status: status.to_string(),
+            iterations: u64::from(iterations),
+            verification,
+            reason,
+        });
+        // T-017 (FR-025): record the loop telemetry exactly once per run -
+        // the iteration count and total duration via the existing agent-loop
+        // instruments, plus the per-iteration tool-call tally published as
+        // the per-session tool-call total.
+        if run_start.is_some()
+            && !self
+                .loop_telemetry_recorded
+                .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            let elapsed_ms = run_start.map_or(0, |start| {
+                u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
+            });
+            let duration_ms = elapsed_ms as f64;
+            let recorder = SessionRecorder::from_subsystem(&self.telemetry);
+            recorder.record_agent_loop(duration_ms, u64::from(iterations));
+            recorder.record_tool_calls_per_session(tracker.tool_calls());
+            tracing::info!(
+                session_id = %session_id,
+                status,
+                iterations,
+                duration_ms,
+                tool_calls = tracker.tool_calls(),
+                tokens,
+                "loop telemetry recorded (FR-025)"
+            );
+        }
+        tracing::info!(
+            session_id = %session_id,
+            status,
+            iterations,
+            tokens,
+            "goal-driven loop terminated"
+        );
+        // T-012 (FR-019): a run that captured the workspace publishes the
+        // change summary alongside the termination event. `working_dir` is
+        // supplied only by in-run termination paths; the public external
+        // path (`terminate_loop`) has no directory and skips the summary.
+        if let Some(dir) = working_dir {
+            self.publish_loop_change_summary(session_id, status, u64::from(iterations), dir)
+                .await;
+        }
+        Some(effective)
+    }
+
+    /// Shared implementation behind the two loop-termination entry points:
+    /// checks activity, logs, and forwards to [`Self::terminate_loop_inner`].
+    async fn terminate_loop_with(
+        &self,
+        session_id: &str,
+        condition: crate::session::loop_state::StopCondition,
+        reason: String,
+        log_line: String,
+        run_start: Option<Instant>,
+        working_dir: Option<&std::path::Path>,
+    ) {
+        let active = self.active_loops.read().await.contains_key(session_id);
+        if !active {
+            return;
+        }
+        tracing::info!(session_id = %session_id, "{log_line}");
+        self.terminate_loop_inner(
+            session_id,
+            condition,
+            run_start,
+            None,
+            None,
+            Some(reason),
+            working_dir,
+        )
+        .await;
+    }
+
+    /// Persist the provider-reported input-token figure into the session
+    /// state cache so the next turn starts with the same usage value shown
+    /// in the TUI. Shared by the compaction and post-LLM call sites.
+    fn persist_last_reported_input_tokens(&self, session_id: &str, tokens: u64) {
+        let session_state_lock = self
+            .session_manager
+            .as_ref()
+            .session_state_cache(session_id);
+        if let Ok(mut guard) = session_state_lock.lock() {
+            guard.set_last_reported_input_tokens(tokens);
+        } else {
+            warn!(
+                session_id = %session_id,
+                "session state cache lock poisoned; input-token figure not persisted"
+            );
+        }
+    }
+
+    /// Write a mutated loop tracker back to `active_loops` so budget gates
+    /// and interrupt handling observe the latest tallies. Shared by the
+    /// post-LLM and stage-completion call sites.
+    async fn persist_loop_tracker(
+        &self,
+        session_id: &str,
+        tracker: &crate::session::loop_state::LoopTracker,
+    ) {
+        self.active_loops
+            .write()
+            .await
+            .insert(session_id.to_string(), tracker.clone());
+    }
+
+    /// Terminate an active goal-driven loop after a run stage failed
+    /// unrecoverably (FR-011: provider transport failure, permission
+    /// hard-deny, tool panic, context overflow, watchdog abort).
+    ///
+    /// Publishes the loop-termination event with termination status `error`
+    /// and the surfaced failure reason; the failed stage is not retried -
+    /// the caller propagates the error so the turn ends. A no-op when no
+    /// loop is active for `session_id` (plain chat turns are unaffected).
+    async fn terminate_loop_on_fatal_error(
+        &self,
+        session_id: &str,
+        err: &anyhow::Error,
+        run_start: Option<Instant>,
+        working_dir: Option<&std::path::Path>,
+    ) {
+        // The single log site is `terminate_loop_with`: it emits the reason as
+        // part of its own info line, so logging it again here would report one
+        // failure twice at two levels.
+        let reason = format!("unrecoverable error: {err:#}");
+        self.terminate_loop_with(
+            session_id,
+            crate::session::loop_state::StopCondition::UnrecoverableError,
+            reason,
+            "loop terminated by unrecoverable error (FR-011); no retry".to_string(),
+            run_start,
+            working_dir,
+        )
+        .await;
+    }
+
+    /// Terminate an active goal-driven loop because the user interrupted it
+    /// (FR-016, T-011: `Esc` during a loop aborts at the next inter-stage
+    /// safe point). Publishes [`Event::LoopTerminated`] with termination
+    /// status `interrupted`; the caller persists the partial assistant
+    /// message and ends the turn normally so the session stays persisted and
+    /// resumable. A no-op when no loop is active for `session_id`.
+    ///
+    /// Token tallies are already persisted by the loop before the safe
+    /// point, so no final-token adjustment is passed here.
+    async fn terminate_loop_on_interrupt(
+        &self,
+        session_id: &str,
+        run_start: Option<Instant>,
+        working_dir: Option<&std::path::Path>,
+    ) {
+        self.terminate_loop_with(
+            session_id,
+            crate::session::loop_state::StopCondition::HumanIntervention,
+            "interrupted by user (Esc)".to_string(),
+            "loop interrupted by user (FR-016); stopping at the safe point".to_string(),
+            run_start,
+            working_dir,
+        )
+        .await;
+    }
+
+    /// End a turn that stopped early - a cancel request, a human interrupt, or
+    /// the tool watchdog - with the one shared epilogue.
+    ///
+    /// Persists the partial assistant message, records
+    /// [`FinishReason::Cancelled`] as the session's terminal reason (so the
+    /// task registry reports the sub-agent as cancelled rather than a healthy
+    /// `stop`), publishes `MessageEnd`, and logs the interruption to the
+    /// activity log. A storage failure is logged and does not skip the
+    /// `MessageEnd`: an early return there would leave the UI with an open
+    /// message.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - Session whose turn is ending.
+    /// * `assistant_parts` - Parts accumulated so far for the assistant message.
+    /// * `assistant_msg_id` - Id of the placeholder assistant message.
+    /// * `run_id` - Activity-log run the termination is recorded against.
+    async fn finish_cancelled_turn(
+        &self,
+        session_id: &str,
+        assistant_parts: Arc<Vec<MessagePart>>,
+        assistant_msg_id: String,
+        run_id: &ragent_types::id::RunId,
+    ) {
+        let parts_owned = Arc::try_unwrap(assistant_parts).unwrap_or_else(|arc| (*arc).clone());
+        let mut assistant_msg = Message::new(session_id, Role::Assistant, parts_owned);
+        assistant_msg.id = assistant_msg_id;
+        let message_id = assistant_msg.id.clone();
+        if let Err(e) = self
+            .storage_op(move |s| s.update_message(&assistant_msg))
+            .await
+        {
+            tracing::warn!(error = %e, "cancelled-turn message persistence failed");
+        }
+        self.last_message_end_reason
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(session_id.to_string(), FinishReason::Cancelled);
+        self.event_bus.publish(Event::MessageEnd {
+            session_id: session_id.to_string(),
+            message_id,
+            reason: FinishReason::Cancelled,
+        });
+        let run_id = run_id.clone();
+        self.record_activity_event(move |log| {
+            log.record_termination(
+                &run_id,
+                ragent_types::activity::TerminationReason::Interrupted,
+            )
+            .map(Some)
+        })
+        .await;
+    }
+
+    /// Record an activity-log event if logging is enabled.
+    ///
+    /// This is a no-op when [`ragent_config::activity_log::is_enabled`]
+    /// returns `false` or when no [`ActivityLog`] handle has been wired.
+    /// Errors are logged at `warn` level and never propagated - activity
+    /// logging is best-effort and must never break the agent loop.
+    ///
+    /// PERF-040: the append is queued onto the background writer task
+    /// ([`Self::start_activity_writer`]) rather than spawning its own
+    /// `spawn_blocking`. The writer drains the queue in batches, so a turn's
+    /// many events collapse into a small number of blocking-thread hops and no
+    /// per-event task is created. When the writer is not running (no store
+    /// wired), the append is dropped - matching the previous no-op behaviour.
+    ///
+    /// The closure returns `Option<ActivityEvent>` so a batch closure that
+    /// appends several events can yield just the last one (or `None`).
+    ///
+    /// Exposed (rather than private) so integration tests can drive the
+    /// writer; not part of the supported public surface.
+    #[doc(hidden)]
+    pub async fn record_activity_event<F>(&self, f: F)
+    where
+        F: FnOnce(
+                &ragent_storage::ActivityLog,
+            ) -> std::result::Result<
+                Option<ragent_types::activity::ActivityEvent>,
+                ragent_storage::AppendError,
+            > + Send
+            + 'static,
+    {
+        if !ragent_config::activity_log::is_enabled() {
+            return;
+        }
+        let tx = self.activity_log_tx.lock().await;
+        if let Some(tx) = tx.as_ref() {
+            let _ = tx.send(Box::new(move |log: &ragent_storage::ActivityLog| {
+                if let Err(e) = f(log) {
+                    tracing::warn!(error = %e, "activity_log: recording failed");
+                }
+            }));
+        }
+    }
+
+    /// Set the MCP client and register all tools from connected servers into the tool registry.
+    ///
+    /// This should be called once after the MCP client has connected to all configured servers.
+    /// Tools are registered with names in the format `mcp_{server_id}_{tool_name}`, through
+    /// [`bridge_server_tools`](crate::tool::mcp_tool::bridge_server_tools) so FR-032's
+    /// namespacing rule is applied here and in the TUI by one implementation.
+    pub async fn set_mcp_client(&self, client: Arc<tokio::sync::RwLock<crate::mcp::McpClient>>) {
+        // Group each connected server's advertised tools before releasing the lock:
+        // the bridge needs the whole list, because a refusal is reported per server.
+        let per_server = {
+            let c = client.read().await;
+            c.servers()
+                .iter()
+                .filter(|server| server.status == crate::mcp::McpStatus::Connected)
+                .map(|server| (server.id.clone(), server.tools.clone()))
+                .collect::<Vec<_>>()
+        };
+
+        let mut registered = 0usize;
+        for (server_id, tools) in per_server {
+            let bridged =
+                crate::tool::mcp_tool::bridge_server_tools(&server_id, &tools, Arc::clone(&client));
+            if !bridged.refusals.is_empty() {
+                tracing::debug!(
+                    server_id = %server_id,
+                    refused = bridged.refusals.len(),
+                    "Refused MCP tools that break FR-032 (each reported once per source and name)"
+                );
+            }
+            registered += bridged.wrappers.len();
+            for wrapper in bridged.wrappers {
+                self.tool_registry.register(Arc::new(wrapper));
+            }
+        }
+
+        if registered > 0 {
+            tracing::info!(
+                count = registered,
+                "Registered MCP tools into tool registry"
+            );
+        } else {
+            tracing::debug!("No connected MCP tools to register");
+        }
+
+        self.invalidate_tool_cache();
+        if self.mcp_client.set(client).is_err() {
+            // `set` only fails when the handle was already published (a second
+            // startup step, or a test that seeded the processor), so the tools
+            // were just registered against the live client and the earlier
+            // handle's tools are registered on their own connect path.
+            tracing::debug!("MCP client already published; retained the existing handle");
+        }
+    }
+
+    /// Publish the connector lifecycle session for this processor (spec
+    /// `connectors` T-008; FR-008, FR-012, FR-019).
+    ///
+    /// `ragent-agent` cannot name the connector type, so the session is stored
+    /// type-erased: `session` is an `Arc<ConnectorSession>` the caller passes as
+    /// an `Arc<dyn Any + Send + Sync>`. A later [`Self::set_connector_session`]
+    /// replaces the previous owner, which is safe because the connector store
+    /// `_state.json` ledger is the durable record and the MCP client holds the
+    /// live connections.
+    ///
+    /// A previous owner is replaced (logged at `debug`); the handle never
+    /// panics, because connector tracking is best-effort and must never take
+    /// the session down.
+    pub async fn set_connector_session(&self, session: Arc<dyn std::any::Any + Send + Sync>) {
+        let mut guard = self.connector_session.write().await;
+        if guard.is_some() {
+            tracing::debug!("connector session already published; replacing the previous owner");
+        }
+        *guard = Some(session);
+    }
+
+    /// The published connector lifecycle session, downcast to `T`, or `None`
+    /// when no session has been published (FR-008).
+    ///
+    /// The caller names the concrete connector type and receives `None` on a
+    /// downcast miss rather than a panic.
+    pub async fn connector_session<T: std::any::Any + Send + Sync>(&self) -> Option<Arc<T>> {
+        let guard = self.connector_session.read().await;
+        guard
+            .as_ref()
+            .and_then(|session| Arc::clone(session).downcast::<T>().ok())
+    }
+
+    /// Publish the live connector status snapshot behind `/connectors list`
+    /// (spec `connectors` T-008; FR-009).
+    ///
+    /// The snapshot is an `Arc<Vec<ConnectorStatus>>` passed type-erased as an
+    /// `Arc<dyn Any + Send + Sync>`; `None` clears it, so a list render falls
+    /// back to the persisted store state.
+    pub async fn set_connector_statuses(
+        &self,
+        statuses: Option<Arc<dyn std::any::Any + Send + Sync>>,
+    ) {
+        let mut guard = self.connector_statuses.write().await;
+        *guard = statuses;
+    }
+
+    /// The published connector status snapshot, downcast to `T`, or `None` when
+    /// no session has loaded the connectors (FR-009).
+    pub async fn connector_statuses<T: std::any::Any + Send + Sync>(&self) -> Option<Arc<T>> {
+        let guard = self.connector_statuses.read().await;
+        guard
+            .as_ref()
+            .and_then(|statuses| Arc::clone(statuses).downcast::<T>().ok())
+    }
+
+    /// Terminate every MCP server connection this session owns.
+    ///
+    /// The shutdown path (TUI exit, headless run end, signal handler) calls this
+    /// so the stdio server children ragent spawned are killed before the process
+    /// exits. A no-op when no MCP client was ever published. Idempotent and
+    /// best-effort: teardown must never fail on a wedged server.
+    pub async fn shutdown_mcp(&self) {
+        // Other projects' servers (spec MULTISESSION M8) first.
+        let projects: Vec<ProjectToolRegistry> = self
+            .project_tool_registries
+            .lock()
+            .drain()
+            .map(|(_, project)| project)
+            .collect();
+        for project in projects {
+            project.client.write().await.shutdown().await;
+        }
+        let Some(client) = self.mcp_client.get() else {
+            return;
+        };
+        client.write().await.shutdown().await;
+    }
+
+    /// Invalidate the cached tool definitions so they are rebuilt on the next loop step.
+    pub fn invalidate_tool_cache(&self) {
+        {
+            let mut guard = self.cached_tool_definitions.write();
+            *guard = None;
+        }
+        {
+            let mut names = self.cached_tool_names.write();
+            *names = None;
+        }
+        {
+            let mut bytes = self.cached_tool_definition_bytes.write();
+            *bytes = None;
+        }
+        // H2: the tool-JSON byte cache in ragent-llm is keyed by tool content
+        // fingerprint + provider format; invalidate it whenever the session's
+        // tool definitions change so stale serialised tool lists are never
+        // sent after a registry update.
+        ragent_llm::provider::tool_cache::invalidate_tool_cache();
+    }
+
+    /// Return cached tool definitions, populating the cache if necessary.
+    ///
+    /// FR-015: the outbound list is passed through the turn's alias table, so
+    /// `tools.expose_alias_names` advertises each alias spelling alongside its
+    /// canonical name. A build with advertising off sends the registry's own
+    /// names, unchanged.
+    ///
+    /// P-7 / PERF-014: also populates [`cached_tool_definition_bytes`] with
+    /// the total serialised byte size of the definitions (computed once via
+    /// [`estimate_tool_definition_bytes`]) so the per-step request-size
+    /// estimate can reuse the sum instead of re-serialising ~111 tool
+    /// schemas on every step.
+    fn get_cached_tool_definitions(
+        &self,
+        tool_registry: &ToolRegistry,
+        alias_table: &AliasTable,
+    ) -> Arc<Vec<ToolDefinition>> {
+        let expose = self.tool_names_exposed(alias_table);
+        {
+            let guard = self.cached_tool_definitions.read();
+            if let Some((ref key, ref defs)) = *guard
+                && key.0 == tool_registry.version()
+                && key.1 == expose
+                && key.2 == *alias_table
+            {
+                return defs.clone();
+            }
+        }
+        let defs = alias_table.outbound_definitions(&tool_registry.definitions(), expose);
+        // PERF-003: also cache the tool-name list used by the `ToolsSent`
+        // event so we don't allocate ~111 Strings on every loop step.
+        let names: Arc<[String]> = defs.iter().map(|t| t.name.clone()).collect();
+        // P-7: pre-compute the total serialised byte size of the tool
+        // definitions so `estimate_request_bytes`-style estimators can
+        // reuse the sum without re-serialising every schema per step.
+        let tool_bytes = estimate_tool_definition_bytes(&defs);
+        {
+            let mut guard = self.cached_tool_definitions.write();
+            *guard = Some((
+                (tool_registry.version(), expose, alias_table.clone()),
+                defs.clone(),
+            ));
+        }
+        {
+            let mut names_guard = self.cached_tool_names.write();
+            *names_guard = Some(names);
+        }
+        {
+            let mut bytes_guard = self.cached_tool_definition_bytes.write();
+            *bytes_guard = Some(tool_bytes);
+        }
+        defs
+    }
+
+    /// Returns `true` when this session's `tools.expose_alias_names` asks for
+    /// the alias spellings in the outbound tool list (FR-015).
+    ///
+    /// Read through [`Self::load_config_cached`] so the helper needs no config
+    /// argument and the same mtime-cached config every other per-turn read uses
+    /// is what decides. An empty table already means "advertising has nothing to
+    /// add", and the default is off, which is the behaviour every build had
+    /// before this switch existed.
+    fn tool_names_exposed(&self, alias_table: &AliasTable) -> bool {
+        !alias_table.is_empty() && self.load_config_cached().tools.expose_alias_names
+    }
+
+    /// Return the cached total serialised byte size of the tool definitions
+    /// (P-7). Populated alongside [`get_cached_tool_definitions`]; returns
+    /// `None` when the cache is empty or invalidated.
+    pub(crate) fn get_cached_tool_definition_bytes(&self) -> Option<u64> {
+        self.cached_tool_definition_bytes.read().as_ref().copied()
+    }
+
+    /// Return the cached tool names for the `ToolsSent` event (PERF-003).
+    ///
+    /// Returns `None` when no tools are registered. The cache is populated
+    /// alongside [`get_cached_tool_definitions`] and invalidated together
+    /// with it by [`invalidate_tool_cache`].
+    fn get_cached_tool_names(&self) -> Option<Arc<[String]>> {
+        let guard = self.cached_tool_names.read();
+        guard.as_ref().cloned()
+    }
+
+    /// The names in this turn's model-facing tool surface that can mutate the
+    /// workspace - the membership test of the automatic sub-agent YOLO scope.
+    ///
+    /// The category question is answered from the registry, not from the name:
+    /// every exposed name is resolved back to its [`crate::tool::Tool`] and its
+    /// `permission_category()` is classified by
+    /// [`crate::session::permissions::is_write_capable_permission_category`].
+    /// A name the registry no longer holds (a registry rebuilt since the
+    /// definitions were cached) is treated as write-capable, so a stale cache
+    /// can only widen caution, never widen the bypass.
+    fn write_capable_tools(
+        &self,
+        tool_registry: &ToolRegistry,
+        definitions: &[ToolDefinition],
+    ) -> Arc<std::collections::HashSet<String>> {
+        let set = definitions
+            .iter()
+            .filter(|def| {
+                tool_registry.get(&def.name).is_none_or(|tool| {
+                    crate::session::permissions::is_write_capable_permission_category(
+                        tool.permission_category(),
+                    )
+                })
+            })
+            .map(|def| def.name.clone())
+            .collect();
+        Arc::new(set)
+    }
+
+    /// Return the per-session system-prompt component cache, creating it
+    /// on first use (FR-008, FR-009).
+    ///
+    /// Sharing a single `SystemPromptCache` across all turns of a session
+    /// lets the `tool_reference`, `codeindex_guidance`, and `team_guidance`
+    /// strings be computed at most once per process-user-message instead
+    /// of once per step.  The cache is advisory: a miss is always
+    /// acceptable, it exists only to skip the work when inputs are
+    /// unchanged.
+    pub fn system_prompt_cache(&self) -> Arc<SystemPromptCache> {
+        {
+            let guard = self.system_prompt_cache.read();
+            if let Some(ref cache) = *guard {
+                return cache.clone();
+            }
+        }
+        let cache = Arc::new(SystemPromptCache::new());
+        let mut guard = self.system_prompt_cache.write();
+        *guard = Some(cache.clone());
+        cache
+    }
+
+    /// Invalidate the system-prompt component cache.
+    ///
+    /// Call this when the tool registry, code-index state, or team
+    /// membership changes.  Cheap: just bumps a global version counter
+    /// and clears the per-component entries.
+    pub fn invalidate_system_prompt_cache(&self) {
+        self.system_prompt_cache().invalidate_all();
+    }
+
+    /// Terminal [`FinishReason`] of the last `MessageEnd` on `session_id`,
+    /// if the run reached the normal finalise path. Read by
+    /// `AgentManager::spawn_background_mode` when composing the
+    /// `SubagentComplete` event so the published `finish_reason` reflects
+    /// the real loop outcome (e.g. `"truncation"` for a silently-cut run)
+    /// instead of a hard-coded `"stop"`.
+    pub fn last_message_end_reason(
+        &self,
+        session_id: &str,
+    ) -> Option<ragent_types::event::FinishReason> {
+        self.last_message_end_reason
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(session_id)
+            .cloned()
+    }
+
+    /// Invalidate the P-2 config cache (force the next `prepare_client`
+    /// call to re-read `ragent.json` from disk). Call this when the config
+    /// is known to have changed externally (e.g. after a `/config save`
+    /// slash command) so the next turn picks up the new values.
+    pub fn invalidate_config_cache(&self) {
+        let mut guard = self.cached_config.lock();
+        *guard = None;
+    }
+
+    /// Resolve the per-turn [`ragent_config::Config`], using the P-2 mtime
+    /// cache to skip the disk read when none of the contributing config
+    /// files have changed since the last load.
+    ///
+    /// Returns the config wrapped in `Arc` so it can be cloned cheaply into
+    /// the per-turn [`TurnClient`] and per-tool-call [`ToolContext`]s.
+    pub fn load_config_cached(&self) -> Arc<ragent_config::Config> {
+        use std::time::SystemTime;
+        let env_overrides_present = std::env::var_os("RAGENT_CONFIG").is_some()
+            || std::env::var_os("RAGENT_CONFIG_CONTENT").is_some();
+        // Try the cache: valid only when no env-var overrides are present and
+        // every recorded file's mtime is unchanged.
+        {
+            let guard = self.cached_config.lock();
+            if let Some(cached) = guard.as_ref()
+                && !env_overrides_present
+                && cached.file_mtimes.iter().all(|(path, mtime)| {
+                    std::fs::metadata(path)
+                        .and_then(|m| m.modified())
+                        .is_ok_and(|current| current == *mtime)
+                })
+            {
+                return cached.config.clone();
+            }
+        }
+        // Cache miss (or invalid): reload from disk. A broken ragent.json
+        // falls back to defaults, but the failure is logged so silent config
+        // degradation is diagnosable.
+        let cfg = match ragent_config::Config::load() {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                tracing::warn!(error = %e, "config load failed; using default config");
+                ragent_config::Config::default()
+            }
+        };
+        let file_mtimes: Vec<(PathBuf, SystemTime)> = cfg
+            .config_paths
+            .iter()
+            .filter_map(|p| {
+                std::fs::metadata(p)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .map(|mt| (p.clone(), mt))
+            })
+            .collect();
+        let arc = Arc::new(cfg);
+        let mut guard = self.cached_config.lock();
+        *guard = Some(CachedConfig {
+            config: Arc::clone(&arc),
+            file_mtimes,
+            env_overrides_present,
+        });
+        arc
+    }
+
+    /// The code index for the project that contains `working_dir`
+    /// (spec MULTISESSION M8): the launch project's index for a directory in
+    /// the launch project, otherwise that project's registered index.
+    ///
+    /// # Arguments
+    ///
+    /// * `working_dir` - a session's working directory.
+    ///
+    /// # Returns
+    ///
+    /// The index, or `None` when that project has no open index.
+    pub fn code_index_for(
+        &self,
+        working_dir: &std::path::Path,
+    ) -> Option<Arc<ragent_codeindex::CodeIndex>> {
+        let root = PathBuf::from(ragent_storage::project_root(
+            &working_dir.display().to_string(),
+        ));
+        if let Some(index) = self.project_code_indexes.lock().get(&root) {
+            return Some(Arc::clone(index));
+        }
+        let launch_root = std::env::current_dir()
+            .map(|cwd| PathBuf::from(ragent_storage::project_root(&cwd.display().to_string())));
+        match launch_root {
+            Ok(launch) if launch == root => self.code_index.get().cloned(),
+            // A working directory that is not in the launch project has no
+            // index until one is registered for its project.
+            Ok(_) => None,
+            Err(e) => {
+                tracing::warn!(error = %e, "cannot resolve launch directory; using launch index");
+                self.code_index.get().cloned()
+            }
+        }
+    }
+
+    /// The tool registry a session working in `working_dir` uses
+    /// (spec MULTISESSION M8): its project's own registry when that project
+    /// has opened its MCP servers, otherwise the base registry.
+    ///
+    /// # Arguments
+    ///
+    /// * `working_dir` - a session's working directory.
+    pub fn tool_registry_for(&self, working_dir: &std::path::Path) -> Arc<ToolRegistry> {
+        let root = PathBuf::from(ragent_storage::project_root(
+            &working_dir.display().to_string(),
+        ));
+        let mut projects = self.project_tool_registries.lock();
+        let Some(project) = projects.get_mut(&root) else {
+            return Arc::clone(&self.tool_registry);
+        };
+        let base_version = self.tool_registry.version();
+        if project.base_version != base_version {
+            project.registry = build_project_registry(&self.tool_registry, &project.wrappers);
+            project.base_version = base_version;
+        }
+        Arc::clone(&project.registry)
+    }
+
+    /// Connects a project's own MCP servers and gives its sessions a tool
+    /// registry with those servers' tools instead of the launch project's
+    /// (spec MULTISESSION M8). Servers switched off in the enable ledger are
+    /// registered as disabled, as at startup.
+    ///
+    /// # Arguments
+    ///
+    /// * `project_root` - the project's root.
+    /// * `servers` - the project's merged server list (configured plus
+    ///   plugin-contributed).
+    ///
+    /// # Returns
+    ///
+    /// The number of servers that connected.
+    pub async fn open_project_mcp(
+        &self,
+        project_root: PathBuf,
+        servers: Vec<(String, ragent_config::McpServerConfig)>,
+    ) -> usize {
+        let client = Arc::new(tokio::sync::RwLock::new(
+            crate::mcp::McpClient::with_working_dir(project_root.clone()),
+        ));
+        // Register first (no MCP tools yet) so a release that arrives while
+        // the servers connect can find and stop this client.
+        let previous = self.project_tool_registries.lock().insert(
+            project_root.clone(),
+            ProjectToolRegistry {
+                client: Arc::clone(&client),
+                wrappers: Vec::new(),
+                registry: build_project_registry(&self.tool_registry, &[]),
+                base_version: self.tool_registry.version(),
+            },
+        );
+        if let Some(previous) = previous {
+            previous.client.write().await.shutdown().await;
+        }
+        self.invalidate_tool_cache();
+
+        let still_wanted = |this: &Self| {
+            this.project_tool_registries
+                .lock()
+                .get(&project_root)
+                .is_some_and(|project| Arc::ptr_eq(&project.client, &client))
+        };
+        let ledger = crate::mcp::McpEnableLedger::load();
+        let mut connected = 0;
+        for (id, cfg) in servers {
+            if !still_wanted(self) {
+                client.write().await.shutdown().await;
+                return 0;
+            }
+            if !crate::mcp::is_server_enabled(&cfg, &ledger, &id) {
+                client.write().await.register_disabled(&id, cfg);
+                continue;
+            }
+            match client.write().await.connect(&id, cfg).await {
+                Ok(()) => connected += 1,
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    server_id = %id,
+                    project = %project_root.display(),
+                    "project MCP server failed to connect"
+                ),
+            }
+        }
+        let per_server = {
+            let c = client.read().await;
+            c.servers()
+                .iter()
+                .filter(|server| server.status == crate::mcp::McpStatus::Connected)
+                .map(|server| (server.id.clone(), server.tools.clone()))
+                .collect::<Vec<_>>()
+        };
+        let mut wrappers: Vec<Arc<dyn crate::tool::Tool>> = Vec::new();
+        for (server_id, tools) in per_server {
+            let bridged =
+                crate::tool::mcp_tool::bridge_server_tools(&server_id, &tools, Arc::clone(&client));
+            wrappers.extend(
+                bridged
+                    .wrappers
+                    .into_iter()
+                    .map(|w| Arc::new(w) as Arc<dyn crate::tool::Tool>),
+            );
+        }
+        let published = {
+            let mut projects = self.project_tool_registries.lock();
+            match projects.get_mut(&project_root) {
+                Some(project) if Arc::ptr_eq(&project.client, &client) => {
+                    project.registry = build_project_registry(&self.tool_registry, &wrappers);
+                    project.wrappers = wrappers;
+                    project.base_version = self.tool_registry.version();
+                    true
+                }
+                _ => false,
+            }
+        };
+        if !published {
+            // Released while connecting: stop what was started.
+            client.write().await.shutdown().await;
+            return 0;
+        }
+        self.invalidate_tool_cache();
+        connected
+    }
+
+    /// Shuts down a project's MCP servers once no open session uses the
+    /// project (spec MULTISESSION M8). Its sessions fall back to the base
+    /// registry.
+    pub async fn release_project_mcp(&self, project_root: &std::path::Path) {
+        let removed = self.project_tool_registries.lock().remove(project_root);
+        if let Some(project) = removed {
+            project.client.write().await.shutdown().await;
+            self.invalidate_tool_cache();
+        }
+    }
+
+    /// The MCP client of a project that opened its own servers.
+    pub fn project_mcp_client(
+        &self,
+        project_root: &std::path::Path,
+    ) -> Option<Arc<tokio::sync::RwLock<crate::mcp::McpClient>>> {
+        self.project_tool_registries
+            .lock()
+            .get(project_root)
+            .map(|project| Arc::clone(&project.client))
+    }
+
+    /// Registers the code index of a project other than the launch project
+    /// (spec MULTISESSION M8), replacing any earlier one for that root.
+    pub fn register_project_code_index(
+        &self,
+        project_root: PathBuf,
+        index: Arc<ragent_codeindex::CodeIndex>,
+    ) {
+        self.project_code_indexes.lock().insert(project_root, index);
+        self.invalidate_tool_cache();
+    }
+
+    /// Releases a project's code index once no open session uses it
+    /// (spec MULTISESSION M8).
+    pub fn release_project_code_index(&self, project_root: &std::path::Path) {
+        if self
+            .project_code_indexes
+            .lock()
+            .remove(project_root)
+            .is_some()
+        {
+            self.invalidate_tool_cache();
+        }
+    }
+
+    /// Resolve the per-turn config for a session working in `directory`
+    /// (spec MULTISESSION M6).
+    ///
+    /// A session whose directory has its own `.ragent/ragent.json` (and is
+    /// not the process cwd) gets that project's config through
+    /// [`ragent_config::Config::load_for`], which keeps its own mtime cache
+    /// per directory. Every other session - the process cwd, or a directory
+    /// with no project config - gets the launch config from
+    /// [`Self::load_config_cached`], exactly as before multi-session. A
+    /// broken config falls back to defaults and is logged.
+    ///
+    /// # Arguments
+    ///
+    /// * `directory` - the session's working directory.
+    pub fn load_config_for(&self, directory: &std::path::Path) -> Arc<ragent_config::Config> {
+        let canonical = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let in_cwd =
+            std::env::current_dir().is_ok_and(|cwd| canonical(&cwd) == canonical(directory));
+        let own_config = directory.join(".ragent").join("ragent.json").is_file();
+        if in_cwd || !own_config {
+            return self.load_config_cached();
+        }
+        match ragent_config::Config::load_for(directory) {
+            Ok(cfg) => Arc::new(cfg),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    directory = %directory.display(),
+                    "config load failed; using default config"
+                );
+                Arc::new(ragent_config::Config::default())
+            }
+        }
+    }
+
+    /// C-001: load (and cache) the skill registry for a working directory,
+    /// invalidating when any scanned skill directory's mtime changes.
+    ///
+    /// Returns `None` when no skill directories exist and no skills would be
+    /// discovered, so callers can cheaply skip the system-prompt skill section.
+    pub fn skill_registry(
+        &self,
+        working_dir: &std::path::Path,
+        extra_dirs: &[String],
+    ) -> Option<crate::skill::SkillRegistry> {
+        // FR-029 skills bridge: enabled plugins contribute skill directories,
+        // appended to the config `extra_dirs`. Compute the effective list once
+        // so the cache key and the load call can never disagree.
+        let effective_extra_dirs = crate::skill::effective_skill_dirs(working_dir, extra_dirs);
+        let extra_dirs: &[String] = &effective_extra_dirs;
+        // Collect the candidate skill directories from the same helper the
+        // loader scans with, so the cache is invalidated precisely when the scan
+        // inputs change (including the AgentSkills `.agents/skills/` roots).
+
+        // Fast path: cached registry still valid (checked before collecting
+        // fresh mtimes so a cache hit does no directory stat sweep).
+        {
+            let guard = self.skill_registry_cache.lock();
+            if let Some(cached) = guard.as_ref()
+                && cached.working_dir == working_dir
+                && cached.extra_dirs == extra_dirs
+                && cached.dir_mtimes.iter().all(|(d, mt)| {
+                    std::fs::metadata(d)
+                        .and_then(|m| m.modified())
+                        .is_ok_and(|current| current == *mt)
+                })
+            {
+                return Some(cached.registry.clone());
+            }
+        }
+
+        // Record mtimes of the directories that actually exist. Needed only
+        // to populate a new cache entry, so it runs after the fast path.
+        let dir_mtimes: Vec<(PathBuf, std::time::SystemTime)> =
+            crate::skill::loader::discovery_roots(working_dir, extra_dirs)
+                .into_iter()
+                .filter_map(|root| {
+                    std::fs::metadata(&root.dir)
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .map(|mt| (root.dir, mt))
+                })
+                .collect();
+
+        // Cache miss or invalid: reload from disk.
+        let registry = crate::skill::SkillRegistry::load(working_dir, extra_dirs);
+        let mut guard = self.skill_registry_cache.lock();
+        *guard = Some(CachedSkillRegistry {
+            registry: registry.clone(),
+            dir_mtimes,
+            extra_dirs: extra_dirs.to_vec(),
+            working_dir: working_dir.to_path_buf(),
+        });
+        Some(registry)
+    }
+    /// `cfg` with session `session_id`'s execution backend applied, for a
+    /// whole turn: remote routing and every tool dispatch read the result.
+    ///
+    /// An automation run's override (FR-033) wins, so its confinement
+    /// cannot be loosened by a project setting. Otherwise a session created
+    /// in a project with its own backend (`sessions.execution_backend`) runs
+    /// on that kind. With neither, `cfg` is returned as it is.
+    pub(crate) async fn session_config_for(
+        &self,
+        cfg: &Arc<ragent_config::Config>,
+        session_id: &str,
+    ) -> Arc<ragent_config::Config> {
+        if crate::automation::session_backend_override(session_id).is_some() {
+            return crate::automation::apply_session_backend_override(cfg, session_id);
+        }
+        let id = session_id.to_string();
+        let stored = match self.storage_op(move |s| s.session_backend(&id)).await {
+            Ok(label) => label
+                .as_deref()
+                .and_then(ragent_config::ExecutionBackendKind::from_label),
+            Err(e) => {
+                tracing::warn!(error = %e, "session backend not read; using the global one");
+                None
+            }
+        };
+        match stored {
+            Some(kind) if kind != cfg.effective_execution_backend() => {
+                Arc::new(cfg.with_backend_kind(kind))
+            }
+            Some(_) | None => Arc::clone(cfg),
+        }
+    }
+
+    /// Run a blocking storage operation on a dedicated thread to avoid
+    /// stalling the Tokio runtime.
+    ///
+    /// (AgentPerf T-012 / FR-010 / FR-011.)  This is the canonical
+    /// way for the agent action loop to talk to the underlying SQLite
+    /// store.  All callers MUST go through this helper rather than
+    /// calling `Storage` methods directly from the async path, so the
+    /// executor is never blocked on synchronous I/O.
+    pub async fn storage_op<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&crate::storage::Storage) -> Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let storage = self.session_manager.storage().clone();
+        tokio::task::spawn_blocking(move || f(&storage))
+            .await
+            .map_err(|e| anyhow::anyhow!("storage task panicked: {e}"))?
+    }
+    /// Processes a user message within an agent session.
+    ///
+    /// Persists the user message, then enters an agentic loop that streams
+    /// LLM responses, executes tool calls, and feeds results back to the model
+    /// until completion or the agent's max-step limit is reached.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the configured model or provider is missing, if the
+    /// API key cannot be resolved, or if an LLM call fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example() -> anyhow::Result<()> {
+    /// use std::sync::Arc;
+    /// use std::sync::atomic::AtomicBool;
+    /// use ragent_agent::session::processor::SessionProcessor;
+    /// use ragent_agent::agent::AgentInfo;
+    ///
+    /// // Assumes `processor` is a fully configured SessionProcessor.
+    /// # let processor: SessionProcessor = todo!();
+    /// let agent = AgentInfo::new("coder", "A coding assistant");
+    /// let cancel = Arc::new(AtomicBool::new(false));
+    /// let reply = processor.process_message("session-1", "Hello!", &agent, cancel).await?;
+    /// println!("Assistant replied: {}", reply.text_content());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn process_message(
+        &self,
+        session_id: &str,
+        user_text: &str,
+        agent: &AgentInfo,
+        cancel_flag: Arc<AtomicBool>,
+    ) -> Result<Message> {
+        let user_msg = Message::user_text(session_id, user_text);
+        self.process_user_message(session_id, user_msg, agent, cancel_flag)
+            .await
+    }
+
+    /// Process a pre-built user [`Message`] (e.g. one containing image attachments).
+    ///
+    /// Unlike [`process_message`] which always creates a plain-text user message,
+    /// this method accepts any `Message` so the TUI can pass multipart messages
+    /// that include [`MessagePart::Image`] parts alongside the text.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The user message cannot be stored in the database
+    /// - The configured model or provider is missing
+    /// - The API key for the provider cannot be resolved
+    /// - An LLM API call fails
+    /// - Tool execution fails and no tool-result recovery is possible
+    /// - The processing is cancelled via the cancel flag
+    pub async fn process_user_message(
+        &self,
+        session_id: &str,
+        user_msg: Message,
+        agent: &AgentInfo,
+        cancel_flag: Arc<AtomicBool>,
+    ) -> Result<Message> {
+        let profiler = crate::session::profiler::agent_loop_profiler();
+        let session_recorder = SessionRecorder::from_subsystem(&self.telemetry);
+        session_recorder.record_session_start();
+
+        let session_id_arc: std::sync::Arc<str> = std::sync::Arc::from(session_id);
+        #[allow(clippy::needless_borrow)]
+        let session_id: &str = &session_id_arc;
+
+        // 1. Store user message
+        {
+            let _scope = profiler.scope("storage.user_message.create");
+            let msg = user_msg.clone();
+            self.storage_op(move |s| s.create_message(&msg)).await?;
+        }
+        self.event_bus.publish(Event::MessageStart {
+            session_id: session_id.to_string(),
+            message_id: user_msg.id.clone(),
+        });
+
+        // Activity log: generate a RunId for this turn and record the user
+        // message. The run_id is threaded through the loop to link all
+        // events (model messages, tool calls, tool results, termination)
+        // for this turn.
+        let run_id = ragent_types::id::RunId::new();
+        let user_content = user_msg.text_content();
+        let user_msg_id = user_msg.id.clone();
+        let run_id_for_user = run_id.clone();
+        self.record_activity_event(move |log| {
+            log.record_model_message(&run_id_for_user, "user", &user_content, Some(user_msg_id))
+                .map(Some)
+        })
+        .await;
+
+        // ACP agents (spec `openhands` FR-022): when the active agent is bound to
+        // an external ACP agent, relay the turn to it over JSON-RPC on stdio
+        // instead of routing it to a local ragent LLM provider. A relay failure
+        // fails the turn and never falls back to a local provider (FR-036).
+        if let Some(acp_agent) = self.acp_agent_for_active(agent) {
+            return self
+                .process_acp_turn(session_id, acp_agent, &user_msg, cancel_flag)
+                .await;
+        }
+
+        // Remote backend (spec `openhands` FR-021): when the active execution
+        // backend is `remote`, drive the turn against that server's REST+SSE API
+        // and mirror its event stream into the local bus. The turn's tools run on
+        // the remote host; a relay failure surfaces in the TUI and never re-runs
+        // the turn locally (FR-031, FR-034).
+        if let Some(descriptor) = self.remote_backend_for_active(session_id).await {
+            return self
+                .process_remote_turn(session_id, &descriptor, &user_msg, cancel_flag)
+                .await;
+        }
+
+        // 2. Prepare LLM client, config, working dir, team context
+        // T-007 (FR-011): a stage failure before the loop body (missing
+        // model/provider, unusable key, client construction failure) is an
+        // unrecoverable provider-stage error - terminate an active loop with
+        // status `error` and surface the reason; no retry of the stage.
+        let turn = match self
+            .prepare_client(session_id, &user_msg.id, agent, &profiler)
+            .await
+        {
+            Ok(turn) => turn,
+            Err(e) => {
+                self.terminate_loop_on_fatal_error(session_id, &e, None, None)
+                    .await;
+                return Err(e);
+            }
+        };
+
+        // T-012: per-run cost tracking. Set up a listener for `Event::TokenUsage`
+        // so we can accumulate usage across all loop iterations, then publish a single `Event::RunCostSummary` when the
+        // run ends. The listener is aborted on return so it never leaks.
+        let usage_accum = Arc::new(Mutex::new((0u64, 0u64)));
+        let usage_listener = {
+            let bus = self.event_bus.clone();
+            let sid = session_id.to_string();
+            let accum = usage_accum.clone();
+            // Subscribe synchronously BEFORE spawning the task. `tokio::spawn`
+            // only queues the future; the task may not be polled until after a
+            // fast LLM exchange has already published its `TokenUsage` events.
+            // Subscribing here closes that window so no usage is missed.
+            let mut rx = bus.subscribe();
+            tokio::spawn(async move {
+                loop {
+                    match rx.recv().await {
+                        Ok(Event::TokenUsage {
+                            session_id,
+                            input_tokens,
+                            output_tokens,
+                        }) if session_id == sid => {
+                            let mut locked = accum
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            locked.0 += input_tokens;
+                            locked.1 += output_tokens;
+                        }
+                        Ok(Event::MessageEnd { session_id, .. }) if session_id == sid => break,
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
+                }
+            })
+        };
+        use crate::session::AbortOnDrop;
+        let _usage_guard = AbortOnDrop(usage_listener);
+
+        let prices = merged_prices(&turn.session_config.prices);
+        let publish_run_cost_summary = {
+            let bus = self.event_bus.clone();
+            let storage = self.session_manager.storage().clone();
+            let sid = session_id.to_string();
+            let model_id = turn.model_ref.model_id.clone();
+            let accum = usage_accum.clone();
+            move |duration_ms: u64| {
+                let (input_tokens, output_tokens) = accum
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
+                let summary = compute_run_cost(
+                    vec![UsageRecord {
+                        model_id: model_id.clone(),
+                        input_tokens,
+                        output_tokens,
+                    }],
+                    &prices,
+                );
+                ragent_telemetry::counters::set_cost_session_last(summary.total_cost_usd);
+                // Persist the summary so it can be attached to an explicit
+                // `--include-cost` session export (FR-018). Stored separately
+                // from the transcript so the default export never leaks cost.
+                let row = crate::storage::RunCostSummaryRow {
+                    id: Uuid::new_v4().to_string(),
+                    session_id: sid.clone(),
+                    model_id: model_id.clone(),
+                    input_tokens: summary.total_input_tokens,
+                    output_tokens: summary.total_output_tokens,
+                    total_cost_usd: summary.total_cost_usd,
+                    duration_ms,
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                };
+                let storage_for_persist = storage.clone();
+                tokio::task::spawn_blocking(move || {
+                    // Best-effort persist: a failure silently breaks the
+                    // `--include-cost` export, so at least log it.
+                    if let Err(e) = storage_for_persist.create_run_cost_summary(&row) {
+                        tracing::warn!(error = %e, "run cost summary persist failed");
+                    }
+                });
+                bus.publish(Event::RunCostSummary {
+                    session_id: sid.clone(),
+                    model_id: model_id.clone(),
+                    input_tokens: summary.total_input_tokens,
+                    output_tokens: summary.total_output_tokens,
+                    total_cost_usd: summary.total_cost_usd,
+                    duration_ms,
+                });
+            }
+        };
+
+        // 3. Build system prompt
+        let system_prompt = self
+            .build_turn_system_prompt(
+                session_id,
+                agent,
+                &turn.session_config,
+                &turn.working_dir,
+                turn.team_context.as_ref(),
+                &turn.alias_table,
+                &profiler,
+            )
+            .await?;
+
+        // 4. Build chat messages from history
+        // P-3: `build_turn_chat_messages` also returns the resolved
+        // `context_window` so the orchestrator does not re-resolve it below.
+        // PERF-032: the returned history is already an `Arc`, shared with the
+        // session-state cache by refcount (no per-turn transcript clone).
+        let (chat_messages, mut last_reported_input_tokens, context_window) = self
+            .build_turn_chat_messages(
+                session_id,
+                agent,
+                &turn.model_ref,
+                &turn.session_config,
+                &profiler,
+            )
+            .await?;
+        // Compression hysteresis for this turn starts false; the LLM stage
+        // sets it through `LoopState` when compaction actually runs.
+        let mut compressed_this_turn = false;
+        // P-6: hold the per-turn chat history as `Arc<Vec<ChatMessage>>`
+        // so the per-retry `ChatRequest` can share it by refcount bump
+        // instead of cloning the entire `Vec` on every attempt.
+        let mut chat_messages: std::sync::Arc<Vec<ChatMessage>> = chat_messages;
+
+        // 5. Agent loop setup
+        let max_steps = agent.max_steps.unwrap_or(1024) as usize;
+        // Interactive-tool block (subagent): sub-agent runs have no attached
+        // user, so interactive tools are filtered from the wire surface and
+        // denied at dispatch (fail closed).
+        let agent_is_subagent = agent.mode == crate::agent::AgentMode::Subagent;
+        self.event_bus.set_step(session_id, 0);
+        // T-009 (FR-008): when a goal-driven loop with a configured tool set
+        // is active, the loop's tool surface is exactly that set plus the
+        // mandatory safety tools - other tools stay visible to the rest of
+        // the application but are not offered to this loop's requests.
+        let loop_tool_set: Option<std::collections::HashSet<String>> = {
+            let specs = self.active_loop_specs.read().await;
+            specs
+                .get(session_id)
+                .filter(|spec| spec.has_tool_set())
+                .map(|spec| {
+                    let mut allowed: std::collections::HashSet<String> =
+                        spec.tool_set.iter().cloned().collect();
+                    // `any` (any case) names every tool: the set keeps that entry so
+                    // the filter admits everything instead of only the safety
+                    // tools (FR-029).
+                    if !spec
+                        .tool_set
+                        .iter()
+                        .any(|entry| crate::tool::allowed_tools::is_any_tool_entry(entry))
+                    {
+                        for name in crate::session::loop_state::LOOP_ALWAYS_ALLOWED_TOOLS {
+                            allowed.insert((*name).to_string());
+                        }
+                        for name in crate::tool::always_allowed_tool_names() {
+                            allowed.insert(name.to_string());
+                        }
+                    }
+                    allowed
+                })
+        };
+        // PERF-034: the wire tool surface is resolved once per turn, but a
+        // sub-agent turn otherwise rebuilds the interactive-filtered vector over
+        // ~111 definitions every turn. When no loop restricts the set, take the
+        // version-keyed cache entry instead; loop-restricted turns keep the
+        // fused filter (they are rare and depend on the loop spec).
+        let tool_definitions: std::sync::Arc<Vec<ToolDefinition>> = if max_steps <= 1 {
+            std::sync::Arc::new(Vec::new())
+        } else if let Some(allowed) = loop_tool_set {
+            let all = self.get_cached_tool_definitions(&turn.tool_registry, &turn.alias_table);
+            std::sync::Arc::new(
+                all.iter()
+                    .filter(|def| {
+                        crate::tool::is_allowed_tool(&def.name, &allowed)
+                            && !(agent_is_subagent
+                                && crate::session::permissions::is_interactive_tool(&def.name))
+                    })
+                    .cloned()
+                    .collect(),
+            )
+        } else if agent_is_subagent {
+            // Interactive-tool block (subagent): remove interactive tools from
+            // the wire surface so a sub-agent is never offered a tool it cannot
+            // use. The dispatch gate below still denies a hallucinated call
+            // (fail closed). Cached by tool-registry version.
+            self.system_prompt_cache()
+                .get_subagent_tool_definitions(
+                    &turn.tool_registry,
+                    &turn.alias_table,
+                    turn.session_config.tools.expose_alias_names,
+                )
+                .unwrap_or_else(|| {
+                    self.get_cached_tool_definitions(&turn.tool_registry, &turn.alias_table)
+                })
+        } else {
+            self.get_cached_tool_definitions(&turn.tool_registry, &turn.alias_table)
+        };
+        // P-7: prime the tool-definition byte cache alongside the definitions
+        // cache so the per-step request-size estimator can reuse the sum.
+        let _ = self.get_cached_tool_definition_bytes();
+        // The write-capable subset of the surface just resolved. A read-only run
+        // (an `explore` sub-agent, a plan reviewer, a loop restricted to reads)
+        // yields an empty set and therefore no automatic YOLO scope; any run
+        // that *can* write carries the whole set, so a tool the model was never
+        // offered cannot be waved through by a name it never had.
+        let write_capable_tools = self.write_capable_tools(&turn.tool_registry, &tool_definitions);
+        let cached_tool_names: Option<std::sync::Arc<[String]>> = if max_steps > 1 {
+            self.get_cached_tool_names()
+        } else {
+            None
+        };
+        let mut assistant_parts: std::sync::Arc<Vec<MessagePart>> = std::sync::Arc::new(Vec::new());
+        let mut agent_switch_requested = false;
+        let mut agent_complete_requested = false;
+        // Set when a tool call stalls past `TOOL_WATCHDOG_TIMEOUT`; the run is
+        // terminated after the tool phase.
+        let mut watchdog_timed_out = false;
+        // Set to true after injecting the sub-agent summary nudge so we only
+        // nudge once per run. See [`SUBAGENT_SUMMARY_NUDGE`].
+        let mut subagent_summary_nudged = false;
+        // M-008 (amended): count of assistant parts at the last interim save.
+        // Parts are only ever pushed or popped (stream deltas, per-call
+        // tool-call appends, the sub-agent narration nudge) - never mutated in
+        // place - so the count alone is a sufficient save gate. Tool-call
+        // parts are included so the child session's SQLite row stays in step
+        // with the run and the TUI output-view overlay can render steps live.
+        let mut last_interim_parts_count: Option<usize> = None;
+        let total_start = Instant::now();
+        let mut cumulative_model_wait_ms: u64 = 0;
+        let mut compaction_attempted_this_turn = false;
+        // Finish reason observed by the inner loop for the most recent
+        // assistant message this turn. Used at finalise time to publish
+        // a visible notice for interactive sessions when the provider
+        // silently truncated the reply.
+        let mut last_finish_reason: Option<FinishReason> = None;
+        // Clear any stale entry from a previous turn on this session so the
+        // `last_message_end_reason()` getter only ever observes THIS run's
+        // terminal `MessageEnd` reason.
+        self.last_message_end_reason
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(session_id);
+        // P-17: reuse the per-step ContentPart buffers across loop iterations
+        // to avoid reallocating two `Vec<ContentPart>`s on every step. They
+        // are emptied via `std::mem::take` when pushed into `chat_messages`,
+        // so the next iteration starts with an empty (but allocated) Vec.
+        let mut assistant_content_parts: Vec<ContentPart> = Vec::new();
+        let mut tool_result_parts: Vec<ContentPart> = Vec::new();
+        let mut bg_parts: Vec<ContentPart> = Vec::new();
+
+        let assistant_msg_id = {
+            let _scope = profiler.scope("storage.assistant_placeholder.create");
+            let placeholder = Message::new(session_id, Role::Assistant, vec![]);
+            let id = placeholder.id.clone();
+            self.storage_op(move |s| s.create_message(&placeholder))
+                .await?;
+            id
+        };
+
+        // P-3: reuse the `context_window` returned by
+        // `build_turn_chat_messages` instead of re-resolving it from the
+        // provider registry a second time.
+
+        // 6. Agent loop
+        // T-008: take a working copy of the loop tracker (when a goal-driven
+        // loop is active) so the FR-017 guard below can consult and update it
+        // without holding the `active_loops` lock across an await point.
+        // Plain chat turns have no tracker entry and skip the guard entirely.
+        let mut loop_tracker: Option<crate::session::loop_state::LoopTracker> =
+            self.active_loops.read().await.get(session_id).copied();
+        // T-011 (FR-016): the human-interrupt flag for this session's loop,
+        // raised by the TUI `Esc` path
+        // ([`SessionProcessor::request_loop_interrupt`]). Plain chat turns
+        // have no flag and keep cancelling through `cancel_flag` alone.
+        let loop_interrupt_flag = self.active_loop_interrupts.read().get(session_id).cloned();
+        let interrupt_requested = |cancel_flag: &AtomicBool| -> bool {
+            cancel_flag.load(Ordering::Relaxed)
+                || loop_interrupt_flag
+                    .as_ref()
+                    .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        };
+        // T-011 (FR-016): set when a safe-point interrupt check fired - the
+        // post-loop handler persists the partial turn and ends it normally.
+        let mut loop_interrupted = false;
+        // FR-033: how many times a blocking Stop hook has already been fed back
+        // to the model this turn. Bounded so a hook that always blocks cannot
+        // spin the loop forever.
+        const MAX_STOP_CONTINUATIONS: u32 = 3;
+        let mut stop_continuations: u32 = 0;
+        // PERF-036: memoise the per-step request-token estimate so a step that
+        // appends one message does not re-sum the whole history + tool schemas.
+        let mut token_tracker = crate::compaction::estimator::RequestTokenTracker::new();
+        // Local estimate of the request whose `input_tokens` the provider last
+        // reported. The pre-send check adds the growth since then to the
+        // (otherwise one-request-stale) provider count. `None` at turn start
+        // and after compaction replaces the history.
+        let mut reported_anchor_estimate: Option<usize> = None;
+        // Threshold a successful, history-reducing pre-send compaction must be
+        // confirmed under (by the next provider report) before auto-compaction
+        // re-arms within this turn.
+        let mut rearm_below_threshold: Option<usize> = None;
+        loop {
+            // T-008 (FR-010, FR-013, FR-014, FR-017): the stop-flag guard.
+            // No stage of this iteration may run once the loop's stop flag is
+            // set; a budget breach stops the run BEFORE the LLM request, and
+            // the per-iteration step counter is persisted back so the gate is
+            // visible to the next iteration and to external terminations.
+            if let Some(tracker) = loop_tracker.as_ref() {
+                if tracker.is_stopped() {
+                    debug!("Loop already stopped; no further stage will run");
+                    break;
+                }
+            }
+            // T-011 (FR-016): inter-stage safe point - an interrupt raised
+            // since the last stage boundary aborts the loop before any
+            // further stage runs, ahead even of the budget gate (first stop
+            // wins; the user's intervention takes precedence).
+            if loop_tracker.is_some() && interrupt_requested(&cancel_flag) {
+                self.terminate_loop_on_interrupt(
+                    session_id,
+                    Some(total_start),
+                    Some(&turn.working_dir),
+                )
+                .await;
+                loop_interrupted = true;
+                break;
+            }
+            // Sub-agent suspension gate (spec `agentui` FR-035): when this
+            // child session was parked by `AgentManager::suspend_task`, wait
+            // here - no further stage runs - until `resume_task` clears the
+            // flag or the user cancels the turn (a set cancel flag falls
+            // through to the cancel branch below). The check is a DashMap
+            // lookup; sessions not spawned by the agent manager (plain chat
+            // turns, ACP and remote dispatch) have no entry and skip the
+            // gate entirely. Suspension takes effect between steps: the LLM
+            // call or tool execution in progress when the request lands
+            // finishes first.
+            if let Some(suspend_flag) = self
+                .agent_manager
+                .get()
+                .and_then(|m| m.suspend_flag_for_session(session_id))
+            {
+                while suspend_flag.load(Ordering::Relaxed) {
+                    if cancel_flag.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                }
+            }
+            if let Some(tracker) = loop_tracker.as_mut() {
+                if !tracker.begin_step() {
+                    // FR-013/FR-014: the step or token budget was reached -
+                    // terminate with `budget_exhausted` before sending
+                    // another LLM request.
+                    let breach = tracker
+                        .budget_breach()
+                        .unwrap_or(crate::session::loop_state::StopCondition::BudgetExhausted);
+                    let reason = if tracker
+                        .cost_limit()
+                        .is_some_and(|limit| tracker.tokens() >= limit)
+                    {
+                        format!(
+                            "token cost budget exhausted ({} tokens accumulated)",
+                            tracker.tokens()
+                        )
+                    } else {
+                        format!(
+                            "step budget exhausted ({}/{} iterations)",
+                            tracker.steps(),
+                            tracker.max_steps().unwrap_or(0)
+                        )
+                    };
+                    self.terminate_loop_inner(
+                        session_id,
+                        breach,
+                        Some(total_start),
+                        None,
+                        None,
+                        Some(reason),
+                        Some(&turn.working_dir),
+                    )
+                    .await;
+                    break;
+                }
+                // Persist the incremented step counter so the next iteration
+                // (and any external termination) sees it.
+                self.persist_loop_tracker(session_id, &tracker).await;
+            }
+            let _step_scope = profiler.scope("loop.step.total");
+            let step = {
+                let _scope = profiler.scope("loop.step.setup");
+                // P-13: compute the new step once, set it, and reuse the
+                // value. The previous form called `current_step` twice
+                // (once to read, once to re-read after `set_step`); the
+                // second read is redundant because we already know the
+                // value we just stored.
+                let new_step = self.event_bus.current_step(session_id) + 1;
+                self.event_bus.set_step(session_id, new_step);
+                new_step as usize
+            };
+            if step > max_steps {
+                warn!("Reached max steps ({}), stopping agent loop", max_steps);
+                self.event_bus.publish(Event::AgentError {
+                    session_id: session_id.to_string(),
+                    error: format!("Reached maximum steps ({max_steps})"),
+                });
+                break;
+            }
+
+            if cancel_flag.load(Ordering::Relaxed) {
+                // One cancellation is one event: the warn carries the step and
+                // the timing breakdown rather than emitting a second info line
+                // for the same cancellation.
+                let total_elapsed_ms = total_start.elapsed().as_millis() as u64;
+                let other_ms = total_elapsed_ms.saturating_sub(cumulative_model_wait_ms);
+                warn!(
+                    session_id = %session_id,
+                    step,
+                    total_ms = total_elapsed_ms,
+                    model_wait_ms = cumulative_model_wait_ms,
+                    other_ms = other_ms,
+                    "Agent loop cancelled by user - timing breakdown: total={}ms, model_wait={}ms, other={}ms",
+                    total_elapsed_ms,
+                    cumulative_model_wait_ms,
+                    other_ms
+                );
+                self.finish_cancelled_turn(session_id, assistant_parts, assistant_msg_id, &run_id)
+                    .await;
+                tokio::task::yield_now().await;
+                publish_run_cost_summary(total_elapsed_ms);
+                return Ok(Message::new(session_id, Role::Assistant, vec![]));
+            }
+            debug!("Agent loop step {}/{}", step, max_steps);
+
+            // P-4: only publish `ToolsSent` on the first step of the turn -
+            // the TUI only renders the tool list once and the previous form
+            // cloned ~111 `String`s (or cloned the cached `Arc<[String]>`
+            // into a `Vec<String>`) on every step. When `cached_tool_names`
+            // is populated we hand the `Arc<[String]>` straight to the event
+            // (P-4/D-1), so the publish is a single refcount bump.
+            if step == 1 && !tool_definitions.is_empty() {
+                let _scope = profiler.scope("loop.step.publish_tools");
+                let tool_names: Vec<String> = match &cached_tool_names {
+                    Some(names) => names.iter().cloned().collect(),
+                    None => tool_definitions.iter().map(|t| t.name.clone()).collect(),
+                };
+                self.event_bus.publish(Event::ToolsSent {
+                    session_id: session_id_arc.to_string(),
+                    tools: tool_names,
+                });
+            }
+
+            // Maybe compact (per-iteration pre-send check) - T-008, FR-003,
+            // FR-006, FR-008. When `compaction.auto` is enabled and compaction
+            // has not already run this turn, estimate the request token load
+            // and - if it exceeds `context_window - max(output, buffer)` -
+            // invoke the OpenCode-derived summarisation runner before sending
+            // the user prompt to the LLM.
+            let llm_request_start = std::time::Instant::now();
+
+            if turn.session_config.compaction.auto && !compaction_attempted_this_turn {
+                // PERF-036: incremental estimate - only changed messages are
+                // re-costed; the tool term reuses the caller's cached byte
+                // hint so ~111 schemas are not re-serialised each step. The
+                // estimate is always needed: the provider count describes the
+                // previous request and misses the reply and tool results
+                // appended since, which only the local estimate can measure.
+                let estimate = token_tracker.estimate(
+                    Some(system_prompt.as_ref()),
+                    &chat_messages,
+                    &tool_definitions[..],
+                    self.get_cached_tool_definition_bytes(),
+                );
+                let current_tokens = crate::compaction::anchored_request_tokens(
+                    last_reported_input_tokens,
+                    reported_anchor_estimate,
+                    estimate,
+                );
+                let decision = crate::compaction::evaluate_trigger(
+                    &turn.session_config.compaction,
+                    estimate,
+                    current_tokens,
+                    context_window,
+                    0,
+                );
+                // One condensed line per turn: `should_compact` plus the
+                // numbers that explain it. The full decision struct was
+                // logged here on every step, which is noise at `debug` level.
+                if decision.should_compact {
+                    tracing::debug!(
+                        session_id,
+                        effective_tokens = decision.effective_tokens,
+                        threshold = decision.threshold,
+                        context_window,
+                        "pre-send compaction trigger fired"
+                    );
+                }
+                if decision.should_compact {
+                    // Convert the provider-facing chat messages into the
+                    // internal `Message` form the compaction runner expects,
+                    // run summarisation, persist the synthetic compaction
+                    // message, and replace the in-memory history with the
+                    // compaction message plus the verbatim recent tail.
+                    let messages =
+                        crate::compaction::convert::chat_messages_to_messages(&chat_messages);
+                    let previous_summary = messages
+                        .iter()
+                        .rev()
+                        .find(|m| m.role == Role::Compaction)
+                        .map(|m| m.text_content());
+                    compaction_attempted_this_turn = true;
+                    if turn.session_config.compaction.model.is_some() {
+                        self.event_bus.publish(Event::AgentNotice {
+                            session_id: session_id.to_string(),
+                            message: "compact.model override currently applies only to /compact and                                       loop-steps compaction; the pre-send path uses the session model"
+                                .to_string(),
+                        });
+                    }
+                    let compact_result = crate::compaction::compact(
+                        session_id,
+                        messages,
+                        &turn.model_ref.model_id,
+                        context_window,
+                        0,
+                        &turn.session_config.compaction,
+                        previous_summary.as_deref(),
+                        &turn.client,
+                        &self.event_bus,
+                        "auto",
+                        &self.stream_config,
+                        // In-loop compaction runs mid-turn with no caller
+                        // supplied cancel flag; a fresh never-set flag keeps
+                        // the cooperative-cancel API uniform without breaking
+                        // the turn-level cancellation semantics.
+                        &std::sync::atomic::AtomicBool::new(false),
+                    )
+                    .await;
+                    match compact_result {
+                        Ok(outcome) => {
+                            // Persist the synthetic compaction message so
+                            // future turns load history from the compaction
+                            // point forward (FR-005 / FR-007).
+                            let compaction_msg = outcome.compaction_message.clone();
+                            let persist_err = self
+                                .storage_op(move |s| s.create_message(&compaction_msg))
+                                .await
+                                .err();
+                            if let Some(e) = persist_err {
+                                warn!(error = %e, "failed to persist compaction message");
+                            }
+                            let new_chat = crate::compaction::convert::messages_to_chat_messages(
+                                &outcome.new_messages,
+                            );
+                            chat_messages = Arc::new(new_chat);
+                            compressed_this_turn = true;
+                            // The history was replaced: no provider count
+                            // describes it yet, so drop the anchor.
+                            reported_anchor_estimate = None;
+                            // Re-arm candidate: the trigger stays disarmed until
+                            // the provider's next report confirms the request is
+                            // back under the threshold (the local estimate can
+                            // undercount system/tool overhead). A summary that
+                            // did not shrink the history never re-arms.
+                            if outcome.compressed_tokens < outcome.original_tokens {
+                                rearm_below_threshold = Some(decision.threshold);
+                            }
+                            last_reported_input_tokens = outcome.compressed_tokens as u64;
+                            self.persist_last_reported_input_tokens(
+                                session_id,
+                                outcome.compressed_tokens as u64,
+                            );
+                            tracing::info!(
+                                original_tokens = outcome.original_tokens,
+                                compressed_tokens = outcome.compressed_tokens,
+                                kept_messages = outcome.kept_message_count,
+                                "pre-send compaction applied"
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                error = %e,
+                                "pre-send compaction failed; continuing with uncompressed history"
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Call LLM with retry + handle stream events
+            let mut loop_state = crate::session::loop_steps::LoopState {
+                chat_messages: std::mem::take(&mut chat_messages),
+                assistant_parts: std::sync::Arc::clone(&assistant_parts),
+                cumulative_model_wait_ms,
+                compressed_this_turn,
+                compaction_attempted_this_turn,
+                last_reported_input_tokens,
+                last_finish_reason: last_finish_reason.clone(),
+            };
+            // T-007 (FR-011): an exhausted LLM-stage failure (transport error
+            // after the internal retry budget, permanent API error, context
+            // overflow that no compaction path could recover) is unrecoverable
+            // - terminate an active loop with status `error`, surface the
+            // reason, and stop without another request.
+            let mut llm_result = match self
+                .call_llm_step(
+                    session_id,
+                    agent,
+                    &turn,
+                    &mut loop_state,
+                    &tool_definitions,
+                    &system_prompt,
+                    context_window,
+                    llm_request_start,
+                    &profiler,
+                )
+                .await
+            {
+                Ok(result) => result,
+                Err(e) => {
+                    self.terminate_loop_on_fatal_error(
+                        session_id,
+                        &e,
+                        Some(total_start),
+                        Some(&turn.working_dir),
+                    )
+                    .await;
+                    return Err(e);
+                }
+            };
+            chat_messages = loop_state.chat_messages;
+            compressed_this_turn = loop_state.compressed_this_turn;
+            compaction_attempted_this_turn = loop_state.compaction_attempted_this_turn;
+            last_reported_input_tokens = loop_state.last_reported_input_tokens;
+            if let Some(reason) = loop_state.last_finish_reason.clone() {
+                last_finish_reason = Some(reason);
+            }
+
+            if llm_result.last_input_tokens > 0 {
+                last_reported_input_tokens = llm_result.last_input_tokens;
+                // Persist the provider-reported input tokens into the session state cache
+                // so the next turn starts with the same usage value shown in the TUI.
+                self.persist_last_reported_input_tokens(session_id, llm_result.last_input_tokens);
+                // First provider report after a reducing compaction: re-arm
+                // auto-compaction only when it confirms usage recovered below
+                // the threshold; otherwise stay disarmed for the turn.
+                if let Some(threshold) = rearm_below_threshold.take()
+                    && llm_result.last_input_tokens <= threshold as u64
+                {
+                    compaction_attempted_this_turn = false;
+                }
+                // Anchor the provider count to the local estimate of the
+                // request it describes (`chat_messages` is still exactly what
+                // was sent; this step's reply is appended below).
+                if turn.session_config.compaction.auto {
+                    reported_anchor_estimate = Some(token_tracker.estimate(
+                        Some(system_prompt.as_ref()),
+                        &chat_messages,
+                        &tool_definitions[..],
+                        self.get_cached_tool_definition_bytes(),
+                    ));
+                }
+            }
+            // T-008 (FR-014): tally this exchange's tokens into the loop
+            // tracker so the next iteration's budget gate sees the updated
+            // cost (the gate fires BEFORE the next request).
+            if let Some(tracker) = loop_tracker.as_mut() {
+                tracker.record_tokens(llm_result.last_input_tokens, llm_result.last_output_tokens);
+                self.persist_loop_tracker(session_id, tracker).await;
+            }
+
+            // Collect parts from this turn
+            {
+                let _scope = profiler.scope("loop.response.process");
+                if !llm_result.reasoning_buffer.is_empty() {
+                    // FR-011: the provider's signature is recorded beside the
+                    // reasoning text, so a profile that declares
+                    // `echo_reasoning` can replay the signed block verbatim.
+                    std::sync::Arc::make_mut(&mut assistant_parts).push(MessagePart::Reasoning {
+                        text: llm_result.reasoning_buffer.clone(),
+                        signature: llm_result.reasoning_signature.clone(),
+                    });
+                }
+                if !llm_result.text_buffer.is_empty() {
+                    let response_preview =
+                        ragent_types::truncate_bytes(&llm_result.text_buffer, 200);
+                    let model_elapsed_ms = llm_request_start.elapsed().as_millis() as u64;
+                    cumulative_model_wait_ms += model_elapsed_ms;
+                    let llm_recorder = LlmRecorder::from_subsystem(&self.telemetry);
+                    llm_recorder.record_duration(
+                        &turn.model_ref.model_id,
+                        &turn.model_ref.provider_id,
+                        model_elapsed_ms as f64,
+                    );
+                    self.event_bus.publish(Event::ModelResponse {
+                        session_id: session_id.to_string(),
+                        text: response_preview,
+                        elapsed_ms: model_elapsed_ms,
+                        input_tokens: llm_result.last_input_tokens,
+                        output_tokens: llm_result.last_output_tokens,
+                    });
+                    std::sync::Arc::make_mut(&mut assistant_parts).push(MessagePart::Text {
+                        text: llm_result.text_buffer.clone(),
+                    });
+                    // Activity log: record the assistant's text response.
+                    let assistant_text = llm_result.text_buffer.clone();
+                    let assistant_msg_id_for_log = assistant_msg_id.clone();
+                    let run_id_for_msg = run_id.clone();
+                    self.record_activity_event(move |log| {
+                        log.record_model_message(
+                            &run_id_for_msg,
+                            "assistant",
+                            &assistant_text,
+                            Some(assistant_msg_id_for_log),
+                        )
+                        .map(Some)
+                    })
+                    .await;
+                }
+            }
+
+            // No tool calls - the loop ends here. The agent's text response
+            // is the final answer for this turn.
+            if llm_result.tool_calls.is_empty() {
+                // Sub-agent premature-termination guard: when a sub-agent that
+                // was actively calling tools (step > 1 implies prior tool-use
+                // steps, otherwise the loop would have broken earlier) produces
+                // a SHORT text-only response, it is almost always narration
+                // ("Now let me check ...") rather than the findings report. The
+                // model forgot to call a tool or emit findings, and the loop
+                // would silently accept the narration as the deliverable.
+                //
+                // Inject a one-shot nudge asking the model to produce its
+                // complete findings report now, then continue the loop. The
+                // next text-only response (the actual findings) terminates the
+                // loop normally.
+                if agent.mode == crate::agent::AgentMode::Subagent
+                    && step > 1
+                    && !subagent_summary_nudged
+                    && llm_result.text_buffer.len() < SUBAGENT_NARRATION_BYTE_LIMIT
+                {
+                    subagent_summary_nudged = true;
+                    self.event_bus.publish(Event::AgentNotice {
+                        session_id: session_id.to_string(),
+                        message: "Sub-agent ended with a short text-only \
+                                 response after tool work - nudging it to \
+                                 produce its findings report."
+                            .to_string(),
+                    });
+                    tracing::info!(
+                        session_id = %session_id,
+                        step,
+                        text_len = llm_result.text_buffer.len(),
+                        "sub-agent premature termination detected; injecting \
+                         summary nudge"
+                    );
+                    // Remove the narration text that was prematurely
+                    // pushed into `assistant_parts` so the final saved
+                    // message contains only the actual findings.
+                    {
+                        let parts = std::sync::Arc::make_mut(&mut assistant_parts);
+                        if matches!(parts.last(), Some(MessagePart::Text { .. })) {
+                            parts.pop();
+                        }
+                    }
+                    // Push the assistant's narration into chat history so the
+                    // model sees its own last message, then push the nudge as
+                    // a user message.
+                    let narration = std::mem::take(&mut llm_result.text_buffer);
+                    if !narration.is_empty() {
+                        Arc::make_mut(&mut chat_messages).push(ChatMessage {
+                            role: "assistant".to_string(),
+                            content: ChatContent::Text(narration),
+                        });
+                    }
+                    Arc::make_mut(&mut chat_messages).push(ChatMessage {
+                        role: "user".to_string(),
+                        content: ChatContent::Text(SUBAGENT_SUMMARY_NUDGE.to_string()),
+                    });
+                    continue;
+                }
+                // T-005 (FR-007, FR-010): the verification gate. A
+                // no-tool-call response from a loop with a verification
+                // command does not complete the run directly - the command's
+                // exit status decides. Success terminates with `completed`;
+                // failure with steps remaining appends the failure output as
+                // an observation and continues; failure with the budget
+                // breached ends the run as `budget_exhausted`.
+                // Bind the spec outside the `if let` scrutinee so the
+                // `active_loop_specs` read guard drops immediately (clippy
+                // significant_drop_in_scrutinee).
+                let loop_spec = self.active_loop_specs.read().await.get(session_id).cloned();
+                if let Some(spec) = loop_spec {
+                    if let Some(verify_cmd) = spec.verify_cmd.clone() {
+                        let outcome = crate::session::verification::run_verification_command(
+                            &verify_cmd,
+                            &turn.working_dir,
+                        )
+                        .await
+                        .unwrap_or_else(|e| {
+                            crate::session::verification::VerificationOutcome::Failure {
+                                reason: format!("gate error: {e}"),
+                                output: String::new(),
+                            }
+                        });
+                        let label = outcome.label();
+                        let output = outcome.output().to_string();
+                        tracing::info!(
+                            session_id = %session_id,
+                            passed = outcome.passed(),
+                            "verification gate ran"
+                        );
+                        if outcome.passed() {
+                            self.terminate_loop_inner(
+                                session_id,
+                                crate::session::loop_state::StopCondition::GoalAchieved,
+                                Some(total_start),
+                                Some((llm_result.last_input_tokens, llm_result.last_output_tokens)),
+                                Some(label),
+                                None,
+                                Some(&turn.working_dir),
+                            )
+                            .await;
+                            break;
+                        }
+                        // Failure: with no step remaining the loop cannot
+                        // retry the verification, so the run is a budget
+                        // exhaustion (FR-007); otherwise the failure output
+                        // becomes the next observation and the loop continues.
+                        let steps_remaining = loop_tracker
+                            .as_ref()
+                            .is_none_or(|tracker| tracker.budget_breach().is_none());
+                        if !steps_remaining {
+                            // A silent failure still needs an informative
+                            // verification field, so fall back to the label.
+                            let verification_summary = if output.is_empty() {
+                                label.clone()
+                            } else {
+                                output.clone()
+                            };
+                            let reason = format!(
+                                "verification command failed and no steps remain ({label})"
+                            );
+                            self.terminate_loop_inner(
+                                session_id,
+                                crate::session::loop_state::StopCondition::BudgetExhausted,
+                                Some(total_start),
+                                None,
+                                Some(verification_summary),
+                                Some(reason),
+                                Some(&turn.working_dir),
+                            )
+                            .await;
+                            break;
+                        }
+                        let observation =
+                            crate::session::verification::verification_failure_observation(
+                                &verify_cmd,
+                                &outcome,
+                            );
+                        self.event_bus.publish(Event::AgentNotice {
+                            session_id: session_id.to_string(),
+                            message: format!(
+                                "Verification gate failed - {label}. Appending \
+                                 the failure output as an observation and \
+                                 continuing the loop."
+                            ),
+                        });
+                        Arc::make_mut(&mut chat_messages).push(ChatMessage {
+                            role: "user".to_string(),
+                            content: ChatContent::Text(observation),
+                        });
+                        // The verification observation is a successful
+                        // observation append: reset the consecutive-failure
+                        // counter so unrelated recoverable failures do not
+                        // accumulate against the retry allowance (FR-012).
+                        if let Some(tracker) = loop_tracker.as_mut() {
+                            tracker.record_success();
+                            self.persist_loop_tracker(session_id, &tracker).await;
+                        }
+                        continue;
+                    }
+                }
+                // Goal-driven loop stop condition 1 (FR-010): a no-tool-call
+                // response with no verification command means the goal was
+                // reached - terminate with `GoalAchieved`, publish
+                // `Event::LoopTerminated`, and stop.
+                self.terminate_loop_inner(
+                    session_id,
+                    crate::session::loop_state::StopCondition::GoalAchieved,
+                    Some(total_start),
+                    Some((llm_result.last_input_tokens, llm_result.last_output_tokens)),
+                    None,
+                    None,
+                    Some(&turn.working_dir),
+                )
+                .await;
+
+                // FR-033: a Stop (`on_session_end`) hook may block the turn and
+                // return findings (the Claude `asyncRewake` shape). Fold them
+                // into a synthetic user turn and keep going, so a plugin
+                // security review can feed corrections back before the turn is
+                // accepted. Bounded so a hook that always blocks cannot loop.
+                let stop_guidance = crate::hooks::run_stop_hooks(
+                    &turn.parsed_hook_configs,
+                    &turn.working_dir,
+                    session_id,
+                )
+                .await;
+                let stop_guidance: Vec<String> = stop_guidance
+                    .into_iter()
+                    .filter(|text| !text.trim().is_empty())
+                    .collect();
+                if !stop_guidance.is_empty() && stop_continuations < MAX_STOP_CONTINUATIONS {
+                    stop_continuations += 1;
+                    self.event_bus.publish(Event::AgentNotice {
+                        session_id: session_id.to_string(),
+                        message: "A Stop hook returned findings; feeding them \
+                                  back to the model before ending the turn."
+                            .to_string(),
+                    });
+                    Arc::make_mut(&mut chat_messages).push(ChatMessage {
+                        role: "user".to_string(),
+                        content: ChatContent::Text(stop_guidance.join("\n\n")),
+                    });
+                    continue;
+                }
+                break;
+            }
+
+            // T-011 (FR-016): safe point between the LLM response and the
+            // tool phase - an interrupt raised while the model was responding
+            // aborts the run before any tool executes.
+            if loop_tracker.is_some() && interrupt_requested(&cancel_flag) {
+                self.terminate_loop_on_interrupt(
+                    session_id,
+                    Some(total_start),
+                    Some(&turn.working_dir),
+                )
+                .await;
+                loop_interrupted = true;
+                break;
+            }
+
+            // Tool dispatch phase (kept inline due to closure complexity)
+            {
+                let _scope = profiler.scope("loop.tool_phase.total");
+                // P-17: clear the reused per-step buffers (cheap - the
+                // allocations from the previous step are retained).
+                assistant_content_parts.clear();
+                tool_result_parts.clear();
+                // FR-011 (T-018): the signed reasoning block is pushed FIRST, so
+                // it precedes both the text and the tool-use blocks of the
+                // assistant turn that answers it. Anthropic requires the
+                // thinking that decided a call to arrive before the call, which
+                // is why this push is above the text push rather than beside the
+                // tool-use push below.
+                //
+                // This is the *within-turn* half of the replay, and it is the
+                // half a history converter cannot provide: the next request of
+                // this turn is built from `chat_messages`, and this message is
+                // what gets appended to it at the end of the phase. A block
+                // recorded only in `assistant_parts` would reach the provider on
+                // next turn's rebuilt history, i.e. after the echoing turn - too
+                // late for the provider that requires it.
+                //
+                // The part is pushed unconditionally, with no profile check: the
+                // omission for a profile declaring `echo_reasoning == false` is
+                // the encoder's decision (FR-011, and
+                // `tests/test_tool_input_error.rs` refuses a converter that
+                // re-implements it here).
+                if !llm_result.reasoning_buffer.is_empty() {
+                    let text = std::mem::take(&mut llm_result.reasoning_buffer);
+                    let signature = llm_result.reasoning_signature.take();
+                    assistant_content_parts.push(ContentPart::Reasoning { text, signature });
+                }
+                // P-18: move `text_buffer` into the `ContentPart::Text` rather
+                // than cloning it. The buffer is not referenced after this
+                // point (the response-preview and no-tool-nudge paths ran
+                // earlier and already consumed whatever they needed).
+                if !llm_result.text_buffer.is_empty() {
+                    let text = std::mem::take(&mut llm_result.text_buffer);
+                    assistant_content_parts.push(ContentPart::Text { text });
+                }
+                let parallel_tool_calls = turn.session_config.experimental.parallel_tool_calls;
+                // FR-010 (T-015): a provider whose wire contract declares
+                // `supports_parallel == false` cannot carry a parallel step, so
+                // the user's `experimental.parallel_tool_calls` opt-in is
+                // demoted here - once per step, before any call is prepared -
+                // and every call below runs through the sequential arm. That
+                // arm is the same ordered pipeline with the same recorded
+                // order (FR-012), so forcing it changes the concurrency of a
+                // step and never the history it produces.
+                //
+                // The gate is a demotion only: it never turns concurrency on,
+                // and a provider that does support parallel calls is not
+                // touched. It is read per step rather than cached per turn
+                // because the lookup is a scan of fifteen rows, and a step
+                // never spans two providers.
+                //
+                // The router is the one id whose contract is not settled here:
+                // `RouterClient` forwards the canonical request to whichever
+                // downstream provider its classification picked, so the row
+                // `profile_for("router")` returns describes the canonical
+                // encoding and not the effective contract. A downstream
+                // provider that declares `supports_parallel == false` cannot be
+                // honoured through this gate (the selection is made inside
+                // `chat`, after this decision), which is a recorded gap in the
+                // task doc rather than a silently wrong answer.
+                let mut parallel_tool_calls = parallel_tool_calls;
+                if parallel_tool_calls
+                    && crate::provider::wire::profile_table::profile_for(
+                        &turn.model_ref.provider_id,
+                    )
+                    .is_none_or(|profile| !profile.supports_parallel)
+                {
+                    parallel_tool_calls = false;
+                    tracing::info!(
+                        provider = %turn.model_ref.provider_id,
+                        reason = "the provider's wire profile declares \
+                                  supports_parallel == false, so the step's tool \
+                                  calls run sequentially (FR-010)",
+                        "parallel tool dispatch demoted to sequential"
+                    );
+                }
+                // One entry per call of this step, in the provider's order.
+                let mut futures: Vec<PendingStepCall> = Vec::new();
+                // P-8/P-9: build a single `ToolContext` for this step and clone
+                // it per tool call. `active_spec` is read once here (P-9) so
+                // the async lock is acquired at most once per step instead of
+                // once per tool call. The cloned value is also reused by the
+                // auto-spec-task-update block below (P-10).
+                let active_spec_id = self.active_spec.read().await.clone();
+                let allowed_roots = turn
+                    .session_config
+                    .dirs
+                    .allowed_roots
+                    .iter()
+                    .map(std::path::PathBuf::from)
+                    .collect();
+                // FR-015: resolve a provider spelling onto the ragent tool BEFORE
+                // the unknown-tool check, and rewrite the pending call so every
+                // later stage - the loop restriction, `LOOP_WRITE_TOOLS`, the
+                // destructive-action classifier, the hooks, the permission
+                // layer, the repeat guard, the telemetry key and the history
+                // record - sees one canonical name, and the provider spelling
+                // never reaches the persisted form (FR-001).
+                //
+                // This sits at the top of the tool phase rather than above it so
+                // the per-call decision below reads the name it dispatches: a
+                // step with no tool calls never builds a table, and a call is
+                // canonicalised exactly when it is about to be resolved (FR-012's
+                // "before any guard").
+                //
+                // A registered name always wins (the resolver checks the
+                // registry first), and a spelling the table cannot resolve - or
+                // whose target this build does not register - is left untouched,
+                // so it reaches the unknown-tool refusal naming the spelling the
+                // client actually sent. With `tools.aliases` absent this loop is
+                // a no-op over an empty table (FR-015's "behaviour shall be
+                // unchanged").
+                for tc in &mut llm_result.tool_calls {
+                    // Two spellings resolve onto a registered tool, in this
+                    // order: the declarative alias table (FR-015), then the
+                    // registry's own unique ASCII-case-insensitive match - so
+                    // `CALCULATOR` for `calculator`, or `bash` for `Bash`,
+                    // reaches the tool instead of being refused as unknown. The
+                    // exact spelling still wins both lookups, and a name neither
+                    // resolves is left untouched so it reaches the unknown-tool
+                    // refusal naming the spelling the client actually sent.
+                    let canonical = crate::tool::alias_table::resolve_inbound_tool_name(
+                        &turn.tool_registry,
+                        &turn.alias_table,
+                        &tc.name,
+                    )
+                    .or_else(|| canonical_dispatch_name(&turn.tool_registry, &tc.name));
+                    let Some(canonical) = canonical else {
+                        continue;
+                    };
+                    tracing::info!(
+                        spelling = %tc.name,
+                        tool = %canonical,
+                        "alias spelling resolved to a ragent tool name (FR-015)"
+                    );
+                    tc.name = canonical;
+                }
+                // Teams outside the TUI (`run`, `serve`, ACP): bind the team
+                // runtime for the team this session leads before any team
+                // tool runs, so `team_spawn` has a manager to spawn with.
+                self.ensure_team_manager(
+                    turn.team_context.as_deref(),
+                    &turn.working_dir,
+                    &turn.model_ref,
+                );
+                let base_tool_ctx = ToolContext {
+                    session_id: session_id.to_string(),
+                    working_dir: turn.working_dir.clone(),
+                    event_bus: self.event_bus.clone(),
+                    storage: Some(self.session_manager.storage().clone()),
+                    agent_manager: self.agent_manager.get().cloned(),
+                    active_model: Some(turn.model_ref.clone()),
+                    provider_registry: Some(Arc::clone(&self.provider_registry)),
+                    team_context: turn.team_context.clone(),
+                    team_manager: self
+                        .team_manager
+                        .get()
+                        .map(|tm| tm as Arc<dyn crate::tool::TeamManagerInterface>),
+                    code_index: self.code_index_for(&turn.working_dir),
+                    bg_service: self.bg_service.get().cloned(),
+                    spec_manager: self.spec_manager.get().cloned(),
+                    active_spec_id: active_spec_id.clone(),
+                    config: Some(std::sync::Arc::clone(&turn.session_config)),
+                    allowed_roots,
+                    cached_team_dir: Arc::new(std::sync::Mutex::new(None)),
+                    // SEC-ragent-team-001: blueprint seed files must run through
+                    // the same permission decision as ordinary tool calls.
+                    permission_checker: Some(self.permission_checker.clone()),
+                    read_timestamps: self.read_timestamps.clone(),
+                    canonical_cache: Arc::new(ragent_tools_core::CanonicalPathCache::new()),
+                    tool_registry: turn.tool_registry.clone(),
+                };
+                // FR-012: one dispatched call's outcome in the concurrent arm,
+                // carrying the position the call had in the provider's step so
+                // the batch is applied in that order whichever arm produced it.
+                type ToolStepResult = (
+                    ToolExecutionResult,
+                    Option<WatchdogIdentity>,
+                    Option<String>,
+                    usize,
+                );
+                // A step's outcome as the concurrent arm holds it: either the
+                // outcome a *run* will produce (a future) or an outcome the
+                // prepare loop already decided and that is emitted in its own
+                // position by the drain below (a refused call). Both are kept in
+                // one list, so a refused call's record lands exactly where the
+                // provider put the call instead of ahead of every sibling.
+                type StepOutcomeSlot =
+                    std::pin::Pin<Box<dyn std::future::Future<Output = ToolStepResult> + Send>>;
+                type PendingStepCall = Result<StepOutcomeSlot, Box<ToolStepResult>>;
+                type ToolExecutionResult = Result<
+                    (
+                        PendingToolCall,
+                        Value,
+                        ToolCallStatus,
+                        Option<Value>,
+                        Option<String>,
+                        u64,
+                        String,
+                        Option<Value>,
+                        Vec<String>,
+                    ),
+                    ToolTaskError,
+                >;
+                let result_profiler = profiler.clone();
+                // P-15: collect one `ToolCallBatchEntry` per tool call so a
+                // single `Event::ToolCallBatch` can be published at the end of
+                // the step, giving consumers an atomic view of all tool calls.
+                // The per-call events are still published inside the spawned
+                // task as a fallback (PERFPLAN Milestone D risk note).
+                let mut batch_entries: Vec<ragent_types::event::ToolCallBatchEntry> = Vec::new();
+                // T-007 (FR-011): set when a tool task panicked or failed to
+                // join - an unrecoverable failure that terminates an active
+                // loop after the tool phase. Panics discovered OUTSIDE the
+                // result handler are staged here first: the closure captures
+                // `tool_panic` mutably, so direct writes elsewhere are
+                // rejected by the borrow checker.
+                let mut tool_panic: Option<String> = None;
+                let mut staged_tool_panic: Option<String> = None;
+                // FR-013: the step's view of the unresolved-approval tracker.
+                //
+                // Read through a free function rather than captured by the
+                // handler: the handler already borrows three step-local buffers
+                // mutably, so it must stay a borrowing closure, and a captured
+                // tracker would make it a `move` closure that takes those
+                // buffers with it. Passing the tracker per call keeps the one
+                // shared state - not a copy of it - on the FR-013 guard.
+                let step_pending_verdicts = self.pending_verdicts.clone();
+                let mut handle_tool_execution_result = |result: ToolExecutionResult| {
+                    let _scope = result_profiler.scope("loop.tool_phase.handle_result");
+                    match result {
+                        Ok((
+                            tc,
+                            input,
+                            status,
+                            output_value,
+                            error,
+                            duration_ms,
+                            result_content,
+                            tool_metadata,
+                            additional_contexts,
+                        )) => {
+                            let success = status == ToolCallStatus::Completed;
+                            // FR-013 (T-016): a result is appended only for a
+                            // call whose permission verdict has resolved - so no
+                            // history append can run while a permission verdict
+                            // is unresolved. The record is still written, so the
+                            // conversation carries the `tool_use` the provider
+                            // listed and no model call is left orphaned, but it
+                            // carries no output and no error: an unapproved
+                            // call's outcome must never reach the model as if it
+                            // had run. The guard reads a state the permission
+                            // stage settled on every exit path, so reaching it
+                            // means a verdict did not resolve - a wedged wait, an
+                            // aborted task - and it is logged rather than passed
+                            // over.
+                            let verdict_resolved =
+                                result_is_appendable(&step_pending_verdicts, session_id, &tc.id);
+                            if !verdict_resolved {
+                                tracing::warn!(
+                                    session_id = %session_id,
+                                    call_id = %tc.id,
+                                    tool = %tc.name,
+                                    "tool result withheld: the call's permission verdict \
+                                     has not resolved (FR-013)"
+                                );
+                            }
+                            std::sync::Arc::make_mut(&mut assistant_parts).push(
+                                MessagePart::ToolCall {
+                                    tool: tc.name.clone(),
+                                    call_id: tc.id.clone(),
+                                    state: Box::new(ToolCallState {
+                                        status: if verdict_resolved {
+                                            status
+                                        } else {
+                                            ToolCallStatus::Pending
+                                        },
+                                        input,
+                                        output: if verdict_resolved { output_value } else { None },
+                                        error: if verdict_resolved {
+                                            error.clone()
+                                        } else {
+                                            None
+                                        },
+                                        duration_ms: Some(duration_ms),
+                                    }),
+                                },
+                            );
+                            // The result content: nothing for an unresolved
+                            // verdict (FR-013), the rendered result otherwise.
+                            if verdict_resolved {
+                                tool_result_parts.push(ContentPart::ToolResult {
+                                    tool_use_id: tc.id.clone(),
+                                    content: tool_result_content_for_llm(
+                                        &tc.name,
+                                        &result_content,
+                                        tool_metadata.as_ref(),
+                                    ),
+                                    // FR-014/T-017: from the recorded status.
+                                    is_error: status.is_error(),
+                                });
+                            }
+                            // FR-033: a PostToolUse hook (for example a Claude
+                            // security-guidance pattern check) may return
+                            // `hookSpecificOutput.additionalContext`; fold it
+                            // into this tool's result so the model sees the
+                            // guidance on the next iteration.
+                            for guidance in additional_contexts {
+                                tool_result_parts.push(ContentPart::Text {
+                                    text: format!("[{} hook guidance]\n{guidance}", tc.name),
+                                });
+                            }
+                            // P-15: capture the per-call summary for the batch
+                            // event. Reuse the already-computed line count and
+                            // preview from the spawned task where available;
+                            // fall back to computing them here for the batch.
+                            let content_line_count = tool_metadata
+                                .as_ref()
+                                .and_then(|m| m.get("lines"))
+                                .and_then(serde_json::Value::as_u64)
+                                .map_or_else(|| result_content.lines().count(), |n| n as usize);
+                            // M-007: the batch event carries a truncated display
+                            // preview too (the full content is preserved in
+                            // `assistant_parts` and the activity log).
+                            const BATCH_PREVIEW_CHARS: usize = 2000;
+                            let batch_content =
+                                truncate_preview(&result_content, BATCH_PREVIEW_CHARS);
+                            batch_entries.push(ragent_types::event::ToolCallBatchEntry {
+                                call_id: tc.id.clone(),
+                                tool: tc.name.clone(),
+                                args: tc.args_json.clone(),
+                                error: error.clone(),
+                                duration_ms,
+                                content: batch_content,
+                                content_line_count,
+                                metadata: tool_metadata.clone(),
+                                success,
+                            });
+                            if let Some(meta) = tool_metadata.as_ref() {
+                                if meta.get("agent_switch").is_some()
+                                    || meta.get("agent_restore").is_some()
+                                {
+                                    agent_switch_requested = true;
+                                    return true;
+                                }
+                                if meta.get("agent_complete").is_some() {
+                                    agent_complete_requested = true;
+                                    return true;
+                                }
+                            }
+                            false
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Tool execution task panicked");
+                            tool_panic = Some(e.to_string());
+                            false
+                        }
+                    }
+                };
+
+                for (dispatch_order, tc) in llm_result.tool_calls.iter().enumerate() {
+                    let _scope = profiler.scope("loop.tool_phase.prepare_call");
+                    // C4: an interrupt raised mid-phase stops further
+                    // dispatch. Not-yet-started calls have no `ToolUse`
+                    // record in the assistant parts, so breaking here keeps
+                    // the conversation history consistent (no orphaned
+                    // tool_use); in-flight tasks complete under the
+                    // watchdog as before.
+                    if interrupt_requested(&cancel_flag) {
+                        tracing::info!(
+                            session_id = %session_id,
+                            "interrupt during tool phase; skipping remaining tool calls"
+                        );
+                        break;
+                    }
+                    // Stages 1-3 of the one ordered pipeline (FR-012): decode
+                    // the accumulated argument text once (FR-007), resolve the
+                    // tool, then validate against its declared schema (FR-008,
+                    // FR-009, FR-021). A malformed args JSON used to be silently
+                    // coerced to `{}` (six parse sites), so the tool executed
+                    // with empty arguments and the model only saw a misleading
+                    // "missing parameter X" error; and an unregistered name used
+                    // to be answered by a second, ad-hoc error. Both are now
+                    // `ToolInputError` values built by the pipeline, so the
+                    // sentence, the record status and the `is_error` flag are one
+                    // derivation and a call can be measured against the tool it
+                    // will not run.
+                    let resolved = resolve_tool_call(&turn.tool_registry, tc);
+                    // The decoded, schema-validated arguments. A refused call
+                    // keeps them in its record so the TUI can render what the
+                    // model sent; it is `Value::Null` only when the payload would
+                    // not decode at all.
+                    let input: Value = resolved.input.clone();
+                    if let Err(refusal) = &resolved.tool {
+                        // A refusal is answered here, before the tool task is
+                        // spawned, so no hook, permission check or backend call
+                        // sees it. The outcome is built by the pipeline's refusal
+                        // constructor: the loop states the content of a refusal
+                        // nowhere, so its sentence, record status and `is_error`
+                        // flag are one derivation (FR-008, FR-009, FR-021).
+                        let synthetic = ToolDispatchPipeline::refusal(
+                            &tc,
+                            refusal,
+                            input,
+                            &self.event_bus,
+                            session_id,
+                        );
+                        if parallel_tool_calls {
+                            // A refused call still occupies its position: the
+                            // record is emitted by the drain in the provider's
+                            // order, so this step and the sequential one produce
+                            // the same history (FR-012). Only the refusal's
+                            // `ToolCallEnd` is published now, by the constructor
+                            // above, so the UI closes the call out promptly.
+                            futures.push(Err(Box::new((
+                                Ok(synthetic),
+                                None,
+                                None,
+                                dispatch_order,
+                            ))));
+                            continue;
+                        }
+                        if handle_tool_execution_result(Ok(synthetic)) {
+                            break;
+                        }
+                        continue;
+                    }
+                    assistant_content_parts.push(ContentPart::ToolUse {
+                        id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        input: input.clone(),
+                    });
+                    // Publish the fully-assembled tool arguments so the TUI can
+                    // render the call summary regardless of provider-specific
+                    // streaming quirks (some local providers omit ToolCallEnd
+                    // stream events for the argument payload).
+                    self.event_bus.publish(Event::ToolCallArgs {
+                        session_id: session_id.to_string(),
+                        call_id: tc.id.clone(),
+                        tool: tc.name.clone(),
+                        args: tc.args_json.clone(),
+                    });
+                    // Activity log: record the tool call.
+                    let tc_id = tc.id.clone();
+                    let tc_name = tc.name.clone();
+                    let tc_args = tc.args_json.clone();
+                    let run_id_for_tc = run_id.clone();
+                    self.record_activity_event(move |log| {
+                        log.record_tool_call(&run_id_for_tc, tc_id, tc_name, tc_args)
+                            .map(Some)
+                    })
+                    .await;
+                    // P-8/P-9: clone the per-step `ToolContext` rather than
+                    // rebuilding it (and re-acquiring the `active_spec` async
+                    // lock) for every tool call. `base_tool_ctx` is built once
+                    // before the loop; the clone is cheap (Arc refcount bumps
+                    // plus a `PathBuf`/`String` clone).
+                    let tool_ctx = base_tool_ctx.clone();
+                    let tc_clone = tc.clone();
+                    // The pipeline's context borrows these rather than cloning
+                    // them per stage: one `Arc` bump each, taken once per call.
+                    let storage_clone = self.session_manager.storage().clone();
+                    // T-015 (FR-006): resolve the analyzer client once per tool
+                    // call, outside the spawned task (the resolve performs async
+                    // config + provider I/O). `None` when the analyzer is
+                    // disabled, so the task skips it entirely.
+                    let security_analyzer = self.security_analyzer_client(&turn.model_ref).await;
+                    // T-009 (FR-008/FR-009/FR-021/FR-022): the loop
+                    // restriction guard runs inside the pipeline, before hooks
+                    // and the permission checker, so a restricted loop
+                    // cannot execute a call outside its tool set or scope.
+                    let loop_spec = self.active_loop_specs.read().await.get(session_id).cloned();
+                    // T-010 (FR-015): when the loop has destructive-action
+                    // checkpoints enabled, `auto_approve` becomes `None` so
+                    // `check_permission_with_prompt` forces the checkpoint
+                    // prompt for destructive calls even under allow rules and
+                    // in auto-approve mode (FR-024). Plain turns keep
+                    // `Some(self.auto_approve)`.
+                    let loop_checkpoint = loop_spec.as_ref().is_some_and(|spec| spec.checkpoints);
+                    let auto_approve = if loop_checkpoint {
+                        None
+                    } else {
+                        Some(self.auto_approve)
+                    };
+                    let checkpoint_timeout_secs = loop_spec
+                        .as_ref()
+                        .and_then(|spec| spec.checkpoint_timeout_secs)
+                        .map_or_else(
+                            || u64::from(self.load_config_cached().r#loop.checkpoint_timeout_secs),
+                            u64::from,
+                        );
+                    // T-012 (FR-018): capture the workspace BEFORE the first
+                    // write action executes. The check is cheap when already
+                    // captured (a map read); when armed, the storage-backed
+                    // snapshot runs synchronously here so no write can slip
+                    // through before the capture. Failures surface as a tool
+                    // error observation instead of executing the call.
+                    if loop_tracker.is_some()
+                        && crate::session::loop_state::LOOP_WRITE_TOOLS.contains(&tc.name.as_str())
+                    {
+                        if let Err(e) = self
+                            .ensure_pre_loop_capture(session_id, &turn.working_dir, &tc.id)
+                            .await
+                        {
+                            let err_msg = format!("pre-loop workspace snapshot failed: {e:#}");
+                            tracing::error!(
+                                session_id = %session_id,
+                                reason = %err_msg,
+                                "loop terminated: workspace capture failed (FR-018)"
+                            );
+                            self.terminate_loop_inner(
+                                session_id,
+                                crate::session::loop_state::StopCondition::UnrecoverableError,
+                                Some(total_start),
+                                None,
+                                None,
+                                Some(format!("unrecoverable error: {err_msg}")),
+                                Some(&turn.working_dir),
+                            )
+                            .await;
+                            return Err(anyhow::anyhow!(err_msg));
+                        }
+                    }
+                    // Every stage after this point lives in
+                    // `ToolDispatchPipeline::run` and nowhere
+                    // else: the task below is a thin shell that awaits it, so the
+                    // sequential arm (which awaits that future) and the concurrent
+                    // arm (which collects it into `join_all`) cannot run a
+                    // different pipeline (FR-012). This block owns only what is
+                    // per-turn rather than per-call - the loop's first-write
+                    // capture above, and the turn's borrows, cloned once here.
+                    let dispatch_ctx = ToolDispatchContext {
+                        session_id: session_id.to_string(),
+                        permission_checker: self.permission_checker.clone(),
+                        event_bus: self.event_bus.clone(),
+                        tool_ctx: tool_ctx.clone(),
+                        loop_spec: loop_spec.clone(),
+                        hook_configs: turn.parsed_hook_configs.clone(),
+                        hook_working_dir: turn.working_dir.clone(),
+                        tool_repeat_guard: self.tool_repeat_guard.clone(),
+                        telemetry: Arc::clone(&self.telemetry),
+                        extraction_engine: self.extraction_engine.clone(),
+                        storage: storage_clone.clone(),
+                        team_context_cache: self.team_context_cache.clone(),
+                        security_analyzer: security_analyzer.clone(),
+                        agent_is_subagent: agent.mode == crate::agent::AgentMode::Subagent,
+                        // The automatic sub-agent YOLO scope's membership test,
+                        // resolved once from the surface this turn was offered. A
+                        // read-only run yields an empty set, so an `explore`
+                        // sub-agent keeps the ordinary prompt policy.
+                        write_capable_tools: write_capable_tools.clone(),
+                        auto_approve,
+                        loop_checkpoint,
+                        checkpoint_timeout_secs,
+                        pending_verdicts: self.pending_verdicts.clone(),
+                    };
+                    let profiler_clone = profiler.clone();
+                    let fut = tokio::spawn(async move {
+                        ToolDispatchPipeline::run(
+                            &dispatch_ctx,
+                            &tc_clone,
+                            resolved,
+                            &profiler_clone,
+                        )
+                        .await
+                    });
+                    if parallel_tool_calls {
+                        // Capture the real call identity for the watchdog and
+                        // panic paths BEFORE `tc` is borrowed/moved. C2 used
+                        // to publish a placeholder `watchdog-parallel` call id
+                        // and C1 dropped sibling results on the first failure.
+                        let parallel_call_id = tc.id.clone();
+                        let parallel_tool_name = tc.name.clone();
+                        let parallel_args_json = tc.args_json.clone();
+                        // The synthesised-outcome constructor publishes
+                        // `ToolCallEnd` itself, so it needs its own handles: the
+                        // ones above are moved into the spawned tool task.
+                        let parallel_event_bus = self.event_bus.clone();
+                        let parallel_session_id = session_id.to_string();
+                        let watchdog_identity: WatchdogIdentity = (tc.id.clone(), tc.name.clone());
+                        // The join-failure answer is built here, before the
+                        // future is moved into the `join_all`, by the one
+                        // synthesised-outcome constructor the sequential arm
+                        // also uses (FR-012). It is a plain function returning
+                        // the outcome, so neither arm assembles the tuple itself.
+                        let synthesise_failure =
+                            move |call_id: String,
+                                  name: String,
+                                  join_err: &dyn std::fmt::Display| {
+                                let msg = format!("Tool task failed: {join_err}");
+                                let synthetic_tc = crate::session::history::PendingToolCall {
+                                    id: call_id,
+                                    name,
+                                    args_json: parallel_args_json.clone(),
+                                };
+                                crate::session::dispatch::ToolDispatchPipeline::synthesised(
+                                    &synthetic_tc,
+                                    &msg,
+                                    0,
+                                    &parallel_event_bus,
+                                    &parallel_session_id,
+                                )
+                            };
+                        let abort_handle = fut.abort_handle();
+                        futures.push(Ok(Box::pin(async move {
+                            // A tuple rather than a bare `None`, so the arm's
+                            // shape is inferable from this line alone.
+                            let no_stall: Option<(String, String)> = None;
+                            let no_join_error: Option<String> = None;
+                            match tokio::time::timeout(TOOL_WATCHDOG_TIMEOUT, fut).await {
+                                Ok(Ok(ok)) => (Ok(ok), no_stall, no_join_error, dispatch_order),
+                                Ok(Err(join_err)) => {
+                                    // C1: the tool task panicked or failed to
+                                    // join. Synthesise an error result so the
+                                    // tool_use record is not orphaned in the
+                                    // conversation history, and surface the
+                                    // panic so loop sessions still terminate.
+                                    // The outcome comes from the pipeline's one
+                                    // synthesised-outcome constructor, so this
+                                    // shape and the sequential one cannot word
+                                    // the same failure differently (FR-012).
+                                    let outcome = synthesise_failure(
+                                        parallel_call_id,
+                                        parallel_tool_name,
+                                        &join_err,
+                                    );
+                                    (
+                                        Ok(outcome),
+                                        None,
+                                        Some(join_err.to_string()),
+                                        dispatch_order,
+                                    )
+                                }
+                                Err(_) => {
+                                    abort_handle.abort();
+                                    (
+                                        Err(ToolTaskError::WatchdogAbort),
+                                        Some(watchdog_identity),
+                                        None,
+                                        dispatch_order,
+                                    )
+                                }
+                            }
+                        }) as StepOutcomeSlot));
+                    } else {
+                        let watchdog_identity: WatchdogIdentity = (tc.id.clone(), tc.name.clone());
+                        let abort_handle = fut.abort_handle();
+                        let result = match tokio::time::timeout(TOOL_WATCHDOG_TIMEOUT, fut).await {
+                            Ok(result) => result.map_err(ToolTaskError::Join),
+                            Err(_) => {
+                                abort_handle.abort();
+                                watchdog_timed_out = true;
+                                let msg = watchdog_timeout_msg(
+                                    &watchdog_identity.1,
+                                    &watchdog_identity.0,
+                                );
+                                // Structured fields so a structured consumer can
+                                // attribute the timeout without parsing the message
+                                // text (audit finding).
+                                warn!(
+                                    tool = %watchdog_identity.1,
+                                    call_id = %watchdog_identity.0,
+                                    timeout_ms = TOOL_WATCHDOG_TIMEOUT.as_millis() as u64,
+                                    msg = %msg,
+                                    "tool watchdog timed out; call aborted"
+                                );
+                                // Close out the tool call in the UI: no `ToolCallEnd`
+                                // was published because the spawned task was aborted.
+                                self.event_bus.publish(Event::ToolCallEnd {
+                                    session_id: session_id.to_string(),
+                                    call_id: watchdog_identity.0,
+                                    tool: watchdog_identity.1,
+                                    error: Some(msg.clone()),
+                                    duration_ms: TOOL_WATCHDOG_TIMEOUT.as_millis() as u64,
+                                });
+                                self.event_bus.publish(Event::AgentError {
+                                    session_id: session_id.to_string(),
+                                    error: msg.clone(),
+                                });
+                                self.event_bus.publish(Event::AgentNotice {
+                                    session_id: session_id.to_string(),
+                                    message: msg,
+                                });
+                                // Stop processing further tool calls for this turn.
+                                break;
+                            }
+                        };
+                        match result {
+                            Ok(ok) => {
+                                if handle_tool_execution_result(Ok(ok)) {
+                                    break;
+                                }
+                            }
+                            Err(join_err) => {
+                                // C1: a panicked/failed tool task must not
+                                // orphan its tool_use record. Synthesise an
+                                // error result (rendered through the normal
+                                // handler) and stage the panic so active
+                                // loops still terminate (T-007).
+                                let msg = format!("Tool task failed: {join_err}");
+                                warn!(error = %join_err, "Tool execution task panicked");
+                                staged_tool_panic = Some(join_err.to_string());
+                                let synthetic = Ok(ToolDispatchPipeline::synthesised(
+                                    &tc,
+                                    &msg,
+                                    0,
+                                    &self.event_bus,
+                                    session_id,
+                                ));
+                                if handle_tool_execution_result(synthetic) {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                if parallel_tool_calls {
+                    // FR-012: the outcomes are applied in the provider's
+                    // order, in this arm exactly as in the sequential one. The
+                    // step is a list of slots in that order - a future for a
+                    // call that runs, an already-decided outcome for a call the
+                    // prepare loop refused - so waiting and then draining the
+                    // list yields the calls in the order the provider listed
+                    // them. Applying each outcome as it finished (or appending
+                    // refusals where they were decided) would make the same step
+                    // produce two different histories depending on
+                    // `parallel_tool_calls`, which is what the one pipeline
+                    // exists to prevent.
+                    let results: Vec<ToolStepResult> = {
+                        let _scope = profiler.scope("loop.tool_phase.join_parallel");
+                        let settled =
+                            futures::future::join_all(futures.into_iter().map(|slot| async move {
+                                match slot {
+                                    Ok(future) => Some(future.await),
+                                    Err(outcome) => Some(*outcome),
+                                }
+                            }))
+                            .await;
+                        settled.into_iter().flatten().collect()
+                    };
+                    for (result, stalled_tool, panic_msg, _order) in results {
+                        if let Some((call_id, tool_name)) = stalled_tool {
+                            watchdog_timed_out = true;
+                            let msg = watchdog_timeout_msg(&tool_name, &call_id);
+                            warn!(
+                                tool = %tool_name,
+                                call_id = %call_id,
+                                timeout_ms = TOOL_WATCHDOG_TIMEOUT.as_millis() as u64,
+                                msg = %msg,
+                                "tool watchdog timed out; call aborted"
+                            );
+                            // C2: close out the stalled call with its REAL
+                            // call id (a placeholder id left the TUI part
+                            // open) and keep draining sibling results so
+                            // completed calls are not dropped.
+                            self.event_bus.publish(Event::ToolCallEnd {
+                                session_id: session_id.to_string(),
+                                call_id,
+                                tool: tool_name,
+                                error: Some(msg.clone()),
+                                duration_ms: TOOL_WATCHDOG_TIMEOUT.as_millis() as u64,
+                            });
+                            self.event_bus.publish(Event::AgentError {
+                                session_id: session_id.to_string(),
+                                error: msg.clone(),
+                            });
+                            self.event_bus.publish(Event::AgentNotice {
+                                session_id: session_id.to_string(),
+                                message: msg,
+                            });
+                            continue;
+                        }
+                        if let Some(panic) = panic_msg {
+                            staged_tool_panic = Some(panic);
+                        }
+                        match result {
+                            Ok(ok) => {
+                                if handle_tool_execution_result(Ok(ok)) {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                // Defense-in-depth: the wrapper converts every
+                                // join `Err` into `Ok(synthetic)` + a panic
+                                // message, and the only remaining `Err` here is
+                                // `WatchdogAbort`, which is paired with
+                                // `stalled_tool` and handled above. If this arm
+                                // ever fires, log LOUDLY - it means the wrapper
+                                // contract was broken.
+                                warn!(error = %e, "unreachable: tool task returned Err without a stalled-tool identity; wrapper contract violated");
+                                staged_tool_panic = Some(e.to_string());
+                                // C2: keep draining sibling results.
+                                continue;
+                            }
+                        }
+                    }
+                }
+                // Merge any staged panic from the parallel drain paths.
+                if tool_panic.is_none() {
+                    tool_panic = staged_tool_panic.take();
+                }
+                // P-15: publish a single `ToolCallBatch` for this step with
+                // all per-call summaries, so consumers can render atomically.
+                if !batch_entries.is_empty() {
+                    // Activity log: record each tool result from the batch
+                    // (PERF-040: queued onto the background writer task, which
+                    // batches the whole step into one blocking hop).
+                    let batch_log: Vec<_> = batch_entries
+                        .iter()
+                        .map(|e| {
+                            (
+                                e.call_id.clone(),
+                                e.tool.clone(),
+                                e.success,
+                                e.content.clone(),
+                            )
+                        })
+                        .collect();
+                    let run_id_for_results = run_id.clone();
+                    self.record_activity_event(move |log| {
+                        for (call_id, tool, success, content) in batch_log {
+                            log.record_tool_result(
+                                &run_id_for_results,
+                                call_id,
+                                tool,
+                                success,
+                                content,
+                            )?;
+                        }
+                        // Each append already yielded its own event; the batch
+                        // closure reports none of its own.
+                        Ok(None)
+                    })
+                    .await;
+                    // T-017 (FR-025): tally this iteration's tool calls into
+                    // the loop tracker so the run's tool-call total is
+                    // published with the loop telemetry on termination. The
+                    // tool-dispatch phase only runs when the response carried
+                    // tool calls, so a no-tool-call step cannot double-count.
+                    if let Some(tracker) = loop_tracker.as_mut() {
+                        tracker.record_tool_calls(llm_result.tool_calls.len() as u64);
+                        self.persist_loop_tracker(session_id, &tracker).await;
+                    }
+                    self.event_bus.publish(Event::ToolCallBatch {
+                        session_id: session_id_arc.to_string(),
+                        step: step as u64,
+                        calls: batch_entries.clone(),
+                    });
+                }
+                if agent_switch_requested || agent_complete_requested || watchdog_timed_out {
+                    break;
+                }
+                // T-007 (FR-011, FR-012): classify this step's tool results.
+                // A panic/join failure or a permission hard-deny terminates an
+                // active loop immediately (FR-011, no retry); recoverable
+                // failures were appended as observations above and only
+                // terminate the loop once the consecutive count exceeds the
+                // retry allowance (FR-012). Successful steps reset the
+                // consecutive-failure counter.
+                if let Some(tracker) = loop_tracker.as_mut() {
+                    let step_errors: Vec<String> = batch_entries
+                        .iter()
+                        .filter(|entry| !entry.success)
+                        .filter_map(|entry| entry.error.clone())
+                        .collect();
+                    let hard_failure = tool_panic.clone().or_else(|| {
+                        step_errors
+                            .iter()
+                            .find(|msg| classify_message(msg).is_unrecoverable())
+                            .cloned()
+                    });
+                    if let Some(failure) = hard_failure {
+                        let reason = format!("unrecoverable tool failure: {failure}");
+                        tracing::error!(
+                            session_id = %session_id,
+                            reason,
+                            "loop terminated by unrecoverable tool failure (FR-011); no retry"
+                        );
+                        self.terminate_loop_inner(
+                            session_id,
+                            crate::session::loop_state::StopCondition::UnrecoverableError,
+                            Some(total_start),
+                            None,
+                            None,
+                            Some(reason),
+                            Some(&turn.working_dir),
+                        )
+                        .await;
+                        break;
+                    }
+                    if step_errors.is_empty() {
+                        tracker.record_success();
+                    } else if tracker.record_failure() {
+                        let reason = format!(
+                            "retry allowance exceeded ({} consecutive recoverable \
+                             tool failures: {})",
+                            tracker.consecutive_failures(),
+                            step_errors.join("; ")
+                        );
+                        tracing::error!(
+                            session_id = %session_id,
+                            reason,
+                            "loop terminated at the retry allowance (FR-012)"
+                        );
+                        self.terminate_loop_inner(
+                            session_id,
+                            crate::session::loop_state::StopCondition::UnrecoverableError,
+                            Some(total_start),
+                            None,
+                            None,
+                            Some(reason),
+                            Some(&turn.working_dir),
+                        )
+                        .await;
+                        break;
+                    }
+                    // Persist the updated failure counter so the next
+                    // iteration (and any external termination) sees it.
+                    self.persist_loop_tracker(session_id, &tracker).await;
+                }
+                // Auto task status updates (P-10: reuse the `active_spec_id`
+                // already read above for the `ToolContext`, and short-circuit
+                // when no spec is active or no file-write tool was called).
+                {
+                    if let Some(ref spec_id_str) = active_spec_id
+                        && let Some(ref spec_mgr) = self.spec_manager.get()
+                        && llm_result.tool_calls.iter().any(|tc| {
+                            matches!(
+                                tc.name.as_str(),
+                                "Write"
+                                    | "Edit"
+                                    | "multiedit"
+                                    | "multi_edit"
+                                    | "patch"
+                                    | "create"
+                                    | "append_to_file"
+                            )
+                        })
+                        && let Some(id) = ragent_specs::spec::SpecId::new(spec_id_str)
+                        && let Ok(mut spec) = spec_mgr.read_spec(&id).await
+                        // Only auto-complete tasks when a write tool actually
+                        // touched a path inside this spec's own directory: an
+                        // unrelated write elsewhere in the workspace (docs,
+                        // scratch files, snapshots) must not silently complete
+                        // spec tasks and corrupt PLAN.md.
+                        && writes_in_spec_dir(&llm_result.tool_calls, &turn.working_dir, spec_mgr.root(), &id)
+                    {
+                        let mut updated = false;
+                        for task in spec.tasks.iter_mut() {
+                            if task.status == ragent_specs::spec::TaskStatus::InProgress {
+                                task.status = ragent_specs::spec::TaskStatus::Completed;
+                                task.completed_at = Some(
+                                    std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs(),
+                                );
+                                updated = true;
+                            }
+                        }
+                        if updated {
+                            if let Err(e) = spec_mgr.write_spec(&spec).await {
+                                tracing::warn!(error = %e, "Auto task update: failed to write spec");
+                            } else {
+                                tracing::info!(spec_id = %spec_id_str, "Auto-updated in_progress tasks to completed after file write");
+                            }
+                        }
+                    }
+                }
+                // Append to chat history (P-17: `std::mem::take` moves the
+                // contents into `ChatContent::Parts` while leaving the Vec
+                // buffer allocated for reuse on the next step). P-6: mutate the
+                // shared `Arc<Vec>` via `Arc::make_mut` so an unchanged
+                // history is not cloned.
+                //
+                // FR-013 (T-016): the turn's history is appended only here,
+                // after every call of the step has been awaited and its
+                // permission verdict settled, so this line can never run while
+                // a verdict is unresolved - the step could not have reached it.
+                Arc::make_mut(&mut chat_messages).push(ChatMessage {
+                    role: "assistant".to_string(),
+                    content: ChatContent::Parts(std::mem::take(&mut assistant_content_parts)),
+                });
+                Arc::make_mut(&mut chat_messages).push(ChatMessage {
+                    role: "user".to_string(),
+                    content: ChatContent::Parts(std::mem::take(&mut tool_result_parts)),
+                });
+            }
+
+            // Background task injection (sub-agents)
+            {
+                let _scope = profiler.scope("loop.background.total");
+                if let Some(tm) = self.agent_manager.get() {
+                    // P-11: skip the lock+scan when no background tasks are
+                    // pending. The flag is set by `spawn_background` and
+                    // cleared by `drain_completed` when nothing remains.
+                    if tm.has_pending_background() {
+                        let completed = tm.drain_completed(session_id).await;
+                        if !completed.is_empty() {
+                            let _scope = profiler.scope("loop.background.inject_completed");
+                            // P-17: reuse the hoisted `bg_parts` buffer.
+                            bg_parts.clear();
+                            for task in &completed {
+                                let status_label = match task.status {
+                                    crate::task::TaskStatus::Completed => "completed",
+                                    crate::task::TaskStatus::Failed => "failed",
+                                    crate::task::TaskStatus::Cancelled => "cancelled",
+                                    crate::task::TaskStatus::Suspended => "suspended",
+                                    crate::task::TaskStatus::Terminating => "terminating",
+                                    crate::task::TaskStatus::Running => "running",
+                                    crate::task::TaskStatus::TimedOut => "timed_out",
+                                };
+                                let body = task
+                                    .result
+                                    .as_deref()
+                                    .or(task.error.as_deref())
+                                    .unwrap_or("(no output)");
+                                let mut text = format!(
+                                    "[Background Task {status_label}: {} - {}]\n\n{body}",
+                                    task.agent_name,
+                                    ragent_types::strutil::short_prefix(&task.id, 8)
+                                );
+                                // The injected body may later be cut by the
+                                // generic 12k tool-result truncation; point at
+                                // the durable on-disk report so the model can
+                                // recover any omitted content with the `read`
+                                // tool instead of re-running the sub-agent.
+                                if let Some(ref file) = task.output_file {
+                                    text.push_str(&format!(
+                                        "\n\n(Full untruncated report: {} - read this \
+                                         file with the `read` tool if the output above \
+                                         appears truncated.)",
+                                        file.display()
+                                    ));
+                                }
+                                bg_parts.push(ContentPart::Text { text });
+                            }
+                            Arc::make_mut(&mut chat_messages).push(ChatMessage {
+                                role: "user".to_string(),
+                                content: ChatContent::Parts(std::mem::take(&mut bg_parts)),
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Background shell task injection (M3 / T-023)
+            {
+                let _scope = profiler.scope("loop.background.bg_shell");
+                if let Some(bg) = self.bg_service.get() {
+                    if bg.has_pending_completions() {
+                        let completed = bg.drain_completed(session_id).await;
+                        if !completed.is_empty() {
+                            bg_parts.clear();
+                            for task in &completed {
+                                let exit_str = task
+                                    .exit_code
+                                    .map(|c| format!("exit={c}"))
+                                    .unwrap_or_else(|| "exit=?".to_string());
+                                let text = format!(
+                                    "[Background Shell Task {}: {} - {} ({})]\n\n{}",
+                                    task.status,
+                                    task.command,
+                                    ragent_types::strutil::short_prefix(&task.task_id, 8),
+                                    exit_str,
+                                    if task.tail.is_empty() {
+                                        "(no output)"
+                                    } else {
+                                        &task.tail
+                                    }
+                                );
+                                bg_parts.push(ContentPart::Text { text });
+                            }
+                            Arc::make_mut(&mut chat_messages).push(ChatMessage {
+                                role: "user".to_string(),
+                                content: ChatContent::Parts(std::mem::take(&mut bg_parts)),
+                            });
+                        }
+                    }
+                }
+            }
+            // Interim save
+            {
+                let _scope = profiler.scope("storage.assistant_interim.update");
+                // M-008: avoid rewriting the full SQLite row when nothing was
+                // appended since the last save. Tool-call parts are carried in
+                // the transcript (`chat_messages`) as well, and the row is
+                // finalised on the final save, so an interim rewrite that only
+                // re-serialises unchanged content is wasted work.
+                //
+                // Invariant: non-tool-call parts are only pushed (stream
+                // deltas) or popped (sub-agent narration nudge) - never
+                // mutated in place - and tool-call parts are appended once per
+                // completed call, so the total count alone is a sufficient
+                // save gate; hashing the serialised parts (the previous P-12
+                // gate) re-serialised every tool-call input/output on every
+                // step, which is exactly the cost this interim save exists to
+                // avoid. Persisting tool-call appends keeps the row in step
+                // with the run so the TUI output-view overlay renders live
+                // steps instead of a frozen snapshot.
+                let interim_parts_count = (*assistant_parts).len();
+                if last_interim_parts_count != Some(interim_parts_count) {
+                    let mut interim =
+                        Message::new(session_id, Role::Assistant, (*assistant_parts).clone());
+                    interim.id = assistant_msg_id.clone();
+                    // H3: use the FTS-skip variant for the interim save. The
+                    // searchable text content of the interim message is either
+                    // unchanged (only a tool-call status transition) or the
+                    // message is still accumulating deltas and will be
+                    // re-synced wholesale on the final save. Rewriting the FTS
+                    // index on every stream event (DELETE + re-INSERT) was the
+                    // dominant cost of `storage.assistant_interim.update`.
+                    // Best-effort interim FTS write; the final save re-syncs
+                    // wholesale. Log a failure rather than swallowing it.
+                    if let Err(e) = self
+                        .storage_op(move |s| s.update_message_parts_skip_fts(&interim))
+                        .await
+                    {
+                        tracing::warn!(error = %e, "interim message-parts save failed");
+                    }
+                    last_interim_parts_count = Some(interim_parts_count);
+                }
+            }
+        }
+
+        // T-011 (FR-016): a human interrupt stops the loop with `interrupted`
+        // (terminated at the safe point above); persist the partial assistant
+        // message and end the turn normally so the session stays persisted
+        // and resumable.
+        if loop_interrupted {
+            let total_elapsed_ms = total_start.elapsed().as_millis() as u64;
+            self.finish_cancelled_turn(session_id, assistant_parts, assistant_msg_id, &run_id)
+                .await;
+            tokio::task::yield_now().await;
+            publish_run_cost_summary(total_elapsed_ms);
+            return Ok(Message::new(session_id, Role::Assistant, vec![]));
+        }
+
+        // Watchdog termination: persist the accumulated assistant parts, end the
+        // message with the cancelled reason (the closest existing variant to a
+        // watchdog-forced stop), and return a fatal error for the run.
+        if watchdog_timed_out {
+            let total_elapsed_ms = total_start.elapsed().as_millis() as u64;
+            self.finish_cancelled_turn(session_id, assistant_parts, assistant_msg_id, &run_id)
+                .await;
+            tokio::task::yield_now().await;
+            publish_run_cost_summary(total_elapsed_ms);
+            // T-007 (FR-011): a watchdog abort is an unrecoverable tool-stage
+            // failure - terminate an active loop with status `error`.
+            let watchdog_err = anyhow::anyhow!(
+                "agent run terminated: tool call stalled beyond the {}s watchdog timeout",
+                TOOL_WATCHDOG_TIMEOUT.as_secs()
+            );
+            self.terminate_loop_on_fatal_error(
+                session_id,
+                &watchdog_err,
+                Some(total_start),
+                Some(&turn.working_dir),
+            )
+            .await;
+            return Err(watchdog_err);
+        }
+
+        // 7. Finalize
+        let parts_owned =
+            std::sync::Arc::try_unwrap(assistant_parts).unwrap_or_else(|arc| (*arc).clone());
+        let mut assistant_msg = Message::new(session_id, Role::Assistant, parts_owned);
+        assistant_msg.id = assistant_msg_id;
+        // P-20: move the message into the `storage_op` closure and have the
+        // closure return it, so we avoid cloning the full `Message` (which
+        // includes the parts `Vec`) on the final save. The closure owns the
+        // message, persists it, and hands it back to us via the `storage_op`
+        // return value. The id is cloned only for the `MessageEnd` event.
+        // (`Message` has no `Default`, so we use `std::mem::replace` with a
+        // cheap placeholder rather than `std::mem::take`.)
+        let msg_id_for_end = assistant_msg.id.clone();
+        let moved_msg = std::mem::replace(
+            &mut assistant_msg,
+            Message::new(session_id, Role::Assistant, Vec::new()),
+        );
+        let saved_msg = self
+            .storage_op(move |s| {
+                s.update_message(&moved_msg)?;
+                Ok(moved_msg)
+            })
+            .await?;
+        let total_elapsed_ms = total_start.elapsed().as_millis() as u64;
+        let other_ms = total_elapsed_ms.saturating_sub(cumulative_model_wait_ms);
+        tracing::info!(
+            session_id = %session_id, total_ms = total_elapsed_ms, model_wait_ms = cumulative_model_wait_ms, other_ms = other_ms,
+            "Agent loop finished - timing breakdown: total={}ms, model_wait={}ms, other={}ms",
+            total_elapsed_ms, cumulative_model_wait_ms, other_ms
+        );
+        let iterations = self.event_bus.current_step(session_id);
+        session_recorder.record_session_end();
+        session_recorder.record_agent_loop(total_elapsed_ms as f64, iterations);
+        // Yield once before publishing the cost summary: the accumulator task
+        // is driven by `Event::TokenUsage` events on the bus, so on a fully
+        // mocked (fast) provider the loop can reach this point having been the
+        // only task polled since the final usage event. The yield lets the
+        // accumulator drain those events so the summary reports real tokens
+        // instead of zero. A single yield keeps the summary synchronous with
+        // the rest of the teardown (which the callers rely on) and cannot
+        // deadlock.
+        tokio::task::yield_now().await;
+        publish_run_cost_summary(total_elapsed_ms);
+        let end_reason = last_finish_reason.unwrap_or(FinishReason::Stop);
+        // Record the terminal reason before publishing `MessageEnd` so a
+        // parent context (the task registry's `SubagentComplete` publisher)
+        // can report the real loop outcome instead of hard-coding `"stop"`.
+        self.last_message_end_reason
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(session_id.to_string(), end_reason.clone());
+        // Interactive sessions get a visible hint when the provider
+        // silently truncated the reply.
+        if agent.mode != crate::agent::AgentMode::Subagent
+            && matches!(end_reason, FinishReason::Length | FinishReason::Truncation)
+        {
+            self.event_bus.publish(Event::AgentNotice {
+                session_id: session_id.to_string(),
+                message: format!(
+                    "The provider ended the response without completing it ({}). \
+                       The saved reply may be incomplete.",
+                    crate::session::finish_reason_label(&end_reason)
+                ),
+            });
+        }
+        self.event_bus.publish(Event::MessageEnd {
+            session_id: session_id.to_string(),
+            message_id: msg_id_for_end,
+            reason: end_reason,
+        });
+        // Activity log: record normal completion.
+        let run_id_for_complete = run_id.clone();
+        self.record_activity_event(move |log| {
+            log.record_termination(
+                &run_id_for_complete,
+                ragent_types::activity::TerminationReason::Completed,
+            )
+            .map(Some)
+        })
+        .await;
+        // FR-033: the Stop (`on_session_end`) hooks have already run inside the
+        // loop, where a blocking hook can feed findings back to the model, so no
+        // second dispatch happens here.
+        Ok(saved_msg)
+    }
+
+    /// Announce the project instruction files (`AGENTS.md` and friends) that
+    /// apply to a session.
+    ///
+    /// Publishes an [`Event::AgentNotice`] listing the discovered files, so the
+    /// user can see which guidelines were loaded. No model call is made: the
+    /// files already reach the model through the system prompt (#38).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the session lookup fails.
+    pub fn announce_instruction_files(&self, session_id: &str) -> Result<()> {
+        // Resolve working directory.
+        let working_dir = self.session_manager.get_session(session_id)?.map_or_else(
+            || std::env::current_dir().unwrap_or_default(),
+            |s| s.directory,
+        );
+
+        // Collect instruction files with discovery info for logging
+        let (_, discovery) = crate::agent::collect_agents_md_content_with_discovery(&working_dir);
+
+        // Log discovery info to tracing and emit AgentNotice event
+        let discovery_msg = discovery.format_summary();
+        tracing::info!(
+            session_id = %session_id,
+            "{}",
+            discovery_msg
+        );
+        self.event_bus.publish(Event::AgentNotice {
+            session_id: session_id.to_string(),
+            message: discovery_msg.clone(),
+        });
+        Ok(())
+    }
+
+    /// Resolve the security-analyzer LLM client for a turn (FR-006).
+    ///
+    /// Returns `None` when the analyzer is disabled (or the section is absent),
+    /// so the caller skips the analyzer entirely. When enabled, resolves the
+    /// effective `(provider, model)` - the `security_analyzer.model` override
+    /// wins over the session's primary model - and returns the warm client plus
+    /// the model id and the configured timeout.
+    ///
+    /// A failure to resolve the provider, API key, or client is logged and
+    /// degrades to `None`; the caller then falls back to the normal permission
+    /// flow (the analyzer is tightening-only and never blocks on its own
+    /// availability).
+    async fn security_analyzer_client(
+        &self,
+        session_model_ref: &crate::agent::ModelRef,
+    ) -> Option<(Arc<dyn crate::llm::LlmClient>, String, u64)> {
+        let cfg = self.load_config_cached();
+        let section = cfg.security_analyzer.as_ref()?;
+        if !section.enabled {
+            return None;
+        }
+
+        let (provider_id, model_id) = match section.model.as_ref() {
+            Some(over) => (over.provider_id.clone(), over.model_id.clone()),
+            None => (
+                session_model_ref.provider_id.clone(),
+                session_model_ref.model_id.clone(),
+            ),
+        };
+        let timeout_secs = section.timeout_secs;
+
+        let provider = match self.provider_registry.get(&provider_id) {
+            Some(p) => p,
+            None => {
+                tracing::warn!(provider = %provider_id, "security analyzer provider not registered; analyzer disabled for this turn");
+                return None;
+            }
+        };
+        // FR-017: an enabled analyzer must publish a verdict for every proposed
+        // tool action. A key-resolution failure therefore must not silently skip
+        // the analyzer - proceed with an empty key so the call fails over to a
+        // fail-safe `ask` verdict (published like any other) instead of leaving
+        // the action with no verdict at all. Providers that need no key (local
+        // endpoints) already resolve to an empty key above.
+        let api_key = match self.resolve_api_key(&provider_id).await {
+            Ok(k) => k,
+            Err(e) => {
+                tracing::warn!(provider = %provider_id, error = %e, "security analyzer API key resolution failed; proceeding without a key (the call will fail safe)");
+                String::new()
+            }
+        };
+
+        let cache_key = format!("{provider_id}/{model_id}");
+        if let Some(cached) = self.llm_client_cache.read().get(&cache_key).map(Arc::clone) {
+            return Some((cached, model_id, timeout_secs));
+        }
+        let mut options: HashMap<String, serde_json::Value> = HashMap::new();
+        options.insert(
+            "model_id".to_string(),
+            serde_json::Value::String(model_id.clone()),
+        );
+        match provider.create_client(&api_key, None, &options).await {
+            Ok(c) => {
+                let arc: Arc<dyn crate::llm::LlmClient> = Arc::from(c);
+                let mut cache = self.llm_client_cache.write();
+                const MAX_LLM_CLIENTS: usize = 8;
+                if cache.len() >= MAX_LLM_CLIENTS
+                    && let Some(key) = cache.keys().next().cloned()
+                {
+                    cache.remove(&key);
+                }
+                cache.insert(cache_key, arc.clone());
+                Some((arc, model_id, timeout_secs))
+            }
+            Err(e) => {
+                tracing::warn!(provider = %provider_id, model = %model_id, error = %e, "security analyzer client creation failed; analyzer disabled for this turn");
+                None
+            }
+        }
+    }
+
+    pub(crate) async fn resolve_api_key(&self, provider_id: &str) -> Result<String> {
+        // The router provider is virtual: it delegates to downstream providers
+        // and does not need its own API key.
+        if provider_id == "router" {
+            return Ok(String::new());
+        }
+
+        // Ollama does not require an API key for local servers
+        if provider_id == "ollama" {
+            return Ok(
+                ragent_config::credential_env::read_credential_env("OLLAMA_API_KEY")
+                    .unwrap_or_default(),
+            );
+        }
+
+        // Copilot: prefer DB-stored device flow token (works for token
+        // exchange), then fall back to env var -> IDE discovery.
+        if provider_id == "copilot" {
+            // DB first - device flow tokens stored here work for copilot_internal/v2/token
+            if let Ok(Some(key)) = self.storage_op(|s| s.get_provider_auth("copilot")).await
+                && !key.is_empty()
+            {
+                return Ok(key);
+            }
+            if let Some(token) = crate::provider::copilot::resolve_copilot_github_token(None) {
+                crate::sanitize::register_secret(&token);
+                return Ok(token);
+            }
+            bail!(
+                "No GitHub token found for Copilot. Use /provider to configure, \
+                 or set the GITHUB_COPILOT_TOKEN environment variable."
+            );
+        }
+
+        // Azure Foundry: also check azure_resource_last_selection for key config
+        if provider_id == "azure_foundry" || provider_id == "azure_resource" {
+            if let Ok(Some(last)) = self
+                .storage_op(|s| s.get_setting("azure_resource_last_selection"))
+                .await
+            {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&last) {
+                    // Direct api_key takes precedence
+                    if let Some(key) = parsed.get("api_key").and_then(|v| v.as_str()) {
+                        if !key.is_empty() {
+                            return Ok(key.to_string());
+                        }
+                    }
+                    // Fall back to api_key_env
+                    if let Some(env_var) = parsed.get("api_key_env").and_then(|v| v.as_str()) {
+                        if let Some(key) =
+                            ragent_config::credential_env::read_credential_env(env_var)
+                        {
+                            return Ok(key);
+                        }
+                    }
+                }
+            }
+        }
+        // Environment resolution goes through the single provider->env-key
+        // resolver (audit T-403) so the variable set, precedence, and
+        // blank/trim policy live in one place across the agent, router, and
+        // research paths.
+        if let Some(key) = crate::provider::env_key::provider_env_key(provider_id) {
+            return Ok(key);
+        }
+
+        // Check the database for a stored API key
+        {
+            let pid = provider_id.to_string();
+            if let Ok(Some(key)) = self.storage_op(move |s| s.get_provider_auth(&pid)).await
+                && !key.is_empty()
+            {
+                return Ok(key);
+            }
+        }
+
+        bail!(
+            "No API key found for provider '{provider_id}'. Set the appropriate environment variable \
+             or run `ragent auth {provider_id} <key>` to store one."
+        )
+    }
+}
+
+/// M-007: shared tool-result display preview - trim, truncate to `max_chars`
+/// characters on a char boundary, and append `...` when truncated.
+///
+/// Delegates to [`ragent_types::strutil::truncate_chars`] after trimming, so the
+/// char-boundary logic lives in one place.
+pub(crate) fn truncate_preview(s: &str, max_chars: usize) -> String {
+    ragent_types::strutil::truncate_chars(s.trim(), max_chars)
+}

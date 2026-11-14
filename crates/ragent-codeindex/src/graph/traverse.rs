@@ -1,0 +1,315 @@
+//! Graph traversal: BFS shortest-path and explain queries.
+//!
+//! The shortest-path implementation uses breadth-first search (BFS) over
+//! the adjacency list built from the `graph_edges` SQLite table.  BFS
+//! guarantees the shortest path by hop count (FR-012).
+//!
+//! The explain implementation retrieves a symbol's node metadata and its
+//! incoming/outgoing edges, limited to the top 50 connections (FR-011).
+
+use crate::graph::{Connection, ExplainResult, PathResult};
+use crate::store::IndexStore;
+use crate::types::GraphEdge;
+use anyhow::Result;
+use std::collections::{HashMap, VecDeque};
+
+/// Maximum number of connections (incoming + outgoing) to return in an
+/// explain result (FR-011).
+const MAX_CONNECTIONS: usize = 50;
+
+/// Compute the shortest path (by hop count) between two symbols.
+///
+/// Looks up both symbols by name, builds an adjacency list from the
+/// `graph_edges` table, runs BFS from the source to the target, and
+/// returns a [`PathResult`] with the sequence of hops.  Returns `None`
+/// if either symbol is not found or no path exists (FR-012).
+pub fn shortest_path(store: &IndexStore, from: &str, to: &str) -> Result<Option<PathResult>> {
+    // -- Resolve source and target symbol IDs ----------------------------
+    let source_id = match find_symbol_id(store, from)? {
+        Some(id) => id,
+        None => return Ok(None),
+    };
+    let target_id = match find_symbol_id(store, to)? {
+        Some(id) => id,
+        None => return Ok(None),
+    };
+
+    if source_id == target_id {
+        // Trivial path: the symbol is itself.
+        let name = symbol_name(store, source_id)?.unwrap_or_else(|| from.to_string());
+        return Ok(Some(PathResult {
+            hops: 0,
+            steps: vec![(name, None)],
+        }));
+    }
+
+    // -- Build adjacency list --------------------------------------------
+    let edges = store.query_all_edges_typed()?;
+    if edges.is_empty() {
+        return Ok(None);
+    }
+
+    let mut adjacency: HashMap<i64, Vec<&GraphEdge>> = HashMap::new();
+    for edge in &edges {
+        adjacency.entry(edge.source_sym).or_default().push(edge);
+    }
+
+    // -- BFS -------------------------------------------------------------
+    let mut visited: HashMap<i64, Option<(&GraphEdge, i64)>> = HashMap::new();
+    visited.insert(source_id, None);
+
+    let mut queue: VecDeque<i64> = VecDeque::new();
+    queue.push_back(source_id);
+
+    while let Some(current) = queue.pop_front() {
+        if current == target_id {
+            break;
+        }
+
+        // Borrow the neighbour list instead of cloning it for every visited
+        // node; the borrow ends before the next loop iteration.
+        let empty: Vec<&GraphEdge> = Vec::new();
+        for edge in adjacency.get(&current).unwrap_or(&empty) {
+            let next = edge.target_sym;
+            if visited.contains_key(&next) {
+                continue;
+            }
+            visited.insert(next, Some((edge, current)));
+            queue.push_back(next);
+        }
+    }
+
+    // -- Reconstruct path ------------------------------------------------
+    if !visited.contains_key(&target_id) {
+        return Ok(None); // No path found.
+    }
+
+    // Walk backwards from target to source, collecting edges.
+    let mut path_edges: Vec<&GraphEdge> = Vec::new();
+    let mut current = target_id;
+    while let Some(Some((edge, prev))) = visited.get(&current) {
+        path_edges.push(edge);
+        current = *prev;
+    }
+    path_edges.reverse();
+
+    // Build the steps: (symbol_name, Some(edge_kind)).
+    let mut steps: Vec<(String, Option<String>)> = Vec::new();
+    let source_name = symbol_name(store, source_id)?.unwrap_or_else(|| from.to_string());
+    steps.push((source_name, None));
+    for edge in &path_edges {
+        let name = symbol_name(store, edge.target_sym)?
+            .unwrap_or_else(|| format!("sym#{}", edge.target_sym));
+        steps.push((name, Some(edge.kind.to_string())));
+    }
+
+    Ok(Some(PathResult {
+        hops: path_edges.len(),
+        steps,
+    }))
+}
+
+/// Explain a symbol: show its node metadata and connections (FR-011).
+///
+/// Looks up the symbol by name, retrieves its source file and line, its
+/// community assignment (if community detection has been run), its degree
+/// (number of incident edges), and its incoming/outgoing edges (limited to
+/// the top 50 connections).  Returns `None` if the symbol is not found.
+pub fn explain(store: &IndexStore, name: &str) -> Result<Option<ExplainResult>> {
+    // -- Resolve the symbol -----------------------------------------------
+    let symbol = match find_symbol(store, name)? {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+
+    // -- Look up the source file path ------------------------------------
+    // FUNC-031: mark a missing file row instead of a blank `source_file`.
+    let source_file = store
+        .get_file_by_id(symbol.file_id)?
+        .map(|f| f.path)
+        .unwrap_or_else(|| format!("<missing-file:{}>", symbol.file_id));
+
+    // -- Look up community assignment ------------------------------------
+    let community = store
+        .query_all_communities()?
+        .into_iter()
+        .find(|(sym_id, _, _)| *sym_id == symbol.id)
+        .map(|(_, community_id, _)| community_id);
+
+    // -- Get all incident edges ------------------------------------------
+    let incident = store.query_edges_for_symbol_typed(symbol.id)?;
+
+    // -- Split into incoming and outgoing --------------------------------
+    let mut incoming: Vec<Connection> = Vec::new();
+    let mut outgoing: Vec<Connection> = Vec::new();
+
+    // Build a lookup of all symbols for name resolution.
+    let all_symbols = store.query_symbols(&crate::types::SymbolFilter::default())?;
+    let sym_lookup: HashMap<i64, &crate::types::Symbol> =
+        all_symbols.iter().map(|s| (s.id, s)).collect();
+
+    // Resolve file paths once in a single pass instead of one SQL query per
+    // connection (N+1).
+    let file_paths: HashMap<i64, String> = store.list_files_with_ids()?.into_iter().collect();
+
+    for edge in &incident {
+        let conn = edge_to_connection(edge, symbol.id, &sym_lookup, &file_paths)?;
+        if edge.source_sym == symbol.id {
+            // Outgoing: this symbol is the source.
+            outgoing.push(conn);
+        } else {
+            // Incoming: this symbol is the target.
+            incoming.push(conn);
+        }
+    }
+
+    let degree = incoming.len() + outgoing.len();
+
+    // -- Limit to MAX_CONNECTIONS ----------------------------------------
+    // Sort by nothing in particular (edges are returned in DB order); just
+    // truncate if the total exceeds the limit.  We split the limit
+    // proportionally: half for incoming, half for outgoing, with the
+    // remainder going to whichever is larger.
+    let total = incoming.len() + outgoing.len();
+    if total > MAX_CONNECTIONS {
+        let half = MAX_CONNECTIONS / 2;
+        let rem = MAX_CONNECTIONS - half;
+        let inc_limit = if incoming.len() >= outgoing.len() {
+            half + rem
+        } else {
+            half
+        };
+        incoming.truncate(inc_limit);
+        // Give outgoing the true remaining budget so the combined count never
+        // exceeds MAX_CONNECTIONS (no minimum-floor overflow).
+        outgoing.truncate(MAX_CONNECTIONS.saturating_sub(incoming.len()));
+    }
+
+    Ok(Some(ExplainResult {
+        name: symbol.name,
+        source_file,
+        line: symbol.start_line,
+        community,
+        degree,
+        incoming,
+        outgoing,
+    }))
+}
+
+/// Convert a [`GraphEdge`] to a [`Connection`] for the explain result.
+///
+/// `explained_sym_id` is the ID of the symbol being explained; the
+/// connection refers to the *other* symbol in the edge.
+fn edge_to_connection(
+    edge: &GraphEdge,
+    explained_sym_id: i64,
+    sym_lookup: &HashMap<i64, &crate::types::Symbol>,
+    file_paths: &HashMap<i64, String>,
+) -> Result<Connection> {
+    // The "other" symbol is the one that is NOT the explained symbol.
+    let other_id = if edge.source_sym == explained_sym_id {
+        edge.target_sym
+    } else {
+        edge.source_sym
+    };
+
+    let (symbol_name, source_file) = match sym_lookup.get(&other_id) {
+        Some(s) => {
+            // FUNC-031: mark a missing file row instead of emitting an empty
+            // `source_file` string.
+            let file = file_paths
+                .get(&s.file_id)
+                .cloned()
+                .unwrap_or_else(|| format!("<missing-file:{}>", s.file_id));
+            (s.name.clone(), file)
+        }
+        None => (format!("sym#{other_id}"), String::new()),
+    };
+
+    Ok(Connection {
+        symbol: symbol_name,
+        source_file,
+        kind: edge.kind.to_string(),
+        confidence: edge.confidence,
+        line: edge.line,
+    })
+}
+
+/// Rank a candidate symbol for name resolution when several symbols share a
+/// name. Lower is better. Definition kinds (struct/function/trait/...) are
+/// preferred over container kinds (impl/module) because graph edges attach to
+/// definitions; identical ranks fall back to the lowest symbol ID so the
+/// result is deterministic.
+///
+/// Why this exists: `query_symbols` does a case-insensitive leading-fragment
+/// match ordered by name, so for `SessionProcessor` it returned the
+/// `CachedSessionProcessor` trait and for `EventBus` the `Default for EventBus`
+/// impl - both near-zero-edge nodes that made `codeindex_path` report
+/// "No path found" for well-connected symbols.
+fn resolution_rank(sym: &crate::types::Symbol) -> (u8, i64) {
+    let kind_rank: u8 = match sym.kind {
+        crate::types::SymbolKind::Function
+        | crate::types::SymbolKind::Method
+        | crate::types::SymbolKind::Struct
+        | crate::types::SymbolKind::Class
+        | crate::types::SymbolKind::Enum
+        | crate::types::SymbolKind::Trait
+        | crate::types::SymbolKind::Interface => 0,
+        crate::types::SymbolKind::EnumVariant
+        | crate::types::SymbolKind::Constant
+        | crate::types::SymbolKind::Static
+        | crate::types::SymbolKind::TypeAlias
+        | crate::types::SymbolKind::Field
+        | crate::types::SymbolKind::Macro
+        | crate::types::SymbolKind::Test => 1,
+        crate::types::SymbolKind::Impl | crate::types::SymbolKind::Module => 2,
+        crate::types::SymbolKind::Import | crate::types::SymbolKind::Unknown => 3,
+    };
+    (kind_rank, sym.id)
+}
+
+/// Pick the best candidate from a ranked list of symbols. Accepts both owned
+/// slices and vectors of references (exact-match shortlists).
+fn best_candidate<'a>(
+    symbols: impl IntoIterator<Item = &'a crate::types::Symbol>,
+) -> Option<&'a crate::types::Symbol> {
+    symbols.into_iter().min_by_key(|s| resolution_rank(s))
+}
+
+/// Find the symbol ID best matching the given name.
+///
+/// Prefers exact name matches over substring matches, then definition kinds
+/// over impl/module nodes (see [`resolution_rank`]).
+fn find_symbol_id(store: &IndexStore, name: &str) -> Result<Option<i64>> {
+    Ok(find_symbol(store, name)?.map(|s| s.id))
+}
+
+/// Find the symbol best matching the given name, preferring exact matches and
+/// definition kinds. Returns the full [`Symbol`] so the caller has access to
+/// file_id, start_line, etc.
+fn find_symbol(store: &IndexStore, name: &str) -> Result<Option<crate::types::Symbol>> {
+    // Exact-match first: a keyed equality query is a bounded index lookup,
+    // where the substring fallback can return thousands of rows (a query for
+    // `new` or `mod` on a large index) that all have to be cloned and ranked
+    // while the store mutex is held.
+    if let Some(sym) = store.get_symbol_by_exact_name(name)? {
+        return Ok(Some(sym));
+    }
+    // query_symbols is a case-insensitive leading-fragment match, so a single
+    // query yields the wider (non-exact) candidates for the ranked fallback.
+    let candidates = store.query_symbols(&crate::types::SymbolFilter {
+        name: Some(name.to_string()),
+        ..Default::default()
+    })?;
+    Ok(best_candidate(&candidates).cloned())
+}
+
+/// Look up a symbol's name by its ID.
+///
+/// H-003: uses a single keyed `SELECT name FROM symbols WHERE id = ?` instead
+/// of loading *all* symbols and linearly searching (which was O(N) per call -
+/// quadratic when reconstructing a path or explaining a symbol with many
+/// connections).
+fn symbol_name(store: &IndexStore, sym_id: i64) -> Result<Option<String>> {
+    store.get_symbol_name(sym_id)
+}

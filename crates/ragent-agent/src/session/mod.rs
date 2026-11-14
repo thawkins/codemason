@@ -1,0 +1,627 @@
+//! Session management for agent conversations.
+//!
+//! A [`Session`] represents an ongoing conversation between a user and an agent,
+//! scoped to a working directory. [`SessionManager`] provides CRUD operations
+//! backed by persistent [`Storage`] and emits lifecycle events via [`EventBus`].
+
+/// ACP agent turn dispatch (spec `openhands` FR-015, FR-022, FR-036).
+pub mod acp_dispatch;
+pub mod archive;
+pub mod cache;
+pub mod compaction_ops;
+/// The one ordered tool-dispatch pipeline (spec `uniformtools` FR-012, FR-021).
+///
+/// Public because it is the module the loop's single call site lives in, and
+/// because a caller outside the loop (a direct resolver caller, and the
+/// integration tests that guard the stage wording and ordering) names it. The
+/// pipeline's own `run` and its outcome constructors stay `pub(crate)`: the loop
+/// is the only caller that may execute a stage sequence.
+pub mod dispatch;
+pub mod history;
+pub mod loop_capture;
+pub mod loop_state;
+pub mod loop_steps;
+/// The unresolved-approval tracker that blocks a tool result for a call whose
+/// permission verdict has not resolved (spec `uniformtools` FR-013).
+pub mod pending;
+pub mod permissions;
+pub mod processor;
+pub mod profiler;
+pub mod prompt_builders;
+/// The one shape a tool call's terminal outcome takes (spec `uniformtools`
+/// FR-012, FR-014, FR-021).
+mod refusal_outcome;
+/// Remote-backend turn dispatch: relay a turn to a second ragent server over
+/// REST+SSE and mirror its event stream locally (spec `openhands` FR-021,
+/// FR-031, FR-034).
+pub mod remote_dispatch;
+pub mod stream_buffer;
+pub(crate) mod text_toolcalls;
+/// The one construction site for a tool call refused *before* it ran (spec
+/// `uniformtools` FR-008, FR-009, FR-014, FR-021).
+pub mod tool_input_error;
+/// The one did-you-mean candidate pool for an unregistered tool name (spec
+/// `uniformtools` FR-021, FR-033).
+pub mod tool_suggestion;
+pub mod verification;
+
+use crate::event::FinishReason;
+
+/// Stable, serialisable label for a [`FinishReason`]. Sub-agent completion
+/// events and the [`crate::task::TaskEntry`] struct cannot carry the raw
+/// enum because they cross a serde boundary; this helper maps to a fixed
+/// string instead.
+pub fn finish_reason_label(reason: &FinishReason) -> &'static str {
+    reason.as_str()
+}
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::OnceLock;
+
+use crate::event::{Event, EventBus};
+
+/// Global cache of in-memory [`SessionState`] values keyed by session id.
+///
+/// Declared at module scope so `session_state_cache` (get-or-insert) and
+/// `remove_session_state` (evict) reference the SAME map. A function-local
+/// `static` would be a distinct item per declaration site, silently turning
+/// `remove_session_state` into a no-op.
+static SESSION_STATE_CACHE: OnceLock<Mutex<HashMap<String, Arc<Mutex<SessionState>>>>> =
+    OnceLock::new();
+use crate::message::Message;
+use crate::session::cache::SessionState;
+use crate::storage::Storage;
+
+/// Wraps a [`tokio::task::JoinHandle`] so the task is aborted when the guard is
+/// dropped. Shared by `loop_steps` and `processor` to guarantee background
+/// notice/usage tasks are cancelled on every scope exit.
+pub(crate) struct AbortOnDrop(pub tokio::task::JoinHandle<()>);
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// A conversation session between a user and an agent.
+///
+/// Each session is tied to a project directory and tracks metadata such as
+/// version, timestamps, and an optional diff summary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Session {
+    /// Unique identifier for this session.
+    pub id: String,
+    /// Human-readable title for the session.
+    pub title: String,
+    /// Identifier of the project this session belongs to.
+    pub project_id: String,
+    /// Working directory on disk associated with this session.
+    pub directory: PathBuf,
+    /// Optional parent session id when this session was forked.
+    pub parent_id: Option<String>,
+    /// Monotonically increasing version number for optimistic concurrency.
+    pub version: i64,
+    /// Storage format version for backward compatibility.
+    pub format_version: i64,
+    /// Timestamp when the session was created.
+    pub created_at: DateTime<Utc>,
+    /// Timestamp when the session was last modified.
+    pub updated_at: DateTime<Utc>,
+    /// Timestamp when the session was archived, if applicable.
+    pub archived_at: Option<DateTime<Utc>>,
+    /// Optional aggregate diff statistics for the session.
+    pub summary: Option<SessionSummary>,
+    /// Config file path used when this session was created (for validation on resume).
+    pub config_path: Option<PathBuf>,
+    /// Branch of the session-owned git worktree, if the session has one
+    /// (spec `projects`).
+    #[serde(default)]
+    pub branch: Option<String>,
+    /// Session-owned git worktree; `None` when the session runs in the
+    /// project worktree.
+    #[serde(default)]
+    pub worktree: Option<PathBuf>,
+}
+
+/// Aggregate statistics summarizing the changes made during a session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSummary {
+    /// Total number of lines added.
+    pub additions: u64,
+    /// Total number of lines deleted.
+    pub deletions: u64,
+    /// Number of files that were modified.
+    pub files_changed: u64,
+}
+
+/// Manages the lifecycle of sessions, delegating persistence to [`Storage`]
+/// and broadcasting changes through the [`EventBus`].
+pub struct SessionManager {
+    storage: Arc<Storage>,
+    event_bus: Arc<EventBus>,
+}
+
+impl SessionManager {
+    /// Creates a new `SessionManager` with the given storage backend and event bus.
+    ///
+    /// # Errors
+    ///
+    /// This constructor does not return errors. It simply wraps the provided
+    /// storage and event bus references.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use ragent_storage::Storage;
+    /// use ragent_agent::event::EventBus;
+    /// use ragent_agent::session::SessionManager;
+    ///
+    /// let storage = Arc::new(Storage::open_in_memory().unwrap());
+    /// let event_bus = Arc::new(EventBus::new(128));
+    /// let manager = SessionManager::new(storage, event_bus);
+    /// ```
+    pub const fn new(storage: Arc<Storage>, event_bus: Arc<EventBus>) -> Self {
+        Self { storage, event_bus }
+    }
+
+    /// Return the per-session [`SessionState`] cache (FR-006 / FR-007).
+    ///
+    /// The cache is allocated on first use and held in a process-wide
+    /// `Mutex<HashMap<String, Arc<Mutex<SessionState>>>>`.  It is used by
+    /// the agent loop to skip redundant `Message -> ChatMessage` and
+    /// `ChatRequest` serialisation work between iterations of the
+    /// tool-call loop.
+    pub fn session_state_cache(&self, session_id: &str) -> Arc<Mutex<SessionState>> {
+        let cache = SESSION_STATE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut guard = cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(existing) = guard.get(session_id) {
+            existing.clone()
+        } else {
+            let new = Arc::new(Mutex::new(SessionState::new(session_id)));
+            guard.insert(session_id.to_string(), new.clone());
+            new
+        }
+    }
+
+    /// R-3: Remove a session's state from the global cache. Called when a
+    /// session is archived or a sub-agent task completes so the cache does
+    /// not grow without bound.
+    pub fn remove_session_state(&self, session_id: &str) {
+        let cache = SESSION_STATE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut guard = cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.remove(session_id);
+    }
+
+    /// Returns a reference to the underlying storage backend.
+    ///
+    /// # Errors
+    ///
+    /// This function does not return errors. It returns an immutable reference
+    /// to the shared `Storage` instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use ragent_storage::Storage;
+    /// use ragent_agent::event::EventBus;
+    /// use ragent_agent::session::SessionManager;
+    ///
+    /// let storage = Arc::new(Storage::open_in_memory().unwrap());
+    /// let event_bus = Arc::new(EventBus::new(128));
+    /// let manager = SessionManager::new(storage, event_bus);
+    /// let _storage_ref = manager.storage();
+    /// ```
+    #[must_use]
+    pub const fn storage(&self) -> &Arc<Storage> {
+        &self.storage
+    }
+
+    /// Creates a new session rooted at `directory`, persists it, and emits a
+    /// `SessionCreated` event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the session cannot be persisted to storage.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use std::path::PathBuf;
+    /// use ragent_storage::Storage;
+    /// use ragent_agent::event::EventBus;
+    /// use ragent_agent::session::SessionManager;
+    ///
+    /// let storage = Arc::new(Storage::open_in_memory().unwrap());
+    /// let event_bus = Arc::new(EventBus::new(128));
+    /// let manager = SessionManager::new(storage, event_bus);
+    /// let session = manager.create_session(PathBuf::from("/tmp/project")).unwrap();
+    /// assert!(!session.id.is_empty());
+    /// ```
+    pub fn create_session(&self, directory: PathBuf) -> anyhow::Result<Session> {
+        self.create_session_with(directory, None, ragent_storage::SessionKind::Interactive)
+    }
+
+    /// Creates a session started by another session (spec MULTISESSION): a
+    /// sub-agent, teammate or forked skill. It records `parent_id`, so it is
+    /// archived with its parent and never listed as a top-level session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the parent does not exist or the insert fails.
+    pub fn create_child_session(
+        &self,
+        directory: PathBuf,
+        parent_id: &str,
+        kind: ragent_storage::SessionKind,
+    ) -> anyhow::Result<Session> {
+        self.create_session_with(directory, Some(parent_id), kind)
+    }
+
+    /// Creates a session of `kind` with no parent (an automation run).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the insert fails.
+    pub fn create_session_of_kind(
+        &self,
+        directory: PathBuf,
+        kind: ragent_storage::SessionKind,
+    ) -> anyhow::Result<Session> {
+        self.create_session_with(directory, None, kind)
+    }
+
+    fn create_session_with(
+        &self,
+        directory: PathBuf,
+        parent_id: Option<&str>,
+        kind: ragent_storage::SessionKind,
+    ) -> anyhow::Result<Session> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now();
+
+        let directory_text = directory.display().to_string();
+        self.storage
+            .create_session_with(&id, &directory_text, parent_id, kind)?;
+        // Storage attached the session to a project record (its parent's, or
+        // the one its directory resolves to); report that id.
+        let project_id = self
+            .storage
+            .get_session(&id)?
+            .map(|row| row.project_id)
+            .unwrap_or_default();
+
+        let session = Session {
+            id: id.clone(),
+            title: String::new(),
+            project_id,
+            directory,
+            parent_id: parent_id.map(str::to_string),
+            version: 1,
+            format_version: 1, // Current format version
+            created_at: now,
+            updated_at: now,
+            archived_at: None,
+            summary: None,
+            config_path: None,
+            branch: None,
+            worktree: None,
+        };
+        self.event_bus
+            .publish(Event::SessionCreated { session_id: id });
+
+        Ok(session)
+    }
+
+    /// Creates an interactive session in a named project (spec `projects`).
+    ///
+    /// # Arguments
+    ///
+    /// * `project_id` - the owning project; must exist.
+    /// * `directory` - the session's working directory: the project
+    ///   worktree, or the session's own worktree.
+    /// * `checkout` - the session's branch and worktree, when it owns one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the project does not exist or the insert fails.
+    pub fn create_session_in_project(
+        &self,
+        project_id: &str,
+        directory: PathBuf,
+        checkout: &ragent_storage::SessionCheckout,
+    ) -> anyhow::Result<Session> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now();
+        self.storage.create_session_in_project(
+            &id,
+            project_id,
+            &directory.display().to_string(),
+            checkout,
+        )?;
+        let session = Session {
+            id: id.clone(),
+            title: String::new(),
+            project_id: project_id.to_string(),
+            directory,
+            parent_id: None,
+            version: 1,
+            format_version: 1,
+            created_at: now,
+            updated_at: now,
+            archived_at: None,
+            summary: None,
+            config_path: None,
+            branch: checkout.branch.clone(),
+            worktree: checkout.worktree.as_ref().map(PathBuf::from),
+        };
+        self.event_bus
+            .publish(Event::SessionCreated { session_id: id });
+        Ok(session)
+    }
+
+    /// Retrieves a session by its unique identifier, returning `None` if not found.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the storage query fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use std::path::PathBuf;
+    /// use ragent_storage::Storage;
+    /// use ragent_agent::event::EventBus;
+    /// use ragent_agent::session::SessionManager;
+    ///
+    /// let storage = Arc::new(Storage::open_in_memory().unwrap());
+    /// let event_bus = Arc::new(EventBus::new(128));
+    /// let manager = SessionManager::new(storage, event_bus);
+    /// let session = manager.create_session(PathBuf::from("/tmp/project")).unwrap();
+    /// let found = manager.get_session(&session.id).unwrap();
+    /// assert!(found.is_some());
+    /// ```
+    pub fn get_session(&self, id: &str) -> anyhow::Result<Option<Session>> {
+        let Some(row) = self.storage.get_session(id)? else {
+            return Ok(None);
+        };
+        let mut session: Session = row.into();
+        if let Some(checkout) = self.storage.session_checkout(id)? {
+            session.branch = checkout.branch;
+            session.worktree = checkout.worktree.map(PathBuf::from);
+        }
+        Ok(Some(session))
+    }
+
+    /// Lists all non-archived sessions, ordered by most recently updated.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the storage query fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use std::path::PathBuf;
+    /// use ragent_storage::Storage;
+    /// use ragent_agent::event::EventBus;
+    /// use ragent_agent::session::SessionManager;
+    ///
+    /// let storage = Arc::new(Storage::open_in_memory().unwrap());
+    /// let event_bus = Arc::new(EventBus::new(128));
+    /// let manager = SessionManager::new(storage, event_bus);
+    /// manager.create_session(PathBuf::from("/tmp/project")).unwrap();
+    /// let sessions = manager.list_sessions().unwrap();
+    /// assert_eq!(sessions.len(), 1);
+    /// ```
+    pub fn list_sessions(&self) -> anyhow::Result<Vec<Session>> {
+        let rows = self.storage.list_sessions()?;
+        let mut checkouts = self.storage.session_checkouts()?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let mut session: Session = row.into();
+                if let Some(checkout) = checkouts.remove(&session.id) {
+                    session.branch = checkout.branch;
+                    session.worktree = checkout.worktree.map(PathBuf::from);
+                }
+                session
+            })
+            .collect())
+    }
+
+    /// Permanently deletes a session and its sub-agent, teammate and skill
+    /// sessions with their transcripts (spec SESSIONMENU FR-13), and drops
+    /// their cached state.
+    ///
+    /// # Returns
+    ///
+    /// The ids deleted, the session itself first; empty when it did not exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage fails; nothing is deleted then.
+    pub fn delete_session(&self, id: &str) -> anyhow::Result<Vec<String>> {
+        let ids = self.storage.delete_session(id)?;
+        for deleted in &ids {
+            self.remove_session_state(deleted);
+        }
+        Ok(ids)
+    }
+
+    /// Copies session `source`'s transcript into a new top-level session in
+    /// the same directory, titled `title` (spec SESSIONMENU FR-10).
+    ///
+    /// # Returns
+    ///
+    /// The new session's id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `source` does not exist or storage fails.
+    pub fn fork_session(&self, source: &str, title: &str) -> anyhow::Result<String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        self.storage.fork_session(source, &id, title)?;
+        Ok(id)
+    }
+
+    /// Archives a session so it no longer appears in [`list_sessions`](Self::list_sessions)
+    /// and emits a `SessionUpdated` event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the storage update fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use std::path::PathBuf;
+    /// use ragent_storage::Storage;
+    /// use ragent_agent::event::EventBus;
+    /// use ragent_agent::session::SessionManager;
+    ///
+    /// let storage = Arc::new(Storage::open_in_memory().unwrap());
+    /// let event_bus = Arc::new(EventBus::new(128));
+    /// let manager = SessionManager::new(storage, event_bus);
+    /// let session = manager.create_session(PathBuf::from("/tmp/project")).unwrap();
+    /// manager.archive_session(&session.id).unwrap();
+    /// let sessions = manager.list_sessions().unwrap();
+    /// assert!(sessions.is_empty());
+    /// ```
+    pub fn archive_session(&self, id: &str) -> anyhow::Result<()> {
+        self.storage.archive_session(id)?;
+        // R-3: Remove the session state cache entry so the global
+        // `session_state_cache` static does not accumulate one entry per
+        // session (including every sub-agent child session) for the process
+        // lifetime. Each entry holds a `Vec<ChatMessage>` that can be hundreds
+        // of KB.
+        self.remove_session_state(id);
+        self.event_bus.publish(Event::SessionUpdated {
+            session_id: id.to_string(),
+        });
+        Ok(())
+    }
+
+    /// Returns all messages belonging to the given session, ordered chronologically.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the storage query fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use std::path::PathBuf;
+    /// use ragent_storage::Storage;
+    /// use ragent_agent::event::EventBus;
+    /// use ragent_types::message::Message;
+    /// use ragent_agent::session::SessionManager;
+    ///
+    /// let storage = Arc::new(Storage::open_in_memory().unwrap());
+    /// let event_bus = Arc::new(EventBus::new(128));
+    /// let manager = SessionManager::new(storage, event_bus);
+    /// let session = manager.create_session(PathBuf::from("/tmp/project")).unwrap();
+    /// let messages = manager.get_messages(&session.id).unwrap();
+    /// assert!(messages.is_empty());
+    /// ```
+    pub fn get_messages(&self, session_id: &str) -> anyhow::Result<Vec<Message>> {
+        self.storage.get_messages(session_id)
+    }
+}
+
+impl Drop for SessionManager {
+    /// Ensures any pending session data is flushed on drop.
+    ///
+    /// This provides a safety net for graceful shutdown scenarios.
+    fn drop(&mut self) {
+        // Signal that we're shutting down - this helps with async cleanup
+        tracing::debug!("SessionManager dropping - ensuring session persistence");
+
+        // Note: Storage operations are synchronous via Mutex, so no async work needed.
+        // The SQLite connection will be closed when the Arc<Storage> is dropped.
+        // This is primarily a hook for future persistence needs.
+    }
+}
+
+impl From<crate::storage::SessionRow> for Session {
+    fn from(row: crate::storage::SessionRow) -> Self {
+        // Validate session row data integrity before conversion
+        let session_id = row.id.clone();
+
+        let created_at = DateTime::parse_from_rfc3339(&row.created_at).map_or_else(
+            |e| {
+                tracing::warn!(
+                    session_id = %session_id,
+                    raw = %row.created_at,
+                    error = %e,
+                    "failed to parse created_at timestamp, falling back to Utc::now()"
+                );
+                Utc::now()
+            },
+            |dt| dt.with_timezone(&Utc),
+        );
+        let updated_at = DateTime::parse_from_rfc3339(&row.updated_at).map_or_else(
+            |e| {
+                tracing::warn!(
+                    session_id = %session_id,
+                    raw = %row.updated_at,
+                    error = %e,
+                    "failed to parse updated_at timestamp, falling back to Utc::now()"
+                );
+                Utc::now()
+            },
+            |dt| dt.with_timezone(&Utc),
+        );
+        let archived_at = row.archived_at.and_then(|s| {
+            DateTime::parse_from_rfc3339(&s)
+                .ok()
+                .map(|dt| dt.with_timezone(&Utc))
+        });
+        let summary = row
+            .summary
+            .and_then(|s| match serde_json::from_str::<SessionSummary>(&s) {
+                Ok(summ) => Some(summ),
+                Err(e) => {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        error = %e,
+                        "failed to parse session summary, treating as None"
+                    );
+                    None
+                }
+            });
+
+        Self {
+            id: row.id,
+            title: row.title,
+            project_id: row.project_id,
+            directory: PathBuf::from(row.directory),
+            parent_id: row.parent_id,
+            version: row.version,
+            format_version: row.format_version,
+            created_at,
+            updated_at,
+            archived_at,
+            summary,
+            config_path: None, // Historical sessions don't store config path
+            // Checkout data is not part of `SessionRow`; `SessionManager`
+            // fills it in.
+            branch: None,
+            worktree: None,
+        }
+    }
+}

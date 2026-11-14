@@ -1,0 +1,126 @@
+//! `team_submit_plan` - Teammate submits a plan to the lead for approval.
+
+use anyhow::Result;
+use serde_json::{Value, json};
+
+use super::{Tool, ToolContext, ToolOutput};
+use crate::team::{
+    Mailbox, MailboxMessage, MemberStatus, MessageType, PlanStatus, TeamStore, find_team_dir,
+};
+
+/// Teammate submits a plan; sets member `plan_status` to Pending.
+pub struct TeamSubmitPlanTool;
+
+#[async_trait::async_trait]
+impl Tool for TeamSubmitPlanTool {
+    fn name(&self) -> &'static str {
+        "team_submit_plan"
+    }
+
+    fn description(&self) -> &'static str {
+        "Submit a plan to the team lead for approval before starting implementation. \
+             REQUIRED parameters: 'team_name' (string) and 'plan' (string, full text of \
+             the intended approach). After calling this tool, wait for plan_approved or \
+             plan_rejected messages via team_read_messages before proceeding. Common \
+             gotcha: do not begin implementation until the lead approves the plan; the \
+             teammate's status is set to PlanPending while waiting."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "team_name": {
+                    "type": "string",
+                    "description": "Name of the team (required)"
+                },
+                "plan": {
+                    "type": "string",
+                    "description": "Full text of the plan describing the intended approach (required)"
+                }
+            },
+            "required": ["team_name", "plan"],
+            "additionalProperties": false
+        })
+    }
+    fn permission_category(&self) -> &'static str {
+        "team:communicate"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let team_name = input
+            .get("team_name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing required parameter: team_name"))?;
+
+        let plan = input
+            .get("plan")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing required parameter: plan"))?;
+
+        let team_dir = find_team_dir(&ctx.working_dir, team_name)
+            .ok_or_else(|| anyhow::anyhow!("Team '{team_name}' not found"))?;
+        let agent_id = super::team_caller::resolve_caller(ctx, team_name, &team_dir)?
+            .agent_id()
+            .to_string();
+
+        // Update member's plan_status to Pending and status to PlanPending.
+        // FR-032: a member that is not in the roster has no plan to record, and
+        // naming that - rather than writing a silent no-op - is what tells the
+        // caller it is addressing the wrong session.
+        TeamStore::update(&team_dir, |config| {
+            let Some(member) = config.member_by_id_mut(&agent_id) else {
+                return Err(anyhow::anyhow!(
+                    "cannot submit a plan as '{agent_id}': that agent is not a member of team \
+                     '{team_name}'. A plan is submitted by a teammate session - read the roster \
+                     with `team_status` to find the agent id"
+                ));
+            };
+            if member.status.is_terminal() {
+                let name = member.name.clone();
+                let status = member.status;
+                return Err(anyhow::anyhow!(
+                    "{} and cannot submit a plan: a {} teammate has no live session. Respawn it \
+                     with `team_spawn` first",
+                    crate::team::member_status_clause(&name, &agent_id, status),
+                    status.display_label()
+                ));
+            }
+            member.plan_status = PlanStatus::Pending;
+            member.status = MemberStatus::PlanPending;
+            Ok(())
+        })?;
+
+        // Send plan_request to lead mailbox.
+        let correlation_id = uuid::Uuid::new_v4().to_string();
+        let lead_mailbox = Mailbox::open(&team_dir, "lead")?;
+        lead_mailbox.push(MailboxMessage::new_correlated(
+            agent_id.clone(),
+            "lead".to_string(),
+            MessageType::PlanRequest,
+            plan,
+            &correlation_id,
+        ))?;
+
+        // M5-T4: store the correlation id on the member so the eventual
+        // PlanApproved/PlanRejected reply can copy it.
+        TeamStore::update(&team_dir, |config| {
+            if let Some(m) = config.member_by_id_mut(&agent_id) {
+                m.plan_request_id = Some(correlation_id);
+            }
+            Ok(())
+        })?;
+
+        Ok(ToolOutput {
+            content: "Plan submitted to lead for approval.\n\
+                 Use team_read_messages to check for plan_approved or plan_rejected response.\n\
+                 Do not start implementation until you receive approval."
+                .to_string(),
+            metadata: Some(json!({
+                "team_name": team_name,
+                "agent_id": agent_id,
+                "plan_status": "pending"
+            })),
+        })
+    }
+}

@@ -1,0 +1,51 @@
+name: Security Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Run weekly on Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo-audit
+        # Advisory suppressions live in .cargo/audit.toml (kept in sync with
+        # deny.toml [advisories].ignore). cargo-audit reads that file
+        # automatically, so there is a single source of truth and a newly
+        # published advisory fails this job instead of being masked by a stale
+        # inline --ignore list.
+        run: cargo audit
+
+      - name: Report outdated dependencies (informational)
+        # Non-blocking: surfaces drift without failing the build. Removing or
+        # raising a stale suppression should be a deliberate change.
+        continue-on-error: true
+        run: |
+          cargo install cargo-outdated --locked
+          cargo outdated --workspace --exit-code 0
+
+  deny:
+    name: Cargo Deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Run cargo-deny
+        run: cargo deny check

@@ -1,0 +1,106 @@
+//! File append tool.
+//!
+//! Provides [`AppendFileTool`], which appends text to an existing file without
+//! reading or rewriting the entire file.  Creates the file (and parent
+//! directories) if they do not exist.
+
+use anyhow::{Context, Result};
+use serde_json::{Value, json};
+use tokio::fs::OpenOptions;
+use tokio::io::AsyncWriteExt as _;
+
+use super::{Tool, ToolContext, ToolOutput};
+use crate::path_util::resolve_path;
+
+/// Append text to a file.
+pub struct AppendFileTool;
+
+#[async_trait::async_trait]
+impl Tool for AppendFileTool {
+    fn name(&self) -> &'static str {
+        "append_to_file"
+    }
+
+    fn description(&self) -> &'static str {
+        "Append text to the end of an existing file, creating the file and any \
+         missing parent directories if they do not already exist. Required \
+         parameters: `path` (string) - the file to append to, and `content` \
+         (string) - the text to append. This is more efficient than rewriting \
+         the whole file when only adding content to the end. Avoid using this \
+         for mid-file edits; use `Edit` or `apply_patch` instead."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path":    { "type": "string", "description": "REQUIRED. Path to the file to append to" },
+                "content": { "type": "string", "description": "REQUIRED. Text to append" }
+            },
+            "required": ["path", "content"],
+            "additionalProperties": false
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "file:write"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let path_str = input["path"]
+            .as_str()
+            .context("Missing required 'path' parameter")?;
+        let content = input["content"]
+            .as_str()
+            .context("Missing required 'content' parameter")?;
+
+        let path = resolve_path(&ctx.working_dir, path_str);
+        super::check_path_within_allowed_roots_cached(
+            &path,
+            &ctx.working_dir,
+            &ctx.allowed_roots,
+            &ctx.canonical_cache,
+        )?;
+
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .with_context(|| format!("Failed to create directories: {}", parent.display()))?;
+        }
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .await
+            .with_context(|| format!("Failed to open file for appending: {}", path.display()))?;
+
+        file.write_all(content.as_bytes())
+            .await
+            .with_context(|| format!("Failed to append to file: {}", path.display()))?;
+
+        // FUNC-061: flush explicitly so the appended bytes are durable and the
+        // caller (and any subsequent read) observes them, rather than relying on
+        // the drop of the buffered handle to flush best-effort.
+        file.flush()
+            .await
+            .with_context(|| format!("Failed to flush appended file: {}", path.display()))?;
+
+        let bytes = content.len();
+        let lines = content.lines().count();
+
+        Ok(ToolOutput {
+            content: format!(
+                "Appended {} bytes ({} lines) to {}",
+                bytes,
+                lines,
+                path.display()
+            ),
+            metadata: Some(json!({
+                "path": path.display().to_string(),
+                "bytes": bytes,
+                "lines": lines,
+            })),
+        })
+    }
+}

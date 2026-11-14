@@ -1,0 +1,459 @@
+//! Background indexing worker with debounce, dedup, and batching.
+//!
+//! `IndexWorker` receives `WatchEvent`s via a channel, collects them into
+//! efficient batches, and applies them to a [`CodeIndex`].
+//! The worker is controlled through `IndexWorkerHandle`.
+
+use crate::CodeIndex;
+use crate::watcher::WatchEvent;
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, mpsc};
+use std::time::{Duration, Instant};
+use tracing::{debug, info, trace, warn};
+
+/// Configuration for the background indexing worker.
+#[derive(Debug, Clone)]
+pub struct WorkerConfig {
+    /// Delay after last event before processing a batch (milliseconds).
+    pub debounce_ms: u64,
+    /// Maximum number of files per indexing batch.
+    pub batch_size: usize,
+    /// Maximum number of pending events before dropping oldest.
+    pub max_queue_size: usize,
+}
+
+impl Default for WorkerConfig {
+    fn default() -> Self {
+        Self {
+            debounce_ms: 500,
+            batch_size: 50,
+            max_queue_size: 10_000,
+        }
+    }
+}
+
+/// Live statistics from the indexing worker.
+#[derive(Debug, Clone, Default)]
+pub struct WorkerStats {
+    /// Number of files indexed since start.
+    pub files_indexed: u64,
+    /// Number of files removed since start.
+    pub files_removed: u64,
+    /// Number of batches processed.
+    pub batches_processed: u64,
+    /// Whether the worker is currently processing a batch.
+    pub is_busy: bool,
+    /// Whether the worker thread terminated via a panic. A panicked worker is
+    /// recorded here so the frozen index is observable rather than silent
+    /// (FUNC-018).
+    pub worker_panicked: bool,
+    /// Number of internal full-reindex attempts that failed. Non-zero means the
+    /// index may be stale after a queue-overflow or manual reindex (FUNC-018).
+    pub reindex_failures: u64,
+}
+
+/// Handle to control the background indexing worker.
+pub struct IndexWorkerHandle {
+    stop_flag: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    stats: Arc<SharedStats>,
+    manual_tx: mpsc::Sender<ManualCommand>,
+}
+
+enum ManualCommand {
+    ReindexFile(PathBuf),
+    FullReindex,
+}
+
+struct SharedStats {
+    files_indexed: AtomicU64,
+    files_removed: AtomicU64,
+    batches_processed: AtomicU64,
+    is_busy: AtomicBool,
+    worker_panicked: AtomicBool,
+    reindex_failures: AtomicU64,
+}
+
+impl SharedStats {
+    const fn new() -> Self {
+        Self {
+            files_indexed: AtomicU64::new(0),
+            files_removed: AtomicU64::new(0),
+            batches_processed: AtomicU64::new(0),
+            is_busy: AtomicBool::new(false),
+            worker_panicked: AtomicBool::new(false),
+            reindex_failures: AtomicU64::new(0),
+        }
+    }
+
+    fn snapshot(&self) -> WorkerStats {
+        WorkerStats {
+            files_indexed: self.files_indexed.load(Ordering::Relaxed),
+            files_removed: self.files_removed.load(Ordering::Relaxed),
+            batches_processed: self.batches_processed.load(Ordering::Relaxed),
+            is_busy: self.is_busy.load(Ordering::Relaxed),
+            worker_panicked: self.worker_panicked.load(Ordering::Relaxed),
+            reindex_failures: self.reindex_failures.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// Collects and deduplicates events into an actionable batch.
+#[derive(Debug)]
+pub struct EventBatch {
+    /// Files to (re-)index - keeps only the latest event per path.
+    pub to_index: HashSet<PathBuf>,
+    /// Files to remove from the index.
+    pub to_remove: HashSet<PathBuf>,
+}
+
+impl EventBatch {
+    /// Create an empty batch.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            to_index: HashSet::new(),
+            to_remove: HashSet::new(),
+        }
+    }
+
+    /// True if there are no events in the batch.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.to_index.is_empty() && self.to_remove.is_empty()
+    }
+
+    /// Total number of events in the batch.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.to_index.len() + self.to_remove.len()
+    }
+
+    /// Add an event, deduplicating: a later Delete overrides a Create/Change.
+    pub fn push(&mut self, event: WatchEvent) {
+        match event {
+            WatchEvent::Created(p) | WatchEvent::Changed(p) => {
+                self.to_remove.remove(&p);
+                self.to_index.insert(p);
+            }
+            WatchEvent::Deleted(p) => {
+                self.to_index.remove(&p);
+                self.to_remove.insert(p);
+            }
+            WatchEvent::Renamed { from, to } => {
+                // Treat as delete old + create new.
+                self.to_index.remove(&from);
+                self.to_remove.insert(from);
+                self.to_remove.remove(&to);
+                self.to_index.insert(to);
+            }
+        }
+    }
+
+    fn clear(&mut self) {
+        self.to_index.clear();
+        self.to_remove.clear();
+    }
+}
+
+/// The background indexing worker.
+///
+/// Spawns a thread that receives events and applies them to the `CodeIndex`
+/// in debounced, deduplicated batches.
+pub struct IndexWorker;
+
+impl IndexWorker {
+    /// Start the background worker.
+    ///
+    /// Returns a handle for control and stats. The handle carries a `None`
+    /// thread when the OS refused to spawn the worker thread (e.g. thread
+    /// exhaustion): the worker is then simply not running, and `queue_*` calls
+    /// report the failure instead of aborting the process with `expect`
+    /// (FUNC-018).
+    pub fn start(
+        index: Arc<CodeIndex>,
+        event_rx: mpsc::Receiver<WatchEvent>,
+        config: WorkerConfig,
+    ) -> IndexWorkerHandle {
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let stats = Arc::new(SharedStats::new());
+        let (manual_tx, manual_rx) = mpsc::channel();
+
+        let thread = {
+            let stop = Arc::clone(&stop_flag);
+            let st = Arc::clone(&stats);
+            let cfg = config;
+            match std::thread::Builder::new()
+                .name("codeindex-worker".into())
+                .spawn(move || {
+                    worker_loop(index, event_rx, manual_rx, cfg, stop, st);
+                }) {
+                Ok(handle) => Some(handle),
+                Err(e) => {
+                    warn!("failed to spawn index worker thread: {e}");
+                    None
+                }
+            }
+        };
+
+        IndexWorkerHandle {
+            stop_flag,
+            thread,
+            stats,
+            manual_tx,
+        }
+    }
+}
+
+impl IndexWorkerHandle {
+    /// Whether the background worker thread is currently running.
+    ///
+    /// `false` means the thread terminated (panic) or never started (spawn
+    /// failure); background indexing is not happening (FUNC-018).
+    #[must_use]
+    pub fn is_running(&self) -> bool {
+        self.thread.is_some()
+    }
+
+    /// Stop the worker gracefully, waiting for it to finish.
+    ///
+    /// A panicked worker thread is logged and recorded in [`WorkerStats`]
+    /// rather than silently swallowed, so a frozen index surfaces in the status
+    /// bar instead of looking healthy (FUNC-018).
+    pub fn stop(&mut self) {
+        self.stop_flag.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.thread.take() {
+            if handle.join().is_err() {
+                self.stats.worker_panicked.store(true, Ordering::Relaxed);
+                warn!("index worker thread panicked; background indexing has stopped");
+            }
+        }
+    }
+
+    /// Manually queue a single file for re-indexing.
+    ///
+    /// Returns `false` when the worker is no longer running (the command could
+    /// not be delivered), so callers are not misled into thinking the file will
+    /// be reindexed (FUNC-018).
+    pub fn queue_reindex(&self, path: PathBuf) -> bool {
+        match self.manual_tx.send(ManualCommand::ReindexFile(path)) {
+            Ok(()) => true,
+            Err(e) => {
+                warn!(error = %e, "index worker not running; reindex request dropped");
+                false
+            }
+        }
+    }
+
+    /// Manually trigger a full reindex.
+    ///
+    /// Returns `false` when the worker is no longer running (FUNC-018).
+    pub fn queue_full_reindex(&self) -> bool {
+        match self.manual_tx.send(ManualCommand::FullReindex) {
+            Ok(()) => true,
+            Err(e) => {
+                warn!(error = %e, "index worker not running; full reindex request dropped");
+                false
+            }
+        }
+    }
+
+    /// Get current worker statistics.
+    #[must_use]
+    pub fn stats(&self) -> WorkerStats {
+        self.stats.snapshot()
+    }
+
+    /// Whether the worker has been asked to stop.
+    #[must_use]
+    pub fn is_stopped(&self) -> bool {
+        self.stop_flag.load(Ordering::SeqCst)
+    }
+}
+
+impl Drop for IndexWorkerHandle {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// Main worker loop - runs on a dedicated thread.
+fn worker_loop(
+    index: Arc<CodeIndex>,
+    event_rx: mpsc::Receiver<WatchEvent>,
+    manual_rx: mpsc::Receiver<ManualCommand>,
+    config: WorkerConfig,
+    stop: Arc<AtomicBool>,
+    stats: Arc<SharedStats>,
+) {
+    let debounce = Duration::from_millis(config.debounce_ms);
+    let mut batch = EventBatch::new();
+    let mut last_event_time: Option<Instant> = None;
+
+    debug!(
+        "index worker started (debounce={}ms, batch_size={}, max_queue={})",
+        config.debounce_ms, config.batch_size, config.max_queue_size
+    );
+
+    loop {
+        if stop.load(Ordering::SeqCst) {
+            debug!("index worker stopping (stop flag set)");
+            break;
+        }
+
+        // Check for manual commands (non-blocking).
+        while let Ok(cmd) = manual_rx.try_recv() {
+            match cmd {
+                ManualCommand::ReindexFile(p) => {
+                    batch.push(WatchEvent::Changed(p));
+                    last_event_time = Some(Instant::now());
+                }
+                ManualCommand::FullReindex => {
+                    info!("manual full reindex requested");
+                    stats.is_busy.store(true, Ordering::Relaxed);
+                    match index.full_reindex() {
+                        Ok(result) => {
+                            info!("full reindex complete: {result}");
+                            stats.files_indexed.fetch_add(
+                                (result.files_added + result.files_updated) as u64,
+                                Ordering::Relaxed,
+                            );
+                            stats
+                                .files_removed
+                                .fetch_add(result.files_removed as u64, Ordering::Relaxed);
+                            stats.batches_processed.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(e) => {
+                            stats.reindex_failures.fetch_add(1, Ordering::Relaxed);
+                            warn!("full reindex failed: {e}");
+                        }
+                    }
+                    stats.is_busy.store(false, Ordering::Relaxed);
+                    batch.clear();
+                }
+            }
+        }
+
+        // R-7: Block on the event channel with a timeout instead of
+        // busy-spinning with `try_recv` + `sleep`. The thread wakes only when
+        // an event arrives or the timeout fires (for manual-command and
+        // debounce checks).
+        //
+        // Idle-CPU fix: the timeout matches `debounce_ms` (500 ms by default)
+        // instead of a fixed 50 ms. The debounce check below only needs to
+        // run once per debounce interval, so the shorter timeout produced 20
+        // wakeups/second for the whole process lifetime while adding no
+        // responsiveness (arrivals still wake the recv immediately).
+        match event_rx.recv_timeout(debounce) {
+            Ok(ev) => {
+                trace!("watch event: {ev:?}");
+                batch.push(ev);
+                last_event_time = Some(Instant::now());
+
+                // Drain any additional events that arrived in the same batch.
+                while let Ok(ev) = event_rx.try_recv() {
+                    batch.push(ev);
+                    last_event_time = Some(Instant::now());
+                }
+
+                // Drop oldest if queue is too large.
+                if batch.len() > config.max_queue_size {
+                    warn!(
+                        "event queue exceeded max_queue_size, clearing batch and triggering full reindex"
+                    );
+                    batch.clear();
+                    if let Err(e) = index.full_reindex() {
+                        stats.reindex_failures.fetch_add(1, Ordering::Relaxed);
+                        warn!("queue-overflow full reindex failed: {e}");
+                    }
+                    last_event_time = None;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => { /* idle - check below */ }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                debug!("event channel disconnected, worker stopping");
+                if !batch.is_empty() {
+                    process_batch(&index, &mut batch, &config, &stats, &stop);
+                }
+                return;
+            }
+        }
+
+        // Debounce: only process if enough time has elapsed since last event.
+        if let Some(last) = last_event_time
+            && last.elapsed() >= debounce
+            && !batch.is_empty()
+        {
+            process_batch(&index, &mut batch, &config, &stats, &stop);
+            last_event_time = None;
+        }
+    }
+
+    // Process any remaining events before shutdown.
+    if !batch.is_empty() {
+        debug!(
+            "processing remaining {} events before shutdown",
+            batch.len()
+        );
+        process_batch(&index, &mut batch, &config, &stats, &stop);
+    }
+
+    debug!("index worker exited");
+}
+
+/// Process the current batch of events.
+fn process_batch(
+    index: &Arc<CodeIndex>,
+    batch: &mut EventBatch,
+    config: &WorkerConfig,
+    stats: &SharedStats,
+    stop: &AtomicBool,
+) {
+    stats.is_busy.store(true, Ordering::Relaxed);
+
+    // Collect paths.
+    let to_index: Vec<PathBuf> = batch.to_index.drain().collect();
+    let to_remove: Vec<PathBuf> = batch.to_remove.drain().collect();
+
+    // Index files in batches.
+    for chunk in to_index.chunks(config.batch_size) {
+        if stop.load(Ordering::SeqCst) {
+            debug!("aborting batch: stop flag set");
+            break;
+        }
+
+        let paths: Vec<&std::path::Path> = chunk.iter().map(std::path::PathBuf::as_path).collect();
+        match index.index_files(&paths) {
+            Ok(result) => {
+                debug!(
+                    "indexed batch of {} files: {} symbols",
+                    chunk.len(),
+                    result.symbols_extracted
+                );
+                stats.files_indexed.fetch_add(
+                    (result.files_added + result.files_updated) as u64,
+                    Ordering::Relaxed,
+                );
+            }
+            Err(e) => warn!("batch index failed: {e}"),
+        }
+    }
+
+    // Remove deleted files.
+    for path in &to_remove {
+        if stop.load(Ordering::SeqCst) {
+            break;
+        }
+        if let Err(e) = index.remove_file(path) {
+            warn!("remove file failed: {e}");
+        } else {
+            stats.files_removed.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    stats.batches_processed.fetch_add(1, Ordering::Relaxed);
+    stats.is_busy.store(false, Ordering::Relaxed);
+    batch.clear();
+}

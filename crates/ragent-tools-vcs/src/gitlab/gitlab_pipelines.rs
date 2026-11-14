@@ -1,0 +1,775 @@
+//! GitLab pipeline and job tools: list pipelines, get pipeline details,
+//! list jobs, get job details, retry/cancel jobs, and download job logs.
+
+use anyhow::{Context, Result};
+use serde_json::{Value, json};
+
+use super::helpers::detect;
+use super::{Tool, ToolContext, ToolOutput};
+use crate::limits::{DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT};
+
+/// Maximum pages `gitlab_list_jobs` will follow (SEC-ragent-tools-vcs-007).
+const MAX_JOB_PAGES: u32 = 50;
+
+/// Maximum jobs `gitlab_list_jobs` will collect (SEC-ragent-tools-vcs-007).
+const MAX_JOB_ENTRIES: usize = 2_000;
+
+// -- helpers ------------------------------------------------------------------
+
+/// Create an authenticated client and detect the project path.
+/// Format a pipeline status with a visual indicator.
+fn status_icon(status: &str) -> &str {
+    match status {
+        "success" | "passed" => "[ok]",
+        "failed" => "[x]",
+        "running" => "[refresh]",
+        "pending" => "[..]",
+        "canceled" | "cancelled" => "[blocked]",
+        "skipped" => "[>>]",
+        "manual" => "[point]",
+        "created" => "[new]",
+        "waiting_for_resource" => "[..]",
+        _ => "[?]",
+    }
+}
+
+/// Format a duration field from a GitLab JSON value as seconds with one
+/// decimal place, or the supplied placeholder when the value is absent/null.
+fn format_duration(value: &Value, empty: &str) -> String {
+    value
+        .as_f64()
+        .map_or_else(|| empty.to_string(), |d| format!("{d:.1}s"))
+}
+
+// -- GitLabListPipelinesTool --------------------------------------------------
+
+/// Tool that lists pipelines in a GitLab project.
+pub struct GitLabListPipelinesTool;
+
+#[async_trait::async_trait]
+impl Tool for GitLabListPipelinesTool {
+    fn name(&self) -> &'static str {
+        "gitlab_list_pipelines"
+    }
+
+    fn description(&self) -> &'static str {
+        "List GitLab CI/CD pipelines in the project detected from the current working directory. \
+         No required parameters. 'status' (enum 'running', 'pending', 'success', 'failed', 'canceled', 'skipped', 'created', 'waiting_for_resource', 'manual') \
+         filters by pipeline status; 'ref' (string) filters by branch or tag name; 'limit' (integer, default 20, max 100) caps results. \
+         Requires GitLab configuration and a GitLab-backed git repo. \
+         Common gotcha: pipelines are returned in descending order by ID; 'ref' must match the branch/tag name exactly as stored in GitLab."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "running", "pending", "success", "failed",
+                        "canceled", "skipped", "created",
+                        "waiting_for_resource", "manual"
+                    ],
+                    "description": "Filter by pipeline status"
+                },
+                "ref": {
+                    "type": "string",
+                    "description": "Filter by branch or tag name"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max pipelines to return (default 20, max 100)"
+                }
+            }
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "gitlab:read"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let (client, project) = detect(ctx)?;
+
+        let limit = input["limit"]
+            .as_u64()
+            .unwrap_or(DEFAULT_PAGE_LIMIT)
+            .min(MAX_PAGE_LIMIT);
+        let mut path =
+            format!("/projects/{project}/pipelines?per_page={limit}&order_by=id&sort=desc");
+        if let Some(status) = input["status"].as_str() {
+            path.push_str(&format!("&status={status}"));
+        }
+        if let Some(git_ref) = input["ref"].as_str() {
+            path.push_str(&format!("&ref={git_ref}"));
+        }
+
+        let pipelines = client.get(&path).await?;
+        let arr = pipelines
+            .as_array()
+            .context("Expected array from GitLab pipelines endpoint")?;
+
+        if arr.is_empty() {
+            return Ok(ToolOutput {
+                content: "No pipelines found.".to_string(),
+                metadata: None,
+            });
+        }
+
+        let mut lines = vec!["Pipelines:\n".to_string()];
+        for p in arr {
+            let id = p["id"].as_u64().unwrap_or(0);
+            let status = p["status"].as_str().unwrap_or("?");
+            let git_ref = p["ref"].as_str().unwrap_or("?");
+            let sha = p["sha"].as_str().unwrap_or("?");
+            let short_sha = sha.get(..8).unwrap_or(sha);
+            let source = p["source"].as_str().unwrap_or("?");
+            let created = p["created_at"].as_str().unwrap_or("?");
+            lines.push(format!(
+                "  {} #{id} [{status}] ref:{git_ref} ({short_sha}) source:{source} {created}",
+                status_icon(status)
+            ));
+        }
+
+        Ok(ToolOutput {
+            content: lines.join("\n"),
+            metadata: Some(json!({"count": arr.len(), "project": project})),
+        })
+    }
+}
+
+// -- GitLabGetPipelineTool ----------------------------------------------------
+
+/// Tool that retrieves details of a specific pipeline.
+pub struct GitLabGetPipelineTool;
+
+#[async_trait::async_trait]
+impl Tool for GitLabGetPipelineTool {
+    fn name(&self) -> &'static str {
+        "gitlab_get_pipeline"
+    }
+
+    fn description(&self) -> &'static str {
+        "Get details of a specific GitLab pipeline including status, duration, ref, sha, user, and web URL. \
+         Required parameter: 'pipeline_id' (integer) - the globally unique pipeline ID (not an IID). \
+         Requires GitLab configuration and a GitLab-backed git repo. \
+         Common gotcha: 'pipeline_id' is the numeric ID from the pipeline URL, not the project-scoped IID used for merge requests."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "pipeline_id": {
+                    "type": "integer",
+                    "description": "The pipeline ID"
+                }
+            },
+            "required": ["pipeline_id"]
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "gitlab:read"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let (client, project) = detect(ctx)?;
+        let pipeline_id = input["pipeline_id"]
+            .as_u64()
+            .context("pipeline_id is required")?;
+
+        let pipeline = client
+            .get(&format!("/projects/{project}/pipelines/{pipeline_id}"))
+            .await?;
+
+        let id = pipeline["id"].as_u64().unwrap_or(0);
+        let status = pipeline["status"].as_str().unwrap_or("?");
+        let git_ref = pipeline["ref"].as_str().unwrap_or("?");
+        let sha = pipeline["sha"].as_str().unwrap_or("?");
+        let source = pipeline["source"].as_str().unwrap_or("?");
+        let created = pipeline["created_at"].as_str().unwrap_or("?");
+        let started = pipeline["started_at"].as_str().unwrap_or("not started");
+        let finished = pipeline["finished_at"].as_str().unwrap_or("not finished");
+        let duration = format_duration(&pipeline["duration"], "N/A");
+        let web_url = pipeline["web_url"].as_str().unwrap_or("?");
+        let user = pipeline["user"]["username"].as_str().unwrap_or("?");
+
+        let content = format!(
+            "{icon} Pipeline #{id}\n\
+             Status:   {status}\n\
+             Ref:      {git_ref} ({sha})\n\
+             Source:   {source}\n\
+             User:     {user}\n\
+             Created:  {created}\n\
+             Started:  {started}\n\
+             Finished: {finished}\n\
+             Duration: {duration}\n\
+             URL:      {web_url}",
+            icon = status_icon(status),
+        );
+
+        Ok(ToolOutput {
+            content,
+            metadata: Some(json!({"pipeline_id": id, "status": status})),
+        })
+    }
+}
+
+// -- GitLabListJobsTool -------------------------------------------------------
+
+/// Tool that lists jobs for a pipeline.
+pub struct GitLabListJobsTool;
+
+#[async_trait::async_trait]
+impl Tool for GitLabListJobsTool {
+    fn name(&self) -> &'static str {
+        "gitlab_list_jobs"
+    }
+
+    fn description(&self) -> &'static str {
+        "List jobs belonging to a GitLab pipeline, including each job's name, stage, status, duration, and runner. \
+         Required parameter: 'pipeline_id' (integer) - the pipeline ID. \
+         Optional: 'scope' (enum 'created', 'pending', 'running', 'failed', 'success', 'canceled', 'skipped', 'manual') filters jobs by status. \
+         Requires GitLab configuration and a GitLab-backed git repo. \
+         Common gotcha: jobs are returned up to 100 per request; use 'scope' to narrow large pipelines."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "pipeline_id": {
+                    "type": "integer",
+                    "description": "The pipeline ID to list jobs for"
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": [
+                        "created", "pending", "running", "failed",
+                        "success", "canceled", "skipped", "manual"
+                    ],
+                    "description": "Filter jobs by scope/status"
+                }
+            },
+            "required": ["pipeline_id"]
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "gitlab:read"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let (client, project) = detect(ctx)?;
+        let pipeline_id = input["pipeline_id"]
+            .as_u64()
+            .context("pipeline_id is required")?;
+
+        // FUNC-053: follow pagination so a pipeline with more than one page of
+        // jobs (>100) is not silently truncated. FUNC-063: percent-encode the
+        // scope value rather than interpolating it raw.
+        let mut base =
+            format!("/projects/{project}/pipelines/{pipeline_id}/jobs?per_page={MAX_PAGE_LIMIT}");
+        if let Some(scope) = input["scope"].as_str() {
+            base.push_str(&format!(
+                "&scope[]={}",
+                crate::percent::encode_component(scope)
+            ));
+        }
+
+        let mut jobs: Vec<Value> = Vec::new();
+        let mut next_page: Option<u32> = None;
+        let mut pages_fetched = 0u32;
+        loop {
+            // SEC-ragent-tools-vcs-007 (SECTASKS T-034): the loop followed
+            // `x-next-page` indefinitely with no page or entry cap, so a server
+            // that always returns a non-empty next page hung the tool call and
+            // grew `jobs` without bound. Mirror the tree-walk budgets.
+            if pages_fetched >= MAX_JOB_PAGES || jobs.len() >= MAX_JOB_ENTRIES {
+                tracing::warn!(
+                    pages = pages_fetched,
+                    jobs = jobs.len(),
+                    "GitLab jobs pagination hit its budget; returning partial results"
+                );
+                break;
+            }
+            let path = match next_page {
+                Some(page) => format!("{base}&page={page}"),
+                None => base.clone(),
+            };
+            let (value, cursor) = client.get_paged(&path).await?;
+            pages_fetched += 1;
+            let arr = value
+                .as_array()
+                .context("Expected array from GitLab jobs endpoint")?;
+            jobs.extend(arr.iter().cloned());
+            match cursor {
+                // Ignore a cursor that does not strictly advance - a server
+                // echoing the same page must not spin the loop.
+                Some(page) => {
+                    if next_page.is_some_and(|current| page <= current) {
+                        tracing::warn!(page, "GitLab jobs pagination cursor did not advance");
+                        break;
+                    }
+                    next_page = Some(page);
+                }
+                None => break,
+            }
+        }
+
+        if jobs.is_empty() {
+            return Ok(ToolOutput {
+                content: format!("No jobs found for pipeline #{pipeline_id}."),
+                metadata: None,
+            });
+        }
+
+        let mut lines = vec![format!("Jobs for pipeline #{pipeline_id}:\n")];
+        for job in &jobs {
+            let id = job["id"].as_u64().unwrap_or(0);
+            let name = job["name"].as_str().unwrap_or("?");
+            let stage = job["stage"].as_str().unwrap_or("?");
+            let status = job["status"].as_str().unwrap_or("?");
+            let duration = format_duration(&job["duration"], "-");
+            let runner = job["runner"]["description"].as_str().unwrap_or("no runner");
+            lines.push(format!(
+                "  {} [{stage}] {name} (id:{id}) - {status}, {duration}, runner:{runner}",
+                status_icon(status)
+            ));
+        }
+
+        Ok(ToolOutput {
+            content: lines.join("\n"),
+            metadata: Some(json!({"count": jobs.len(), "pipeline_id": pipeline_id})),
+        })
+    }
+}
+
+// -- GitLabGetJobTool ---------------------------------------------------------
+
+/// Tool that retrieves details of a specific job.
+pub struct GitLabGetJobTool;
+
+#[async_trait::async_trait]
+impl Tool for GitLabGetJobTool {
+    fn name(&self) -> &'static str {
+        "gitlab_get_job"
+    }
+
+    fn description(&self) -> &'static str {
+        "Get details of a specific GitLab CI/CD job including name, stage, status, duration, runner, artifacts, and failure reason. \
+         Required parameter: 'job_id' (integer) - the globally unique job ID (not pipeline-scoped). \
+         Requires GitLab configuration and a GitLab-backed git repo. \
+         Common gotcha: 'job_id' is the numeric ID shown in the job URL; use gitlab_list_jobs to map job names to IDs."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "job_id": {
+                    "type": "integer",
+                    "description": "The job ID"
+                }
+            },
+            "required": ["job_id"]
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "gitlab:read"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let (client, project) = detect(ctx)?;
+        let job_id = input["job_id"].as_u64().context("job_id is required")?;
+
+        let job = client
+            .get(&format!("/projects/{project}/jobs/{job_id}"))
+            .await?;
+
+        let name = job["name"].as_str().unwrap_or("?");
+        let stage = job["stage"].as_str().unwrap_or("?");
+        let status = job["status"].as_str().unwrap_or("?");
+        let git_ref = job["ref"].as_str().unwrap_or("?");
+        let created = job["created_at"].as_str().unwrap_or("?");
+        let started = job["started_at"].as_str().unwrap_or("not started");
+        let finished = job["finished_at"].as_str().unwrap_or("not finished");
+        let duration = format_duration(&job["duration"], "N/A");
+        let web_url = job["web_url"].as_str().unwrap_or("?");
+        let runner_desc = job["runner"]["description"].as_str().unwrap_or("none");
+        let pipeline_id = job["pipeline"]["id"].as_u64().unwrap_or(0);
+        let failure_reason = job["failure_reason"].as_str().unwrap_or("");
+        let allow_failure = job["allow_failure"].as_bool().unwrap_or(false);
+
+        let artifacts = job["artifacts"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|art| art["filename"].as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+
+        let mut content = format!(
+            "{icon} Job: {name} (id:{job_id})\n\
+             Stage:         {stage}\n\
+             Status:        {status}\n\
+             Ref:           {git_ref}\n\
+             Pipeline:      #{pipeline_id}\n\
+             Allow failure: {allow_failure}\n\
+             Created:       {created}\n\
+             Started:       {started}\n\
+             Finished:      {finished}\n\
+             Duration:      {duration}\n\
+             Runner:        {runner_desc}\n\
+             URL:           {web_url}",
+            icon = status_icon(status),
+        );
+
+        if !failure_reason.is_empty() {
+            content.push_str(&format!("\nFailure:       {failure_reason}"));
+        }
+        if !artifacts.is_empty() {
+            content.push_str(&format!("\nArtifacts:     {artifacts}"));
+        }
+
+        Ok(ToolOutput {
+            content,
+            metadata: Some(json!({"job_id": job_id, "status": status})),
+        })
+    }
+}
+
+// -- GitLabGetJobLogTool ------------------------------------------------------
+
+/// Tool that downloads the log (trace) output of a job.
+pub struct GitLabGetJobLogTool;
+
+#[async_trait::async_trait]
+impl Tool for GitLabGetJobLogTool {
+    fn name(&self) -> &'static str {
+        "gitlab_get_job_log"
+    }
+
+    fn description(&self) -> &'static str {
+        "Download the log (trace) output of a GitLab CI/CD job, returning the last N lines. \
+         Required parameter: 'job_id' (integer) - the globally unique job ID. \
+         Optional: 'tail' (integer, default 200, max 2000) sets the number of trailing lines to return. \
+         Requires GitLab configuration and a GitLab-backed git repo. \
+         Common gotcha: the job must have produced output and not be stuck in a pre-creation state; very large logs are truncated to the last 'tail' lines."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "job_id": {
+                    "type": "integer",
+                    "description": "The job ID"
+                },
+                "tail": {
+                    "type": "integer",
+                    "description": "Number of lines from the end to return (default 200, max 2000)"
+                }
+            },
+            "required": ["job_id"]
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "gitlab:read"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let (client_obj, project) = detect(ctx)?;
+
+        let job_id = input["job_id"].as_u64().context("job_id is required")?;
+        let tail = input["tail"].as_u64().unwrap_or(200).min(2000) as usize;
+
+        // The job trace endpoint returns plain text, not JSON.
+        let url = format!(
+            "{}/api/v4/projects/{project}/jobs/{job_id}/trace",
+            client_obj.instance_url()
+        );
+        let resp = crate::http_client::shared_client()
+            .get(&url)
+            .header("PRIVATE-TOKEN", client_obj.token())
+            .header("User-Agent", "ragent/0.1")
+            .send()
+            .await
+            .context("Failed to fetch job trace")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("GitLab API error {status} fetching job trace: {body}");
+        }
+
+        let full_log = resp.text().await.context("Failed to read job trace")?;
+
+        // Return last `tail` lines
+        let lines: Vec<&str> = full_log.lines().collect();
+        let start = lines.len().saturating_sub(tail);
+        let truncated = start > 0;
+        let output_lines = &lines[start..];
+
+        let mut content = String::new();
+        if truncated {
+            content.push_str(&format!(
+                "--- showing last {tail} of {} lines ---\n",
+                lines.len()
+            ));
+        }
+        content.push_str(&output_lines.join("\n"));
+
+        Ok(ToolOutput {
+            content,
+            metadata: Some(json!({
+                "job_id": job_id,
+                "total_lines": lines.len(),
+                "returned_lines": output_lines.len(),
+                "truncated": truncated,
+            })),
+        })
+    }
+}
+
+// -- GitLabRetryJobTool -------------------------------------------------------
+
+/// Tool that retries a failed or cancelled job.
+pub struct GitLabRetryJobTool;
+
+#[async_trait::async_trait]
+impl Tool for GitLabRetryJobTool {
+    fn name(&self) -> &'static str {
+        "gitlab_retry_job"
+    }
+
+    fn description(&self) -> &'static str {
+        "Retry a failed or cancelled GitLab CI/CD job, creating a new job instance. \
+         Required parameter: 'job_id' (integer) - the globally unique job ID to retry. \
+         Requires GitLab configuration and a GitLab-backed git repo with job retry permissions. \
+         Common gotcha: only jobs in 'failed' or 'canceled' state can normally be retried; retrying creates a new job with a new ID."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "job_id": {
+                    "type": "integer",
+                    "description": "The job ID to retry"
+                }
+            },
+            "required": ["job_id"]
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "gitlab:write"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let (client, project) = detect(ctx)?;
+        let job_id = input["job_id"].as_u64().context("job_id is required")?;
+
+        let result = client
+            .post(
+                &format!("/projects/{project}/jobs/{job_id}/retry"),
+                &json!({}),
+            )
+            .await?;
+
+        let new_id = result["id"].as_u64().unwrap_or(0);
+        let status = result["status"].as_str().unwrap_or("?");
+        let name = result["name"].as_str().unwrap_or("?");
+
+        Ok(ToolOutput {
+            content: format!("Retried job '{name}': new job id={new_id}, status={status}"),
+            metadata: Some(json!({"new_job_id": new_id, "status": status})),
+        })
+    }
+}
+
+// -- GitLabCancelJobTool ------------------------------------------------------
+
+/// Tool that cancels a running or pending job.
+pub struct GitLabCancelJobTool;
+
+#[async_trait::async_trait]
+impl Tool for GitLabCancelJobTool {
+    fn name(&self) -> &'static str {
+        "gitlab_cancel_job"
+    }
+
+    fn description(&self) -> &'static str {
+        "Cancel a running or pending GitLab CI/CD job. \
+         Required parameter: 'job_id' (integer) - the globally unique job ID to cancel. \
+         Requires GitLab configuration and a GitLab-backed git repo with job cancellation permissions. \
+         Common gotcha: cancelling an already-finished job is a no-op but returns success; cancelled jobs cannot be resumed, only retried."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "job_id": {
+                    "type": "integer",
+                    "description": "The job ID to cancel"
+                }
+            },
+            "required": ["job_id"]
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "gitlab:write"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let (client, project) = detect(ctx)?;
+        let job_id = input["job_id"].as_u64().context("job_id is required")?;
+
+        let result = client
+            .post(
+                &format!("/projects/{project}/jobs/{job_id}/cancel"),
+                &json!({}),
+            )
+            .await?;
+
+        let status = result["status"].as_str().unwrap_or("?");
+        let name = result["name"].as_str().unwrap_or("?");
+
+        Ok(ToolOutput {
+            content: format!("Cancelled job '{name}' (id:{job_id}), status={status}"),
+            metadata: Some(json!({"job_id": job_id, "status": status})),
+        })
+    }
+}
+
+// -- GitLabRetryPipelineTool --------------------------------------------------
+
+/// Tool that retries all failed jobs in a pipeline.
+pub struct GitLabRetryPipelineTool;
+
+#[async_trait::async_trait]
+impl Tool for GitLabRetryPipelineTool {
+    fn name(&self) -> &'static str {
+        "gitlab_retry_pipeline"
+    }
+
+    fn description(&self) -> &'static str {
+        "Retry all failed jobs in a GitLab CI/CD pipeline in a single operation. \
+         Required parameter: 'pipeline_id' (integer) - the globally unique pipeline ID. \
+         Requires GitLab configuration and a GitLab-backed git repo with pipeline retry permissions. \
+         Common gotcha: only failed or cancelled jobs are retried; successful and running jobs are left unchanged."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "pipeline_id": {
+                    "type": "integer",
+                    "description": "The pipeline ID to retry"
+                }
+            },
+            "required": ["pipeline_id"]
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "gitlab:write"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let (client, project) = detect(ctx)?;
+        let pipeline_id = input["pipeline_id"]
+            .as_u64()
+            .context("pipeline_id is required")?;
+
+        let result = client
+            .post(
+                &format!("/projects/{project}/pipelines/{pipeline_id}/retry"),
+                &json!({}),
+            )
+            .await?;
+
+        let status = result["status"].as_str().unwrap_or("?");
+
+        Ok(ToolOutput {
+            content: format!("Retried failed jobs in pipeline #{pipeline_id}, status={status}"),
+            metadata: Some(json!({"pipeline_id": pipeline_id, "status": status})),
+        })
+    }
+}
+
+// -- GitLabCancelPipelineTool -------------------------------------------------
+
+/// Tool that cancels all running/pending jobs in a pipeline.
+pub struct GitLabCancelPipelineTool;
+
+#[async_trait::async_trait]
+impl Tool for GitLabCancelPipelineTool {
+    fn name(&self) -> &'static str {
+        "gitlab_cancel_pipeline"
+    }
+
+    fn description(&self) -> &'static str {
+        "Cancel a running GitLab CI/CD pipeline, cancelling all pending and running jobs in it. \
+         Required parameter: 'pipeline_id' (integer) - the globally unique pipeline ID. \
+         Requires GitLab configuration and a GitLab-backed git repo with pipeline cancellation permissions. \
+         Common gotcha: cancelling a finished pipeline is a no-op but returns success; this action cannot be undone."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "pipeline_id": {
+                    "type": "integer",
+                    "description": "The pipeline ID to cancel"
+                }
+            },
+            "required": ["pipeline_id"]
+        })
+    }
+
+    fn permission_category(&self) -> &'static str {
+        "gitlab:write"
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let (client, project) = detect(ctx)?;
+        let pipeline_id = input["pipeline_id"]
+            .as_u64()
+            .context("pipeline_id is required")?;
+
+        let result = client
+            .post(
+                &format!("/projects/{project}/pipelines/{pipeline_id}/cancel"),
+                &json!({}),
+            )
+            .await?;
+
+        let status = result["status"].as_str().unwrap_or("?");
+
+        Ok(ToolOutput {
+            content: format!("Cancelled pipeline #{pipeline_id}, status={status}"),
+            metadata: Some(json!({"pipeline_id": pipeline_id, "status": status})),
+        })
+    }
+}

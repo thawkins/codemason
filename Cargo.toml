@@ -1,0 +1,390 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "1.0.169"
+edition = "2024"
+# The minimum Rust the workspace actually builds on. `edition = "2024"` needs
+# 1.85, but the source uses `slice::as_chunks` (stable in 1.88) and several
+# `const`-context stabilisations from 1.91, so any lower floor is a claim clippy
+# rejects. Every crate inherits this via `rust-version.workspace = true`, so the
+# floor has one source of truth (audit finding: the field was previously absent,
+# and when added it understated the real floor).
+rust-version = "1.91"
+license = "MIT"
+repository = "https://github.com/thawkins/ragent"
+authors = ["Tim Hawkins <tim.thawkins@gmail.com>"]
+
+[package]
+name = "ragent"
+# One integration-test binary for the root crate (see AGENTS.md, "Test Layout").
+autotests = false
+description = "An AI coding agent for the terminal, built in Rust."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+keywords = ["ai", "agent", "llm", "cli", "tui"]
+categories = ["command-line-utilities", "development-tools"]
+
+[package.metadata.deb]
+maintainer = "Tim Hawkins <tim.thawkins@gmail.com>"
+copyright = "2025, Tim Hawkins"
+depends = "$auto"
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/ragent", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/ragent/README.md", "644"],
+    ["LICENSE", "usr/share/doc/ragent/LICENSE", "644"],
+    ["CHANGELOG.md", "usr/share/doc/ragent/CHANGELOG.md", "644"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/ragent", dest = "/usr/bin/ragent", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/ragent/README.md", mode = "644" },
+    { source = "LICENSE", dest = "/usr/share/doc/ragent/LICENSE", mode = "644" },
+    { source = "CHANGELOG.md", dest = "/usr/share/doc/ragent/CHANGELOG.md", mode = "644" },
+]
+
+[package.metadata.wix]
+upgrade-guid = "C2B8F5A0-3F6C-4B9E-9C7D-1E8A4F2B5D6A"
+
+[workspace.lints.clippy]
+# Groups must have higher priority than individual overrides
+all = { level = "warn", priority = -2 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+# ── Pedantic/nursery lints that require architectural changes to fix ─────────
+# These are suppressed at workspace level; fixing them is tracked separately.
+too_many_lines = "allow"
+too_many_arguments = "allow"
+struct_excessive_bools = "allow"
+type_complexity = "allow"
+similar_names = "allow"
+# Numeric casts are intentional throughout (geometry/layout/token counts)
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+# Doc style — enforced by review rather than lint
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+too_long_first_doc_paragraph = "allow"
+doc_markdown = "allow"
+empty_line_after_doc_comments = "allow"
+# Code style — auto-fixable but low-risk; auto-fixer already ran
+needless_pass_by_value = "allow"
+items_after_statements = "allow"
+option_if_let_else = "allow"
+manual_let_else = "allow"
+match_same_arms = "allow"
+if_same_then_else = "allow"
+branches_sharing_code = "allow"
+single_match = "allow"
+match_wildcard_for_single_variants = "allow"
+needless_continue = "allow"
+needless_range_loop = "allow"
+unnecessary_sort_by = "allow"
+unnecessary_wraps = "allow"
+unnecessary_unwrap = "allow"
+unused_peekable = "allow"
+unused_self = "allow"
+format_push_string = "allow"
+format_collect = "allow"
+ptr_arg = "allow"
+new_without_default = "allow"
+missing_fields_in_debug = "allow"
+significant_drop_tightening = "allow"
+assigning_clones = "allow"
+or_fun_call = "allow"
+default_trait_access = "allow"
+collection_is_never_read = "allow"
+no_effect_underscore_binding = "allow"
+double_must_use = "allow"
+# `unwrap_used` is deliberately NOT set here. The clippy lint cannot express
+# "no unwrap on user-facing production paths" because every `.unwrap()` in a
+# `#[cfg(test)]` module, a benchmark, or a test-support fixture is legitimate
+# and would trip a deny-level lint. Enforcing the AGENTS-LANGUAGE.md rule with clippy
+# would therefore require per-function `#[allow]` noise across thousands of
+# test sites.
+#
+# The rule is instead enforced by two shrink-only gates that scan production
+# sources only:
+#   * scripts/check-security-unwraps.sh  (panicking unwrap/expect baseline)
+#   * scripts/check-silent-errors.sh     (masked-error baseline)
+# An intentional production `.unwrap()`/`.expect()` is exempted in place with a
+# same-line `// no-panic-ok: <reason>` (see scripts/check_security_unwraps.py).
+unused_async = "allow"
+# Clippy 1.99 extended the unused-async check from free functions to trait
+# impls and inherent methods (`unused_async_trait_impl`). The sites it flags in
+# this workspace are deliberate, for the same reason `unused_async` above is
+# allowed:
+#   * `opentelemetry_sdk` async trait impls (`LogExporter::export`,
+#     `PushMetricExporter::export`) whose signatures are fixed by the SDK;
+#   * an all-async file-I/O surface (`SpecIo`, `ResearchIo`) and an all-async
+#     manager API (`AgentManager`, `TeamManager`, `Coordinator`) where dropping
+#     `async` from the few methods that happen not to await would force call
+#     sites to mix `.await` and non-`.await` forms of the same helper family.
+unused_async_trait_impl = "allow"
+# Additional lints from second auto-fix pass
+bool_to_int_with_if = "allow"
+cast_lossless = "allow"
+clone_on_copy = "allow"
+collapsible_else_if = "allow"
+collapsible_if = "allow"
+comparison_chain = "allow"
+equatable_if_let = "allow"
+explicit_iter_loop = "allow"
+if_not_else = "allow"
+ignored_unit_patterns = "allow"
+implicit_clone = "allow"
+manual_clamp = "allow"
+manual_strip = "allow"
+manual_unwrap_or_default = "allow"
+map_unwrap_or = "allow"
+missing_const_for_fn = "allow"
+must_use_candidate = "allow"
+needless_borrow = "allow"
+needless_pass_by_ref_mut = "allow"
+redundant_clone = "allow"
+redundant_closure_for_method_calls = "allow"
+redundant_else = "allow"
+ref_option = "allow"
+semicolon_if_nothing_returned = "allow"
+should_implement_trait = "allow"
+single_char_add_str = "allow"
+single_match_else = "allow"
+trivially_copy_pass_by_ref = "allow"
+uninlined_format_args = "allow"
+unnecessary_map_or = "allow"
+unnested_or_patterns = "allow"
+useless_format = "allow"
+useless_let_if_seq = "allow"
+manual_unwrap_or = "allow"
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_code = "deny"
+
+[workspace.dependencies]
+# ── Internal crates ───────────────────────────────────────────────────────
+ragent-agent = { path = "crates/ragent-agent" }
+ragent-config = { path = "crates/ragent-config" }
+ragent-connectors = { path = "crates/ragent-connectors" }
+ragent-llm = { path = "crates/ragent-llm" }
+ragent-plugins = { path = "crates/ragent-plugins" }
+ragent-server = { path = "crates/ragent-server" }
+ragent-tui = { path = "crates/ragent-tui" }
+
+# ── Hashing / file-locking ───────────────────────────────────────────────
+num_cpus = "1.16"
+sha2 = "0.11"
+blake3 = "1.4"
+fs2 = "0.4"
+
+# ── Async runtime ────────────────────────────────────────────────────────
+# "full" is intentional: the binary uses fs, net, process, signal, rt-multi-thread.
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+tokio-stream = { version = "0.1", features = ["sync"] }   # sync → BroadcastStream
+# process-wrap: `KillOnDrop` so a spawned MCP stdio child dies with its
+# transport instead of being orphaned when the client goes away.
+process-wrap = { version = "10", features = ["tokio1", "kill-on-drop"] }
+async-stream = "0.3"
+
+# ── Serialization ────────────────────────────────────────────────────────
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+serde_norway = "0.9"
+
+# ── Error handling ───────────────────────────────────────────────────────
+anyhow = "1"
+thiserror = "2"
+
+# ── Logging / tracing ───────────────────────────────────────────────────
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# ── Identity / time ─────────────────────────────────────────────────────
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# ── HTTP client ──────────────────────────────────────────────────────────
+# default-features = false avoids native-tls; rustls-tls is pure-Rust and auditable.
+reqwest = { version = "0.13", features = ["blocking", "json", "stream", "rustls", "form", "query"], default-features = false }
+
+# ── Database ─────────────────────────────────────────────────────────────
+# "bundled" compiles SQLite from source — no system libsqlite3 dependency.
+rusqlite = { version = "0.41", features = ["bundled"] }
+
+# ── CLI ──────────────────────────────────────────────────────────────────
+clap = { version = "4", features = ["derive"] }
+
+# ── Web framework (Axum) ────────────────────────────────────────────────
+axum = { version = "0.8", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# ── TUI ──────────────────────────────────────────────────────────────────
+ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
+crossterm = "0.28"
+
+# ── File / path / text ──────────────────────────────────────────────────
+globset = "0.4"
+dirs = "7"
+html2text = "0.16"
+similar = "3"
+regex = "1"
+readability-rs = "0.5"
+base64 = "0.23"
+rand = "0.10"
+
+# ── ripgrep library crates ───────────────────────────────────────────────
+grep-regex = "0.1"
+grep-searcher = "0.1"
+ignore = "0.4"
+
+# ── Clipboard / image ───────────────────────────────────────────────────
+arboard = "3"
+# default-features = false: only PNG codec — avoids pulling in gif, jpeg, tiff, etc.
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# ── Hardware / IPMI ──────────────────────────────────────────────────────
+rmcp = { version = "3.9", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
+
+# ── System introspection ─────────────────────────────────────────────────
+# os_info tool (spec `osinfo`): cross-platform OS/CPU/memory/uptime data,
+# pure Rust with no shell-out. Pinned to the `system` feature only (not
+# disk/network/user/component) to keep compile cost low (NFR-002).
+sysinfo = { version = "0.38", default-features = false, features = ["system"] }
+
+# ── Document format support ─────────────────────────────────────────────
+# calamine: used by ragent-bench to read back generated .xlsx workbooks.
+calamine = "0.38"
+rust_xlsxwriter = "0.101"
+# default-features = false: only deflate — avoids bzip2, zstd, lzma, aes.
+zip = { version = "9", default-features = false, features = ["deflate"] }
+quick-xml = { version = "0.42", features = ["serialize"] }
+# default-features = false: only text_layout + raster formats needed.
+printpdf = { version = "0.12", default-features = false, features = ["text_layout", "png", "jpeg"] }
+pdf-extract = "0.10"
+lopdf = "0.44"
+
+url = "2"
+
+# ── Concurrent collections ──────────────────────────────────────────────
+dashmap = "6"
+lru = "0.18"
+rayon = "1"
+parking_lot = "0.12"
+# Unix process-group signal support (killpg) for the bash tool timeout path.
+libc = "0.2"
+# PERF-031: non-cryptographic hasher for cache keys. `rustc-hash` provides
+# FxHash — ~2–5× faster than `std::DefaultHasher` (SipHash-1-3) for short
+# non-adversarial keys like cache hashes, with no extra dependencies.
+rustc-hash = "2.0"
+
+# ── Encoding ───────────────────────────────────────────────────────────
+hex = "0.4"
+# GCF (Graph Compact Format) — AI-native token-efficient encoding of JSON tool
+# results for the LLM view. Zero runtime deps beyond serde/serde_json. See
+# spec `gcf`; the encoding hook lives in ragent-agent (session/history.rs).
+gcf = "3.0.1"
+
+ragent-specs = { path = "crates/ragent-specs" }
+ragent-research = { path = "crates/ragent-research" }
+ragent-types = { path = "crates/ragent-types" }
+ragent-tools-core = { path = "crates/ragent-tools-core" }
+ragent-tools-extended = { path = "crates/ragent-tools-extended" }
+
+# ── Benchmarking ─────────────────────────────────────────────────────────
+criterion = { version = "0.8", features = ["html_reports"] }
+
+# ── Natural-language detection ──────────────────────────────────────────
+# Used by masterfetch (`mf_fetch`) to derive the human language of each
+# fetched page so the research References Index can report it. Default
+# features pull in all 75 language models (~300 MB of embedded FSTs).
+lingua = "1.8"
+
+[patch.crates-io]
+pdf-extract = { path = "vendor/pdf-extract" }
+# Vendored to fix a debug-mode panic (`attempt to subtract with overflow`) in
+# `WrappedBlock::flush_word` — upstream 0.16.7 computes `self.width - self.line.len`
+# with plain subtraction. See vendor/html2text/src/render/text_renderer.rs.
+html2text = { path = "vendor/html2text" }
+
+[[bin]]
+name = "ragent"
+path = "src/main.rs"
+
+[[test]]
+name = "all"
+path = "tests/all.rs"
+
+[features]
+default = []
+# The `telemetry` feature is no longer required; telemetry is hardwired into the
+# binary by default via `ragent-telemetry`'s own default feature. Kept as an
+# alias for compatibility with any scripts still passing --features telemetry.
+telemetry = ["ragent-tui/telemetry"]
+# ACP server endpoint on stdio for ACP-capable editors (spec `openhands`
+# FR-022, FR-028). Off by default; also gated at runtime by the
+# `acp.server_enabled` config key. Enable with `--features acp-server`.
+acp-server = ["ragent-agent/acp-server"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = "z"
+
+[profile.dev]
+debug = "line-tables-only"
+# Incremental compilation writes a large cache that is non-cacheable under the
+# sccache RUSTC_WRAPPER, so it costs disk without saving rebuild time here.
+incremental = false
+
+[profile.test]
+debug = "line-tables-only"
+incremental = false
+
+[dependencies]
+ragent-agent = { workspace = true }
+ragent-config = { workspace = true }
+ragent-connectors = { workspace = true }
+ragent-llm = { workspace = true }
+ragent-plugins = { workspace = true }
+ragent-server = { workspace = true }
+ragent-tui = { workspace = true }
+ragent-specs = { workspace = true }
+ragent-research = { workspace = true }
+ragent-types = { workspace = true }
+ragent-tools-core = { workspace = true }
+ragent-tools-extended = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+futures = { workspace = true }
+parking_lot = { workspace = true }
+chrono = { workspace = true }
+libc = { workspace = true }
+serde = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
+[dev-dependencies]
+tempfile = "3.14"
+
+[lints]
+workspace = true

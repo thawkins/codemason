@@ -1,0 +1,398 @@
+//! Go language parser using tree-sitter.
+//!
+//! Extracts functions, methods (receiver-based), structs, interfaces,
+//! constants, type aliases, and import blocks from Go source code.
+//! Visibility: capitalised names = exported (Public).
+
+use super::{LanguageParser, ParsedFile};
+use crate::types::{ImportEntry, Symbol, SymbolKind, Visibility};
+use anyhow::{Context, Result};
+use tree_sitter::Node;
+
+/// Tree-sitter parser for the Go programming language.
+pub struct GoParser {
+    _private: (),
+}
+
+impl GoParser {
+    /// Create a new Go parser.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { _private: () }
+    }
+
+    super::util::tree_sitter_parser!(
+        tree_sitter_go::LANGUAGE,
+        "failed to load Go grammar",
+        "tree-sitter parse returned None"
+    );
+}
+
+impl LanguageParser for GoParser {
+    fn language_id(&self) -> &'static str {
+        "go"
+    }
+
+    fn parse(&self, source: &[u8]) -> Result<ParsedFile> {
+        let tree = Self::parse_tree(source)?;
+        let root = tree.root_node();
+
+        let mut ctx = Ctx::new(source);
+
+        walk(&mut ctx, root, None, &[]);
+
+        Ok(ParsedFile {
+            symbols: ctx.symbols,
+            imports: ctx.imports,
+            references: ctx.references,
+            tree: Some(tree),
+        })
+    }
+}
+
+/// Parser-local alias of the shared extraction context.
+type Ctx<'a> = super::ctx::Ctx<'a>;
+
+// -- Walk --------------------------------------------------------------------
+
+fn walk(ctx: &mut Ctx, node: Node, parent: Option<i64>, scope: &[String]) {
+    let Some(_depth_guard) = super::util::TreeDepthGuard::enter(node) else {
+        return;
+    };
+
+    match node.kind() {
+        "function_declaration" => extract_function(ctx, node, parent, scope),
+        "method_declaration" => extract_method(ctx, node, parent, scope),
+        "type_declaration" => extract_type_decl(ctx, node, parent, scope),
+        "const_declaration" | "var_declaration" => extract_const_var(ctx, node, parent, scope),
+        "import_declaration" => extract_imports(ctx, node),
+        _ => {
+            let cursor = &mut node.walk();
+            for child in node.children(cursor) {
+                walk(ctx, child, parent, scope);
+            }
+        }
+    }
+}
+
+// -- Function ----------------------------------------------------------------
+
+fn extract_function(ctx: &mut Ctx, node: Node, parent: Option<i64>, scope: &[String]) {
+    let name = field_text(ctx, node, "name").unwrap_or_default();
+    if name.is_empty() {
+        return;
+    }
+
+    let visibility = go_visibility(&name);
+    let doc = extract_go_doc(ctx, node);
+    let sig = build_func_sig(ctx, node, &name);
+    let qname = build_qname(scope, &name);
+    let hash = hash_node(ctx, node);
+
+    let id = ctx.alloc_id();
+    ctx.symbols.push(Symbol {
+        id,
+        file_id: 0,
+        name,
+        qualified_name: Some(qname),
+        kind: SymbolKind::Function,
+        visibility,
+        start_line: node.start_position().row as u32 + 1,
+        end_line: node.end_position().row as u32 + 1,
+        start_col: node.start_position().column as u32,
+        end_col: node.end_position().column as u32,
+        parent_id: parent,
+        signature: Some(sig),
+        doc_comment: doc,
+        body_hash: Some(hash),
+    });
+}
+
+// -- Method (receiver-based) -------------------------------------------------
+
+fn extract_method(ctx: &mut Ctx, node: Node, parent: Option<i64>, scope: &[String]) {
+    let name = field_text(ctx, node, "name").unwrap_or_default();
+    if name.is_empty() {
+        return;
+    }
+
+    let receiver = field_text(ctx, node, "receiver").unwrap_or_default();
+    let visibility = go_visibility(&name);
+    let doc = extract_go_doc(ctx, node);
+    let params = field_text(ctx, node, "parameters").unwrap_or_else(|| "()".to_string());
+    let result = field_text(ctx, node, "result");
+
+    let sig = match result {
+        Some(r) => format!("func {receiver} {name}{params} {r}"),
+        None => format!("func {receiver} {name}{params}"),
+    };
+    let qname = build_qname(scope, &name);
+    let hash = hash_node(ctx, node);
+
+    let id = ctx.alloc_id();
+    ctx.symbols.push(Symbol {
+        id,
+        file_id: 0,
+        name,
+        qualified_name: Some(qname),
+        kind: SymbolKind::Method,
+        visibility,
+        start_line: node.start_position().row as u32 + 1,
+        end_line: node.end_position().row as u32 + 1,
+        start_col: node.start_position().column as u32,
+        end_col: node.end_position().column as u32,
+        parent_id: parent,
+        signature: Some(sig),
+        doc_comment: doc,
+        body_hash: Some(hash),
+    });
+}
+
+// -- Type declarations (struct, interface, type alias) ------------------------
+
+fn extract_type_decl(ctx: &mut Ctx, node: Node, parent: Option<i64>, scope: &[String]) {
+    let cursor = &mut node.walk();
+    for child in node.children(cursor) {
+        if child.kind() == "type_spec" {
+            extract_type_spec(ctx, child, parent, scope);
+        }
+    }
+}
+
+fn extract_type_spec(ctx: &mut Ctx, node: Node, parent: Option<i64>, scope: &[String]) {
+    let name = field_text(ctx, node, "name").unwrap_or_default();
+    if name.is_empty() {
+        return;
+    }
+
+    let type_node = node.child_by_field_name("type");
+    let kind = type_node.map_or(SymbolKind::TypeAlias, |t| match t.kind() {
+        "struct_type" => SymbolKind::Struct,
+        "interface_type" => SymbolKind::Interface,
+        _ => SymbolKind::TypeAlias,
+    });
+
+    let visibility = go_visibility(&name);
+    let doc =
+        extract_go_doc(ctx, node).or_else(|| extract_go_doc(ctx, node.parent().unwrap_or(node)));
+    let sig = format!("type {name}");
+    let qname = build_qname(scope, &name);
+    let hash = hash_node(ctx, node);
+
+    let id = ctx.alloc_id();
+    ctx.symbols.push(Symbol {
+        id,
+        file_id: 0,
+        name: name.clone(),
+        qualified_name: Some(qname),
+        kind,
+        visibility,
+        start_line: node.start_position().row as u32 + 1,
+        end_line: node.end_position().row as u32 + 1,
+        start_col: node.start_position().column as u32,
+        end_col: node.end_position().column as u32,
+        parent_id: parent,
+        signature: Some(sig),
+        doc_comment: doc,
+        body_hash: Some(hash),
+    });
+
+    // Extract struct fields.
+    if kind == SymbolKind::Struct
+        && let Some(type_n) = type_node
+    {
+        let new_scope = ext_scope(scope, &name);
+        extract_struct_fields(ctx, type_n, id, &new_scope);
+    }
+}
+
+fn extract_struct_fields(ctx: &mut Ctx, struct_node: Node, parent_id: i64, scope: &[String]) {
+    let cursor = &mut struct_node.walk();
+    for child in struct_node.children(cursor) {
+        if child.kind() == "field_declaration_list" {
+            let fc = &mut child.walk();
+            for field in child.children(fc) {
+                if field.kind() == "field_declaration" {
+                    let name = field_text(ctx, field, "name").unwrap_or_default();
+                    if name.is_empty() {
+                        continue;
+                    }
+                    let type_text = field_text(ctx, field, "type").unwrap_or_default();
+                    let vis = go_visibility(&name);
+                    let qname = build_qname(scope, &name);
+
+                    let id = ctx.alloc_id();
+                    ctx.symbols.push(Symbol {
+                        id,
+                        file_id: 0,
+                        name: name.clone(),
+                        qualified_name: Some(qname),
+                        kind: SymbolKind::Field,
+                        visibility: vis,
+                        start_line: field.start_position().row as u32 + 1,
+                        end_line: field.end_position().row as u32 + 1,
+                        start_col: field.start_position().column as u32,
+                        end_col: field.end_position().column as u32,
+                        parent_id: Some(parent_id),
+                        signature: Some(format!("{name} {type_text}")),
+                        doc_comment: None,
+                        body_hash: None,
+                    });
+                }
+            }
+        }
+    }
+}
+
+// -- Constants / Variables ---------------------------------------------------
+
+fn extract_const_var(ctx: &mut Ctx, node: Node, parent: Option<i64>, scope: &[String]) {
+    let is_const = node.kind() == "const_declaration";
+    let cursor = &mut node.walk();
+    for child in node.children(cursor) {
+        if child.kind() == "const_spec" || child.kind() == "var_spec" {
+            let name = field_text(ctx, child, "name").unwrap_or_default();
+            if name.is_empty() {
+                continue;
+            }
+            let type_text = field_text(ctx, child, "type").unwrap_or_default();
+            let vis = go_visibility(&name);
+            let qname = build_qname(scope, &name);
+            let kind = if is_const {
+                SymbolKind::Constant
+            } else {
+                SymbolKind::Static
+            };
+            let label = if is_const { "const" } else { "var" };
+
+            let id = ctx.alloc_id();
+            ctx.symbols.push(Symbol {
+                id,
+                file_id: 0,
+                name,
+                qualified_name: Some(qname),
+                kind,
+                visibility: vis,
+                start_line: child.start_position().row as u32 + 1,
+                end_line: child.end_position().row as u32 + 1,
+                start_col: child.start_position().column as u32,
+                end_col: child.end_position().column as u32,
+                parent_id: parent,
+                signature: Some(format!("{label} {type_text}")),
+                doc_comment: None,
+                body_hash: None,
+            });
+        }
+    }
+}
+
+// -- Imports -----------------------------------------------------------------
+
+fn extract_imports(ctx: &mut Ctx, node: Node) {
+    let line = node.start_position().row as u32 + 1;
+    let cursor = &mut node.walk();
+    for child in node.children(cursor) {
+        if child.kind() == "import_spec" || child.kind() == "import_spec_list" {
+            extract_import_specs(ctx, child, line);
+        }
+        if child.kind() == "interpreted_string_literal" {
+            let path = ctx.text(child).trim_matches('"').to_string();
+            ctx.imports.push(ImportEntry {
+                file_id: 0,
+                imported_name: path.rsplit('/').next().unwrap_or(&path).to_string(),
+                source_module: path,
+                alias: None,
+                line,
+                kind: "import".to_string(),
+            });
+        }
+    }
+}
+
+fn extract_import_specs(ctx: &mut Ctx, node: Node, line: u32) {
+    if node.kind() == "import_spec" {
+        let alias = field_text(ctx, node, "name");
+        let path_node = node.child_by_field_name("path");
+        if let Some(pn) = path_node {
+            let path = ctx.text(pn).trim_matches('"').to_string();
+            let imported = path.rsplit('/').next().unwrap_or(&path).to_string();
+            ctx.imports.push(ImportEntry {
+                file_id: 0,
+                imported_name: imported,
+                source_module: path,
+                alias,
+                line,
+                kind: "import".to_string(),
+            });
+        }
+    } else {
+        let cursor = &mut node.walk();
+        for child in node.children(cursor) {
+            extract_import_specs(ctx, child, line);
+        }
+    }
+}
+
+// -- Helpers -----------------------------------------------------------------
+
+fn go_visibility(name: &str) -> Visibility {
+    if name.starts_with(|c: char| c.is_uppercase()) {
+        Visibility::Public
+    } else {
+        Visibility::Private
+    }
+}
+
+fn extract_go_doc(ctx: &Ctx, node: Node) -> Option<String> {
+    let mut sib = node.prev_sibling();
+    let mut lines = Vec::new();
+    while let Some(s) = sib {
+        if s.kind() == "comment" {
+            let text = ctx.text(s);
+            if text.starts_with("//") {
+                let content = text.trim_start_matches("//").trim();
+                lines.push(content.to_string());
+            }
+        } else {
+            break;
+        }
+        sib = s.prev_sibling();
+    }
+    if lines.is_empty() {
+        None
+    } else {
+        lines.reverse();
+        Some(lines.join("\n"))
+    }
+}
+
+fn build_func_sig(ctx: &Ctx, node: Node, name: &str) -> String {
+    let params = field_text(ctx, node, "parameters").unwrap_or_else(|| "()".to_string());
+    let result = field_text(ctx, node, "result");
+    match result {
+        Some(r) => format!("func {name}{params} {r}"),
+        None => format!("func {name}{params}"),
+    }
+}
+
+fn field_text(ctx: &Ctx, node: Node, field: &str) -> Option<String> {
+    super::util::field_text(ctx.source, node, field)
+}
+
+/// Build a qualified name from the current scope and a local name.
+///
+/// Delegates to [`super::util::build_qname`] with the `.` separator.
+#[inline]
+fn build_qname(scope: &[String], name: &str) -> String {
+    super::util::build_qname(scope, name, ".")
+}
+
+fn ext_scope(scope: &[String], name: &str) -> Vec<String> {
+    super::util::extend_scope(scope, name)
+}
+
+fn hash_node(ctx: &Ctx, node: Node) -> String {
+    super::util::node_hash(ctx.source, node)
+}
+
+// -- Tests -------------------------------------------------------------------

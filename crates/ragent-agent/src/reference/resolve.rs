@@ -1,0 +1,393 @@
+//! Resolve `@` references to actual file, directory, or URL content.
+//!
+//! Takes parsed [`ParsedRef`] items and fetches their content, returning
+//! [`ResolvedRef`] structs ready for injection into the prompt.
+
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+use anyhow::{Context, Result};
+
+use ragent_types::format_size;
+
+use super::fuzzy::{collect_project_files_async, fuzzy_match};
+use super::parse::{FileRef, ParsedRef, parse_refs};
+// Source-of-truth for PDF reading lives in ragent-tools-extended.
+use ragent_tools_extended::pdf_read;
+
+/// Shared HTTP client for URL reference resolution.
+///
+/// Constructed once on first use and reused for every `@https://...` or
+/// `@http://...` reference, avoiding the cost of per-request `reqwest::Client`
+/// creation and connection-pool setup.
+static SHARED_HTTP_CLIENT: OnceLock<Result<reqwest::Client, reqwest::Error>> = OnceLock::new();
+
+/// Return a reference to the shared `reqwest::Client`.
+fn shared_http_client() -> Result<&'static reqwest::Client> {
+    let client = SHARED_HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .redirect(reqwest::redirect::Policy::limited(5))
+            .user_agent("ragent/0.1")
+            .build()
+    });
+    client
+        .as_ref()
+        .with_context(|| "Failed to initialize shared HTTP client for URL references")
+}
+
+/// Maximum content size per resolved reference (50 KB).
+const MAX_CONTENT_SIZE: usize = 50 * 1024;
+
+/// A resolved `@` reference with its fetched content.
+#[derive(Debug, Clone)]
+pub struct ResolvedRef {
+    /// The original raw text (without `@` prefix).
+    pub original: String,
+    /// The classification of this reference.
+    pub kind: FileRef,
+    /// The resolved file/directory content or URL text.
+    pub content: String,
+    /// Whether the content was truncated due to size limits.
+    pub truncated: bool,
+    /// The resolved absolute path (for files/directories), if applicable.
+    pub resolved_path: Option<PathBuf>,
+}
+
+/// Resolve a single parsed reference to its content.
+///
+/// # Errors
+///
+/// Returns an error if the file/directory cannot be read or the URL cannot
+/// be fetched.
+pub async fn resolve_ref(parsed: &ParsedRef, working_dir: &Path) -> Result<ResolvedRef> {
+    match &parsed.kind {
+        FileRef::File(path) => resolve_file(path, &parsed.raw, working_dir).await,
+        FileRef::Directory(path) => resolve_directory(path, &parsed.raw, working_dir),
+        FileRef::Url(url) => resolve_url(shared_http_client()?, url, &parsed.raw).await,
+        FileRef::Fuzzy(name) => resolve_fuzzy(name, &parsed.raw, working_dir).await,
+    }
+}
+
+/// Read a file's content, trying binary formats first then falling back to
+/// text. Text content is line-numbered. Returns a [`ResolvedRef`] on success.
+///
+/// Shared by [`resolve_file`] and [`resolve_fuzzy`] to avoid duplicating the
+/// binary-read / truncate / number-lines / ResolvedRef-construction sequence.
+async fn read_file_content(abs_path: &Path, file_ref: FileRef, raw: &str) -> Result<ResolvedRef> {
+    if let Some(content) = try_read_binary(abs_path, raw).await? {
+        let (content, truncated) = truncate_content(content);
+        return Ok(ResolvedRef {
+            original: raw.to_string(),
+            kind: file_ref,
+            content,
+            truncated,
+            resolved_path: Some(abs_path.to_path_buf()),
+        });
+    }
+
+    let content = tokio::fs::read_to_string(abs_path)
+        .await
+        .with_context(|| format!("Cannot read file '@{raw}' ({})", abs_path.display()))?;
+
+    let (content, truncated) = truncate_content(content);
+
+    let numbered = number_lines(&content);
+
+    Ok(ResolvedRef {
+        original: raw.to_string(),
+        kind: file_ref,
+        content: numbered,
+        truncated,
+        resolved_path: Some(abs_path.to_path_buf()),
+    })
+}
+
+/// Format content with 1-based line numbers (right-aligned to 4 columns).
+fn number_lines(content: &str) -> String {
+    content
+        .lines()
+        .enumerate()
+        .map(|(i, line)| format!("{:>4}  {}", i + 1, line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Resolve a file reference by reading its contents.
+///
+/// For the binary PDF format (`.pdf`), delegates to the PDF reader tool.
+/// Text files are read with `read_to_string`.
+async fn resolve_file(path: &Path, raw: &str, working_dir: &Path) -> Result<ResolvedRef> {
+    let abs_path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        working_dir.join(path)
+    };
+
+    read_file_content(&abs_path, FileRef::File(path.to_path_buf()), raw).await
+}
+
+/// Resolve a directory reference by listing its contents.
+fn resolve_directory(path: &Path, raw: &str, working_dir: &Path) -> Result<ResolvedRef> {
+    let abs_path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        working_dir.join(path)
+    };
+
+    if !abs_path.is_dir() {
+        anyhow::bail!("'@{raw}' is not a directory or does not exist");
+    }
+
+    let mut lines = Vec::new();
+    lines.push(format!("{}/", abs_path.display()));
+    list_recursive(&abs_path, "", 0, 2, &mut lines)?;
+
+    let content = lines.join("\n");
+    let (content, truncated) = truncate_content(content);
+
+    Ok(ResolvedRef {
+        original: raw.to_string(),
+        kind: FileRef::Directory(path.to_path_buf()),
+        content,
+        truncated,
+        resolved_path: Some(abs_path),
+    })
+}
+
+/// Resolve a URL reference by fetching its content.
+async fn resolve_url(client: &reqwest::Client, url: &str, raw: &str) -> Result<ResolvedRef> {
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("Failed to fetch '@{raw}'"))?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("HTTP {} fetching '@{raw}'", response.status().as_u16());
+    }
+
+    let body = response
+        .text()
+        .await
+        .with_context(|| format!("Failed to read response from '@{raw}'"))?;
+
+    // Simple HTML detection and conversion.  html2text can panic on malformed
+    // HTML (e.g. a subtraction overflow in its word wrapper), so run it on a
+    // dedicated OS thread - a panic there unwinds only that thread and is
+    // converted to `Err` by `JoinHandle::join`, never touching the async
+    // runtime's task machinery. Fall back to the raw body on failure.
+    let processed = if body.trim_start().starts_with("<!") || body.trim_start().starts_with("<html")
+    {
+        let html = body.clone();
+        match std::thread::Builder::new()
+            .name("ref-html2text".to_string())
+            .spawn(move || {
+                html2text::from_read(html.as_bytes(), ragent_types::strutil::HTML2TEXT_WIDTH)
+            })
+            .map_err(|e| e.to_string())
+            .and_then(|h| h.join().map_err(|_| "html2text panicked".to_string()))
+        {
+            Ok(Ok(text)) => text,
+            _ => body,
+        }
+    } else {
+        body
+    };
+
+    let (content, truncated) = truncate_content(processed);
+
+    Ok(ResolvedRef {
+        original: raw.to_string(),
+        kind: FileRef::Url(url.to_string()),
+        content,
+        truncated,
+        resolved_path: None,
+    })
+}
+
+/// Resolve a fuzzy name by finding the best-matching project file.
+async fn resolve_fuzzy(name: &str, raw: &str, working_dir: &Path) -> Result<ResolvedRef> {
+    // PERF-051: the tree walk is filesystem-bound; run it off the async worker.
+    let candidates = collect_project_files_async(working_dir, 10_000).await?;
+    let matches = fuzzy_match(name, &candidates);
+
+    let best = matches
+        .first()
+        .with_context(|| format!("No file matching '@{raw}' found in project"))?;
+
+    let abs_path = working_dir.join(&best.path);
+
+    read_file_content(&abs_path, FileRef::File(best.path.clone()), raw).await
+}
+
+/// Attempt to read a file as a binary document (PDF).
+///
+/// Returns `Some(content)` if the file has a recognised binary extension
+/// (`.pdf`) and was read successfully, or `None` if the extension is not a
+/// binary document type (caller should fall back to text reading).
+async fn try_read_binary(abs_path: &Path, raw: &str) -> Result<Option<String>> {
+    let ext: Option<String> = abs_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase());
+
+    match ext.as_deref() {
+        Some("pdf") => {
+            let path = abs_path.to_path_buf();
+            let raw_owned = raw.to_string();
+            let content = tokio::task::spawn_blocking(move || -> Result<String> {
+                pdf_read::read_pdf(&path, None, None, "text")
+            })
+            .await
+            .with_context(|| format!("Failed to read '@{raw_owned}'"))??;
+
+            Ok(Some(content))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Truncate content to `MAX_CONTENT_SIZE` at a char boundary.
+fn truncate_content(content: String) -> (String, bool) {
+    if content.len() <= MAX_CONTENT_SIZE {
+        return (content, false);
+    }
+
+    // Truncate at the last char boundary at or before MAX_CONTENT_SIZE.
+    let end = content.floor_char_boundary(MAX_CONTENT_SIZE);
+
+    let mut truncated = content[..end].to_string();
+    truncated.push_str("\n\n[Content truncated - exceeded 50KB limit]");
+    (truncated, true)
+}
+
+/// Parse all `@` references in input and resolve each, returning
+/// the original text with a `<referenced_files>` block appended.
+///
+/// If no `@` references are found, returns the input unchanged and
+/// an empty vector.
+pub async fn resolve_all_refs(
+    input: &str,
+    working_dir: &Path,
+) -> Result<(String, Vec<ResolvedRef>)> {
+    let parsed = parse_refs(input);
+    if parsed.is_empty() {
+        return Ok((input.to_string(), Vec::new()));
+    }
+
+    let mut resolved = Vec::new();
+    let mut errors = Vec::new();
+
+    for p in &parsed {
+        match resolve_ref(p, working_dir).await {
+            Ok(r) => resolved.push(r),
+            Err(e) => errors.push(format!("@{}: {e}", p.raw)),
+        }
+    }
+
+    if resolved.is_empty() && !errors.is_empty() {
+        anyhow::bail!("Failed to resolve references:\n{}", errors.join("\n"));
+    }
+
+    // Build the augmented prompt
+    let mut output = input.to_string();
+
+    if !resolved.is_empty() {
+        output.push_str("\n\n<referenced_files>\n");
+        for r in &resolved {
+            let tag = match &r.kind {
+                FileRef::File(p) | FileRef::Directory(p) => {
+                    format!("<file path=\"{}\">", p.display())
+                }
+                FileRef::Url(u) => format!("<file url=\"{u}\">"),
+                FileRef::Fuzzy(n) => {
+                    if let Some(rp) = &r.resolved_path {
+                        format!("<file path=\"{}\">", rp.display())
+                    } else {
+                        format!("<file name=\"{n}\">")
+                    }
+                }
+            };
+            output.push_str(&tag);
+            output.push('\n');
+            output.push_str(&r.content);
+            output.push_str("\n</file>\n");
+        }
+        output.push_str("</referenced_files>");
+    }
+
+    if !errors.is_empty() {
+        output.push_str("\n\n[Warning: some references could not be resolved:\n");
+        for e in &errors {
+            output.push_str(&format!("  - {e}\n"));
+        }
+        output.push(']');
+    }
+
+    Ok((output, resolved))
+}
+
+/// Recursively list a directory tree (reused from list tool logic).
+fn list_recursive(
+    dir: &Path,
+    prefix: &str,
+    depth: usize,
+    max_depth: usize,
+    lines: &mut Vec<String>,
+) -> Result<()> {
+    if depth >= max_depth {
+        return Ok(());
+    }
+
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .with_context(|| format!("Cannot read directory: {}", dir.display()))?
+        .filter_map(std::result::Result::ok)
+        .collect();
+
+    entries.sort_by(|a, b| {
+        let a_is_dir = a.path().is_dir();
+        let b_is_dir = b.path().is_dir();
+        match (a_is_dir, b_is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.file_name().cmp(&b.file_name()),
+        }
+    });
+
+    entries.retain(|e| e.file_name().to_str().is_none_or(|n| !n.starts_with('.')));
+
+    let count = entries.len();
+    for (i, entry) in entries.iter().enumerate() {
+        let is_last = i == count - 1;
+        let connector = if is_last { "└── " } else { "├── " };
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        let path = entry.path();
+
+        if path.is_dir() {
+            if matches!(
+                name_str.as_ref(),
+                "node_modules" | "target" | "__pycache__" | "dist" | "build"
+            ) {
+                lines.push(format!("{prefix}{connector}{name_str}/  (skipped)"));
+                continue;
+            }
+            lines.push(format!("{prefix}{connector}{name_str}/"));
+            let new_prefix = format!("{prefix}{}", if is_last { "    " } else { "│   " });
+            list_recursive(&path, &new_prefix, depth + 1, max_depth, lines)?;
+        } else {
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            lines.push(format!(
+                "{prefix}{connector}{name_str}  ({})",
+                format_size(size)
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "../../tests/inline/resolve_tests.rs"]
+mod tests;

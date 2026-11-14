@@ -1,0 +1,363 @@
+//! Conversation message types.
+//!
+//! Contains [`Message`], the primary unit of conversation history, along with
+//! [`MessagePart`] variants (text, tool calls, reasoning) and supporting types
+//! like [`Role`], [`ToolCallState`], and [`ToolCallStatus`].
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::fmt;
+
+/// The role of a participant in a conversation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    /// A human user.
+    User,
+    /// An AI assistant.
+    Assistant,
+    /// A synthetic compaction summary message.
+    ///
+    /// Compaction messages are produced by the OpenCode-derived summarisation
+    /// pipeline and contain a structured summary plus the verbatim recent
+    /// conversation tail. They behave like assistant messages for display but
+    /// are tagged distinctly so storage and the runner can anchor history
+    /// around them.
+    Compaction,
+}
+
+impl fmt::Display for Role {
+    /// Format the role as a lowercase string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if writing to the formatter fails.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::User => write!(f, "user"),
+            Self::Assistant => write!(f, "assistant"),
+            Self::Compaction => write!(f, "compaction"),
+        }
+    }
+}
+
+/// Lifecycle status of a tool call.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolCallStatus {
+    /// The tool call has been created but not yet started.
+    Pending,
+    /// The tool call is currently executing.
+    Running,
+    /// The tool call finished successfully.
+    Completed,
+    /// The tool call failed with an error.
+    Error,
+}
+
+/// Runtime state of a single tool invocation, including its input,
+/// output, and timing information.
+impl fmt::Display for ToolCallStatus {
+    /// Format the tool call status as a lowercase string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if writing to the formatter fails.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pending => write!(f, "pending"),
+            Self::Running => write!(f, "running"),
+            Self::Completed => write!(f, "completed"),
+            Self::Error => write!(f, "error"),
+        }
+    }
+}
+
+impl ToolCallStatus {
+    /// The `is_error` flag this status maps to on a tool result (FR-014).
+    ///
+    /// This is the one derivation the whole workspace uses - history
+    /// construction, the refusal adapter and the wire encoders all read it -
+    /// so a new status can never leave the flag a successful-looking result
+    /// silently implies.
+    pub const fn is_error(&self) -> bool {
+        match self {
+            Self::Pending | Self::Running | Self::Completed => false,
+            Self::Error => true,
+        }
+    }
+}
+
+/// Tracks the execution state of a single tool call, including its input
+/// arguments, output result, error information, and timing.
+///
+/// # Examples
+///
+/// ```rust
+/// use ragent_types::message::{ToolCallState, ToolCallStatus};
+/// use serde_json::json;
+///
+/// let state = ToolCallState {
+///     status: ToolCallStatus::Completed,
+///     input: json!({"path": "/tmp/file.txt"}),
+///     output: Some(json!({"ok": true})),
+///     error: None,
+///     duration_ms: Some(42),
+/// };
+/// assert_eq!(state.status, ToolCallStatus::Completed);
+/// assert!(state.error.is_none());
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallState {
+    /// Current lifecycle status of the tool call.
+    pub status: ToolCallStatus,
+    /// JSON arguments passed to the tool, as decoded by
+    /// [`crate::tool_args::decode_tool_arguments`].
+    ///
+    /// Deliberately `Value`, not a typed struct - see
+    /// `specs/uniformtools/T-025-TYPED-ARGS-DECISION.md`. The arguments shape
+    /// is owned by whichever tool was called, and the tool set is open at run
+    /// time (built-in tools are 148 today, and every MCP server or plugin adds
+    /// more after the binary was compiled), so no compile-time type can
+    /// describe it. The guarantee FR-001 actually needs - that the input of an
+    /// executed call is a JSON object satisfying the callee's declared
+    /// required/type constraints - is enforced at decode and validation time,
+    /// which covers bridged tools that a type could not.
+    pub input: Value,
+    /// JSON result returned by the tool, if available.
+    ///
+    /// `Value` for the same reason as [`Self::input`] - see
+    /// `specs/uniformtools/T-025-TYPED-ARGS-DECISION.md`. `output` is outside
+    /// FR-001's record contract and is forwarded to the provider's result
+    /// encoder uninterpreted, while the tool-side carrier
+    /// (`ToolOutput::metadata`) is itself `Option<Value>`.
+    pub output: Option<Value>,
+    /// Error message if the tool call failed.
+    pub error: Option<String>,
+    /// Wall-clock execution time in milliseconds.
+    pub duration_ms: Option<u64>,
+}
+
+/// Image attachment data.
+///
+/// Stores MIME type and file path for an image attachment.
+/// Wrapped in a `Box` when stored in [`MessagePart::Image`] to reduce
+/// memory usage (the `Image` variant is the largest `MessagePart` variant).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageData {
+    /// MIME type, e.g. `"image/png"`.
+    pub mime_type: String,
+    /// Absolute path to the image file on disk.
+    pub path: std::path::PathBuf,
+}
+
+/// A discrete content block within a [`Message`].
+///
+/// Messages are composed of one or more parts, allowing text, tool calls,
+/// and model reasoning to coexist in a single message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MessagePart {
+    /// Plain text content.
+    Text {
+        /// The text body.
+        text: String,
+    },
+    /// A tool invocation with its execution state.
+    ///
+    /// `state` is `Box`ed because [`ToolCallState`] is large (it embeds JSON
+    /// values) and this variant is common, keeping the overall `MessagePart`
+    /// footprint small.
+    ToolCall {
+        /// Name of the tool being called.
+        tool: String,
+        /// Unique identifier for this tool call.
+        call_id: String,
+        /// Execution state of the tool call.
+        state: Box<ToolCallState>,
+    },
+    /// Internal model reasoning or chain-of-thought.
+    ///
+    /// `signature` is the provider's opaque signature over the block.
+    /// Anthropic's extended thinking attaches one to every signed thinking
+    /// block and expects it to come back unchanged on the turn that answers a
+    /// tool call, so a provider whose wire profile declares `echo_reasoning`
+    /// (FR-011) can replay the reasoning *and* prove it originated it.
+    Reasoning {
+        /// The reasoning text.
+        text: String,
+        /// The provider's signature over the block, when it supplies one.
+        ///
+        /// Omitted from the wire when `None`, so a signature-less block (or a
+        /// record written before the field existed) keeps the shape it always
+        /// had and never gains a `null` it never had. Defaults to `None` on
+        /// deserialisation for the same reason.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
+    /// An image attachment (e.g. pasted from clipboard via Alt+V).
+    ///
+    /// The image data is read from `path` at send time and base64-encoded for
+    /// the LLM API. Storing the path rather than raw bytes keeps the session
+    /// database small.
+    ///
+    /// Note: `Box`ed to reduce memory usage (this is the largest `MessagePart`
+    /// variant).
+    Image(Box<ImageData>),
+}
+
+/// A single message in a conversation session.
+///
+/// Each message has a unique ID, belongs to a session, carries a [`Role`],
+/// and contains one or more [`MessagePart`]s.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Message {
+    /// Unique identifier for this message (UUID v4).
+    pub id: String,
+    /// Identifier of the session this message belongs to.
+    pub session_id: String,
+    /// Who sent the message.
+    pub role: Role,
+    /// Ordered content blocks that make up the message.
+    pub parts: Vec<MessagePart>,
+    /// Timestamp when the message was created (UTC).
+    pub created_at: DateTime<Utc>,
+    /// Timestamp when the message was last modified (UTC).
+    pub updated_at: DateTime<Utc>,
+    /// Monotonic edit counter bumped every time the message content is
+    /// mutated in place.  Render caches key their per-message staleness
+    /// checks on this value instead of a global version counter so that
+    /// editing one message does not invalidate every cached render.
+    /// Defaults to 0 when deserialising older persisted sessions.
+    #[serde(default)]
+    pub edit_seq: u64,
+}
+
+impl Message {
+    /// Creates a new message with a generated UUID and the current timestamp.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use ragent_types::message::{Message, MessagePart, Role};
+    ///
+    /// let msg = Message::new(
+    ///     "session-1",
+    ///     Role::Assistant,
+    ///     vec![MessagePart::Text { text: "Hello!".into() }],
+    /// );
+    /// assert_eq!(msg.role, Role::Assistant);
+    /// assert_eq!(msg.session_id, "session-1");
+    /// ```
+    pub fn new(session_id: impl Into<String>, role: Role, parts: Vec<MessagePart>) -> Self {
+        let now = Utc::now();
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            session_id: session_id.into(),
+            role,
+            parts,
+            created_at: now,
+            updated_at: now,
+            edit_seq: 0,
+        }
+    }
+
+    /// Bumps the edit counter and refreshes `updated_at`.
+    ///
+    /// Call this after mutating the message content in place so render
+    /// caches can detect the change (see [`Message::edit_seq`]).
+    pub fn touch(&mut self) {
+        self.edit_seq = self.edit_seq.wrapping_add(1);
+        self.updated_at = Utc::now();
+    }
+
+    /// Convenience constructor for a simple user text message.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use ragent_types::message::{Message, Role};
+    ///
+    /// let msg = Message::user_text("session-1", "Fix the bug");
+    /// assert_eq!(msg.role, Role::User);
+    /// assert_eq!(msg.text_content(), "Fix the bug");
+    /// ```
+    pub fn user_text(session_id: impl Into<String>, text: impl Into<String>) -> Self {
+        Self::new(
+            session_id,
+            Role::User,
+            vec![MessagePart::Text { text: text.into() }],
+        )
+    }
+
+    /// Convenience constructor for a single-text assistant message.
+    pub fn assistant_text(session_id: impl Into<String>, text: impl Into<String>) -> Self {
+        Self::new(
+            session_id,
+            Role::Assistant,
+            vec![MessagePart::Text { text: text.into() }],
+        )
+    }
+
+    /// Concatenates all [`MessagePart::Text`] parts into a single string.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use ragent_types::message::{Message, MessagePart, Role};
+    ///
+    /// let msg = Message::new(
+    ///     "s1",
+    ///     Role::User,
+    ///     vec![
+    ///         MessagePart::Text { text: "Hello ".into() },
+    ///         MessagePart::Text { text: "world".into() },
+    ///     ],
+    /// );
+    /// assert_eq!(msg.text_content(), "Hello world");
+    /// ```
+    #[must_use]
+    pub fn text_content(&self) -> String {
+        self.parts
+            .iter()
+            .filter_map(|p| match p {
+                MessagePart::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+}
+
+impl fmt::Display for Message {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = self.text_content();
+        let preview = if text.len() > 80 {
+            let mut end = 80;
+            while end > 0 && !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}...", &text[..end])
+        } else {
+            text
+        };
+        let tool_calls = self
+            .parts
+            .iter()
+            .filter(|p| matches!(p, MessagePart::ToolCall { .. }))
+            .count();
+        if tool_calls > 0 {
+            write!(
+                f,
+                "[{}] {} ({} tool call{})",
+                self.role,
+                preview,
+                tool_calls,
+                if tool_calls == 1 { "" } else { "s" }
+            )
+        } else {
+            write!(f, "[{}] {}", self.role, preview)
+        }
+    }
+}

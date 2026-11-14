@@ -1,0 +1,604 @@
+//! Free-standing helper functions for the TUI app module.
+// Clippy complains about `pub(crate)` inside this private module, but CI's
+// dead-code lint runs with `-D unreachable_pub`, so `pub` items here fail CI.
+// Keep `pub(crate)` and suppress the clippy nursery lint.
+#![allow(clippy::redundant_pub_crate)]
+
+/// Leading marker every slash-command reply carries, so the render path can
+/// recognise (and special-case) command output.
+///
+/// The literal `"From: /..."` was hard-coded in ~491 construction sites before
+/// ANTIPAT M6 (LOW-1); this constant and [`from_cmd`] are the shared home for
+/// new code. Existing sites are migrated incrementally.
+pub(crate) const FROM_CMD_PREFIX: &str = "From: /";
+
+/// Build a slash-command reply in the canonical `From: /<cmd>\n\n<body>` shape.
+///
+/// Use for replies whose command marker is a plain leading prefix; call sites
+/// that interpolate the prefix mid-string keep their bespoke `format!`.
+pub(crate) fn from_cmd(cmd: &str, body: &str) -> String {
+    format!("{FROM_CMD_PREFIX}{cmd}\n\n{body}")
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MentionSpan {
+    pub(crate) at_start: usize,
+    pub(crate) token_start: usize,
+    pub(crate) token_end: usize,
+}
+
+impl MentionSpan {
+    pub(crate) fn query<'a>(&self, input: &'a str) -> &'a str {
+        &input[self.token_start..self.token_end]
+    }
+}
+
+pub(crate) fn try_extract_research_code_block(text: &str) -> Option<String> {
+    if !text.starts_with(FROM_CMD_PREFIX) {
+        return None;
+    }
+    // A message may contain several preformatted tables (e.g. `/tools` shows
+    // the visibility switch table and then the tool list).  Extract EVERY
+    // blank-line-separated bare triple-backtick block so later tables are not
+    // discarded, keeping the non-fenced text (headings, summaries) in order.
+    //
+    // The opening fence must be a bare triple-backtick line preceded by a blank
+    // line, so the closing fence of a language-tagged block earlier in the text
+    // is not mistaken for an opener.  Four-backtick fences are not emitted by
+    // this codebase, so `\n```` never terminates a block early.
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut found = false;
+    while let Some(start) = rest.find("\n\n```\n") {
+        let body_start = start + 5;
+        let Some(end_off) = rest[body_start..].find("\n```") else {
+            break;
+        };
+        let body_end = body_start + end_off;
+        // Keep the prose before the block, then the block body itself with the
+        // fences removed.
+        let prefix = rest[..start].trim_end();
+        if !prefix.is_empty() {
+            out.push_str(prefix);
+            out.push_str("\n\n");
+        }
+        out.push_str(&rest[body_start..body_end]);
+        out.push_str("\n\n");
+        found = true;
+        rest = &rest[body_end + 4..];
+    }
+    if !found {
+        return None;
+    }
+    let tail = rest.trim();
+    if !tail.is_empty() {
+        out.push_str(tail);
+        out.push('\n');
+    }
+    Some(out.trim_end().to_string())
+}
+
+pub(crate) fn parse_swarm_args(args: &str) -> (String, Option<String>) {
+    let mut agent_type: Option<String> = None;
+    let mut parts = Vec::new();
+    let mut tokens = args.split_whitespace().peekable();
+    while let Some(token) = tokens.next() {
+        if token == "--agent" {
+            if let Some(next) = tokens.next() {
+                agent_type = Some(next.to_string());
+            }
+        } else {
+            parts.push(token);
+        }
+    }
+    let prompt = parts.join(" ");
+    (prompt, agent_type)
+}
+
+pub(crate) fn short_session_id(session_id: &str) -> String {
+    tail8(session_id)
+}
+
+/// Truncate any identifier to a stable short prefix for compact display.
+///
+/// Returns the leading 8 characters of `id`, or the whole value unchanged
+/// when it is shorter. Delegates to [`ragent_types::strutil::short_prefix`] so
+/// every id abbreviation in the workspace comes from one helper (FR-008), and
+/// takes its cut on a char boundary so a multi-byte UTF-8 sequence straddling
+/// the cut point cannot panic.
+pub(crate) fn short_id(id: &str) -> String {
+    ragent_types::strutil::short_prefix(id, 8)
+}
+
+/// Whether a sub-agent task in `status` can still accept a cancellation
+/// request (FR-023).
+///
+/// The cancellable states are the ones that represent work still in flight:
+/// `Running`, `Suspended` (parked but resumable - the cancel flag is what
+/// wakes the parked loop), and `Terminating` (a kill is already escalating and
+/// a cancel request is harmless). The finished states - `Completed`, `Failed`,
+/// `Cancelled` and `TimedOut` - cannot be cancelled, so `/cancel` reports the
+/// state instead of claiming a transition that will never happen. The same
+/// predicate drives the live-id listing an unmatched prefix prints (FR-041),
+/// so "live" means exactly "would accept a cancel".
+pub(crate) fn is_cancellable(status: &ragent_agent::task::TaskStatus) -> bool {
+    use ragent_agent::task::TaskStatus;
+    matches!(
+        status,
+        TaskStatus::Running | TaskStatus::Suspended | TaskStatus::Terminating
+    )
+}
+
+/// Truncate a [`RunId`] to a stable short prefix for compact display.
+///
+/// Returns the last 8 characters of the run id, mirroring
+/// [`short_session_id`]. If the run id is shorter than 8 characters the
+/// whole value is returned unchanged.
+pub(crate) fn short_run_id(run_id: &ragent_types::id::RunId) -> String {
+    tail8(run_id.as_str())
+}
+
+/// Return the last 8 characters of a string, or the whole string if shorter.
+///
+/// Delegates to [`ragent_types::strutil::short_suffix`], which takes the cut on
+/// a char boundary so a multi-byte sequence straddling the cut point cannot
+/// panic (FR-008: one shared helper, no hand-rolled byte slicing).
+fn tail8(s: &str) -> String {
+    ragent_types::strutil::short_suffix(s, 8)
+}
+
+/// Resolve the activity-log database path from the main storage database path.
+///
+/// Thin wrapper around [`ragent_storage::ActivityLog::default_path`] so the
+/// TUI and the binary share a single source of truth for the path convention.
+pub(crate) fn activity_log_db_path(db_path: &std::path::Path) -> std::path::PathBuf {
+    ragent_storage::ActivityLog::default_path(db_path)
+}
+
+/// Parse the `<run-id> [--yes]` arguments shared by the destructive `/alog`
+/// subcommands (`delete`, `export`).
+///
+/// On a validation failure the formatted usage / confirmation warning is
+/// appended to the UI through `append` and the status bar is set, then
+/// `None` is returned so the caller can simply abort.
+pub(crate) fn parse_alog_run_id_yes(
+    args: &str,
+    subcmd: &str,
+    mut append: impl FnMut(&str),
+) -> Option<String> {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let has_yes = parts.contains(&"--yes");
+    let run_id = parts.iter().find(|p| **p != "--yes").copied();
+
+    let Some(run_id) = run_id else {
+        append(&format!(
+            "From: /alog {subcmd}\n\n\
+             \u{26a0} Missing <run-id> argument.\n\n\
+             Usage: `/alog {subcmd} <run-id> --yes`"
+        ));
+        return None;
+    };
+
+    if !has_yes {
+        append(&format!(
+            "From: /alog {subcmd}\n\n\
+             \u{26a0} The `--yes` flag is required to confirm this operation.\n\n\
+             To proceed, re-run:\n\
+             `/alog {subcmd} <run-id> --yes`"
+        ));
+        return None;
+    }
+
+    // SEC-ragent-tui-003 (SECTASKS T-066): the run id is interpolated into the
+    // export file name (`export-<run-id>.jsonl`), so a value containing `/` or
+    // `..` wrote attacker-chosen paths outside `log/exports/`. Accept only the
+    // characters a generated run id can contain.
+    if !run_id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        append(&format!(
+            "From: /alog {subcmd}\n\n\
+             \u{26a0} Invalid run id `{run_id}`: only ASCII letters, digits, `-`, and `_` are allowed."
+        ));
+        return None;
+    }
+
+    Some(run_id.to_string())
+}
+
+/// Open the activity log and verify `run_id` exists (via `list_runs`),
+/// returning the log handle and the run's event count.
+///
+/// On failure an error message prefixed `From: /alog {subcmd}` is returned
+/// so the caller can surface it directly. Used by the `/alog delete` and
+/// `/alog export` handlers, which share this open -> verify -> count scaffold.
+pub(crate) fn open_verified_alog(
+    alog_path: &std::path::Path,
+    run_id: &ragent_types::id::RunId,
+    subcmd: &str,
+) -> Result<(ragent_storage::activity_log::ActivityLog, u64), String> {
+    use ragent_storage::activity_log::ActivityLog;
+
+    let log = ActivityLog::open(alog_path).map_err(|e| {
+        format!(
+            "From: /alog {subcmd}\n\n\
+             \u{26a0} Failed to open activity log at `{}`: {e}",
+            alog_path.display(),
+        )
+    })?;
+
+    let runs = log.list_runs().map_err(|e| {
+        format!(
+            "From: /alog {subcmd}\n\n\
+             \u{26a0} Failed to list activity-log runs: {e}",
+        )
+    })?;
+
+    if !runs.iter().any(|r| r == run_id) {
+        return Err(format!(
+            "From: /alog {subcmd}\n\n\
+             \u{26a0} No run with id `{}` was found in the activity log.",
+            run_id.as_str(),
+        ));
+    }
+
+    // Propagate storage errors: a corrupt log must not be presented to the
+    // user as an empty run - the confirmation dialog this feeds guards the
+    // destructive `/alog delete` path.
+    let count = log
+        .count(run_id)
+        .map_err(|e| format!("From: /alog {subcmd}\n\n[!] Failed to count events: {e}"))?;
+    Ok((log, count))
+}
+
+/// Pluralize `word` for `n` occurrences (`1 iteration` / `3 iterations`).
+/// Shared by the loop-termination banner, the change-summary log line, and
+/// the message-window summary so the wording stays consistent by
+/// construction.
+#[must_use]
+pub(crate) fn plural(n: u64, word: &str) -> String {
+    if n == 1 {
+        format!("{n} {word}")
+    } else {
+        format!("{n} {word}s")
+    }
+}
+
+/// Render the status-aware termination banner for a goal-driven loop (spec
+/// `agentloop`, task T-025 / FR-019): maps the termination label to a
+/// human-readable phrase (`completed`, `error`, `budget exhausted`,
+/// `interrupted`) with a status icon, plus the iteration count. Unknown
+/// labels fall back to the raw status string.
+#[must_use]
+pub(crate) fn loop_termination_banner(status: &str, iterations: u64) -> String {
+    let iterations_label = plural(iterations, "iteration");
+    match status {
+        "completed" => format!("[ok] Goal loop completed - {iterations_label}"),
+        "error" => format!("[x] Goal loop failed - {iterations_label}"),
+        "budget_exhausted" => format!("[..] Goal loop budget exhausted - {iterations_label}"),
+        "interrupted" => format!("[stop] Goal loop interrupted - {iterations_label}"),
+        other => format!("* Goal loop {other} - {iterations_label}"),
+    }
+}
+
+/// Render a truncated, comma-joined preview of `files`: at most `take`
+/// entries plus a `(+N more)` suffix. Shared by the change-summary log line
+/// and the message-window summary line.
+#[must_use]
+pub(crate) fn files_preview(files: &[String], take: usize) -> String {
+    if files.is_empty() {
+        return String::new();
+    }
+    let preview = files
+        .iter()
+        .take(take)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let more = files.len().saturating_sub(take);
+    if more > 0 {
+        format!(" * files: {preview} (+{more} more)")
+    } else {
+        format!(" * files: {preview}")
+    }
+}
+
+pub(crate) fn summarise_error(raw: &str) -> String {
+    // Try to extract just the human-readable message from common patterns
+    // e.g. "LLM call failed: Unknown model: claude-haiku-4.5"
+    let cleaned = raw.trim().strip_prefix("LLM call failed: ").unwrap_or(raw);
+
+    if cleaned.contains("not accessible via the /chat/completions endpoint")
+        || cleaned.contains("unsupported_api_for_model")
+    {
+        return "Selected model is not available for chat/completions; use /model and pick a non-Codex chat model".to_string();
+    }
+
+    // Truncate to a reasonable length for the status bar.
+    truncate_to_char_boundary(cleaned, 120)
+}
+
+/// Truncate `s` to at most `max` **bytes**, always ending on a UTF-8 char
+/// boundary so a multi-byte sequence at the cut point cannot panic. Appends a
+/// single ellipsis when truncation occurred.
+///
+/// Callers pass byte budgets (e.g. status-bar width limits). For a
+/// character-count budget use [`truncate_chars`] instead.
+pub(crate) fn truncate_to_char_boundary(s: &str, max: usize) -> String {
+    ragent_types::strutil::truncate_bytes(s, max)
+}
+
+/// Truncate `s` to at most `max_chars` **characters**, appending a single
+/// ellipsis when truncation occurred.
+///
+/// Delegates to [`ragent_types::strutil::truncate_chars`], the single shared
+/// char-boundary truncation helper.
+pub(crate) fn truncate_chars(s: &str, max_chars: usize) -> String {
+    ragent_types::strutil::truncate_chars(s, max_chars)
+}
+
+/// Remove control characters (except newlines and tabs) and ANSI escape
+/// sequences from strings before they are displayed in the TUI.
+///
+/// Fetched page titles, error messages, and URL body previews may contain
+/// arbitrary bytes from the network. Stripping them prevents garbage glyphs
+/// such as `%???` from appearing at the start of rendered lines.
+/// Sanitize raw text so it is safe to render as Markdown/ANSI in the TUI.
+pub fn sanitize_for_display(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            // ANSI escape: skip the ESC and everything up to (and including) a
+            // letter terminator or the canonical ST sequence (`ESC \`).
+            while let Some(&next) = chars.peek() {
+                chars.next();
+                if next.is_ascii_alphabetic() || next == '\u{7}' {
+                    break;
+                }
+            }
+            continue;
+        }
+        // Allow printable chars, whitespace and common Unicode. Drop control
+        // chars except newline and tab.
+        if c == '\n' || c == '\t' || (!c.is_control()) {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Convert single newlines in a markdown block into hard breaks (two
+/// trailing spaces) so the markdown-to-HTML-to-text pipeline keeps the
+/// line structure.
+///
+/// `html2text` collapses every newline inside an HTML paragraph into a
+/// single space (see `vendor/html2text` `WrappedBlock::add_text`), so a
+/// plain multi-line summary fed to the pipeline renders as one wrapped
+/// paragraph. Markdown hard breaks survive: `pulldown-cmark` emits
+/// `<br />` and the vendored `html2text` renders `<br>` via
+/// `new_line_hard`.
+#[must_use]
+pub fn hard_break_lines(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            let trimmed = line.trim_end();
+            if trimmed.is_empty() || trimmed.ends_with("  ") {
+                line.to_string()
+            } else {
+                format!("{trimmed}  ")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Resolve an image reference to a placeholder description for terminal display.
+///
+/// Returns a short string such as `[Image: alt text (100x50)]` if the file can
+/// be inspected, or `[Image: alt text (path)]` otherwise. Terminal TUI panels
+/// cannot render bitmaps directly, so this placeholder keeps the layout useful.
+#[must_use]
+pub fn image_dimensions_or_placeholder(alt: &str, src: &str, base_dir: &std::path::Path) -> String {
+    let is_url = ragent_types::strutil::is_http_url(src);
+    // SEC-079: a non-URL `src` is attacker-influenced (an image reference in a
+    // document or a model-authored part). An absolute path or one containing a
+    // `..` component would escape `base_dir` and let the read inspect any file
+    // the process can open, so such a source is rejected before any filesystem
+    // access. It is only ever displayed as a placeholder.
+    let safe_local = !is_url && is_contained_relative(src);
+    let resolved = if is_url {
+        src.to_string()
+    } else {
+        base_dir.join(src).to_string_lossy().to_string()
+    };
+    // `image_dimensions` reads only a bounded header prefix and returns `None`
+    // for missing, unreadable, or rejected paths, so no separate stat is needed.
+    let dims = safe_local
+        .then(|| image_dimensions(std::path::Path::new(&resolved)))
+        .flatten();
+    match dims {
+        Some((w, h)) => format!("[Image: {alt} ({w}x{h})]"),
+        None => format!("[Image: {alt} ({resolved})]"),
+    }
+}
+
+/// Returns `true` when `src` is a relative path that does not escape its base
+/// directory (no root, no `..` component).
+///
+/// SEC-079: guards [`image_dimensions_or_placeholder`] against reading a file
+/// outside the document root via an absolute path or a `../` traversal.
+fn is_contained_relative(src: &str) -> bool {
+    let path = std::path::Path::new(src);
+    if path.is_absolute() {
+        return false;
+    }
+    !path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+}
+
+/// Read at most `IMAGE_HEADER_LIMIT` bytes from `path`.
+///
+/// SEC-079: capped so a huge (or unbounded-stream) file cannot exhaust memory
+/// during dimension parsing; PNG/JPEG headers always fit well within the cap.
+fn read_image_header(path: &std::path::Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).ok()?;
+    let mut data = Vec::new();
+    file.take(IMAGE_HEADER_LIMIT).read_to_end(&mut data).ok()?;
+    Some(data)
+}
+
+/// Upper bound on the bytes read while parsing an image header (64 KiB).
+const IMAGE_HEADER_LIMIT: u64 = 64 * 1024;
+
+fn image_dimensions(path: &std::path::Path) -> Option<(u32, u32)> {
+    // Lightweight dimension parsing for PNG/JPEG headers without decoding pixels.
+    let data = read_image_header(path)?;
+    if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+        // PNG IHDR width/height at offsets 16-23 (big-endian).
+        if data.len() >= 24 {
+            let w = u32::from_be_bytes([data[16], data[17], data[18], data[19]]);
+            let h = u32::from_be_bytes([data[20], data[21], data[22], data[23]]);
+            return Some((w, h));
+        }
+    } else if data.starts_with(b"\xff\xd8") {
+        // Minimal JPEG SOF scan for width/height.
+        let mut i = 2usize;
+        while i + 8 < data.len() {
+            if data[i] != 0xff {
+                i += 1;
+                continue;
+            }
+            let marker = data[i + 1];
+            if marker == 0xd9 {
+                break;
+            }
+            if marker == 0xd8 || marker == 0x00 {
+                i += 2;
+                continue;
+            }
+            let len = u16::from_be_bytes([data[i + 2], data[i + 3]]) as usize;
+            if matches!(marker, 0xc0..=0xcf) && marker != 0xc4 && marker != 0xc8 && marker != 0xcc {
+                if i + 9 < data.len() {
+                    let h = u16::from_be_bytes([data[i + 5], data[i + 6]]) as u32;
+                    let w = u16::from_be_bytes([data[i + 7], data[i + 8]]) as u32;
+                    return Some((w, h));
+                }
+            }
+            i += len + 2;
+        }
+    }
+    None
+}
+
+/// The current working directory, falling back to `.` when the process has
+/// no readable cwd (e.g. the directory was deleted). A shared fallback keeps
+/// `unwrap_or_default()` (an empty `PathBuf`, which resolves paths against
+/// the filesystem root) out of the codebase.
+#[must_use]
+pub(crate) fn current_working_dir() -> std::path::PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+}
+
+/// Log root the TUI spools write under (`<working dir>/log` by default).
+///
+/// Set once by [`set_log_root_override`] in tests, so a test run writes its
+/// log-window spools into `target/temp/` instead of the checked-in `log/`
+/// tree. Production never sets it and keeps `<working dir>/log`.
+static LOG_ROOT_OVERRIDE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Redirect TUI log spools to `root` for this process.
+///
+/// Test hook only: the first call wins and the value applies process-wide.
+#[doc(hidden)]
+pub fn set_log_root_override(root: impl Into<std::path::PathBuf>) {
+    let _ = LOG_ROOT_OVERRIDE.set(root.into()); // INTENTIONAL: first set wins; later calls are no-ops
+}
+
+/// Point TUI log spools at the workspace scratch tree for this test process.
+///
+/// Resolves `<workspace>/target/temp/log` from the crate's own
+/// `CARGO_MANIFEST_DIR`, so the path is correct whatever directory the test
+/// binary runs in. Git-ignored, so a test run never dirties the repository.
+#[doc(hidden)]
+pub fn use_scratch_log_root_for_tests() {
+    set_log_root_override(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("target/temp/log"),
+    );
+}
+
+/// The directory TUI log spools live under (`<working dir>/log` by default).
+#[must_use]
+pub(crate) fn log_root() -> std::path::PathBuf {
+    LOG_ROOT_OVERRIDE
+        .get()
+        .cloned()
+        .unwrap_or_else(|| current_working_dir().join("log"))
+}
+
+/// Map a log level to its fixed three-letter spool tag.
+///
+/// The tag is written as the second field of every line in the log spool file
+/// (see [`crate::app::session_ops`]). Extracted so the append and full-history
+/// writers cannot drift apart (ANTIPAT M6.9 / MEDIUM-2).
+pub(crate) fn log_level_str(level: crate::app::state::LogLevel) -> &'static str {
+    match level {
+        crate::app::state::LogLevel::Info => "INF",
+        crate::app::state::LogLevel::Tool => "TUL",
+        crate::app::state::LogLevel::Warn => "WRN",
+        crate::app::state::LogLevel::Error => "ERR",
+    }
+}
+
+/// Open `path` for writing with owner-only (`0o600`) permissions asserted.
+///
+/// `mode(0o600)` on `OpenOptions` only applies at creation, so a pre-existing
+/// file keeps its old (possibly world-readable) mode; this re-asserts it
+/// best-effort. Shared by the log spool, session export, and bug-report
+/// writers, which previously carried three copies of the same block (see
+/// `ANTIPAT.md` M3.15).
+///
+/// When `truncate` is true the file is created/truncated; otherwise it is
+/// created and appended to.
+///
+/// # Errors
+///
+/// Propagates any error from opening the file.
+pub(crate) fn open_owner_only(
+    path: &std::path::Path,
+    truncate: bool,
+) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    if truncate {
+        options.write(true).create(true).truncate(true);
+    } else {
+        options.create(true).append(true);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600)); // INTENTIONAL: best-effort permission tighten (mode set at create)
+    }
+    Ok(file)
+}
+
+/// Open the log spool `path` for owner-only (`0o600`) appending.
+///
+/// Thin `Option`-returning wrapper over [`open_owner_only`] for the two log
+/// spool writers in `session_ops`, which treat an open failure as "skip this
+/// write" rather than an error. Kept in one place so the spool permission
+/// policy cannot diverge (ANTIPAT M6.9 / MEDIUM-2).
+pub(crate) fn open_log_spool(path: &std::path::Path) -> Option<std::fs::File> {
+    open_owner_only(path, false).ok()
+}

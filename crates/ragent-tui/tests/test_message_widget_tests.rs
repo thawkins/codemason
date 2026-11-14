@@ -1,0 +1,155 @@
+//! External tests for `tests` from `crates/ragent-tui/src/widgets/message_widget.rs`
+//!
+//! Relocated from the inline `#[cfg(test)]` module.
+
+use ragent_tui::widgets::message_widget::tool_input_summary;
+use serde_json::json;
+
+#[test]
+fn test_team_tool_summary_includes_args() {
+    let input = json!({
+        "team_name": "alpha",
+        "teammate_name": "reviewer-1",
+        "agent_type": "general"
+    });
+    let summary = tool_input_summary("team_spawn", &input, "/tmp");
+    // Format: "spawn {agent_type}"
+    assert!(summary.starts_with("spawn"));
+    assert!(!summary.contains("[team]"));
+    assert!(summary.contains("general"));
+}
+
+#[test]
+fn test_team_tool_summary_truncates_long_strings_with_three_dots() {
+    let long = "x".repeat(160);
+    let input = json!({
+        "team_name": "alpha",
+        "content": long
+    });
+    let summary = tool_input_summary("team_broadcast", &input, "/tmp");
+    // Format: "broadcast: {content}" with truncation
+    assert!(summary.starts_with("broadcast:"));
+    assert!(!summary.contains("[team]"));
+    // The string should be truncated (120 chars + "...")
+    assert!(
+        summary.len() <= 160, // "broadcast: " + 120 + "..." with a little headroom
+        "summary should be truncated, got: {summary} (len: {})",
+        summary.len()
+    );
+}
+
+#[test]
+fn test_unknown_tool_summary_includes_args() {
+    let input = json!({
+        "path": "/tmp/file.txt",
+        "limit": 10
+    });
+    let summary = tool_input_summary("some_new_tool", &input, "/tmp");
+    assert!(summary.contains("path=\"/tmp/file.txt\""));
+    assert!(summary.contains("limit=10"));
+}
+
+#[test]
+fn test_read_tool_summary_uses_path_or_file_path() {
+    // Canonical `path` parameter works.
+    let input = json!({ "path": "/tmp/project/src/main.rs" });
+    let summary = tool_input_summary("read", &input, "/tmp/project");
+    assert_eq!(summary, "src/main.rs", "got: {summary}");
+
+    // Legacy/alias `file_path` parameter also works.
+    let input = json!({ "file_path": "/tmp/project/Cargo.toml" });
+    let summary = tool_input_summary("read", &input, "/tmp/project");
+    assert_eq!(summary, "Cargo.toml", "got: {summary}");
+
+    // Neither parameter present.
+    let input = json!({});
+    let summary = tool_input_summary("read", &input, "/tmp/project");
+    assert!(summary.is_empty(), "got: {summary}");
+}
+
+// -------------------------------------------------------------------
+// Widgets for extended tools (M6+): verify they are registered in
+// `tool_input_summary` and render with a category icon + formatted args
+// rather than falling through to the `summarize_tool_args` fallback,
+// which dumps raw parameters without an icon.
+// -------------------------------------------------------------------
+
+#[test]
+fn test_apply_patch_input_summary_shows_icon() {
+    let input = json!({"patch": "*** Begin Patch\n*** Update File: src/x.rs\n@@\n*** End Patch"});
+    let summary = tool_input_summary("apply_patch", &input, "/tmp");
+    assert_eq!(summary, "apply patch", "got: {summary}");
+}
+
+#[test]
+fn test_bg_input_summary_spawn() {
+    let input = json!({"action": "spawn", "command": "cargo build 2>&1"});
+    let summary = tool_input_summary("bg", &input, "/tmp");
+    assert!(!summary.contains("[bg]"), "got: {summary}");
+    assert!(summary.contains("spawn"));
+    assert!(summary.contains("cargo build"));
+}
+
+#[test]
+fn test_bg_input_summary_output_by_task() {
+    let input = json!({"action": "output", "task_id": "abcdef0123456789"});
+    let summary = tool_input_summary("bg", &input, "/tmp");
+    assert!(!summary.contains("[bg]"));
+    assert!(summary.contains("output"));
+    assert!(summary.contains("abcdef01"));
+}
+
+#[test]
+fn test_open_input_summary() {
+    let input = json!({"action": "url", "target": "https://github.com/"});
+    let summary = tool_input_summary("open", &input, "/tmp");
+    assert!(!summary.contains("[open]"), "got: {summary}");
+    assert!(summary.contains("github.com"));
+}
+
+#[test]
+fn test_conversation_search_input_summary() {
+    let input = json!({"query": "memory store"});
+    let summary = tool_input_summary("conversation_search", &input, "/tmp");
+    assert!(!summary.contains("[find]"), "got: {summary}");
+    assert!(summary.contains("memory store"));
+}
+
+#[test]
+fn test_session_search_input_summary() {
+    let input = json!({"query": "tool window bug"});
+    let summary = tool_input_summary("session_search", &input, "/tmp");
+    assert!(!summary.contains("[find]"), "got: {summary}");
+    assert!(summary.contains("tool window bug"));
+}
+
+#[test]
+fn test_initiative_input_summary_create() {
+    let input = json!({"action": "create", "id": "x", "title": "Ship M7"});
+    let summary = tool_input_summary("initiative", &input, "/tmp");
+    assert!(!summary.contains("[sched]"), "got: {summary}");
+    assert!(summary.contains("Ship M7"));
+}
+
+#[test]
+fn test_initiative_input_summary_checkpoint() {
+    let input = json!({"action": "checkpoint", "id": "api-v2", "progress": 75});
+    let summary = tool_input_summary("initiative", &input, "/tmp");
+    assert!(!summary.contains("[sched]"));
+    assert!(summary.contains("checkpoint"));
+}
+
+#[test]
+fn test_skill_manage_input_summary_list() {
+    let input = json!({"action": "list"});
+    let summary = tool_input_summary("Skill", &input, "/tmp");
+    assert!(!summary.contains("[skill]"), "got: {summary}");
+}
+
+#[test]
+fn test_skill_manage_input_summary_load() {
+    let input = json!({"action": "load", "name": "simplify"});
+    let summary = tool_input_summary("Skill", &input, "/tmp");
+    assert!(!summary.contains("[skill]"));
+    assert!(summary.contains("simplify"));
+}
