@@ -225,3 +225,79 @@ async fn test_finished_run_frees_its_name() {
     }
     assert!(freed, "the name is released when the run's task ends");
 }
+
+/// Publish one cluster-style progress report for run `item`.
+async fn cluster_report(app: &mut App, phase: SessionPhase, status: &str, detail: &str) {
+    app.handle_event(Event::AgentNotice {
+        session_id: "s1".to_string(),
+        message: encode_cluster_progress_event("item", "item", phase, status, detail),
+    })
+    .await;
+}
+
+/// The tracker of run `item`.
+fn item_tracker(app: &App) -> &ResearchProgress {
+    app.research_progress
+        .iter()
+        .find(|p| p.name == "item")
+        .expect("tracker")
+}
+
+#[tokio::test]
+async fn test_cluster_run_is_done_after_its_finalize_step() {
+    let mut app = app_with_session();
+    app.begin_research_progress(ResearchProgress::new("item", "item").completing_at_finalize());
+
+    cluster_report(
+        &mut app,
+        SessionPhase::Synthesize,
+        "done",
+        "LLM returned 9 bytes",
+    )
+    .await;
+    cluster_report(
+        &mut app,
+        SessionPhase::Finalize,
+        "started",
+        "writing CONCEPTS.md...",
+    )
+    .await;
+    assert!(item_tracker(&app).is_running(), "still writing");
+    assert!(!item_tracker(&app).done);
+
+    cluster_report(
+        &mut app,
+        SessionPhase::Finalize,
+        "done",
+        "wrote CONCEPTS.md (9 bytes)",
+    )
+    .await;
+    let tracker = item_tracker(&app);
+    assert!(tracker.done, "a cluster run ends at its finalize step");
+    assert!(!tracker.is_running());
+    assert_eq!(app.status, "research: item extraction complete");
+}
+
+#[tokio::test]
+async fn test_tier_done_does_not_end_a_session_run() {
+    let mut app = app_with_session();
+    app.begin_research_progress(ResearchProgress::new("item", "topic"));
+
+    // A session run reports its pipeline's "tier done" in the finalize phase
+    // before the final source count.
+    cluster_report(
+        &mut app,
+        SessionPhase::Finalize,
+        "tier done",
+        "pipeline complete: 5 completed, 0 skipped, 0 failed",
+    )
+    .await;
+    let tracker = item_tracker(&app);
+    assert!(!tracker.done, "the source count has not arrived yet");
+    assert!(tracker.is_running());
+    assert!(
+        !app.status.contains("extraction complete"),
+        "{}",
+        app.status
+    );
+}

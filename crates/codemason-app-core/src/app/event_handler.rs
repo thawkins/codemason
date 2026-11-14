@@ -975,6 +975,13 @@ impl App {
                         last
                     };
                     progress.apply(decoded.phase, decoded.status, decoded.detail.clone());
+                    // A run that ends at its finalize step (`/research
+                    // cluster`, which carries no source count) has just
+                    // completed.
+                    let completed_at_finalize = progress.completes_at_finalize
+                        && progress.done
+                        && decoded.phase == crate::research_progress::SessionPhase::Finalize
+                        && decoded.status == crate::research_progress::StepStatus::Done;
                     // A finalize-phase error is the terminal failure report a
                     // `/research` spawn publishes when its run fails, so end
                     // the run rather than leaving it "running".
@@ -1017,9 +1024,7 @@ impl App {
                         }
                         self.status = status;
                         self.arm_status_expiry();
-                    } else if decoded.phase == crate::research_progress::SessionPhase::Finalize
-                        && decoded.status == crate::research_progress::StepStatus::Done
-                    {
+                    } else if completed_at_finalize {
                         // `/research cluster` does not carry a source count;
                         // its final progress event is a finalize/done step.
                         self.status = format!("research: {} extraction complete", decoded.name);

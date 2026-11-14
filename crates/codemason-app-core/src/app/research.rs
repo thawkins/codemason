@@ -1046,7 +1046,8 @@ impl App {
                             return;
                         };
                         self.begin_research_progress(
-                            crate::research_progress::ResearchProgress::new(&name, &name),
+                            crate::research_progress::ResearchProgress::new(&name, &name)
+                                .completing_at_finalize(),
                         );
                         self.status =
                             format!("[wait] research: cluster '{name}' reading sources...");

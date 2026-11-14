@@ -1764,6 +1764,10 @@ async fn event_agent_notice_plain_and_progress_paths() {
 #[tokio::test]
 async fn event_progress_notice_with_total_sources_marks_complete() {
     let mut app = app_with_session("sess-1");
+    // The finalize+done branch below is `/research cluster`'s completion, so
+    // the run is seeded as the cluster handler seeds it: a run that ends at
+    // its finalize step (a session run's finalize "tier done" is not its end).
+    app.begin_research_progress(ResearchProgress::new("run-1", "topic").completing_at_finalize());
     let event = SessionEvent::Phase {
         phase: SessionPhase::Web,
     };

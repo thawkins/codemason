@@ -111,6 +111,12 @@ pub struct ResearchProgress {
     /// separately from [`Self::steps`] and rendered in stage order beneath the
     /// same header, which keeps one message per run in the window.
     pub deck: Option<DeckTracker>,
+    /// Whether the run ends with its finalize-phase `Done` step rather than
+    /// a final source count. `/research cluster` reports no count, so its
+    /// tracker is built with [`Self::completing_at_finalize`]; a session run
+    /// also reports a finalize-phase `Done` ("tier done") before its count,
+    /// so for it that step is not the end.
+    pub completes_at_finalize: bool,
 }
 
 impl ResearchProgress {
@@ -131,6 +137,28 @@ impl ResearchProgress {
             excluded_count: 0,
             web_phase_deadline: None,
             deck: None,
+            completes_at_finalize: false,
+        }
+    }
+
+    /// This tracker, ending at its finalize-phase `Done` step (see
+    /// [`Self::completes_at_finalize`]).
+    #[must_use]
+    pub fn completing_at_finalize(mut self) -> Self {
+        self.completes_at_finalize = true;
+        self
+    }
+
+    /// Whether the run is still going.
+    ///
+    /// A deck run is going until its tracker is finished (completed or
+    /// failed); any other run until it is done (its final source count, a
+    /// failure, or the finalize step of a run that ends there).
+    #[must_use]
+    pub fn is_running(&self) -> bool {
+        match &self.deck {
+            Some(deck) => !deck.finished,
+            None => !self.done,
         }
     }
 
@@ -138,9 +166,21 @@ impl ResearchProgress {
     ///
     /// Per-URL web capture/failure/exclusion events are accumulated as counts
     /// so the rendered log stays compact.
+    /// A run built with [`Self::completing_at_finalize`] is done once its
+    /// finalize phase reports `Done`.
     pub fn apply(&mut self, phase: SessionPhase, status: StepStatus, detail: impl Into<String>) {
-        let detail = detail.into();
+        self.apply_step(phase, status, detail.into());
+        if self.completes_at_finalize
+            && phase == SessionPhase::Finalize
+            && status == StepStatus::Done
+        {
+            self.done = true;
+            self.web_phase_deadline = None;
+        }
+    }
 
+    /// Record one step update (the body of [`Self::apply`]).
+    fn apply_step(&mut self, phase: SessionPhase, status: StepStatus, detail: String) {
         // The resolved-options snapshot is stored and rendered once at the
         // top of the log instead of becoming a setup step line.
         if phase == SessionPhase::Setup
