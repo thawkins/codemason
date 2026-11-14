@@ -139,6 +139,9 @@ mod windows;
 /// `agentssetup` FR-042). Re-exported so the panel's refusal text has one
 /// definition, reachable from the TUI tests.
 pub use self::windows::AGENTS_WINDOW_EMPTY_REFUSAL;
+/// The Agents/Teams window key set (spec `agentui` FR-055), shared with
+/// frontends that forward only those keys.
+pub use self::windows::{KeyWindow, window_owns_key};
 
 /// Why the Teams window refuses to open with no active team (spec `agentssetup`
 /// FR-042), re-exported alongside its Agents counterpart.

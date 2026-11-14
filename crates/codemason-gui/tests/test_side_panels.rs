@@ -423,3 +423,49 @@ fn test_agents_panel_cursor_stops_at_the_last_sub_agent() {
     assert_eq!(app.agents_subagent_task_ids, vec!["task-alpha-0001"]);
     assert_eq!(app.agents_cursor_subagent, Some(0));
 }
+
+#[test]
+fn test_agents_panel_shown_keeps_the_prompt_for_paste_ime_and_typing() {
+    let mut rig = rig(|rt, app| {
+        let sid = start_session(rt, app);
+        app.active_tasks.push(task("task-alpha-0001", &sid));
+        app.active_tasks.push(task("task-beta-00002", &sid));
+    });
+    focus_prompt(&mut rig);
+    alt(&mut rig, egui::Key::A, "a");
+    assert!(rig.harness.state().app().show_agents_window);
+    assert_eq!(
+        rig.harness
+            .state()
+            .layout()
+            .panel_state(&PaneId::ActiveAgents),
+        PanelState::Front
+    );
+
+    // A paste, an IME commit and plain typing each reach the prompt once,
+    // as the TUI's input editor keeps them while the popup is open.
+    rig.harness.event(egui::Event::Paste("abc".to_string()));
+    rig.harness.run();
+    assert_eq!(rig.harness.state().app().session.input, "abc");
+    rig.harness.event(egui::Event::Ime(egui::ImeEvent::Commit(
+        "\u{4f60}".to_string(),
+    )));
+    rig.harness.run();
+    assert_eq!(rig.harness.state().app().session.input, "abc\u{4f60}");
+    press(&mut rig, egui::Key::X, egui::Modifiers::NONE, Some("x"));
+    assert_eq!(rig.harness.state().app().session.input, "abc\u{4f60}x");
+
+    // The window's own keys still drive its cursor, and Space types nothing.
+    tap(&mut rig, egui::Key::ArrowDown);
+    tap(&mut rig, egui::Key::ArrowDown);
+    assert_eq!(rig.harness.state().app().agents_cursor_subagent, Some(1));
+    press(&mut rig, egui::Key::Space, egui::Modifiers::NONE, Some(" "));
+    assert_eq!(rig.harness.state().app().session.input, "abc\u{4f60}x");
+    assert_eq!(
+        rig.harness
+            .state()
+            .layout()
+            .panel_state(&PaneId::ActiveAgents),
+        PanelState::Front
+    );
+}

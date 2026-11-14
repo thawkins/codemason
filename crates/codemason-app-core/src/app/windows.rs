@@ -33,7 +33,53 @@
 use super::state::{
     App, PendingRowAction, ROW_ACTION_CONFIRM_NO, ROW_ACTION_CONFIRM_YES, RowAction,
 };
+use crate::input_event::{Key, KeyInput, Modifiers};
 use codemason_agent::team::MemberStatus;
+
+/// The popup window whose navigation keys `App::handle_key` serves first,
+/// before the input editor (spec `agentui` FR-055).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyWindow {
+    /// The Agents window.
+    Agents,
+    /// The Teams window.
+    Teams,
+}
+
+/// Whether the shown `window` takes `key` itself (FR-055): Up/Down,
+/// PageUp/PageDown, Space, Delete, Enter and Esc, plus Shift+K on the Agents
+/// window and `k`/`K` on the Teams window. Every other key reaches the input
+/// editor as usual. `App::handle_key` gates its window arms on this, so a
+/// frontend that keeps its own text field focused (the GUI) can forward
+/// exactly these keys and leave the rest (typing, pastes, IME) to the field.
+///
+/// # Arguments
+///
+/// * `window` - the shown window ([`App::key_window`]).
+/// * `key` - the key press.
+///
+/// # Returns
+///
+/// `true` when the window consumes the key.
+#[must_use]
+pub fn window_owns_key(window: KeyWindow, key: KeyInput) -> bool {
+    match key.key {
+        Key::Up
+        | Key::Down
+        | Key::PageUp
+        | Key::PageDown
+        | Key::Char(' ')
+        | Key::Delete
+        | Key::Enter
+        | Key::Esc => true,
+        Key::Char('K') => match window {
+            KeyWindow::Agents => key.mods.contains(Modifiers::SHIFT),
+            KeyWindow::Teams => true,
+        },
+        Key::Char('k') => window == KeyWindow::Teams,
+        _ => false,
+    }
+}
 
 /// Why an empty Agents window *used* to refuse to open (spec `agentssetup`
 /// FR-042).
@@ -366,6 +412,26 @@ fn is_terminal_member_status(status: MemberStatus) -> bool {
 /// ordinals only, so no key path can select or terminate the primary agent or
 /// the lead (FR-067).
 impl App {
+    /// The popup window that takes its navigation keys now: the Agents or
+    /// Teams window while it is shown and no output overlay covers it (the
+    /// overlay's own keys win, as in `App::handle_key`).
+    ///
+    /// # Returns
+    ///
+    /// The window, or `None` when neither takes keys.
+    #[must_use]
+    pub fn key_window(&self) -> Option<KeyWindow> {
+        if self.output_view.is_some() {
+            None
+        } else if self.show_agents_window {
+            Some(KeyWindow::Agents)
+        } else if self.show_teams_window {
+            Some(KeyWindow::Teams)
+        } else {
+            None
+        }
+    }
+
     /// Move the Agents-window cursor by `direction` rows (-1 = up, 1 = down).
     ///
     /// A first press with no cursor starts from the top of the list; moving

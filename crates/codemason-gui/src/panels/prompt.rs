@@ -66,7 +66,7 @@
 //! Dependencies: `codemason-app-core` (the App state), `craft-ui` (the IME
 //! composer) and `egui`.
 
-use codemason_app_core::app::{App, SelectionPane};
+use codemason_app_core::app::{App, KeyWindow, SelectionPane};
 use craft_ui::ime::Composer;
 use egui::text::{CCursor, CCursorRange};
 use egui::{Event, Id};
@@ -90,16 +90,20 @@ pub const ATTACHMENTS_LABEL: &str = "Attachments";
 /// Placeholder shown in an empty prompt.
 const HINT: &str = "Ask codemason...";
 
-/// A focus under which every key [`is_prompt_app_key`] can match does, for
-/// the conservative frame split in [`app_key_after_edit`].
-const ANY_APP_KEY: Focus = Focus::Prompt {
-    has_selection: false,
-    completion_open: true,
-    up_to_app: true,
-    down_to_app: true,
-    delete_to_app: true,
-    question_opens_shortcuts: true,
-};
+/// A focus under which every key [`is_prompt_app_key`] can match does (with
+/// the shown popup `window`'s own keys), for the conservative frame split in
+/// [`app_key_after_edit`].
+const fn any_app_key(window: Option<KeyWindow>) -> Focus {
+    Focus::Prompt {
+        has_selection: false,
+        completion_open: true,
+        up_to_app: true,
+        down_to_app: true,
+        delete_to_app: true,
+        window,
+        question_opens_shortcuts: true,
+    }
+}
 
 /// Rows of a completion list shown at once (the TUI's
 /// `FILE_MENU_VISIBLE_ROWS`; the App keeps the file menu's `scroll_offset`
@@ -170,11 +174,8 @@ impl PromptInput {
         // The focused sessions sidebar owns the keyboard, as in the TUI,
         // where it takes every key before the input does: the prompt gives
         // up the focus, and the keys reach the App as under a modal, so none
-        // is typed and Enter or Space presses no button. The shown Agents or
-        // Teams window owns it the same way, as the TUI's popup does: its
-        // keys move and act on its rows, and the rest reach app-core's own
-        // input editing.
-        if app.sidebar.focused && app.sidebar.visible || window_takes_keys(app) {
+        // is typed and Enter or Space presses no button.
+        if app.sidebar.focused && app.sidebar.visible {
             if self.composer.is_composing() {
                 self.drop_preedit(ctx, app);
             }
@@ -212,9 +213,10 @@ impl PromptInput {
         }
         let composer = &mut self.composer;
         let deferred = &mut self.deferred;
+        let window = app.key_window();
         ctx.input_mut(|input| {
             strip_carriage_returns(&mut input.events);
-            if let Some(at) = app_key_after_edit(&input.events) {
+            if let Some(at) = app_key_after_edit(&input.events, window) {
                 *deferred = input.events.split_off(at);
             }
             let processed = composer.process(&input.events, input.time);
@@ -233,6 +235,7 @@ impl PromptInput {
             up_to_app,
             down_to_app,
             delete_to_app: app.show_memory && app.session.input.is_empty(),
+            window: app.key_window(),
             question_opens_shortcuts: app.shortcuts_panel_enabled && app.session.input.is_empty(),
         }
     }
@@ -364,13 +367,6 @@ fn history_keys_to_app(app: &App) -> (bool, bool) {
     (!input[..byte].contains('\n'), !input[byte..].contains('\n'))
 }
 
-/// Whether the shown Agents or Teams window takes the keyboard
-/// (`crate::dock::pane_takes_keys`), as the TUI's popup does while open.
-fn window_takes_keys(app: &App) -> bool {
-    crate::dock::pane_takes_keys(app, crate::dock::PaneId::ActiveAgents)
-        || crate::dock::pane_takes_keys(app, crate::dock::PaneId::Teams)
-}
-
 /// Whether the App has an `@` mention or `/` command menu open.
 fn completion_open(app: &App) -> bool {
     app.file_menu.is_some() || app.slash_menu.is_some()
@@ -394,11 +390,11 @@ fn strip_carriage_returns(events: &mut [Event]) {
 /// it before the text typed ahead of it; it waits for the next frame
 /// instead. Every completion-menu key counts, since a menu can open from the
 /// text typed ahead of it.
-fn app_key_after_edit(events: &[Event]) -> Option<usize> {
+fn app_key_after_edit(events: &[Event], window: Option<KeyWindow>) -> Option<usize> {
     let mut edited = false;
     for (i, event) in events.iter().enumerate() {
         if let Some(key) = to_key_input(event) {
-            if edited && is_prompt_app_key(key, ANY_APP_KEY) {
+            if edited && is_prompt_app_key(key, any_app_key(window)) {
                 return Some(i);
             }
             edited = true;

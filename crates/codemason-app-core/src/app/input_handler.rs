@@ -1246,7 +1246,10 @@ impl App {
         // for its navigation keys only (FR-055): unmapped keys still reach the
         // input editor, and while the output overlay sits on top of the popup
         // its own keys (Esc close, PgUp/PgDn scroll) keep working.
-        if self.show_agents_window && self.output_view.is_none() {
+        if self.show_agents_window
+            && self.output_view.is_none()
+            && super::window_owns_key(super::KeyWindow::Agents, key)
+        {
             let consumed = match key.key {
                 Key::Up => {
                     self.move_agents_cursor(-1);
@@ -1294,7 +1297,10 @@ impl App {
                 return;
             }
         }
-        if self.show_teams_window && self.output_view.is_none() {
+        if self.show_teams_window
+            && self.output_view.is_none()
+            && super::window_owns_key(super::KeyWindow::Teams, key)
+        {
             let consumed = match key.key {
                 Key::Up => {
                     self.move_teams_cursor(-1);

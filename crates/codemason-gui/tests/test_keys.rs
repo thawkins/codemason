@@ -9,10 +9,11 @@ mod support;
 
 use std::path::PathBuf;
 
+use codemason_app_core::app::KeyWindow;
 use codemason_app_core::input_event::{Key, KeyInput, Modifiers};
 use codemason_gui::keys::{
-    Focus, KeyRouter, TUI_ALT_LETTERS, command_key_input, default_keymap, is_prompt_edit_key,
-    load_keymap, to_key_input,
+    Focus, KeyRouter, TUI_ALT_LETTERS, command_key_input, default_keymap, is_prompt_app_key,
+    is_prompt_edit_key, load_keymap, to_key_input,
 };
 use craft_keymap::{Binding, CommandRef, Platform};
 
@@ -37,6 +38,7 @@ const TYPING: Focus = Focus::Prompt {
     up_to_app: false,
     down_to_app: false,
     delete_to_app: false,
+    window: None,
     question_opens_shortcuts: false,
 };
 
@@ -357,6 +359,7 @@ fn test_route_leaves_ctrl_c_and_ctrl_x_to_a_prompt_selection() {
             up_to_app: false,
             down_to_app: false,
             delete_to_app: false,
+            window: None,
             question_opens_shortcuts: false,
         },
     );
@@ -669,6 +672,7 @@ fn test_route_forwards_completion_keys_only_while_a_menu_is_open() {
             up_to_app: false,
             down_to_app: false,
             delete_to_app: false,
+            window: None,
             question_opens_shortcuts: false,
         };
         let keys = router.route(&mut input, focus);
@@ -711,6 +715,7 @@ fn test_route_forwards_up_and_down_only_at_the_history_edges() {
             up_to_app,
             down_to_app,
             delete_to_app: false,
+            window: None,
             question_opens_shortcuts: false,
         };
         let keys: Vec<Key> = router
@@ -915,6 +920,7 @@ fn test_route_question_mark_opens_shortcuts_only_on_an_empty_prompt() {
         up_to_app: false,
         down_to_app: false,
         delete_to_app: false,
+        window: None,
         question_opens_shortcuts,
     };
     let events = || {
@@ -1015,4 +1021,33 @@ fn test_route_modal_forwards_ctrl_and_cmd_chords_before_unrelated_text() {
         ],
     );
     assert_eq!(keys, vec![cmd_d, plain(Key::Char('z'))]);
+}
+
+#[test]
+fn test_keys_prompt_forwards_only_the_shown_windows_own_keys() {
+    let focus = |window| Focus::Prompt {
+        has_selection: false,
+        completion_open: false,
+        up_to_app: false,
+        down_to_app: false,
+        delete_to_app: false,
+        window,
+        question_opens_shortcuts: false,
+    };
+    let plain = |key| KeyInput {
+        key,
+        mods: Modifiers::NONE,
+    };
+    let teams = focus(Some(KeyWindow::Teams));
+    let agents = focus(Some(KeyWindow::Agents));
+    for key in [Key::Up, Key::Down, Key::Char(' '), Key::Delete, Key::Enter] {
+        assert!(is_prompt_app_key(plain(key), agents), "{key:?}");
+    }
+    assert!(is_prompt_app_key(plain(Key::Char('k')), teams));
+    assert!(!is_prompt_app_key(plain(Key::Char('k')), agents));
+    assert!(!is_prompt_app_key(plain(Key::Char('x')), teams));
+    assert!(!is_prompt_app_key(plain(Key::Backspace), agents));
+    // Without a shown window, Up and Space stay with the prompt.
+    assert!(!is_prompt_app_key(plain(Key::Up), focus(None)));
+    assert!(!is_prompt_app_key(plain(Key::Char(' ')), focus(None)));
 }

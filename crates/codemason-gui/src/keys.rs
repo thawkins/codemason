@@ -36,6 +36,7 @@
 
 use std::path::{Path, PathBuf};
 
+use codemason_app_core::app::{KeyWindow, window_owns_key};
 use codemason_app_core::input_event::{Key, KeyInput, Modifiers};
 use craft_keymap::egui::Dispatcher;
 use craft_keymap::{Active, Bindable, Binding, CommandRef, Keymap, Overrides, Platform, Scope};
@@ -401,6 +402,9 @@ fn is_field_edit_key(input: KeyInput) -> bool {
 ///   and Down likewise with `down_to_app`: the App browses the input history
 ///   (or moves the Memory panel cursor), as the TUI's `HistoryUp` and
 ///   `HistoryDown` do on the first and last logical line.
+/// - A key the shown Agents or Teams window takes itself
+///   (`window_owns_key`: Up/Down, PageUp/PageDown, Space, Delete, Enter,
+///   Esc, Shift+K or `k`) when [`Focus::Prompt`]'s `window` is set.
 /// - Delete without modifiers when [`Focus::Prompt`]'s `delete_to_app` is
 ///   set (the Memory panel is shown and the prompt is empty): the App asks
 ///   to delete the selected memory, as the TUI's `Key::Delete` arm does.
@@ -420,12 +424,16 @@ pub fn is_prompt_app_key(input: KeyInput, focus: Focus) -> bool {
         up_to_app,
         down_to_app,
         delete_to_app,
+        window,
         question_opens_shortcuts,
         ..
     } = focus
     else {
         return false;
     };
+    if window.is_some_and(|window| window_owns_key(window, input)) {
+        return true;
+    }
     let plain = !input.mods.shift && !input.mods.alt;
     match input.key {
         Key::Enter => true,
@@ -518,6 +526,11 @@ pub enum Focus {
         /// Whether Delete goes to the App to ask to delete the selected
         /// memory: the Memory panel is shown and the prompt is empty.
         delete_to_app: bool,
+        /// The Agents or Teams window that takes its own navigation keys
+        /// (`App::key_window`): those keys go to the App, and the prompt keeps
+        /// every other key, its typing, IME and pastes, as the TUI's input
+        /// editor keeps them while the popup is open (spec `agentui` FR-055).
+        window: Option<KeyWindow>,
         /// Whether `?` goes to the App to open the shortcuts panel: the
         /// prompt is empty and the panel is enabled.
         question_opens_shortcuts: bool,
