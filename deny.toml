@@ -63,6 +63,12 @@ name = "ring"
 expression = "ISC AND MIT AND OpenSSL"
 license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 
+# epaint_default_fonts (egui) bundles font files under OFL-1.1 and the Ubuntu Font Licence;
+# those licences apply to the font files only.
+[[licenses.exceptions]]
+name = "epaint_default_fonts"
+allow = ["OFL-1.1", "Ubuntu-font-1.0"]
+
 [bans]
 # Warn on multiple versions of the same crate (common in large trees).
 multiple-versions = "warn"
