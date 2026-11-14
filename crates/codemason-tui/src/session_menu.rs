@@ -294,7 +294,7 @@ fn request_items(app: &App, target: &MenuTarget) -> Vec<MenuItem> {
     history
         .iter()
         .map(|r| {
-            let title = crate::sessions_sidebar::fit(&r.title, REQUEST_TITLE_WIDTH);
+            let title = crate::sessions_sidebar_state::fit(&r.title, REQUEST_TITLE_WIDTH);
             let label = format!("{} [{}] {title}", crate::app::autofix::label_of(r), r.state);
             item(&label, None, MenuAction::OpenUrl(r.web_url.clone()), 0)
         })
@@ -427,9 +427,9 @@ pub fn open(app: &mut App, session_id: &str, row_y: u16) {
 /// Builds the items of project `project_id`'s menu.
 fn project_items(app: &App, project_id: &str) -> Vec<MenuItem> {
     let target = MenuTarget::Project(project_id.to_string());
-    let listed = crate::sessions_sidebar::project_session_ids(app, project_id).len();
-    let (up, down) = crate::sessions_sidebar::project_moves(app, project_id);
-    let keys = crate::sessions_sidebar::section_keys(app);
+    let listed = crate::sessions_sidebar_state::project_session_ids(app, project_id).len();
+    let (up, down) = crate::sessions_sidebar_state::project_moves(app, project_id);
+    let keys = crate::sessions_sidebar_state::section_keys(app);
     let collapsed = &app.sidebar.collapsed;
     let any_open = keys.iter().any(|k| !collapsed.contains(k));
     let any_collapsed = keys.iter().any(|k| collapsed.contains(k));
@@ -526,7 +526,7 @@ fn unread_marks(app: &App) -> std::collections::HashSet<String> {
 /// apply to every selected session unless all already have that state, in
 /// which case they read `Unpin` and `Mark as read`.
 fn selection_items(app: &App) -> Vec<MenuItem> {
-    let selected = crate::sessions_sidebar::selected_ids(app);
+    let selected = crate::sessions_sidebar_state::selected_ids(app);
     let n = selected.len();
     let all_pinned = selected.iter().all(|id| app.sidebar.pinned.contains(id));
     let marks = unread_marks(app);
@@ -617,7 +617,7 @@ fn dispatch(app: &mut App, target: &MenuTarget, action: MenuAction) {
         MenuTarget::Project(id) => dispatch_project(app, id, action),
         MenuTarget::Selection => dispatch_selection(app, action),
     };
-    crate::sessions_sidebar::report(app, result);
+    crate::sessions_sidebar_state::report(app, result);
 }
 
 /// Runs a project menu `action` on project `project_id`.
@@ -629,27 +629,34 @@ fn dispatch_project(app: &mut App, project_id: &str, action: MenuAction) -> Resu
         .find(|g| g.project_id == project_id)
         .map(|g| g.project.clone())
         .ok_or_else(|| "that project is no longer listed".to_string())?;
-    let listed = || crate::sessions_sidebar::project_session_ids(app, project_id);
+    let listed = || crate::sessions_sidebar_state::project_session_ids(app, project_id);
     match action {
-        MenuAction::NewSession => crate::sessions_sidebar::new_session_in(app, project)?,
+        MenuAction::NewSession => crate::sessions_sidebar_state::new_session_in(app, project)?,
         MenuAction::NewSessionOnBranch => {
-            let text = crate::sessions_sidebar::branch_session_command(app, &project);
-            crate::sessions_sidebar::prefill_input(app, &text);
+            let text = crate::sessions_sidebar_state::branch_session_command(app, &project);
+            crate::sessions_sidebar_state::prefill_input(app, &text);
         }
-        MenuAction::RenameProject => crate::sessions_sidebar::prefill_input(
+        MenuAction::RenameProject => crate::sessions_sidebar_state::prefill_input(
             app,
             &format!("/project rename --project {project_id} {}", project.name),
         ),
         MenuAction::Properties => crate::project_properties::open(app, project_id)?,
         MenuAction::MoveUp | MenuAction::MoveDown => {
-            crate::sessions_sidebar::move_project(app, project_id, action == MenuAction::MoveUp);
+            crate::sessions_sidebar_state::move_project(
+                app,
+                project_id,
+                action == MenuAction::MoveUp,
+            );
         }
         MenuAction::SelectAll => {
             let ids = listed();
             app.sidebar.selected = ids.into_iter().collect();
         }
         MenuAction::CollapseAll | MenuAction::ExpandAll => {
-            crate::sessions_sidebar::set_all_collapsed(app, action == MenuAction::CollapseAll);
+            crate::sessions_sidebar_state::set_all_collapsed(
+                app,
+                action == MenuAction::CollapseAll,
+            );
         }
         MenuAction::Archive => {
             let ids = listed();
@@ -684,7 +691,7 @@ fn dispatch_project(app: &mut App, project_id: &str, action: MenuAction) -> Resu
 /// Runs a selection menu `action` on every selected session the sidebar
 /// lists. Every session is tried; the status line counts the ones done.
 fn dispatch_selection(app: &mut App, action: MenuAction) -> Result<(), String> {
-    let ids = crate::sessions_sidebar::selected_ids(app);
+    let ids = crate::sessions_sidebar_state::selected_ids(app);
     match action {
         MenuAction::TogglePin => {
             let pin = !ids.iter().all(|id| app.sidebar.pinned.contains(id));
@@ -755,7 +762,7 @@ fn dispatch_session(app: &mut App, session_id: &str, action: MenuAction) -> Resu
         MenuAction::TogglePin => app.toggle_session_pin(session_id),
         MenuAction::ToggleUnread => app.toggle_session_unread(session_id),
         MenuAction::Rename => {
-            crate::sessions_sidebar::begin_rename(app, session_id);
+            crate::sessions_sidebar_state::begin_rename(app, session_id);
             Ok(())
         }
         MenuAction::Fork => app.fork_session_by_id(session_id),
@@ -767,7 +774,7 @@ fn dispatch_session(app: &mut App, session_id: &str, action: MenuAction) -> Resu
             app.move_session_to_section(session_id, section.as_deref())
         }
         MenuAction::NewSection => {
-            crate::sessions_sidebar::begin_prefill(app, session_id, "/session section new ");
+            crate::sessions_sidebar_state::begin_prefill(app, session_id, "/session section new ");
             Ok(())
         }
         MenuAction::NewSession

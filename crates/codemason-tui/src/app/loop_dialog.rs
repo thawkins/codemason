@@ -14,7 +14,7 @@
 //! processor and sends the goal text through the normal message path so the
 //! agent loop engages immediately.
 //!
-//! Dependencies: `crossterm` (key events), `codemason-agent` (`LoopSpec`,
+//! Dependencies: `codemason-app-core` (neutral key events), `codemason-agent` (`LoopSpec`,
 //! agent resolution), `codemason-config` (`LoopConfig` defaults), and the
 //! reusable [`InputField`](crate::input_field::InputField) widget.
 

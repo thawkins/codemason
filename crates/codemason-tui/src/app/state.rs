@@ -3094,7 +3094,7 @@ pub struct App {
     /// (spec MULTISESSION, M3). Their runs keep going while parked here.
     pub background: super::SessionRegistry,
     /// Left-hand session sidebar (spec MULTISESSION, M5).
-    pub sidebar: crate::sessions_sidebar::SidebarState,
+    pub sidebar: crate::sessions_sidebar_state::SidebarState,
     /// Pull/merge request counts per session branch (spec `projects`).
     pub request_counts: Arc<codemason_agent::project::requests::PullRequestCounts>,
     /// Sessions whose worktrees were created on a background task and are

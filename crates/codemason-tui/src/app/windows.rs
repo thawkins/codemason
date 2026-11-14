@@ -310,11 +310,11 @@ impl App {
             }
             RowAction::DeleteSession { session_id, .. } => {
                 let result = self.delete_session_by_id(&session_id);
-                crate::sessions_sidebar::report(self, result);
+                crate::sessions_sidebar_state::report(self, result);
             }
             RowAction::DeleteSessions { session_ids, .. } => {
                 let result = self.delete_sessions_by_id(&session_ids);
-                crate::sessions_sidebar::report(self, result);
+                crate::sessions_sidebar_state::report(self, result);
             }
         }
     }

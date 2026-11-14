@@ -1054,7 +1054,7 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
 
     // Session sidebar (spec MULTISESSION M5): its global shortcuts, and every
     // key while it has focus, after all modal dialogs had their chance.
-    if crate::sessions_sidebar::handle_key(app, key) {
+    if crate::sessions_sidebar_state::handle_key(app, key) {
         return None;
     }
 

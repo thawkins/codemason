@@ -121,6 +121,8 @@ pub fn log_window_messages_for_tests(app: &App) -> Vec<String> {
 mod launch;
 use codemason_app_core::app::mcp_bridge;
 mod spawn;
+mod startup;
+pub use self::startup::StartupSession;
 mod subagent_events;
 mod swarm;
 pub use codemason_app_core::app::toolchain;

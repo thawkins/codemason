@@ -519,7 +519,7 @@ impl App {
         // Session sidebar (spec MULTISESSION M5): clicks, wheel and border
         // drags inside it are its own; a click elsewhere drops its focus and
         // falls through to the normal routing.
-        if crate::sessions_sidebar::handle_mouse(self, event) {
+        if crate::sessions_sidebar_state::handle_mouse(self, event) {
             self.assert_ui_invariants();
             self.debug_log_input_transition("mouse-sidebar", &before_input, before_cursor);
             return;

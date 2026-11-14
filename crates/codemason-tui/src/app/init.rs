@@ -193,7 +193,7 @@ impl App {
         let selected_thinking_level = Self::load_persisted_thinking_level(storage.as_ref());
         sub.record("App: settings load", t0.elapsed());
         let t0 = Instant::now();
-        let sidebar = crate::sessions_sidebar::SidebarState::load(&storage);
+        let sidebar = crate::sessions_sidebar_state::SidebarState::load(&storage);
         let mut app = Self {
             session: {
                 let mut session =
