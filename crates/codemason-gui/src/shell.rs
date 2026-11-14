@@ -6,7 +6,8 @@
 //! dialog ([`dialogs::show`]); later tasks render the other panes from the
 //! `App` state.
 //! Each frame ([`Shell::update`]) it first drains the agent-event queue and
-//! the tracing log channel into the `App` and runs the App's timers
+//! the tracing log channel into the `App`, runs app-core's background
+//! housekeeping pass (`App::housekeeping`) and the App's timers
 //! (`App::poll_timers`), prepares the prompt's input
 //! ([`PromptInput::prepare`]) and the active dialog's ([`dialogs::prepare`]),
 //! then routes the frame's key presses to `App::handle_key` through
@@ -149,6 +150,7 @@ impl Shell {
     /// * `ui` - the root ui of the window.
     pub fn update(&mut self, ui: &mut egui::Ui) {
         self.drain_sources();
+        self.housekeeping(ui.ctx());
         self.poll_timers(ui.ctx());
         let focus = self.prompt.prepare(ui.ctx(), &mut self.app);
         dialogs::prepare(ui.ctx(), &mut self.app);
@@ -181,6 +183,34 @@ impl Shell {
     #[doc(hidden)]
     pub fn app_mut(&mut self) -> &mut App {
         &mut self.app
+    }
+
+    /// Run app-core's background housekeeping pass (`App::housekeeping`):
+    /// the polls that apply what background jobs deposited (compaction,
+    /// rollback, `/swarm`, `/bench`, sub-agent launches, background
+    /// sessions, store fetches, ...), gated by `HOUSEKEEPING_INTERVAL`, then
+    /// the history flush. It runs every frame, as the terminal frontend runs
+    /// it every loop wake, and asks for a frame when the next pass is due:
+    /// background jobs fill shared slots without waking anything, so that
+    /// wake (the TUI's loop keeps the same one) is what lands their results
+    /// while the user is idle.
+    ///
+    /// It runs on the UI thread through `Handle::block_on`, like
+    /// `App::handle_event`. That is safe because every await in the pass is
+    /// bounded (lock `try_read`s that skip when held, small task-store
+    /// writes), the same pass the TUI has always run on its render loop.
+    /// Without attached sources there is no runtime, so nothing runs.
+    fn housekeeping(&mut self, ctx: &egui::Context) {
+        let Some(sources) = self.sources.as_ref() else {
+            return;
+        };
+        let processor = std::sync::Arc::clone(&self.app.session_processor);
+        sources.runtime.block_on(self.app.housekeeping(&processor));
+        ctx.request_repaint_after(
+            self.app
+                .housekeeping_due_at()
+                .saturating_duration_since(std::time::Instant::now()),
+        );
     }
 
     /// Run the App's wall-clock timers (`App::poll_timers`: status expiry,
