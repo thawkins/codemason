@@ -698,3 +698,144 @@ fn test_answering_a_free_text_question_gives_the_keyboard_back_to_the_prompt() {
             .is_focused()
     );
 }
+
+#[test]
+fn test_timed_question_behind_another_modal_auto_answers_its_default() {
+    let (_rt, events, mut harness) = rig(|app| app.show_shortcuts = true);
+    let mut bus = harness.state().app().event_bus.subscribe();
+    events
+        .send(Event::QuestionRequested {
+            session_id: SESSION.to_string(),
+            request_id: "q-9".to_string(),
+            question: "Proceed?".to_string(),
+            options: vec!["yes".to_string(), "no".to_string()],
+            default_index: Some(1),
+            secret: false,
+        })
+        .expect("send question");
+    harness.run();
+    assert!(
+        !dialog_shown(&harness, QUESTION_TITLE),
+        "the shortcuts panel is above it"
+    );
+    assert!(answers(&mut bus).is_empty());
+
+    // The question's 120 s timeout passes on the test clock; nothing sleeps.
+    harness
+        .state_mut()
+        .app_mut()
+        .advance_permission_clock_for_tests(std::time::Duration::from_secs(121));
+    harness.run();
+
+    assert_eq!(
+        answers(&mut bus),
+        vec![("q-9".to_string(), "no".to_string())]
+    );
+    let app = harness.state().app();
+    assert!(app.session.question_queue.is_empty());
+    assert!(app.show_shortcuts, "the panel above it is untouched");
+}
+
+/// Open the `/loop` dialog with the goal field active; the runtime is
+/// returned so it outlives the harness.
+fn loop_on_goal() -> (tokio::runtime::Runtime, Harness<'static, Shell>) {
+    let (rt, _events, mut harness) = rig(codemason_app_core::app::open_loop_setup);
+    harness.run();
+    type_key(&mut harness, egui::Key::Tab, None);
+    (rt, harness)
+}
+
+/// The loop dialog's goal text.
+fn goal(harness: &Harness<'static, Shell>) -> Option<String> {
+    harness
+        .state()
+        .app()
+        .loop_setup
+        .as_ref()
+        .map(|s| s.goal_field.text().to_string())
+}
+
+#[test]
+fn test_loop_goal_takes_text_with_no_key_once() {
+    let (_rt, mut harness) = loop_on_goal();
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::Text("\u{fc}".to_string()));
+    harness.run();
+    assert_eq!(goal(&harness).as_deref(), Some("\u{fc}"));
+}
+
+#[test]
+fn test_loop_goal_takes_an_ime_commit_once() {
+    let (_rt, mut harness) = loop_on_goal();
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::Ime(egui::ImeEvent::Commit(
+            "na\u{ef}ve".to_string(),
+        )));
+    harness.run();
+    assert_eq!(goal(&harness).as_deref(), Some("na\u{ef}ve"));
+}
+
+#[test]
+fn test_loop_goal_altgr_types_its_character_not_the_key() {
+    let (_rt, mut harness) = loop_on_goal();
+    let altgr = egui::Modifiers {
+        ctrl: true,
+        alt: true,
+        ..egui::Modifiers::NONE
+    };
+    let input = harness.input_mut();
+    input.events.push(egui::Event::Key {
+        key: egui::Key::Q,
+        physical_key: Some(egui::Key::Q),
+        pressed: true,
+        repeat: false,
+        modifiers: altgr,
+    });
+    input.events.push(egui::Event::Text("@".to_string()));
+    input.events.push(egui::Event::Key {
+        key: egui::Key::Q,
+        physical_key: Some(egui::Key::Q),
+        pressed: false,
+        repeat: false,
+        modifiers: altgr,
+    });
+    harness.run();
+    assert_eq!(goal(&harness).as_deref(), Some("@"));
+}
+
+#[test]
+fn test_loop_goal_takes_a_paste_once() {
+    let (_rt, mut harness) = loop_on_goal();
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::Paste("fix\r\nthe build".to_string()));
+    harness.run();
+    assert_eq!(goal(&harness).as_deref(), Some("fix the build"));
+    assert!(
+        harness.state().app().loop_setup.is_some(),
+        "the line break did not start the loop"
+    );
+}
+
+#[test]
+fn test_properties_description_takes_paste_and_text_with_no_key() {
+    let (_rt, _events, mut harness) = rig(|app| app.sidebar.properties = Some(properties()));
+    harness.run();
+    let input = harness.input_mut();
+    input.events.push(egui::Event::Paste("caf".to_string()));
+    input.events.push(egui::Event::Text("\u{e9}".to_string()));
+    harness.run();
+    let description = harness
+        .state()
+        .app()
+        .sidebar
+        .properties
+        .as_ref()
+        .map(|p| p.description.clone());
+    assert_eq!(description.as_deref(), Some("caf\u{e9}"));
+}

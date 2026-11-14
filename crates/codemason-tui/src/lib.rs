@@ -941,15 +941,11 @@ pub async fn run_tui(
             // lag burst (dropped SubagentStart/Complete events).
             app.poll_active_tasks_reconcile();
 
-            // Transition slash-command statuses to "ready" after a grace period.
-            app.poll_status_expiry();
-
-            // Auto-dismiss the run-cost banner after 15 seconds.
-            app.poll_run_cost_banner_expiry();
-
-            // Auto-answer a timed question with its default option once the
-            // inactivity deadline passes.
-            app.poll_question_expiry();
+            // The App's wall-clock timers, shared with the GUI: statuses go
+            // to "ready" after a grace period, the run-cost banner dismisses
+            // itself after 15 seconds, and a timed question answers its
+            // default option once its deadline passes.
+            app.poll_timers();
 
             // Unblock swarm tasks whose dependencies are satisfied.
             app.poll_swarm_unblock();

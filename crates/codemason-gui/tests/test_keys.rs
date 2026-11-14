@@ -933,3 +933,44 @@ fn test_route_question_mark_opens_shortcuts_only_on_an_empty_prompt() {
     assert!(keys.is_empty(), "inside text `?` types");
     assert_eq!(left.len(), 2);
 }
+
+#[test]
+fn test_route_modal_forwards_unpaired_text_once_and_leaves_pastes() {
+    let altgr = egui::Modifiers {
+        ctrl: true,
+        alt: true,
+        ..egui::Modifiers::NONE
+    };
+    let (keys, left) = route_events(
+        Focus::Modal {
+            field_focused: false,
+            field_selection: false,
+        },
+        vec![
+            press(egui::Key::A, egui::Modifiers::NONE),
+            egui::Event::Text("a".to_string()),
+            egui::Event::Text("\u{fc}".to_string()),
+            press(egui::Key::Q, altgr),
+            egui::Event::Text("@".to_string()),
+            egui::Event::Ime(egui::ImeEvent::Commit("ni".to_string())),
+            egui::Event::Paste("y".to_string()),
+        ],
+    );
+
+    assert_eq!(
+        keys,
+        vec![
+            plain(Key::Char('a')),
+            plain(Key::Char('\u{fc}')),
+            plain(Key::Char('@')),
+            plain(Key::Char('n')),
+            plain(Key::Char('i')),
+        ],
+        "each typed character reaches the App once, in order; AltGr's key does not"
+    );
+    assert_eq!(
+        left,
+        vec![egui::Event::Paste("y".to_string())],
+        "a paste is never keys (the TUI gets it as a paste): it stays for the dialog's hook"
+    );
+}

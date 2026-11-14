@@ -306,6 +306,18 @@ pub(crate) fn is_key_text(input: KeyInput, text: &str) -> bool {
     }
 }
 
+/// The characters a text-carrying event holds: a typed `Text` or an IME
+/// commit. Pastes are not typing (the TUI receives them as a paste, never as
+/// keys), so they are not included.
+fn typed_text_of(event: &egui::Event) -> Option<&str> {
+    match event {
+        egui::Event::Text(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+            Some(text.as_str())
+        }
+        _ => None,
+    }
+}
+
 /// Whether `input` holds Alt without Ctrl or Cmd.
 fn is_plain_alt(input: KeyInput) -> bool {
     input.mods.alt && !input.mods.ctrl && !input.mods.cmd
@@ -477,7 +489,9 @@ pub enum Focus {
     /// dialog button is also pressed by Enter or Space, and Tab does not move
     /// egui's focus. The exception is a dialog's own text field (a filter):
     /// while one has the keyboard it keeps its text and editing keys, and
-    /// Ctrl+C/Ctrl+X while it has a selection.
+    /// Ctrl+C/Ctrl+X while it has a selection. With no such field focused,
+    /// text no press typed (AltGr, dead keys, IME commits) goes to the App
+    /// as its characters; pastes stay for the dialog's paste hook.
     Modal {
         /// Whether a dialog's text field (not the prompt) has the keyboard.
         field_focused: bool,
@@ -570,7 +584,14 @@ impl KeyRouter {
     /// keys. Under [`Focus::Modal`]
     /// every press is forwarded and removed from `input` with the text it
     /// typed, except the typing and editing keys of a focused dialog text
-    /// field, which stay with the field and are not forwarded.
+    /// field, which stay with the field and are not forwarded. With no
+    /// dialog field focused, the App's key-driven fields (the `/loop` form,
+    /// the properties description, the provider fields) get every typed
+    /// character: a `Text` or IME commit that no press of the frame typed is
+    /// forwarded as one [`Key::Char`] per character, and a character press
+    /// whose own text is another character (AltGr, Option) is not forwarded,
+    /// so its text is, once. Pastes stay in `input` for the dialog's own paste
+    /// hook.
     ///
     /// egui `Copy`/`Cut` events convert to Ctrl+C/Ctrl+X only off macOS and
     /// only when the frame holds Ctrl without Shift or Alt; macOS Cmd+C/Cmd+X
@@ -621,6 +642,24 @@ impl KeyRouter {
                 }
                 continue;
             }
+            if let Focus::Modal {
+                field_focused: false,
+                ..
+            } = focus
+                && !drop[i]
+                && let Some(text) = typed_text_of(event)
+            {
+                // Text no press of this frame typed (a dead key's result, an
+                // AltGr or Option character, a letter with no egui key, an
+                // IME commit) reaches the App as the characters it holds, as
+                // the TUI receives them; the router removes it.
+                drop[i] = true;
+                keys.extend(text.chars().filter(|c| !c.is_control()).map(|c| KeyInput {
+                    key: Key::Char(c),
+                    mods: Modifiers::NONE,
+                }));
+                continue;
+            }
             let Some(key) = to_key_input(event) else {
                 continue;
             };
@@ -638,6 +677,17 @@ impl KeyRouter {
                     continue;
                 }
                 drop[i] = true;
+                // A character key whose press typed another character (AltGr
+                // or Option composing, a layout where egui reports the
+                // physical key) is not forwarded: the text that follows it is,
+                // as its own characters.
+                if !field_focused
+                    && next_text.is_some()
+                    && !typed_text
+                    && matches!(key.key, Key::Char(_))
+                {
+                    continue;
+                }
                 if typed_text {
                     drop[i + 1] = true;
                 }

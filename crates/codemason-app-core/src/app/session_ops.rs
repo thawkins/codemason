@@ -1065,8 +1065,9 @@ impl App {
     /// Freeze the clock the permission and question answer guards read (at
     /// the real now, on the first call) and move it forward by `by`, so tests
     /// can place a key press before or after [`PERMISSION_ANSWER_DELAY`]
-    /// (or [`QUESTION_ANSWER_DELAY`]) without sleeping. `Duration::ZERO`
-    /// just freezes it.
+    /// (or [`QUESTION_ANSWER_DELAY`]), or past a timed question's deadline
+    /// (`App::poll_timers`), without sleeping. `Duration::ZERO` just freezes
+    /// it.
     ///
     /// # Arguments
     ///

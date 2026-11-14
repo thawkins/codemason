@@ -15,6 +15,10 @@
 //! disabled entry is greyed out and does nothing). Save sends Enter and
 //! Cancel sends Esc.
 //!
+//! Typed text the router cannot pair with a key (AltGr and Option
+//! characters, dead keys, IME commits) is forwarded as its characters
+//! (`Focus::Modal`), so the description gets every character once.
+//!
 //! The dialog is not one of the App's input locks, but it takes every key
 //! while open, so the prompt treats it as one
 //! ([`super::locks_prompt`]).

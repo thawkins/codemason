@@ -3,7 +3,7 @@
 //!
 //! It is not a modal. As in the TUI (`render_run_cost_banner`) it sits above
 //! everything else, at the top, until the next key press or until it
-//! expires (`App::poll_run_cost_banner_expiry`, polled while it is drawn).
+//! expires (`App::poll_timers`, which the shell runs every frame).
 //!
 //! The next key press dismisses it the way app-core's `dispatch_key` does:
 //! a plain character dismisses it and still types, any other key is used up
@@ -15,8 +15,6 @@
 //! The Dismiss button sends Esc.
 //!
 //! Dependencies: `codemason-app-core` and `egui`.
-
-use std::time::Duration;
 
 use codemason_app_core::app::App;
 use codemason_app_core::input_event::Key;
@@ -75,13 +73,12 @@ pub fn prepare(ctx: &egui::Context, app: &mut App) {
 /// # Arguments
 ///
 /// * `ctx` - the frame's context.
-/// * `app` - the App whose banner is drawn; an expired one is cleared.
+/// * `app` - the App whose banner is drawn.
 ///
 /// # Returns
 ///
 /// `true` while the banner is shown.
 pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
-    app.poll_run_cost_banner_expiry();
     let Some(text) = app.session.run_cost_banner.as_deref() else {
         return false;
     };
@@ -101,7 +98,5 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
                 });
             });
         });
-    // The banner expires on its own; look again in a second.
-    ctx.request_repaint_after(Duration::from_secs(1));
     true
 }

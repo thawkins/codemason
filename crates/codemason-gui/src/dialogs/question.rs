@@ -22,8 +22,8 @@
 //! `QUESTION_ANSWER_DELAY` and removes it at once
 //! (`App::question_answerable`), so a double Enter or a double click cannot
 //! answer the next question unseen. The buttons are disabled meanwhile. The
-//! TUI's timeout (a timed question answers its default) is polled while the
-//! dialog is drawn.
+//! TUI's timeout (a timed question answers its default) runs from the
+//! shell's timer poll every frame (`App::poll_timers`), drawn or not.
 //!
 //! Dependencies: `codemason-app-core`, `codemason-types` (countdown text)
 //! and `egui`.
@@ -92,8 +92,6 @@ fn countdown(expire_at_ms: Option<u64>) -> Option<String> {
 ///
 /// `true` while a question is waiting.
 pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
-    // A timed question past its deadline answers its default, as in the TUI.
-    app.poll_question_expiry();
     // The question is shown from this frame on; it can be answered once
     // app-core's answer delay has passed.
     app.note_question_front();

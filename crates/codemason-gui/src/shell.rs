@@ -6,7 +6,8 @@
 //! dialog ([`dialogs::show`]); later tasks render the other panes from the
 //! `App` state.
 //! Each frame ([`Shell::update`]) it first drains the agent-event queue and
-//! the tracing log channel into the `App`, prepares the prompt's input
+//! the tracing log channel into the `App` and runs the App's timers
+//! (`App::poll_timers`), prepares the prompt's input
 //! ([`PromptInput::prepare`]) and the active dialog's ([`dialogs::prepare`]),
 //! then routes the frame's key presses to `App::handle_key` through
 //! [`KeyRouter`] before any widget reads them. After drawing it runs the key
@@ -148,6 +149,7 @@ impl Shell {
     /// * `ui` - the root ui of the window.
     pub fn update(&mut self, ui: &mut egui::Ui) {
         self.drain_sources();
+        self.poll_timers(ui.ctx());
         let focus = self.prompt.prepare(ui.ctx(), &mut self.app);
         dialogs::prepare(ui.ctx(), &mut self.app);
         self.route_keys(ui.ctx(), focus);
@@ -179,6 +181,18 @@ impl Shell {
     #[doc(hidden)]
     pub fn app_mut(&mut self) -> &mut App {
         &mut self.app
+    }
+
+    /// Run the App's wall-clock timers (`App::poll_timers`: status expiry,
+    /// run-cost banner, timed question) every frame, whatever is drawn, and
+    /// ask for a frame when the next one is due, so they fire while the
+    /// window is idle too. A timed question behind another modal still
+    /// answers its default, as in the TUI.
+    fn poll_timers(&mut self, ctx: &egui::Context) {
+        self.app.poll_timers();
+        if let Some(due) = self.app.next_timer_due() {
+            ctx.request_repaint_after(due);
+        }
     }
 
     /// Route this frame's key presses to `App::handle_key`.

@@ -5130,6 +5130,65 @@ impl App {
         }
     }
 
+    /// Run the App's wall-clock timers: the status auto-expiry, the run-cost
+    /// banner auto-dismiss and the timed question's auto-answer.
+    ///
+    /// Each frontend calls it on its periodic tick (the TUI from its
+    /// housekeeping pass, the GUI every frame), whatever is on screen, so a
+    /// timed question hidden behind another modal still answers its default
+    /// and the agent waiting on it is never blocked.
+    pub fn poll_timers(&mut self) {
+        self.poll_status_expiry();
+        self.poll_run_cost_banner_expiry();
+        self.poll_question_expiry();
+    }
+
+    /// How long until the next timer [`Self::poll_timers`] runs is due, so
+    /// an idle frontend can wake for it.
+    ///
+    /// # Returns
+    ///
+    /// The time left to the earliest armed timer (zero when one is already
+    /// due), or `None` when none is armed.
+    #[must_use]
+    pub fn next_timer_due(&self) -> Option<std::time::Duration> {
+        let now = std::time::Instant::now();
+        let status = self.status_set_at.map(|set_at| {
+            (set_at + std::time::Duration::from_millis(STATUS_EXPIRY_MS))
+                .saturating_duration_since(now)
+        });
+        let banner = self.session.run_cost_banner_at.map(|shown_at| {
+            (shown_at + std::time::Duration::from_secs(RUN_COST_BANNER_EXPIRY_SECS))
+                .saturating_duration_since(now)
+        });
+        let question = self
+            .session
+            .question_queue
+            .front()
+            .and_then(|q| q.expire_at_ms)
+            .map(|deadline| {
+                std::time::Duration::from_millis(deadline.saturating_sub(self.timer_now_ms()))
+            });
+        [status, banner, question].into_iter().flatten().min()
+    }
+
+    /// The wall clock (Unix milliseconds) the question timeout reads: the
+    /// real clock, moved forward by as much as the answer guards' test clock
+    /// (`App::advance_permission_clock_for_tests`) is ahead of now, so tests
+    /// can expire a question without sleeping.
+    fn timer_now_ms(&self) -> u64 {
+        let real = crate::text_utils::now_unix_ms();
+        let ahead = self.permission_clock.map_or(0, |frozen| {
+            u64::try_from(
+                frozen
+                    .saturating_duration_since(std::time::Instant::now())
+                    .as_millis(),
+            )
+            .unwrap_or(u64::MAX)
+        });
+        real.saturating_add(ahead)
+    }
+
     /// Auto-answer a timed multiple-choice question whose deadline has passed.
     ///
     /// When the user leaves a question dialog untouched for
@@ -5148,8 +5207,7 @@ impl App {
         let Some(deadline) = req.expire_at_ms else {
             return;
         };
-        let now_ms = crate::text_utils::now_unix_ms();
-        if now_ms < deadline {
+        if self.timer_now_ms() < deadline {
             return;
         }
 

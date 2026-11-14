@@ -9,6 +9,14 @@
 //! for the next `/loop`. The keys reach the App through the router, as in
 //! the TUI.
 //!
+//! Typed text the router cannot pair with a key (AltGr and Option
+//! characters, dead keys, IME commits) is forwarded as its characters by the
+//! router (`Focus::Modal`), and a paste is typed character by character by
+//! [`prepare`], so the form gets every character once, through the same
+//! key path as the TUI. (The fields stay key-driven, like the provider
+//! fields; binding text editors to them would give two editors of one
+//! field.)
+//!
 //! This dialog draws the form as the App holds it, the active field marked
 //! as the TUI marks it. Clicking an agent moves the agent highlight (the
 //! state Up/Down move); clicking the checkpoints value moves to that field
@@ -46,6 +54,35 @@ const TEXT_FIELDS: [(&str, LoopSetupField); 7] = [
     ("max steps", LoopSetupField::MaxSteps),
     ("cost limit", LoopSetupField::CostLimit),
 ];
+
+/// Type this frame's pastes into the focused text field, as key presses.
+///
+/// app-core has no paste path for the form, and every field accepts typed
+/// characters, so each pasted character is sent as its own [`Key::Char`]
+/// through `App::handle_key` ([`send_key`]): the same path as typing, and
+/// once. Carriage returns are dropped, and line breaks and tabs become
+/// spaces, since the fields are single lines and Enter would start the loop.
+/// The paste is removed from the input.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context, before the router reads input.
+pub fn prepare(ctx: &egui::Context) {
+    let mut pasted = String::new();
+    ctx.input_mut(|input| {
+        input.events.retain(|event| match event {
+            egui::Event::Paste(text) => {
+                pasted.push_str(text);
+                false
+            }
+            _ => true,
+        });
+    });
+    for c in pasted.chars().filter(|&c| c != '\r') {
+        let c = if c == '\n' || c == '\t' { ' ' } else { c };
+        send_key(ctx, plain(Key::Char(c)));
+    }
+}
 
 /// The TUI's active-field marker.
 fn marker(active: bool) -> &'static str {
