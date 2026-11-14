@@ -244,11 +244,13 @@ fn named_key(key: egui::Key, shift: bool) -> Key {
         .map_or(Key::Other, Key::F)
 }
 
-/// The letters the TUI binds with Alt, taken from the `Key::Char(..) if
-/// key.mods.contains(Modifiers::ALT)` arms of `handle_key` in
-/// `crates/codemason-app-core/src/input.rs` (a test keeps the two in step).
+/// The letters the TUI binds with Alt: the `Key::Char(..)` arms guarded by
+/// Alt in `handle_key` in `crates/codemason-app-core/src/input.rs`, plus
+/// Alt+S (toggle the sessions sidebar) and Alt+R (return to the recent
+/// session) in `sessions_sidebar_state.rs`, which `handle_key` always calls.
+/// A test scans every app-core source file and keeps the two in step.
 pub const TUI_ALT_LETTERS: &[char] = &[
-    'a', 'c', 'e', 'g', 'i', 'l', 'm', 'o', 'p', 'q', 't', 'v', 'x', 'y',
+    'a', 'c', 'e', 'g', 'i', 'l', 'm', 'o', 'p', 'q', 'r', 's', 't', 'v', 'x', 'y',
 ];
 
 /// Whether `input` is an Alt chord the TUI handles: Alt with one of
@@ -375,13 +377,11 @@ impl KeyRouter {
     ///   never types these letters). On macOS an Alt (Option) press that
     ///   typed a character is left to the prompt instead, as a terminal does
     ///   unless Option is set to act as Meta.
-    /// - Ctrl+C (an egui `Copy` event off macOS, see below) is left to the
-    ///   prompt when it has a non-empty selection, so it copies, matching the
-    ///   TUI's "copy if a selection is active; otherwise arm quit". Without a
-    ///   selection it is forwarded and arms quit.
-    /// - Ctrl+X (an egui `Cut` event off macOS) is always forwarded, so it
-    ///   cancels a running agent as in the TUI; the prompt still cuts its
-    ///   selection.
+    /// - Ctrl+C and Ctrl+X (egui `Copy` and `Cut` events off macOS, see
+    ///   below) are left to the prompt when it has a non-empty selection, so
+    ///   they only copy or cut it, matching the TUI's "copy if a selection is
+    ///   active". Without a selection they are forwarded: Ctrl+C arms quit
+    ///   and Ctrl+X cancels a running agent, as in the TUI.
     /// - Other presses are forwarded only when they typed no text and the
     ///   prompt ignores them: Esc, function keys, PageUp and PageDown.
     ///
@@ -418,8 +418,8 @@ impl KeyRouter {
         let mut drop = vec![false; events.len()];
         for (i, event) in events.iter().enumerate() {
             if let Some(key) = clipboard_key_input(event, platform, &input.modifiers) {
-                let copies = typing && has_selection && matches!(event, egui::Event::Copy);
-                if !copies {
+                // A prompt selection takes Ctrl+C and Ctrl+X for itself.
+                if !(typing && has_selection) {
                     keys.push(key);
                 }
                 continue;

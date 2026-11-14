@@ -340,7 +340,7 @@ fn test_route_ignores_mac_cmd_x_and_pc_shift_delete_cut() {
 }
 
 #[test]
-fn test_route_leaves_ctrl_c_to_a_prompt_selection() {
+fn test_route_leaves_ctrl_c_and_ctrl_x_to_a_prompt_selection() {
     let mut router = KeyRouter::new(default_keymap(Platform::Linux));
     let mut input = input_mods(
         vec![egui::Event::Copy, egui::Event::Cut],
@@ -356,33 +356,135 @@ fn test_route_leaves_ctrl_c_to_a_prompt_selection() {
 
     assert_eq!(
         keys,
-        vec![KeyInput {
-            key: Key::Char('x'),
-            mods: Modifiers::CTRL,
-        }],
-        "Ctrl+C copies the selection; Ctrl+X still reaches the App"
+        Vec::new(),
+        "with a selection Ctrl+C copies and Ctrl+X cuts, in the prompt only"
     );
     assert_eq!(input.events.len(), 2, "the prompt still sees Copy and Cut");
 }
 
 #[test]
+fn test_route_forwards_sidebar_alt_s_and_drops_its_text_while_typing() {
+    let mut router = KeyRouter::new(default_keymap(Platform::Linux));
+    let mut input = input_with(vec![
+        press(egui::Key::S, egui::Modifiers::ALT),
+        egui::Event::Text("s".into()),
+        press(egui::Key::R, egui::Modifiers::ALT),
+        egui::Event::Text("r".into()),
+    ]);
+
+    let keys = router.route(&mut input, TYPING);
+
+    assert_eq!(
+        keys,
+        vec![
+            KeyInput {
+                key: Key::Char('s'),
+                mods: Modifiers::ALT,
+            },
+            KeyInput {
+                key: Key::Char('r'),
+                mods: Modifiers::ALT,
+            },
+        ]
+    );
+    assert!(
+        !input
+            .events
+            .iter()
+            .any(|e| matches!(e, egui::Event::Text(_))),
+        "{:?}",
+        input.events
+    );
+}
+
+/// The letters `source` binds with Alt held.
+///
+/// Each `Key::Char('<c>')` literal is read up to the end of its match arm
+/// pattern (the `=>`), taking the next line too when the arm does not end on
+/// its own line (a guard rustfmt wrapped, or a `KeyInput { .. }` literal).
+/// The letter counts when that text holds `Modifiers::ALT` or an `alt`
+/// binding that is not negated (`!key.mods.contains(Modifiers::ALT)`,
+/// `!alt`). This covers `Key::Char('x') if key.mods.contains(Modifiers::ALT)`,
+/// `Key::Char('s') if alt`, a wrapped guard, `matches!(key.key,
+/// Key::Char('x')) && key.mods.contains(Modifiers::ALT)` and
+/// `KeyInput { key: Key::Char('x'), mods: Modifiers::ALT }`.
+fn alt_letters(source: &str) -> Vec<char> {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut found = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let mut rest = *line;
+        while let Some(at) = rest.find("Key::Char('") {
+            let after = &rest[at + "Key::Char('".len()..];
+            let mut chars = after.chars();
+            let (Some(c), Some('\''), Some(')')) = (chars.next(), chars.next(), chars.next())
+            else {
+                rest = after;
+                continue;
+            };
+            let tail = chars.as_str();
+            let mut window = tail.to_string();
+            if !window.contains("=>")
+                && let Some(next) = lines.get(i + 1)
+            {
+                window.push(' ');
+                window.push_str(next);
+            }
+            let arm = window.split("=>").next().unwrap_or_default();
+            let arm = arm
+                .replace("!key.mods.contains(Modifiers::ALT)", "")
+                .replace("!alt", "");
+            let alt = arm
+                .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                .any(|token| token == "ALT" || token == "alt");
+            if alt {
+                found.push(c);
+            }
+            rest = tail;
+        }
+    }
+    found.sort_unstable();
+    found.dedup();
+    found
+}
+
+#[test]
+fn test_alt_letters_scanner_recognises_every_form() {
+    let source = "\
+        Key::Char('a') if key.mods.contains(Modifiers::ALT) => x,
+        Key::Char('b') if alt => {
+        Key::Char('c')
+            if key.mods.contains(Modifiers::ALT) =>
+        matches!(key.key, Key::Char('d')) && key.mods.contains(Modifiers::ALT)
+        let k = KeyInput { key: Key::Char('e'), mods: Modifiers::ALT };
+        Key::Char('f') if !alt => {
+        Key::Char('g') if key.mods.contains(Modifiers::CTRL) && !key.mods.contains(Modifiers::ALT) =>
+        Key::Char('h') => {
+    ";
+    assert_eq!(alt_letters(source), vec!['a', 'b', 'c', 'd', 'e']);
+}
+
+#[test]
 fn test_tui_alt_letters_match_app_core_input_handler() {
-    let source = std::fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../codemason-app-core/src/input.rs"),
-    )
-    .expect("read app-core input.rs");
-    let mut found: Vec<char> = source
-        .lines()
-        .filter(|line| line.contains("if key.mods.contains(Modifiers::ALT)"))
-        .filter_map(|line| {
-            let rest = line.trim().strip_prefix("Key::Char('")?;
-            let mut chars = rest.chars();
-            let c = chars.next()?;
-            chars.as_str().starts_with("')").then_some(c)
-        })
-        .collect();
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../codemason-app-core/src");
+    let mut dirs = vec![src];
+    let mut found = Vec::new();
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).expect("read app-core src dir") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                let source = std::fs::read_to_string(&path).expect("read app-core source");
+                found.extend(alt_letters(&source));
+            }
+        }
+    }
     found.sort_unstable();
     found.dedup();
 
-    assert_eq!(found, TUI_ALT_LETTERS.to_vec());
+    assert_eq!(
+        found,
+        TUI_ALT_LETTERS.to_vec(),
+        "keys::TUI_ALT_LETTERS must list every Alt+letter app-core handles"
+    );
 }
