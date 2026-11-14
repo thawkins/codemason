@@ -1,7 +1,7 @@
 //! T-017 unit tests: prompt module pure functions (spec `prompts`,
 //! FR-005-FR-009, FR-011, FR-013).
 //!
-//! Covers the pure helpers of `crates/codemason-tui/src/app/prompt.rs` directly,
+//! Covers the pure helpers of `crates/codemason-app-core/src/app/prompt.rs` directly,
 //! without the App/runtime harness (those paths are covered end to end by
 //! `test_prompt_subagent_render.rs`, `test_prompt_tool_free.rs`,
 //! `test_prompt_size_cap.rs`, and `test_prompt_readonly.rs`):

@@ -595,7 +595,7 @@ fn test_all_three_restriction_sites_report_and_the_prompt_path_does_not() {
     for relative in [
         "crates/codemason-agent/src/session/prompt_builders.rs",
         "crates/codemason-agent/src/session/loop_steps.rs",
-        "crates/codemason-tui/src/app/prompt.rs",
+        "crates/codemason-app-core/src/app/prompt.rs",
     ] {
         let source = read_workspace_file(relative);
         assert!(

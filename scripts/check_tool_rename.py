@@ -544,7 +544,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         "scaffold help text listing the language ids `--language` accepts",
     ),
     Exemption(
-        "crates/codemason-tui/src/app/toolchain.rs",
+        "crates/codemason-app-core/src/app/toolchain.rs",
         ("bash",),
         'Some(LanguageRuntime::many(&["bash"])),',
         1,
@@ -612,14 +612,14 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         "TESTABLE_VERBS entry -- the English verb a requirement is validated on",
     ),
     Exemption(
-        "crates/codemason-tui/src/widgets/message_widget.rs",
+        "crates/codemason-app-core/src/message_text.rs",
         ("edit",),
         'pluralize(count, "edit", "edits")',
         1,
         "pluralize noun -- the count of edits shown in a summary line",
     ),
     Exemption(
-        "crates/codemason-tui/src/widgets/message_widget.rs",
+        "crates/codemason-app-core/src/message_text.rs",
         ("edit",),
         'pluralize(edits, "edit", "edits"),',
         1,

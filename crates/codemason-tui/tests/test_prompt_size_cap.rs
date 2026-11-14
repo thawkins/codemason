@@ -8,7 +8,7 @@
 //!
 //! The pure functions (`apply_size_cap`, `PROMPT_REPORT_MAX_CHARS`) are
 //! asserted directly; the marker wording comes from
-//! `crates/codemason-tui/src/app/prompt.rs`.
+//! `crates/codemason-app-core/src/app/prompt.rs`.
 
 use codemason_tui::app::prompt::{PROMPT_REPORT_MAX_CHARS, apply_size_cap};
 
