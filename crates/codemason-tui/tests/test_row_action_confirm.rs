@@ -21,6 +21,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use codemason_tui::adapters::area_to_rect;
 use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{Terminal, backend::TestBackend, layout::Rect};
@@ -124,7 +125,7 @@ fn render_dialog_text(app: &mut App) -> String {
         "the dialog must be painted inside the dialog region (area {area:?})"
     );
     let _ = backend_area;
-    text_of(app, area)
+    text_of(app, area_to_rect(area))
 }
 
 /// Flatten the given rect of the last render into text.
@@ -230,7 +231,7 @@ async fn render_paints_title_body_and_button_rects() {
     let no = app.row_action_confirm_no_area;
     let dialog = app.row_action_confirm_area;
     assert!(
-        dialog.contains(centre(yes).into()) && dialog.contains(centre(no).into()),
+        dialog.contains(centre(area_to_rect(yes))) && dialog.contains(centre(area_to_rect(no))),
         "both button rects must sit inside the cached dialog area"
     );
     assert_ne!(yes, no, "the two button rects must be distinct hit targets");
@@ -355,7 +356,7 @@ async fn mouse_click_on_no_dismisses_without_dispatching() {
         agent_name: "explore".to_string(),
     });
     render(&mut app);
-    let (col, row) = centre(app.row_action_confirm_no_area);
+    let (col, row) = centre(area_to_rect(app.row_action_confirm_no_area));
     app.needs_redraw = false;
 
     app.handle_mouse_event(click(col, row));
@@ -382,7 +383,7 @@ async fn mouse_click_on_yes_accepts() {
         agent_name: "explore".to_string(),
     });
     render(&mut app);
-    let (col, row) = centre(app.row_action_confirm_yes_area);
+    let (col, row) = centre(area_to_rect(app.row_action_confirm_yes_area));
 
     app.handle_mouse_event(click(col, row));
 
@@ -802,7 +803,7 @@ async fn shared_yes_no_dialog_footer_states_the_outcomes() {
         area.width > 0 && area.height > 0,
         "the shared dialog must be painted (area {area:?})"
     );
-    let text = text_of(&mut app, area);
+    let text = text_of(&mut app, area_to_rect(area));
     assert!(
         text.contains("Enter on Yes performs"),
         "the shared dialog's footer says Yes performs the action: {text}"

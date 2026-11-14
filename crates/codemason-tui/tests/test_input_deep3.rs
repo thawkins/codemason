@@ -21,11 +21,11 @@
 
 mod support;
 
+use codemason_app_core::geometry::Area;
 use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use ratatui::layout::Rect;
 
 use codemason_tui::app::{
     ConfigSavePickerState, ContextAction, ContextMenuState, HistoryPickerState, ModelPickerEntry,
@@ -1036,7 +1036,7 @@ async fn input_ladder_slash_and_bang_prefixes_select_the_action() {
 #[test]
 fn mouse_wheel_scrolls_the_messages_pane() {
     let mut app = support::make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.handle_mouse_event(mouse(MouseEventKind::ScrollUp, 5, 5));
     assert_eq!(app.session.scroll_offset, 3);
     app.handle_mouse_event(mouse(MouseEventKind::ScrollDown, 5, 5));
@@ -1050,17 +1050,17 @@ fn mouse_wheel_scrolls_every_side_panel() {
     // offset. None of them may scroll the message pane.
     let mut app = support::make_app();
     app.show_log = true;
-    app.log_area = Rect::new(60, 1, 20, 20);
+    app.log_area = Area::new(60, 1, 20, 20);
     app.show_profile = true;
-    app.profile_area = Rect::new(60, 21, 20, 20);
+    app.profile_area = Area::new(60, 21, 20, 20);
     app.show_tasks_panel = true;
-    app.tasks_area = Rect::new(30, 1, 20, 20);
+    app.tasks_area = Area::new(30, 1, 20, 20);
     app.show_memory = true;
-    app.memory_area = Rect::new(30, 21, 20, 20);
+    app.memory_area = Area::new(30, 21, 20, 20);
     app.show_telemetry = true;
-    app.telemetry_area = Rect::new(90, 1, 20, 20);
+    app.telemetry_area = Area::new(90, 1, 20, 20);
     app.show_context_panel = true;
-    app.context_panel_area = Rect::new(90, 21, 20, 20);
+    app.context_panel_area = Area::new(90, 21, 20, 20);
 
     for (column, row) in [
         (65_u16, 5_u16),
@@ -1082,7 +1082,7 @@ fn mouse_wheel_scrolls_every_side_panel() {
 #[test]
 fn mouse_wheel_over_the_input_pane_is_a_noop() {
     let mut app = support::make_app();
-    app.input_area = Rect::new(0, 40, 80, 3);
+    app.input_area = Area::new(0, 40, 80, 3);
     app.handle_mouse_event(mouse(MouseEventKind::ScrollUp, 5, 41));
     app.handle_mouse_event(mouse(MouseEventKind::ScrollDown, 5, 41));
     assert_eq!(app.session.scroll_offset, 0);
@@ -1095,7 +1095,7 @@ fn mouse_wheel_over_the_input_pane_is_a_noop() {
 #[test]
 fn mouse_drag_extends_and_release_preserves_the_selection() {
     let mut app = support::make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
 
     app.handle_mouse_event(mouse(MouseEventKind::Down(MouseButton::Left), 4, 4));
     app.handle_mouse_event(mouse(MouseEventKind::Drag(MouseButton::Left), 12, 6));
@@ -1114,7 +1114,7 @@ fn mouse_drag_extends_and_release_preserves_the_selection() {
 fn mouse_scrollbar_drag_moves_the_log_offset() {
     let mut app = support::make_app();
     app.show_log = true;
-    app.log_area = Rect::new(60, 1, 20, 20);
+    app.log_area = Area::new(60, 1, 20, 20);
     app.log_max_scroll = 100;
     let gutter = app.log_area.right() - 1;
 
@@ -1138,7 +1138,7 @@ fn mouse_scrollbar_drag_moves_the_log_offset() {
 fn app_with_log_rows() -> codemason_tui::App {
     let mut app = support::make_app();
     app.show_log = true;
-    app.log_area = Rect::new(60, 1, 30, 20);
+    app.log_area = Area::new(60, 1, 30, 20);
     app.log_content_lines = vec!["hello world".to_string(), "second row".to_string()];
     app
 }
@@ -1185,7 +1185,7 @@ fn context_menu_copy_row_copies_the_selected_log_text() {
 #[test]
 fn context_menu_cut_row_from_the_input_pane_removes_the_range() {
     let mut app = support::make_app();
-    app.input_area = Rect::new(0, 40, 40, 3);
+    app.input_area = Area::new(0, 40, 40, 3);
     app.session.input = "abcdef".to_string();
     app.session.input_cursor = app.session.input.chars().count();
     // Inner origin is (1, 41); the painted prefix is "> ", so columns 5..6
@@ -1212,7 +1212,7 @@ fn context_menu_cut_row_from_the_input_pane_removes_the_range() {
 #[test]
 fn context_menu_paste_row_with_a_provider_setup_dialog_pastes_into_the_form() {
     let mut app = support::make_app();
-    app.input_area = Rect::new(0, 40, 40, 3);
+    app.input_area = Area::new(0, 40, 40, 3);
     app.provider_setup = Some(enter_key("anthropic", ""));
     app.context_menu = Some(ContextMenuState {
         x: 2,

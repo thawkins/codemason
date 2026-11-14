@@ -11,6 +11,7 @@
 //! - Scroll, scrollbar, text-selection, and mutual-exclusion behaviour
 //!   preserved.
 
+use codemason_app_core::geometry::Area;
 use codemason_tui::crossterm_input::CrosstermAppExt;
 use codemason_tui::{App, app::ScreenMode, layout};
 use ratatui::{Terminal, backend::TestBackend};
@@ -701,11 +702,11 @@ fn test_drag_tasks_scrollbar_moves_offset_bottom_semantics() {
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
     let mut app = support::make_app();
-    app.message_area = ratatui::layout::Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.show_tasks_panel = true;
     app.show_log = false;
     app.show_profile = false;
-    app.tasks_area = ratatui::layout::Rect::new(80, 0, 30, 21);
+    app.tasks_area = Area::new(80, 0, 30, 21);
     app.tasks_max_scroll = 60;
 
     let mouse_event = |kind: MouseEventKind, col: u16, row: u16| MouseEvent {

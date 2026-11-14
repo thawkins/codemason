@@ -9,6 +9,7 @@
 //! `unsafe` in edition 2024 and the workspace denies `unsafe_code`, so this
 //! target opts back in explicitly (env mutation is contained to the test).
 #![allow(unsafe_code)]
+use codemason_app_core::geometry::Area;
 use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::fs;
 use std::sync::{Arc, MutexGuard};
@@ -2041,13 +2042,12 @@ fn test_paste_text_replaces_keyboard_selection() {
 #[test]
 fn test_paste_text_replaces_mouse_selection() {
     use codemason_tui::app::{SelectionPane, TextSelection};
-    use ratatui::layout::Rect;
 
     let mut app = make_app();
     app.session.input = "hello world".to_string();
     app.session.input_cursor = 0;
     app.session.kb_select_anchor = None;
-    app.input_area = Rect::new(0, 0, 12, 10);
+    app.input_area = Area::new(0, 0, 12, 10);
     app.text_selection = Some(TextSelection {
         pane: SelectionPane::Input,
         anchor: (2, 1),

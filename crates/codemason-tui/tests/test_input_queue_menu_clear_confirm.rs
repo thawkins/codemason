@@ -12,6 +12,7 @@
 //! `Yes`-empties / `No`-leaves-unchanged gating (T-022) is covered by
 //! `test_input_queue_menu_clear_gating.rs`.
 
+use codemason_app_core::geometry::Area;
 use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -174,7 +175,7 @@ fn test_closed_dialog_is_not_painted_and_area_is_cleared() {
 
     assert_eq!(
         app.queue_clear_confirm_area,
-        ratatui::layout::Rect::default(),
+        Area::default(),
         "a closed dialog must leave no cached overlay area"
     );
     let buffer = terminal.backend().buffer();

@@ -3,9 +3,9 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use codemason_app_core::geometry::Area;
 use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-use ratatui::layout::Rect;
 
 use codemason_tui::App;
 
@@ -85,8 +85,8 @@ fn test_log_scroll_down_does_not_go_below_zero() {
 #[test]
 fn test_mouse_scroll_up_on_messages() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
-    app.log_area = Rect::new(80, 1, 30, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
+    app.log_area = Area::new(80, 1, 30, 20);
 
     app.handle_mouse_event(mouse_scroll_up(10, 10));
     assert_eq!(app.session.scroll_offset, 3);
@@ -96,7 +96,7 @@ fn test_mouse_scroll_up_on_messages() {
 #[test]
 fn test_mouse_scroll_down_on_messages() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.session.scroll_offset = 6;
 
     app.handle_mouse_event(mouse_scroll_down(10, 10));
@@ -108,8 +108,8 @@ fn test_mouse_scroll_down_on_messages() {
 #[test]
 fn test_mouse_scroll_up_on_log() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
-    app.log_area = Rect::new(80, 1, 30, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
+    app.log_area = Area::new(80, 1, 30, 20);
 
     app.handle_mouse_event(mouse_scroll_up(90, 10));
     assert_eq!(app.log_scroll_offset, 3);
@@ -119,8 +119,8 @@ fn test_mouse_scroll_up_on_log() {
 #[test]
 fn test_mouse_scroll_down_on_log() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
-    app.log_area = Rect::new(80, 1, 30, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
+    app.log_area = Area::new(80, 1, 30, 20);
     app.log_scroll_offset = 9;
 
     app.handle_mouse_event(mouse_scroll_down(90, 10));
@@ -132,9 +132,9 @@ fn test_mouse_scroll_down_on_log() {
 #[test]
 fn test_mouse_scroll_up_on_profile() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.show_profile = true;
-    app.profile_area = Rect::new(80, 1, 30, 20);
+    app.profile_area = Area::new(80, 1, 30, 20);
 
     app.handle_mouse_event(mouse_scroll_up(90, 10));
     assert_eq!(app.profile_scroll_offset, 3);
@@ -144,9 +144,9 @@ fn test_mouse_scroll_up_on_profile() {
 #[test]
 fn test_mouse_scroll_down_on_profile() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.show_profile = true;
-    app.profile_area = Rect::new(80, 1, 30, 20);
+    app.profile_area = Area::new(80, 1, 30, 20);
     app.profile_scroll_offset = 9;
 
     app.handle_mouse_event(mouse_scroll_down(90, 10));
@@ -158,8 +158,8 @@ fn test_mouse_scroll_down_on_profile() {
 #[test]
 fn test_mouse_scroll_outside_panes_no_effect() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
-    app.log_area = Rect::new(80, 1, 30, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
+    app.log_area = Area::new(80, 1, 30, 20);
 
     // Scroll in the status bar area (row 0)
     app.handle_mouse_event(mouse_scroll_up(10, 0));
@@ -173,8 +173,8 @@ fn test_mouse_scroll_outside_panes_no_effect() {
 fn test_mouse_scroll_log_hidden_ignores_log_area() {
     let mut app = make_app();
     app.show_log = false;
-    app.message_area = Rect::new(0, 1, 110, 20);
-    app.log_area = Rect::default();
+    app.message_area = Area::new(0, 1, 110, 20);
+    app.log_area = Area::default();
 
     app.handle_mouse_event(mouse_scroll_up(50, 10));
     assert_eq!(app.session.scroll_offset, 3);
@@ -186,8 +186,8 @@ fn test_mouse_scroll_log_hidden_ignores_log_area() {
 #[test]
 fn test_area_fields_default_to_zero() {
     let app = make_app();
-    assert_eq!(app.message_area, Rect::default());
-    assert_eq!(app.log_area, Rect::default());
+    assert_eq!(app.message_area, Area::default());
+    assert_eq!(app.log_area, Area::default());
 }
 
 // ---------- Non-scroll mouse events ignored ----------
@@ -195,7 +195,7 @@ fn test_area_fields_default_to_zero() {
 #[test]
 fn test_mouse_click_no_effect() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.session.message_max_scroll = 100;
     let click = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
@@ -244,7 +244,7 @@ const fn mouse_up(col: u16, row: u16) -> MouseEvent {
 fn test_drag_starts_on_message_scrollbar_column() {
     let mut app = make_app();
     // message area: x=0, y=1, width=80, height=20 -> scrollbar at column 79
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.session.message_max_scroll = 100;
 
     app.handle_mouse_event(mouse_down(79, 10));
@@ -254,7 +254,7 @@ fn test_drag_starts_on_message_scrollbar_column() {
 #[test]
 fn test_drag_does_not_start_without_scrollable_content() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.session.message_max_scroll = 0; // nothing to scroll
 
     app.handle_mouse_event(mouse_down(79, 10));
@@ -264,8 +264,8 @@ fn test_drag_does_not_start_without_scrollable_content() {
 #[test]
 fn test_drag_starts_on_log_scrollbar_column() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
-    app.log_area = Rect::new(80, 1, 30, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
+    app.log_area = Area::new(80, 1, 30, 20);
     app.log_max_scroll = 50;
 
     // log scrollbar at column 109 (80 + 30 - 1)
@@ -276,7 +276,7 @@ fn test_drag_starts_on_log_scrollbar_column() {
 #[test]
 fn test_drag_to_top_scrolls_to_top_of_content() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.session.message_max_scroll = 100;
 
     // Click scrollbar, drag to top of pane (row 1)
@@ -289,7 +289,7 @@ fn test_drag_to_top_scrolls_to_top_of_content() {
 #[test]
 fn test_drag_to_bottom_scrolls_to_bottom_of_content() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.session.message_max_scroll = 100;
     app.session.scroll_offset = 50;
 
@@ -304,7 +304,7 @@ fn test_drag_to_bottom_scrolls_to_bottom_of_content() {
 fn test_drag_to_middle_scrolls_to_midpoint() {
     let mut app = make_app();
     // area: y=0, height=21 -> rows 0..20 inclusive, track_height=20
-    app.message_area = Rect::new(0, 0, 80, 21);
+    app.message_area = Area::new(0, 0, 80, 21);
     app.session.message_max_scroll = 100;
 
     app.handle_mouse_event(mouse_down(79, 10));
@@ -316,7 +316,7 @@ fn test_drag_to_middle_scrolls_to_midpoint() {
 #[test]
 fn test_drag_release_clears_state() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.session.message_max_scroll = 100;
 
     app.handle_mouse_event(mouse_down(79, 10));
@@ -330,7 +330,7 @@ fn test_drag_release_clears_state() {
 fn test_drag_outside_pane_clamped() {
     let mut app = make_app();
     // area: y=5, height=10 -> rows 5..14
-    app.message_area = Rect::new(0, 5, 80, 10);
+    app.message_area = Area::new(0, 5, 80, 10);
     app.session.message_max_scroll = 100;
 
     app.handle_mouse_event(mouse_down(79, 10));
@@ -346,8 +346,8 @@ fn test_drag_outside_pane_clamped() {
 #[test]
 fn test_drag_log_scrollbar() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
-    app.log_area = Rect::new(80, 0, 30, 21);
+    app.message_area = Area::new(0, 1, 80, 20);
+    app.log_area = Area::new(80, 0, 30, 21);
     app.log_max_scroll = 60;
 
     // Click log scrollbar (column 109), drag to top
@@ -365,7 +365,7 @@ fn test_drag_log_scrollbar() {
 #[test]
 fn test_drag_ignored_when_no_active_drag() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.session.message_max_scroll = 100;
 
     // Drag without prior mouse down - no scrollbar_drag active

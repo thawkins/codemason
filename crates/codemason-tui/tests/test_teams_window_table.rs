@@ -11,6 +11,7 @@
 
 mod support;
 
+use codemason_tui::adapters::area_to_rect;
 use std::path::PathBuf;
 
 use ratatui::Terminal;
@@ -212,7 +213,7 @@ fn test_teams_lead_row_carries_marker_identity_and_placeholders() {
     }
 
     let buffer = render(&mut app, 170, 44);
-    let content = table_inner(app.teams_area);
+    let content = table_inner(area_to_rect(app.teams_area));
     let header_y = row_containing(&buffer, &["id", "name", "status", "model"]);
     let lead_y = header_y + 1;
     let lead_row = screen_row(&buffer, lead_y);
@@ -282,7 +283,7 @@ fn test_teams_lead_row_carries_marker_identity_and_placeholders() {
 fn test_teams_lead_row_without_a_stored_session_shows_a_dash() {
     let mut app = open_teams(Vec::new());
     let buffer = render(&mut app, 170, 44);
-    let content = table_inner(app.teams_area);
+    let content = table_inner(area_to_rect(app.teams_area));
     let lead_y = row_containing(&buffer, &["id", "name", "status", "model"]) + 1;
 
     assert_eq!(
@@ -306,7 +307,7 @@ fn test_teams_teammate_rows_carry_connector_focus_marker_and_label() {
     app.session.focused_teammate = Some("tm-001".to_string());
 
     let buffer = render(&mut app, 170, 44);
-    let content = table_inner(app.teams_area);
+    let content = table_inner(area_to_rect(app.teams_area));
     let lead_y = row_containing(&buffer, &["id", "name", "status", "model"]) + 1;
 
     let focused_y = lead_y + 1;
@@ -356,7 +357,7 @@ fn test_teams_teammate_label_is_clipped_to_its_column() {
     let long_name = "reviewer-with-a-very-long-name-indeed";
     let mut app = open_teams(vec![member(long_name, "tm-009", MemberStatus::Idle)]);
     let buffer = render(&mut app, 170, 44);
-    let content = table_inner(app.teams_area);
+    let content = table_inner(area_to_rect(app.teams_area));
     let row_y = row_containing(&buffer, &["tm-009"]);
 
     let painted = column_text(&buffer, content, row_y, col::LABEL, columns::LABEL_W);
@@ -401,7 +402,7 @@ fn test_teams_status_words_match_the_canonical_mapping_in_distinct_colours() {
     let mut app = open_teams(members);
 
     let buffer = render(&mut app, 170, 48);
-    let content = table_inner(app.teams_area);
+    let content = table_inner(area_to_rect(app.teams_area));
     let mut colours = Vec::new();
 
     for (i, status) in statuses.iter().enumerate() {
@@ -489,7 +490,7 @@ fn test_teams_model_column_shows_override_or_inherited() {
     app.session.selected_model = Some("openai/gpt-4o".to_string());
 
     let buffer = render(&mut app, 170, 44);
-    let content = table_inner(app.teams_area);
+    let content = table_inner(area_to_rect(app.teams_area));
 
     let override_y = row_containing(&buffer, &["tm-001"]);
     let override_text = column_text(&buffer, content, override_y, col::MODEL, columns::MODEL_W);
@@ -543,7 +544,7 @@ fn test_teams_model_column_suppresses_an_override_equal_to_the_global_model() {
     app.session.selected_model = Some("anthropic/claude-sonnet-4-20250514".to_string());
 
     let buffer = render(&mut app, 170, 44);
-    let content = table_inner(app.teams_area);
+    let content = table_inner(area_to_rect(app.teams_area));
     let row_y = row_containing(&buffer, &["tm-001"]);
 
     assert_eq!(
@@ -580,7 +581,7 @@ fn test_teams_message_counters_render_dash_for_zero_and_colour_for_non_zero() {
         .insert("tm-002".to_string(), (4, 2));
 
     let buffer = render(&mut app, 170, 44);
-    let content = table_inner(app.teams_area);
+    let content = table_inner(area_to_rect(app.teams_area));
 
     let zero_y = row_containing(&buffer, &["tm-001"]);
     assert_eq!(
@@ -663,7 +664,7 @@ fn test_teams_task_counters_come_from_the_team_task_store() {
         member("tester", "tm-002", MemberStatus::Idle),
     ]);
     let buffer = render(&mut app, 170, 44);
-    let content = table_inner(app.teams_area);
+    let content = table_inner(area_to_rect(app.teams_area));
 
     let counted_y = row_containing(&buffer, &["tm-001"]);
     assert_eq!(
@@ -767,7 +768,7 @@ fn test_teams_row_controls_paint_at_the_pinned_columns_and_track_the_cursor_list
         member("archivist", "tm-003", MemberStatus::Idle),
     ]);
     let buffer = render(&mut app, full_table_width(), 44);
-    let content = table_inner(app.teams_area);
+    let content = table_inner(area_to_rect(app.teams_area));
     let lead_y = row_containing(&buffer, &["id", "name", "status", "model"]) + 1;
 
     // Live rows paint both controls at their pinned columns; the stopped row
@@ -842,7 +843,7 @@ fn test_teams_suspended_row_paints_the_resume_glyph_in_place_of_stop() {
     let suspended = member("reviewer", "tm-001", MemberStatus::Suspended);
     let mut app = open_teams(vec![suspended]);
     let buffer = render(&mut app, full_table_width(), 44);
-    let content = table_inner(app.teams_area);
+    let content = table_inner(area_to_rect(app.teams_area));
     let row_y = row_containing(&buffer, &["tm-001"]);
 
     let control = column_text(&buffer, content, row_y, columns::STOP_X, columns::STOP_W);
@@ -870,7 +871,7 @@ fn test_teams_rows_truncate_multi_byte_text_on_character_boundaries() {
     app.session.agent_name = "gëneral-Ωmega-überlang".to_string();
 
     let buffer = render(&mut app, 170, 44);
-    let content = table_inner(app.teams_area);
+    let content = table_inner(area_to_rect(app.teams_area));
     let row_y = row_containing(&buffer, &["tm-001"]);
 
     let label = column_text(&buffer, content, row_y, col::LABEL, columns::LABEL_W);
@@ -904,7 +905,7 @@ fn test_teams_rows_truncate_multi_byte_text_on_character_boundaries() {
 fn test_teams_header_and_rows_share_the_column_grid() {
     let mut app = open_teams(vec![member("reviewer", "tm-001", MemberStatus::Working)]);
     let buffer = render(&mut app, 170, 44);
-    let content = table_inner(app.teams_area);
+    let content = table_inner(area_to_rect(app.teams_area));
     let header_y = row_containing(&buffer, &["id", "name", "status", "model"]);
     let lead_y = header_y + 1;
 

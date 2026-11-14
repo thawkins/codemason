@@ -10,6 +10,7 @@
 
 mod support;
 
+use codemason_tui::adapters::area_to_rect;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -166,7 +167,7 @@ fn test_agents_modal_clears_the_underlay() {
 
     let content = app.active_agents_area;
     for y in content.y..content.bottom() {
-        let text = row_text(&buffer, y, content);
+        let text = row_text(&buffer, y, area_to_rect(content));
         assert!(
             !text.contains("UNDERLAY-"),
             "row {y} shows the cleared underlay: {text:?}"

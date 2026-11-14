@@ -27,10 +27,10 @@
 
 mod support;
 
+use codemason_app_core::geometry::Area;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
 use ratatui::style::Color;
 
 use codemason_agent::task::{ReportStatus, TaskEntry, TaskStatus};
@@ -489,19 +489,19 @@ fn test_side_panels_clear_both_areas() {
     for (case, set_flag) in &cases {
         let mut app = make_app();
         // Poison the areas so only a reset clears them.
-        app.active_agents_area = Rect::new(1, 1, 40, 10);
-        app.teams_area = Rect::new(1, 1, 40, 10);
+        app.active_agents_area = Area::new(1, 1, 40, 10);
+        app.teams_area = Area::new(1, 1, 40, 10);
         set_flag(&mut app);
         let _ = render_plain(&mut app, 140, 40);
 
         assert_eq!(
             app.active_agents_area,
-            Rect::default(),
+            Area::default(),
             "case {case}: the hidden active-agents surface must reset to the empty rect (FR-057)"
         );
         assert_eq!(
             app.teams_area,
-            Rect::default(),
+            Area::default(),
             "case {case}: the hidden teams surface must reset to the empty rect (FR-057)"
         );
     }
@@ -512,19 +512,19 @@ fn test_side_panels_clear_both_areas() {
 #[test]
 fn test_log_panel_clears_both_areas() {
     let mut app = make_app();
-    app.active_agents_area = Rect::new(1, 1, 40, 10);
-    app.teams_area = Rect::new(1, 1, 40, 10);
+    app.active_agents_area = Area::new(1, 1, 40, 10);
+    app.teams_area = Area::new(1, 1, 40, 10);
     app.show_log = true;
     let _ = render_plain(&mut app, 140, 40);
 
     assert_eq!(
         app.active_agents_area,
-        Rect::default(),
+        Area::default(),
         "the log-panel branch resets the active-agents area"
     );
     assert_eq!(
         app.teams_area,
-        Rect::default(),
+        Area::default(),
         "the log-panel branch resets the teams area"
     );
 }

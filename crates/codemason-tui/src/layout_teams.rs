@@ -842,8 +842,8 @@ pub fn render_teams_subpanel(frame: &mut Frame, app: &mut App, area: Rect) {
     // painted-rows rectangle goes to `teams_rows_area` so a click maps onto
     // the row it was painted on without knowing the table border's offset
     // (FR-056, NFR-011).
-    app.teams_area = area;
-    app.teams_rows_area = inner;
+    app.teams_area = crate::adapters::rect_to_area(area);
+    app.teams_rows_area = crate::adapters::rect_to_area(inner);
     let scroll = app.teams_scroll_offset.min(max_scroll);
     app.teams_row_agent_ids = row_keys.clone();
 

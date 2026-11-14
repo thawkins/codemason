@@ -5,6 +5,7 @@
 //! `TestBackend` and read the painted buffer back, so no catalogue endpoint is
 //! contacted: the browser state is filled directly.
 
+use codemason_app_core::geometry::Area;
 use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
@@ -464,10 +465,10 @@ async fn enter_on_an_installed_row_is_refused() {
 fn the_panel_area_resets_when_the_panel_closes() {
     let mut app = open(sample(), &[], 0);
     let _ = render(&mut app, 100, 30);
-    assert_ne!(app.connector_store_area, ratatui::layout::Rect::default());
+    assert_ne!(app.connector_store_area, Area::default());
     app.close_connector_catalogue();
     let _ = render(&mut app, 100, 30);
-    assert_eq!(app.connector_store_area, ratatui::layout::Rect::default());
+    assert_eq!(app.connector_store_area, Area::default());
 }
 
 // ---------------------------------------------------------------------------

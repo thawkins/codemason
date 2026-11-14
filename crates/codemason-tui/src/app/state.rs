@@ -4,8 +4,8 @@
 //! and small helpers used by the TUI renderer and input handler.
 
 use anyhow::Result;
+use codemason_app_core::geometry::Area;
 use lru::LruCache;
-use ratatui::layout::Rect;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -3172,9 +3172,9 @@ pub struct App {
     /// router-model, Azure-resource, thinking-level, agent and router panes all
     /// window around the cursor. A notch outside it is swallowed while the
     /// dialog is open rather than scrolling the pane behind the modal. Kept in
-    /// [`Rect::default`] while no dialog is showing, so a closed dialog can
+    /// [`Area::default`] while no dialog is showing, so a closed dialog can
     /// never receive a wheel event.
-    pub provider_setup_area: Rect,
+    pub provider_setup_area: Area,
     /// Currently configured provider, if any.
     pub configured_provider: Option<ConfiguredProvider>,
     /// Provider registry for querying available models.
@@ -3228,8 +3228,8 @@ pub struct App {
     /// FR-021; see [`QUEUE_MENU_ROW_NEXT`] and friends).
     pub queue_menu_selected: usize,
     /// Cached area of the queue-control menu overlay (set during render). Kept
-    /// in [`Rect::default`] while the menu is closed.
-    pub queue_menu_area: Rect,
+    /// in [`Area::default`] while the menu is closed.
+    pub queue_menu_area: Area,
     /// Whether the scrollable queue-entry panel (opened by the queue-control
     /// menu's `Show` row) is displayed. While open it lists every queued entry
     /// oldest-first so the user can reorder or delete entries without leaving
@@ -3240,8 +3240,8 @@ pub struct App {
     /// opens and when entries are removed.
     pub queue_show_selected: usize,
     /// Cached area of the queue-entry panel (set during render). Kept in
-    /// [`Rect::default`] while the panel is closed.
-    pub queue_show_area: Rect,
+    /// [`Area::default`] while the panel is closed.
+    pub queue_show_area: Area,
     /// Whether the `Clear the input queue?` confirmation dialog (opened by the
     /// queue-control menu's `Clear` row) is displayed (spec `inputqueue` FR-033).
     /// The queue is left untouched while it is open; it is emptied only after the
@@ -3254,8 +3254,8 @@ pub struct App {
     /// (FR-034).
     pub queue_clear_confirm_selected: usize,
     /// Cached area of the `Clear the input queue?` confirmation dialog (set
-    /// during render). Kept in [`Rect::default`] while the dialog is closed.
-    pub queue_clear_confirm_area: Rect,
+    /// during render). Kept in [`Area::default`] while the dialog is closed.
+    pub queue_clear_confirm_area: Area,
     /// Whether the single-button notice dialog is displayed.
     ///
     /// The dialog reports something that has no decision to make and offers one
@@ -3270,8 +3270,8 @@ pub struct App {
     /// A secondary line, usually the value involved (a path, a branch).
     pub notice_detail: Option<String>,
     /// Cached area of the notice dialog (set during render). Kept in
-    /// [`Rect::default`] while the dialog is closed.
-    pub notice_area: Rect,
+    /// [`Area::default`] while the dialog is closed.
+    pub notice_area: Area,
     /// Whether the `Clear this project's memory?` confirmation dialog (opened by
     /// `/memory clear`) is displayed. No memory is removed while it is open; the
     /// store is emptied only after the user confirms with `Yes`.
@@ -3373,49 +3373,49 @@ pub struct App {
     /// applied to the wrong entries.
     pub store_enrich_generation: Arc<std::sync::atomic::AtomicU64>,
     /// Cached area of the plugin-store browse panel (set during render). Kept in
-    /// [`Rect::default`] while no panel is open (spec `pluginstores` FR-018).
+    /// [`Area::default`] while no panel is open (spec `pluginstores` FR-018).
     ///
     /// Recomputed from `Frame::area` every frame, so a terminal resize re-derives
     /// a centred, fully visible modal without any stored size to go stale
     /// (FR-018); tests read it back to locate the painted panel.
-    pub plugin_store_area: Rect,
+    pub plugin_store_area: Area,
     /// Cached area of the plugin-store panel's left category-navigator column
     /// (set during render; spec `catnav` FR-001, FR-020).
     ///
     /// Recomputed from the panel body every frame so a terminal resize re-derives
     /// it (FR-020); tests and mouse hit-testing read it back to locate the
-    /// navigator. [`Rect::default`] while no plugin-store panel is open.
-    pub plugin_store_nav_area: Rect,
+    /// navigator. [`Area::default`] while no plugin-store panel is open.
+    pub plugin_store_nav_area: Area,
     /// Cached area of the plugin-store panel's marketplace-navigator pane (set
     /// during render; spec `pluginstores` FR-052).
     ///
     /// The left column is split vertically: the category navigator occupies the top
     /// half ([`Self::plugin_store_nav_area`]) and the marketplace navigator the bottom
-    /// half. Recomputed from the panel body every frame; [`Rect::default`] while no
+    /// half. Recomputed from the panel body every frame; [`Area::default`] while no
     /// plugin-store panel is open.
-    pub plugin_store_marketplace_area: Rect,
+    pub plugin_store_marketplace_area: Area,
     /// Cached area of the plugin-store panel's result-list column (set during
     /// render; spec `catnav` FR-020).
     ///
     /// Recomputed from the panel body every frame alongside the navigator;
-    /// [`Rect::default`] while no plugin-store panel is open.
-    pub plugin_store_result_area: Rect,
+    /// [`Area::default`] while no plugin-store panel is open.
+    pub plugin_store_result_area: Area,
     /// Cached area of the plugin-store panel's bottom search box (set during
     /// render; spec `pluginstores` FR-004).
     ///
     /// The search box spans the panel's inner width on the row below the footer;
     /// the panel's own search filter is typed into it while any pane holds focus.
     /// Recomputed from the current frame every draw so a terminal resize re-derives
-    /// it (FR-018); [`Rect::default`] while no plugin-store panel is open. The
+    /// it (FR-018); [`Area::default`] while no plugin-store panel is open. The
     /// clear button occupies its rightmost columns (see [`Self::plugin_store_clear_area`]).
-    pub plugin_store_search_area: Rect,
+    pub plugin_store_search_area: Area,
     /// Cached area of the plugin-store panel's search-box clear button (set during
     /// render; spec `pluginstores` FR-004).
     ///
     /// Recomputed from [`Self::plugin_store_search_area`] every frame and painted at
     /// the search box's right edge; a left-click inside it clears the search filter.
-    /// [`Rect::default`] while no plugin-store panel is open.
-    pub plugin_store_clear_area: Rect,
+    /// [`Area::default`] while no plugin-store panel is open.
+    pub plugin_store_clear_area: Area,
     /// Active connector-catalogue browser, present while the `/connectors claude`
     /// browse panel is open. `None` when no panel is showing.
     ///
@@ -3467,53 +3467,53 @@ pub struct App {
     /// to the wrong entries.
     pub connector_enrich_generation: Arc<std::sync::atomic::AtomicU64>,
     /// Cached area of the connector-catalogue browse panel (set during render).
-    /// Kept in [`Rect::default`] while no panel is open.
-    pub connector_store_area: Rect,
+    /// Kept in [`Area::default`] while no panel is open.
+    pub connector_store_area: Area,
     /// Cached area of the connector-catalogue panel's left category-navigator
     /// column (set during render).
     ///
     /// Recomputed from the panel body every frame so a terminal resize re-derives
     /// it; tests and mouse hit-testing read it back to locate the navigator. The
     /// area is the rows *below* the navigator's reversed-video title band, so a
-    /// click or wheel on the band is inert. Kept in [`Rect::default`] while no
+    /// click or wheel on the band is inert. Kept in [`Area::default`] while no
     /// panel is open.
-    pub connector_store_nav_area: Rect,
+    pub connector_store_nav_area: Area,
     /// Cached area of the connector-catalogue panel's marketplace-navigator rows
     /// in the lower half of the left column (set during render).
     ///
     /// Recomputed from the panel body every frame; like
     /// [`Self::connector_store_nav_area`] it excludes the title band above it.
-    /// Kept in [`Rect::default`] while no panel is open.
-    pub connector_store_marketplace_area: Rect,
+    /// Kept in [`Area::default`] while no panel is open.
+    pub connector_store_marketplace_area: Area,
     /// Cached area of the connector-catalogue panel's result-list column (set
     /// during render).
     ///
     /// Recomputed from the panel body every frame alongside the navigators; kept
-    /// in [`Rect::default`] while no panel is open. Anchored on the scrolling
+    /// in [`Area::default`] while no panel is open. Anchored on the scrolling
     /// list *below* the pinned column-heading row, so mouse hit-testing treats a
     /// click or wheel on the heading as inert.
-    pub connector_store_result_area: Rect,
+    pub connector_store_result_area: Area,
     /// Cached area of the connector-catalogue panel's bottom search box (set
     /// during render).
     ///
     /// The panel's own search filter is typed into it while any pane holds focus,
     /// and the live query is painted there rather than in the title alone. Kept in
-    /// [`Rect::default`] while no panel is open.
-    pub connector_store_search_area: Rect,
+    /// [`Area::default`] while no panel is open.
+    pub connector_store_search_area: Area,
     /// Cached area of the connector-catalogue panel's search-box clear button (set
     /// during render).
     ///
     /// Recomputed from [`Self::connector_store_search_area`] every frame and
     /// painted at the search box's right edge; a left-click inside it clears the
-    /// search filter. [`Rect::default`] while no panel is open.
-    pub connector_store_clear_area: Rect,
+    /// search filter. [`Area::default`] while no panel is open.
+    pub connector_store_clear_area: Area,
     /// The `/backend` switcher panel state, present while it is open
     /// (spec `openhands` FR-008). `None` when no panel is showing; while it is
     /// `Some` the panel swallows every keystroke and locks the input field.
     pub backend_panel: Option<BackendPanelState>,
     /// Cached area of the `/backend` panel (set during render). Kept in
-    /// [`Rect::default`] while the panel is closed.
-    pub backend_panel_area: Rect,
+    /// [`Area::default`] while the panel is closed.
+    pub backend_panel_area: Area,
     /// Whether the log panel is visible.
     pub show_log: bool,
     /// Whether the realtime profiling panel is visible.
@@ -3560,19 +3560,19 @@ pub struct App {
     /// Scroll offset for the Telemetry panel (lines from top).
     pub telemetry_scroll_offset: u16,
     /// Cached area of the messages pane (set during render for mouse hit-testing).
-    pub message_area: Rect,
+    pub message_area: Area,
     /// Cached area of the log panel (set during render for mouse hit-testing).
-    pub log_area: Rect,
+    pub log_area: Area,
     /// Cached area of the profiler panel.
-    pub profile_area: Rect,
+    pub profile_area: Area,
     /// Cached area of the TODO panel (set during render for mouse hit-testing).
-    pub tasks_area: Rect,
+    pub tasks_area: Area,
     /// Cached area of the Memory panel (set during render for mouse hit-testing).
-    pub memory_area: Rect,
+    pub memory_area: Area,
     /// Cached area of the Telemetry panel (set during render for mouse hit-testing).
-    pub telemetry_area: Rect,
+    pub telemetry_area: Area,
     /// Cached area of the Context panel (set during render for mouse hit-testing).
-    pub context_panel_area: Rect,
+    pub context_panel_area: Area,
     /// Maximum scroll value for the log pane (set during render).
     pub log_max_scroll: u16,
     /// Maximum scroll value for the profile pane (set during render).
@@ -3602,7 +3602,7 @@ pub struct App {
     /// resolve to the same rows the table paints (replaces the mouse row map).
     pub agents_subagent_task_ids: Vec<String>,
     /// Cached area of the active-agents subpanel.
-    pub active_agents_area: Rect,
+    pub active_agents_area: Area,
     /// Painted-row -> click key for the Agents table (spec `agentui` T-008).
     ///
     /// Index equals the painted content row (0 = header, 1 = primary, then the
@@ -3662,9 +3662,9 @@ pub struct App {
     /// Plain-text lines from the last Context pane render (for copy).
     pub context_content_lines: Vec<String>,
     /// Cached area of the chat-screen input widget (set during render).
-    pub input_area: Rect,
+    pub input_area: Area,
     /// Cached area of the teams subpanel (frame content geometry, FR-008).
-    pub teams_area: Rect,
+    pub teams_area: Area,
     /// The painted-rows rectangle inside the Teams table: the bordered
     /// table block's inner area, recorded by the renderer every frame.
     ///
@@ -3673,17 +3673,17 @@ pub struct App {
     /// identifier of the row it was painted on (spec `agentui` FR-056,
     /// NFR-011). Reset to the empty rect wherever the frame content area is
     /// reset, so a hidden surface cannot receive a click (FR-057).
-    pub teams_rows_area: Rect,
+    pub teams_rows_area: Area,
     /// Cached area of the output overlay.
-    pub output_view_area: Rect,
+    pub output_view_area: Area,
     /// Cached area of the research markdown viewer overlay.
-    pub research_view_area: Rect,
+    pub research_view_area: Area,
     /// Cached area of the full-memory overlay.
-    pub memory_view_area: Rect,
+    pub memory_view_area: Area,
     /// Cached area of the Agents button beside chat input.
-    pub agents_button_area: Rect,
+    pub agents_button_area: Area,
     /// Cached area of the Teams button beside chat input.
-    pub teams_button_area: Rect,
+    pub teams_button_area: Area,
     /// Whether the Agents popup window is visible.
     pub show_agents_window: bool,
     /// Whether the Teams popup window is visible.
@@ -4052,18 +4052,18 @@ pub struct App {
     pub row_action_confirm: Option<PendingRowAction>,
     /// Cached area of the destructive row-action confirmation dialog (spec
     /// `agentui` NFR-010). Set during render so the mouse router can answer
-    /// the dialog with a click; kept in [`Rect::default`] while closed.
-    pub row_action_confirm_area: Rect,
+    /// the dialog with a click; kept in [`Area::default`] while closed.
+    pub row_action_confirm_area: Area,
     /// Cached rectangle of the dialog's painted `[ Yes ]` button span (spec
     /// `agentui` T-009, NFR-010). A left-click inside it is the `Yes` answer;
-    /// `Rect::default` while the dialog is closed, which can never match a
+    /// `Area::default` while the dialog is closed, which can never match a
     /// click.
-    pub row_action_confirm_yes_area: Rect,
+    pub row_action_confirm_yes_area: Area,
     /// Cached rectangle of the dialog's painted `[ No ]` button span (spec
     /// `agentui` T-009, NFR-010). A left-click inside it is the `No` answer;
-    /// `Rect::default` while the dialog is closed, which can never match a
+    /// `Area::default` while the dialog is closed, which can never match a
     /// click.
-    pub row_action_confirm_no_area: Rect,
+    pub row_action_confirm_no_area: Area,
 
     // -- Research progress (`/research create`) -------------------------------
     /// Live progress trackers for all running/completed `/research create`

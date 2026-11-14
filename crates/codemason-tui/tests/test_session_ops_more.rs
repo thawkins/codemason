@@ -9,6 +9,7 @@
 //!
 //! Tests only - no production logic is touched.
 
+use codemason_app_core::geometry::Area;
 use codemason_tui::App;
 use codemason_tui::app::{
     ConfiguredProvider, ContextPartitionSnapshot, ProviderSource, QueuedInput, RollbackOfferState,
@@ -514,14 +515,13 @@ fn extract_text_from_lines_clamps_when_row_missing() {
 
 #[test]
 fn pane_at_reports_each_visible_panel_and_none_when_hidden() {
-    use ratatui::layout::Rect;
     let mut app = support::make_app();
-    app.message_area = Rect::new(0, 0, 10, 10);
+    app.message_area = Area::new(0, 0, 10, 10);
     app.show_log = true;
-    app.log_area = Rect::new(10, 0, 10, 10);
+    app.log_area = Area::new(10, 0, 10, 10);
     app.show_telemetry = true;
-    app.telemetry_area = Rect::new(20, 0, 10, 10);
-    app.input_area = Rect::new(0, 20, 80, 3);
+    app.telemetry_area = Area::new(20, 0, 10, 10);
+    app.input_area = Area::new(0, 20, 80, 3);
 
     assert_eq!(app.pane_at(5, 5), Some(SelectionPane::Messages));
     assert_eq!(app.pane_at(15, 5), Some(SelectionPane::Log));

@@ -11,6 +11,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use codemason_app_core::geometry::Area;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::style::Color;
@@ -249,7 +250,7 @@ fn test_open_menu_records_its_overlay_area_and_clears_it_when_closed() {
     let _ = render(&mut app, 120, 40);
     assert_eq!(
         app.queue_menu_area,
-        ratatui::layout::Rect::default(),
+        Area::default(),
         "NFR-007: the overlay area is cleared once the menu closes"
     );
 }

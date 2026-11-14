@@ -97,11 +97,11 @@ mod interaction_tests {
     use crossterm::event::{
         KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
-    use ratatui::layout::Rect;
 
     use codemason_tui::app::ResearchViewState;
 
     use super::{PathBuf, support};
+    use codemason_app_core::geometry::Area;
     use codemason_tui::crossterm_input::CrosstermAppExt;
 
     fn make_research_view() -> ResearchViewState {
@@ -219,7 +219,7 @@ mod interaction_tests {
     fn test_research_view_mouse_scroll_inside() {
         let mut app = support::make_app();
         app.research_view = Some(make_research_view());
-        app.research_view_area = Rect::new(5, 5, 70, 20);
+        app.research_view_area = Area::new(5, 5, 70, 20);
 
         app.handle_mouse_event(mouse_scroll_down(10, 10));
         assert_eq!(app.research_view.as_ref().unwrap().scroll_offset, 7);
@@ -232,7 +232,7 @@ mod interaction_tests {
     fn test_research_view_click_outside_closes() {
         let mut app = support::make_app();
         app.research_view = Some(make_research_view());
-        app.research_view_area = Rect::new(5, 5, 70, 20);
+        app.research_view_area = Area::new(5, 5, 70, 20);
 
         app.handle_mouse_event(mouse_click(2, 2));
         assert!(
@@ -245,7 +245,7 @@ mod interaction_tests {
     fn test_research_view_click_inside_keeps_open() {
         let mut app = support::make_app();
         app.research_view = Some(make_research_view());
-        app.research_view_area = Rect::new(5, 5, 70, 20);
+        app.research_view_area = Area::new(5, 5, 70, 20);
 
         app.handle_mouse_event(mouse_click(10, 10));
         assert!(

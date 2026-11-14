@@ -30,6 +30,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use codemason_tui::adapters::area_to_rect;
 use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -308,7 +309,9 @@ async fn kill_answer_terminates_the_task_through_the_manager() {
         .await;
     assert!(app.row_action_confirm_open(), "the kill confirms first");
     render(&mut app);
-    app.handle_mouse_event(click_at(centre(app.row_action_confirm_yes_area)));
+    app.handle_mouse_event(click_at(centre(area_to_rect(
+        app.row_action_confirm_yes_area,
+    ))));
     assert!(!app.row_action_confirm_open(), "Yes closes the dialog");
     assert!(
         log_has_attribution(&app, "c3d4e5f6-session", "Kill requested for task c3d4e5f6"),
@@ -374,7 +377,9 @@ async fn background_cancel_answer_cancels_through_the_service() {
         "the background cancel confirms first (FR-037)"
     );
     render(&mut app);
-    app.handle_mouse_event(click_at(centre(app.row_action_confirm_yes_area)));
+    app.handle_mouse_event(click_at(centre(area_to_rect(
+        app.row_action_confirm_yes_area,
+    ))));
     assert!(!app.row_action_confirm_open(), "Yes closes the dialog");
     assert!(
         log_has_attribution(&app, LEAD_SESSION, "requested for background task"),
@@ -463,7 +468,9 @@ async fn teammate_space_answer_suspends_through_the_manager() {
         "suspending a live teammate confirms first (FR-040)"
     );
     render(&mut app);
-    app.handle_mouse_event(click_at(centre(app.row_action_confirm_yes_area)));
+    app.handle_mouse_event(click_at(centre(area_to_rect(
+        app.row_action_confirm_yes_area,
+    ))));
     assert!(!app.row_action_confirm_open(), "Yes closes the dialog");
     assert!(
         log_has_attribution(&app, "tm-001-session", "tm-001 suspend requested"),
@@ -527,7 +534,9 @@ async fn teammate_del_answer_requests_graceful_shutdown() {
         "shutting a teammate down confirms first (FR-040)"
     );
     render(&mut app);
-    app.handle_mouse_event(click_at(centre(app.row_action_confirm_yes_area)));
+    app.handle_mouse_event(click_at(centre(area_to_rect(
+        app.row_action_confirm_yes_area,
+    ))));
     assert!(!app.row_action_confirm_open(), "Yes closes the dialog");
     assert!(
         log_has_attribution(&app, "tm-001-session", "tm-001 shutdown requested"),

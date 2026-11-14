@@ -10,9 +10,9 @@
 
 mod support;
 
+use codemason_app_core::geometry::Area;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use ratatui::layout::Rect;
 
 use codemason_tui::app::{MemoryViewState, OutputViewState, OutputViewTarget, ResearchViewState};
 
@@ -167,7 +167,7 @@ fn test_output_view_area_tracks_rendered_overlay() {
 
     assert_ne!(
         app.output_view_area,
-        Rect::default(),
+        Area::default(),
         "the overlay render must record its area"
     );
 }

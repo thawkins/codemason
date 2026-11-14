@@ -11,6 +11,7 @@
 
 mod support;
 
+use codemason_tui::adapters::area_to_rect;
 use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
@@ -225,7 +226,7 @@ fn test_teams_modal_clears_the_underlay() {
 
     let content = app.teams_area;
     for y in content.y..content.bottom() {
-        let text = row_text(&buffer, y, content);
+        let text = row_text(&buffer, y, area_to_rect(content));
         assert!(
             !text.contains("UNDERLAY-"),
             "row {y} shows the cleared underlay: {text:?}"
@@ -354,7 +355,7 @@ fn test_teams_table_title_names_the_team_and_pluralises_the_count() {
         let mut app = open_teams(members);
         let buffer = render(&mut app, 160, 44);
         let content = app.teams_area;
-        let text = row_text(&buffer, content.y, content);
+        let text = row_text(&buffer, content.y, area_to_rect(content));
         assert!(
             text.contains(expected),
             "with {members} members the table title must read {expected:?}, got {text:?}"
@@ -376,7 +377,7 @@ fn test_teams_table_header_names_twelve_dimmed_columns() {
         "id", "name", "status", "model", "elapsed", "steps", "claimed", "done", "sent", "recv",
         "[stop]", "[x]",
     ];
-    let header_row = row_containing(&buffer, content, &columns)
+    let header_row = row_containing(&buffer, area_to_rect(content), &columns)
         .unwrap_or_else(|| panic!("the header row must name all twelve columns: {columns:?}"));
     assert_eq!(
         header_row,
@@ -385,7 +386,7 @@ fn test_teams_table_header_names_twelve_dimmed_columns() {
     );
 
     // Columns appear left to right in the documented order.
-    let text = row_text(&buffer, header_row, content);
+    let text = row_text(&buffer, header_row, area_to_rect(content));
     let mut last = 0usize;
     for column in columns {
         let at = text
@@ -397,7 +398,7 @@ fn test_teams_table_header_names_twelve_dimmed_columns() {
         );
         last = at;
 
-        let style = style_of(&buffer, header_row, content, column);
+        let style = style_of(&buffer, header_row, area_to_rect(content), column);
         assert_eq!(
             style.fg,
             Some(colors::HINT),

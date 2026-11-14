@@ -19,6 +19,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use codemason_tui::adapters::area_to_rect;
 use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
@@ -330,7 +331,7 @@ async fn window_actions_stay_serviceable_during_a_running_turn() {
     render(&mut app);
 
     // Step 1: the Agents button opens the window mid-turn.
-    let (bcol, brow) = centre(app.agents_button_area);
+    let (bcol, brow) = centre(area_to_rect(app.agents_button_area));
     app.needs_redraw = false;
     app.show_agents_window = false;
     app.handle_mouse_event(click(bcol, brow));
@@ -417,7 +418,7 @@ fn teams_window_stays_serviceable_during_a_running_turn() {
 
     // The Teams button is reachable mid-turn: it toggles, so the click closes
     // the open window and the next click reopens it.
-    let (bcol, brow) = centre(app.teams_button_area);
+    let (bcol, brow) = centre(area_to_rect(app.teams_button_area));
     app.handle_mouse_event(click(bcol, brow));
     assert!(
         !app.show_teams_window,

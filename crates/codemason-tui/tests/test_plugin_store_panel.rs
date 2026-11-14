@@ -11,6 +11,7 @@
 //! These drive the real renderer through a `TestBackend` and read the painted
 //! buffer back, so no store endpoint is contacted.
 
+use codemason_app_core::geometry::Area;
 use codemason_tui::crossterm_input::CrosstermAppExt;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -792,7 +793,7 @@ fn the_panel_area_is_cleared_when_the_panel_closes() {
     let _ = render(&mut app, 100, 30);
     assert_eq!(
         app.plugin_store_area,
-        ratatui::layout::Rect::default(),
+        Area::default(),
         "area cleared when the panel is closed"
     );
 }

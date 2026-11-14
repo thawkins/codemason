@@ -13,6 +13,7 @@
 
 mod support;
 
+use codemason_tui::adapters::area_to_rect;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -172,7 +173,7 @@ fn test_agents_header_names_every_column_dimmed_and_in_order() {
     let mut app = app_with_primary();
     let buffer = render(&mut app, 160, 44);
     let area = app.active_agents_area;
-    let header = row_text(&buffer, area, 0);
+    let header = row_text(&buffer, area_to_rect(area), 0);
 
     let columns_in_order = [
         "id",
@@ -199,7 +200,7 @@ fn test_agents_header_names_every_column_dimmed_and_in_order() {
     let hint = codemason_tui::theme::colors::HINT;
     for column in columns_in_order {
         let at = header.find(column).expect("column present") as u16;
-        let cell = cell_at(&buffer, area, 0, at);
+        let cell = cell_at(&buffer, area_to_rect(area), 0, at);
         assert_eq!(cell.fg, hint, "{column:?} must use the hint colour");
         assert!(
             cell.modifier.contains(Modifier::DIM),
@@ -221,14 +222,14 @@ fn test_primary_row_carries_marker_identity_and_live_step_count() {
     app.event_bus.increment_tool_calls("s1");
     let buffer = render(&mut app, 160, 44);
     let area = app.active_agents_area;
-    let row = row_text(&buffer, area, 1);
+    let row = row_text(&buffer, area_to_rect(area), 1);
 
     assert!(
         row[columns::CONTENT_X..].starts_with('*'),
         "the primary marker is a green `*`: {row:?}"
     );
     assert_eq!(
-        cell_at(&buffer, area, 1, columns::CONTENT_X as u16).fg,
+        cell_at(&buffer, area_to_rect(area), 1, columns::CONTENT_X as u16).fg,
         Color::Green,
         "the primary marker must be green"
     );
@@ -239,7 +240,7 @@ fn test_primary_row_carries_marker_identity_and_live_step_count() {
     );
 
     let name_col = (columns::CONTENT_X + columns::MARKER_W + columns::ID_W + columns::GAP_W) as u16;
-    let name_cell = cell_at(&buffer, area, 1, name_col);
+    let name_cell = cell_at(&buffer, area_to_rect(area), 1, name_col);
     assert_eq!(name_cell.fg, Color::Green, "the agent name is green");
     assert!(
         name_cell.modifier.contains(Modifier::BOLD),
@@ -324,10 +325,10 @@ fn test_subagent_rows_indent_two_columns_per_ancestor() {
 
     // Depth 0 siblings: the non-last one keeps the branch open, the last one
     // closes it.
-    let alpha = find_row(&buffer, area, "alpha-0001").expect("first sibling paints");
-    let beta = find_row(&buffer, area, "beta-0002").expect("second sibling paints");
-    let alpha_row = row_text(&buffer, area, alpha);
-    let beta_row = row_text(&buffer, area, beta);
+    let alpha = find_row(&buffer, area_to_rect(area), "alpha-0001").expect("first sibling paints");
+    let beta = find_row(&buffer, area_to_rect(area), "beta-0002").expect("second sibling paints");
+    let alpha_row = row_text(&buffer, area_to_rect(area), alpha);
+    let beta_row = row_text(&buffer, area_to_rect(area), beta);
     assert!(
         alpha_row[label_x as usize..].starts_with(glyphs::BRANCH_MID),
         "a non-last child paints the mid branch glyph: {alpha_row:?}"
@@ -338,8 +339,8 @@ fn test_subagent_rows_indent_two_columns_per_ancestor() {
     );
 
     // Depth 1 under a non-last parent: one trunk segment then the branch glyph.
-    let gamma = find_row(&buffer, area, "gamma-0003").expect("grandchild paints");
-    let gamma_row = row_text(&buffer, area, gamma);
+    let gamma = find_row(&buffer, area_to_rect(area), "gamma-0003").expect("grandchild paints");
+    let gamma_row = row_text(&buffer, area_to_rect(area), gamma);
     let gamma_label = &gamma_row[label_x as usize..];
     assert!(
         gamma_label.starts_with(glyphs::TRUNK),
@@ -352,8 +353,9 @@ fn test_subagent_rows_indent_two_columns_per_ancestor() {
 
     // Depth 2: the non-last grandparent keeps its trunk, the last-child parent
     // contributes a blank segment, then the child's own branch glyph.
-    let delta = find_row(&buffer, area, "delta-0004").expect("great-grandchild paints");
-    let delta_row = row_text(&buffer, area, delta);
+    let delta =
+        find_row(&buffer, area_to_rect(area), "delta-0004").expect("great-grandchild paints");
+    let delta_row = row_text(&buffer, area_to_rect(area), delta);
     let delta_label = &delta_row[label_x as usize..];
     assert!(
         delta_label.starts_with(glyphs::TRUNK),
@@ -442,14 +444,20 @@ fn test_subagent_row_paints_dot_short_id_label_type_elapsed_and_steps() {
     let elapsed_x = type_x + columns::TYPE_W as u16;
     let steps_x = elapsed_x + (columns::ELAPSED_W + columns::GAP_W) as u16;
 
-    let bg_row = find_row(&buffer, area, "abcd1234").expect("the bg row paints the short id");
-    let bg_text = row_text(&buffer, area, bg_row);
+    let bg_row =
+        find_row(&buffer, area_to_rect(area), "abcd1234").expect("the bg row paints the short id");
+    let bg_text = row_text(&buffer, area_to_rect(area), bg_row);
     assert!(
         bg_text[columns::CONTENT_X..].starts_with(glyphs::ROW_DOT),
         "a sub-agent row starts with the status dot: {bg_text:?}"
     );
     assert_eq!(
-        fg_at(&buffer, area, bg_row, columns::CONTENT_X as u16),
+        fg_at(
+            &buffer,
+            area_to_rect(area),
+            bg_row,
+            columns::CONTENT_X as u16
+        ),
         Color::Yellow,
         "a running row's dot is yellow"
     );
@@ -462,7 +470,7 @@ fn test_subagent_row_paints_dot_short_id_label_type_elapsed_and_steps() {
         "the id column never paints the full task id: {bg_text:?}"
     );
 
-    let steps_cell = row_text(&buffer, area, bg_row);
+    let steps_cell = row_text(&buffer, area_to_rect(area), bg_row);
     let steps_slice: String = steps_cell
         .chars()
         .skip(steps_x as usize)
@@ -491,8 +499,8 @@ fn test_subagent_row_paints_dot_short_id_label_type_elapsed_and_steps() {
         .take(columns::TYPE_W)
         .collect();
     assert_eq!(type_slice.trim(), "bg", "a background task reads `bg`");
-    let fg_row = find_row(&buffer, area, "efgh5678").expect("the fg row paints");
-    let fg_text = row_text(&buffer, area, fg_row);
+    let fg_row = find_row(&buffer, area_to_rect(area), "efgh5678").expect("the fg row paints");
+    let fg_text = row_text(&buffer, area_to_rect(area), fg_row);
     let fg_type: String = fg_text
         .chars()
         .skip(type_x as usize)
@@ -531,11 +539,11 @@ fn test_agent_label_never_exceeds_thirty_two_columns() {
     // width, so nothing can spill past it.
     let row = (1..area.height)
         .find(|offset| {
-            let text = row_text(&buffer, area, *offset);
+            let text = row_text(&buffer, area_to_rect(area), *offset);
             text.contains(glyphs::BADGE_CUSTOM) && text.contains(glyphs::BADGE_TEAM)
         })
         .unwrap_or_else(|| panic!("the badly-labelled row must paint both badges"));
-    let text = row_text(&buffer, area, row);
+    let text = row_text(&buffer, area_to_rect(area), row);
     let label: String = text.chars().skip(label_x).take(columns::LABEL_W).collect();
     assert!(
         label.contains(glyphs::BADGE_CUSTOM) && label.contains(glyphs::BADGE_TEAM),
@@ -551,13 +559,13 @@ fn test_agent_label_never_exceeds_thirty_two_columns() {
         "bg",
         "the type column is not pushed out by an over-long label: {text:?}"
     );
-    let stop_at = find_in_row(&buffer, area, row, glyphs::STOP);
+    let stop_at = find_in_row(&buffer, area_to_rect(area), row, glyphs::STOP);
     assert_eq!(
         stop_at, None,
         "a suspended row paints the resume glyph, not [stop]: {text:?}"
     );
     assert_eq!(
-        find_in_row(&buffer, area, row, glyphs::KILL),
+        find_in_row(&buffer, area_to_rect(area), row, glyphs::KILL),
         Some(columns::CONTENT_X + columns::KILL_X),
         "the control column keeps its pinned position: {text:?}"
     );
@@ -590,8 +598,8 @@ fn test_badges_follow_the_current_custom_agents_and_members() {
     // No custom definitions and no team: no badges paint.
     let buffer = render(&mut app, 160, 44);
     let area = app.active_agents_area;
-    let row = find_row(&buffer, area, "first-0001").expect("row paints");
-    let plain = row_text(&buffer, area, row);
+    let row = find_row(&buffer, area_to_rect(area), "first-0001").expect("row paints");
+    let plain = row_text(&buffer, area_to_rect(area), row);
     assert!(
         !plain.contains(glyphs::BADGE_CUSTOM) && !plain.contains(glyphs::BADGE_TEAM),
         "no badge without a custom agent or a team: {plain:?}"
@@ -601,8 +609,8 @@ fn test_badges_follow_the_current_custom_agents_and_members() {
     add_custom_agent(&mut app, "explore");
     let buffer = render(&mut app, 160, 44);
     let area = app.active_agents_area;
-    let row = find_row(&buffer, area, "first-0001").expect("row paints");
-    let custom = row_text(&buffer, area, row);
+    let row = find_row(&buffer, area_to_rect(area), "first-0001").expect("row paints");
+    let custom = row_text(&buffer, area_to_rect(area), row);
     assert!(
         custom.contains(glyphs::BADGE_CUSTOM),
         "a row whose agent is a custom definition carries [C]: {custom:?}"
@@ -620,10 +628,10 @@ fn test_badges_follow_the_current_custom_agents_and_members() {
     app.session.team_members.push(member);
     let buffer = render(&mut app, 160, 44);
     let area = app.active_agents_area;
-    let first = find_row(&buffer, area, "first-0001").expect("first row paints");
-    let second = find_row(&buffer, area, "second-0002").expect("second row paints");
-    let first_text = row_text(&buffer, area, first);
-    let second_text = row_text(&buffer, area, second);
+    let first = find_row(&buffer, area_to_rect(area), "first-0001").expect("first row paints");
+    let second = find_row(&buffer, area_to_rect(area), "second-0002").expect("second row paints");
+    let first_text = row_text(&buffer, area_to_rect(area), first);
+    let second_text = row_text(&buffer, area_to_rect(area), second);
     assert!(
         first_text.contains(glyphs::BADGE_CUSTOM) && !first_text.contains(glyphs::BADGE_TEAM),
         "the non-member row carries only [C]: {first_text:?}"
@@ -637,9 +645,9 @@ fn test_badges_follow_the_current_custom_agents_and_members() {
     app.session.team_members.clear();
     let buffer = render(&mut app, 160, 44);
     let area = app.active_agents_area;
-    let second = find_row(&buffer, area, "second-0002").expect("second row paints");
+    let second = find_row(&buffer, area_to_rect(area), "second-0002").expect("second row paints");
     assert!(
-        !row_text(&buffer, area, second).contains(glyphs::BADGE_TEAM),
+        !row_text(&buffer, area_to_rect(area), second).contains(glyphs::BADGE_TEAM),
         "the [T] badge tracks the live member list"
     );
 }
@@ -680,38 +688,40 @@ fn test_row_status_colours_and_suffixes() {
     let area = app.active_agents_area;
     let label_x = (columns::CONTENT_X + columns::MARKER_W + columns::ID_W + columns::GAP_W) as u16;
 
-    let running = find_row(&buffer, area, "run-0001").expect("running row paints");
+    let running = find_row(&buffer, area_to_rect(area), "run-0001").expect("running row paints");
     assert_eq!(
-        fg_at(&buffer, area, running, label_x),
+        fg_at(&buffer, area_to_rect(area), running, label_x),
         Color::Yellow,
         "a running row's label is yellow"
     );
-    let running_text = row_text(&buffer, area, running);
+    let running_text = row_text(&buffer, area_to_rect(area), running);
     assert!(
         !running_text.contains(glyphs::STATUS_SUSPENDED)
             && !running_text.contains(glyphs::STATUS_TERMINATING),
         "a running row carries no status suffix: {running_text:?}"
     );
 
-    let suspended = find_row(&buffer, area, "susp-0002").expect("suspended row paints");
+    let suspended =
+        find_row(&buffer, area_to_rect(area), "susp-0002").expect("suspended row paints");
     assert_eq!(
-        fg_at(&buffer, area, suspended, label_x),
+        fg_at(&buffer, area_to_rect(area), suspended, label_x),
         Color::DarkGray,
         "a suspended row's label is dark grey"
     );
-    let suspended_text = row_text(&buffer, area, suspended);
+    let suspended_text = row_text(&buffer, area_to_rect(area), suspended);
     assert!(
         suspended_text.contains(glyphs::STATUS_SUSPENDED),
         "a suspended row paints the ` [||]` suffix: {suspended_text:?}"
     );
 
-    let terminating = find_row(&buffer, area, "term-0003").expect("terminating row paints");
+    let terminating =
+        find_row(&buffer, area_to_rect(area), "term-0003").expect("terminating row paints");
     assert_eq!(
-        fg_at(&buffer, area, terminating, label_x),
+        fg_at(&buffer, area_to_rect(area), terminating, label_x),
         Color::Red,
         "a terminating row's label is red"
     );
-    let terminating_text = row_text(&buffer, area, terminating);
+    let terminating_text = row_text(&buffer, area_to_rect(area), terminating);
     assert!(
         terminating_text.contains(glyphs::STATUS_TERMINATING),
         "a terminating row paints the ` ...` suffix: {terminating_text:?}"
@@ -740,9 +750,9 @@ fn test_live_rows_pin_stop_and_kill_to_the_documented_columns() {
     let area = app.active_agents_area;
 
     for needle in ["run-0001", "bg-0001"] {
-        let row = find_row(&buffer, area, needle).expect("row paints");
-        let text = row_text(&buffer, area, row);
-        let stop_at = find_in_row(&buffer, area, row, glyphs::STOP)
+        let row = find_row(&buffer, area_to_rect(area), needle).expect("row paints");
+        let text = row_text(&buffer, area_to_rect(area), row);
+        let stop_at = find_in_row(&buffer, area_to_rect(area), row, glyphs::STOP)
             .unwrap_or_else(|| panic!("{needle}: the [stop] control must paint: {text:?}"));
         assert_eq!(
             stop_at,
@@ -750,7 +760,7 @@ fn test_live_rows_pin_stop_and_kill_to_the_documented_columns() {
             "{needle}: [stop] must start at column {} behind the margin: {text:?}",
             columns::CONTENT_X + columns::STOP_X
         );
-        let kill_at = find_in_row(&buffer, area, row, glyphs::KILL)
+        let kill_at = find_in_row(&buffer, area_to_rect(area), row, glyphs::KILL)
             .unwrap_or_else(|| panic!("{needle}: the [x] control must paint: {text:?}"));
         assert_eq!(
             kill_at,
@@ -781,8 +791,8 @@ fn test_suspended_row_paints_the_resume_glyph_in_the_stop_column() {
     ));
     let buffer = render(&mut app, 160, 44);
     let area = app.active_agents_area;
-    let row = find_row(&buffer, area, "susp-0001").expect("row paints");
-    let text = row_text(&buffer, area, row);
+    let row = find_row(&buffer, area_to_rect(area), "susp-0001").expect("row paints");
+    let text = row_text(&buffer, area_to_rect(area), row);
 
     assert!(
         !text.contains(glyphs::STOP),
@@ -790,7 +800,7 @@ fn test_suspended_row_paints_the_resume_glyph_in_the_stop_column() {
     );
     let cell = cell_at(
         &buffer,
-        area,
+        area_to_rect(area),
         row,
         (columns::CONTENT_X + columns::STOP_X) as u16,
     );
@@ -801,7 +811,7 @@ fn test_suspended_row_paints_the_resume_glyph_in_the_stop_column() {
     );
     assert_eq!(cell.fg, Color::Green, "the resume glyph is green");
     assert_eq!(
-        find_in_row(&buffer, area, row, glyphs::KILL),
+        find_in_row(&buffer, area_to_rect(area), row, glyphs::KILL),
         Some(columns::CONTENT_X + columns::KILL_X),
         "the [x] control stays at its pinned column: {text:?}"
     );
@@ -870,16 +880,16 @@ fn test_render_publishes_row_maps_and_the_subagent_cursor_list() {
 
     // A rendered (but cursor-less) frame paints the controls on the live rows.
     for needle in ["run-0001", "bg-0001"] {
-        let row = find_row(&buffer, area, needle).expect("row paints");
-        let text = row_text(&buffer, area, row);
+        let row = find_row(&buffer, area_to_rect(area), needle).expect("row paints");
+        let text = row_text(&buffer, area_to_rect(area), row);
         assert_eq!(
-            find_in_row(&buffer, area, row, glyphs::STOP),
+            find_in_row(&buffer, area_to_rect(area), row, glyphs::STOP),
             Some(columns::CONTENT_X + columns::STOP_X),
             "{needle}: [stop] must start at column {}: {text:?}",
             columns::CONTENT_X + columns::STOP_X
         );
         assert_eq!(
-            find_in_row(&buffer, area, row, glyphs::KILL),
+            find_in_row(&buffer, area_to_rect(area), row, glyphs::KILL),
             Some(columns::CONTENT_X + columns::KILL_X),
             "{needle}: [x] must start at column {}: {text:?}",
             columns::CONTENT_X + columns::KILL_X
@@ -887,8 +897,9 @@ fn test_render_publishes_row_maps_and_the_subagent_cursor_list() {
     }
 
     // A completed task paints no controls on its row.
-    let done_row = find_row(&buffer, area, "done-0002").expect("completed row paints");
-    let done_text = row_text(&buffer, area, done_row);
+    let done_row =
+        find_row(&buffer, area_to_rect(area), "done-0002").expect("completed row paints");
+    let done_text = row_text(&buffer, area_to_rect(area), done_row);
     assert!(
         !done_text.contains(glyphs::STOP) && !done_text.contains(glyphs::KILL),
         "a terminal row carries no action controls: {done_text:?}"
@@ -917,21 +928,23 @@ fn test_background_shell_section_lists_each_task_with_controls() {
 
     let buffer = render(&mut app, 160, 44);
     let area = app.active_agents_area;
-    let heading = find_row(&buffer, area, glyphs::BG_HEADING)
+    let heading = find_row(&buffer, area_to_rect(area), glyphs::BG_HEADING)
         .unwrap_or_else(|| panic!("the background shell heading must paint"));
-    let agent_row = find_row(&buffer, area, "run-0001").expect("the agent row paints");
+    let agent_row =
+        find_row(&buffer, area_to_rect(area), "run-0001").expect("the agent row paints");
     assert!(
         heading > agent_row,
         "the background section follows the sub-agent rows: heading {heading}, agent row {agent_row}"
     );
 
-    let running = find_row(&buffer, area, "cc112233").expect("the running bg row paints");
+    let running =
+        find_row(&buffer, area_to_rect(area), "cc112233").expect("the running bg row paints");
     assert_eq!(
         running,
         heading + 1,
         "the first background row sits directly under the heading"
     );
-    let running_text = row_text(&buffer, area, running);
+    let running_text = row_text(&buffer, area_to_rect(area), running);
     assert!(
         running_text[columns::CONTENT_X..].starts_with(glyphs::ROW_DOT),
         "a background row starts with the status dot: {running_text:?}"
@@ -958,8 +971,9 @@ fn test_background_shell_section_lists_each_task_with_controls() {
     );
 
     // The completed row paints no controls.
-    let completed = find_row(&buffer, area, "dd445566").expect("the completed bg row paints");
-    let completed_text = row_text(&buffer, area, completed);
+    let completed =
+        find_row(&buffer, area_to_rect(area), "dd445566").expect("the completed bg row paints");
+    let completed_text = row_text(&buffer, area_to_rect(area), completed);
     assert!(
         !completed_text.contains(glyphs::STOP) && !completed_text.contains(glyphs::KILL),
         "a finished background row paints no controls: {completed_text:?}"
@@ -982,8 +996,8 @@ fn test_long_background_command_truncates_within_its_column() {
 
     let buffer = render(&mut app, 200, 50);
     let area = app.active_agents_area;
-    let row = find_row(&buffer, area, "ee778899").expect("the bg row paints");
-    let text = row_text(&buffer, area, row);
+    let row = find_row(&buffer, area_to_rect(area), "ee778899").expect("the bg row paints");
+    let text = row_text(&buffer, area_to_rect(area), row);
 
     assert!(
         !text.contains(long_command),
@@ -1007,7 +1021,7 @@ fn test_long_background_command_truncates_within_its_column() {
         "the type column survives an over-long command: {text:?}"
     );
     assert_eq!(
-        find_in_row(&buffer, area, row, glyphs::STOP),
+        find_in_row(&buffer, area_to_rect(area), row, glyphs::STOP),
         Some(columns::CONTENT_X + columns::STOP_X),
         "the [stop] control keeps its pinned column: {text:?}"
     );
@@ -1049,7 +1063,7 @@ fn test_painted_glyphs_come_from_the_module_glyph_set() {
     let buffer = render(&mut app, 160, 44);
     let area = app.active_agents_area;
     let painted: String = (0..area.height)
-        .map(|offset| row_text(&buffer, area, offset))
+        .map(|offset| row_text(&buffer, area_to_rect(area), offset))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -1071,7 +1085,7 @@ fn test_painted_glyphs_come_from_the_module_glyph_set() {
     }
 
     // The header and the rows must share the control glyphs verbatim.
-    let header = row_text(&buffer, area, 0);
+    let header = row_text(&buffer, area_to_rect(area), 0);
     assert!(
         header.contains(glyphs::STOP) && header.contains(glyphs::KILL),
         "the header names the control columns with the painted glyphs: {header:?}"
@@ -1104,7 +1118,7 @@ fn test_multibyte_identifiers_truncate_on_a_character_boundary() {
     let buffer = render(&mut app, 160, 44);
     let area = app.active_agents_area;
     for offset in 0..area.height {
-        let text = row_text(&buffer, area, offset);
+        let text = row_text(&buffer, area_to_rect(area), offset);
         assert!(
             !text.contains('\u{fffd}') && !text.contains('?'),
             "row {offset} must not paint a broken character: {text:?}"
@@ -1113,9 +1127,9 @@ fn test_multibyte_identifiers_truncate_on_a_character_boundary() {
 
     // The label column is still exactly `LABEL_W` wide, so nothing split.
     let label_x = columns::CONTENT_X + columns::MARKER_W + columns::ID_W + columns::GAP_W;
-    let row = find_row(&buffer, area, glyphs::BG_HEADING)
+    let row = find_row(&buffer, area_to_rect(area), glyphs::BG_HEADING)
         .map_or(area.height - 1, |heading| heading.saturating_add(1));
-    let text = row_text(&buffer, area, row);
+    let text = row_text(&buffer, area_to_rect(area), row);
     let label: String = text.chars().skip(label_x).take(columns::LABEL_W).collect();
     assert!(
         label.chars().count() <= columns::LABEL_W,
@@ -1163,8 +1177,9 @@ fn test_type_column_paints_the_execution_contract() {
         ("bg222222", glyphs::CONTRACT_BACKGROUND),
         ("dt333333", glyphs::CONTRACT_DETACHED),
     ] {
-        let row = find_row(&buffer, area, short).unwrap_or_else(|| panic!("{short} row paints"));
-        let text = row_text(&buffer, area, row);
+        let row = find_row(&buffer, area_to_rect(area), short)
+            .unwrap_or_else(|| panic!("{short} row paints"));
+        let text = row_text(&buffer, area_to_rect(area), row);
         let painted: String = text.chars().skip(type_x).take(columns::TYPE_W).collect();
         assert_eq!(
             painted.trim(),
@@ -1195,8 +1210,8 @@ fn test_detached_badge_fits_the_type_column() {
     let type_x = label_x + columns::LABEL_W;
     let elapsed_x = type_x + columns::TYPE_W;
 
-    let row = find_row(&buffer, area, "dt999999").expect("the detached row paints");
-    let text = row_text(&buffer, area, row);
+    let row = find_row(&buffer, area_to_rect(area), "dt999999").expect("the detached row paints");
+    let text = row_text(&buffer, area_to_rect(area), row);
     let elapsed: String = text
         .chars()
         .skip(elapsed_x)
@@ -1227,8 +1242,8 @@ fn an_awaited_live_row_paints_its_waiter_count() {
 
     let buffer = render(&mut app, 200, 50);
     let area = app.active_agents_area;
-    let row = find_row(&buffer, area, "w0000001").expect("the awaited row paints");
-    let text = row_text(&buffer, area, row);
+    let row = find_row(&buffer, area_to_rect(area), "w0000001").expect("the awaited row paints");
+    let text = row_text(&buffer, area_to_rect(area), row);
 
     assert!(
         text.contains("[w2]"),
@@ -1252,8 +1267,8 @@ fn an_unawaited_row_paints_no_waiter_marker() {
 
     let buffer = render(&mut app, 200, 50);
     let area = app.active_agents_area;
-    let row = find_row(&buffer, area, "w0000002").expect("the row paints");
-    let text = row_text(&buffer, area, row);
+    let row = find_row(&buffer, area_to_rect(area), "w0000002").expect("the row paints");
+    let text = row_text(&buffer, area_to_rect(area), row);
 
     assert!(
         !text.contains("[w"),
@@ -1278,8 +1293,8 @@ fn a_suspended_awaited_row_still_paints_its_waiters() {
 
     let buffer = render(&mut app, 200, 50);
     let area = app.active_agents_area;
-    let row = find_row(&buffer, area, "w0000003").expect("the suspended row paints");
-    let text = row_text(&buffer, area, row);
+    let row = find_row(&buffer, area_to_rect(area), "w0000003").expect("the suspended row paints");
+    let text = row_text(&buffer, area_to_rect(area), row);
 
     assert!(
         text.contains("[w1]"),
@@ -1308,7 +1323,7 @@ fn the_waiter_marker_does_not_move_the_pinned_controls() {
 
     let buffer = render(&mut app, 200, 50);
     let area = app.active_agents_area;
-    let row = find_row(&buffer, area, "w0000004").expect("the row paints");
+    let row = find_row(&buffer, area_to_rect(area), "w0000004").expect("the row paints");
 
     let stop_x = u16::try_from(columns::CONTENT_X + columns::STOP_X).expect("stop column");
     let kill_x = u16::try_from(columns::CONTENT_X + columns::KILL_X).expect("kill column");
@@ -1353,17 +1368,19 @@ fn test_agents_empty_state_paints_the_hint_beneath_the_primary_row() {
     let buffer = render(&mut app, 170, 44);
     let area = app.active_agents_area;
 
-    let header_y = find_row(&buffer, area, "id").expect("header row");
-    let hint_y = find_row(&buffer, area, glyphs::EMPTY_HINT).expect("empty-state hint row");
+    let header_y = find_row(&buffer, area_to_rect(area), "id").expect("header row");
+    let hint_y =
+        find_row(&buffer, area_to_rect(area), glyphs::EMPTY_HINT).expect("empty-state hint row");
     assert_eq!(
         hint_y,
         header_y + 2,
         "the empty-state hint must sit directly beneath the primary row (FR-026)"
     );
-    let hint_x =
-        u16::try_from(find_in_row(&buffer, area, hint_y, glyphs::EMPTY_HINT).expect("hint column"))
-            .expect("hint column fits");
-    let hint_cell = cell_at(&buffer, area, hint_y, hint_x);
+    let hint_x = u16::try_from(
+        find_in_row(&buffer, area_to_rect(area), hint_y, glyphs::EMPTY_HINT).expect("hint column"),
+    )
+    .expect("hint column fits");
+    let hint_cell = cell_at(&buffer, area_to_rect(area), hint_y, hint_x);
     assert_eq!(
         hint_cell.fg,
         codemason_tui::theme::colors::HINT,
@@ -1386,7 +1403,7 @@ fn test_agents_empty_state_hint_is_absent_with_rows() {
     let area = app.active_agents_area;
 
     assert_eq!(
-        find_row(&buffer, area, glyphs::EMPTY_HINT),
+        find_row(&buffer, area_to_rect(area), glyphs::EMPTY_HINT),
         None,
         "the empty-state hint must not paint while rows exist (FR-026)"
     );

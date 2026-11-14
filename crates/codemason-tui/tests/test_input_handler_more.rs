@@ -6,9 +6,9 @@
 //!
 //! Tests only - no production logic is touched.
 
+use codemason_app_core::geometry::Area;
 use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use ratatui::layout::Rect;
 
 use codemason_agent::message::{Message, MessagePart, Role};
 use codemason_tui::app::{
@@ -51,7 +51,7 @@ fn app_with_session(session: &str) -> codemason_tui::App {
 fn wheel_scrolls_the_telemetry_panel() {
     let mut app = app_with_session("s1");
     app.show_telemetry = true;
-    app.telemetry_area = Rect::new(60, 1, 20, 10);
+    app.telemetry_area = Area::new(60, 1, 20, 10);
     app.telemetry_scroll_offset = 0;
 
     app.handle_mouse_event(mouse(MouseEventKind::ScrollUp, 65, 5));
@@ -71,7 +71,7 @@ fn wheel_scrolls_the_telemetry_panel() {
 fn wheel_scrolls_the_context_panel() {
     let mut app = app_with_session("s1");
     app.show_context_panel = true;
-    app.context_panel_area = Rect::new(60, 1, 20, 10);
+    app.context_panel_area = Area::new(60, 1, 20, 10);
     app.context_scroll_offset = 0;
 
     app.handle_mouse_event(mouse(MouseEventKind::ScrollUp, 65, 5));
@@ -85,7 +85,7 @@ fn wheel_scrolls_the_context_panel() {
 fn wheel_scrolls_the_memory_panel() {
     let mut app = app_with_session("s1");
     app.show_memory = true;
-    app.memory_area = Rect::new(60, 1, 20, 10);
+    app.memory_area = Area::new(60, 1, 20, 10);
     app.memory_scroll_offset = 0;
 
     app.handle_mouse_event(mouse(MouseEventKind::ScrollUp, 65, 5));
@@ -98,7 +98,7 @@ fn wheel_scrolls_the_memory_panel() {
 #[test]
 fn wheel_over_the_input_pane_is_a_noop() {
     let mut app = app_with_session("s1");
-    app.input_area = Rect::new(0, 40, 80, 3);
+    app.input_area = Area::new(0, 40, 80, 3);
     app.session.scroll_offset = 5;
 
     app.handle_mouse_event(mouse(MouseEventKind::ScrollUp, 5, 41));
@@ -113,7 +113,7 @@ fn wheel_over_the_input_pane_is_a_noop() {
 #[test]
 fn right_click_in_message_pane_opens_context_menu() {
     let mut app = app_with_session("s1");
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
 
     app.handle_mouse_event(mouse(MouseEventKind::Down(MouseButton::Right), 5, 5));
     let menu = app.context_menu.as_ref().expect("context menu opens");
@@ -123,7 +123,7 @@ fn right_click_in_message_pane_opens_context_menu() {
 #[test]
 fn right_click_outside_every_pane_clears_context_menu() {
     let mut app = app_with_session("s1");
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.context_menu = Some(ContextMenuState {
         x: 1,
         y: 1,
@@ -189,7 +189,7 @@ fn left_click_outside_context_menu_dismisses_it() {
 #[test]
 fn execute_context_action_copy_clears_the_menu() {
     let mut app = app_with_session("s1");
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.text_selection = Some(TextSelection {
         pane: SelectionPane::Messages,
         anchor: (0, 2),
@@ -214,7 +214,7 @@ fn execute_context_action_cut_on_non_input_pane_only_copies() {
     let mut app = app_with_session("s1");
     app.session.input = "abcdef".to_string();
     app.session.input_cursor = 6;
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.text_selection = Some(TextSelection {
         pane: SelectionPane::Messages,
         anchor: (0, 2),
@@ -281,7 +281,7 @@ fn file_menu_with_two_entries() -> FileMenuState {
 #[test]
 fn mouse_move_over_file_menu_updates_hovered_row() {
     let mut app = app_with_session("s1");
-    app.input_area = Rect::new(0, 10, 60, 3);
+    app.input_area = Area::new(0, 10, 60, 3);
     app.file_menu = Some(file_menu_with_two_entries());
 
     // Popup geometry: height = (2 items + 1 + 2).min(10) = 5, top = 10 - 5 = 5.
@@ -294,7 +294,7 @@ fn mouse_move_over_file_menu_updates_hovered_row() {
 #[test]
 fn left_click_outside_file_menu_popup_dismisses_it() {
     let mut app = app_with_session("s1");
-    app.input_area = Rect::new(0, 10, 60, 3);
+    app.input_area = Area::new(0, 10, 60, 3);
     app.file_menu = Some(file_menu_with_two_entries());
 
     app.handle_mouse_event(mouse(MouseEventKind::Down(MouseButton::Left), 200, 60));
@@ -308,7 +308,7 @@ fn left_click_outside_file_menu_popup_dismisses_it() {
 #[test]
 fn drag_updates_text_selection_endpoint() {
     let mut app = app_with_session("s1");
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.text_selection = Some(TextSelection {
         pane: SelectionPane::Messages,
         anchor: (1, 2),

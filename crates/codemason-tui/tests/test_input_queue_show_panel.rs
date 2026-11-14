@@ -7,6 +7,7 @@
 //! the only key that dismisses the panel. The panel must never mutate the
 //! editable input buffer, the staged attachments, or the running turn.
 
+use codemason_app_core::geometry::Area;
 use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -181,7 +182,7 @@ fn test_panel_records_its_overlay_area_and_clears_it_when_closed() {
     let _ = render(&mut app, 120, 40);
     assert_eq!(
         app.queue_show_area,
-        ratatui::layout::Rect::default(),
+        Area::default(),
         "the overlay area is cleared once the panel closes"
     );
 }

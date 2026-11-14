@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, LockResult, MutexGuard};
 
-use ratatui::layout::Rect;
+use codemason_app_core::geometry::Area;
 
 use codemason_agent::team::{Mailbox, MessageType, TeamStore};
 use codemason_agent::{
@@ -3311,7 +3311,7 @@ impl App {
         debug_assert!(self.session.input_cursor <= self.input_len_chars());
     }
 
-    pub(crate) fn pane_area(&self, pane: SelectionPane) -> Rect {
+    pub(crate) fn pane_area(&self, pane: SelectionPane) -> Area {
         match pane {
             SelectionPane::Messages => self.message_area,
             SelectionPane::Log => self.log_area,
@@ -3639,7 +3639,7 @@ impl App {
         }
     }
 
-    pub(crate) fn active_input_widget_area(&self) -> Rect {
+    pub(crate) fn active_input_widget_area(&self) -> Area {
         self.input_area
     }
 
@@ -4956,7 +4956,7 @@ impl App {
     /// left-click selection start, right-click context-menu open, and
     /// scrollbar-gutter detection (FR-013).
     pub fn pane_at(&self, col: u16, row: u16) -> Option<SelectionPane> {
-        let pos = (col, row).into();
+        let pos = (col, row);
         if self.message_area.area() > 0 && self.message_area.contains(pos) {
             Some(SelectionPane::Messages)
         } else if self.show_profile

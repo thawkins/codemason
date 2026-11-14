@@ -23,6 +23,7 @@
 
 mod support;
 
+use codemason_app_core::geometry::Area;
 use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
@@ -1147,7 +1148,7 @@ fn plugin_store_wheel_over_nav_marketplace_results() {
 #[test]
 fn right_click_in_input_pane_builds_context_menu() {
     let mut app = support::make_app();
-    app.input_area = ratatui::layout::Rect::new(0, 40, 80, 3);
+    app.input_area = Area::new(0, 40, 80, 3);
     // A right-click inside the input pane opens a context menu with Cut/Copy/Paste.
     app.handle_mouse_event(mouse(MouseEventKind::Down(MouseButton::Right), 5, 41));
     let menu = app.context_menu.as_ref().expect("context menu opened");
@@ -1158,7 +1159,7 @@ fn right_click_in_input_pane_builds_context_menu() {
 #[test]
 fn right_click_with_provider_setup_input_enables_paste() {
     let mut app = support::make_app();
-    app.input_area = ratatui::layout::Rect::new(0, 40, 80, 3);
+    app.input_area = Area::new(0, 40, 80, 3);
     app.provider_setup = Some(enter_key("anthropic", "k"));
     app.handle_mouse_event(mouse(MouseEventKind::Down(MouseButton::Right), 5, 41));
     let menu = app.context_menu.as_ref().expect("context menu opened");
@@ -1189,7 +1190,7 @@ fn right_click_outside_any_pane_leaves_no_menu() {
 #[test]
 fn messages_scrollbar_gutter_click_starts_a_drag() {
     let mut app = support::make_app();
-    app.message_area = ratatui::layout::Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.session.message_max_scroll = 100;
     app.session.scroll_offset = 40;
     // Click the rightmost column (scrollbar gutter) inside the messages pane.
@@ -1205,7 +1206,7 @@ fn messages_scrollbar_gutter_click_starts_a_drag() {
 fn tasks_panel_scrollbar_gutter_click_starts_a_drag() {
     let mut app = support::make_app();
     app.show_tasks_panel = true;
-    app.tasks_area = ratatui::layout::Rect::new(60, 1, 20, 20);
+    app.tasks_area = Area::new(60, 1, 20, 20);
     app.tasks_max_scroll = 100;
     app.handle_mouse_event(mouse(
         MouseEventKind::Down(MouseButton::Left),
@@ -1219,7 +1220,7 @@ fn tasks_panel_scrollbar_gutter_click_starts_a_drag() {
 fn memory_panel_scrollbar_gutter_click_starts_a_drag() {
     let mut app = support::make_app();
     app.show_memory = true;
-    app.memory_area = ratatui::layout::Rect::new(60, 1, 20, 20);
+    app.memory_area = Area::new(60, 1, 20, 20);
     app.memory_max_scroll = 100;
     app.handle_mouse_event(mouse(
         MouseEventKind::Down(MouseButton::Left),

@@ -19,6 +19,8 @@
 
 mod support;
 
+use codemason_app_core::geometry::Area;
+use codemason_tui::adapters::area_to_rect;
 use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::backend::TestBackend;
@@ -126,9 +128,9 @@ fn scrollbar_glyph(c: char) -> bool {
 #[test]
 fn test_window_scroll_wheel_moves_the_agents_offset() {
     let mut app = support::make_app();
-    app.active_agents_area = Rect::new(5, 5, 100, 20);
+    app.active_agents_area = Area::new(5, 5, 100, 20);
     app.active_agents_max_scroll = 20;
-    let (col, row) = centre(app.active_agents_area);
+    let (col, row) = centre(area_to_rect(app.active_agents_area));
 
     app.active_agents_scroll_offset = 0;
     app.handle_mouse_event(wheel_up(col, row));
@@ -144,9 +146,9 @@ fn test_window_scroll_wheel_moves_the_agents_offset() {
 #[test]
 fn test_window_scroll_wheel_clamps_to_the_agents_maximum() {
     let mut app = support::make_app();
-    app.active_agents_area = Rect::new(5, 5, 100, 20);
+    app.active_agents_area = Area::new(5, 5, 100, 20);
     app.active_agents_max_scroll = 5;
-    let (col, row) = centre(app.active_agents_area);
+    let (col, row) = centre(area_to_rect(app.active_agents_area));
 
     app.handle_mouse_event(wheel_up(col, row));
     app.handle_mouse_event(wheel_up(col, row));
@@ -163,10 +165,10 @@ fn test_window_scroll_wheel_clamps_to_the_agents_maximum() {
 #[test]
 fn test_window_scroll_agents_wheel_does_not_scroll_the_pane_beneath() {
     let mut app = support::make_app();
-    app.message_area = Rect::new(0, 1, 100, 20);
-    app.active_agents_area = Rect::new(5, 5, 100, 20);
+    app.message_area = Area::new(0, 1, 100, 20);
+    app.active_agents_area = Area::new(5, 5, 100, 20);
     app.active_agents_max_scroll = 20;
-    let (col, row) = centre(app.active_agents_area);
+    let (col, row) = centre(area_to_rect(app.active_agents_area));
 
     app.handle_mouse_event(wheel_up(col, row));
     assert_eq!(app.session.scroll_offset, 0, "the popup absorbs the wheel");
@@ -182,9 +184,9 @@ fn test_window_scroll_agents_wheel_does_not_scroll_the_pane_beneath() {
 #[test]
 fn test_window_scroll_wheel_moves_the_teams_offset() {
     let mut app = support::make_app();
-    app.teams_area = Rect::new(5, 5, 100, 20);
+    app.teams_area = Area::new(5, 5, 100, 20);
     app.teams_max_scroll = 20;
-    let (col, row) = centre(app.teams_area);
+    let (col, row) = centre(area_to_rect(app.teams_area));
 
     app.handle_mouse_event(wheel_up(col, row));
     assert_eq!(app.teams_scroll_offset, STEP);
@@ -200,9 +202,9 @@ fn test_window_scroll_wheel_moves_the_teams_offset() {
 #[test]
 fn test_window_scroll_wheel_clamps_to_the_teams_maximum() {
     let mut app = support::make_app();
-    app.teams_area = Rect::new(5, 5, 100, 20);
+    app.teams_area = Area::new(5, 5, 100, 20);
     app.teams_max_scroll = 4;
-    let (col, row) = centre(app.teams_area);
+    let (col, row) = centre(area_to_rect(app.teams_area));
 
     app.handle_mouse_event(wheel_up(col, row));
     app.handle_mouse_event(wheel_up(col, row));
@@ -216,10 +218,10 @@ fn test_window_scroll_wheel_clamps_to_the_teams_maximum() {
 #[test]
 fn test_window_scroll_teams_wheel_does_not_scroll_the_pane_beneath() {
     let mut app = support::make_app();
-    app.message_area = Rect::new(0, 1, 100, 20);
-    app.teams_area = Rect::new(5, 5, 100, 20);
+    app.message_area = Area::new(0, 1, 100, 20);
+    app.teams_area = Area::new(5, 5, 100, 20);
     app.teams_max_scroll = 20;
-    let (col, row) = centre(app.teams_area);
+    let (col, row) = centre(area_to_rect(app.teams_area));
 
     app.handle_mouse_event(wheel_up(col, row));
     assert_eq!(app.session.scroll_offset, 0, "the popup absorbs the wheel");
@@ -235,17 +237,17 @@ fn test_window_scroll_teams_wheel_does_not_scroll_the_pane_beneath() {
 #[test]
 fn test_window_scroll_wheel_sets_the_redraw_flag() {
     let mut app = support::make_app();
-    app.active_agents_area = Rect::new(5, 5, 100, 20);
-    app.teams_area = Rect::new(5, 5, 100, 20);
+    app.active_agents_area = Area::new(5, 5, 100, 20);
+    app.teams_area = Area::new(5, 5, 100, 20);
     app.active_agents_max_scroll = 20;
     app.teams_max_scroll = 20;
-    let (col, row) = centre(app.active_agents_area);
+    let (col, row) = centre(area_to_rect(app.active_agents_area));
 
     app.needs_redraw = false;
     app.handle_mouse_event(wheel_up(col, row));
     assert!(app.needs_redraw, "an agents wheel must request a redraw");
 
-    let (tcol, trow) = centre(app.teams_area);
+    let (tcol, trow) = centre(area_to_rect(app.teams_area));
     app.needs_redraw = false;
     app.handle_mouse_event(wheel_up(tcol, trow));
     assert!(app.needs_redraw, "a teams wheel must request a redraw");
@@ -260,8 +262,8 @@ fn test_window_scroll_wheel_sets_the_redraw_flag() {
 #[test]
 fn test_window_scroll_wheel_without_a_popup_leaves_the_offsets_alone() {
     let mut app = support::make_app();
-    app.active_agents_area = Rect::default();
-    app.teams_area = Rect::default();
+    app.active_agents_area = Area::default();
+    app.teams_area = Area::default();
 
     app.handle_mouse_event(wheel_up(40, 10));
     assert_eq!(app.active_agents_scroll_offset, 0);
@@ -292,7 +294,7 @@ fn test_window_scroll_wheel_scrolls_the_rendered_agents_table_end_to_end() {
     let max = app.active_agents_max_scroll;
     assert!(max >= STEP + 2, "12 tasks must overflow a 14-row popup");
 
-    let (col, row) = centre(area);
+    let (col, row) = centre(area_to_rect(area));
     app.needs_redraw = false;
     app.handle_mouse_event(wheel_up(col, row));
     assert_eq!(app.active_agents_scroll_offset, STEP);
@@ -389,7 +391,7 @@ fn test_window_scroll_wheel_scrolls_the_rendered_teams_table_end_to_end() {
     let max = app.teams_max_scroll;
     assert!(max >= STEP + 2, "12 members must overflow a 14-row popup");
 
-    let (col, row) = centre(area);
+    let (col, row) = centre(area_to_rect(area));
     app.handle_mouse_event(wheel_up(col, row));
     assert_eq!(app.teams_scroll_offset, STEP);
 
@@ -440,7 +442,7 @@ const fn mouse_event(kind: MouseEventKind, col: u16, row: u16) -> MouseEvent {
 #[test]
 fn test_agents_scrollbar_gutter_drag_jumps_then_drags_then_ends() {
     let mut app = support::make_app();
-    app.active_agents_area = Rect::new(5, 5, 100, 20);
+    app.active_agents_area = Area::new(5, 5, 100, 20);
     app.active_agents_max_scroll = 20;
 
     // Click at the gutter's column, near the top of the track: jump-to-
@@ -491,7 +493,7 @@ fn test_agents_scrollbar_gutter_drag_jumps_then_drags_then_ends() {
 #[test]
 fn test_teams_scrollbar_gutter_drag_jumps_then_drags_then_ends() {
     let mut app = support::make_app();
-    app.teams_area = Rect::new(5, 5, 110, 20);
+    app.teams_area = Area::new(5, 5, 110, 20);
     app.teams_max_scroll = 15;
 
     let gutter = app.teams_area.right() - 1;
@@ -538,7 +540,7 @@ fn test_teams_scrollbar_gutter_drag_jumps_then_drags_then_ends() {
 #[test]
 fn test_a_gutter_click_without_overflow_starts_no_drag() {
     let mut app = support::make_app();
-    app.active_agents_area = Rect::new(5, 5, 100, 20);
+    app.active_agents_area = Area::new(5, 5, 100, 20);
     app.active_agents_max_scroll = 0;
 
     let gutter = app.active_agents_area.right() - 1;

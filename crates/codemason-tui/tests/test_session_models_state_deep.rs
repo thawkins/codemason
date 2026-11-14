@@ -17,6 +17,7 @@
 #![cfg(test)]
 #![allow(clippy::await_holding_lock)]
 
+use codemason_app_core::geometry::Area;
 use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,7 +25,6 @@ use std::time::Duration;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use ratatui::layout::Rect;
 
 use codemason_agent::event::Event;
 use codemason_agent::message::Message;
@@ -760,7 +760,7 @@ async fn paste_outside_scope_image_attaches_with_a_warning() {
 #[tokio::test]
 async fn scrollbar_drag_maps_the_gutter_row_to_an_offset() {
     let mut app = support::make_app();
-    app.message_area = Rect::new(0, 0, 20, 11);
+    app.message_area = Area::new(0, 0, 20, 11);
     app.session.message_max_scroll = 100;
 
     app.handle_mouse_event(MouseEvent {
@@ -781,7 +781,7 @@ async fn scrollbar_drag_maps_the_gutter_row_to_an_offset() {
 async fn scrollbar_drag_on_a_memory_pane_uses_top_down_offsets() {
     let mut app = support::make_app();
     app.show_memory = true;
-    app.memory_area = Rect::new(0, 0, 20, 11);
+    app.memory_area = Area::new(0, 0, 20, 11);
     app.memory_max_scroll = 40;
 
     app.handle_mouse_event(MouseEvent {

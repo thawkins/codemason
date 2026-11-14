@@ -3,9 +3,9 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use codemason_app_core::geometry::Area;
 use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-use ratatui::layout::Rect;
 use ratatui::{Terminal, backend::TestBackend};
 
 use codemason_agent::message::{Message, MessagePart, Role, ToolCallState, ToolCallStatus};
@@ -64,8 +64,8 @@ const fn right_click(col: u16, row: u16) -> MouseEvent {
 #[test]
 fn test_left_click_starts_selection_in_messages() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
-    app.log_area = Rect::new(80, 1, 30, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
+    app.log_area = Area::new(80, 1, 30, 20);
 
     // Click inside messages (not on scrollbar column 79)
     app.handle_mouse_event(mouse_down(10, 5));
@@ -79,8 +79,8 @@ fn test_left_click_starts_selection_in_messages() {
 #[test]
 fn test_left_click_starts_selection_in_log() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
-    app.log_area = Rect::new(80, 1, 30, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
+    app.log_area = Area::new(80, 1, 30, 20);
 
     app.handle_mouse_event(mouse_down(90, 10));
     assert!(app.text_selection.is_some());
@@ -91,9 +91,9 @@ fn test_left_click_starts_selection_in_log() {
 #[test]
 fn test_left_click_starts_selection_in_input() {
     let mut app = make_app();
-    app.input_area = Rect::new(0, 22, 80, 3);
+    app.input_area = Area::new(0, 22, 80, 3);
     // message_area must not contain the click
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
 
     app.handle_mouse_event(mouse_down(10, 23));
     assert!(app.text_selection.is_some());
@@ -104,7 +104,7 @@ fn test_left_click_starts_selection_in_input() {
 #[test]
 fn test_left_click_outside_panes_clears_selection() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     // Start a selection
     app.text_selection = Some(TextSelection {
         pane: SelectionPane::Messages,
@@ -122,7 +122,7 @@ fn test_left_click_outside_panes_clears_selection() {
 #[test]
 fn test_drag_extends_selection() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
 
     app.handle_mouse_event(mouse_down(5, 3));
     app.handle_mouse_event(mouse_drag(40, 7));
@@ -135,7 +135,7 @@ fn test_drag_extends_selection() {
 #[test]
 fn test_mouse_up_preserves_selection() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
 
     app.handle_mouse_event(mouse_down(5, 3));
     app.handle_mouse_event(mouse_drag(40, 7));
@@ -236,7 +236,7 @@ fn test_click_outside_output_view_closes_overlay() {
             source_generation: 0,
         },
     });
-    app.output_view_area = Rect::new(10, 10, 40, 10);
+    app.output_view_area = Area::new(10, 10, 40, 10);
 
     app.handle_mouse_event(mouse_down(1, 1));
     assert!(app.output_view.is_none());
@@ -264,7 +264,7 @@ fn test_clicking_agents_button_toggles_agents_window() {
         report_status: codemason_agent::task::ReportStatus::default(),
         time_bound_secs: None,
     });
-    app.agents_button_area = Rect::new(2, 30, 9, 3);
+    app.agents_button_area = Area::new(2, 30, 9, 3);
 
     app.handle_mouse_event(mouse_down(3, 31));
     assert!(app.show_agents_window);
@@ -277,7 +277,7 @@ fn test_clicking_agents_button_toggles_agents_window() {
 fn test_clicking_teams_button_toggles_teams_window() {
     let mut app = make_app();
     app.session.active_team = Some(TeamConfig::new("alpha", "lead-s1"));
-    app.teams_button_area = Rect::new(12, 30, 9, 3);
+    app.teams_button_area = Area::new(12, 30, 9, 3);
 
     app.handle_mouse_event(mouse_down(13, 31));
     assert!(app.show_teams_window);
@@ -292,8 +292,8 @@ fn test_clicking_dimmed_buttons_still_opens_windows() {
     // the window opens and paints its empty state (FR-026), so the operator can
     // always reach the roster.
     let mut app = make_app();
-    app.agents_button_area = Rect::new(2, 30, 9, 3);
-    app.teams_button_area = Rect::new(12, 30, 9, 3);
+    app.agents_button_area = Area::new(2, 30, 9, 3);
+    app.teams_button_area = Area::new(12, 30, 9, 3);
 
     app.handle_mouse_event(mouse_down(3, 31));
     assert!(app.show_agents_window, "a dimmed Agents button still opens");
@@ -591,7 +591,7 @@ fn test_selection_normalized_same_row() {
 #[test]
 fn test_right_click_opens_context_menu_and_keeps_selection() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.session.message_content_lines = vec![
         "You: hello world".to_string(),
         "Assistant: hi there".to_string(),
@@ -615,7 +615,7 @@ fn test_right_click_opens_context_menu_and_keeps_selection() {
 #[test]
 fn test_right_click_with_no_selection_opens_disabled_menu() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     assert!(app.text_selection.is_none());
     app.handle_mouse_event(right_click(5, 5));
     assert!(app.text_selection.is_none());
@@ -628,8 +628,8 @@ fn test_right_click_with_no_selection_opens_disabled_menu() {
 #[test]
 fn test_right_click_with_selection_in_other_pane_disables_copy_for_clicked_pane() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
-    app.log_area = Rect::new(80, 1, 30, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
+    app.log_area = Area::new(80, 1, 30, 20);
     app.show_log = true;
     app.text_selection = Some(TextSelection {
         pane: SelectionPane::Messages,
@@ -647,7 +647,7 @@ fn test_right_click_with_selection_in_other_pane_disables_copy_for_clicked_pane(
 #[test]
 fn test_context_copy_keeps_selection() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.session.message_content_lines = vec!["You: hello world".to_string()];
     app.text_selection = Some(TextSelection {
         pane: SelectionPane::Messages,
@@ -709,7 +709,7 @@ fn test_extract_partial_single_line() {
 #[test]
 fn test_scrollbar_click_clears_selection() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.session.message_max_scroll = 50;
 
     // Pre-set a selection
@@ -730,7 +730,7 @@ fn test_scrollbar_click_clears_selection() {
 #[test]
 fn test_new_click_replaces_selection() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
 
     app.handle_mouse_event(mouse_down(5, 5));
     app.handle_mouse_event(mouse_drag(20, 5));
@@ -746,7 +746,7 @@ fn test_new_click_replaces_selection() {
 #[test]
 fn test_context_cut_on_input_removes_selected_range_only() {
     let mut app = make_app();
-    app.input_area = Rect::new(0, 22, 40, 3);
+    app.input_area = Area::new(0, 22, 40, 3);
     app.session.input = "abcdef".to_string();
     app.session.input_cursor = app.session.input.chars().count();
     app.text_selection = Some(TextSelection {
@@ -779,7 +779,7 @@ fn test_extract_text_from_lines_unicode_uses_character_columns() {
 #[test]
 fn test_context_cut_on_wrapped_unicode_input_removes_single_character() {
     let mut app = make_app();
-    app.input_area = Rect::new(0, 22, 6, 4); // inner width = 4
+    app.input_area = Area::new(0, 22, 6, 4); // inner width = 4
     app.session.input = "ab💡cd".to_string();
     app.session.input_cursor = app.session.input.chars().count();
     app.text_selection = Some(TextSelection {
@@ -806,7 +806,7 @@ fn test_context_cut_on_wrapped_unicode_input_removes_single_character() {
 #[test]
 fn test_right_click_uses_home_input_geometry_for_file_menu_popup() {
     let mut app = make_app();
-    app.input_area = Rect::new(20, 15, 40, 3);
+    app.input_area = Area::new(20, 15, 40, 3);
     app.session.input = "@src".to_string();
     app.session.input_cursor = app.session.input.chars().count();
     app.file_menu = Some(codemason_tui::app::FileMenuState {
@@ -835,7 +835,7 @@ fn test_right_click_uses_home_input_geometry_for_file_menu_popup() {
 #[test]
 fn test_left_click_outside_file_menu_closes_popup() {
     let mut app = make_app();
-    app.input_area = Rect::new(20, 15, 40, 3);
+    app.input_area = Area::new(20, 15, 40, 3);
     app.session.input = "@".to_string();
     app.session.input_cursor = 1;
     app.file_menu = Some(codemason_tui::app::FileMenuState {
@@ -874,7 +874,7 @@ fn test_prune_stale_selection_after_log_panel_dismissed() {
     let mut app = make_app();
     // Simulate the log panel being visible with a real area.
     app.show_log = true;
-    app.log_area = Rect::new(80, 1, 30, 20);
+    app.log_area = Area::new(80, 1, 30, 20);
     app.text_selection = Some(TextSelection {
         pane: SelectionPane::Log,
         anchor: (85, 5),
@@ -885,8 +885,8 @@ fn test_prune_stale_selection_after_log_panel_dismissed() {
     app.show_log = false;
     app.show_tasks_panel = true;
     // The render pass would zero log_area here.
-    app.log_area = Rect::default();
-    app.tasks_area = Rect::new(80, 1, 30, 20);
+    app.log_area = Area::default();
+    app.tasks_area = Area::new(80, 1, 30, 20);
 
     // A mouse event arrives. Before the fix this panicked in
     // assert_ui_invariants; now prune_stale_selection clears the stale
@@ -908,8 +908,8 @@ fn test_prune_stale_selection_clears_menu_and_selection() {
     let mut app = make_app();
     app.show_log = true;
     app.show_memory = true;
-    app.log_area = Rect::new(80, 1, 30, 10);
-    app.memory_area = Rect::new(80, 11, 30, 10);
+    app.log_area = Area::new(80, 1, 30, 10);
+    app.memory_area = Area::new(80, 11, 30, 10);
     app.text_selection = Some(TextSelection {
         pane: SelectionPane::Memory,
         anchor: (85, 15),
@@ -926,8 +926,8 @@ fn test_prune_stale_selection_clears_menu_and_selection() {
     // Dismiss both panels (e.g. user opens tasks panel via Alt+I).
     app.show_log = false;
     app.show_memory = false;
-    app.log_area = Rect::default();
-    app.memory_area = Rect::default();
+    app.log_area = Area::default();
+    app.memory_area = Area::default();
 
     app.handle_mouse_event(mouse_down(10, 5));
 
@@ -945,7 +945,7 @@ fn test_prune_stale_selection_clears_menu_and_selection() {
 #[test]
 fn test_prune_stale_selection_keeps_valid_selection() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.text_selection = Some(TextSelection {
         pane: SelectionPane::Messages,
         anchor: (5, 5),

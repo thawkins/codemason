@@ -29,6 +29,7 @@
 
 mod support;
 
+use codemason_tui::adapters::area_to_rect;
 use std::path::PathBuf;
 
 use ratatui::Terminal;
@@ -353,8 +354,8 @@ fn test_t019_agents_window_deterministic_offline_and_all_row_variants() {
         + agents_columns::TYPE_W;
     let steps_x = elapsed_x + agents_columns::ELAPSED_W + agents_columns::GAP_W;
     for offset in 0..area.height {
-        let row1 = area_row_text(&buf1, area, offset);
-        let row2 = area_row_text(&buf2, area, offset);
+        let row1 = area_row_text(&buf1, area_to_rect(area), offset);
+        let row2 = area_row_text(&buf2, area_to_rect(area), offset);
         if row1 == row2 {
             continue;
         }
@@ -548,7 +549,7 @@ fn test_t019_teams_window_deterministic_offline_all_statuses_and_strip() {
 
     let mut first = build_state();
     let buf1 = render_teams_window(&mut first, 170, 44);
-    let content = table_inner(first.teams_area);
+    let content = table_inner(area_to_rect(first.teams_area));
 
     let mut second = build_state();
     let buf2 = render_teams_window(&mut second, 170, 44);
@@ -804,7 +805,7 @@ fn test_t019_teams_frame_is_bounded_to_the_two_documented_reads() {
 
     // The claimed/done counters come from the store read: the disk member has
     // no tasks so the count is 0, painted as a zero rather than a dash.
-    let content = table_inner(app1.teams_area);
+    let content = table_inner(area_to_rect(app1.teams_area));
     let member_y = row_containing(&buf1, "tm-001");
     let claimed_x = teams_columns::MARKER_W
         + teams_columns::ID_W

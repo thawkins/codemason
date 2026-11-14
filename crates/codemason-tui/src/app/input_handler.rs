@@ -177,7 +177,7 @@ impl App {
         let marketplace_area = self.connector_store_marketplace_area;
         let result_area = self.connector_store_result_area;
         let clear_area = self.connector_store_clear_area;
-        let pos = (event.column, event.row).into();
+        let pos = (event.column, event.row);
         let in_nav = nav_area.contains(pos);
         let in_marketplace = marketplace_area.contains(pos);
         let in_results = result_area.contains(pos);
@@ -292,7 +292,7 @@ impl App {
         let marketplace_area = self.plugin_store_marketplace_area;
         let result_area = self.plugin_store_result_area;
         let clear_area = self.plugin_store_clear_area;
-        let pos = (event.column, event.row).into();
+        let pos = (event.column, event.row);
         let in_nav = nav_area.contains(pos);
         let in_marketplace = marketplace_area.contains(pos);
         let in_results = result_area.contains(pos);
@@ -426,11 +426,7 @@ impl App {
                     | ProviderSetupStep::SetupRouter { .. }
             )
         );
-        if steppable
-            && self
-                .provider_setup_area
-                .contains((event.column, event.row).into())
-        {
+        if steppable && self.provider_setup_area.contains((event.column, event.row)) {
             let key = KeyInput {
                 key: code,
                 mods: Modifiers::NONE,
@@ -456,7 +452,7 @@ impl App {
             let area = self.row_action_confirm_area;
             if event.kind == MouseKind::Down(MouseButton::Left)
                 && area.width > 0
-                && area.contains((event.column, event.row).into())
+                && area.contains((event.column, event.row))
             {
                 if event.column < area.x + area.width / 2 {
                     self.row_action_confirm_accept();
@@ -541,7 +537,7 @@ impl App {
                 if self.output_view.is_some()
                     && self
                         .output_view_area
-                        .contains((event.column, event.row).into()) =>
+                        .contains((event.column, event.row)) =>
             {
                 self.scroll_output_view_by(SCROLL_STEP_LINES as i16);
                 self.needs_redraw = true;
@@ -550,7 +546,7 @@ impl App {
                 if self.output_view.is_some()
                     && self
                         .output_view_area
-                        .contains((event.column, event.row).into()) =>
+                        .contains((event.column, event.row)) =>
             {
                 self.scroll_output_view_by(-(SCROLL_STEP_LINES as i16));
                 self.needs_redraw = true;
@@ -563,7 +559,7 @@ impl App {
             // over the popup can thus never scroll the surface beneath it
             // (spec `agentui` FR-008, FR-059, T-017).
             MouseKind::ScrollUp
-                if self.active_agents_area.contains((event.column, event.row).into()) =>
+                if self.active_agents_area.contains((event.column, event.row)) =>
             {
                 self.active_agents_scroll_offset = (self
                     .active_agents_scroll_offset
@@ -572,14 +568,14 @@ impl App {
                 self.needs_redraw = true;
             }
             MouseKind::ScrollDown
-                if self.active_agents_area.contains((event.column, event.row).into()) =>
+                if self.active_agents_area.contains((event.column, event.row)) =>
             {
                 self.active_agents_scroll_offset =
                     self.active_agents_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
                 self.needs_redraw = true;
             }
             MouseKind::ScrollUp
-                if self.teams_area.contains((event.column, event.row).into()) =>
+                if self.teams_area.contains((event.column, event.row)) =>
             {
                 self.teams_scroll_offset = (self.teams_scroll_offset.saturating_add(
                     SCROLL_STEP_LINES,
@@ -588,7 +584,7 @@ impl App {
                 self.needs_redraw = true;
             }
             MouseKind::ScrollDown
-                if self.teams_area.contains((event.column, event.row).into()) =>
+                if self.teams_area.contains((event.column, event.row)) =>
             {
                 self.teams_scroll_offset =
                     self.teams_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
@@ -598,7 +594,7 @@ impl App {
                 if self.research_view.is_some()
                     && self
                         .research_view_area
-                        .contains((event.column, event.row).into())
+                        .contains((event.column, event.row))
                 {
                     self.scroll_research_view_by(SCROLL_STEP_LINES as i16);
                 } else {
@@ -639,7 +635,7 @@ impl App {
                 if self.research_view.is_some()
                     && self
                         .research_view_area
-                        .contains((event.column, event.row).into())
+                        .contains((event.column, event.row))
                 {
                     self.scroll_research_view_by(-(SCROLL_STEP_LINES as i16));
                 } else {
@@ -679,11 +675,11 @@ impl App {
             // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
             MouseKind::Down(MouseButton::Left) => {
                 let pos = (event.column, event.row);
-                if self.agents_button_area.contains(pos.into()) {
+                if self.agents_button_area.contains(pos) {
                     self.toggle_agents_window();
                     return;
                 }
-                if self.teams_button_area.contains(pos.into()) {
+                if self.teams_button_area.contains(pos) {
                     self.toggle_teams_window();
                     return;
                 }
@@ -695,7 +691,7 @@ impl App {
                 if self.active_agents_max_scroll > 0
                     && self.active_agents_area.height > 0
                     && event.column == self.active_agents_area.right().saturating_sub(1)
-                    && self.active_agents_area.contains(pos.into())
+                    && self.active_agents_area.contains(pos)
                 {
                     self.scrollbar_drag = Some(ScrollbarDragPane::AgentsWindow);
                     self.apply_scrollbar_drag(event.row, ScrollbarDragPane::AgentsWindow);
@@ -704,14 +700,14 @@ impl App {
                 if self.teams_max_scroll > 0
                     && self.teams_area.height > 0
                     && event.column == self.teams_area.right().saturating_sub(1)
-                    && self.teams_area.contains(pos.into())
+                    && self.teams_area.contains(pos)
                 {
                     self.scrollbar_drag = Some(ScrollbarDragPane::TeamsWindow);
                     self.apply_scrollbar_drag(event.row, ScrollbarDragPane::TeamsWindow);
                     return;
                 }
                 if self.research_view.is_some() {
-                    if self.research_view_area.contains(pos.into()) {
+                    if self.research_view_area.contains(pos) {
                         return;
                     }
                     self.research_view = None;
@@ -720,7 +716,7 @@ impl App {
                 if self.output_view.is_some()
                     && self
                         .output_view_area
-                        .contains((event.column, event.row).into())
+                        .contains((event.column, event.row))
                 {
                     return;
                 }
@@ -729,7 +725,7 @@ impl App {
                 }
                 if self
                     .active_agents_area
-                    .contains((event.column, event.row).into())
+                    .contains((event.column, event.row))
                 {
                     // Click-to-select: the click moves the block cursor onto
                     // the clicked row, so the mouse and keyboard share the
@@ -747,7 +743,7 @@ impl App {
                     return;
                 }
 
-                if self.teams_area.contains((event.column, event.row).into()) {
+                if self.teams_area.contains((event.column, event.row)) {
                     // Same click-to-select contract for the Teams window.
                     let absolute_row = event
                         .row
@@ -761,7 +757,7 @@ impl App {
                     // Scrollbar drag takes priority (rightmost column of pane)
                                                     if self.message_area.height > 0
                                                         && event.column == self.message_area.right().saturating_sub(1)
-                                                        && self.message_area.contains(pos.into())
+                                                        && self.message_area.contains(pos)
                                                         && self.session.message_max_scroll > 0
                                                     {                    self.scrollbar_drag = Some(ScrollbarDragPane::Messages);
                     self.text_selection = None;
@@ -769,7 +765,7 @@ impl App {
                 } else if self.show_log
                     && self.log_area.height > 0
                     && event.column == self.log_area.right().saturating_sub(1)
-                    && self.log_area.contains(pos.into())
+                    && self.log_area.contains(pos)
                     && self.log_max_scroll > 0
                 {
                     self.scrollbar_drag = Some(ScrollbarDragPane::Log);
@@ -778,7 +774,7 @@ impl App {
                 } else if self.show_profile
                     && self.profile_area.height > 0
                     && event.column == self.profile_area.right().saturating_sub(1)
-                    && self.profile_area.contains(pos.into())
+                    && self.profile_area.contains(pos)
                     && self.profile_max_scroll > 0
                 {
                     self.scrollbar_drag = Some(ScrollbarDragPane::Profile);
@@ -787,7 +783,7 @@ impl App {
                 } else if self.show_tasks_panel
                     && self.tasks_area.height > 0
                     && event.column == self.tasks_area.right().saturating_sub(1)
-                    && self.tasks_area.contains(pos.into())
+                    && self.tasks_area.contains(pos)
                     && self.tasks_max_scroll > 0
                 {
                     self.scrollbar_drag = Some(ScrollbarDragPane::Tasks);
@@ -796,7 +792,7 @@ impl App {
                                   } else if self.show_memory
                                       && self.memory_area.height > 0
                                       && event.column == self.memory_area.right().saturating_sub(1)
-                                      && self.memory_area.contains(pos.into())
+                                      && self.memory_area.contains(pos)
                                       && self.memory_max_scroll > 0
                                   {
                                       // Click on the Memory panel scrollbar gutter (rightmost
@@ -808,7 +804,7 @@ impl App {
                                       self.apply_scrollbar_drag(event.row, ScrollbarDragPane::Memory);                                    } else if self.show_telemetry
                                         && self.telemetry_area.height > 0
                                         && event.column == self.telemetry_area.right().saturating_sub(1)
-                                        && self.telemetry_area.contains(pos.into())
+                                        && self.telemetry_area.contains(pos)
                                         && self.telemetry_max_scroll > 0
                                     {
                                         // Click on the Telemetry panel scrollbar gutter initiates
@@ -820,7 +816,7 @@ impl App {
                                         && self.context_panel_area.height > 0
                                         && event.column
                                             == self.context_panel_area.right().saturating_sub(1)
-                                        && self.context_panel_area.contains(pos.into())
+                                        && self.context_panel_area.contains(pos)
                                         && self.context_panel_max_scroll > 0
                                     {
                                         // Click on the Context panel scrollbar gutter initiates a

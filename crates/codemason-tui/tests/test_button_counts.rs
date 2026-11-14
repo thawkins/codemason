@@ -5,6 +5,7 @@
 //! the button widths grow to fit the labels, and that the cached button hit
 //! areas cover the rendered labels.
 
+use codemason_tui::adapters::area_to_rect;
 use ratatui::{Terminal, backend::TestBackend};
 
 mod support;
@@ -241,7 +242,7 @@ fn test_both_buttons_dimmed_when_subjects_absent() {
         (app.agents_button_area, "Agents"),
         (app.teams_button_area, "Teams"),
     ] {
-        let style = label_cell_style(area, &buffer, label)
+        let style = label_cell_style(area_to_rect(area), &buffer, label)
             .unwrap_or_else(|| panic!("{label} label not painted in {area:?}"));
         assert_eq!(
             style.fg,
@@ -268,7 +269,7 @@ fn test_enabled_buttons_render_white_text() {
         (app.agents_button_area, "Agents ("),
         (app.teams_button_area, "Teams"),
     ] {
-        let style = label_cell_style(area, &buffer, label)
+        let style = label_cell_style(area_to_rect(area), &buffer, label)
             .unwrap_or_else(|| panic!("{label} label not painted in {area:?}"));
         assert_eq!(
             style.fg,
@@ -296,8 +297,8 @@ fn test_open_teams_window_paints_active_button() {
     app.show_teams_window = true;
     let buffer = render_buffer(&mut app);
 
-    let style =
-        label_cell_style(app.teams_button_area, &buffer, "Teams").expect("Teams label painted");
+    let style = label_cell_style(area_to_rect(app.teams_button_area), &buffer, "Teams")
+        .expect("Teams label painted");
     assert_eq!(style.fg, Some(ratatui::style::Color::White), "{style:?}");
     assert_eq!(style.bg, Some(ratatui::style::Color::Blue), "{style:?}");
     assert!(
@@ -333,7 +334,7 @@ fn test_button_areas_stay_inside_the_column_and_never_overlap() {
         assert!(
             teams.right() <= app.input_area.left(),
             "at width {width}: teams {teams:?} must not overrun the input {}",
-            app.input_area
+            area_to_rect(app.input_area)
         );
     }
 }

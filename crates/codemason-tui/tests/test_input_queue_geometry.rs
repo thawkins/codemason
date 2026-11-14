@@ -14,9 +14,9 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use codemason_app_core::geometry::Area;
 use ratatui::Terminal;
 use ratatui::backend::{Backend, TestBackend};
-use ratatui::layout::Rect;
 
 use codemason_tui::App;
 use codemason_tui::app::{
@@ -208,7 +208,7 @@ fn cut_menu() -> ContextMenuState {
 #[test]
 fn test_selection_maps_through_the_counter_prefix() {
     let mut app = support::make_app();
-    app.input_area = Rect::new(0, 22, 40, 3);
+    app.input_area = Area::new(0, 22, 40, 3);
     app.session.input = "abcdef".to_string();
     app.session.input_cursor = 6;
     app.session.input_queue.push_back(entry("queued"));
@@ -231,7 +231,7 @@ fn test_selection_maps_through_the_counter_prefix() {
 #[test]
 fn test_selection_over_counter_digits_is_not_message_content() {
     let mut app = support::make_app();
-    app.input_area = Rect::new(0, 22, 40, 3);
+    app.input_area = Area::new(0, 22, 40, 3);
     app.session.input = "abcdef".to_string();
     app.session.input_cursor = 6;
     app.session.input_queue.push_back(entry("queued"));

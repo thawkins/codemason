@@ -10,6 +10,7 @@
 
 mod support;
 
+use codemason_app_core::geometry::Area;
 use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::collections::HashMap;
 
@@ -1138,7 +1139,7 @@ fn render_messages_directly_with_overflow() {
     terminal
         .draw(|frame| codemason_tui::layout::render_messages(frame, &mut app, area))
         .expect("draw");
-    assert!(app.message_area.width > 0 || app.message_area == Rect::default());
+    assert!(app.message_area.width > 0 || app.message_area == Area::default());
 }
 
 #[test]

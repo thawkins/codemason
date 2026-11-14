@@ -12,7 +12,9 @@ use std::path::Path;
 
 use crate::app::{image_dimensions_or_placeholder, sanitize_for_display, short_id};
 
+use crate::adapters::{area_to_rect, rect_to_area};
 use crate::widgets::message_widget::make_relative_path;
+use codemason_app_core::geometry::Area;
 use codemason_types::ThinkingLevel;
 use codemason_types::sanitize_terminal::sanitize_terminal;
 use codemason_types::strutil::{truncate_bytes, truncate_bytes_no_ellipsis};
@@ -404,7 +406,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     match sidebar_area {
         Some(area) => crate::sessions_sidebar::render(frame, app, area),
         None => {
-            app.sidebar.area = Rect::default();
+            app.sidebar.area = Area::default();
             app.sidebar.focused = false;
             app.sidebar.menu = None;
             app.sidebar.properties = None;
@@ -413,9 +415,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     render_chat(frame, app, chat_area);
     // Session context menu (spec SESSIONMENU): above the sidebar and chat,
     // below every modal overlay drawn next.
-    crate::session_menu::render(frame, app);
+    crate::session_menu_render::render(frame, app);
     // Project `Properties` dialog, above the menu that opened it.
-    crate::project_properties::render(frame, app);
+    crate::project_properties_render::render(frame, app);
     // Config-save picker overlay - rendered on top of chat, before history
     // picker so that whichever picker is open gets drawn last (i.e. on top).
     if app.config_save_picker.is_some() {
@@ -436,12 +438,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     if app.queue_menu_open {
         render_queue_menu(frame, app);
     } else {
-        app.queue_menu_area = Rect::default();
+        app.queue_menu_area = Area::default();
     }
     if app.queue_show_open {
         render_queue_show_panel(frame, app);
     } else {
-        app.queue_show_area = Rect::default();
+        app.queue_show_area = Area::default();
     }
     // `Clear the input queue?` confirmation dialog (ALT-Q `Clear` row) - a modal
     // drawn above the menu/chat that reuses the shared overlay machinery
@@ -449,7 +451,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     if app.queue_clear_confirm_open {
         render_queue_clear_confirm(frame, app);
     } else {
-        app.queue_clear_confirm_area = Rect::default();
+        app.queue_clear_confirm_area = Area::default();
     }
     // The single-button notice dialog (a worktree that no longer exists, raised
     // by the session menu's `Terminal` entry). Drawn above the chat with the same
@@ -457,7 +459,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     if app.notice_open {
         render_notice_dialog(frame, app);
     } else {
-        app.notice_area = Rect::default();
+        app.notice_area = Area::default();
     }
     // `Clear this project's memory?` confirmation dialog (`/memory clear`) - a
     // modal drawn above the chat that reuses the shared overlay machinery.
@@ -476,9 +478,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     if app.row_action_confirm.is_some() {
         render_row_action_confirm(frame, app);
     } else {
-        app.row_action_confirm_area = Rect::default();
-        app.row_action_confirm_yes_area = Rect::default();
-        app.row_action_confirm_no_area = Rect::default();
+        app.row_action_confirm_area = Area::default();
+        app.row_action_confirm_yes_area = Area::default();
+        app.row_action_confirm_no_area = Area::default();
     }
     // Plugin-store browse panel (spec `pluginstores` T-006) - a full-screen-ish
     // modal drawn last so it sits above every other overlay while it owns the
@@ -486,31 +488,31 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     if app.plugin_store.is_some() {
         render_plugin_store_panel(frame, app);
     } else {
-        app.plugin_store_area = Rect::default();
-        app.plugin_store_nav_area = Rect::default();
-        app.plugin_store_marketplace_area = Rect::default();
-        app.plugin_store_result_area = Rect::default();
-        app.plugin_store_search_area = Rect::default();
-        app.plugin_store_clear_area = Rect::default();
+        app.plugin_store_area = Area::default();
+        app.plugin_store_nav_area = Area::default();
+        app.plugin_store_marketplace_area = Area::default();
+        app.plugin_store_result_area = Area::default();
+        app.plugin_store_search_area = Area::default();
+        app.plugin_store_clear_area = Area::default();
     }
     // Connector-catalogue browse panel (`/connectors claude`) - drawn last so it
     // sits above every other overlay while it owns the keyboard.
     if app.connector_store.is_some() {
         render_connector_catalogue_panel(frame, app);
     } else {
-        app.connector_store_area = Rect::default();
-        app.connector_store_nav_area = Rect::default();
-        app.connector_store_marketplace_area = Rect::default();
-        app.connector_store_result_area = Rect::default();
-        app.connector_store_search_area = Rect::default();
-        app.connector_store_clear_area = Rect::default();
+        app.connector_store_area = Area::default();
+        app.connector_store_nav_area = Area::default();
+        app.connector_store_marketplace_area = Area::default();
+        app.connector_store_result_area = Area::default();
+        app.connector_store_search_area = Area::default();
+        app.connector_store_clear_area = Area::default();
     }
     // `/backend` switcher panel (spec `openhands` FR-008) - drawn last so it sits
     // above every other overlay while it owns the keyboard.
     if app.backend_panel.is_some() {
         render_backend_panel(frame, app);
     } else {
-        app.backend_panel_area = Rect::default();
+        app.backend_panel_area = Area::default();
     }
 }
 
@@ -574,7 +576,7 @@ fn render_backend_panel(frame: &mut Frame, app: &mut App) {
         .min(screen.height);
     let area = centered_rect_fixed(width, height, screen);
     frame.render_widget(Clear, area);
-    app.backend_panel_area = area;
+    app.backend_panel_area = rect_to_area(area);
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -698,7 +700,7 @@ fn render_connector_catalogue_panel(frame: &mut Frame, app: &mut App) {
         .min(screen.height);
     let area = centered_rect_fixed(width, height, screen);
     frame.render_widget(Clear, area);
-    app.connector_store_area = area;
+    app.connector_store_area = rect_to_area(area);
 
     // The title names the catalogue, the search field, the counts, and the active
     // filters; it needs only an immutable read of the browser.
@@ -728,7 +730,7 @@ fn render_connector_catalogue_panel(frame: &mut Frame, app: &mut App) {
     let body_area = chunks[0];
     let footer_area = chunks[1];
     let search_area = chunks[2];
-    app.connector_store_search_area = search_area;
+    app.connector_store_search_area = rect_to_area(search_area);
 
     // Split the body into the left navigator column and the result column. The
     // navigator width is recomputed from the current frame every draw, so a
@@ -771,8 +773,8 @@ fn render_connector_catalogue_panel(frame: &mut Frame, app: &mut App) {
         .split(marketplace_area);
     let marketplace_title_area = marketplace_chunks[0];
     let marketplace_rows_area = marketplace_chunks[1];
-    app.connector_store_nav_area = category_rows_area;
-    app.connector_store_marketplace_area = marketplace_rows_area;
+    app.connector_store_nav_area = rect_to_area(category_rows_area);
+    app.connector_store_marketplace_area = rect_to_area(marketplace_rows_area);
 
     // The result column splits vertically into a fixed column-heading row (always
     // painted, never scrolled) and the scrolling result list beneath it. The
@@ -787,7 +789,7 @@ fn render_connector_catalogue_panel(frame: &mut Frame, app: &mut App) {
     // Mouse hit-testing and the cursor-to-row mapping both reason about result
     // rows; anchor the cached area on the list (below the heading) so a click or
     // wheel on the heading row is inert.
-    app.connector_store_result_area = list_area;
+    app.connector_store_result_area = rect_to_area(list_area);
 
     // Row text colours. The id and description carry the reading colour; the
     // category and marketplace columns step back - the category to a muted tone,
@@ -1024,8 +1026,13 @@ fn render_connector_catalogue_panel(frame: &mut Frame, app: &mut App) {
     // click-to-clear button on the right. The box reflects the browser's query
     // exactly, so typing and the button stay in step without any extra state; the
     // button is inert while the query is already empty.
-    app.connector_store_clear_area =
-        render_store_search_box(frame, &browser.query, search_area, normal_style, dim_style);
+    app.connector_store_clear_area = rect_to_area(render_store_search_box(
+        frame,
+        &browser.query,
+        search_area,
+        normal_style,
+        dim_style,
+    ));
 }
 
 /// Render the connector-catalogue category navigator into `area`.
@@ -1364,7 +1371,7 @@ fn render_queue_menu(frame: &mut Frame, app: &mut App) {
     let screen = frame.area();
     let area = centered_rect_fixed(width, height, screen);
     frame.render_widget(Clear, area);
-    app.queue_menu_area = area;
+    app.queue_menu_area = rect_to_area(area);
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1470,7 +1477,7 @@ fn render_queue_show_panel(frame: &mut Frame, app: &mut App) {
     let height = (len as u16).saturating_add(5).min(16).min(screen.height);
     let area = centered_rect_fixed(width, height, screen);
     frame.render_widget(Clear, area);
-    app.queue_show_area = area;
+    app.queue_show_area = rect_to_area(area);
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1596,7 +1603,7 @@ fn render_plugin_store_panel(frame: &mut Frame, app: &mut App) {
         .min(screen.height);
     let area = centered_rect_fixed(width, height, screen);
     frame.render_widget(Clear, area);
-    app.plugin_store_area = area;
+    app.plugin_store_area = rect_to_area(area);
 
     // The title names the store, the search field, the counts, and the active
     // category (FR-005); it needs only an immutable read of the browser.
@@ -1630,7 +1637,7 @@ fn render_plugin_store_panel(frame: &mut Frame, app: &mut App) {
     let body_area = chunks[0];
     let footer_area = chunks[1];
     let search_area = chunks[2];
-    app.plugin_store_search_area = search_area;
+    app.plugin_store_search_area = rect_to_area(search_area);
 
     // Split the body into the left category navigator and the result column. The
     // navigator width is recomputed from the current frame every draw, so a
@@ -1647,7 +1654,7 @@ fn render_plugin_store_panel(frame: &mut Frame, app: &mut App) {
         .split(body_area);
     let nav_area = columns[0];
     let result_area = columns[2];
-    app.plugin_store_nav_area = nav_area;
+    app.plugin_store_nav_area = rect_to_area(nav_area);
     // The left navigator column is split vertically into the category navigator
     // (top half) and the marketplace navigator (bottom half); each pane owns a full
     // viewport so both stay usable side by side in one column (FR-052).
@@ -1675,8 +1682,8 @@ fn render_plugin_store_panel(frame: &mut Frame, app: &mut App) {
         .split(marketplace_area);
     let marketplace_title_area = marketplace_chunks[0];
     let marketplace_rows_area = marketplace_chunks[1];
-    app.plugin_store_nav_area = category_rows_area;
-    app.plugin_store_marketplace_area = marketplace_rows_area;
+    app.plugin_store_nav_area = rect_to_area(category_rows_area);
+    app.plugin_store_marketplace_area = rect_to_area(marketplace_rows_area);
     // The result column splits vertically into a fixed column-heading row (always
     // painted, never scrolled) and the scrolling result list beneath it. The
     // headings are drawn outside the `List`, so the list's own scroll keeps rows
@@ -1690,7 +1697,7 @@ fn render_plugin_store_panel(frame: &mut Frame, app: &mut App) {
     // Mouse hit-testing and the cursor-to-row mapping both reason about result
     // rows; anchor the cached area on the list (below the heading) so a click or
     // wheel on the heading row is inert.
-    app.plugin_store_result_area = list_area;
+    app.plugin_store_result_area = rect_to_area(list_area);
 
     // Row text colours. The id and description carry the reading colour;
     // the version and marketplace columns step back into a muted tone so a
@@ -1936,8 +1943,13 @@ fn render_plugin_store_panel(frame: &mut Frame, app: &mut App) {
     // query exactly, so typing and the button stay in step without any extra
     // state; the button is inert while the query is already empty. The painted
     // button area is cached for click hit-testing.
-    app.plugin_store_clear_area =
-        render_plugin_store_search_box(frame, browser, search_area, normal_style, dim_style);
+    app.plugin_store_clear_area = rect_to_area(render_plugin_store_search_box(
+        frame,
+        browser,
+        search_area,
+        normal_style,
+        dim_style,
+    ));
 }
 
 /// Render the plugin-store search box on the panel's bottom edge (spec
@@ -2578,12 +2590,12 @@ fn render_notice(frame: &mut Frame, title: &str, message: &str, detail: Option<&
 
 /// Render the single-button notice dialog and cache its area.
 fn render_notice_dialog(frame: &mut Frame, app: &mut App) {
-    app.notice_area = render_notice(
+    app.notice_area = rect_to_area(render_notice(
         frame,
         &app.notice_title,
         &app.notice_message,
         app.notice_detail.as_deref(),
-    );
+    ));
 }
 
 /// Render the `Clear the input queue?` confirmation dialog (spec `inputqueue`
@@ -2598,11 +2610,11 @@ fn render_notice_dialog(frame: &mut Frame, app: &mut App) {
 /// The dialog only paints state here - it removes no entry. The queue is emptied
 /// by the `Yes` gating step (FR-036); `No`/`Esc` leave it unchanged (FR-035).
 fn render_queue_clear_confirm(frame: &mut Frame, app: &mut App) {
-    app.queue_clear_confirm_area = render_yes_no_confirm(
+    app.queue_clear_confirm_area = rect_to_area(render_yes_no_confirm(
         frame,
         " Clear the input queue? ",
         app.queue_clear_confirm_selected,
-    );
+    ));
 }
 
 /// Render the `Clear this project's memory?` confirmation dialog (opened by
@@ -2700,7 +2712,7 @@ fn render_row_action_confirm(frame: &mut Frame, app: &mut App) {
 
     let screen = frame.area();
     let area = centered_rect_fixed(width, height, screen);
-    app.row_action_confirm_area = area;
+    app.row_action_confirm_area = rect_to_area(area);
     frame.render_widget(Clear, area);
 
     let block = Block::default()
@@ -2759,9 +2771,13 @@ fn render_row_action_confirm(frame: &mut Frame, app: &mut App) {
         )),
         Rect::new(pair_x + yes_label_w + BUTTON_GAP, buttons_y, no_label_w, 1),
     );
-    app.row_action_confirm_yes_area = Rect::new(pair_x, buttons_y, yes_label_w, 1);
-    app.row_action_confirm_no_area =
-        Rect::new(pair_x + yes_label_w + BUTTON_GAP, buttons_y, no_label_w, 1);
+    app.row_action_confirm_yes_area = rect_to_area(Rect::new(pair_x, buttons_y, yes_label_w, 1));
+    app.row_action_confirm_no_area = rect_to_area(Rect::new(
+        pair_x + yes_label_w + BUTTON_GAP,
+        buttons_y,
+        no_label_w,
+        1,
+    ));
 
     // The two hint lines sit on the inner rows under the buttons; omitted when
     // the dialog is too small to carry them. They state that the selection must
@@ -2953,8 +2969,8 @@ fn draw_input_side_buttons(frame: &mut Frame, app: &mut App, button_col_area: Re
     let y = button_col_area.y;
     let h = button_col_area.height.max(3);
 
-    app.agents_button_area = Rect::new(agents_x, y, agents_w, h);
-    app.teams_button_area = Rect::new(teams_x, y, teams_w, h);
+    app.agents_button_area = rect_to_area(Rect::new(agents_x, y, agents_w, h));
+    app.teams_button_area = rect_to_area(Rect::new(teams_x, y, teams_w, h));
 
     let agents_enabled = app.agents_window_available();
     let teams_enabled = app.teams_window_available();
@@ -2978,7 +2994,7 @@ fn draw_input_side_buttons(frame: &mut Frame, app: &mut App, button_col_area: Re
                         .borders(Borders::ALL)
                         .border_style(agents_border_style),
                 ),
-            app.agents_button_area,
+            area_to_rect(app.agents_button_area),
         );
     }
 
@@ -2992,7 +3008,7 @@ fn draw_input_side_buttons(frame: &mut Frame, app: &mut App, button_col_area: Re
                         .borders(Borders::ALL)
                         .border_style(teams_border_style),
                 ),
-            app.teams_button_area,
+            area_to_rect(app.teams_button_area),
         );
     }
 }
@@ -3246,9 +3262,9 @@ fn render_provider_setup_dialog(frame: &mut Frame, app: &mut App) {
     // The rect is recorded before the step is borrowed so the mouse router knows
     // where the dialog is painted: a wheel notch inside it scrolls the dialog's
     // own list and a notch outside it is swallowed (FR-011).
-    app.provider_setup_area = centered_rect_max(60, 80, 80, 30, frame.area());
+    app.provider_setup_area = rect_to_area(centered_rect_max(60, 80, 80, 30, frame.area()));
     let area = app.provider_setup_area;
-    frame.render_widget(Clear, area);
+    frame.render_widget(Clear, area_to_rect(area));
 
     let Some(step) = app.provider_setup.as_ref() else {
         return;
@@ -3288,7 +3304,7 @@ fn render_provider_setup_dialog(frame: &mut Frame, app: &mut App) {
             let paragraph = Paragraph::new(lines)
                 .block(block)
                 .alignment(Alignment::Center);
-            frame.render_widget(paragraph, area);
+            frame.render_widget(paragraph, area_to_rect(area));
         }
         ProviderSetupStep::SelectProvider { selected, .. } => {
             // One calm column: a heading strip naming the step, a pinned
@@ -3300,7 +3316,7 @@ fn render_provider_setup_dialog(frame: &mut Frame, app: &mut App) {
                 " Provider Setup ",
                 setup_accent_style(),
             )));
-            let inner = block.inner(area);
+            let inner = block.inner(area_to_rect(area));
             // Which providers already have saved credentials, so the status lane
             // can show `[ok]` rather than a blank.
             let configured_ids: std::collections::HashSet<String> =
@@ -3387,7 +3403,7 @@ fn render_provider_setup_dialog(frame: &mut Frame, app: &mut App) {
             );
             render_setup_list(
                 frame,
-                area,
+                area_to_rect(area),
                 Line::from(Span::styled(" Provider Setup ", setup_accent_style())),
                 heading,
                 "^/v navigate  Enter select  Esc cancel",
@@ -3408,7 +3424,7 @@ fn render_provider_setup_dialog(frame: &mut Frame, app: &mut App) {
         } => {
             // Wider dialog so the full API key (>= 48 chars) is visible.
             let area = centered_rect_max(80, 80, 100, 30, frame.area());
-            app.provider_setup_area = area;
+            app.provider_setup_area = rect_to_area(area);
             frame.render_widget(Clear, area);
 
             let mut lines: Vec<Line<'_>> = vec![
@@ -3546,7 +3562,7 @@ fn render_provider_setup_dialog(frame: &mut Frame, app: &mut App) {
             let paragraph = Paragraph::new(lines)
                 .block(block)
                 .alignment(Alignment::Center);
-            frame.render_widget(paragraph, area);
+            frame.render_widget(paragraph, area_to_rect(area));
         }
         ProviderSetupStep::SelectModel {
             provider_id: _,
@@ -3567,7 +3583,7 @@ fn render_provider_setup_dialog(frame: &mut Frame, app: &mut App) {
                 let inner_w = model_picker_inner_width(&cells) as u16;
                 centered_rect_max(100, 80, inner_w.saturating_add(2), 30, frame.area())
             };
-            app.provider_setup_area = area;
+            app.provider_setup_area = rect_to_area(area);
             frame.render_widget(Clear, area);
 
             let title = setup_block(Line::from(vec![
@@ -3708,9 +3724,9 @@ fn render_provider_setup_dialog(frame: &mut Frame, app: &mut App) {
                 " Select Azure Resource ",
                 setup_accent_style(),
             )));
-            let inner = block.inner(area);
-            frame.render_widget(Clear, area);
-            frame.render_widget(block, area);
+            let inner = block.inner(area_to_rect(area));
+            frame.render_widget(Clear, area_to_rect(area));
+            frame.render_widget(block, area_to_rect(area));
             if inner.width == 0 || inner.height == 0 {
                 return;
             }
@@ -3833,9 +3849,9 @@ fn render_provider_setup_dialog(frame: &mut Frame, app: &mut App) {
                 Span::styled(" Select Thinking Level ", setup_accent_style()),
                 Span::styled(format!(" {} ", model.name), setup_muted_style()),
             ]));
-            let inner = block.inner(area);
-            frame.render_widget(Clear, area);
-            frame.render_widget(block, area);
+            let inner = block.inner(area_to_rect(area));
+            frame.render_widget(Clear, area_to_rect(area));
+            frame.render_widget(block, area_to_rect(area));
             if inner.width == 0 || inner.height == 0 {
                 return;
             }
@@ -3922,7 +3938,7 @@ fn render_provider_setup_dialog(frame: &mut Frame, app: &mut App) {
             let paragraph = Paragraph::new(lines)
                 .block(block)
                 .alignment(Alignment::Center);
-            frame.render_widget(paragraph, area);
+            frame.render_widget(paragraph, area_to_rect(area));
         }
         ProviderSetupStep::SelectAgent { agents, selected } => {
             // Agent rows: the name leads in white with the cursor bar on the selected
@@ -3960,7 +3976,7 @@ fn render_provider_setup_dialog(frame: &mut Frame, app: &mut App) {
 
             render_setup_list(
                 frame,
-                area,
+                area_to_rect(area),
                 Line::from(Span::styled(" Select Agent ", setup_accent_style())),
                 setup_heading(
                     vec![Span::styled("Select an Agent", setup_accent_style())],
@@ -4012,7 +4028,7 @@ fn render_provider_setup_dialog(frame: &mut Frame, app: &mut App) {
 
             render_setup_list(
                 frame,
-                area,
+                area_to_rect(area),
                 Line::from(Span::styled(" Switch Provider ", setup_accent_style())),
                 setup_heading(
                     vec![Span::styled("Switch Provider", setup_accent_style())],
@@ -4051,7 +4067,7 @@ fn render_provider_setup_dialog(frame: &mut Frame, app: &mut App) {
 
             render_setup_list(
                 frame,
-                area,
+                area_to_rect(area),
                 Line::from(Span::styled(" Provider Config ", setup_accent_style())),
                 setup_heading(
                     vec![Span::styled(
@@ -4081,9 +4097,9 @@ fn render_provider_setup_dialog(frame: &mut Frame, app: &mut App) {
                 .borders(Borders::ALL)
                 .title(Span::styled(" Provider Reset ", danger))
                 .border_style(Style::default().fg(Color::Yellow));
-            let inner = block.inner(area);
-            frame.render_widget(Clear, area);
-            frame.render_widget(block, area);
+            let inner = block.inner(area_to_rect(area));
+            frame.render_widget(Clear, area_to_rect(area));
+            frame.render_widget(block, area_to_rect(area));
             if inner.width == 0 || inner.height == 0 {
                 return;
             }
@@ -4164,7 +4180,7 @@ fn render_provider_setup_dialog(frame: &mut Frame, app: &mut App) {
         } => {
             // Wider dialog so the full token (>= 48 chars) is visible.
             let area = centered_rect_max(80, 80, 100, 30, frame.area());
-            app.provider_setup_area = area;
+            app.provider_setup_area = rect_to_area(area);
             frame.render_widget(Clear, area);
 
             let mut lines: Vec<Line<'_>> = vec![
@@ -4338,7 +4354,7 @@ fn render_provider_setup_dialog(frame: &mut Frame, app: &mut App) {
             let paragraph = Paragraph::new(lines)
                 .block(block)
                 .alignment(Alignment::Center);
-            frame.render_widget(paragraph, area);
+            frame.render_widget(paragraph, area_to_rect(area));
         }
 
         ProviderSetupStep::GitLabValidating { .. } => {
@@ -4369,7 +4385,7 @@ fn render_provider_setup_dialog(frame: &mut Frame, app: &mut App) {
             let paragraph = Paragraph::new(lines)
                 .block(block)
                 .alignment(Alignment::Center);
-            frame.render_widget(paragraph, area);
+            frame.render_widget(paragraph, area_to_rect(area));
         }
         ProviderSetupStep::SetupRouter {
             providers,
@@ -4382,7 +4398,7 @@ fn render_provider_setup_dialog(frame: &mut Frame, app: &mut App) {
             error,
         } => {
             let area = centered_rect(80, 80, frame.area());
-            app.provider_setup_area = area;
+            app.provider_setup_area = rect_to_area(area);
             frame.render_widget(Clear, area);
 
             let block = Block::default()
@@ -4697,7 +4713,7 @@ fn render_provider_setup_dialog(frame: &mut Frame, app: &mut App) {
                 let inner_w = model_picker_inner_width(&cells) as u16;
                 centered_rect_max(100, 78, inner_w.saturating_add(2), 30, frame.area())
             };
-            app.provider_setup_area = area;
+            app.provider_setup_area = rect_to_area(area);
             frame.render_widget(Clear, area);
 
             if models.is_empty() {
@@ -5663,7 +5679,7 @@ fn render_telemetry_panel(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    app.telemetry_area = area;
+    app.telemetry_area = rect_to_area(area);
 
     // The panel shares the counter catalogue with `/telemetry counters`, so it
     // also needs the state of the OTLP logs signal (spec `otel` FR-036). Use
@@ -5799,7 +5815,7 @@ fn render_context_panel(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    app.context_panel_area = area;
+    app.context_panel_area = rect_to_area(area);
 
     // T-013/FR-015: consume the cached snapshot populated by the background
     // refresh (falling back to a synchronous computation on the first frame
@@ -6123,7 +6139,7 @@ fn render_chat(frame: &mut Frame, app: &mut App, chat_area: Rect) {
             ])
             .split(chunks[0]);
 
-        app.message_area = h_chunks[0];
+        app.message_area = rect_to_area(h_chunks[0]);
         render_messages(frame, app, h_chunks[0]);
         apply_selection_highlight(frame, app, SelectionPane::Messages, h_chunks[0]);
 
@@ -6131,14 +6147,14 @@ fn render_chat(frame: &mut Frame, app: &mut App, chat_area: Rect) {
         // (FR-012), so it gets its own branch that renders alone in the side
         // column.
         if app.show_tasks_panel {
-            app.log_area = Rect::default();
-            app.profile_area = Rect::default();
-            app.active_agents_area = Rect::default();
-            app.teams_area = Rect::default();
-            app.teams_rows_area = Rect::default();
-            app.memory_area = Rect::default();
-            app.telemetry_area = Rect::default();
-            app.tasks_area = h_chunks[1];
+            app.log_area = Area::default();
+            app.profile_area = Area::default();
+            app.active_agents_area = Area::default();
+            app.teams_area = Area::default();
+            app.teams_rows_area = Area::default();
+            app.memory_area = Area::default();
+            app.telemetry_area = Area::default();
+            app.tasks_area = rect_to_area(h_chunks[1]);
             render_tasks_panel(frame, app, h_chunks[1]);
             apply_selection_highlight(frame, app, SelectionPane::Tasks, h_chunks[1]);
         } else if app.show_memory {
@@ -6147,27 +6163,27 @@ fn render_chat(frame: &mut Frame, app: &mut App, chat_area: Rect) {
             // side column. Clearing the other side-panel areas ensures mouse
             // hit-testing and scrollbar drag dispatch never target a panel
             // that is not actually visible.
-            app.log_area = Rect::default();
-            app.profile_area = Rect::default();
-            app.active_agents_area = Rect::default();
-            app.teams_area = Rect::default();
-            app.teams_rows_area = Rect::default();
-            app.tasks_area = Rect::default();
-            app.telemetry_area = Rect::default();
-            app.memory_area = h_chunks[1];
+            app.log_area = Area::default();
+            app.profile_area = Area::default();
+            app.active_agents_area = Area::default();
+            app.teams_area = Area::default();
+            app.teams_rows_area = Area::default();
+            app.tasks_area = Area::default();
+            app.telemetry_area = Area::default();
+            app.memory_area = rect_to_area(h_chunks[1]);
             render_memory_panel(frame, app, h_chunks[1]);
             apply_selection_highlight(frame, app, SelectionPane::Memory, h_chunks[1]);
         } else if app.show_telemetry {
             // The Telemetry panel is mutually exclusive with log/profile/task/memory,
             // so it renders alone in the side column.
-            app.log_area = Rect::default();
-            app.profile_area = Rect::default();
-            app.active_agents_area = Rect::default();
-            app.teams_area = Rect::default();
-            app.teams_rows_area = Rect::default();
-            app.tasks_area = Rect::default();
-            app.memory_area = Rect::default();
-            app.telemetry_area = h_chunks[1];
+            app.log_area = Area::default();
+            app.profile_area = Area::default();
+            app.active_agents_area = Area::default();
+            app.teams_area = Area::default();
+            app.teams_rows_area = Area::default();
+            app.tasks_area = Area::default();
+            app.memory_area = Area::default();
+            app.telemetry_area = rect_to_area(h_chunks[1]);
             render_telemetry_panel(frame, app, h_chunks[1]);
             apply_selection_highlight(frame, app, SelectionPane::Telemetry, h_chunks[1]);
         } else if app.show_context_panel {
@@ -6176,15 +6192,15 @@ fn render_chat(frame: &mut Frame, app: &mut App, chat_area: Rect) {
             // side column. Clearing the other side-panel areas keeps mouse
             // hit-testing and scrollbar drag dispatch from targeting a panel
             // that is not visible.
-            app.log_area = Rect::default();
-            app.profile_area = Rect::default();
-            app.active_agents_area = Rect::default();
-            app.teams_area = Rect::default();
-            app.teams_rows_area = Rect::default();
-            app.tasks_area = Rect::default();
-            app.memory_area = Rect::default();
-            app.telemetry_area = Rect::default();
-            app.context_panel_area = h_chunks[1];
+            app.log_area = Area::default();
+            app.profile_area = Area::default();
+            app.active_agents_area = Area::default();
+            app.teams_area = Area::default();
+            app.teams_rows_area = Area::default();
+            app.tasks_area = Area::default();
+            app.memory_area = Area::default();
+            app.telemetry_area = Area::default();
+            app.context_panel_area = rect_to_area(h_chunks[1]);
             render_context_panel(frame, app, h_chunks[1]);
             apply_selection_highlight(frame, app, SelectionPane::ContextPanel, h_chunks[1]);
         } else {
@@ -6194,49 +6210,49 @@ fn render_chat(frame: &mut Frame, app: &mut App, chat_area: Rect) {
                         .direction(Direction::Vertical)
                         .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
                         .split(h_chunks[1]);
-                    app.log_area = side_chunks[0];
-                    app.profile_area = side_chunks[1];
-                    app.memory_area = Rect::default();
+                    app.log_area = rect_to_area(side_chunks[0]);
+                    app.profile_area = rect_to_area(side_chunks[1]);
+                    app.memory_area = Area::default();
                     render_log_panel(frame, app, side_chunks[0]);
                     apply_selection_highlight(frame, app, SelectionPane::Log, side_chunks[0]);
                     render_profile_panel(frame, app, side_chunks[1]);
                     apply_selection_highlight(frame, app, SelectionPane::Profile, side_chunks[1]);
                 }
                 (true, false) => {
-                    app.log_area = h_chunks[1];
-                    app.profile_area = Rect::default();
-                    app.memory_area = Rect::default();
+                    app.log_area = rect_to_area(h_chunks[1]);
+                    app.profile_area = Area::default();
+                    app.memory_area = Area::default();
                     render_log_panel(frame, app, h_chunks[1]);
                     apply_selection_highlight(frame, app, SelectionPane::Log, h_chunks[1]);
                 }
                 (false, true) => {
-                    app.log_area = Rect::default();
-                    app.profile_area = h_chunks[1];
-                    app.active_agents_area = Rect::default();
-                    app.teams_area = Rect::default();
-                    app.teams_rows_area = Rect::default();
-                    app.memory_area = Rect::default();
-                    app.telemetry_area = Rect::default();
+                    app.log_area = Area::default();
+                    app.profile_area = rect_to_area(h_chunks[1]);
+                    app.active_agents_area = Area::default();
+                    app.teams_area = Area::default();
+                    app.teams_rows_area = Area::default();
+                    app.memory_area = Area::default();
+                    app.telemetry_area = Area::default();
                     render_profile_panel(frame, app, h_chunks[1]);
                     apply_selection_highlight(frame, app, SelectionPane::Profile, h_chunks[1]);
                 }
                 (false, false) => {
-                    app.memory_area = Rect::default();
-                    app.telemetry_area = Rect::default();
+                    app.memory_area = Area::default();
+                    app.telemetry_area = Area::default();
                 }
             }
         }
     } else {
-        app.message_area = chunks[0];
-        app.log_area = Rect::default();
-        app.profile_area = Rect::default();
-        app.tasks_area = Rect::default();
-        app.memory_area = Rect::default();
-        app.telemetry_area = Rect::default();
-        app.context_panel_area = Rect::default();
-        app.active_agents_area = Rect::default();
-        app.teams_area = Rect::default();
-        app.teams_rows_area = Rect::default();
+        app.message_area = rect_to_area(chunks[0]);
+        app.log_area = Area::default();
+        app.profile_area = Area::default();
+        app.tasks_area = Area::default();
+        app.memory_area = Area::default();
+        app.telemetry_area = Area::default();
+        app.context_panel_area = Area::default();
+        app.active_agents_area = Area::default();
+        app.teams_area = Area::default();
+        app.teams_rows_area = Area::default();
         render_messages(frame, app, chunks[0]);
         apply_selection_highlight(frame, app, SelectionPane::Messages, chunks[0]);
     }
@@ -6246,7 +6262,7 @@ fn render_chat(frame: &mut Frame, app: &mut App, chat_area: Rect) {
         .constraints([Constraint::Length(button_col_w), Constraint::Min(20)])
         .split(chunks[1]);
 
-    app.input_area = input_chunks[1];
+    app.input_area = rect_to_area(input_chunks[1]);
     render_input(frame, app, input_chunks[1]);
     apply_selection_highlight(frame, app, SelectionPane::Input, input_chunks[1]);
     draw_input_side_buttons(frame, app, input_chunks[0]);
@@ -6278,7 +6294,7 @@ fn render_chat(frame: &mut Frame, app: &mut App, chat_area: Rect) {
     if app.provider_setup.is_some() {
         render_provider_setup_dialog(frame, app);
     } else {
-        app.provider_setup_area = Rect::default();
+        app.provider_setup_area = Area::default();
     }
 
     // /loop setup dialog overlay (spec `agentloop` T-014)
@@ -6338,13 +6354,13 @@ fn render_chat(frame: &mut Frame, app: &mut App, chat_area: Rect) {
     if app.output_view.is_some() {
         render_output_view_overlay(frame, app);
     } else {
-        app.output_view_area = Rect::default();
+        app.output_view_area = Area::default();
     }
     // Research markdown viewer overlay (above output view).
     if app.research_view.is_some() {
         render_research_view_overlay(frame, app);
     } else {
-        app.research_view_area = Rect::default();
+        app.research_view_area = Area::default();
     }
 
     // Memory delete confirmation modal overlay.
@@ -6356,14 +6372,14 @@ fn render_chat(frame: &mut Frame, app: &mut App, chat_area: Rect) {
     if app.memory_view.is_some() {
         render_memory_view_overlay(frame, app);
     } else {
-        app.memory_view_area = Rect::default();
+        app.memory_view_area = Area::default();
     }
 }
 
 /// Render the full-memory overlay opened from the Alt+M panel.
 fn render_memory_view_overlay(frame: &mut Frame, app: &mut App) {
     let area = centered_rect(90, 80, frame.area());
-    app.memory_view_area = area;
+    app.memory_view_area = rect_to_area(area);
     frame.render_widget(Clear, area);
 
     let Some(view) = app.memory_view.as_mut() else {
@@ -6539,7 +6555,7 @@ fn render_stop_confirm_dialog(frame: &mut Frame) {
 /// Render the `/research open` markdown viewer overlay.
 fn render_research_view_overlay(frame: &mut Frame, app: &mut App) {
     let area = centered_rect(90, 80, frame.area());
-    app.research_view_area = area;
+    app.research_view_area = rect_to_area(area);
     frame.render_widget(Clear, area);
 
     let Some(view) = app.research_view.as_mut() else {
@@ -7006,9 +7022,9 @@ fn render_log_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(block, area);
     let log_inner = inner;
 
-    app.active_agents_area = Rect::default();
-    app.teams_area = Rect::default();
-    app.teams_rows_area = Rect::default();
+    app.active_agents_area = Area::default();
+    app.teams_area = Area::default();
+    app.teams_rows_area = Area::default();
 
     // Determine which session to display logs for.
     // If a specific agent is selected, show its logs; otherwise show primary session.
@@ -7286,7 +7302,7 @@ fn render_tasks_panel(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    app.tasks_area = area;
+    app.tasks_area = rect_to_area(area);
 
     // session id when no specific agent session is selected, mirroring the
     // log panel's session-resolution logic.
@@ -7444,7 +7460,7 @@ fn render_profile_panel(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    app.profile_area = area;
+    app.profile_area = rect_to_area(area);
 
     let snapshot = codemason_agent::session::profiler::agent_loop_profiler().snapshot();
     if !snapshot.enabled {
@@ -7536,7 +7552,7 @@ fn render_memory_panel(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    app.memory_area = area;
+    app.memory_area = rect_to_area(area);
 
     let mut lines: Vec<Line<'_>> = Vec::new();
     // Track which rendered line corresponds to each selectable memory row so
@@ -7724,7 +7740,7 @@ fn render_output_view_overlay(frame: &mut Frame, app: &mut App) {
         frame.area(),
     );
     let area = geo.area;
-    app.output_view_area = area;
+    app.output_view_area = rect_to_area(area);
     frame.render_widget(Clear, area);
 
     let Some(view) = app.output_view.as_mut() else {
@@ -8078,7 +8094,7 @@ fn render_agents_window_overlay(frame: &mut Frame, app: &mut App) {
         .border_style(Style::default().fg(Color::Cyan));
     frame.render_widget(block, geo.area);
 
-    app.active_agents_area = geo.content;
+    app.active_agents_area = rect_to_area(geo.content);
     render_active_agents_subpanel(frame, app, geo.content);
 
     render_window_key_legend(frame, AGENTS_WINDOW_LEGEND, geo.legend);
@@ -8120,7 +8136,7 @@ fn render_teams_window_overlay(frame: &mut Frame, app: &mut App) {
         .border_style(Style::default().fg(Color::Blue));
     frame.render_widget(block, geo.area);
 
-    app.teams_area = geo.content;
+    app.teams_area = rect_to_area(geo.content);
     crate::layout_teams::render_teams_subpanel(frame, app, geo.content);
 
     render_window_key_legend(frame, TEAMS_WINDOW_LEGEND, geo.legend);

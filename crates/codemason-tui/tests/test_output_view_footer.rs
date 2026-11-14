@@ -20,6 +20,8 @@
 
 mod support;
 
+use codemason_app_core::geometry::Area;
+use codemason_tui::adapters::area_to_rect;
 use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
@@ -241,7 +243,7 @@ fn test_output_view_wheel_scrolls_while_agents_popup_open() {
     // `test_output_view_paging_shortcuts` exercises via keys).
     app.output_view.as_mut().unwrap().max_scroll = 50;
 
-    let (col, row) = centre(app.output_view_area);
+    let (col, row) = centre(area_to_rect(app.output_view_area));
     app.handle_mouse_event(wheel_up(col, row));
     assert_eq!(
         app.output_view.as_ref().unwrap().scroll_offset,
@@ -267,7 +269,7 @@ fn test_output_view_wheel_does_not_scroll_the_popup_beneath() {
     app.output_view.as_mut().unwrap().max_scroll = 50;
     let agents_offset_before = app.active_agents_scroll_offset;
 
-    let (col, row) = centre(app.output_view_area);
+    let (col, row) = centre(area_to_rect(app.output_view_area));
     app.handle_mouse_event(wheel_up(col, row));
     app.handle_mouse_event(wheel_up(col, row));
 
@@ -287,9 +289,9 @@ fn test_output_view_wheel_does_not_scroll_the_popup_beneath() {
 #[test]
 fn test_agents_popup_wheel_still_scrolls_without_overlay() {
     let mut app = support::make_app();
-    app.active_agents_area = Rect::new(5, 5, 100, 20);
+    app.active_agents_area = Area::new(5, 5, 100, 20);
     app.active_agents_max_scroll = 20;
-    let (col, row) = centre(app.active_agents_area);
+    let (col, row) = centre(area_to_rect(app.active_agents_area));
 
     app.handle_mouse_event(wheel_up(col, row));
     assert_eq!(

@@ -19,11 +19,11 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use codemason_app_core::geometry::Area;
 use codemason_tui::crossterm_input::CrosstermAppExt;
 use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use ratatui::layout::Rect;
 use ratatui::{Terminal, backend::TestBackend};
 use tempfile::TempDir;
 
@@ -191,9 +191,9 @@ fn test_pane_at_returns_memory_when_click_inside_memory_area() {
     // `SelectionPane::Memory` so the rest of the mouse pipeline (selection
     // start, context menu, scrollbar drag) can route on that pane.
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.show_memory = true;
-    app.memory_area = Rect::new(80, 1, 30, 20);
+    app.memory_area = Area::new(80, 1, 30, 20);
 
     let pane = app.pane_at(90, 10);
     assert_eq!(pane, Some(SelectionPane::Memory));
@@ -206,11 +206,11 @@ fn test_pane_at_returns_none_for_memory_when_panel_hidden() {
     // visible so hit-testing should fall through (FR-002 mutual exclusion
     // relies on `show_memory` gating `memory_area`).
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.show_memory = false;
     // Leave memory_area non-empty to prove the `show_memory` gate is what
     // blocks the match, not a zeroed rect.
-    app.memory_area = Rect::new(80, 1, 30, 20);
+    app.memory_area = Area::new(80, 1, 30, 20);
 
     let pane = app.pane_at(90, 10);
     assert_ne!(pane, Some(SelectionPane::Memory));
@@ -223,9 +223,9 @@ fn test_pane_at_returns_none_for_memory_when_panel_hidden() {
 #[test]
 fn test_mouse_scroll_up_on_memory_increments_memory_scroll_offset() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.show_memory = true;
-    app.memory_area = Rect::new(80, 1, 30, 20);
+    app.memory_area = Area::new(80, 1, 30, 20);
     assert_eq!(app.memory_scroll_offset, 0);
 
     app.handle_mouse_event(mouse_scroll_up(90, 10));
@@ -237,9 +237,9 @@ fn test_mouse_scroll_up_on_memory_increments_memory_scroll_offset() {
 #[test]
 fn test_mouse_scroll_down_on_memory_decrements_memory_scroll_offset() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.show_memory = true;
-    app.memory_area = Rect::new(80, 1, 30, 20);
+    app.memory_area = Area::new(80, 1, 30, 20);
     app.memory_scroll_offset = 9;
 
     app.handle_mouse_event(mouse_scroll_down(90, 10));
@@ -256,9 +256,9 @@ fn test_drag_starts_on_memory_scrollbar_column() {
     // matching the Log / Profile / Tasks behaviour) should initiate a
     // `ScrollbarDragPane::Memory` drag and clear any active text selection.
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.show_memory = true;
-    app.memory_area = Rect::new(80, 1, 30, 20);
+    app.memory_area = Area::new(80, 1, 30, 20);
     app.memory_max_scroll = 50;
 
     // Pre-existing selection that the scrollbar click must clear.
@@ -277,9 +277,9 @@ fn test_drag_starts_on_memory_scrollbar_column() {
 #[test]
 fn test_drag_memory_scrollbar_moves_offset() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.show_memory = true;
-    app.memory_area = Rect::new(80, 0, 30, 21);
+    app.memory_area = Area::new(80, 0, 30, 21);
     app.memory_max_scroll = 60;
 
     // Click scrollbar (column 109), drag to top -> offset = 0 (top of
@@ -299,9 +299,9 @@ fn test_drag_memory_scrollbar_moves_offset() {
 #[test]
 fn test_drag_does_not_start_on_memory_scrollbar_without_scrollable_content() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.show_memory = true;
-    app.memory_area = Rect::new(80, 1, 30, 20);
+    app.memory_area = Area::new(80, 1, 30, 20);
     app.memory_max_scroll = 0;
 
     app.handle_mouse_event(mouse_down(109, 10));
@@ -315,9 +315,9 @@ fn test_drag_does_not_start_on_memory_scrollbar_without_scrollable_content() {
 #[test]
 fn test_left_click_inside_memory_area_starts_memory_selection() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.show_memory = true;
-    app.memory_area = Rect::new(80, 1, 30, 20);
+    app.memory_area = Area::new(80, 1, 30, 20);
 
     // Click in the body of the panel (not the scrollbar column 109).
     app.handle_mouse_event(mouse_down(90, 10));
@@ -330,9 +330,9 @@ fn test_left_click_inside_memory_area_starts_memory_selection() {
 #[test]
 fn test_drag_extends_memory_selection_endpoint() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.show_memory = true;
-    app.memory_area = Rect::new(80, 1, 30, 20);
+    app.memory_area = Area::new(80, 1, 30, 20);
 
     app.handle_mouse_event(mouse_down(85, 3));
     app.handle_mouse_event(mouse_drag(100, 7));
@@ -349,9 +349,9 @@ fn test_drag_extends_memory_selection_endpoint() {
 #[test]
 fn test_mouse_up_preserves_memory_selection() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.show_memory = true;
-    app.memory_area = Rect::new(80, 1, 30, 20);
+    app.memory_area = Area::new(80, 1, 30, 20);
 
     app.handle_mouse_event(mouse_down(85, 3));
     app.handle_mouse_event(mouse_drag(100, 7));
@@ -370,9 +370,9 @@ fn test_mouse_up_preserves_memory_selection() {
 #[test]
 fn test_right_click_inside_memory_area_opens_context_menu() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.show_memory = true;
-    app.memory_area = Rect::new(80, 1, 30, 20);
+    app.memory_area = Area::new(80, 1, 30, 20);
 
     app.handle_mouse_event(right_click(90, 10));
     let menu = app
@@ -390,9 +390,9 @@ fn test_right_click_inside_memory_area_opens_context_menu() {
 #[test]
 fn test_right_click_with_memory_selection_enables_copy() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.show_memory = true;
-    app.memory_area = Rect::new(80, 1, 30, 20);
+    app.memory_area = Area::new(80, 1, 30, 20);
     app.text_selection = Some(TextSelection {
         pane: SelectionPane::Memory,
         anchor: (82, 5),
@@ -408,9 +408,9 @@ fn test_right_click_with_memory_selection_enables_copy() {
 #[test]
 fn test_right_click_outside_memory_area_does_not_open_memory_menu() {
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.show_memory = true;
-    app.memory_area = Rect::new(80, 1, 30, 20);
+    app.memory_area = Area::new(80, 1, 30, 20);
 
     // Click in the status bar (row 0) - outside every pane.
     app.handle_mouse_event(right_click(10, 0));
@@ -556,7 +556,7 @@ async fn test_toggle_memory_clears_memory_selection_and_context_menu_on_hide() {
     // text selection or context menu is cleared.
     let mut app = make_app();
     app.show_memory = true;
-    app.memory_area = Rect::new(0, 1, 80, 20);
+    app.memory_area = Area::new(0, 1, 80, 20);
     app.text_selection = Some(TextSelection {
         pane: SelectionPane::Memory,
         anchor: (5, 5),
@@ -583,7 +583,7 @@ async fn test_toggle_memory_clears_memory_context_menu_on_hide() {
     // clears an active Memory-pane context menu.
     let mut app = make_app();
     app.show_memory = true;
-    app.memory_area = Rect::new(0, 1, 80, 20);
+    app.memory_area = Area::new(0, 1, 80, 20);
     app.context_menu = Some(codemason_tui::app::ContextMenuState {
         x: 5,
         y: 5,
@@ -878,9 +878,9 @@ fn test_scrollbar_drag_clamps_offset_within_bounds() {
     // of a 100-line scrollable region yields ~50, never negative and never
     // greater than max_scroll.
     let mut app = make_app();
-    app.message_area = Rect::new(0, 1, 80, 20);
+    app.message_area = Area::new(0, 1, 80, 20);
     app.show_memory = true;
-    app.memory_area = Rect::new(80, 0, 30, 21);
+    app.memory_area = Area::new(80, 0, 30, 21);
     app.memory_max_scroll = 100;
 
     // Click scrollbar (column 109) at the vertical middle (row 10 of a

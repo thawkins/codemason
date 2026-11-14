@@ -13,6 +13,7 @@
 
 mod support;
 
+use codemason_tui::adapters::area_to_rect;
 use codemason_tui::crossterm_input::CrosstermAppExt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
@@ -130,7 +131,7 @@ fn render(app: &mut App) {
 fn agents_button_toggles_the_window_and_requests_a_redraw() {
     let mut app = app_with_task();
     render(&mut app);
-    let (col, row) = centre(app.agents_button_area);
+    let (col, row) = centre(area_to_rect(app.agents_button_area));
 
     app.handle_mouse_event(click(col, row));
     assert!(app.show_agents_window, "the first click opens the window");
@@ -150,7 +151,7 @@ fn agents_button_click_opens_the_window_with_no_subject_and_says_nothing() {
     let mut app = app();
     app.status = "ready".to_string();
     render(&mut app);
-    let (col, row) = centre(app.agents_button_area);
+    let (col, row) = centre(area_to_rect(app.agents_button_area));
 
     app.handle_mouse_event(click(col, row));
     assert!(
@@ -170,7 +171,7 @@ fn agents_button_click_closes_an_open_window_even_when_the_subject_vanished() {
     render(&mut app);
     app.show_agents_window = true;
     app.needs_redraw = false;
-    let (col, row) = centre(app.agents_button_area);
+    let (col, row) = centre(area_to_rect(app.agents_button_area));
 
     app.handle_mouse_event(click(col, row));
     assert!(
@@ -190,7 +191,7 @@ fn opening_the_agents_window_closes_the_teams_window() {
     app.session.active_team = Some(TeamConfig::new("alpha", LEAD_SESSION));
     render(&mut app);
     app.show_teams_window = true;
-    let (col, row) = centre(app.agents_button_area);
+    let (col, row) = centre(area_to_rect(app.agents_button_area));
 
     app.handle_mouse_event(click(col, row));
     assert!(app.show_agents_window, "the Agents window opens");
@@ -203,7 +204,7 @@ fn opening_the_teams_window_closes_the_agents_window() {
     app.active_tasks.push(running_task("task-1"));
     render(&mut app);
     app.show_agents_window = true;
-    let (col, row) = centre(app.teams_button_area);
+    let (col, row) = centre(area_to_rect(app.teams_button_area));
 
     app.handle_mouse_event(click(col, row));
     assert!(app.show_teams_window, "the Teams window opens");
@@ -218,7 +219,7 @@ fn opening_the_teams_window_closes_the_agents_window() {
 fn teams_button_toggles_the_window_and_requests_a_redraw() {
     let mut app = app_with_team();
     render(&mut app);
-    let (col, row) = centre(app.teams_button_area);
+    let (col, row) = centre(area_to_rect(app.teams_button_area));
 
     app.handle_mouse_event(click(col, row));
     assert!(app.show_teams_window, "the first click opens the window");
@@ -237,7 +238,7 @@ fn teams_button_click_opens_the_window_with_no_team_and_says_nothing() {
     let mut app = app();
     app.status = "ready".to_string();
     render(&mut app);
-    let (col, row) = centre(app.teams_button_area);
+    let (col, row) = centre(area_to_rect(app.teams_button_area));
 
     app.handle_mouse_event(click(col, row));
     assert!(
@@ -257,7 +258,7 @@ fn teams_button_click_closes_an_open_window_even_when_the_team_is_gone() {
     render(&mut app);
     app.show_teams_window = true;
     app.needs_redraw = false;
-    let (col, row) = centre(app.teams_button_area);
+    let (col, row) = centre(area_to_rect(app.teams_button_area));
 
     app.handle_mouse_event(click(col, row));
     assert!(
