@@ -3640,6 +3640,9 @@ pub struct App {
     /// does not issue N+1 SQLite queries every frame.  Refreshed only when
     /// `memory_cache_dirty` is `true`.
     pub memory_cache_entries: Vec<codemason_storage::storage::MemoryRow>,
+    /// Tags of each cached memory row, keyed by memory id, read in one batch
+    /// with `memory_cache_entries` (`App::refresh_memory_cache`).
+    pub memory_cache_tags: std::collections::HashMap<i64, Vec<String>>,
     /// Cached memory count (avoiding a separate `count_memories_for_project`
     /// SQLite call every frame).
     pub memory_cache_count: u64,

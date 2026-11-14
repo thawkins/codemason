@@ -55,6 +55,7 @@ mod session_ops;
 mod session_registry;
 mod session_view;
 pub(crate) mod sessions;
+mod side_panels;
 pub use self::session_ops::{
     PERMISSION_ANSWER_DELAY, QUESTION_ANSWER_DELAY, emit_log_entry_to_tracing,
 };

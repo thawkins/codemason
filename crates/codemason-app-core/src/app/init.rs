@@ -357,6 +357,7 @@ impl App {
             tasks_content_lines: Vec::new(),
             memory_content_lines: Vec::new(),
             memory_cache_entries: Vec::new(),
+            memory_cache_tags: std::collections::HashMap::new(),
             memory_cache_count: 0,
             memory_cache_dirty: true,
             memory_cursor: 0,

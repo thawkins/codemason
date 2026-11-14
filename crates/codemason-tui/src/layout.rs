@@ -6840,39 +6840,9 @@ fn render_tasks_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(block, area);
     app.tasks_area = rect_to_area(area);
 
-    // session id when no specific agent session is selected, mirroring the
-    // log panel's session-resolution logic.
-    let session_id = app
-        .session
-        .selected_agent_session_id
-        .clone()
-        .or_else(|| app.session.session_id.clone());
-
     // Refresh the cached task rows only when dirty, avoiding a per-frame
-    // SQLite query + DAG computation.  The cache is marked dirty by
-    // task-related events (tool results for task_create/task_update, and
-    // the TaskCompleted / SubagentStart / SubagentComplete events).
-    if app.session.tasks_cache_dirty {
-        let rows_result: anyhow::Result<Vec<codemason_storage::TaskRow>> = match &session_id {
-            Some(sid) => app
-                .storage
-                .list_tasks(sid, None)
-                .map_err(|e| anyhow::anyhow!(e.to_string())),
-            None => Ok(Vec::new()),
-        };
-        match rows_result {
-            Ok(rows) => {
-                app.session.tasks_cache_rows = rows;
-                app.session.tasks_cache_dirty = false;
-            }
-            Err(e) => {
-                // Keep stale cache on error so the panel does not blank out
-                // on a transient SQLite failure. Retry on the next render.
-                tracing::warn!("tasks panel cache refresh failed: {e}");
-                app.session.tasks_cache_dirty = true;
-            }
-        }
-    }
+    // SQLite query + DAG computation (shared with the GUI).
+    app.refresh_tasks_cache();
 
     // Build display lines from the cached rows.  When the cache is empty
     // we must distinguish "no tasks" from "query failed" - the latter only
@@ -7090,48 +7060,17 @@ fn render_memory_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(block, area);
     app.memory_area = rect_to_area(area);
 
+    // Refresh the cached memory data only when dirty, avoiding per-frame
+    // SQLite queries (shared with the GUI). The cache is marked dirty by
+    // memory-related tool results (memory_store, memory_recall,
+    // memory_forget).
+    app.refresh_memory_cache();
+
     let mut lines: Vec<Line<'_>> = Vec::new();
     // Track which rendered line corresponds to each selectable memory row so
     // cursor navigation can scroll the selection into view.
     app.memory_row_line_indices.clear();
     app.memory_row_count = 0;
-
-    // M-032: use the real cwd cached in `App` (it cannot change at runtime)
-    // instead of calling `std::env::current_dir()` (a syscall) on every
-    // rendered frame while the memory panel is visible.  We intentionally use
-    // `cwd_path` rather than `cwd` because `cwd` is `~`-collapsed for display
-    // and would not match the real project keys stored in the memories table.
-    let project_dir = &app.cwd_path;
-
-    // Refresh the cached memory data only when dirty, avoiding per-frame
-    // N+1 SQLite queries (count + list + N x get_memory_tags).  The cache
-    // is marked dirty by memory-related tool results (memory_store,
-    // memory_recall, memory_forget).
-    if app.memory_cache_dirty {
-        let project_dir = std::path::Path::new(project_dir);
-        let count = app
-            .storage
-            .count_memories_for_project(project_dir)
-            .unwrap_or(0);
-        let entries = app
-            .storage
-            .list_memories_for_project(project_dir, 100)
-            .unwrap_or_default();
-        // Pre-fetch tags for each row so the render path does not issue a
-        // per-row SQLite query.
-        for row in &entries {
-            let _ = app.storage.get_memory_tags(row.id); // INTENTIONAL: read hint; empty/None on error is acceptable for display
-        }
-        app.memory_cache_count = count;
-        app.memory_cache_entries = entries;
-        // Sort the panel rows by category then id so the visual order and
-        // the cursor index both use the same deterministic ordering.
-        app.memory_cache_entries
-            .sort_by(|a, b| a.category.cmp(&b.category).then(a.id.cmp(&b.id)));
-        app.memory_cache_dirty = false;
-        // Cursor may now be out of bounds; clamp it on the next render after
-        // `memory_row_count` is recomputed below.
-    }
 
     let count = app.memory_cache_count;
     let entries = &app.memory_cache_entries;
