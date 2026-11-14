@@ -5,17 +5,19 @@
 //! not depend on it.
 //!
 //! - [`run_gui`] is the entry point the `cdmn --gui` launch path calls.
+//! - [`main_thread`] hands the built session to the process main thread,
+//!   which runs the eframe window ([`MainThreadHost::serve`]).
 //! - [`Shell`] is the `eframe::App` that draws the window.
 //! - [`bridge::spawn_event_bridge`] forwards agent events from the
 //!   [`EventBus`] into the shell's queue and wakes egui.
 //!
 //! Dependencies: `eframe`/`egui` (the storytold forks, via the workspace
-//! `[patch.crates-io]` table), `winit` (only to let the event loop start on
-//! the codemason program thread), `tokio`, `thiserror` and `tracing`.
+//! `[patch.crates-io]` table), `tokio`, `thiserror` and `tracing`.
 
 #![deny(unsafe_code)]
 
 pub mod bridge;
+pub mod main_thread;
 pub mod shell;
 
 use std::path::PathBuf;
@@ -31,10 +33,8 @@ use codemason_app_core::app::{App, StartupSession};
 use codemason_app_core::log_channel::TuiLogReceiver;
 use codemason_types::stderr_spool::Spool as StderrSpool;
 
+pub use main_thread::{GuiLaunch, GuiLauncher, MainThreadHost, main_thread_channel};
 pub use shell::Shell;
-
-/// Window title and eframe application name.
-const APP_NAME: &str = "codemason";
 
 /// Why the GUI could not be started.
 #[derive(Debug, thiserror::Error)]
@@ -78,6 +78,9 @@ pub struct GuiOptions {
     pub timings: StartupTimings,
     /// Raw-stderr spool, when the binary installed one.
     pub stderr_spool: Option<StderrSpool>,
+    /// Hands the built session to the process main thread's
+    /// [`MainThreadHost`], which runs the window.
+    pub launcher: GuiLauncher,
 }
 
 impl std::fmt::Debug for GuiOptions {
@@ -120,11 +123,13 @@ pub fn check_display() -> Result<(), GuiLaunchError> {
 
 /// Run the GUI application until its window is closed.
 ///
-/// Builds the [`App`], starts the event bridge, and runs the eframe event
-/// loop on the calling thread. The calling thread must be a worker of a
-/// multi-thread tokio runtime: the event loop runs inside
-/// [`tokio::task::block_in_place`], so the runtime keeps driving agent work
-/// on its other workers while eframe owns this thread.
+/// Runs on the tokio runtime thread (`codemason-main` in `cdmn`). It checks
+/// the display and builds the [`App`] here, then hands the `App`, the log
+/// receiver, the event bus and a runtime [`tokio::runtime::Handle`] to the
+/// process main thread through `opts.launcher`. The main thread's
+/// [`MainThreadHost`] runs the eframe window there, while agent work keeps
+/// running on this runtime and reaches the window through the event bridge.
+/// This future resolves when the window closes.
 ///
 /// # Arguments
 ///
@@ -137,7 +142,8 @@ pub fn check_display() -> Result<(), GuiLaunchError> {
 /// # Errors
 ///
 /// Returns [`GuiLaunchError::NoDisplay`] when no display is reachable and
-/// [`GuiLaunchError::Backend`] when eframe fails to start or run.
+/// [`GuiLaunchError::Backend`] when the main-thread host is not serving or
+/// eframe fails to start or run.
 pub async fn run_gui(opts: GuiOptions) -> anyhow::Result<()> {
     check_display()?;
 
@@ -151,6 +157,7 @@ pub async fn run_gui(opts: GuiOptions) -> anyhow::Result<()> {
         startup,
         log_rx,
         db_path,
+        launcher,
         // Consumed by the later session-startup and log-panel tasks.
         config_paths: _,
         timings: _,
@@ -167,70 +174,13 @@ pub async fn run_gui(opts: GuiOptions) -> anyhow::Result<()> {
         show_log,
         db_path,
     );
-    let runtime = tokio::runtime::Handle::current();
-    let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut bridge = None;
-
-    let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title(APP_NAME),
-        event_loop_builder: Some(Box::new(allow_event_loop_off_main_thread)),
-        ..Default::default()
-    };
-    let result = tokio::task::block_in_place(|| {
-        eframe::run_native(
-            APP_NAME,
-            native_options,
-            Box::new(|cc| {
-                let _enter = runtime.enter();
-                bridge = Some(bridge::spawn_event_bridge(
-                    (*event_bus).clone(),
-                    cc.egui_ctx.clone(),
-                    event_tx,
-                ));
-                let shell = Shell::new(app).with_sources(event_rx, log_rx, runtime.clone());
-                Ok(Box::new(shell))
-            }),
-        )
-    });
-    if let Some(handle) = bridge {
-        handle.abort();
-    }
-    result.map_err(|e| GuiLaunchError::Backend(e.to_string()))?;
+    launcher
+        .launch(GuiLaunch {
+            app,
+            event_bus: (*event_bus).clone(),
+            logs: log_rx,
+            runtime: tokio::runtime::Handle::current(),
+        })
+        .await?;
     Ok(())
-}
-
-/// eframe event-loop hook: allow winit to start the event loop off the
-/// process main thread.
-///
-/// `cdmn` runs its program body on a dedicated large-stack thread (see
-/// `src/main.rs`), so the thread that reaches [`run_gui`] is not the process
-/// main thread. X11, Wayland and Windows allow that once opted in.
-fn allow_event_loop_off_main_thread(
-    builder: &mut winit::event_loop::EventLoopBuilder<eframe::UserEvent>,
-) {
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "freebsd",
-        target_os = "dragonfly",
-        target_os = "netbsd",
-        target_os = "openbsd"
-    ))]
-    {
-        use winit::platform::x11::EventLoopBuilderExtX11 as _;
-        builder.with_any_thread(true);
-    }
-    #[cfg(target_os = "windows")]
-    {
-        use winit::platform::windows::EventLoopBuilderExtWindows as _;
-        builder.with_any_thread(true);
-    }
-    #[cfg(not(any(
-        target_os = "linux",
-        target_os = "freebsd",
-        target_os = "dragonfly",
-        target_os = "netbsd",
-        target_os = "openbsd",
-        target_os = "windows"
-    )))]
-    let _ = builder; // INTENTIONAL: no off-main-thread opt-in exists on this platform
 }

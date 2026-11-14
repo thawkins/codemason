@@ -21,14 +21,12 @@ egui = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-# Only to let the event loop start off the process main thread (`cdmn` runs
-# its program body on a dedicated thread); the patch redirects it to the fork.
-winit = { version = "0.30.13", default-features = false }
 
 [dev-dependencies]
 egui_kittest = { workspace = true }
 parking_lot = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
 
 [[test]]
 name = "all"

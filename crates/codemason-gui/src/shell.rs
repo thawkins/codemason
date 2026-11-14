@@ -138,6 +138,11 @@ impl Shell {
 impl eframe::App for Shell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.drain_sources();
+        // `/quit` (or any other path that stops the app) closes the window,
+        // which ends `run_gui` the same way closing the window does.
+        if !self.app.is_running {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
         self.show(ui);
     }
 }

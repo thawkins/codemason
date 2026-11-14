@@ -463,7 +463,7 @@ async fn run_dry_run_and_exit(
 /// # Errors
 ///
 /// Returns an error on configuration, storage, network, or I/O failures.
-async fn async_main() -> Result<()> {
+async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
     let working_dir = crate::working_dir();
 
     // `--version` / `-V` is answered before any side effect: no panic hook, no
@@ -1311,6 +1311,7 @@ async fn async_main() -> Result<()> {
                     config_paths: config.read().await.config_paths.clone(),
                     timings: startup,
                     stderr_spool: stderr_spool.clone(),
+                    launcher: gui_launcher,
                 }))
                 .await?;
             } else {
@@ -1576,6 +1577,7 @@ async fn async_main() -> Result<()> {
                         config_paths: config.read().await.config_paths.clone(),
                         timings: startup,
                         stderr_spool: stderr_spool.clone(),
+                        launcher: gui_launcher,
                     }))
                     .await?;
                 } else {
@@ -2072,16 +2074,23 @@ const MAIN_THREAD_STACK_BYTES: usize = 32 * 1024 * 1024;
 /// gives every platform the same headroom; a panic payload raised on that
 /// thread is re-raised here with `resume_unwind` so the panic-hook output and
 /// the 101 exit code are unchanged.
+///
+/// The process main thread stays free for the `--gui` window: eframe must own
+/// it (macOS refuses any other thread), so the program thread hands a built
+/// GUI session back here through the `codemason_gui` launcher and this thread
+/// serves it. In every other mode no launch arrives and `serve` returns as
+/// soon as the program thread finishes and drops its launcher.
 fn main() -> Result<()> {
-    std::thread::Builder::new()
+    let (gui_launcher, gui_host) = codemason_gui::main_thread_channel();
+    let body = std::thread::Builder::new()
         .name("codemason-main".to_string())
         .stack_size(MAIN_THREAD_STACK_BYTES)
-        .spawn(main_body)
-        .map_err(|e| anyhow::anyhow!("failed to spawn program body thread: {e}"))?
-        .join()
-        .unwrap_or_else(|payload| {
-            std::panic::resume_unwind(payload);
-        })
+        .spawn(move || main_body(gui_launcher))
+        .map_err(|e| anyhow::anyhow!("failed to spawn program body thread: {e}"))?;
+    gui_host.serve();
+    body.join().unwrap_or_else(|payload| {
+        std::panic::resume_unwind(payload);
+    })
 }
 
 /// Wrap the tokio entrypoint so the runtime is shut down with a bounded
@@ -2092,11 +2101,14 @@ fn main() -> Result<()> {
 /// blocking task (e.g. an abandoned code-index reindex join) therefore kept
 /// the process alive burning CPU after the TUI had already exited. Arming a
 /// `shutdown_timeout` bounds that wait so the prompt returns promptly.
-fn main_body() -> Result<()> {
+///
+/// `gui_launcher` reaches the main thread's GUI host; it is dropped when
+/// `async_main` returns, which lets the main thread stop serving.
+fn main_body(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
     let working_dir = crate::working_dir();
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|e| anyhow::anyhow!("failed to create tokio runtime: {e}"))?;
-    let result = runtime.block_on(async_main());
+    let result = runtime.block_on(async_main(gui_launcher));
     // A normal return (including an error propagated out of `async_main`)
     // clears the crash marker so the next start does not report a phantom
     // abort. Process-wide state only; failure to mark is not worth failing on.

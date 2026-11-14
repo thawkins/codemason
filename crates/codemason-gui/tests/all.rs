@@ -4,10 +4,16 @@
 //! AGENTS-LANGUAGE.md, "Test Organization"). The binary-wide environment lock
 //! lives here so every test that touches a process-global takes the same one.
 
+// Each child file declares `#[path = "support/mod.rs"] mod support;`, so the
+// helper is loaded once per child (AGENTS-LANGUAGE.md, "Test Organization").
+#![allow(clippy::duplicate_mod)]
+
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 #[path = "test_launch.rs"]
 mod test_launch;
+#[path = "test_main_thread.rs"]
+mod test_main_thread;
 
 /// The one mutex that serialises every test mutating a process-global
 /// (environment variables, cwd) in this binary.
