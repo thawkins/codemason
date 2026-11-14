@@ -169,12 +169,11 @@ pub fn command_key_input(command: &CommandRef) -> Option<KeyInput> {
 
 /// Convert an egui event into the frontend-neutral [`KeyInput`].
 ///
-/// Key presses and repeats convert; releases and other events do not. egui's
-/// `Copy` and `Cut` events, which egui-winit sends in place of the Ctrl+C
-/// and Ctrl+X presses, convert to those presses so the TUI's Ctrl+C (arm
-/// quit) and Ctrl+X (cancel the agent) still reach the App. Letters are
-/// lower case unless Shift is held; Shift+Tab is [`Key::BackTab`]; a key
-/// with no neutral equivalent is [`Key::Other`].
+/// Key presses and repeats convert; releases and other events do not
+/// (egui's `Copy` and `Cut` events need the platform and the frame's
+/// modifiers, so [`KeyRouter::route`] converts those). Letters are lower case
+/// unless Shift is held; Shift+Tab is [`Key::BackTab`]; a key with no neutral
+/// equivalent is [`Key::Other`].
 ///
 /// # Arguments
 ///
@@ -202,8 +201,6 @@ pub fn to_key_input(ev: &egui::Event) -> Option<KeyInput> {
                 mods,
             })
         }
-        egui::Event::Copy => Some(chord('c', Modifiers::CTRL)),
-        egui::Event::Cut => Some(chord('x', Modifiers::CTRL)),
         _ => None,
     }
 }
@@ -247,18 +244,69 @@ fn named_key(key: egui::Key, shift: bool) -> Key {
         .map_or(Key::Other, Key::F)
 }
 
-/// Whether an unbound key press reaches the App while the prompt TextEdit
-/// has the keyboard. The TextEdit owns typed text and editing keys, so only
-/// keys it ignores go through: Esc, function keys, page scrolling, and the
-/// TUI's Alt+letter commands when they typed no text.
-fn forwards_while_typing(input: KeyInput, typed_text: bool) -> bool {
-    if typed_text {
+/// The letters the TUI binds with Alt, taken from the `Key::Char(..) if
+/// key.mods.contains(Modifiers::ALT)` arms of `handle_key` in
+/// `crates/codemason-app-core/src/input.rs` (a test keeps the two in step).
+pub const TUI_ALT_LETTERS: &[char] = &[
+    'a', 'c', 'e', 'g', 'i', 'l', 'm', 'o', 'p', 'q', 't', 'v', 'x', 'y',
+];
+
+/// Whether `input` is an Alt chord the TUI handles: Alt with one of
+/// [`TUI_ALT_LETTERS`], or Alt with Up, Down (teammate focus) or Enter
+/// (newline), and neither Ctrl nor Cmd.
+pub fn is_tui_alt_chord(input: KeyInput) -> bool {
+    if !input.mods.alt || input.mods.ctrl || input.mods.cmd {
         return false;
     }
     match input.key {
+        Key::Char(c) => TUI_ALT_LETTERS.contains(&c),
+        Key::Up | Key::Down | Key::Enter => true,
+        Key::Esc
+        | Key::Tab
+        | Key::BackTab
+        | Key::Backspace
+        | Key::Delete
+        | Key::Left
+        | Key::Right
+        | Key::Home
+        | Key::End
+        | Key::PageUp
+        | Key::PageDown
+        | Key::F(_)
+        | Key::Other => false,
+    }
+}
+
+/// The TUI key press an egui `Copy` or `Cut` event stands for.
+///
+/// egui-winit sends these events in place of the key press for Ctrl+C and
+/// Ctrl+X, but also for macOS Cmd+C/Cmd+X and PC Shift+Delete, Ctrl+Insert
+/// and Ctrl+Shift+Delete. Only a real Ctrl+C or Ctrl+X off macOS converts:
+/// the platform is not macOS and the frame holds Ctrl without Shift or Alt.
+fn clipboard_key_input(
+    event: &egui::Event,
+    platform: Platform,
+    mods: &egui::Modifiers,
+) -> Option<KeyInput> {
+    if platform.is_mac() || !mods.ctrl || mods.shift || mods.alt {
+        return None;
+    }
+    match event {
+        egui::Event::Copy => Some(chord('c', Modifiers::CTRL)),
+        egui::Event::Cut => Some(chord('x', Modifiers::CTRL)),
+        _ => None,
+    }
+}
+
+/// Whether an unbound key press that typed no text reaches the App while
+/// the prompt TextEdit has the keyboard. The TextEdit owns editing keys, so
+/// only keys it ignores go through: Esc, function keys and page scrolling.
+/// TUI Alt chords are handled before this ([`is_tui_alt_chord`]).
+fn forwards_while_typing(input: KeyInput) -> bool {
+    match input.key {
         Key::Esc | Key::F(_) | Key::PageUp | Key::PageDown => true,
-        Key::Char(_) => input.mods.alt && !input.mods.ctrl && !input.mods.cmd,
-        Key::Enter
+        Key::Char(_)
+        | Key::Enter
         | Key::Tab
         | Key::BackTab
         | Key::Backspace
@@ -271,6 +319,18 @@ fn forwards_while_typing(input: KeyInput, typed_text: bool) -> bool {
         | Key::End
         | Key::Other => false,
     }
+}
+
+/// Where the keyboard focus is when a frame's keys are routed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Focus {
+    /// The prompt TextEdit does not have the keyboard.
+    Elsewhere,
+    /// The prompt TextEdit has the keyboard.
+    Prompt {
+        /// Whether the prompt has a non-empty text selection.
+        has_selection: bool,
+    },
 }
 
 /// Routes a frame's key events: keymap commands first, then unbound keys.
@@ -304,20 +364,47 @@ impl KeyRouter {
     /// presses ([`to_key_input`]).
     ///
     /// A press that runs a command is removed from `input`, with any text it
-    /// typed, so no widget sees it. Unbound events stay in `input`. While
-    /// `typing`, an unbound press is forwarded only when the prompt TextEdit
-    /// ignores it (Esc, function keys, PageUp/PageDown, an Alt+letter that
-    /// typed no text), so typed text is never inserted twice.
+    /// typed, so no widget sees it. Other events stay in `input`, except the
+    /// text of a TUI Alt chord forwarded from the prompt (below).
+    ///
+    /// While the prompt has the keyboard ([`Focus::Prompt`]), typed text is
+    /// never sent to the App, so it is never inserted twice. The rules:
+    ///
+    /// - A TUI Alt chord ([`is_tui_alt_chord`]) is forwarded and the text it
+    ///   typed is dropped, so its letter never reaches the prompt (the TUI
+    ///   never types these letters). On macOS an Alt (Option) press that
+    ///   typed a character is left to the prompt instead, as a terminal does
+    ///   unless Option is set to act as Meta.
+    /// - Ctrl+C (an egui `Copy` event off macOS, see below) is left to the
+    ///   prompt when it has a non-empty selection, so it copies, matching the
+    ///   TUI's "copy if a selection is active; otherwise arm quit". Without a
+    ///   selection it is forwarded and arms quit.
+    /// - Ctrl+X (an egui `Cut` event off macOS) is always forwarded, so it
+    ///   cancels a running agent as in the TUI; the prompt still cuts its
+    ///   selection.
+    /// - Other presses are forwarded only when they typed no text and the
+    ///   prompt ignores them: Esc, function keys, PageUp and PageDown.
+    ///
+    /// egui `Copy`/`Cut` events convert to Ctrl+C/Ctrl+X only off macOS and
+    /// only when the frame holds Ctrl without Shift or Alt; macOS Cmd+C/Cmd+X
+    /// and PC Shift+Delete or Ctrl+Shift+Delete never reach the App as Ctrl
+    /// chords, wherever the focus is.
     ///
     /// # Arguments
     ///
     /// * `input` - the frame's input, before any widget reads it.
-    /// * `typing` - whether the prompt TextEdit has keyboard focus.
+    /// * `focus` - whether the prompt TextEdit has the keyboard, and whether
+    ///   it has a selection.
     ///
     /// # Returns
     ///
     /// The key presses for the App.
-    pub fn route(&mut self, input: &mut egui::InputState, typing: bool) -> Vec<KeyInput> {
+    pub fn route(&mut self, input: &mut egui::InputState, focus: Focus) -> Vec<KeyInput> {
+        let platform = self.keymap.platform();
+        let (typing, has_selection) = match focus {
+            Focus::Elsewhere => (false, false),
+            Focus::Prompt { has_selection } => (true, has_selection),
+        };
         let active = Active {
             typing,
             ..Active::NONE
@@ -328,16 +415,40 @@ impl KeyRouter {
             .filter_map(|hit| command_key_input(&hit.command))
             .collect();
         let events = &input.events;
+        let mut drop = vec![false; events.len()];
         for (i, event) in events.iter().enumerate() {
+            if let Some(key) = clipboard_key_input(event, platform, &input.modifiers) {
+                let copies = typing && has_selection && matches!(event, egui::Event::Copy);
+                if !copies {
+                    keys.push(key);
+                }
+                continue;
+            }
             let Some(key) = to_key_input(event) else {
                 continue;
             };
             let typed_text = matches!(events.get(i + 1), Some(egui::Event::Text(_)));
-            if typing && !forwards_while_typing(key, typed_text) {
+            if typing && is_tui_alt_chord(key) {
+                if typed_text {
+                    if platform.is_mac() {
+                        continue;
+                    }
+                    drop[i + 1] = true;
+                }
+                keys.push(key);
+                continue;
+            }
+            if typing && (typed_text || !forwards_while_typing(key)) {
                 continue;
             }
             keys.push(key);
         }
+        let mut index = 0;
+        input.events.retain(|_| {
+            let keep = !drop[index];
+            index += 1;
+            keep
+        });
         keys
     }
 }

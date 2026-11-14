@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use codemason_app_core::input_event::{Key, KeyInput, Modifiers};
 use codemason_gui::keys::{
-    KeyRouter, command_key_input, default_keymap, load_keymap, to_key_input,
+    Focus, KeyRouter, TUI_ALT_LETTERS, command_key_input, default_keymap, load_keymap, to_key_input,
 };
 use craft_keymap::{Binding, CommandRef, Platform};
 
@@ -24,10 +24,15 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
-/// The single binding text of `command` in `keymap`.
+/// The bindings of `command` in `keymap`.
 fn bound(keymap: &craft_keymap::Keymap, command: &str) -> Vec<Binding> {
     keymap.bindings(&CommandRef::new(command))
 }
+
+/// The prompt has the keyboard and no selection.
+const TYPING: Focus = Focus::Prompt {
+    has_selection: false,
+};
 
 /// An egui key press of `key` with `modifiers`.
 fn press(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
@@ -152,7 +157,7 @@ async fn test_mac_cmd_shift_l_toggles_log_like_alt_l() {
     let mods = egui::Modifiers::MAC_CMD | egui::Modifiers::SHIFT;
     let mut input = input_with(vec![press(egui::Key::L, mods)]);
 
-    let keys = router.route(&mut input, false);
+    let keys = router.route(&mut input, Focus::Elsewhere);
 
     assert_eq!(
         keys,
@@ -189,7 +194,7 @@ fn test_route_skips_typed_text_while_typing() {
         press(egui::Key::Escape, egui::Modifiers::NONE),
     ]);
 
-    let keys = router.route(&mut input, true);
+    let keys = router.route(&mut input, TYPING);
 
     assert_eq!(
         keys,
@@ -211,7 +216,7 @@ fn test_route_forwards_unbound_keys_when_not_typing() {
     let mut router = KeyRouter::new(default_keymap(Platform::Linux));
     let mut input = input_with(vec![press(egui::Key::PageUp, egui::Modifiers::NONE)]);
 
-    let keys = router.route(&mut input, false);
+    let keys = router.route(&mut input, Focus::Elsewhere);
 
     assert_eq!(
         keys,
@@ -251,4 +256,133 @@ fn test_load_keymap_falls_back_on_missing_or_invalid_file() {
         bound(&keymap, "panel.log"),
         vec![Binding::parse("Alt+L").expect("parse")]
     );
+}
+
+/// An input state holding `events` with frame modifiers `modifiers`.
+fn input_mods(events: Vec<egui::Event>, modifiers: egui::Modifiers) -> egui::InputState {
+    let mut input = input_with(events);
+    input.modifiers = modifiers;
+    input
+}
+
+#[test]
+fn test_route_forwards_tui_alt_letter_and_drops_its_text_while_typing() {
+    let mut router = KeyRouter::new(default_keymap(Platform::Linux));
+    let mut input = input_with(vec![
+        press(egui::Key::T, egui::Modifiers::ALT),
+        egui::Event::Text("t".into()),
+    ]);
+
+    let keys = router.route(&mut input, TYPING);
+
+    assert_eq!(
+        keys,
+        vec![KeyInput {
+            key: Key::Char('t'),
+            mods: Modifiers::ALT,
+        }]
+    );
+    assert!(
+        !input
+            .events
+            .iter()
+            .any(|e| matches!(e, egui::Event::Text(_))),
+        "the letter is never typed into the prompt: {:?}",
+        input.events
+    );
+}
+
+#[test]
+fn test_route_forwards_ctrl_c_and_ctrl_x_while_typing() {
+    let mut router = KeyRouter::new(default_keymap(Platform::Linux));
+    let mut input = input_mods(
+        vec![egui::Event::Copy, egui::Event::Cut],
+        egui::Modifiers::CTRL | egui::Modifiers::COMMAND,
+    );
+
+    let keys = router.route(&mut input, TYPING);
+
+    assert_eq!(
+        keys,
+        vec![
+            KeyInput {
+                key: Key::Char('c'),
+                mods: Modifiers::CTRL,
+            },
+            KeyInput {
+                key: Key::Char('x'),
+                mods: Modifiers::CTRL,
+            },
+        ]
+    );
+}
+
+#[test]
+fn test_route_ignores_mac_cmd_x_and_pc_shift_delete_cut() {
+    let mut mac = KeyRouter::new(default_keymap(Platform::Mac));
+    let mut input = input_mods(
+        vec![egui::Event::Cut, egui::Event::Copy],
+        egui::Modifiers::MAC_CMD | egui::Modifiers::COMMAND,
+    );
+    assert_eq!(
+        mac.route(&mut input, Focus::Elsewhere),
+        Vec::new(),
+        "Mac Cmd+X/Cmd+C"
+    );
+
+    let mut pc = KeyRouter::new(default_keymap(Platform::Linux));
+    let mut input = input_mods(vec![egui::Event::Cut], egui::Modifiers::SHIFT);
+    assert_eq!(
+        pc.route(&mut input, Focus::Elsewhere),
+        Vec::new(),
+        "Shift+Delete"
+    );
+}
+
+#[test]
+fn test_route_leaves_ctrl_c_to_a_prompt_selection() {
+    let mut router = KeyRouter::new(default_keymap(Platform::Linux));
+    let mut input = input_mods(
+        vec![egui::Event::Copy, egui::Event::Cut],
+        egui::Modifiers::CTRL | egui::Modifiers::COMMAND,
+    );
+
+    let keys = router.route(
+        &mut input,
+        Focus::Prompt {
+            has_selection: true,
+        },
+    );
+
+    assert_eq!(
+        keys,
+        vec![KeyInput {
+            key: Key::Char('x'),
+            mods: Modifiers::CTRL,
+        }],
+        "Ctrl+C copies the selection; Ctrl+X still reaches the App"
+    );
+    assert_eq!(input.events.len(), 2, "the prompt still sees Copy and Cut");
+}
+
+#[test]
+fn test_tui_alt_letters_match_app_core_input_handler() {
+    let source = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../codemason-app-core/src/input.rs"),
+    )
+    .expect("read app-core input.rs");
+    let mut found: Vec<char> = source
+        .lines()
+        .filter(|line| line.contains("if key.mods.contains(Modifiers::ALT)"))
+        .filter_map(|line| {
+            let rest = line.trim().strip_prefix("Key::Char('")?;
+            let mut chars = rest.chars();
+            let c = chars.next()?;
+            chars.as_str().starts_with("')").then_some(c)
+        })
+        .collect();
+    found.sort_unstable();
+    found.dedup();
+
+    assert_eq!(found, TUI_ALT_LETTERS.to_vec());
 }

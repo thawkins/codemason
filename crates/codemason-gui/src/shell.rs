@@ -12,7 +12,7 @@ use codemason_app_core::log_channel::TuiLogReceiver;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::keys::{KeyRouter, default_keymap};
+use crate::keys::{Focus, KeyRouter, default_keymap};
 
 /// Most log records moved into the app per frame, so a burst cannot stall
 /// a frame (the terminal frontend uses the same limit).
@@ -147,8 +147,16 @@ impl Shell {
         let Some(sources) = self.sources.as_ref() else {
             return;
         };
-        let typing = ctx.memory(|m| m.has_focus(egui::Id::unique(PROMPT_ID)));
-        let keys = ctx.input_mut(|input| self.keys.route(input, typing));
+        let id = egui::Id::unique(PROMPT_ID);
+        let focus = if ctx.memory(|m| m.has_focus(id)) {
+            let has_selection = egui::TextEdit::load_state(ctx, id)
+                .and_then(|state| state.cursor.char_range())
+                .is_some_and(|range| !range.is_empty());
+            Focus::Prompt { has_selection }
+        } else {
+            Focus::Elsewhere
+        };
+        let keys = ctx.input_mut(|input| self.keys.route(input, focus));
         for key in keys {
             sources.runtime.block_on(self.app.handle_key(key));
         }
