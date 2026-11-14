@@ -5,6 +5,11 @@
 //! operations should route through these helpers so behaviour (e.g. the Linux
 //! `wait()` threading workaround) lives in a single place.
 //!
+//! A frontend that owns the system clipboard itself (the GUI writes through
+//! its toolkit) calls [`route_copies_to_frontend`] on its UI thread: text
+//! writes made there are then kept for it ([`take_frontend_copies`]) instead
+//! of going to `arboard`.
+//!
 //! # Clipboard image lifecycle
 //!
 //! Pasted images are persisted under `<cwd>/target/temp/` as `codemason_paste_*.png`
@@ -17,7 +22,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Result;
-use arboard::ImageData;
+/// Raw RGBA clipboard pixels, as the image paths in this module take them.
+pub use arboard::ImageData;
 use image::{ExtendedColorType, ImageEncoder};
 
 /// Maximum raw pixel buffer size we accept from the clipboard (50 MB).
@@ -78,6 +84,47 @@ thread_local! {
     /// paths without a display server, and avoids cross-thread contamination when
     /// tests run in parallel.
     static CLIPBOARD_TEXT_OVERRIDE: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// Text writes kept for a frontend that owns the clipboard (see
+    /// [`route_copies_to_frontend`]); `None` while writes go to `arboard`.
+    static FRONTEND_COPIES: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+}
+
+/// Keep this thread's clipboard text writes for the frontend instead of
+/// writing them with `arboard`, or (with `false`) write them again.
+///
+/// The GUI turns this on for its UI thread, which runs every `App` action,
+/// and forwards what [`take_frontend_copies`] returns to its toolkit's
+/// clipboard, so copies work wherever the toolkit's clipboard does
+/// (including Wayland, where a background `arboard` writer cannot own the
+/// selection for the window).
+///
+/// # Arguments
+///
+/// * `on` - whether [`set_clipboard_text`] keeps the text for the frontend.
+pub fn route_copies_to_frontend(on: bool) {
+    FRONTEND_COPIES.with(|c| {
+        let mut copies = c.borrow_mut();
+        match (on, copies.is_some()) {
+            (true, false) => *copies = Some(Vec::new()),
+            (false, _) => *copies = None,
+            (true, true) => {}
+        }
+    });
+}
+
+/// The text writes kept for the frontend since the last call, oldest
+/// first (empty unless [`route_copies_to_frontend`] is on for this thread).
+///
+/// # Returns
+///
+/// The copied texts, in the order they were written.
+pub fn take_frontend_copies() -> Vec<String> {
+    FRONTEND_COPIES.with(|c| {
+        c.borrow_mut()
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    })
 }
 
 /// Read plain text from the system clipboard.
@@ -159,8 +206,18 @@ pub fn get_clipboard_text_sync() -> Option<String> {
 /// On Linux, arboard's `set().wait()` blocks until another application takes
 /// ownership of the clipboard, so the write is performed on a background
 /// thread.  Errors are silently ignored because clipboard writes are best-
-/// effort UI conveniences.
+/// effort UI conveniences. While [`route_copies_to_frontend`] is on for the
+/// calling thread, the text is kept for the frontend instead.
 pub fn set_clipboard_text(text: &str) {
+    let kept = FRONTEND_COPIES.with(|c| {
+        c.borrow_mut()
+            .as_mut()
+            .map(|copies| copies.push(text.to_owned()))
+            .is_some()
+    });
+    if kept {
+        return;
+    }
     let text = text.to_owned();
     std::thread::spawn(move || {
         let _ = set_clipboard_text_sync(&text); // INTENTIONAL: clipboard write is inherently best-effort

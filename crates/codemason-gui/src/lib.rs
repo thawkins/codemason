@@ -21,7 +21,8 @@
 //!   [`styled_text`] layout.
 //! - [`fonts`] builds the font stack (block and status glyphs, a bold
 //!   face, system fonts for CJK and the rest) the window installs at start.
-//! - [`platform`] holds the native file dialogs ([`platform::files`]).
+//! - [`platform`] holds the native file dialogs ([`platform::files`]) and
+//!   the clipboard paste and copy wiring ([`platform::clipboard`]).
 //! - [`theme`] installs the egui visuals of the App's theme mode and
 //!   restyles the window when the mode changes.
 //! - [`bridge::spawn_event_bridge`] forwards agent events from the

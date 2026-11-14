@@ -10,6 +10,8 @@
 
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+#[path = "test_clipboard.rs"]
+mod test_clipboard;
 #[path = "test_dialogs.rs"]
 mod test_dialogs;
 #[path = "test_dialogs_more.rs"]

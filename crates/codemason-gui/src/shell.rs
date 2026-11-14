@@ -73,6 +73,7 @@ use crate::panels::sessions::SessionsView;
 use crate::panels::status_bar::status_bar_ui;
 use crate::panels::tasks::tasks_ui;
 use crate::panels::teams::teams_ui;
+use crate::platform::clipboard;
 use crate::platform::files::{self, FileDialogs, file_menu};
 use crate::theme::ThemeApplier;
 
@@ -472,10 +473,14 @@ impl Shell {
     ///
     /// * `ctx` - the window's context.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        // App actions run on this thread; their clipboard writes go to the
+        // window's clipboard (`forward_copies`).
+        clipboard::route_copies_to_window();
         self.drain_sources();
         self.apply_file_answers(ctx);
         self.housekeeping(ctx);
         self.poll_timers(ctx);
+        clipboard::forward_copies(ctx);
         // `/quit` (or any other path that stops the app) closes the window.
         if !self.app.is_running {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -487,6 +492,8 @@ impl Shell {
         // A context-menu item chosen last frame acts on the prompt editor
         // before the prompt reads this frame's input.
         dialogs::context_menu::apply_pending(ui.ctx());
+        // An image pasted with Ctrl+V/Cmd+V is staged as Alt+V stages one.
+        clipboard::attach_pasted_images(ui.ctx(), &mut self.app);
         let focus = self.prompt.prepare(ui.ctx(), &mut self.app);
         dialogs::prepare(ui.ctx(), &mut self.app);
         self.route_keys(ui.ctx(), focus);
@@ -497,6 +504,7 @@ impl Shell {
         }
         self.show(ui);
         self.run_dialog_keys(ui.ctx());
+        clipboard::forward_copies(ui.ctx());
     }
 
     /// Answer every file dialog with `answer_with` instead of a native
@@ -702,6 +710,13 @@ fn messages_body(ui: &mut egui::Ui, app: &mut App, messages: &mut MessagesView, 
 /// name, so the pane is labelled.
 fn placeholder(ui: &mut egui::Ui, pane: PaneId) {
     ui.weak(format!("{} panel", pane.label()));
+}
+
+impl Drop for Shell {
+    fn drop(&mut self) {
+        // The window is gone: app-core writes the clipboard itself again.
+        clipboard::stop_routing_copies();
+    }
 }
 
 impl eframe::App for Shell {
