@@ -32,6 +32,10 @@ impl App {
     /// store's blocking exclusive file lock, which teammate processes
     /// contend for, and runs the team's `TaskCompleted` hook (30 s timeout,
     /// `HOOK_TIMEOUT`); the pass after the job ends applies the tally.
+    /// Cancelling the swarm or closing, clearing or removing its team stops
+    /// and awaits the job first (`App::stop_swarm_autocomplete`); closing
+    /// its session or exiting aborts it (its running hook is killed), which
+    /// leaves the tasks it had not reached open.
     /// Applying a finished `/swarm` decomposition (`poll_pending_swarm` ->
     /// `TaskStore::add_task`) still writes inline: the team was created in
     /// the same step, so no teammate holds its lock yet and it has no hooks

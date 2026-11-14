@@ -374,6 +374,9 @@ impl App {
         // Reuse the existing team cleanup path
         let team_name = swarm.team_name.clone();
 
+        // A finalising job must not run more hooks for a cancelled swarm.
+        self.stop_swarm_autocomplete(&team_name).await;
+
         // Trigger team cleanup
         self.execute_slash_command(&format!("/team close {team_name}"))
             .await;
@@ -668,6 +671,46 @@ impl App {
         }
     }
 
+    /// Stop every swarm auto-complete job working on `team_name`, in the
+    /// focused and the background sessions, and wait until each has ended.
+    ///
+    /// Every path that cancels a swarm or closes, clears or removes its team
+    /// calls this before it touches the team directory. An aborted job stops
+    /// at its next await: a `TaskStore::complete` write in progress finishes
+    /// first (its locked read-modify-write holds no await), and a running
+    /// hook process is killed when its future is dropped (`kill_on_drop`).
+    /// So once this returns nothing of the job writes into the directory
+    /// any more, and no further hook starts. Tasks it did not reach stay
+    /// open, as they were before the swarm finalised.
+    ///
+    /// # Arguments
+    ///
+    /// * `team_name` - the swarm team being cancelled or removed.
+    pub async fn stop_swarm_autocomplete(&mut self, team_name: &str) {
+        let mut jobs = Vec::new();
+        if self
+            .session
+            .swarm_autocomplete
+            .as_ref()
+            .is_some_and(|job| job.team_name == team_name)
+        {
+            jobs.extend(self.session.swarm_autocomplete.take());
+        }
+        for index in 0..self.background.len() {
+            if let Some(view) = self.background.view_mut(index)
+                && view
+                    .swarm_autocomplete
+                    .as_ref()
+                    .is_some_and(|job| job.team_name == team_name)
+            {
+                jobs.extend(view.swarm_autocomplete.take());
+            }
+        }
+        for job in jobs {
+            job.stop().await;
+        }
+    }
+
     /// Whether a swarm auto-complete job is running (test hook).
     ///
     /// # Returns
@@ -741,12 +784,34 @@ impl App {
 /// [`App::poll_swarm_completion`]). The handle doubles as the in-flight
 /// flag and the result slot: the job's only results are the store writes
 /// and their warnings, so its end is what the next pass waits for.
+///
+/// Dropping it aborts the job without waiting: a session that is closed or
+/// deleted, or the App going away at exit, ends its job (and kills a hook
+/// it is running) rather than leaving it detached. Paths that then touch
+/// the team directory use [`App::stop_swarm_autocomplete`], which also
+/// waits for the job to end.
 #[derive(Debug)]
 pub struct SwarmAutoComplete {
     /// The swarm the job completes tasks for.
     team_name: String,
     /// The spawned job.
     handle: tokio::task::JoinHandle<()>,
+}
+
+impl SwarmAutoComplete {
+    /// Abort the job and wait until it has ended.
+    async fn stop(mut self) {
+        self.handle.abort();
+        // A cancelled (or panicked) job has ended too; only the end matters.
+        let _ = (&mut self.handle).await; // INTENTIONAL: only the end matters
+    }
+}
+
+impl Drop for SwarmAutoComplete {
+    fn drop(&mut self) {
+        // No-op for a job that has already ended.
+        self.handle.abort();
+    }
 }
 
 /// Complete every task of `ts` that is neither completed nor cancelled, on

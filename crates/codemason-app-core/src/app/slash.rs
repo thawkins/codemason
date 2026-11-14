@@ -6810,6 +6810,9 @@ than assumed.
                     "close" => {
                         if let Some(team) = self.session.active_team.as_ref() {
                             let team_name = team.name.clone();
+                            // Closing cancels the team's swarm: stop its
+                            // finalising job first.
+                            self.stop_swarm_autocomplete(&team_name).await;
                             self.session.active_team = None;
                             self.session.team_members.clear();
                             self.session.team_message_counts.clear();
@@ -6904,6 +6907,9 @@ than assumed.
                             return;
                         }
                         let rest = team_name;
+                        // Nothing of a finalising job may write into the
+                        // directory while it is removed (ENOTEMPTY).
+                        self.stop_swarm_autocomplete(&name_owned).await;
                         match TeamStore::load_by_name(rest, &working_dir) {
                             Ok(store) => match std::fs::remove_dir_all(&store.dir) {
                                 Ok(_) => {
@@ -7115,6 +7121,9 @@ than assumed.
                     "clear" => {
                         let team_opt = self.session.active_team.clone();
                         if let Some(team) = team_opt {
+                            // A finalising job must not write tasks.json while
+                            // it is removed.
+                            self.stop_swarm_autocomplete(&team.name).await;
                             let working_dir = self.cwd_path.clone();
                             match TeamStore::load_by_name(&team.name, &working_dir) {
                                 Ok(store) => {
@@ -7217,6 +7226,9 @@ than assumed.
 
                             let working_dir = self.cwd_path.clone();
                             let team_name = team.name.clone();
+                            // Nothing of a finalising job may write into the
+                            // directory while it is removed (ENOTEMPTY).
+                            self.stop_swarm_autocomplete(&team_name).await;
                             let removed = match TeamStore::load_by_name(&team_name, &working_dir) {
                                 Ok(store) => std::fs::remove_dir_all(&store.dir).is_ok(),
                                 Err(_) => false,
@@ -7311,6 +7323,9 @@ than assumed.
                         if let Some(team) = team_opt {
                             let working_dir = self.cwd_path.clone();
                             let team_name = team.name.clone();
+                            // Nothing of a finalising job may write into the
+                            // directory while it is removed (ENOTEMPTY).
+                            self.stop_swarm_autocomplete(&team_name).await;
                             match TeamStore::load_by_name(&team_name, &working_dir) {
                                 Ok(mut store) => {
                                     // Attempt shutdown of active teammate sessions first.

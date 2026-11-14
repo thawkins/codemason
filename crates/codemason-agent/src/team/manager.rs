@@ -376,6 +376,10 @@ pub async fn run_hook(
     }
     child_cmd.stdout(std::process::Stdio::piped());
     child_cmd.stderr(std::process::Stdio::piped());
+    // A caller that abandons the hook (an aborted task, a runtime shutting
+    // down) drops this future; the hook process is killed with it rather
+    // than left running unwatched.
+    child_cmd.kill_on_drop(true);
 
     let child = child_cmd.spawn();
 
