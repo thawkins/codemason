@@ -15,8 +15,8 @@ mod support;
 
 use codemason_agent::event::Event;
 use codemason_app_core::app::{
-    App, ConfigSavePickerState, HistoryPickerState, PendingForceCleanup, PlanApprovalState,
-    QUESTION_ANSWER_DELAY, RollbackOfferState,
+    App, ConfigSavePickerState, HistoryPickerState, LoopSetupField, PendingForceCleanup,
+    PlanApprovalState, QUESTION_ANSWER_DELAY, RollbackOfferState,
 };
 use codemason_app_core::geometry::Area;
 use codemason_app_core::log_channel::tui_log_channel;
@@ -820,6 +820,54 @@ fn test_loop_goal_takes_a_paste_once() {
         harness.state().app().loop_setup.is_some(),
         "the line break did not start the loop"
     );
+}
+
+#[test]
+fn test_loop_paste_is_ignored_off_the_text_fields() {
+    let (_rt, _events, mut harness) = rig(|app| {
+        codemason_app_core::app::open_loop_setup(app);
+        if let Some(state) = app.loop_setup.as_mut() {
+            state.active_field = LoopSetupField::Checkpoints;
+        }
+    });
+    harness.run();
+    let checkpoints = |harness: &Harness<'static, Shell>| {
+        harness
+            .state()
+            .app()
+            .loop_setup
+            .as_ref()
+            .map(|s| s.checkpoints)
+    };
+    let before = checkpoints(&harness);
+    assert!(before.is_some());
+
+    // A paste holding a space would toggle checkpoints if typed as keys.
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::Paste("a b".to_string()));
+    harness.run();
+    assert_eq!(
+        checkpoints(&harness),
+        before,
+        "a paste never toggles checkpoints"
+    );
+
+    // On the agent picker a paste is ignored too.
+    if let Some(state) = harness.state_mut().app_mut().loop_setup.as_mut() {
+        state.active_field = LoopSetupField::Agent;
+    }
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::Paste("goal text".to_string()));
+    harness.run();
+    let app = harness.state().app();
+    let state = app.loop_setup.as_ref().expect("dialog still open");
+    assert_eq!(state.goal_field.text(), "");
+    assert_eq!(state.checkpoints, before.unwrap_or_default());
+    assert_eq!(app.session.input, "");
 }
 
 #[test]

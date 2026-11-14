@@ -680,8 +680,13 @@ impl KeyRouter {
                 // A character key whose press typed another character (AltGr
                 // or Option composing, a layout where egui reports the
                 // physical key) is not forwarded: the text that follows it is,
-                // as its own characters.
+                // as its own characters. A Ctrl or Cmd chord types nothing
+                // (egui-winit sends no Text with Ctrl or Cmd), so a Text after
+                // one is another press's and the chord is forwarded. Ctrl+Alt
+                // is Windows AltGr, which types, so it is not such a chord.
+                let command_chord = key.mods.cmd || (key.mods.ctrl && !key.mods.alt);
                 if !field_focused
+                    && !command_chord
                     && next_text.is_some()
                     && !typed_text
                     && matches!(key.key, Key::Char(_))

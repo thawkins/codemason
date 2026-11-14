@@ -974,3 +974,40 @@ fn test_route_modal_forwards_unpaired_text_once_and_leaves_pastes() {
         "a paste is never keys (the TUI gets it as a paste): it stays for the dialog's hook"
     );
 }
+
+#[test]
+fn test_route_modal_forwards_ctrl_and_cmd_chords_before_unrelated_text() {
+    let modal = Focus::Modal {
+        field_focused: false,
+        field_selection: false,
+    };
+    let ctrl_c = KeyInput {
+        key: Key::Char('c'),
+        mods: Modifiers::CTRL,
+    };
+    let (keys, _) = route_events(
+        modal,
+        vec![
+            press(egui::Key::C, egui::Modifiers::CTRL),
+            egui::Event::Text("z".to_string()),
+        ],
+    );
+    assert_eq!(
+        keys,
+        vec![ctrl_c, plain(Key::Char('z'))],
+        "Ctrl+C types nothing, so the Text after it is another press's and both reach the App"
+    );
+
+    let cmd_d = KeyInput {
+        key: Key::Char('d'),
+        mods: Modifiers::CMD,
+    };
+    let (keys, _) = route_events(
+        modal,
+        vec![
+            press(egui::Key::D, egui::Modifiers::MAC_CMD),
+            egui::Event::Text("z".to_string()),
+        ],
+    );
+    assert_eq!(keys, vec![cmd_d, plain(Key::Char('z'))]);
+}

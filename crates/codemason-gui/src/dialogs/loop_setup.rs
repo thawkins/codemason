@@ -11,9 +11,9 @@
 //!
 //! Typed text the router cannot pair with a key (AltGr and Option
 //! characters, dead keys, IME commits) is forwarded as its characters by the
-//! router (`Focus::Modal`), and a paste is typed character by character by
-//! [`prepare`], so the form gets every character once, through the same
-//! key path as the TUI. (The fields stay key-driven, like the provider
+//! router (`Focus::Modal`), and a paste into a text field is typed
+//! character by character by [`prepare`], so the form gets every character
+//! once, through the same key path as the TUI. (The fields stay key-driven, like the provider
 //! fields; binding text editors to them would give two editors of one
 //! field.)
 //!
@@ -57,17 +57,20 @@ const TEXT_FIELDS: [(&str, LoopSetupField); 7] = [
 
 /// Type this frame's pastes into the focused text field, as key presses.
 ///
-/// app-core has no paste path for the form, and every field accepts typed
-/// characters, so each pasted character is sent as its own [`Key::Char`]
-/// through `App::handle_key` ([`send_key`]): the same path as typing, and
-/// once. Carriage returns are dropped, and line breaks and tabs become
-/// spaces, since the fields are single lines and Enter would start the loop.
-/// The paste is removed from the input.
+/// app-core has no paste path for the form, so while a text field is active
+/// each pasted character is sent as its own [`Key::Char`] through
+/// `App::handle_key` ([`send_key`]): the same path as typing, and once.
+/// Carriage returns are dropped, and line breaks and tabs become spaces,
+/// since the fields are single lines and Enter would start the loop. On the
+/// agent picker or the checkpoints toggle a paste is ignored: typed as keys
+/// it would pick agents or toggle checkpoints. The paste is removed from the
+/// input either way, so it never reaches the prompt behind the dialog.
 ///
 /// # Arguments
 ///
 /// * `ctx` - the frame's context, before the router reads input.
-pub fn prepare(ctx: &egui::Context) {
+/// * `app` - the App whose active loop field is read.
+pub fn prepare(ctx: &egui::Context, app: &App) {
     let mut pasted = String::new();
     ctx.input_mut(|input| {
         input.events.retain(|event| match event {
@@ -78,6 +81,14 @@ pub fn prepare(ctx: &egui::Context) {
             _ => true,
         });
     });
+    let on_text_field = app.loop_setup.as_ref().is_some_and(|state| {
+        TEXT_FIELDS
+            .iter()
+            .any(|(_, field)| *field == state.active_field)
+    });
+    if !on_text_field {
+        return;
+    }
     for c in pasted.chars().filter(|&c| c != '\r') {
         let c = if c == '\n' || c == '\t' { ' ' } else { c };
         send_key(ctx, plain(Key::Char(c)));

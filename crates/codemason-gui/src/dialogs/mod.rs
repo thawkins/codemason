@@ -282,7 +282,7 @@ pub fn prepare(ctx: &egui::Context, app: &mut App) {
         Some(ActiveDialog::ModelPicker) => model_picker::prepare(ctx, app),
         Some(ActiveDialog::Provider) => provider::prepare(ctx, app),
         Some(ActiveDialog::Properties) => properties::prepare(ctx, app),
-        Some(ActiveDialog::LoopSetup) => loop_setup::prepare(ctx),
+        Some(ActiveDialog::LoopSetup) => loop_setup::prepare(ctx, app),
         Some(
             ActiveDialog::ConfigSavePicker
             | ActiveDialog::HistoryPicker
