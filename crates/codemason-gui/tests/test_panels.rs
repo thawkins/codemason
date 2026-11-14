@@ -549,3 +549,44 @@ fn test_dock_layout_file_saves_changes() {
 
     assert!(load_layout(&path).contains(&PaneId::Log));
 }
+
+/// Alt+S focuses the sidebar, then the toggle chord `letter` turns on
+/// `pane`, which shares the sidebar's tab group: the new pane is in front
+/// and the sidebar gave up the keyboard, as the TUI shows both at once.
+fn toggle_on_beside_focused_sidebar(key: egui::Key, letter: &str, pane: PaneId) {
+    let mut ids = None;
+    let mut rig = rig(|rt, app| ids = Some(two_sessions(rt, app)));
+    let _ = ids.expect("sessions");
+    rig.harness.run();
+    focus_prompt(&mut rig.harness);
+    alt(&mut rig.harness, egui::Key::S, "s");
+    rig.harness.run();
+    assert!(rig.harness.state().app().sidebar.focused);
+    assert!(sessions_shown(&rig.harness));
+
+    alt(&mut rig.harness, key, letter);
+    rig.harness.run();
+    rig.harness.run();
+
+    assert!(rig.harness.state().layout().contains(&pane));
+    assert_eq!(
+        rig.harness.state().layout().panel_state(&pane),
+        PanelState::Front,
+        "{pane:?} is the front tab"
+    );
+    assert!(
+        !rig.harness.state().app().sidebar.focused,
+        "the sidebar gave up the keyboard"
+    );
+    assert!(!sessions_shown(&rig.harness));
+}
+
+#[test]
+fn test_dock_alt_p_beside_focused_sidebar_fronts_profile() {
+    toggle_on_beside_focused_sidebar(egui::Key::P, "p", PaneId::Profile);
+}
+
+#[test]
+fn test_dock_alt_m_beside_focused_sidebar_fronts_memory() {
+    toggle_on_beside_focused_sidebar(egui::Key::M, "m", PaneId::Memory);
+}

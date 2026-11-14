@@ -22,7 +22,9 @@
 //! app-core starts sending the keyboard to ([`dock::pane_takes_keys`]) is
 //! brought to the front of its tab group, and the sessions sidebar is kept
 //! in front for as long as it has the keyboard, so keys never go to a
-//! covered pane. The other actions the dock returns (moves, resizes, tab
+//! covered pane. A pane toggled on in the focused sidebar's tab group
+//! (`Alt+P`, `Alt+M`) takes the front instead, and the sidebar gives up the
+//! keyboard (`sessions_sidebar_state::unfocus`, as a press outside it). The other actions the dock returns (moves, resizes, tab
 //! switches, floats) are applied to the layout. With a layout file
 //! ([`Shell::with_layout_file`]) the layout and the hidden panes' places
 //! are loaded at start ([`dock::load_dock`]), and every
@@ -45,7 +47,8 @@ use codemason_agent::event::Event;
 use codemason_app_core::app::{App, LogLevel, SelectionPane};
 use codemason_app_core::input_event::KeyInput;
 use codemason_app_core::log_channel::TuiLogReceiver;
-use craft_ui::docking::{Action, DockArea, DockStyle, Layout};
+use codemason_app_core::sessions_sidebar_state;
+use craft_ui::docking::{Action, DockArea, DockStyle, Layout, PanelState};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -250,12 +253,24 @@ impl Shell {
     /// Hide or show the dock's panes to match the App's flags.
     fn sync_dock(&mut self, ctx: &egui::Context) {
         let app = &self.app;
+        let sidebar_was_front = self.layout.panel_state(&PaneId::Sessions) == PanelState::Front;
         match dock::sync_visibility(&mut self.layout, &mut self.hidden, |pane| {
             dock::pane_wanted(app, pane)
         }) {
             Ok(true) => {
                 self.layout_dirty = true;
                 ctx.request_repaint();
+                // A pane toggled on in the focused sidebar's tab group (Alt+P,
+                // Alt+M) is now in front of it. The TUI shows both side by
+                // side; here the new pane stays in front and the sidebar gives
+                // up the keyboard, as a press outside it does, so keys never
+                // go to a covered pane.
+                if self.app.sidebar.focused
+                    && sidebar_was_front
+                    && self.layout.panel_state(&PaneId::Sessions) == PanelState::Open
+                {
+                    sessions_sidebar_state::unfocus(&mut self.app);
+                }
             }
             Ok(false) => {}
             Err(err) => tracing::warn!(%err, "dock visibility sync failed"),
@@ -373,7 +388,7 @@ impl Shell {
             && !sessions_rect.is_some_and(|rect| rect.contains(at))
             && ctx.memory(|m| m.top_modal_layer().is_none())
         {
-            self.app.sidebar.focused = false;
+            sessions_sidebar_state::unfocus(&mut self.app);
         }
     }
 
