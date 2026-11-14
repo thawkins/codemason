@@ -8,15 +8,18 @@
 //! - [`main_thread`] hands the built session to the process main thread,
 //!   which runs the eframe window ([`MainThreadHost::serve`]).
 //! - [`Shell`] is the `eframe::App` that draws the window.
+//! - [`dock`] is the dockable pane layout model (craft-ui docking).
 //! - [`bridge::spawn_event_bridge`] forwards agent events from the
 //!   [`EventBus`] into the shell's queue and wakes egui.
 //!
 //! Dependencies: `eframe`/`egui` (the storytold forks, via the workspace
-//! `[patch.crates-io]` table), `tokio`, `thiserror` and `tracing`.
+//! `[patch.crates-io]` table), `craft-ui` (docking), `tokio`, `thiserror`
+//! and `tracing`.
 
 #![deny(unsafe_code)]
 
 pub mod bridge;
+pub mod dock;
 pub mod main_thread;
 pub mod shell;
 
