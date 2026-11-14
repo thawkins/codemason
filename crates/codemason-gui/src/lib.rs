@@ -9,17 +9,20 @@
 //!   which runs the eframe window ([`MainThreadHost::serve`]).
 //! - [`Shell`] is the `eframe::App` that draws the window.
 //! - [`dock`] is the dockable pane layout model (craft-ui docking).
+//! - [`keys`] is the keyboard shortcut map (craft-keymap).
 //! - [`bridge::spawn_event_bridge`] forwards agent events from the
 //!   [`EventBus`] into the shell's queue and wakes egui.
 //!
 //! Dependencies: `eframe`/`egui` (the storytold forks, via the workspace
-//! `[patch.crates-io]` table), `craft-ui` (docking), `tokio`, `thiserror`
+//! `[patch.crates-io]` table), `craft-ui` (docking),
+//! `craft-keymap` (keyboard shortcuts), `tokio`, `thiserror`
 //! and `tracing`.
 
 #![deny(unsafe_code)]
 
 pub mod bridge;
 pub mod dock;
+pub mod keys;
 pub mod main_thread;
 pub mod shell;
 

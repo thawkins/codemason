@@ -25,7 +25,7 @@ use codemason_app_core::log_channel::TuiLogReceiver;
 use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 
-use crate::{GuiLaunchError, Shell, bridge};
+use crate::{GuiLaunchError, Shell, bridge, keys};
 
 /// Window title and eframe application name.
 const APP_NAME: &str = "codemason";
@@ -149,7 +149,11 @@ fn run_window(launch: GuiLaunch) -> Result<(), GuiLaunchError> {
                 cc.egui_ctx.clone(),
                 event_tx,
             ));
-            let shell = Shell::new(app).with_sources(event_rx, logs, runtime.clone());
+            let mut shell = Shell::new(app).with_sources(event_rx, logs, runtime.clone());
+            if let Some(path) = keys::keys_path() {
+                let platform = craft_keymap::egui::platform(&cc.egui_ctx);
+                shell = shell.with_keymap(keys::load_keymap(platform, &path));
+            }
             Ok(Box::new(shell))
         }),
     );

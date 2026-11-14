@@ -12,6 +12,8 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 #[path = "test_dock.rs"]
 mod test_dock;
+#[path = "test_keys.rs"]
+mod test_keys;
 #[path = "test_launch.rs"]
 mod test_launch;
 #[path = "test_main_thread.rs"]

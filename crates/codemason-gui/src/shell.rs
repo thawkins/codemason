@@ -3,7 +3,8 @@
 //! For now the shell draws a central placeholder and the prompt input; later
 //! tasks render the transcript, panels and dialogs from the `App` state.
 //! Each frame it first drains the agent-event queue and the tracing log
-//! channel into the `App`.
+//! channel into the `App`, then routes the frame's key presses to
+//! `App::handle_key` through [`KeyRouter`] before any widget reads them.
 
 use codemason_agent::event::Event;
 use codemason_app_core::app::{App, LogLevel};
@@ -11,12 +12,17 @@ use codemason_app_core::log_channel::TuiLogReceiver;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::UnboundedReceiver;
 
+use crate::keys::{KeyRouter, default_keymap};
+
 /// Most log records moved into the app per frame, so a burst cannot stall
 /// a frame (the terminal frontend uses the same limit).
 const LOG_DRAIN_LIMIT: usize = 50;
 
 /// Accessible label of the prompt input.
 pub const PROMPT_LABEL: &str = "Prompt";
+
+/// Widget id of the prompt input, used to tell whether it has the keyboard.
+const PROMPT_ID: &str = "codemason_prompt";
 
 /// Event and log sources a running window drains each frame.
 struct Sources {
@@ -31,6 +37,7 @@ pub struct Shell {
     app: App,
     prompt: String,
     sources: Option<Sources>,
+    keys: KeyRouter,
 }
 
 impl std::fmt::Debug for Shell {
@@ -51,14 +58,31 @@ impl Shell {
     ///
     /// # Returns
     ///
-    /// A shell with an empty prompt.
+    /// A shell with an empty prompt and the default keymap of the platform
+    /// this build runs on.
     #[must_use]
     pub fn new(app: App) -> Self {
         Self {
             app,
             prompt: String::new(),
             sources: None,
+            keys: KeyRouter::new(default_keymap(craft_keymap::Platform::current())),
         }
+    }
+
+    /// Replace the keyboard shortcuts.
+    ///
+    /// # Arguments
+    ///
+    /// * `keymap` - the bindings to use, e.g. from [`crate::keys::load_keymap`].
+    ///
+    /// # Returns
+    ///
+    /// The shell routing keys through `keymap`.
+    #[must_use]
+    pub fn with_keymap(mut self, keymap: craft_keymap::Keymap) -> Self {
+        self.keys = KeyRouter::new(keymap);
+        self
     }
 
     /// Attach the queues the shell drains each frame.
@@ -98,6 +122,7 @@ impl Shell {
                 let label = ui.label(PROMPT_LABEL);
                 ui.add(
                     egui::TextEdit::singleline(&mut self.prompt)
+                        .id(egui::Id::unique(PROMPT_ID))
                         .desired_width(f32::INFINITY)
                         .hint_text("Ask codemason..."),
                 )
@@ -109,6 +134,24 @@ impl Shell {
                 ui.label(format!("codemason - {}", self.app.cwd));
             });
         });
+    }
+
+    /// Route this frame's key presses to `App::handle_key`.
+    ///
+    /// Runs before any widget reads input, so a press that runs a keymap
+    /// command is gone before the prompt sees it. While the prompt has the
+    /// keyboard, text it types stays with it (see [`KeyRouter::route`]).
+    /// Without attached sources there is no runtime to drive the async
+    /// handler, so the presses are left to the widgets.
+    fn route_keys(&mut self, ctx: &egui::Context) {
+        let Some(sources) = self.sources.as_ref() else {
+            return;
+        };
+        let typing = ctx.memory(|m| m.has_focus(egui::Id::unique(PROMPT_ID)));
+        let keys = ctx.input_mut(|input| self.keys.route(input, typing));
+        for key in keys {
+            sources.runtime.block_on(self.app.handle_key(key));
+        }
     }
 
     /// Move pending agent events and log records into the [`App`].
@@ -138,6 +181,7 @@ impl Shell {
 impl eframe::App for Shell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.drain_sources();
+        self.route_keys(ui.ctx());
         // `/quit` (or any other path that stops the app) closes the window,
         // which ends `run_gui` the same way closing the window does.
         if !self.app.is_running {

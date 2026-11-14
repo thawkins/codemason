@@ -17,6 +17,7 @@ codemason-app-core = { workspace = true }
 codemason-types = { workspace = true }
 codemason-config = { workspace = true }
 anyhow = { workspace = true }
+craft-keymap = { workspace = true }
 craft-ui = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }

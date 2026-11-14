@@ -191,6 +191,9 @@ egui_kittest = "0.37"
 # Docking layout model (craft_ui::docking) from storytold/craft-libs; `serde`
 # persists the layout. Pinned to the same rev the egui patches were copied from.
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "d15bf1f35b17b759870f9e5111b9a5d243f64888", features = ["serde"] }
+# Keyboard bindings (chords, keymap, user overrides, egui dispatch) from the
+# same craft-libs rev.
+craft-keymap = { git = "https://github.com/storytold/craft-libs", rev = "d15bf1f35b17b759870f9e5111b9a5d243f64888", features = ["egui"] }
 
 # ── Hashing / file-locking ───────────────────────────────────────────────
 num_cpus = "1.16"
