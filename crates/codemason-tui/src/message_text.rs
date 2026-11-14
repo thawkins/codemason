@@ -32,7 +32,7 @@ pub fn is_agent_notice(text: &str) -> bool {
 
 /// Style of think-tool and reasoning text (lavender italics, readable on
 /// dark backgrounds); the terminal theme's `think()` style.
-pub const THINK_STYLE: TextStyle = TextStyle::new().fg(ThemeColor::Rgb(210, 210, 255)).italic();
+pub const THINK_STYLE: TextStyle = TextStyle::new().fg(ThemeColor::Rgb(180, 180, 220)).italic();
 
 /// Prefix of attachment chips in the input bar and image attachment lines.
 pub const ICON_ATTACHMENT: &str = "[attach]";

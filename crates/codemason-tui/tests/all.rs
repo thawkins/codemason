@@ -351,6 +351,8 @@ mod test_memory_panel;
 mod test_message_edit_seq_cache;
 #[path = "test_message_pinned_scroll.rs"]
 mod test_message_pinned_scroll;
+#[path = "test_message_text_styles.rs"]
+mod test_message_text_styles;
 #[path = "test_message_widget_duration_tests.rs"]
 mod test_message_widget_duration_tests;
 #[path = "test_message_widget_more.rs"]
