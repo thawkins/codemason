@@ -71,6 +71,7 @@ use crate::panels::sessions::SessionsView;
 use crate::panels::status_bar::status_bar_ui;
 use crate::panels::tasks::tasks_ui;
 use crate::panels::teams::teams_ui;
+use crate::theme::ThemeApplier;
 
 /// Most log records moved into the app per frame, so a burst cannot stall
 /// a frame (the terminal frontend uses the same limit).
@@ -107,6 +108,8 @@ pub struct Shell {
     /// Toggle chords that close panes closed from the dock's chrome, run
     /// through `App::handle_key` after drawing.
     close_keys: Vec<KeyInput>,
+    /// Installs the visuals of the App's theme mode, again when it changes.
+    theme: ThemeApplier,
 }
 
 impl std::fmt::Debug for Shell {
@@ -148,6 +151,7 @@ impl Shell {
             layout_dirty: false,
             key_panes: BTreeSet::new(),
             close_keys: Vec::new(),
+            theme: ThemeApplier::default(),
         }
     }
 
@@ -227,6 +231,9 @@ impl Shell {
     ///
     /// * `ui` - the root ui of the window.
     pub fn show(&mut self, ui: &mut egui::Ui) {
+        // A changed theme mode restyles the window (a repaint is requested,
+        // so the next pass draws with the new visuals).
+        self.theme.sync(ui.ctx(), self.app.theme_mode);
         self.sync_dock(ui.ctx());
         let palette = palette_for(self.app.theme_mode);
         egui::Panel::bottom("status_bar").show(ui, |ui| {

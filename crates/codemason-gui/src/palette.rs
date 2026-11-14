@@ -35,6 +35,12 @@ const XTERM_ANSI: [Color32; 16] = [
     Color32::from_rgb(255, 255, 255),
 ];
 
+/// The default mode's accent: xterm-256 colour 75 (`#5fafff`), 9.1:1 on
+/// black (WCAG AAA). The terminal theme's accent is ANSI blue, 2.2:1 on
+/// black, which the TUI only gets away with because it draws the accent as
+/// uncoloured bold.
+const DEFAULT_ACCENT: Color32 = Color32::from_rgb(95, 175, 255);
+
 /// Channel levels of the xterm-256 6x6x6 colour cube (indices 16..232).
 const CUBE_LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
 
@@ -141,7 +147,8 @@ impl Palette {
 /// # Returns
 ///
 /// The default palette mirrors the terminal theme's `colors`/`status`
-/// constants (accent = `colors::PRIMARY`, i.e. ANSI blue); the high-contrast
+/// constants, except the accent: `colors::PRIMARY` is ANSI blue, unreadable
+/// on black, so the GUI uses `DEFAULT_ACCENT` (light blue). The high-contrast
 /// palette mirrors `high_contrast` (accent `Rgb(0, 150, 255)`, error
 /// `Rgb(255, 50, 50)`, ...). Both draw on black with the xterm ANSI colours.
 #[must_use]
@@ -149,7 +156,7 @@ pub fn palette_for(mode: ThemeMode) -> Palette {
     let ansi = XTERM_ANSI;
     match mode {
         ThemeMode::Default => Palette {
-            accent: ansi[4],
+            accent: DEFAULT_ACCENT,
             text: ansi[15],
             muted: Color32::from_rgb(170, 170, 170),
             error: ansi[1],

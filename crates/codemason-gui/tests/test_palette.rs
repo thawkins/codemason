@@ -11,7 +11,7 @@ fn test_palette_for_maps_accent_text_error_in_both_modes() {
     let default = palette_for(ThemeMode::Default);
     assert_eq!(
         default.color(ThemeColor::Accent),
-        Color32::from_rgb(0, 0, 238)
+        Color32::from_rgb(95, 175, 255)
     );
     assert_eq!(default.color(ThemeColor::Text), Color32::WHITE);
     assert_eq!(

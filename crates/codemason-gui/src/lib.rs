@@ -19,6 +19,8 @@
 //!   sessions sidebar, [`panels::log`] the log panel) and the
 //!   [`panels::status_bar`], drawn with [`palette`] colours and
 //!   [`styled_text`] layout.
+//! - [`theme`] installs the egui visuals of the App's theme mode and
+//!   restyles the window when the mode changes.
 //! - [`bridge::spawn_event_bridge`] forwards agent events from the
 //!   [`EventBus`] into the shell's queue and wakes egui.
 //!
@@ -38,6 +40,7 @@ pub mod palette;
 pub mod panels;
 pub mod shell;
 pub mod styled_text;
+pub mod theme;
 
 use std::path::PathBuf;
 use std::sync::Arc;
