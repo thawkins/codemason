@@ -1063,7 +1063,6 @@ impl App {
             || self.session.plan_approval_pending.is_some()
             || self.pending_memory_delete.is_some()
             || self.pending_router_save.is_some()
-            || self.session.pending_stop_confirm
             // The destructive row-action confirmation dialog (spec `agentui`
             // T-009) is likewise a modal overlay: every key routes to it, so
             // no character may reach the input buffer while it is open.

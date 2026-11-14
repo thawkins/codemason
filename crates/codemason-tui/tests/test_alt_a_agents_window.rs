@@ -237,10 +237,6 @@ async fn alt_a_leaves_a_running_turn_untouched() {
         app.show_agents_window,
         "FR-022: the panel is reachable while a turn executes"
     );
-    assert!(
-        !app.session.pending_stop_confirm,
-        "Alt+A must not arm the stop-confirmation dialog"
-    );
     assert!(app.session.is_processing, "the running turn is untouched");
 }
 

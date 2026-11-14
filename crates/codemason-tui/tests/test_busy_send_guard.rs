@@ -209,7 +209,10 @@ fn test_input_border_is_red_when_a_modal_is_open() {
     let mut app = support::make_app();
     app.session.is_processing = true;
     // An overlay that swallows keystrokes genuinely locks the input field.
-    app.session.pending_stop_confirm = true;
+    app.pending_memory_delete = Some(codemason_tui::app::PendingMemoryDelete {
+        id: 1,
+        preview: "preview".to_string(),
+    });
 
     let color = render_and_get_input_border_color(&mut app);
 

@@ -387,13 +387,6 @@ fn render_memory_delete_dialog() {
 }
 
 #[test]
-fn render_stop_confirm_dialog() {
-    let mut app = support::make_app();
-    app.session.pending_stop_confirm = true;
-    let _ = render(&mut app, 120, 40);
-}
-
-#[test]
 fn render_model_loading_popup() {
     let mut app = support::make_app();
     app.model_loading_state = Some(ModelLoadingState {

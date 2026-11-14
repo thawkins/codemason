@@ -1141,7 +1141,7 @@ impl App {
         }
     }
 
-    /// Halt the running agent turn (Esc / Ctrl+X / confirmed Alt+X): set the
+    /// Halt the running agent turn (Esc / Ctrl+X): set the
     /// turn cancel flag and raise the goal-driven loop interrupt (FR-016).
     /// A no-op when no turn is running (`cancel_flag` unset).
     pub(crate) fn halt_running_agent(&mut self) {
@@ -1204,18 +1204,16 @@ impl App {
             let is_plain_char = matches!(key.key, Key::Char(_))
                 && !key.mods.contains(Modifiers::CTRL)
                 && !key.mods.contains(Modifiers::ALT);
-            // Alt+X (open the stop dialog) and every key while the stop
-            // dialog or the destructive row-action confirmation is open fall
-            // through to normal processing instead of being consumed by the
-            // banner - a confirmation dialog must never appear dead mid-run,
-            // or its `Enter`/`Esc` answer swallowed by the banner's dismissal.
-            let is_stop_confirm = self.session.pending_stop_confirm
-                || self.row_action_confirm_open()
-                || (matches!(key.key, Key::Char('x')) && key.mods.contains(Modifiers::ALT));
+            // Every key while the destructive row-action confirmation is
+            // open falls through to normal processing instead of being
+            // consumed by the banner - a confirmation dialog must never appear
+            // dead mid-run, or its `Enter`/`Esc` answer swallowed by the
+            // banner's dismissal.
+            let is_confirm = self.row_action_confirm_open();
             // The always-on quit keys (Ctrl+C/Ctrl+D) also fall through, so
             // quitting works identically while the cost banner is showing
             // (LOW-6).
-            if !is_plain_char && !is_stop_confirm && !input::is_global_quit_key(key) {
+            if !is_plain_char && !is_confirm && !input::is_global_quit_key(key) {
                 return;
             }
         }
@@ -2185,18 +2183,6 @@ impl App {
                         );
                         self.status = "rollback declined - changes kept".to_string();
                         self.needs_redraw = true;
-                    }
-                }
-                InputAction::ConfirmStopAgent => {
-                    if self.session.pending_stop_confirm {
-                        self.session.pending_stop_confirm = false;
-                        self.halt_running_agent();
-                    }
-                }
-                InputAction::CancelStopAgent => {
-                    if self.session.pending_stop_confirm {
-                        self.session.pending_stop_confirm = false;
-                        self.status = "stop cancelled - agent still running".to_string();
                     }
                 }
                 // `Clear the input queue?` confirmation dialog (spec `inputqueue`

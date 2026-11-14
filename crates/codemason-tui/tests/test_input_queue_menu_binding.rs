@@ -77,10 +77,6 @@ async fn test_alt_q_opens_menu_while_processing() {
         "FR-021: ALT-Q opens the menu while a turn is executing"
     );
     assert!(
-        !app.session.pending_stop_confirm,
-        "FR-022: opening the menu must not arm the stop-confirmation dialog"
-    );
-    assert!(
         app.session.is_processing,
         "FR-022: the running turn is untouched"
     );

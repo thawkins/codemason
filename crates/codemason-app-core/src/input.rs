@@ -100,10 +100,6 @@ pub enum InputAction {
     ConfirmRouterSave,
     /// Cancel the router save confirmation modal (Esc -> cancel).
     CancelRouterSave,
-    /// Confirm the Alt+X stop-agent dialog (Enter -> halt the agent / loop).
-    ConfirmStopAgent,
-    /// Cancel the Alt+X stop-agent dialog (Esc -> keep the agent running).
-    CancelStopAgent,
     /// Confirm the `Clear the input queue?` dialog's `Yes` option (spec
     /// `inputqueue` FR-033, FR-036).
     ConfirmQueueClear,
@@ -278,18 +274,6 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
         match key.key {
             Key::Enter => return Some(InputAction::ConfirmRouterSave),
             Key::Esc => return Some(InputAction::CancelRouterSave),
-            _ => return None,
-        }
-    }
-
-    // If the Alt+X stop-agent confirmation modal is active, intercept
-    // Enter/Esc before any other dialog so the confirmation always takes
-    // precedence. Note: like the modals above, pickers/windows handled by
-    // `App::handle_key`'s pre-checks still outrank this dialog.
-    if app.session.pending_stop_confirm {
-        match key.key {
-            Key::Enter => return Some(InputAction::ConfirmStopAgent),
-            Key::Esc => return Some(InputAction::CancelStopAgent),
             _ => return None,
         }
     }
@@ -1175,21 +1159,20 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
         // never typed into the input buffer (NFR-002). ALT was otherwise
         // unbound for `t`, so no other key behaviour changes (NFR-009).
         Key::Char('t') if key.mods.contains(Modifiers::ALT) => Some(InputAction::ToggleTeamsWindow),
-        // Alt+X opens the stop-agent confirmation dialog (only while a turn
-        // is running - placed before generic char-insert handling so the `x`
-        // is never inserted into the input buffer - NFR-002).
-        Key::Char('x') if key.mods.contains(Modifiers::ALT) => {
-            if app.session.is_processing {
-                app.session.pending_stop_confirm = true;
-                app.needs_redraw = true;
-            }
-            None
-        }
         // Alt+Q opens the queue-control menu overlay (spec `inputqueue` FR-021).
         // Placed before the generic char-insert arm so the `q` is never typed
         // into the input buffer (FR-022, FR-031). ALT was otherwise unbound for
         // `q`, so no other key behaviour changes (NFR-009).
         Key::Char('q') if key.mods.contains(Modifiers::ALT) => Some(InputAction::OpenQueueMenu),
+        // An Alt+character the arms above do not bind (e.g. Alt+X, whose
+        // stop-agent shortcut was removed: Esc stops a running agent) is
+        // ignored, never typed into the input buffer (NFR-002). Ctrl+Alt is
+        // left alone, since some terminals report AltGr characters that way.
+        Key::Char(_)
+            if key.mods.contains(Modifiers::ALT) && !key.mods.contains(Modifiers::CTRL) =>
+        {
+            None
+        }
         Key::Char(c) => {
             if app.is_input_locked() {
                 app.status = "busy - wait for the current turn to finish".to_string();

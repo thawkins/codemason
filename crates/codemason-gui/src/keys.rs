@@ -17,7 +17,6 @@
 //! | `panel.tasks`   | Alt+I           | Cmd+Shift+I   | `input.rs`: `Alt+I` -> `ToggleTasksPanel` |
 //! | `panel.memory`  | Alt+M           | Cmd+Shift+M   | `input.rs`: `Alt+M` -> `ToggleMemory` |
 //! | `queue.menu`    | Alt+Q           | Cmd+Alt+Q     | `input.rs`: `Alt+Q` -> `OpenQueueMenu` |
-//! | `agent.stop`    | Alt+X           | Cmd+Shift+X   | `input.rs`: `Alt+X` -> stop confirmation |
 //! | `app.quit`      | Ctrl+D          | Cmd+Q         | `input.rs`: `Ctrl+D` -> `ConfirmQuit` |
 //!
 //! `input.rs` is `crates/codemason-app-core/src/input.rs`. macOS uses
@@ -100,13 +99,6 @@ const COMMANDS: &[Command] = &[
         pc: "Alt+Q",
         mac: "Cmd+Alt+Q",
         tui: chord('q', Modifiers::ALT),
-    },
-    Command {
-        id: "agent.stop",
-        label: "Stop Agent",
-        pc: "Alt+X",
-        mac: "Cmd+Shift+X",
-        tui: chord('x', Modifiers::ALT),
     },
     Command {
         id: "app.quit",
@@ -250,7 +242,7 @@ fn named_key(key: egui::Key, shift: bool) -> Key {
 /// session) in `sessions_sidebar_state.rs`, which `handle_key` always calls.
 /// A test scans every app-core source file and keeps the two in step.
 pub const TUI_ALT_LETTERS: &[char] = &[
-    'a', 'c', 'e', 'g', 'i', 'l', 'm', 'o', 'p', 'q', 'r', 's', 't', 'v', 'x', 'y',
+    'a', 'c', 'e', 'g', 'i', 'l', 'm', 'o', 'p', 'q', 'r', 's', 't', 'v', 'y',
 ];
 
 /// Whether `input` is an Alt chord the TUI handles: Alt with one of

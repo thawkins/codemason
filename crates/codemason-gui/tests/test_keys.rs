@@ -82,10 +82,6 @@ fn test_keymap_linux_defaults_use_alt() {
             vec![Binding::parse("Alt+Q").expect("parse")]
         );
         assert_eq!(
-            bound(&keymap, "agent.stop"),
-            vec![Binding::parse("Alt+X").expect("parse")]
-        );
-        assert_eq!(
             bound(&keymap, "app.quit"),
             vec![Binding::parse("Ctrl+D").expect("parse")]
         );

@@ -243,6 +243,8 @@ mod test_subagent_lifecycle_review;
 mod test_autopilot_alt_o;
 #[path = "test_db_command.rs"]
 mod test_db_command;
+#[path = "test_esc_stops_agent.rs"]
+mod test_esc_stops_agent;
 #[path = "test_fr030_surface_agreement.rs"]
 mod test_fr030_surface_agreement;
 #[path = "test_fr033_completion_surfaces.rs"]
@@ -561,8 +563,6 @@ mod test_status_expiry;
 mod test_statusbar_last_prompt;
 #[path = "test_statusbar_layout.rs"]
 mod test_statusbar_layout;
-#[path = "test_stop_confirm_dialog.rs"]
-mod test_stop_confirm_dialog;
 #[path = "test_stream_metrics.rs"]
 mod test_stream_metrics;
 #[path = "test_subagent_events.rs"]

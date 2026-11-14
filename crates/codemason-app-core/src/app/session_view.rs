@@ -164,9 +164,6 @@ pub struct SessionView {
     pub run_cost_banner: Option<String>,
     /// When the run-cost banner was first shown, for auto-dismissal.
     pub run_cost_banner_at: Option<std::time::Instant>,
-    /// Pending Alt+X stop-agent confirmation. When `true`, Enter confirms the
-    /// halt and Esc keeps the agent running (nothing is stopped until Yes).
-    pub pending_stop_confirm: bool,
     /// Cached `created_at` timestamp for the lead session, so the teams
     /// panel does not read `storage.get_session()` every frame (FR-009).
     pub lead_session_created_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -425,7 +422,6 @@ impl SessionView {
             last_task_completed_at: None,
             run_cost_banner: None,
             run_cost_banner_at: None,
-            pending_stop_confirm: false,
             lead_session_created_at: None,
             shell_cwd: None,
             role_mode: None,

@@ -117,21 +117,6 @@ async fn router_save_modal_enter_and_esc() {
 }
 
 #[tokio::test]
-async fn stop_confirm_modal_enter_and_esc() {
-    let mut app = support::make_app();
-    app.session.pending_stop_confirm = true;
-    let action = handle_key(&mut app, key(KeyCode::Enter)).await;
-    assert!(matches!(action, Some(InputAction::ConfirmStopAgent)));
-    let action = handle_key(&mut app, key(KeyCode::Esc)).await;
-    assert!(matches!(action, Some(InputAction::CancelStopAgent)));
-    assert!(
-        handle_key(&mut app, key(KeyCode::Char('z')))
-            .await
-            .is_none()
-    );
-}
-
-#[tokio::test]
 async fn force_cleanup_modal_enter_and_esc() {
     let mut app = support::make_app();
     app.session.pending_forcecleanup = Some(PendingForceCleanup {
@@ -939,23 +924,22 @@ async fn alt_toggle_keys_map_to_actions() {
 }
 
 #[tokio::test]
-async fn alt_x_opens_stop_confirm_only_while_processing() {
-    let mut app = support::make_app();
-    app.session.is_processing = true;
-    assert!(
-        handle_key(&mut app, kmod(KeyCode::Char('x'), KeyModifiers::ALT))
-            .await
-            .is_none()
-    );
-    assert!(app.session.pending_stop_confirm);
-
-    let mut app = support::make_app();
-    assert!(
-        handle_key(&mut app, kmod(KeyCode::Char('x'), KeyModifiers::ALT))
-            .await
-            .is_none()
-    );
-    assert!(!app.session.pending_stop_confirm);
+async fn alt_x_is_a_no_op() {
+    // The Alt+X stop-agent shortcut was removed (Esc stops the agent): Alt+X
+    // maps to nothing, stops nothing and types no `x`, running or idle.
+    for processing in [true, false] {
+        let mut app = support::make_app();
+        app.session.is_processing = processing;
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        app.session.cancel_flag = Some(std::sync::Arc::clone(&flag));
+        assert!(
+            handle_key(&mut app, kmod(KeyCode::Char('x'), KeyModifiers::ALT))
+                .await
+                .is_none()
+        );
+        assert!(!flag.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(app.session.input.is_empty(), "Alt+X types no x");
+    }
 }
 
 #[tokio::test]

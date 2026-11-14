@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Removed
+
+- Removed: Alt+X stop-agent shortcut and its confirmation dialog; Esc stops a running agent.
+
 ### Added - TUI to egui GUI migration plan
 
 - `docs/superpowers/plans/2026-11-14-tui-to-egui-gui-migration.md`: a
