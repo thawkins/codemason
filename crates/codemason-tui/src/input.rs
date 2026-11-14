@@ -10,7 +10,7 @@ use crate::app::{
     App, ConfiguredProvider, ContextAction, ModelPickerEntry, PROVIDER_LIST, ProviderSetupStep,
     ProviderSource,
 };
-use crate::utils::is_ollama_family;
+use crate::text_utils::is_ollama_family;
 use codemason_llm::providers::router_config::Tier;
 
 /// Returns `true` when `key` is one of the always-on global quit keys:

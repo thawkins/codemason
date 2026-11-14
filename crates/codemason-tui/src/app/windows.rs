@@ -39,7 +39,7 @@ use codemason_agent::team::MemberStatus;
 /// FR-042).
 ///
 /// Kept for the refusal-text contract only: the window now always opens and
-/// paints its own empty state ([`crate::layout_active_agents::glyphs::EMPTY_HINT`]),
+/// paints its own empty state (`layout_active_agents::glyphs::EMPTY_HINT`),
 /// so nothing assigns this to the status line. The text still names the
 /// condition, both kinds of subject and the action that produces one, and it is
 /// one constant so no future entry point can describe the same state

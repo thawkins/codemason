@@ -5139,7 +5139,7 @@ impl App {
         let Some(deadline) = req.expire_at_ms else {
             return;
         };
-        let now_ms = crate::utils::now_unix_ms();
+        let now_ms = crate::text_utils::now_unix_ms();
         if now_ms < deadline {
             return;
         }

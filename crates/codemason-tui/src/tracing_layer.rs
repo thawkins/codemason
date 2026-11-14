@@ -5,33 +5,9 @@
 //! rendering during an interactive TUI session. Records are buffered in a
 //! [`std::sync::mpsc`] channel and drained by the TUI event loop on each frame.
 
-use std::sync::mpsc;
-
-use tracing::Level;
 use tracing_subscriber::Layer;
 
-/// A log record forwarded from the tracing layer to the TUI.
-#[derive(Debug)]
-pub struct TuiLogRecord {
-    /// Severity level of the record.
-    pub level: Level,
-    /// Formatted log message.
-    pub message: String,
-}
-
-/// Receiving end of the tracing -> TUI channel.
-pub type TuiLogReceiver = mpsc::Receiver<TuiLogRecord>;
-
-/// Sending end of the tracing -> TUI channel.
-type TuiLogSender = mpsc::SyncSender<TuiLogRecord>;
-
-/// Create a matched (sender, receiver) pair for the TUI tracing layer.
-///
-/// The `capacity` controls how many records can be buffered before senders
-/// block. 512 is enough for any realistic burst.
-pub fn tui_log_channel(capacity: usize) -> (TuiLogSender, TuiLogReceiver) {
-    mpsc::sync_channel(capacity)
-}
+pub use crate::log_channel::{TuiLogReceiver, TuiLogRecord, TuiLogSender, tui_log_channel};
 
 /// A [`tracing_subscriber::Layer`] that sends log records to the TUI.
 ///

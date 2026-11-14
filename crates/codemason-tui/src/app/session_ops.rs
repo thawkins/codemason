@@ -4760,7 +4760,7 @@ impl App {
             let plan = codemason_agent::provider::copilot::cached_copilot_plan()
                 .unwrap_or_else(|| "Copilot".to_string());
             (ctx_label(&plan), false)
-        } else if crate::utils::is_ollama_family(provider_id) {
+        } else if crate::text_utils::is_ollama_family(provider_id) {
             let label = ctx_label("");
             if label.is_empty() {
                 (
@@ -5278,7 +5278,7 @@ impl App {
     /// A record travels at the entry's own severity, and no event is natively
     /// logged at the same level with the same body, so a caller that derived the
     /// line from a `tracing` record (the drain of
-    /// [`TuiTracingLayer`][crate::tracing_layer::TuiTracingLayer]) still exports
+    /// `TuiTracingLayer`) still exports
     /// it exactly once via [`push_log_deferred`](Self::push_log_deferred).
     pub(crate) fn push_log_for(
         &mut self,
@@ -5761,7 +5761,7 @@ impl ExportLimiter {
 ///
 /// Some panel entries are *derived* from a `tracing` record that has already been
 /// exported - the drain of
-/// [`TuiTracingLayer`][crate::tracing_layer::TuiTracingLayer] records in the TUI
+/// `TuiTracingLayer` records in the TUI
 /// event loop, and the mirrored-child drain that re-records those lines. Those
 /// call sites use [`push_log_deferred`](Self::push_log_deferred), which records
 /// the line in the panel and the spool but never re-emits it. The panel entry is

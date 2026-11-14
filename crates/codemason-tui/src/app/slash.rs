@@ -35,7 +35,7 @@ use crate::app::helpers::{
     parse_swarm_args, short_id, short_run_id, short_session_id,
 };
 use crate::app::toolchain;
-use crate::widgets::message_widget::pluralize;
+use crate::text_utils::pluralize;
 
 // -- /spec govcreate orchestration (T-012) ------------------------------------
 //

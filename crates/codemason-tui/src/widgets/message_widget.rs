@@ -88,30 +88,7 @@ pub(crate) fn render_agent_notice_lines(text: &str) -> Vec<Line<'static>> {
 
 use crate::theme;
 
-/// Helper to build a ternary for pluralization (e.g., "1 item" vs "2 items").
-/// Return the singular or plural form based on `count`.
-pub fn pluralize(count: usize, singular: &str, plural: &str) -> String {
-    if count == 1 {
-        format!("{} {}", count, singular)
-    } else {
-        format!("{} {}", count, plural)
-    }
-}
-
-/// Truncate a string to a maximum length, appending an ellipsis if truncated.
-///
-/// The budget counts visible characters only: `max_len` characters are kept and
-/// the `...` is appended after them, so a preview never loses content to the
-/// marker. That is [`codemason_types::strutil::truncate_chars_no_ellipsis`] plus the
-/// marker here, not [`codemason_types::strutil::truncate_chars`], which reserves
-/// three of the budget for the ellipsis.
-pub fn truncate_str(s: &str, max_len: usize) -> String {
-    let head = codemason_types::strutil::truncate_chars_no_ellipsis(s, max_len);
-    if head.len() == s.len() {
-        return head;
-    }
-    format!("{head}...")
-}
+pub use crate::text_utils::{pluralize, truncate_str};
 
 /// Character budget for the command echoed in a bash tool-call header.
 ///

@@ -20,7 +20,7 @@ use crate::app::state::{
 
 // Helpers
 use crate::app::helpers::{sanitize_for_display, try_extract_research_code_block};
-use crate::utils::is_ollama_family;
+use crate::text_utils::is_ollama_family;
 
 // Re-export status types from theme
 

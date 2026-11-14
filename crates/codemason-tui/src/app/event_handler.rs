@@ -24,7 +24,7 @@ use crate::app::state::{
 // Helpers
 use crate::app::helpers::{hard_break_lines, short_id, short_session_id, summarise_error};
 use crate::app::session_ops::recover_poisoned;
-use crate::widgets::message_widget::truncate_str;
+use crate::text_utils::truncate_str;
 
 /// Maximum number of characters of an error string shown in the log/status
 /// before it is truncated, so a multi-kilobyte provider error cannot flood the
@@ -726,7 +726,8 @@ impl App {
                     // index can never pre-select a non-existent row.
                     let selected =
                         crate::app::state::resolve_default_index(options.len(), default_index);
-                    let expire_at_ms = crate::utils::now_unix_ms() + QUESTION_TIMEOUT_SECS * 1000;
+                    let expire_at_ms =
+                        crate::text_utils::now_unix_ms() + QUESTION_TIMEOUT_SECS * 1000;
                     self.session.question_queue.push_back(QuestionRequest {
                         id: request_id.clone(),
                         session_id: session_id.clone(),

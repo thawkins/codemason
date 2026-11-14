@@ -5,26 +5,7 @@
 use chrono::{DateTime, Utc};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
-/// Returns true for providers that use Ollama's boolean `think` parameter.
-///
-/// Covers both the local (`ollama`) and cloud (`ollama_cloud`) variants so a
-/// call site never re-spells the two-id check inline.
-pub fn is_ollama_family(provider_id: &str) -> bool {
-    provider_id == "ollama" || provider_id == "ollama_cloud"
-}
-
-/// Current wall-clock time as Unix milliseconds.
-///
-/// Returns `0` if the system clock is set before the Unix epoch (which cannot
-/// happen in practice); callers use this for relative deadlines, where a `0`
-/// base simply expires immediately rather than panicking.
-#[must_use]
-pub fn now_unix_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
+pub use crate::text_utils::{is_ollama_family, now_unix_ms};
 
 /// Format a UTC timestamp as elapsed duration from now (e.g. "2m34s").
 pub fn format_elapsed(created_at: DateTime<Utc>) -> String {
