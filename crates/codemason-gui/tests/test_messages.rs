@@ -9,6 +9,7 @@ mod support;
 
 use codemason_agent::message::{Message, MessagePart, Role, ToolCallState, ToolCallStatus};
 use codemason_app_core::app::App;
+use codemason_app_core::message_lines::MESSAGE_STREAM_MIN_INTERVAL;
 use codemason_gui::Shell;
 use codemason_gui::palette::palette_for;
 use codemason_gui::panels::messages::{MESSAGES_LABEL, MessagesView};
@@ -135,4 +136,121 @@ async fn test_shell_shows_messages_above_prompt() {
     harness.get_by_label(MESSAGES_LABEL);
     harness.get_by_label_contains("You: hello there");
     harness.get_by_label("Prompt");
+}
+
+/// `count` assistant messages `"message 0"`, `"message 1"`, ...
+fn numbered_messages(count: usize) -> Vec<Message> {
+    (0..count)
+        .map(|i| Message::assistant_text("s1", format!("message {i}")))
+        .collect()
+}
+
+/// Evict the oldest message and append `"message <n>"`, the way the core
+/// trims a session at its message cap.
+fn evict_and_push(app: &mut App, n: usize) {
+    app.session.messages.remove(0);
+    app.session
+        .messages
+        .push(Message::assistant_text("s1", format!("message {n}")));
+}
+
+#[tokio::test]
+async fn test_message_view_eviction_renders_only_the_new_message() {
+    let mut app = support::make_app();
+    app.session.messages = numbered_messages(500);
+    let mut harness = harness(app);
+    harness.run();
+    let renders_before = harness.state().view.render_count();
+    let heights_before = harness.state().view.message_heights();
+
+    evict_and_push(&mut harness.state_mut().app, 500);
+    harness.run();
+
+    let view = &harness.state().view;
+    assert_eq!(view.render_count() - renders_before, 1);
+    let heights_after = view.message_heights();
+    assert_eq!(heights_after.len(), 500);
+    assert_eq!(heights_after[..499], heights_before[1..]);
+    harness.get_by_label_contains("message 500");
+}
+
+#[tokio::test]
+async fn test_message_view_eviction_keeps_scrolled_up_position() {
+    let mut app = support::make_app();
+    app.session.messages = numbered_messages(500);
+    let mut harness = harness(app);
+    harness.run();
+
+    harness.hover_at(egui::pos2(400.0, 300.0));
+    harness.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, 3000.0),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Wheel,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.run();
+    let anchor = harness
+        .state()
+        .view
+        .first_visible_id()
+        .map(str::to_owned)
+        .expect("a visible message");
+    assert!(harness.query_by_label_contains("message 499").is_none());
+
+    evict_and_push(&mut harness.state_mut().app, 500);
+    harness.run();
+
+    assert_eq!(
+        harness.state().view.first_visible_id(),
+        Some(anchor.as_str())
+    );
+    assert!(harness.query_by_label_contains("message 500").is_none());
+}
+
+#[tokio::test]
+async fn test_message_view_throttles_streaming_rerenders() {
+    let mut app = support::make_app();
+    app.session.messages = vec![Message::assistant_text("s1", "chunk")];
+    app.session.is_processing = true;
+    let mut harness = harness(app);
+    let start = std::time::Instant::now();
+    harness.state_mut().view.set_clock(start);
+    harness.run();
+    let renders_before = harness.state().view.render_count();
+
+    // Many deltas inside one throttle interval (the clock is frozen).
+    for _ in 0..20 {
+        let msg = &mut harness.state_mut().app.session.messages[0];
+        if let MessagePart::Text { text } = &mut msg.parts[0] {
+            text.push_str(" chunk");
+        }
+        msg.touch();
+        harness.step();
+    }
+    assert!(harness.state().view.render_count() - renders_before <= 1);
+
+    // Once the interval has passed, the pending delta is drawn.
+    let after_interval = renders_before;
+    harness
+        .state_mut()
+        .view
+        .set_clock(start + MESSAGE_STREAM_MIN_INTERVAL);
+    harness.step();
+    assert!(harness.state().view.render_count() > after_interval);
+
+    // A finished message re-renders at once, even inside the interval.
+    let before_finish = harness.state().view.render_count();
+    {
+        let state = harness.state_mut();
+        let msg = &mut state.app.session.messages[0];
+        if let MessagePart::Text { text } = &mut msg.parts[0] {
+            text.push_str(" done");
+        }
+        msg.touch();
+        state.app.session.is_processing = false;
+    }
+    harness.step();
+    assert_eq!(harness.state().view.render_count() - before_finish, 1);
+    harness.get_by_label_contains("chunk done");
 }

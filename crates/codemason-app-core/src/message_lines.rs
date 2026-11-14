@@ -25,6 +25,16 @@ use crate::message_text::{
     scrub_narrated_toolcalls, tool_inline_diff, tool_input_summary, tool_result_summary,
 };
 
+/// PERF-042: minimum interval between re-renders of a message whose cache
+/// group is already populated while it is being streamed.
+///
+/// `Message::edit_seq` is bumped on every streamed token, so re-parsing and
+/// re-wrapping the growing reply on every token is O(n^2) over the reply.  A
+/// group that has already been rendered is refreshed at most once per this
+/// interval; a frontend keeps the edit pending and schedules a wake at the end
+/// of the window so the tail is never left stale.
+pub const MESSAGE_STREAM_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(33);
+
 /// Render a single message into formatted lines (FR-003, FR-006).
 ///
 /// Delegates to `messages_to_lines` with a single-message slice so the

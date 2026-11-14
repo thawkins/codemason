@@ -223,15 +223,10 @@ const PROVIDER_ID_MAX: usize = 14;
 /// provider in the reset dialog).
 const PROVIDER_STATUS_WIDTH: usize = 5;
 
-/// PERF-042: minimum interval between re-renders of a message whose cache
-/// group is already populated while it is being streamed.
-///
-/// `Message::edit_seq` is bumped on every streamed token, so re-parsing and
-/// re-wrapping the growing reply on every token is O(n^2) over the reply.  A
-/// group that has already been rendered is refreshed at most once per this
-/// interval; the dirty watermark keeps it pending, and the main loop schedules
-/// a wake at the end of the window so the tail is never left stale.
-pub const MESSAGE_STREAM_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(33);
+/// PERF-042: minimum interval between re-renders of a streamed message
+/// (re-exported from [`codemason_app_core::message_lines`], shared with the
+/// GUI).
+pub use codemason_app_core::message_lines::MESSAGE_STREAM_MIN_INTERVAL;
 
 /// Format a model-picker entry into its five display-cell strings.
 ///
