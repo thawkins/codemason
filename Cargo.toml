@@ -178,6 +178,7 @@ codemason-connectors = { path = "crates/codemason-connectors" }
 codemason-llm = { path = "crates/codemason-llm" }
 codemason-plugins = { path = "crates/codemason-plugins" }
 codemason-server = { path = "crates/codemason-server" }
+codemason-app-core = { path = "crates/codemason-app-core" }
 codemason-tui = { path = "crates/codemason-tui" }
 
 # ── Hashing / file-locking ───────────────────────────────────────────────

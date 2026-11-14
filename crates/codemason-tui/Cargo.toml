@@ -13,6 +13,7 @@ workspace = true
 chrono = { workspace = true }
 
 [dependencies]
+codemason-app-core = { path = "../codemason-app-core" }
 codemason-agent = { path = "../codemason-agent" }
 codemason-bench = { path = "../codemason-bench" }
 codemason-config = { path = "../codemason-config" }

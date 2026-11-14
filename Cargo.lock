@@ -971,6 +971,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "codemason-app-core"
+version = "1.0.169"
+
+[[package]]
 name = "codemason-bench"
 version = "1.0.169"
 dependencies = [
@@ -1359,6 +1363,7 @@ dependencies = [
  "axum",
  "chrono",
  "codemason-agent",
+ "codemason-app-core",
  "codemason-bench",
  "codemason-codeindex",
  "codemason-config",

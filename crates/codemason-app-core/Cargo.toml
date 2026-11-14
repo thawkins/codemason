@@ -1,0 +1,17 @@
+[package]
+autotests = false
+name = "codemason-app-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Frontend-neutral styled text, input event and geometry types"
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[[test]]
+name = "all"
+path = "tests/all.rs"

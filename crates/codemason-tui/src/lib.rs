@@ -6,6 +6,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod adapters;
 pub mod app;
 pub mod branch_names;
 pub mod clipboard;
