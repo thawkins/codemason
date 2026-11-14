@@ -1260,6 +1260,69 @@ pub fn handle_key(app: &mut App, key: KeyInput) -> bool {
     true
 }
 
+/// Acts on a click on row `index` (an index into [`build_rows`]), as a
+/// left press on that row does: the sidebar takes the focus, a plain click
+/// clears the multi-selection and acts on the row (opens a session, starts
+/// the filter, toggles a section), and with `add_to_selection` (`Ctrl`+click)
+/// a session row joins or leaves the selection instead. A spacer row, or an
+/// index past the last row, only takes the focus.
+///
+/// Frontends that hit-test rows themselves (the GUI) call this; the
+/// terminal's [`handle_mouse`] maps a screen row to `index` and calls it.
+///
+/// # Arguments
+///
+/// * `app` - the application.
+/// * `index` - the clicked row.
+/// * `add_to_selection` - whether the click toggles a session's selection.
+pub fn click_row(app: &mut App, index: usize, add_to_selection: bool) {
+    app.sidebar.focused = true;
+    let rows = build_rows(app);
+    // `Ctrl`+click adds the session to the selection or takes it out; a
+    // plain click clears the selection.
+    if add_to_selection && let Some(SidebarRow::Session { id, .. }) = rows.get(index) {
+        let id = id.clone();
+        app.sidebar.cursor = index;
+        toggle_selected(app, &id);
+        return;
+    }
+    app.sidebar.selected.clear();
+    if index < rows.len() && !matches!(rows.get(index), Some(SidebarRow::Spacer)) {
+        app.sidebar.cursor = index;
+        activate_row(app, index);
+    }
+}
+
+/// Opens the context menu of row `index` (an index into [`build_rows`]), as
+/// a right press on that row does: the session menu on a session row (the
+/// selection's menu on a session of a multi-selection), the project menu on
+/// a project heading. The sidebar takes the focus, and the cursor moves to
+/// the row when a menu opens.
+///
+/// # Arguments
+///
+/// * `app` - the application.
+/// * `index` - the row whose menu to open.
+///
+/// # Returns
+///
+/// Whether a menu was opened; other rows have none.
+pub fn open_row_menu(app: &mut App, index: usize) -> bool {
+    app.sidebar.focused = true;
+    let line = index.saturating_sub(app.sidebar.scroll);
+    let row_y = app
+        .sidebar
+        .area
+        .y
+        .saturating_add(1)
+        .saturating_add(u16::try_from(line).unwrap_or(u16::MAX));
+    let opened = open_menu_for_row(app, index, row_y);
+    if opened {
+        app.sidebar.cursor = index;
+    }
+    opened
+}
+
 /// Handles a mouse event.
 ///
 /// # Arguments
@@ -1311,25 +1374,12 @@ pub fn handle_mouse(app: &mut App, event: MouseInput) -> bool {
             let top = area.y + 1;
             if event.row >= top && event.row < area.y + area.height - 1 {
                 let index = app.sidebar.scroll + usize::from(event.row - top);
-                let rows = build_rows(app);
-                // `Ctrl`+click adds the session to the selection or takes it
-                // out; a plain click clears the selection.
-                if event.mods.contains(Modifiers::CTRL)
-                    && let Some(SidebarRow::Session { id, .. }) = rows.get(index)
-                {
-                    let id = id.clone();
-                    app.sidebar.cursor = index;
-                    toggle_selected(app, &id);
-                    return true;
-                }
-                app.sidebar.selected.clear();
-                if let Some(SidebarRow::Session { id, .. }) = rows.get(index) {
+                let ctrl = event.mods.contains(Modifiers::CTRL);
+                // A plain press on a session row may start dragging it.
+                if !ctrl && let Some(SidebarRow::Session { id, .. }) = build_rows(app).get(index) {
                     app.sidebar.drag_session = Some(id.clone());
                 }
-                if index < rows.len() && !matches!(rows.get(index), Some(SidebarRow::Spacer)) {
-                    app.sidebar.cursor = index;
-                    activate_row(app, index);
-                }
+                click_row(app, index, ctrl);
             }
         }
         MouseKind::Up(MouseButton::Left) => {
