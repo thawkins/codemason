@@ -264,3 +264,75 @@ mod interaction_tests {
         assert_eq!(app.session.input, "");
     }
 }
+
+/// Characterization: pins the exact ratatui output of the markdown viewer
+/// (styles, indents, code blocks, rule, footer) so the move of the renderer
+/// into `codemason-app-core` keeps every rule.
+#[test]
+fn test_markdown_to_lines_exact_styles_are_stable() {
+    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::text::{Line, Span};
+
+    let base = PathBuf::from("/");
+    let md = "# H1\n\n## H2\n\n### H3\n\n- item `x`\n\n```\ncode\n```\n\n---\n\n\
+              [t](u)\n\n```mermaid\nA-->B\n```\n";
+    let lines = markdown_to_lines_testable(md, &base, 10);
+    let expected: Vec<Line<'static>> = vec![
+        Line::from(Span::styled(
+            "H1",
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "H2",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "H3",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(vec![
+            Span::raw("* item "),
+            Span::styled(
+                " `x` ",
+                Style::default()
+                    .fg(Color::Green)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(Span::styled("  code", Style::default().fg(Color::DarkGray))),
+        Line::from(Span::styled(
+            "\u{2500}".repeat(10),
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(vec![
+            Span::styled("[t]", Style::default().fg(Color::White)),
+            Span::styled(
+                "(u)",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::UNDERLINED),
+            ),
+        ]),
+        Line::from(Span::styled(
+            "[Mermaid diagram - rendered as text below]",
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled("  A-->B", Style::default().fg(Color::Cyan))),
+        Line::from(""),
+        Line::from(Span::styled(
+            "[Esc to close * images shown as placeholders * links are plain text]",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    assert_eq!(lines, expected);
+}

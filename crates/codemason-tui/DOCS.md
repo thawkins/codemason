@@ -28,7 +28,7 @@ markdown rendering, tool-call display, permission dialogs, and status bar.
 - dirs, tokio, serde, serde_json, anyhow, tracing, tracing-subscriber
 - ratatui, crossterm, futures
 - chrono, rand, arboard, image
-- html2text, pulldown-cmark, async-trait, fs2, lru, uuid, tempfile
+- html2text, async-trait, fs2, lru, uuid, tempfile
 - unicode-segmentation, unicode-width
 
 Dev-dependencies: tempfile, criterion, parking_lot, filetime, unicode-width.

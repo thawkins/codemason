@@ -7,16 +7,16 @@
 //! - Line 1: Session, agent, working directory, git branch, and status message
 //! - Line 2: Provider, token usage, active tasks, code index, and log indicator
 
-use pulldown_cmark::{Event as MdEvent, Options, Parser, Tag, TagEnd};
 use std::path::Path;
 
-use crate::app::{image_dimensions_or_placeholder, sanitize_for_display, short_id};
+use crate::app::{sanitize_for_display, short_id};
 
 use crate::adapters::{area_to_rect, from_ratatui_line, rect_to_area, to_ratatui_line};
 use crate::line_wrap::{wrap_line_styled, wrapped_lines_to_strings};
 pub use crate::message_lines::ensure_message_copy_lines;
 use crate::message_lines::{build_step_map_for_messages, message_to_lines, messages_to_lines};
 use codemason_app_core::geometry::Area;
+use codemason_app_core::markdown::markdown_to_styled;
 use codemason_app_core::styled::StyledLine;
 use codemason_types::ThinkingLevel;
 use codemason_types::sanitize_terminal::sanitize_terminal;
@@ -6413,230 +6413,18 @@ fn render_research_view_overlay(frame: &mut Frame, app: &mut App) {
 }
 
 /// Convert a RESEARCH.md body into styled ratatui lines.
+///
+/// Thin wrapper over the frontend-neutral
+/// [`codemason_app_core::markdown::markdown_to_styled`].
 fn markdown_to_lines<'a>(
     markdown: &'a str,
     base_dir: &'a Path,
     wrap_width: usize,
 ) -> Vec<Line<'a>> {
-    let sanitized = sanitize_for_display(markdown);
-    let mut opts = Options::empty();
-    opts.insert(Options::ENABLE_TABLES);
-    opts.insert(Options::ENABLE_STRIKETHROUGH);
-    opts.insert(Options::ENABLE_TASKLISTS);
-
-    let parser = Parser::new_ext(&sanitized, opts);
-    let mut lines: Vec<Line<'_>> = Vec::new();
-    let mut current_spans: Vec<Span> = Vec::new();
-    let mut list_stack: Vec<u8> = Vec::new();
-    let mut in_code_block: Option<String> = None;
-    let mut code_buffer = String::new();
-    let mut pending_text = String::new();
-    // Inline link/image state: (url, accumulated_visible_text)
-    let mut link_state: Option<(String, String)> = None;
-    let mut image_state: Option<(String, String)> = None;
-    // Inline emphasis state stack.
-    let mut style_stack: Vec<TextStyle> = Vec::new();
-
-    for event in parser {
-        match event {
-            MdEvent::Start(tag) => match tag {
-                Tag::CodeBlock(lang) => {
-                    flush_text_spans(&mut pending_text, &mut current_spans);
-                    let lang_str = match lang {
-                        pulldown_cmark::CodeBlockKind::Fenced(l) => l.to_string(),
-                        pulldown_cmark::CodeBlockKind::Indented => String::new(),
-                    };
-                    in_code_block = Some(lang_str);
-                    code_buffer.clear();
-                }
-                Tag::List(start) => {
-                    flush_text_spans(&mut pending_text, &mut current_spans);
-                    list_stack.push(start.unwrap_or(1) as u8);
-                }
-                Tag::Item => {
-                    flush_text_spans(&mut pending_text, &mut current_spans);
-                }
-                Tag::Link { dest_url, .. } => {
-                    flush_text_spans(&mut pending_text, &mut current_spans);
-                    link_state = Some((dest_url.to_string(), String::new()));
-                }
-                Tag::Image { dest_url, .. } => {
-                    flush_text_spans(&mut pending_text, &mut current_spans);
-                    image_state = Some((dest_url.to_string(), String::new()));
-                }
-                Tag::Emphasis => style_stack.push(TextStyle::Italic),
-                Tag::Strong => style_stack.push(TextStyle::Bold),
-                _ => {}
-            },
-            MdEvent::End(tag_end) => match tag_end {
-                TagEnd::CodeBlock => {
-                    flush_text_spans(&mut pending_text, &mut current_spans);
-                    flush_line(&mut lines, &mut current_spans);
-                    if let Some(ref lang) = in_code_block {
-                        let is_mermaid = lang.eq_ignore_ascii_case("mermaid");
-                        let label = if is_mermaid {
-                            "[Mermaid diagram - rendered as text below]"
-                        } else {
-                            ""
-                        };
-                        if is_mermaid && !code_buffer.trim().is_empty() {
-                            lines.push(Line::from(Span::styled(
-                                label.to_string(),
-                                Style::default()
-                                    .fg(Color::Magenta)
-                                    .add_modifier(Modifier::BOLD),
-                            )));
-                        }
-                        for raw in code_buffer.lines() {
-                            let line = sanitize_for_display(raw);
-                            lines.push(Line::from(Span::styled(
-                                format!("  {line}"),
-                                if is_mermaid {
-                                    Style::default().fg(Color::Cyan)
-                                } else {
-                                    Style::default().fg(Color::DarkGray)
-                                },
-                            )));
-                        }
-                    }
-                    in_code_block = None;
-                    code_buffer.clear();
-                }
-                TagEnd::List(_) => {
-                    flush_text_spans(&mut pending_text, &mut current_spans);
-                    flush_line(&mut lines, &mut current_spans);
-                    list_stack.pop();
-                }
-                TagEnd::Heading(level) => {
-                    flush_text_spans(&mut pending_text, &mut current_spans);
-                    flush_line(&mut lines, &mut current_spans);
-                    let idx = lines.len().saturating_sub(1);
-                    if let Some(line) = lines.get_mut(idx) {
-                        let style = match level {
-                            pulldown_cmark::HeadingLevel::H1 => Style::default()
-                                .fg(Color::White)
-                                .bg(Color::Blue)
-                                .add_modifier(Modifier::BOLD),
-                            pulldown_cmark::HeadingLevel::H2 => Style::default()
-                                .fg(Color::Cyan)
-                                .add_modifier(Modifier::BOLD),
-                            _ => Style::default()
-                                .fg(Color::Yellow)
-                                .add_modifier(Modifier::BOLD),
-                        };
-                        for span in &mut line.spans {
-                            span.style = style;
-                        }
-                    }
-                }
-                TagEnd::Paragraph => {
-                    flush_text_spans(&mut pending_text, &mut current_spans);
-                    flush_line(&mut lines, &mut current_spans);
-                }
-                TagEnd::BlockQuote(_) => {
-                    flush_text_spans(&mut pending_text, &mut current_spans);
-                    flush_line(&mut lines, &mut current_spans);
-                }
-                TagEnd::Link => {
-                    if let Some((url, text)) = link_state.take() {
-                        flush_text_spans(&mut pending_text, &mut current_spans);
-                        current_spans.push(Span::styled(
-                            format!("[{text}]"),
-                            Style::default().fg(Color::White),
-                        ));
-                        current_spans.push(Span::styled(
-                            format!("({url})"),
-                            Style::default()
-                                .fg(Color::Cyan)
-                                .add_modifier(Modifier::UNDERLINED),
-                        ));
-                    }
-                }
-                TagEnd::Image => {
-                    if let Some((url, alt)) = image_state.take() {
-                        flush_text_spans(&mut pending_text, &mut current_spans);
-                        let placeholder = image_dimensions_or_placeholder(&alt, &url, base_dir);
-                        current_spans.push(Span::styled(
-                            placeholder,
-                            Style::default()
-                                .fg(Color::Yellow)
-                                .add_modifier(Modifier::ITALIC),
-                        ));
-                    }
-                }
-                TagEnd::Emphasis | TagEnd::Strong => {
-                    flush_text_spans(&mut pending_text, &mut current_spans);
-                    style_stack.pop();
-                }
-                _ => {
-                    flush_text_spans(&mut pending_text, &mut current_spans);
-                }
-            },
-            MdEvent::Text(text) => {
-                if in_code_block.is_some() {
-                    code_buffer.push_str(&text);
-                } else if let Some(ls) = link_state.as_mut() {
-                    ls.1.push_str(&text);
-                } else if let Some(is) = image_state.as_mut() {
-                    is.1.push_str(&text);
-                } else {
-                    let prefix = list_prefix(&list_stack);
-                    if !prefix.is_empty() && pending_text.is_empty() && current_spans.is_empty() {
-                        pending_text.push_str(&prefix);
-                    }
-                    pending_text.push_str(&text);
-                }
-            }
-            MdEvent::Code(code) => {
-                if in_code_block.is_none() {
-                    flush_text_spans(&mut pending_text, &mut current_spans);
-                    current_spans.push(Span::styled(
-                        format!(" `{code}` "),
-                        Style::default()
-                            .fg(Color::Green)
-                            .bg(Color::Black)
-                            .add_modifier(Modifier::BOLD),
-                    ));
-                } else {
-                    code_buffer.push_str(&code);
-                }
-            }
-            MdEvent::Html(html) => {
-                if in_code_block.is_none() {
-                    pending_text.push_str(&html);
-                }
-            }
-            MdEvent::SoftBreak | MdEvent::HardBreak => {
-                if in_code_block.is_none() {
-                    flush_text_spans(&mut pending_text, &mut current_spans);
-                    flush_line(&mut lines, &mut current_spans);
-                } else {
-                    code_buffer.push('\n');
-                }
-            }
-            MdEvent::Rule => {
-                flush_text_spans(&mut pending_text, &mut current_spans);
-                flush_line(&mut lines, &mut current_spans);
-                lines.push(Line::from(Span::styled(
-                    "─".repeat(wrap_width.min(80)),
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
-            _ => {}
-        }
-    }
-
-    flush_text_spans(&mut pending_text, &mut current_spans);
-    flush_line(&mut lines, &mut current_spans);
-
-    // Footer note about terminal limitations for images and links.
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "[Esc to close * images shown as placeholders * links are plain text]".to_string(),
-        Style::default().fg(Color::DarkGray),
-    )));
-
-    lines
+    markdown_to_styled(markdown, base_dir, wrap_width)
+        .iter()
+        .map(to_ratatui_line)
+        .collect()
 }
 
 /// Testable wrapper for the private `markdown_to_lines` renderer.
@@ -6657,38 +6445,6 @@ pub fn wrap_line_styled_testable(line: &Line<'_>, width: usize) -> Vec<Line<'sta
         .iter()
         .map(to_ratatui_line)
         .collect()
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TextStyle {
-    Bold,
-    Italic,
-}
-
-fn flush_text_spans(text: &mut String, spans: &mut Vec<Span>) {
-    if !text.is_empty() {
-        spans.push(Span::raw(std::mem::take(text)));
-    }
-}
-
-fn flush_line<'a>(lines: &mut Vec<Line<'a>>, spans: &mut Vec<Span<'a>>) {
-    if !spans.is_empty() {
-        lines.push(Line::from(std::mem::take(spans)));
-    }
-}
-
-fn list_prefix(list_stack: &[u8]) -> String {
-    let depth = list_stack.len();
-    if depth == 0 {
-        return String::new();
-    }
-    let indent = "  ".repeat(depth.saturating_sub(1));
-    let marker = if list_stack.last().copied().unwrap_or(1) == 0 {
-        "* "
-    } else {
-        "* "
-    };
-    format!("{indent}{marker}")
 }
 
 /// Render a small centered popup with a spinner while a provider loads its model list.

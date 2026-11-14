@@ -1,0 +1,74 @@
+//! Tests for `codemason_app_core::markdown`, the frontend-neutral markdown
+//! renderer shared by the terminal and GUI frontends.
+
+use std::path::Path;
+
+use codemason_app_core::markdown::markdown_to_styled;
+use codemason_app_core::styled::{TextStyle, ThemeColor};
+
+#[test]
+fn test_markdown_code_block_is_monospace() {
+    let lines = markdown_to_styled("intro\n\n```rust\nlet x = 1;\n```\n", Path::new("/"), 80);
+    let code = lines
+        .iter()
+        .find(|l| l.text().contains("let x = 1;"))
+        .expect("code line rendered");
+    assert_eq!(code.text(), "  let x = 1;");
+    assert!(code.spans.iter().all(|s| s.style.monospace));
+    assert_eq!(code.spans[0].style.fg, Some(ThemeColor::DarkGray));
+    let intro = lines
+        .iter()
+        .find(|l| l.text() == "intro")
+        .expect("paragraph rendered");
+    assert!(intro.spans.iter().all(|s| !s.style.monospace));
+}
+
+#[test]
+fn test_markdown_inline_code_is_monospace() {
+    let lines = markdown_to_styled("run `cargo` now", Path::new("/"), 80);
+    let span = lines
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .find(|s| s.text == " `cargo` ")
+        .expect("inline code span");
+    assert!(span.style.monospace);
+    assert_eq!(span.style.fg, Some(ThemeColor::Green));
+    assert_eq!(span.style.bg, Some(ThemeColor::Black));
+    assert!(span.style.bold);
+}
+
+#[test]
+fn test_markdown_heading_levels_keep_tui_styles() {
+    let lines = markdown_to_styled("# One\n\n## Two\n\n### Three\n", Path::new("/"), 80);
+    let style_of = |text: &str| -> TextStyle {
+        lines
+            .iter()
+            .find(|l| l.text() == text)
+            .expect("heading rendered")
+            .spans[0]
+            .style
+    };
+    assert_eq!(
+        style_of("One"),
+        TextStyle::new()
+            .fg(ThemeColor::White)
+            .bg(ThemeColor::Blue)
+            .bold()
+    );
+    assert_eq!(
+        style_of("Two"),
+        TextStyle::new().fg(ThemeColor::Cyan).bold()
+    );
+    assert_eq!(
+        style_of("Three"),
+        TextStyle::new().fg(ThemeColor::Yellow).bold()
+    );
+}
+
+#[test]
+fn test_markdown_ends_with_viewer_footer() {
+    let lines = markdown_to_styled("body", Path::new("/"), 80);
+    let last = lines.last().expect("footer line");
+    assert!(last.text().starts_with("[Esc to close"));
+    assert!(lines[lines.len() - 2].spans.is_empty());
+}

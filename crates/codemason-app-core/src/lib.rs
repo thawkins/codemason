@@ -4,7 +4,8 @@
 //! ([`geometry`]), the frontend-neutral application state ([`app::App`]) with
 //! its input handling ([`input`], [`input_field`]) and the supporting state
 //! modules moved from `codemason-tui` (status, theme mode, sidebar and menu
-//! state, research progress, message text and line wrapping, log channel).
+//! state, research progress, message text and line wrapping, markdown
+//! rendering, log channel).
 //! `codemason-tui` keeps only rendering and terminal setup and re-exports
 //! these modules under their old paths.
 
@@ -22,6 +23,7 @@ pub mod input_prompt;
 pub mod line_wrap;
 pub mod log_channel;
 pub mod logo;
+pub mod markdown;
 pub mod message_lines;
 pub mod message_text;
 pub mod open_in;

@@ -31,7 +31,6 @@ tracing-subscriber = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 chrono = { workspace = true }
-pulldown-cmark = "0.13"
 
 codemason-specs = { path = "../codemason-specs" }
 codemason-llm = { path = "../codemason-llm" }

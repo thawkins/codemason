@@ -1914,7 +1914,6 @@ dependencies = [
  "filetime",
  "futures",
  "parking_lot",
- "pulldown-cmark",
  "ratatui",
  "serde",
  "serde_json",
