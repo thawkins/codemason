@@ -1,7 +1,8 @@
 //! The eframe application that draws the codemason window.
 //!
-//! For now the shell draws a central placeholder and the prompt input; later
-//! tasks render the transcript, panels and dialogs from the `App` state.
+//! The shell draws the message transcript ([`MessagesView`]) above the
+//! prompt input; later tasks render the other panes and dialogs from the
+//! `App` state.
 //! Each frame it first drains the agent-event queue and the tracing log
 //! channel into the `App`, then routes the frame's key presses to
 //! `App::handle_key` through [`KeyRouter`] before any widget reads them.
@@ -13,6 +14,8 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::keys::{Focus, KeyRouter, default_keymap};
+use crate::palette::palette_for;
+use crate::panels::messages::MessagesView;
 
 /// Most log records moved into the app per frame, so a burst cannot stall
 /// a frame (the terminal frontend uses the same limit).
@@ -38,6 +41,7 @@ pub struct Shell {
     prompt: String,
     sources: Option<Sources>,
     keys: KeyRouter,
+    messages: MessagesView,
 }
 
 impl std::fmt::Debug for Shell {
@@ -67,6 +71,7 @@ impl Shell {
             prompt: String::new(),
             sources: None,
             keys: KeyRouter::new(default_keymap(craft_keymap::Platform::current())),
+            messages: MessagesView::default(),
         }
     }
 
@@ -130,9 +135,8 @@ impl Shell {
             });
         });
         egui::CentralPanel::default().show(ui, |ui| {
-            ui.centered_and_justified(|ui| {
-                ui.label(format!("codemason - {}", self.app.cwd));
-            });
+            let palette = palette_for(self.app.theme_mode);
+            self.messages.show(ui, &self.app, &palette);
         });
     }
 

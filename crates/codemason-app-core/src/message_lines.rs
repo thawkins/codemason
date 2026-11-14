@@ -44,6 +44,27 @@ pub fn message_to_lines<S1: BuildHasher, S2: BuildHasher>(
     )
 }
 
+/// The status label of each tool call in `msg`, in part order.
+///
+/// Each label is `"<Tool>: <status>"`, the tool name as the transcript
+/// header capitalises it and the status as [`ToolCallStatus`] displays it
+/// (`pending`, `running`, `completed`, `error`). The terminal shows the
+/// status by colour and glyph only; a GUI uses these labels to name it in
+/// text (for example for assistive technology).
+pub fn tool_call_status_labels(msg: &Message) -> Vec<String> {
+    msg.parts
+        .iter()
+        .filter_map(|part| match part {
+            MessagePart::ToolCall { tool, state, .. } => {
+                Some(format!("{}: {}", capitalize_tool_name(tool), state.status))
+            }
+            MessagePart::Text { .. } | MessagePart::Reasoning { .. } | MessagePart::Image(_) => {
+                None
+            }
+        })
+        .collect()
+}
+
 /// Build a `(call_id -> (short_sid, step, substep))` map from the
 /// message transcript itself. This lets storage-backed sessions (sub-agents,
 /// teammates, resumed sessions) render the same `[N.M]` step/parallel-tool

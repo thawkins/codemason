@@ -10,6 +10,8 @@
 //! - [`Shell`] is the `eframe::App` that draws the window.
 //! - [`dock`] is the dockable pane layout model (craft-ui docking).
 //! - [`keys`] is the keyboard shortcut map (craft-keymap).
+//! - [`panels`] holds the pane contents ([`panels::messages`] is the
+//!   transcript), drawn with [`palette`] colours and [`styled_text`] layout.
 //! - [`bridge::spawn_event_bridge`] forwards agent events from the
 //!   [`EventBus`] into the shell's queue and wakes egui.
 //!
@@ -24,7 +26,10 @@ pub mod bridge;
 pub mod dock;
 pub mod keys;
 pub mod main_thread;
+pub mod palette;
+pub mod panels;
 pub mod shell;
+pub mod styled_text;
 
 use std::path::PathBuf;
 use std::sync::Arc;

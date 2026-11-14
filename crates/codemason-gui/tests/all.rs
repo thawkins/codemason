@@ -18,6 +18,12 @@ mod test_keys;
 mod test_launch;
 #[path = "test_main_thread.rs"]
 mod test_main_thread;
+#[path = "test_markdown.rs"]
+mod test_markdown;
+#[path = "test_messages.rs"]
+mod test_messages;
+#[path = "test_palette.rs"]
+mod test_palette;
 
 /// The one mutex that serialises every test mutating a process-global
 /// (environment variables, cwd) in this binary.
