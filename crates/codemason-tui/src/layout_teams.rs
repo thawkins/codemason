@@ -782,7 +782,13 @@ pub fn render_teams_subpanel(frame: &mut Frame, app: &mut App, area: Rect) {
     // The keyboard cursor is an ordinal over the painted teammate rows only:
     // publish the agent ids in paint order for the cursor's Space/Del/Enter
     // resolution and the scroll sync (FR-038).
-    app.teams_teammate_agent_ids = row_keys[teammate_row_start..].to_vec();
+    // The plan continuation lines carry an empty key: they are part of the
+    // row above, not cursor rows of their own, so they are left out.
+    app.teams_teammate_agent_ids = row_keys[teammate_row_start..]
+        .iter()
+        .filter(|key| !key.is_empty())
+        .cloned()
+        .collect();
 
     // -- parked-member hint row (spec `teamssetup` FR-028) ------------------
     // While any member is `Blocked` or `Suspended`, the popup says which key

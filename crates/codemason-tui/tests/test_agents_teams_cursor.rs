@@ -708,3 +708,29 @@ async fn teams_click_selects_the_clicked_member_row() {
     );
     assert_eq!(app.teams_cursor_teammate, Some(0));
 }
+
+/// A teammate waiting on a plan paints a `plan awaiting approval:` line
+/// under its row; that line is not a cursor row, so Down from the planning
+/// member lands on the next teammate.
+#[test]
+fn teams_cursor_skips_the_plan_line_of_a_planning_member() {
+    let mut app = make_app();
+    app.session.session_id = Some(LEAD_SESSION.to_string());
+    app.session.team_members = vec![
+        member("agent-plan", "planner", MemberStatus::PlanPending),
+        member("agent-work", "worker", MemberStatus::Working),
+    ];
+    render_teams(&mut app, 200, 40);
+    assert_eq!(
+        app.teams_teammate_agent_ids,
+        vec!["agent-plan".to_string(), "agent-work".to_string()]
+    );
+
+    app.move_teams_cursor(1);
+    app.move_teams_cursor(1);
+    assert_eq!(app.teams_cursor_teammate, Some(1));
+    assert_eq!(
+        app.teams_teammate_agent_ids.get(1).map(String::as_str),
+        Some("agent-work")
+    );
+}
