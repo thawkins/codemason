@@ -59,17 +59,23 @@ impl App {
                 picker.selected += 1;
             }
             Key::Enter => {
-                let chosen = picker.entries[picker.selected].clone();
+                // A highlight past the end (an empty list) chooses nothing
+                // and only closes the picker.
+                let chosen = picker.entries.get(picker.selected).cloned();
                 self.history_picker = None;
-                self.session.input = chosen;
-                self.set_cursor_char_index_clamped(self.input_len_chars());
+                if let Some(chosen) = chosen {
+                    self.session.input = chosen;
+                    self.set_cursor_char_index_clamped(self.input_len_chars());
+                }
             }
             Key::Char('c') => {
                 // Copy the highlighted entry to the clipboard without closing
                 // the picker, so several entries can be copied in one session.
-                let chosen = picker.entries[picker.selected].clone();
-                crate::clipboard::set_clipboard_text(&chosen);
-                self.status = "history: copied to clipboard".to_string();
+                // With no entry highlighted there is nothing to copy.
+                if let Some(chosen) = picker.entries.get(picker.selected).cloned() {
+                    crate::clipboard::set_clipboard_text(&chosen);
+                    self.status = "history: copied to clipboard".to_string();
+                }
             }
             _ => {}
         }
@@ -103,7 +109,13 @@ impl App {
                 picker.selected += 1;
             }
             Key::Enter => {
-                let backup = picker.entries[picker.selected].clone();
+                // A highlight past the end (an empty list) restores nothing
+                // and only closes the picker.
+                let Some(backup) = picker.entries.get(picker.selected).cloned() else {
+                    self.config_save_picker = None;
+                    self.status = "config list: cancelled".to_string();
+                    return;
+                };
                 let config_dir = picker.config_dir.clone();
                 self.config_save_picker = None;
 
