@@ -3,7 +3,20 @@
 # dependency tree are listed here, so a re-introduced vulnerable crate is never
 # silently masked.
 [advisories]
-# No ignores: RUSTSEC-2024-0436 (`paste` unmaintained) no longer matches the
-# current tree, so the entry was dead configuration. cargo-deny reported it as
-# `advisory-not-detected`; the ignore was removed from both gates together.
-ignore = []
+# `paste` (RUSTSEC-2024-0436) is not ignored: it no longer matches the current
+# tree (cargo-deny reported `advisory-not-detected`). The entries below are the
+# unmaintained advisories pulled in by egui/eframe, identical to deny.toml.
+ignore = [
+    # `ttf-parser` is unmaintained (not a vulnerability); transitive via egui/eframe (epaint fonts).
+    # No safe upgrade is available; revisit when egui is bumped.
+    "RUSTSEC-2026-0192",
+    # `zbus_names` is unmaintained (not a vulnerability); transitive via egui/eframe (accesskit_unix/atspi/zbus a11y).
+    # No safe upgrade is available; revisit when egui is bumped.
+    "RUSTSEC-2026-0371",
+    # `zvariant` is unmaintained (not a vulnerability); transitive via egui/eframe (accesskit_unix/atspi/zbus a11y).
+    # No safe upgrade is available; revisit when egui is bumped.
+    "RUSTSEC-2026-0370",
+    # `zvariant_derive` is unmaintained (not a vulnerability); transitive via egui/eframe (accesskit_unix/atspi/zbus a11y).
+    # No safe upgrade is available; revisit when egui is bumped.
+    "RUSTSEC-2026-0372",
+]
