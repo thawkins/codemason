@@ -7,11 +7,14 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use codemason_agent::event::Event;
 use codemason_app_core::app::App;
 use codemason_app_core::deck_progress::{
     DECK_PROGRESS_SENTINEL, DeckTracker, decode_deck_progress_event,
 };
-use codemason_app_core::research_progress::{ResearchProgress, SessionPhase, StepStatus};
+use codemason_app_core::research_progress::{
+    ResearchProgress, SessionPhase, StepStatus, encode_cluster_progress_event,
+};
 use codemason_gui::Shell;
 use codemason_gui::panels::research::{DECK_PROGRESS_LABEL, RESEARCH_PROGRESS_LABEL};
 use egui::accesskit::Role;
@@ -59,9 +62,15 @@ fn shown(harness: &Harness<'_, Shell>, role: Role, label: &str) -> bool {
     harness.query_by_role_and_label(role, label).is_some()
 }
 
-/// Whether some drawn node's label contains `text`.
+/// Whether some drawn node outside the transcript has a label containing
+/// `text`. The transcript also shows app-core's progress message once the
+/// App has a session; its text starts with the `[research]` header.
 fn has_text(harness: &Harness<'_, Shell>, text: &str) -> bool {
-    harness.query_by_label_contains(text).is_some()
+    harness.query_all_by_label_contains(text).any(|node| {
+        let node = node.accesskit_node();
+        let label = node.value().or_else(|| node.label()).unwrap_or_default();
+        !label.contains("[research] Research Progress")
+    })
 }
 
 /// The text of the drawn label containing `needle` (a `Role::Label` keeps
@@ -149,4 +158,134 @@ fn test_research_views_hidden_once_runs_finish() {
     });
     assert!(!shown(&harness, Role::Group, RESEARCH_PROGRESS_LABEL));
     assert!(!shown(&harness, Role::Group, DECK_PROGRESS_LABEL));
+}
+
+/// Deliver one cluster-style progress notice for run `name` through
+/// app-core's event handler, then draw.
+fn notice(
+    runtime: &tokio::runtime::Runtime,
+    harness: &mut Harness<'static, Shell>,
+    name: &str,
+    phase: SessionPhase,
+    status: &str,
+    detail: &str,
+) {
+    let message = encode_cluster_progress_event(name, name, phase, status, detail);
+    let app = harness.state_mut().app_mut();
+    // Notices are routed to the session they name, as in the TUI tests.
+    let session_id = app
+        .session
+        .session_id
+        .get_or_insert_with(|| "s1".to_string())
+        .clone();
+    runtime.block_on(app.handle_event(Event::AgentNotice {
+        session_id,
+        message,
+    }));
+    harness.run();
+}
+
+#[test]
+fn test_research_cluster_run_leaves_view_after_finalize() {
+    let (rt, mut harness) = harness(|app| {
+        app.research_progress
+            .push(ResearchProgress::new("concepts", "concepts").completing_at_finalize());
+    });
+    notice(
+        &rt,
+        &mut harness,
+        "concepts",
+        SessionPhase::Finalize,
+        "started",
+        "writing CONCEPTS.md...",
+    );
+    assert!(shown(&harness, Role::Group, RESEARCH_PROGRESS_LABEL));
+    assert!(has_text(&harness, "writing CONCEPTS.md"));
+
+    notice(
+        &rt,
+        &mut harness,
+        "concepts",
+        SessionPhase::Finalize,
+        "done",
+        "wrote CONCEPTS.md (9 bytes)",
+    );
+    assert!(!shown(&harness, Role::Group, RESEARCH_PROGRESS_LABEL));
+}
+
+#[test]
+fn test_research_session_run_stays_through_tier_done() {
+    let (rt, mut harness) = harness(|app| {
+        app.research_progress
+            .push(ResearchProgress::new("rust-async", "async rust"));
+    });
+    // A session run's finalize "tier done" comes before its source count.
+    notice(
+        &rt,
+        &mut harness,
+        "rust-async",
+        SessionPhase::Finalize,
+        "tier done",
+        "pipeline complete: 5 completed, 0 skipped, 0 failed",
+    );
+    assert!(shown(&harness, Role::Group, RESEARCH_PROGRESS_LABEL));
+    assert!(has_text(&harness, "pipeline complete"));
+}
+
+#[test]
+fn test_research_failed_run_leaves_view() {
+    let (rt, mut harness) = harness(|app| {
+        let mut progress = ResearchProgress::new("rust-async", "async rust");
+        progress.apply(SessionPhase::Web, StepStatus::Started, "searching");
+        app.research_progress.push(progress);
+    });
+    assert!(shown(&harness, Role::Group, RESEARCH_PROGRESS_LABEL));
+    notice(
+        &rt,
+        &mut harness,
+        "rust-async",
+        SessionPhase::Finalize,
+        "error",
+        "rust-async failed: provider unreachable",
+    );
+    assert!(!shown(&harness, Role::Group, RESEARCH_PROGRESS_LABEL));
+}
+
+#[test]
+fn test_deck_failed_run_shows_reason_until_replaced() {
+    let (rt, mut harness) = harness(|app| {
+        let mut progress = ResearchProgress::new("q3-review", "q3-review");
+        let mut deck = DeckTracker::new();
+        deck_report(&mut deck, "select", "started", "looking up item");
+        progress.deck = Some(deck);
+        app.research_progress.push(progress);
+    });
+    notice(
+        &rt,
+        &mut harness,
+        "q3-review",
+        SessionPhase::Finalize,
+        "error",
+        "research item `q3-review` not found",
+    );
+    // As in the TUI's message, the failed run stays with its reason.
+    assert!(shown(&harness, Role::Group, DECK_PROGRESS_LABEL));
+    assert!(has_text(
+        &harness,
+        "Failed: research item `q3-review` not found"
+    ));
+
+    // A new run under the same name replaces it, as it retires the TUI's
+    // message.
+    let app = harness.state_mut().app_mut();
+    let mut rerun = ResearchProgress::new("q3-review", "q3-review");
+    let mut deck = DeckTracker::new();
+    deck_report(&mut deck, "select", "started", "second attempt");
+    rerun.deck = Some(deck);
+    app.begin_research_progress(rerun);
+    harness.run();
+    assert!(shown(&harness, Role::Group, DECK_PROGRESS_LABEL));
+    assert!(has_text(&harness, "second attempt"));
+    assert!(!has_text(&harness, "Failed: research item"));
+    assert!(!has_text(&harness, "looking up item"));
 }

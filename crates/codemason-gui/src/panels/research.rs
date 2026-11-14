@@ -15,9 +15,12 @@
 //! - a deck run ([`DECK_PROGRESS_LABEL`]): its name and one row per stage
 //!   (`status stage - [n/m] detail`), and the failure reason if it failed.
 //!
-//! A run leaves the view once it is done (the final source count, a
-//! finished or failed deck, or a finalize step that ended); the transcript
-//! keeps its final report.
+//! Which runs are shown comes from app-core's state only: a run is shown
+//! while `ResearchProgress::is_running` says it is going. A deck run that
+//! failed stays, with its `Failed: <reason>` row, as the TUI's progress
+//! message keeps showing it, until app-core drops its tracker (a new run
+//! under the same name, which also retires the TUI's message). Any other run
+//! leaves the view when it ends; the transcript keeps its final report.
 //!
 //! Dependencies: `codemason-app-core` (the trackers) and `egui`.
 
@@ -25,9 +28,7 @@ use std::time::{Duration, Instant};
 
 use codemason_app_core::app::App;
 use codemason_app_core::deck_progress::{DeckStageRow, DeckTracker};
-use codemason_app_core::research_progress::{
-    ResearchProgress, ResearchStep, SessionPhase, StepStatus,
-};
+use codemason_app_core::research_progress::{ResearchProgress, ResearchStep, StepStatus};
 use codemason_app_core::styled::ThemeColor;
 use egui::{Color32, FontId, RichText, WidgetInfo};
 
@@ -43,19 +44,16 @@ pub const DECK_PROGRESS_LABEL: &str = "Deck progress";
 /// Share of the pane's height the views may take before they scroll.
 const MAX_HEIGHT_FRACTION: f32 = 0.4;
 
-/// Whether `progress` is still running.
-fn running(progress: &ResearchProgress) -> bool {
-    match &progress.deck {
-        Some(deck) => !deck.finished,
-        None => {
-            // `/research cluster` reports no source count: its last word is
-            // a finalize step that ended.
-            let finalized = progress.steps.last().is_some_and(|step| {
-                step.phase == SessionPhase::Finalize.as_str() && step.status != StepStatus::Started
-            });
-            !progress.done && !finalized
-        }
-    }
+/// Whether the view shows `progress`: while app-core says the run is
+/// going ([`ResearchProgress::is_running`]), and, for a deck run that
+/// failed, from then on with its reason, as the TUI's progress message keeps
+/// showing it. The view never decides a run's state itself.
+fn shown(progress: &ResearchProgress) -> bool {
+    progress.is_running()
+        || progress
+            .deck
+            .as_ref()
+            .is_some_and(|deck| deck.failure.is_some())
 }
 
 /// The word a step's status is shown with.
@@ -97,11 +95,7 @@ fn stage_color(word: &str, palette: &Palette) -> Color32 {
 /// * `app` - the App whose research trackers are drawn.
 /// * `palette` - the colours to draw with.
 pub fn research_ui(ui: &mut egui::Ui, app: &App, palette: &Palette) {
-    let runs: Vec<&ResearchProgress> = app
-        .research_progress
-        .iter()
-        .filter(|p| running(p))
-        .collect();
+    let runs: Vec<&ResearchProgress> = app.research_progress.iter().filter(|p| shown(p)).collect();
     if runs.is_empty() {
         return;
     }
