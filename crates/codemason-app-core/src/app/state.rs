@@ -3821,6 +3821,9 @@ pub struct App {
     pub shortcuts_panel_enabled: bool,
     /// Whether Ctrl+C has armed a guarded keyboard exit sequence.
     pub quit_armed: bool,
+    /// The clock the permission answer guard reads, when a test froze it
+    /// (`App::advance_permission_clock_for_tests`); `None` reads the real clock.
+    pub(crate) permission_clock: Option<std::time::Instant>,
     /// Active right-click context menu, if any.
     pub context_menu: Option<ContextMenuState>,
     /// Path to the persistent input history file.

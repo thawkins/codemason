@@ -233,9 +233,6 @@ pub struct SessionView {
     /// The front permission request's id and when it became the front, for
     /// the answer guard (`App::permission_answerable`).
     pub permission_front: Option<(String, std::time::Instant)>,
-    /// The id of the permission request already answered whose removal
-    /// (the reply's round trip through the event bus) is still pending.
-    pub permission_answered: Option<String>,
     /// Queue of pending direct question requests awaiting user answers.
     pub question_queue: VecDeque<QuestionRequest>,
     /// Text typed by the user in response to the active question dialog.
@@ -448,7 +445,6 @@ impl SessionView {
             autopilot_continued_this_wake: false,
             permission_queue: VecDeque::new(),
             permission_front: None,
-            permission_answered: None,
             question_queue: VecDeque::new(),
             pending_question_input: String::new(),
             question_selected_index: 0,

@@ -48,6 +48,9 @@ fn rig(
         let _enter = runtime.enter();
         let mut app = support::make_app();
         app.session.session_id = Some(SESSION.to_string());
+        // The permission answer delay reads a frozen clock that only
+        // `wait_shown` moves.
+        app.advance_permission_clock_for_tests(std::time::Duration::ZERO);
         configure(&mut app);
         app
     };
@@ -115,10 +118,14 @@ fn type_key(harness: &mut Harness<'static, Shell>, key: egui::Key, text: Option<
     harness.run();
 }
 
-/// Wait until app-core lets the shown permission request be answered
-/// (`PERMISSION_ANSWER_DELAY`), then draw a frame.
+/// Move app-core's frozen test clock past the answer delay
+/// (`PERMISSION_ANSWER_DELAY`), so the shown permission request can be
+/// answered, then draw a frame. Nothing sleeps.
 fn wait_shown(harness: &mut Harness<'static, Shell>) {
-    std::thread::sleep(PERMISSION_ANSWER_DELAY + std::time::Duration::from_millis(50));
+    harness
+        .state_mut()
+        .app_mut()
+        .advance_permission_clock_for_tests(PERMISSION_ANSWER_DELAY);
     harness.run();
 }
 
@@ -721,5 +728,65 @@ fn test_model_picker_ctrl_c_with_selection_copies() {
     assert!(
         !harness.state().app().quit_armed,
         "Ctrl+C copies the filter's selection"
+    );
+}
+
+#[test]
+fn test_permission_lost_reply_still_advances_and_unlocks() {
+    let (_rt, events, mut harness) = rig(|_| {});
+    let mut bus = harness.state().app().event_bus.subscribe();
+    request_permission(&events, "req-e");
+    request_permission(&events, "req-f");
+    harness.run();
+    wait_shown(&mut harness);
+
+    // The replies never come back through the bus (a lagged bridge).
+    harness.get_by_label(ALLOW_ONCE).click();
+    harness.run();
+    let app = harness.state().app();
+    assert_eq!(
+        app.session.permission_queue.front().map(|r| r.id.as_str()),
+        Some("req-f"),
+        "the dialog moves on to the next request"
+    );
+
+    wait_shown(&mut harness);
+    harness.get_by_label(DENY).click();
+    harness.run();
+    assert_eq!(reply_ids(&mut bus), vec!["req-e", "req-f"]);
+    let app = harness.state().app();
+    assert!(app.session.permission_queue.is_empty());
+    assert!(!app.is_input_locked(), "the input unlocks");
+    assert!(
+        harness
+            .query_by_role_and_label(Role::Dialog, PERMISSION_TITLE)
+            .is_none(),
+        "the dialog closes"
+    );
+}
+
+#[test]
+fn test_permission_late_reply_keeps_the_next_request() {
+    let (_rt, events, mut harness) = rig(|_| {});
+    request_permission(&events, "req-g");
+    request_permission(&events, "req-h");
+    harness.run();
+    wait_shown(&mut harness);
+    type_key(&mut harness, egui::Key::Y, Some("y"));
+    wait_shown(&mut harness);
+
+    // req-g's reply arrives late, with req-h at the front and answerable.
+    reply_returns(&events, "req-g");
+    harness.run();
+
+    let app = harness.state().app();
+    assert_eq!(
+        app.session.permission_queue.front().map(|r| r.id.as_str()),
+        Some("req-h"),
+        "the late reply removes nothing"
+    );
+    assert!(
+        app.permission_answerable(),
+        "and does not restart req-h's answer delay"
     );
 }

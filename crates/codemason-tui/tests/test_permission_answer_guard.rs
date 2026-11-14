@@ -47,15 +47,22 @@ fn replies(bus: &mut tokio::sync::broadcast::Receiver<Event>) -> Vec<String> {
     ids
 }
 
-/// Wait out the answer delay.
-fn wait_shown() {
-    std::thread::sleep(PERMISSION_ANSWER_DELAY + std::time::Duration::from_millis(50));
+/// A test App for the guard session, its answer clock frozen.
+fn guarded_app() -> App {
+    let mut app = support::make_app();
+    app.session.session_id = Some(SESSION.to_string());
+    app.advance_permission_clock_for_tests(std::time::Duration::ZERO);
+    app
+}
+
+/// Move the frozen clock past the answer delay. Nothing sleeps.
+fn wait_shown(app: &mut App) {
+    app.advance_permission_clock_for_tests(PERMISSION_ANSWER_DELAY);
 }
 
 #[tokio::test]
 async fn test_permission_double_y_answers_once_and_never_the_next_unread() {
-    let mut app = support::make_app();
-    app.session.session_id = Some(SESSION.to_string());
+    let mut app = guarded_app();
     let mut bus = app.event_bus.subscribe();
     request(&mut app, "req-1").await;
     request(&mut app, "req-2").await;
@@ -63,13 +70,18 @@ async fn test_permission_double_y_answers_once_and_never_the_next_unread() {
     press_y(&mut app).await;
     assert!(replies(&mut bus).is_empty(), "too soon after it was shown");
 
-    wait_shown();
+    wait_shown(&mut app);
     press_y(&mut app).await;
     press_y(&mut app).await;
     assert_eq!(replies(&mut bus), vec!["req-1"], "answered exactly once");
+    assert_eq!(
+        app.session.permission_queue.front().map(|r| r.id.as_str()),
+        Some("req-2"),
+        "req-1 leaves the queue at once; req-2 stays pending"
+    );
 
-    // The reply comes back and req-2 becomes the front: an immediate `y`
-    // (the second half of a double press) does not grant it.
+    // req-1's reply comes back late: it removes nothing, and an immediate
+    // `y` (the second half of a double press) still does not grant req-2.
     app.handle_event(Event::PermissionReplied {
         session_id: SESSION.to_string(),
         request_id: "req-1".to_string(),
@@ -81,7 +93,20 @@ async fn test_permission_double_y_answers_once_and_never_the_next_unread() {
     assert!(replies(&mut bus).is_empty());
     assert_eq!(app.session.permission_queue.len(), 1, "req-2 stays pending");
 
-    wait_shown();
+    wait_shown(&mut app);
     press_y(&mut app).await;
     assert_eq!(replies(&mut bus), vec!["req-2"]);
+}
+
+#[tokio::test]
+async fn test_permission_lost_reply_unlocks_the_input() {
+    let mut app = guarded_app();
+    request(&mut app, "req-3").await;
+    wait_shown(&mut app);
+
+    // The reply never comes back through the bus.
+    press_y(&mut app).await;
+
+    assert!(app.session.permission_queue.is_empty());
+    assert!(!app.is_input_locked());
 }

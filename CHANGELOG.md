@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed: permission requests ignore answers for 500 ms after they appear, and accept one answer only, so a double press cannot approve the next request unseen (TUI and GUI).
+
 ### Removed
 
 - Removed: Alt+X stop-agent shortcut and its confirmation dialog; Esc stops a running agent.

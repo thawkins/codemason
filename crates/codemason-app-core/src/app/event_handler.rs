@@ -755,16 +755,22 @@ impl App {
                 allowed,
                 ..
             } if self.is_current_session(session_id) => {
-                // Remove the specific answered request from the queue.
+                // Remove the specific answered request from the queue. A
+                // reply typed in this App already removed its request
+                // (`answer_front_permission`), so its echo removes nothing
+                // and changes nothing else (it never removes the next one).
+                let before = self.session.permission_queue.len();
                 self.session
                     .permission_queue
                     .retain(|r| r.id != *request_id);
-                // The next request is shown from now on.
-                self.note_permission_front();
-                self.session.pending_question_input.clear();
-                self.session.question_selected_index = 0;
-                if self.session.permission_queue.is_empty() {
-                    self.set_status_working("processing");
+                if self.session.permission_queue.len() != before {
+                    // The next request is shown from now on.
+                    self.note_permission_front();
+                    self.session.pending_question_input.clear();
+                    self.session.question_selected_index = 0;
+                    if self.session.permission_queue.is_empty() {
+                        self.set_status_working("processing");
+                    }
                 }
                 self.push_log_no_agent(
                     LogLevel::Info,

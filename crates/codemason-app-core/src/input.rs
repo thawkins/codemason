@@ -617,74 +617,29 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
     // If permission dialog is active, intercept keys
     if !app.session.permission_queue.is_empty() {
         // Standard permission dialog: y/a/n only. An answer counts only once
-        // the front request has been shown for the answer delay and was not
-        // answered yet, so a double press cannot answer twice or grant the
-        // next request unread.
-        if matches!(key.key, Key::Char('y' | 'a' | 'n')) {
-            app.note_permission_front();
-            if !app.permission_answerable() {
-                return None;
-            }
-            app.session.permission_answered = app
-                .session
-                .permission_queue
-                .front()
-                .map(|req| req.id.clone());
-        }
-        return match key.key {
-            Key::Char('y') => {
-                if let Some(ref req) = app.session.permission_queue.front() {
-                    tracing::info!(
-                        session_id = %req.session_id,
-                        request_id = %req.id,
-                        "User pressed 'y' to grant permission"
-                    );
-                    app.event_bus
-                        .publish(codemason_agent::event::Event::PermissionReplied {
-                            session_id: req.session_id.clone(),
-                            request_id: req.id.clone(),
-                            allowed: true,
-                            decision: codemason_agent::permission::PermissionDecision::Once,
-                        });
-                }
-                None
-            }
-            Key::Char('a') => {
-                if let Some(ref req) = app.session.permission_queue.front() {
-                    tracing::info!(
-                        session_id = %req.session_id,
-                        request_id = %req.id,
-                        "User pressed 'a' to grant permission (always)"
-                    );
-                    app.event_bus
-                        .publish(codemason_agent::event::Event::PermissionReplied {
-                            session_id: req.session_id.clone(),
-                            request_id: req.id.clone(),
-                            allowed: true,
-                            decision: codemason_agent::permission::PermissionDecision::Always,
-                        });
-                }
-                None
-            }
-            Key::Char('n') => {
-                if let Some(ref req) = app.session.permission_queue.front() {
-                    tracing::info!(
-                        session_id = %req.session_id,
-                        request_id = %req.id,
-                        "User pressed 'n' to deny permission"
-                    );
-                    app.event_bus
-                        .publish(codemason_agent::event::Event::PermissionReplied {
-                            session_id: req.session_id.clone(),
-                            request_id: req.id.clone(),
-                            allowed: false,
-                            decision: codemason_agent::permission::PermissionDecision::Deny,
-                        });
-                }
-                None
-            }
-            _ => None,
+        // the front request has been shown for the answer delay, so a double
+        // press cannot grant the next request unread; the answered request
+        // leaves the queue at once (see `App::answer_front_permission`).
+        let (decision, verb) = match key.key {
+            Key::Char('y') => (
+                codemason_agent::permission::PermissionDecision::Once,
+                "grant",
+            ),
+            Key::Char('a') => (
+                codemason_agent::permission::PermissionDecision::Always,
+                "grant (always)",
+            ),
+            Key::Char('n') => (
+                codemason_agent::permission::PermissionDecision::Deny,
+                "deny",
+            ),
+            _ => return None,
         };
+        app.note_permission_front();
+        if app.permission_answerable() {
+            app.answer_front_permission(decision, verb);
+        }
+        return None;
     }
 
     // The single-button notice dialog has nothing to decide: `Enter` and `Esc`

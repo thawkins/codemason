@@ -170,6 +170,17 @@ impl Shell {
         &self.app
     }
 
+    /// The application state, for tests that change it between frames
+    /// (e.g. to move app-core's test clock).
+    ///
+    /// # Returns
+    ///
+    /// The App the shell renders.
+    #[doc(hidden)]
+    pub fn app_mut(&mut self) -> &mut App {
+        &mut self.app
+    }
+
     /// Route this frame's key presses to `App::handle_key`.
     ///
     /// Runs before any widget reads input, so a press that runs a keymap

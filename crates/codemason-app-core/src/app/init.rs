@@ -406,6 +406,7 @@ impl App {
             show_shortcuts: false,
             shortcuts_panel_enabled: true,
             quit_armed: false,
+            permission_clock: None,
             context_menu: None,
             history_file_path: None,
             history_picker: None,

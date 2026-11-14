@@ -1049,27 +1049,46 @@ impl App {
             || self.session.pending_send_after_compact.is_some()
     }
 
+    /// The time the permission answer guard reads: the test clock when one
+    /// was started ([`Self::advance_permission_clock_for_tests`]), else now.
+    fn permission_now(&self) -> std::time::Instant {
+        self.permission_clock
+            .unwrap_or_else(std::time::Instant::now)
+    }
+
+    /// Freeze the clock the permission answer guard reads (at the real now,
+    /// on the first call) and move it forward by `by`, so tests can place a
+    /// key press before or after [`PERMISSION_ANSWER_DELAY`] without
+    /// sleeping. `Duration::ZERO` just freezes it.
+    ///
+    /// # Arguments
+    ///
+    /// * `by` - how far the frozen clock moves forward.
+    #[doc(hidden)]
+    pub fn advance_permission_clock_for_tests(&mut self, by: std::time::Duration) {
+        let now = self.permission_now();
+        self.permission_clock = Some(now + by);
+    }
+
     /// Record the front permission request as shown now, when it changed
     /// since the last call, starting its answer delay
     /// ([`PERMISSION_ANSWER_DELAY`]).
     ///
-    /// The event handler calls it when a request arrives or an answered one
-    /// is removed; a frontend may call it when it draws the dialog.
+    /// Called when a request arrives, when one is answered or removed, and
+    /// by a frontend when it draws the dialog.
     pub fn note_permission_front(&mut self) {
         let front = self.session.permission_queue.front().map(|r| r.id.clone());
         let noted = self.session.permission_front.as_ref().map(|(id, _)| id);
         if front.as_ref() != noted {
-            self.session.permission_front = front.map(|id| (id, std::time::Instant::now()));
+            let now = self.permission_now();
+            self.session.permission_front = front.map(|id| (id, now));
         }
     }
 
-    /// Whether the front permission request may be answered now.
-    ///
-    /// A reply removes its request only when it comes back through the event
-    /// bus, so a quick second answer (a double `y`, a double-click) would
-    /// answer the same request twice or grant the next one unread. A request
-    /// is answerable once it has been the front for
-    /// [`PERMISSION_ANSWER_DELAY`] and has not been answered yet.
+    /// Whether the front permission request may be answered now: it has
+    /// been the front for [`PERMISSION_ANSWER_DELAY`], so a quick second
+    /// answer (a double `y`, a double-click) cannot grant the request that
+    /// replaced an answered one before the user saw it.
     ///
     /// # Returns
     ///
@@ -1078,14 +1097,57 @@ impl App {
         let Some(front) = self.session.permission_queue.front() else {
             return false;
         };
-        let shown = self
-            .session
+        let now = self.permission_now();
+        self.session
             .permission_front
             .as_ref()
             .is_some_and(|(id, since)| {
-                *id == front.id && since.elapsed() >= PERMISSION_ANSWER_DELAY
+                *id == front.id && now.saturating_duration_since(*since) >= PERMISSION_ANSWER_DELAY
+            })
+    }
+
+    /// Answer the front permission request with `decision` and remove it
+    /// from the queue at once.
+    ///
+    /// The reply is published for the agent. The request is not left
+    /// waiting for that event to come back through the bus: a frontend's
+    /// bridge drops broadcast events when it falls behind, and a reply that
+    /// never returned would leave the dialog unanswerable and the input
+    /// locked. The `PermissionReplied` the App sees later removes nothing,
+    /// since it removes by request id.
+    ///
+    /// # Arguments
+    ///
+    /// * `decision` - once, always or deny.
+    /// * `verb` - what the user did, for the log.
+    pub(crate) fn answer_front_permission(
+        &mut self,
+        decision: codemason_agent::permission::PermissionDecision,
+        verb: &str,
+    ) {
+        let Some(req) = self.session.permission_queue.pop_front() else {
+            return;
+        };
+        let allowed = !matches!(
+            decision,
+            codemason_agent::permission::PermissionDecision::Deny
+        );
+        tracing::info!(
+            session_id = %req.session_id,
+            request_id = %req.id,
+            "User chose to {verb} permission"
+        );
+        self.event_bus
+            .publish(codemason_agent::event::Event::PermissionReplied {
+                session_id: req.session_id,
+                request_id: req.id,
+                allowed,
+                decision,
             });
-        shown && self.session.permission_answered.as_deref() != Some(front.id.as_str())
+        self.note_permission_front();
+        if self.session.permission_queue.is_empty() {
+            self.set_status_working("processing");
+        }
     }
 
     /// Return whether the input field is genuinely locked, as opposed to merely
