@@ -31,10 +31,12 @@
 //!   stripped from a paste, as the TUI does). It takes the focus only when
 //!   no other text field has it and no modal is open: another focused text
 //!   field keeps its typing ([`Focus::Widget`]);
-//! - while an app-core modal locks the prompt, the router gets
-//!   [`Focus::Modal`] and the App every key; a composition the IME had not
-//!   committed is removed from the buffer, since the editor keeps marked
-//!   text in it while composing;
+//! - while an app-core modal locks the prompt
+//!   ([`crate::dialogs::locks_prompt`]), the router gets [`Focus::Modal`]
+//!   and the App every key; a composition the IME had not committed is
+//!   removed from the buffer, since the editor keeps marked text in it while
+//!   composing. A dialog's own text field keeps its typing, and a second
+//!   composer removes the keys its input method owns;
 //! - `?` on an empty prompt goes to the App, which opens the shortcuts
 //!   panel, as in the TUI; after text it types;
 //! - Up and Down go to the App on the first and last logical line (input
@@ -111,6 +113,9 @@ pub fn prompt_id() -> Id {
 #[derive(Debug, Default)]
 pub struct PromptInput {
     composer: Composer,
+    /// Follows the IME composition of a dialog's text field (the question's
+    /// answer, the model filter) while a modal has the keyboard.
+    field_composer: Composer,
     deferred: Vec<Event>,
 }
 
@@ -143,11 +148,12 @@ impl PromptInput {
         let focused_id = ctx.memory(|m| m.focused());
         // A locked prompt (a modal owns the keys) takes no typing; the App
         // gets every key, and a dialog's own text field keeps its typing.
-        if app.is_input_locked() {
+        if crate::dialogs::locks_prompt(app) {
             if self.composer.is_composing() {
                 self.drop_preedit(ctx, app);
             }
             let field_focused = ctx.text_edit_focused() && focused_id != Some(id);
+            self.compose_for_field(ctx, field_focused);
             return Focus::Modal {
                 field_focused,
                 field_selection: field_focused && focused_has_selection(ctx),
@@ -201,6 +207,25 @@ impl PromptInput {
             down_to_app,
             question_opens_shortcuts: app.shortcuts_panel_enabled && app.session.input.is_empty(),
         }
+    }
+
+    /// While a dialog's text field has the keyboard, remove the keys its
+    /// input method owns (the Enter that confirms a word, the Backspace that
+    /// edits marked text) before the router forwards them to the App; the
+    /// IME events stay for the field's `TextEdit`. Otherwise forget any
+    /// composition.
+    fn compose_for_field(&mut self, ctx: &egui::Context, field_focused: bool) {
+        if !field_focused {
+            if self.field_composer.is_composing() {
+                self.field_composer = Composer::new();
+            }
+            return;
+        }
+        let composer = &mut self.field_composer;
+        ctx.input_mut(|input| {
+            let processed = composer.process(&input.events, input.time);
+            input.events = keep_with_ime_events(&input.events, &processed.events);
+        });
     }
 
     /// Remove the IME's uncommitted (marked) text from the App's input
@@ -385,7 +410,7 @@ fn keep_with_ime_events(events: &[Event], kept: &[Event]) -> Vec<Event> {
 pub fn prompt_ui(ui: &mut egui::Ui, app: &mut App) {
     let id = prompt_id();
     push_app_cursor(ui.ctx(), id, app.session.input_cursor);
-    let editable = !app.is_input_locked();
+    let editable = !crate::dialogs::locks_prompt(app);
     let queued = app.session.input_queue.len();
     attachments_row(ui, app);
     let output = ui

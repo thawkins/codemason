@@ -20,20 +20,33 @@
 //!
 //! # Keyboard
 //!
-//! While a dialog is open the App's input is locked, so the key router gets
-//! [`crate::keys::Focus::Modal`] from the prompt: every press goes to the App
-//! as in the TUI and egui never sees it, except the typing and editing keys of
-//! a dialog's own text field (the model filter). [`prepare`] runs before the
-//! router for the one dialog that needs it (the model picker's filtered
-//! list, the provider fields' paste). A closing dialog gives egui's keyboard focus back to the prompt, so
-//! typing goes on there.
+//! While a dialog is open the App's input is locked (or, for the sidebar's
+//! properties dialog and session menu, the prompt treats it as locked:
+//! [`locks_prompt`]), so the key router gets [`crate::keys::Focus::Modal`]
+//! from the prompt: every press goes to the App as in the TUI and egui never
+//! sees it, except the typing and editing keys of a dialog's own text field
+//! (the model filter, the question's answer). [`prepare`] runs before the
+//! router for the dialogs that need it (the model picker's filtered list,
+//! the provider and properties fields' paste, the run-cost banner's dismiss
+//! rule). A closing dialog gives egui's keyboard focus back to the prompt,
+//! so typing goes on there.
+//!
+//! The run-cost banner ([`banner`]) is not a modal: it is drawn above the
+//! active dialog, if any.
 //!
 //! Dependencies: `codemason-app-core` (the App and its key types), `egui`
 //! (`Modal`) and `craft-ui` (`ComboBox`).
 
+pub mod banner;
+pub mod confirm;
+pub mod loop_setup;
 pub mod model_picker;
 pub mod permission;
+pub mod pickers;
+pub mod properties;
 pub mod provider;
+pub mod question;
+pub mod session_menu;
 pub mod shortcuts;
 
 use codemason_app_core::app::{App, ProviderSetupStep};
@@ -45,6 +58,13 @@ use crate::panels::prompt::prompt_id;
 /// The dialog the App's key handling serves now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActiveDialog {
+    /// The `/config list` save picker (`App::config_save_picker`).
+    ConfigSavePicker,
+    /// The input history picker (`App::history_picker`).
+    HistoryPicker,
+    /// The router configuration save confirmation
+    /// (`App::pending_router_save`).
+    RouterSave,
     /// The `?` keyboard shortcuts panel (`App::show_shortcuts`).
     Shortcuts,
     /// The provider setup flow (`App::provider_setup`), except its model
@@ -53,16 +73,36 @@ pub enum ActiveDialog {
     /// The model lists of the provider setup flow
     /// (`ProviderSetupStep::SelectModel` and `SelectRouterModel`).
     ModelPicker,
+    /// The `/loop` setup dialog (`App::loop_setup`).
+    LoopSetup,
+    /// The agent's front question (`session.question_queue`).
+    Question,
     /// The front permission request (`session.permission_queue`).
     Permission,
+    /// The single-button notice (`App::notice_open`).
+    Notice,
+    /// The `/db prune` confirmation (`App::db_prune_confirm_open`).
+    DbPrune,
+    /// The team force-cleanup confirmation
+    /// (`session.pending_forcecleanup`).
+    ForceCleanup,
+    /// The post-loop rollback offer (`session.pending_rollback`).
+    Rollback,
+    /// The plan approval (`session.plan_approval_pending`).
+    PlanApproval,
+    /// The project properties dialog (`sidebar.properties`).
+    Properties,
+    /// The sidebar's session menu (`sidebar.menu`).
+    SessionMenu,
 }
 
 /// Which dialog the App's key handling serves now, if this crate draws it.
 ///
-/// Follows the order of `App::handle_key` (`input_handler.rs`, then
-/// `input.rs`): a modal state checked before a dialog takes its keys, so
-/// while one is set (drawn elsewhere or not ported yet) the dialogs below it
-/// are not drawn.
+/// Follows the order of `App::handle_key` (`dispatch_key` in
+/// `input_handler.rs`, then `input::handle_key` in `input.rs`, which calls
+/// the sidebar's `handle_key` last): a modal state checked before a dialog
+/// takes its keys, so while one is set (drawn elsewhere or not ported yet)
+/// the dialogs below it are not drawn.
 ///
 /// # Arguments
 ///
@@ -73,12 +113,19 @@ pub enum ActiveDialog {
 /// The dialog to draw, or `None` when no drawn dialog has the keyboard.
 #[must_use]
 pub fn active(app: &App) -> Option<ActiveDialog> {
-    let earlier = app.config_save_picker.is_some()
-        || app.history_picker.is_some()
-        || app.row_action_confirm.is_some()
-        || app.pending_memory_delete.is_some()
-        || app.pending_router_save.is_some()
-        || app.plugin_store.is_some()
+    if app.config_save_picker.is_some() {
+        return Some(ActiveDialog::ConfigSavePicker);
+    }
+    if app.history_picker.is_some() {
+        return Some(ActiveDialog::HistoryPicker);
+    }
+    if app.row_action_confirm.is_some() || app.pending_memory_delete.is_some() {
+        return None;
+    }
+    if app.pending_router_save.is_some() {
+        return Some(ActiveDialog::RouterSave);
+    }
+    let earlier = app.plugin_store.is_some()
         || app.connector_store.is_some()
         || app.backend_panel.is_some()
         || app.queue_show_open
@@ -98,17 +145,71 @@ pub fn active(app: &App) -> Option<ActiveDialog> {
             _ => ActiveDialog::Provider,
         });
     }
-    let between = app.mcp_discover.is_some()
-        || app.plugins_list.is_some()
-        || app.loop_setup.is_some()
-        || !app.session.question_queue.is_empty();
-    if between {
+    if app.mcp_discover.is_some() || app.plugins_list.is_some() {
         return None;
+    }
+    if app.loop_setup.is_some() {
+        return Some(ActiveDialog::LoopSetup);
+    }
+    if !app.session.question_queue.is_empty() {
+        return Some(ActiveDialog::Question);
     }
     if !app.session.permission_queue.is_empty() {
         return Some(ActiveDialog::Permission);
     }
+    if app.notice_open {
+        return Some(ActiveDialog::Notice);
+    }
+    // The queue panel draws the queue clear confirm; the memory clear
+    // confirm is not ported yet.
+    if app.queue_clear_confirm_open || app.memory_clear_confirm_open {
+        return None;
+    }
+    if app.db_prune_confirm_open {
+        return Some(ActiveDialog::DbPrune);
+    }
+    if app.session.pending_forcecleanup.is_some() {
+        return Some(ActiveDialog::ForceCleanup);
+    }
+    if app.session.pending_rollback.is_some() {
+        return Some(ActiveDialog::Rollback);
+    }
+    if app.session.plan_approval_pending.is_some() {
+        return Some(ActiveDialog::PlanApproval);
+    }
+    let later = app.slash_menu.is_some()
+        || app.file_menu.is_some()
+        || app.research_view.is_some()
+        || app.memory_view.is_some()
+        || app.output_view.is_some();
+    if later {
+        return None;
+    }
+    if app.sidebar.properties.is_some() {
+        return Some(ActiveDialog::Properties);
+    }
+    if app.sidebar.menu.is_some() {
+        return Some(ActiveDialog::SessionMenu);
+    }
     None
+}
+
+/// Whether the prompt must give up the keyboard: an app-core modal locks
+/// the input (`App::is_input_locked`), or the sidebar's properties dialog or
+/// session menu is open. Those two take every key in app-core's
+/// `handle_key` without being input locks, so the prompt treats them as
+/// locks too: the router forwards every key and the prompt stops editing.
+///
+/// # Arguments
+///
+/// * `app` - the App whose modal state is read.
+///
+/// # Returns
+///
+/// `true` while the App, not the prompt, takes the keyboard.
+#[must_use]
+pub fn locks_prompt(app: &App) -> bool {
+    app.is_input_locked() || app.sidebar.properties.is_some() || app.sidebar.menu.is_some()
 }
 
 /// Draw the active dialog ([`active`]), if any.
@@ -127,18 +228,37 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         model_picker::reset(ctx);
     }
     let was_open = ctx.data(|d| d.get_temp::<bool>(open_id())).unwrap_or(false);
-    if dialog.is_none() && was_open && ctx.memory(|m| m.focused().is_none()) {
+    let unfocused = ctx.memory(|m| {
+        m.focused().is_none_or(|id| {
+            id == model_picker::filter_field_id() || id == question::answer_field_id()
+        })
+    });
+    if dialog.is_none() && was_open && unfocused {
         // A closed dialog gives the keyboard back to the prompt, where the
         // TUI's keyboard always is. (The prompt lost it when the modal took
         // the input and the prompt stopped being editable.)
         ctx.memory_mut(|m| m.request_focus(prompt_id()));
     }
     ctx.data_mut(|d| d.insert_temp(open_id(), dialog.is_some()));
+    // The run-cost banner is not a modal; it sits above everything.
+    banner::show(ctx, app);
     match dialog {
+        Some(ActiveDialog::ConfigSavePicker) => pickers::show_config_saves(ctx, app),
+        Some(ActiveDialog::HistoryPicker) => pickers::show_history(ctx, app),
+        Some(ActiveDialog::RouterSave) => confirm::show_router_save(ctx, app),
         Some(ActiveDialog::Shortcuts) => shortcuts::show(ctx, app),
         Some(ActiveDialog::Provider) => provider::show(ctx, app),
         Some(ActiveDialog::ModelPicker) => model_picker::show(ctx, app),
+        Some(ActiveDialog::LoopSetup) => loop_setup::show(ctx, app),
+        Some(ActiveDialog::Question) => question::show(ctx, app),
         Some(ActiveDialog::Permission) => permission::show(ctx, app),
+        Some(ActiveDialog::Notice) => confirm::show_notice(ctx, app),
+        Some(ActiveDialog::DbPrune) => confirm::show_db_prune(ctx, app),
+        Some(ActiveDialog::ForceCleanup) => confirm::show_force_cleanup(ctx, app),
+        Some(ActiveDialog::Rollback) => confirm::show_rollback(ctx, app),
+        Some(ActiveDialog::PlanApproval) => confirm::show_plan_approval(ctx, app),
+        Some(ActiveDialog::Properties) => properties::show(ctx, app),
+        Some(ActiveDialog::SessionMenu) => session_menu::show(ctx, app),
         None => false,
     }
 }
@@ -147,18 +267,37 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
 ///
 /// The model picker uses it so that, while its filter hides rows, Up and
 /// Down move between the shown rows and Enter on an empty list does nothing
-/// ([`model_picker::prepare`]); the provider dialog to paste into its text
-/// fields ([`provider::prepare`]).
+/// ([`model_picker::prepare`]); the provider and properties dialogs to paste
+/// into their text fields ([`provider::prepare`],
+/// [`properties::prepare`]). The run-cost banner, shown over any dialog,
+/// applies its dismiss rule first ([`banner::prepare`]).
 ///
 /// # Arguments
 ///
 /// * `ctx` - the frame's context, before the router reads input.
 /// * `app` - the App whose dialog state is read.
 pub fn prepare(ctx: &egui::Context, app: &mut App) {
+    banner::prepare(ctx, app);
     match active(app) {
         Some(ActiveDialog::ModelPicker) => model_picker::prepare(ctx, app),
         Some(ActiveDialog::Provider) => provider::prepare(ctx, app),
-        Some(ActiveDialog::Shortcuts | ActiveDialog::Permission) | None => {}
+        Some(ActiveDialog::Properties) => properties::prepare(ctx, app),
+        Some(
+            ActiveDialog::ConfigSavePicker
+            | ActiveDialog::HistoryPicker
+            | ActiveDialog::RouterSave
+            | ActiveDialog::Shortcuts
+            | ActiveDialog::LoopSetup
+            | ActiveDialog::Question
+            | ActiveDialog::Permission
+            | ActiveDialog::Notice
+            | ActiveDialog::DbPrune
+            | ActiveDialog::ForceCleanup
+            | ActiveDialog::Rollback
+            | ActiveDialog::PlanApproval
+            | ActiveDialog::SessionMenu,
+        )
+        | None => {}
     }
 }
 
