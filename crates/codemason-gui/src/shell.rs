@@ -5,10 +5,11 @@
 //! edits the App's own input buffer, and over them the App's active modal
 //! dialog ([`dialogs::show`]); later tasks render the other panes from the
 //! `App` state.
-//! Each frame ([`Shell::update`]) it first drains the agent-event queue and
-//! the tracing log channel into the `App`, runs app-core's background
-//! housekeeping pass (`App::housekeeping`) and the App's timers
-//! (`App::poll_timers`), prepares the prompt's input
+//! [`Shell::logic`], which eframe also runs while the window is hidden,
+//! drains the agent-event queue and the tracing log channel into the `App`
+//! and runs app-core's background housekeeping pass (`App::housekeeping`)
+//! and the App's timers (`App::poll_timers`). Each shown frame then
+//! prepares the prompt's input
 //! ([`PromptInput::prepare`]) and the active dialog's ([`dialogs::prepare`]),
 //! then routes the frame's key presses to `App::handle_key` through
 //! [`KeyRouter`] before any widget reads them. After drawing it runs the key
@@ -155,15 +156,48 @@ impl Shell {
         dialogs::show(ui.ctx(), &mut self.app);
     }
 
-    /// Run one frame: drain the sources, route the keys, draw.
+    /// Run one whole frame: [`Self::logic`], then route the keys and draw.
+    ///
+    /// eframe calls the two halves separately (`eframe::App::logic` and
+    /// `eframe::App::ui`); harnesses that drive only a `Ui` call this.
     ///
     /// # Arguments
     ///
     /// * `ui` - the root ui of the window.
     pub fn update(&mut self, ui: &mut egui::Ui) {
+        self.logic(ui.ctx());
+        self.draw_frame(ui);
+    }
+
+    /// The work that must go on whether or not the window is shown: drain
+    /// the agent events and log records into the App, run app-core's
+    /// housekeeping pass and the App's timers, and keep a wake scheduled for
+    /// the next pass.
+    ///
+    /// eframe calls `eframe::App::logic` before every frame and, while the
+    /// window is minimised or hidden (when it runs no frame at all), on
+    /// every requested repaint, at most every 100 ms for an invisible
+    /// window. The pass always requests the next wake (at most
+    /// `HOUSEKEEPING_INTERVAL` away), so swarm unblocking and completion,
+    /// autopilot, timed-question defaults and the history flush keep going
+    /// while the window is hidden, as in the TUI. It reads no input and
+    /// draws nothing.
+    ///
+    /// # Arguments
+    ///
+    /// * `ctx` - the window's context.
+    pub fn logic(&mut self, ctx: &egui::Context) {
         self.drain_sources();
-        self.housekeeping(ui.ctx());
-        self.poll_timers(ui.ctx());
+        self.housekeeping(ctx);
+        self.poll_timers(ctx);
+        // `/quit` (or any other path that stops the app) closes the window.
+        if !self.app.is_running {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+
+    /// Route this frame's keys and draw it (the shown half of a frame).
+    fn draw_frame(&mut self, ui: &mut egui::Ui) {
         // A context-menu item chosen last frame acts on the prompt editor
         // before the prompt reads this frame's input.
         dialogs::context_menu::apply_pending(ui.ctx());
@@ -204,17 +238,25 @@ impl Shell {
     /// the polls that apply what background jobs deposited (compaction,
     /// rollback, `/swarm`, `/bench`, sub-agent launches, background
     /// sessions, store fetches, ...), gated by `HOUSEKEEPING_INTERVAL`, then
-    /// the history flush. It runs every frame, as the terminal frontend runs
-    /// it every loop wake, and asks for a frame when the next pass is due:
-    /// background jobs fill shared slots without waking anything, so that
-    /// wake (the TUI's loop keeps the same one) is what lands their results
-    /// while the user is idle.
+    /// the history flush. It runs on every [`Self::logic`] call, as the
+    /// terminal frontend runs it every loop wake, and asks for a wake when
+    /// the next pass is due: background jobs fill shared slots without
+    /// waking anything, so that wake (the TUI's loop keeps the same one) is
+    /// what lands their results while the user is idle or the window is
+    /// hidden.
     ///
     /// It runs on the UI thread through `Handle::block_on`, like
-    /// `App::handle_event`. That is safe because every await in the pass is
-    /// bounded (lock `try_read`s that skip when held, small task-store
-    /// writes), the same pass the TUI has always run on its render loop.
-    /// Without attached sources there is no runtime, so nothing runs.
+    /// `App::handle_event`, the same pass the TUI runs on its render loop.
+    /// Most awaits are short (lock `try_read`s that skip when held, small
+    /// task-store writes), but not all: when a finished `/swarm`
+    /// decomposition is applied or a swarm finalises, each task-store write
+    /// takes the store's blocking file lock and runs the team's
+    /// `TaskCreated` / `TaskCompleted` hook inline, each hook with a 30 s
+    /// timeout, one task after another. With such hooks configured the
+    /// window does not repaint or take input until they finish, exactly as
+    /// the TUI stalls. Moving that work off the thread is a recorded
+    /// follow-up. Without attached sources there is no runtime, so nothing
+    /// runs.
     fn housekeeping(&mut self, ctx: &egui::Context) {
         let Some(sources) = self.sources.as_ref() else {
             return;
@@ -299,7 +341,13 @@ impl Shell {
 }
 
 impl eframe::App for Shell {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // The inherent `Shell::logic` (inherent methods take precedence).
+        Self::logic(self, ctx);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.update(ui);
+        // eframe has just called `logic` for this frame.
+        self.draw_frame(ui);
     }
 }

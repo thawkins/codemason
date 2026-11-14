@@ -541,3 +541,88 @@ fn test_overlay_dispatch_follows_app_core_key_priority() {
     );
     assert!(dialog_shown(&harness, "Output: build"));
 }
+
+/// The stored (non-focused) session the tail tests show.
+const STORED: &str = "session-overlays-stored";
+
+/// Store message `i` of the stored session.
+fn store_line(app: &App, i: usize) {
+    app.storage
+        .create_message(&Message::user_text(STORED, format!("stored line {i}")))
+        .expect("store message");
+}
+
+/// A shell showing the output overlay over [`STORED`], holding `count`
+/// stored messages.
+fn stored_output_rig(
+    count: usize,
+) -> (
+    tokio::runtime::Runtime,
+    UnboundedSender<Event>,
+    Harness<'static, Shell>,
+) {
+    rig(|app| {
+        app.storage
+            .create_session(STORED, "/")
+            .expect("store session");
+        for i in 0..count {
+            store_line(app, i);
+        }
+        app.output_view = Some(OutputViewState {
+            target: OutputViewTarget::Session {
+                session_id: STORED.to_string(),
+                label: "sub-agent".to_string(),
+            },
+            scroll_offset: 0,
+            max_scroll: 0,
+            line_cache: OutputViewLineCache::default(),
+        });
+    })
+}
+
+/// The output overlay's `(scroll_offset, max_scroll)`.
+fn output_offsets(harness: &Harness<'static, Shell>) -> Option<(u16, u16)> {
+    harness
+        .state()
+        .app()
+        .output_view
+        .as_ref()
+        .map(|v| (v.scroll_offset, v.max_scroll))
+}
+
+#[test]
+fn test_output_view_follows_the_tail_of_a_growing_stored_session() {
+    let (_rt, _events, mut harness) = stored_output_rig(80);
+    harness.run();
+    assert!(dialog_shown(&harness, "Output: sub-agent"));
+    harness.get_by_label_contains("You: stored line 79");
+    assert!(output_offsets(&harness).is_some_and(|(offset, max)| offset == 0 && max > 0));
+
+    // The running agent stores more output: the pinned view shows it.
+    for i in 80..83 {
+        store_line(harness.state().app(), i);
+    }
+    harness.run();
+    harness.get_by_label_contains("You: stored line 82");
+    assert_eq!(output_offsets(&harness).map(|(offset, _)| offset), Some(0));
+}
+
+#[test]
+fn test_output_view_scrolled_up_keeps_its_offset_as_a_stored_session_grows() {
+    let (_rt, _events, mut harness) = stored_output_rig(80);
+    harness.run();
+    type_key(&mut harness, egui::Key::PageUp, None);
+    let scrolled = output_offsets(&harness).map(|(offset, _)| offset);
+    assert!(scrolled.is_some_and(|offset| offset > 0), "{scrolled:?}");
+
+    store_line(harness.state().app(), 80);
+    harness.run();
+    // As in the TUI: the offset from the bottom is kept, the view is not
+    // pulled to the tail, so the new line is not shown.
+    assert_eq!(output_offsets(&harness).map(|(offset, _)| offset), scrolled);
+    assert!(
+        harness
+            .query_by_label_contains("You: stored line 80")
+            .is_none()
+    );
+}

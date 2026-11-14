@@ -124,6 +124,16 @@ pub struct MessageSource<'a> {
     pub processing: bool,
 }
 
+/// Where [`MessagesView::show_messages`] moves the view this frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ScrollTo {
+    /// To the end of the content, which then stays pinned there as content
+    /// grows.
+    Bottom,
+    /// This many points above the end of the content.
+    FromBottom(f32),
+}
+
 /// Where a [`MessagesView`] drew and how far it is scrolled.
 #[derive(Debug, Clone, Copy)]
 pub struct ViewScroll {
@@ -208,8 +218,8 @@ impl MessagesView {
     ///   step numbers, display names, working directory).
     /// * `source` - the messages to show and whether they are streaming.
     /// * `palette` - the colours of the current theme mode.
-    /// * `scroll_to` - a scroll offset from the top, in points, to move to
-    ///   this frame (a keyboard scroll); `None` keeps the user's scrolling.
+    /// * `scroll_to` - where to move this frame (a keyboard scroll, or
+    ///   keeping a rebuilt view in place); `None` keeps the user's scrolling.
     ///
     /// # Returns
     ///
@@ -221,7 +231,7 @@ impl MessagesView {
         app: &App,
         source: MessageSource<'_>,
         palette: &Palette,
-        scroll_to: Option<f32>,
+        scroll_to: Option<ScrollTo>,
     ) -> ViewScroll {
         self.laid_out = 0;
         let row_height = ui
@@ -243,8 +253,15 @@ impl MessagesView {
                     .id_salt("messages_scroll")
                     .auto_shrink(false)
                     .stick_to_bottom(true);
-                if let Some(offset) = scroll_to {
-                    scroll = scroll.vertical_scroll_offset(offset.max(0.0));
+                if let Some(ScrollTo::FromBottom(points)) = scroll_to {
+                    // The view fills the space left (`auto_shrink(false)`),
+                    // so its largest offset is the content height minus that.
+                    if self.offsets_dirty {
+                        self.rebuild_offsets();
+                    }
+                    let total = self.offsets.last().copied().unwrap_or(0.0);
+                    let max = (total - ui.available_height()).max(0.0);
+                    scroll = scroll.vertical_scroll_offset((max - points).max(0.0));
                 } else if outcome.evicted_height > 0.0 && !self.at_bottom {
                     // Keep the same message at the top of the viewport while
                     // the user is scrolled up: the content above it shrank.
@@ -252,8 +269,23 @@ impl MessagesView {
                         (self.scroll_offset - outcome.evicted_height).max(0.0),
                     );
                 }
-                let output = scroll
-                    .show_viewport(ui, |ui, viewport| self.show_visible(ui, viewport, palette));
+                let to_bottom = matches!(scroll_to, Some(ScrollTo::Bottom));
+                let output = scroll.show_viewport(ui, |ui, viewport| {
+                    self.show_visible(ui, viewport, palette);
+                    if to_bottom {
+                        // Scroll to the end of the content; once there, the
+                        // area sticks to the bottom as more arrives.
+                        let bottom = ui.max_rect().bottom();
+                        ui.scroll_to_rect_animation(
+                            Rect::from_min_max(
+                                pos2(ui.max_rect().left(), bottom - 1.0),
+                                pos2(ui.max_rect().left() + 1.0, bottom),
+                            ),
+                            Some(egui::Align::BOTTOM),
+                            egui::style::ScrollAnimation::none(),
+                        );
+                    }
+                });
                 max_offset = (output.content_size.y - output.inner_rect.height()).max(0.0);
                 self.scroll_offset = output.state.clamped_offset().y;
                 self.at_bottom = self.scroll_offset >= max_offset - HEIGHT_EPSILON;

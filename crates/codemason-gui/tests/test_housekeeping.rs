@@ -90,3 +90,41 @@ fn test_shell_schedules_a_wake_for_the_next_housekeeping_pass() {
         "an idle shell must wake within {HOUSEKEEPING_INTERVAL:?}, got {delay:?}"
     );
 }
+
+#[test]
+fn test_shell_logic_alone_runs_housekeeping_and_timers() {
+    // eframe calls only `logic` while the window is minimised or hidden: no
+    // frame is drawn, yet background results and timers must still land.
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let app = {
+        let _enter = runtime.enter();
+        let mut app = support::make_app();
+        app.session.session_id = Some(SESSION.to_string());
+        app.session.compact_in_progress = true;
+        *app.session.compact_result.lock().expect("compact slot") =
+            Some(Ok(vec![Message::user_text(
+                SESSION,
+                "compacted while hidden",
+            )]));
+        make_housekeeping_due(&mut app);
+        app.status = "slash command done".to_string();
+        app.arm_status_expiry();
+        app.status_set_at = Instant::now().checked_sub(Duration::from_secs(10));
+        app
+    };
+    let (_events_tx, events) = tokio::sync::mpsc::unbounded_channel();
+    let (_logs_tx, logs) = tui_log_channel(16);
+    let mut shell = Shell::new(app).with_sources(events, logs, runtime.handle().clone());
+    let ctx = egui::Context::default();
+
+    shell.logic(&ctx);
+
+    let app = shell.app();
+    assert!(!app.session.compact_in_progress, "housekeeping ran");
+    assert_eq!(app.session.messages.len(), 1);
+    assert_eq!(app.status, "ready", "the status timer ran");
+    assert!(
+        ctx.has_requested_repaint(),
+        "a wake is kept for the next pass, so logic keeps running while hidden"
+    );
+}

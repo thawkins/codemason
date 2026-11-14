@@ -14,9 +14,12 @@
 //! `max_scroll`, which the frontend measures); this overlay writes
 //! `max_scroll` from the view's real height every frame, moves the view
 //! when a key changed `scroll_offset`, and writes the wheel's scrolling back
-//! to `scroll_offset`, so keys and wheel agree. A session other than the
-//! focused one is read back from storage, which does not keep message edit
-//! counters, so its view is rebuilt whenever the output changes.
+//! to `scroll_offset`, so keys and wheel agree. As in the TUI, offset 0 pins
+//! the view to the tail, so a running agent's new output stays in view, and
+//! any other offset keeps its distance from the bottom. A session other
+//! than the focused one is read back from storage, which does not keep
+//! message edit counters, so its view is rebuilt whenever the output
+//! changes and put back at app-core's offset.
 //!
 //! Dependencies: `codemason-app-core`, [`crate::panels::messages`] and
 //! `egui`.
@@ -26,7 +29,7 @@ use codemason_app_core::input_event::Key;
 
 use super::{key_buttons, modal, plain};
 use crate::palette::palette_for;
-use crate::panels::messages::{MessageSource, MessagesView};
+use crate::panels::messages::{MessageSource, MessagesView, ScrollTo};
 
 /// Accessible label of the output transcript.
 pub const OUTPUT_LABEL: &str = "Output";
@@ -95,15 +98,13 @@ fn show_with(ctx: &egui::Context, app: &mut App, state: &mut OutputView) -> bool
     let key = (content.session_id.clone(), content.generation);
     if !content.focused && state.built_for.as_ref() != Some(&key) {
         // A stored session's messages carry no edit counter: rebuild the
-        // view, keeping the reader's position.
+        // view, then put it back where app-core's offset says (the tail
+        // when pinned to the bottom).
         state.view = MessagesView::default();
         state.force_scroll = state.built_for.is_some();
     }
     state.built_for = Some(key);
-    let (offset_lines, max_lines) = app
-        .output_view
-        .as_ref()
-        .map_or((0, 0), |v| (v.scroll_offset, v.max_scroll));
+    let offset_lines = app.output_view.as_ref().map_or(0, |v| v.scroll_offset);
     let key_scrolled = state.last_offset.is_some_and(|last| last != offset_lines);
     let follow_app = key_scrolled || std::mem::take(&mut state.force_scroll);
     let palette = palette_for(app.theme_mode);
@@ -119,9 +120,17 @@ fn show_with(ctx: &egui::Context, app: &mut App, state: &mut OutputView) -> bool
                 let row = ui.ctx().fonts_mut(|f| {
                     f.row_height(&egui::FontId::proportional(crate::styled_text::FONT_SIZE))
                 });
-                // Lines from the bottom become points from the top.
-                let scroll_to =
-                    follow_app.then(|| f32::from(max_lines.saturating_sub(offset_lines)) * row);
+                // As in the TUI, app-core's offset counts lines from the
+                // bottom: 0 pins the view to the tail, so new output stays
+                // in view; any other offset keeps that distance from the
+                // bottom.
+                let scroll_to = follow_app.then(|| {
+                    if offset_lines == 0 {
+                        ScrollTo::Bottom
+                    } else {
+                        ScrollTo::FromBottom(f32::from(offset_lines) * row)
+                    }
+                });
                 let source = MessageSource {
                     messages: &content.messages,
                     processing: content.focused && app.session.is_processing,

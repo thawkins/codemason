@@ -24,10 +24,17 @@ impl App {
     /// inside. The tail - copying the off-thread memory count into the
     /// status-bar cache and the debounced history flush - runs on every call.
     ///
-    /// Every await is bounded: the MCP and connector steps use `try_read`
-    /// on the client lock and skip when it is held, and the swarm steps do
-    /// small task-store file writes. A frontend may therefore drive this on
-    /// its UI thread, as the terminal frontend always has.
+    /// Most awaits are short: the MCP and connector steps use `try_read` on
+    /// the client lock and skip when it is held. The swarm steps are not
+    /// always short. Applying a finished `/swarm` decomposition
+    /// (`poll_pending_swarm` -> `TaskStore::add_task`) and finalising a
+    /// swarm (`poll_swarm_completion`, also run per background session by
+    /// `poll_background_sessions` -> `TaskStore::complete`) take the task
+    /// store's blocking exclusive file lock, which teammate processes
+    /// contend for, and run the team's `TaskCreated` / `TaskCompleted` hook
+    /// inline for each task, in series, each with a 30 s timeout
+    /// (`HOOK_TIMEOUT`). A frontend that drives this on its UI thread, as
+    /// both frontends do, stops repainting until those hooks finish.
     ///
     /// # Arguments
     ///
