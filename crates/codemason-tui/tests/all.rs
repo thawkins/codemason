@@ -133,6 +133,8 @@ mod test_alt_a_agents_window;
 mod test_alt_t_teams_window;
 #[path = "test_app_core_input.rs"]
 mod test_app_core_input;
+#[path = "test_app_core_moved.rs"]
+mod test_app_core_moved;
 #[path = "test_app_send_sync.rs"]
 mod test_app_send_sync;
 #[path = "test_automation_command.rs"]
