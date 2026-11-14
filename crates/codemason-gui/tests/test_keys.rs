@@ -484,3 +484,54 @@ fn test_tui_alt_letters_match_app_core_input_handler() {
         "keys::TUI_ALT_LETTERS must list every Alt+letter app-core handles"
     );
 }
+
+/// Whether `input` still holds a `Text` event.
+fn has_text(input: &egui::InputState) -> bool {
+    input
+        .events
+        .iter()
+        .any(|e| matches!(e, egui::Event::Text(_)))
+}
+
+#[test]
+fn test_route_drops_text_of_unbound_alt_letter_while_typing() {
+    for platform in [Platform::Linux, Platform::Windows] {
+        let mut router = KeyRouter::new(default_keymap(platform));
+        let mut input = input_with(vec![
+            press(egui::Key::Z, egui::Modifiers::ALT),
+            egui::Event::Text("z".into()),
+        ]);
+
+        router.route(&mut input, TYPING);
+
+        assert!(!has_text(&input), "{platform:?}: Alt+Z types nothing");
+    }
+}
+
+#[test]
+fn test_route_keeps_altgr_text_while_typing() {
+    let mut router = KeyRouter::new(default_keymap(Platform::Windows));
+    let altgr = egui::Modifiers::CTRL | egui::Modifiers::ALT | egui::Modifiers::COMMAND;
+    let mut input = input_with(vec![
+        press(egui::Key::Q, altgr),
+        egui::Event::Text("@".into()),
+    ]);
+
+    let keys = router.route(&mut input, TYPING);
+
+    assert_eq!(keys, Vec::new());
+    assert!(has_text(&input), "AltGr+Q still types @");
+}
+
+#[test]
+fn test_route_keeps_mac_option_text_while_typing() {
+    let mut router = KeyRouter::new(default_keymap(Platform::Mac));
+    let mut input = input_with(vec![
+        press(egui::Key::Z, egui::Modifiers::ALT),
+        egui::Event::Text("\u{3a9}".into()),
+    ]);
+
+    router.route(&mut input, TYPING);
+
+    assert!(has_text(&input), "macOS Option keeps typing");
+}

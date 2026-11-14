@@ -249,7 +249,7 @@ pub const TUI_ALT_LETTERS: &[char] = &[
 /// [`TUI_ALT_LETTERS`], or Alt with Up, Down (teammate focus) or Enter
 /// (newline), and neither Ctrl nor Cmd.
 pub fn is_tui_alt_chord(input: KeyInput) -> bool {
-    if !input.mods.alt || input.mods.ctrl || input.mods.cmd {
+    if !is_plain_alt(input) {
         return false;
     }
     match input.key {
@@ -269,6 +269,11 @@ pub fn is_tui_alt_chord(input: KeyInput) -> bool {
         | Key::F(_)
         | Key::Other => false,
     }
+}
+
+/// Whether `input` holds Alt without Ctrl or Cmd.
+fn is_plain_alt(input: KeyInput) -> bool {
+    input.mods.alt && !input.mods.ctrl && !input.mods.cmd
 }
 
 /// The TUI key press an egui `Copy` or `Cut` event stands for.
@@ -369,6 +374,10 @@ impl KeyRouter {
     ///   never types these letters). On macOS an Alt (Option) press that
     ///   typed a character is left to the prompt instead, as a terminal does
     ///   unless Option is set to act as Meta.
+    /// - Off macOS, any other Alt press without Ctrl that typed text has its
+    ///   text dropped and is not forwarded: app-core ignores an unbound
+    ///   Alt+character, so the prompt does not type it either. Ctrl+Alt
+    ///   (AltGr on Windows) and Linux AltGr (reported without Alt) still type.
     /// - Ctrl+C and Ctrl+X (egui `Copy` and `Cut` events off macOS, see
     ///   below) are left to the prompt when it has a non-empty selection, so
     ///   they only copy or cut it, matching the TUI's "copy if a selection is
@@ -428,6 +437,14 @@ impl KeyRouter {
                     drop[i + 1] = true;
                 }
                 keys.push(key);
+                continue;
+            }
+            // App-core ignores an unbound Alt+character, so off macOS the
+            // prompt does not type it either. It is not forwarded (app-core
+            // would drop it). Ctrl+Alt (AltGr on Windows) and Linux AltGr
+            // (reported without Alt) still type.
+            if typing && typed_text && !platform.is_mac() && is_plain_alt(key) {
+                drop[i + 1] = true;
                 continue;
             }
             if typing && (typed_text || !forwards_while_typing(key)) {
