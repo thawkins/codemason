@@ -32,6 +32,7 @@ pub mod research_adapter;
 pub mod research_progress;
 pub mod session_menu;
 pub mod sessions_sidebar_state;
+pub mod shortcuts;
 pub mod status;
 pub mod styled;
 pub mod text_utils;
