@@ -368,6 +368,13 @@ pub fn is_prompt_edit_key(input: KeyInput) -> bool {
     }
 }
 
+/// Whether `input` is a press a focused text field applies itself: a
+/// printable key, Backspace, Delete, Left, Right, Home or End, as
+/// [`is_prompt_edit_key`] without Up and Down (which move a dialog's list).
+fn is_field_edit_key(input: KeyInput) -> bool {
+    is_prompt_edit_key(input) && !matches!(input.key, Key::Up | Key::Down)
+}
+
 /// Whether `input` is a key the App handles for the focused prompt: it
 /// reads or edits the App's input buffer, so it is forwarded and the prompt
 /// TextEdit never sees it.
@@ -382,6 +389,10 @@ pub fn is_prompt_edit_key(input: KeyInput) -> bool {
 ///   and Down likewise with `down_to_app`: the App browses the input history
 ///   (or moves the Memory panel cursor), as the TUI's `HistoryUp` and
 ///   `HistoryDown` do on the first and last logical line.
+/// - `?` without Ctrl, Alt or Cmd when [`Focus::Prompt`]'s
+///   `question_opens_shortcuts` is set (the prompt is empty): the App opens
+///   the keyboard shortcuts panel, as the TUI's `Key::Char('?') if
+///   input.is_empty()` arm does. The text it typed is dropped with it.
 ///
 /// # Arguments
 ///
@@ -393,6 +404,7 @@ pub fn is_prompt_app_key(input: KeyInput, focus: Focus) -> bool {
         completion_open,
         up_to_app,
         down_to_app,
+        question_opens_shortcuts,
         ..
     } = focus
     else {
@@ -401,6 +413,9 @@ pub fn is_prompt_app_key(input: KeyInput, focus: Focus) -> bool {
     let plain = !input.mods.shift && !input.mods.alt;
     match input.key {
         Key::Enter => true,
+        Key::Char('?') => {
+            question_opens_shortcuts && !input.mods.ctrl && !input.mods.alt && !input.mods.cmd
+        }
         Key::Up => completion_open || (up_to_app && plain),
         Key::Down => completion_open || (down_to_app && plain),
         Key::Tab | Key::BackTab | Key::Esc => completion_open,
@@ -444,8 +459,24 @@ fn forwards_while_typing(input: KeyInput) -> bool {
 /// Where the keyboard focus is when a frame's keys are routed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Focus {
-    /// The prompt TextEdit does not have the keyboard.
+    /// No widget has the keyboard and no modal is open: every press goes to
+    /// the App and stays in the input for egui.
     Elsewhere,
+    /// Another widget than the prompt has the keyboard and no modal is open.
+    /// It keeps its text, its editing keys and Ctrl+C/Ctrl+X, as the prompt
+    /// does with a selection; Esc, function keys, PageUp/PageDown and the TUI
+    /// Alt chords still reach the App.
+    Widget,
+    /// An app-core modal (a dialog, a menu, the shortcuts panel, a running
+    /// compaction) owns the keyboard, as in the TUI: every press goes to the
+    /// App and is removed from egui's input with the text it typed, so no
+    /// dialog button is also pressed by Enter or Space, and Tab does not move
+    /// egui's focus. The exception is a dialog's own text field (a filter):
+    /// while one has the keyboard it keeps its text and editing keys.
+    Modal {
+        /// Whether a dialog's text field (not the prompt) has the keyboard.
+        field_focused: bool,
+    },
     /// The prompt TextEdit has the keyboard.
     Prompt {
         /// Whether the prompt has a non-empty text selection.
@@ -459,6 +490,9 @@ pub enum Focus {
         /// Whether Down goes to the App: the caret is on the last logical
         /// line, the history is being browsed, or the Memory panel is shown.
         down_to_app: bool,
+        /// Whether `?` goes to the App to open the shortcuts panel: the
+        /// prompt is empty and the panel is enabled.
+        question_opens_shortcuts: bool,
     },
 }
 
@@ -501,10 +535,11 @@ impl KeyRouter {
     /// the App's own input buffer, so the two cannot drift. The rules:
     ///
     /// - A key the App handles for the prompt ([`is_prompt_app_key`]: Enter,
-    ///   the completion-menu keys while a menu is open, and Up or Down at the
-    ///   first or last line for the history) is forwarded and
-    ///   removed from `input`, so the App submits, inserts the newline or
-    ///   moves the menu exactly once and the TextEdit does not act on it too.
+    ///   the completion-menu keys while a menu is open, Up or Down at the
+    ///   first or last line for the history, and `?` on an empty prompt) is
+    ///   forwarded and removed from `input` with the text it typed, so the
+    ///   App submits, inserts the newline, moves the menu or opens the
+    ///   shortcuts panel exactly once and the TextEdit does not act on it too.
     /// - A TUI Alt chord ([`is_tui_alt_chord`]) is forwarded and the text it
     ///   typed (`is_key_text`: the next `Text`, equal to the key's
     ///   character ignoring ASCII case) is dropped, so its letter never reaches the prompt (the TUI
@@ -524,6 +559,12 @@ impl KeyRouter {
     /// - Other presses are forwarded only when they typed no text and the
     ///   prompt ignores them: Esc, function keys, PageUp and PageDown.
     ///
+    /// Under [`Focus::Widget`] the same typing rules apply, with the widget
+    /// keeping Ctrl+C and Ctrl+X and no prompt keys. Under [`Focus::Modal`]
+    /// every press is forwarded and removed from `input` with the text it
+    /// typed, except the typing and editing keys of a focused dialog text
+    /// field, which stay with the field and are not forwarded.
+    ///
     /// egui `Copy`/`Cut` events convert to Ctrl+C/Ctrl+X only off macOS and
     /// only when the frame holds Ctrl without Shift or Alt; macOS Cmd+C/Cmd+X
     /// and PC Shift+Delete or Ctrl+Shift+Delete never reach the App as Ctrl
@@ -532,8 +573,7 @@ impl KeyRouter {
     /// # Arguments
     ///
     /// * `input` - the frame's input, before any widget reads it.
-    /// * `focus` - whether the prompt TextEdit has the keyboard, and whether
-    ///   it has a selection.
+    /// * `focus` - where the keyboard is (see [`Focus`]).
     ///
     /// # Returns
     ///
@@ -541,9 +581,16 @@ impl KeyRouter {
     pub fn route(&mut self, input: &mut egui::InputState, focus: Focus) -> Vec<KeyInput> {
         let platform = self.keymap.platform();
         let (typing, has_selection) = match focus {
-            Focus::Elsewhere => (false, false),
+            Focus::Elsewhere | Focus::Modal { .. } => (false, false),
             Focus::Prompt { has_selection, .. } => (true, has_selection),
+            Focus::Widget => (true, true),
         };
+        let field_focused = matches!(
+            focus,
+            Focus::Modal {
+                field_focused: true
+            }
+        );
         let active = Active {
             typing,
             ..Active::NONE
@@ -557,8 +604,10 @@ impl KeyRouter {
         let mut drop = vec![false; events.len()];
         for (i, event) in events.iter().enumerate() {
             if let Some(key) = clipboard_key_input(event, platform, &input.modifiers) {
-                // A prompt selection takes Ctrl+C and Ctrl+X for itself.
-                if !(typing && has_selection) {
+                // A prompt selection (or another focused widget, or a
+                // dialog's text field) takes Ctrl+C and Ctrl+X for itself.
+                let keeps_clipboard = (typing && has_selection) || field_focused;
+                if !keeps_clipboard {
                     keys.push(key);
                 }
                 continue;
@@ -574,8 +623,23 @@ impl KeyRouter {
             // Text that follows in the same frame (fast typing, an IME
             // commit) is never dropped and never makes the press "typed".
             let typed_text = next_text.is_some_and(|text| is_key_text(key, text));
+            if let Focus::Modal { field_focused } = focus {
+                // A dialog's text field keeps its typing and editing keys.
+                if field_focused && is_field_edit_key(key) {
+                    continue;
+                }
+                drop[i] = true;
+                if typed_text {
+                    drop[i + 1] = true;
+                }
+                keys.push(key);
+                continue;
+            }
             if is_prompt_app_key(key, focus) {
                 drop[i] = true;
+                if typed_text {
+                    drop[i + 1] = true;
+                }
                 keys.push(key);
                 continue;
             }

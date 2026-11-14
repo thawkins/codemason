@@ -36,6 +36,7 @@ const TYPING: Focus = Focus::Prompt {
     completion_open: false,
     up_to_app: false,
     down_to_app: false,
+    question_opens_shortcuts: false,
 };
 
 /// An egui key press of `key` with `modifiers`.
@@ -354,6 +355,7 @@ fn test_route_leaves_ctrl_c_and_ctrl_x_to_a_prompt_selection() {
             completion_open: false,
             up_to_app: false,
             down_to_app: false,
+            question_opens_shortcuts: false,
         },
     );
 
@@ -664,6 +666,7 @@ fn test_route_forwards_completion_keys_only_while_a_menu_is_open() {
             completion_open,
             up_to_app: false,
             down_to_app: false,
+            question_opens_shortcuts: false,
         };
         let keys = router.route(&mut input, focus);
         (keys, input.events.len())
@@ -704,6 +707,7 @@ fn test_route_forwards_up_and_down_only_at_the_history_edges() {
             completion_open: false,
             up_to_app,
             down_to_app,
+            question_opens_shortcuts: false,
         };
         let keys: Vec<Key> = router
             .route(&mut input, focus)
@@ -747,4 +751,131 @@ fn test_prompt_edit_keys_are_typing_and_caret_keys_only() {
     assert!(!is_prompt_edit_key(key(Key::Esc, Modifiers::NONE)));
     assert!(!is_prompt_edit_key(key(Key::Enter, Modifiers::NONE)));
     assert!(!is_prompt_edit_key(key(Key::F(1), Modifiers::NONE)));
+}
+
+/// The keys `router` forwards from `events` under `focus`, and the events
+/// left for egui's widgets.
+fn route_events(focus: Focus, events: Vec<egui::Event>) -> (Vec<KeyInput>, Vec<egui::Event>) {
+    let mut router = KeyRouter::new(default_keymap(Platform::Linux));
+    let mut input = input_with(events);
+    let keys = router.route(&mut input, focus);
+    (keys, input.events)
+}
+
+/// A TUI key press of `key` with no modifiers.
+fn plain(key: Key) -> KeyInput {
+    KeyInput {
+        key,
+        mods: Modifiers::NONE,
+    }
+}
+
+#[test]
+fn test_route_modal_forwards_and_removes_every_press() {
+    let (keys, left) = route_events(
+        Focus::Modal {
+            field_focused: false,
+        },
+        vec![
+            press(egui::Key::Enter, egui::Modifiers::NONE),
+            press(egui::Key::Space, egui::Modifiers::NONE),
+            egui::Event::Text(" ".to_string()),
+            press(egui::Key::Tab, egui::Modifiers::NONE),
+            press(egui::Key::Y, egui::Modifiers::NONE),
+            egui::Event::Text("y".to_string()),
+        ],
+    );
+
+    assert_eq!(
+        keys,
+        vec![
+            plain(Key::Enter),
+            plain(Key::Char(' ')),
+            plain(Key::Tab),
+            plain(Key::Char('y')),
+        ],
+        "the App gets every press, as in the TUI"
+    );
+    assert!(
+        left.is_empty(),
+        "no dialog button sees Enter or Space, and Tab moves no egui focus: {left:?}"
+    );
+}
+
+#[test]
+fn test_route_modal_text_field_keeps_typing_and_editing_keys() {
+    let (keys, left) = route_events(
+        Focus::Modal {
+            field_focused: true,
+        },
+        vec![
+            press(egui::Key::S, egui::Modifiers::NONE),
+            egui::Event::Text("s".to_string()),
+            press(egui::Key::Backspace, egui::Modifiers::NONE),
+            press(egui::Key::ArrowDown, egui::Modifiers::NONE),
+            press(egui::Key::Enter, egui::Modifiers::NONE),
+            press(egui::Key::Escape, egui::Modifiers::NONE),
+        ],
+    );
+
+    assert_eq!(
+        keys,
+        vec![plain(Key::Down), plain(Key::Enter), plain(Key::Esc)],
+        "the dialog's list and buttons keys still go to the App"
+    );
+    assert_eq!(left.len(), 3, "the field keeps s, its text and Backspace");
+}
+
+#[test]
+fn test_route_other_widget_keeps_typing_and_clipboard() {
+    let mut router = KeyRouter::new(default_keymap(Platform::Linux));
+    let mut input = input_with(vec![
+        press(egui::Key::A, egui::Modifiers::NONE),
+        egui::Event::Text("a".to_string()),
+        press(egui::Key::Escape, egui::Modifiers::NONE),
+    ]);
+    let keys = router.route(&mut input, Focus::Widget);
+    assert_eq!(keys, vec![plain(Key::Esc)], "only Esc reaches the App");
+    assert_eq!(input.events.len(), 3, "the widget keeps its events");
+
+    let mut input = input_mods(
+        vec![egui::Event::Copy],
+        egui::Modifiers::CTRL | egui::Modifiers::COMMAND,
+    );
+    assert_eq!(
+        router.route(&mut input, Focus::Widget),
+        Vec::new(),
+        "Ctrl+C copies from the focused widget"
+    );
+}
+
+#[test]
+fn test_route_question_mark_opens_shortcuts_only_on_an_empty_prompt() {
+    let focus = |question_opens_shortcuts| Focus::Prompt {
+        has_selection: false,
+        completion_open: false,
+        up_to_app: false,
+        down_to_app: false,
+        question_opens_shortcuts,
+    };
+    let events = || {
+        vec![
+            press(egui::Key::Questionmark, egui::Modifiers::SHIFT),
+            egui::Event::Text("?".to_string()),
+        ]
+    };
+
+    let (keys, left) = route_events(focus(true), events());
+    assert_eq!(
+        keys,
+        vec![KeyInput {
+            key: Key::Char('?'),
+            mods: Modifiers::SHIFT,
+        }]
+    );
+    assert!(left.is_empty(), "the `?` that opens the panel never types");
+
+    let (keys, left) = route_events(focus(false), events());
+    assert!(keys.is_empty(), "inside text `?` types");
+    assert_eq!(left.len(), 2);
 }

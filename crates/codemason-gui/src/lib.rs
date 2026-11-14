@@ -10,6 +10,8 @@
 //! - [`Shell`] is the `eframe::App` that draws the window.
 //! - [`dock`] is the dockable pane layout model (craft-ui docking).
 //! - [`keys`] is the keyboard shortcut map (craft-keymap).
+//! - [`dialogs`] draws the App's modal dialogs (permission, provider
+//!   setup, model picker, keyboard shortcuts) from one dispatch.
 //! - [`panels`] holds the pane contents ([`panels::messages`] is the
 //!   transcript, [`panels::prompt`] the prompt editor over the App's input
 //!   buffer, [`panels::queue`] the input queue), drawn with [`palette`]
@@ -18,13 +20,14 @@
 //!   [`EventBus`] into the shell's queue and wakes egui.
 //!
 //! Dependencies: `eframe`/`egui` (the storytold forks, via the workspace
-//! `[patch.crates-io]` table), `craft-ui` (docking),
+//! `[patch.crates-io]` table), `craft-ui` (docking, IME, combo boxes),
 //! `craft-keymap` (keyboard shortcuts), `tokio`, `thiserror`
 //! and `tracing`.
 
 #![deny(unsafe_code)]
 
 pub mod bridge;
+pub mod dialogs;
 pub mod dock;
 pub mod keys;
 pub mod main_thread;

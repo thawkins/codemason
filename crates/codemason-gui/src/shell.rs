@@ -2,12 +2,15 @@
 //!
 //! The shell draws the message transcript ([`MessagesView`]) above the
 //! input queue ([`queue_ui`]) and the prompt editor ([`prompt_ui`]), which
-//! edits the App's own input buffer; later tasks render the other panes and
-//! dialogs from the `App` state.
+//! edits the App's own input buffer, and over them the App's active modal
+//! dialog ([`dialogs::show`]); later tasks render the other panes from the
+//! `App` state.
 //! Each frame ([`Shell::update`]) it first drains the agent-event queue and
 //! the tracing log channel into the `App`, prepares the prompt's input
-//! ([`PromptInput::prepare`]), then routes the frame's key presses to
-//! `App::handle_key` through [`KeyRouter`] before any widget reads them.
+//! ([`PromptInput::prepare`]) and the active dialog's ([`dialogs::prepare`]),
+//! then routes the frame's key presses to `App::handle_key` through
+//! [`KeyRouter`] before any widget reads them. After drawing it runs the key
+//! presses the dialogs' buttons sent ([`dialogs::take_keys`]).
 
 use codemason_agent::event::Event;
 use codemason_app_core::app::{App, LogLevel};
@@ -15,6 +18,7 @@ use codemason_app_core::log_channel::TuiLogReceiver;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::UnboundedReceiver;
 
+use crate::dialogs;
 use crate::keys::{Focus, KeyRouter, default_keymap};
 use crate::palette::palette_for;
 use crate::panels::messages::MessagesView;
@@ -66,9 +70,10 @@ impl Shell {
     /// this build runs on.
     #[must_use]
     pub fn new(mut app: App) -> Self {
-        // The GUI draws no keybindings panel yet, so `?` must type, not
-        // open an invisible panel that locks the prompt.
-        app.shortcuts_panel_enabled = false;
+        // The GUI draws the keyboard shortcuts panel
+        // (`dialogs::shortcuts`), so `?` on an empty prompt opens it, as in
+        // the TUI.
+        app.shortcuts_panel_enabled = true;
         Self {
             app,
             prompt: PromptInput::default(),
@@ -133,6 +138,7 @@ impl Shell {
             let palette = palette_for(self.app.theme_mode);
             self.messages.show(ui, &self.app, &palette);
         });
+        dialogs::show(ui.ctx(), &mut self.app);
     }
 
     /// Run one frame: drain the sources, route the keys, draw.
@@ -142,7 +148,8 @@ impl Shell {
     /// * `ui` - the root ui of the window.
     pub fn update(&mut self, ui: &mut egui::Ui) {
         self.drain_sources();
-        let focus = self.prompt.prepare(ui.ctx(), &self.app);
+        let focus = self.prompt.prepare(ui.ctx(), &mut self.app);
+        dialogs::prepare(ui.ctx(), &mut self.app);
         self.route_keys(ui.ctx(), focus);
         // `/quit` (or any other path that stops the app) closes the window,
         // which ends `run_gui` the same way closing the window does.
@@ -150,6 +157,7 @@ impl Shell {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
         self.show(ui);
+        self.run_dialog_keys(ui.ctx());
     }
 
     /// The application state the shell renders.
@@ -177,6 +185,23 @@ impl Shell {
         for key in keys {
             sources.runtime.block_on(self.app.handle_key(key));
         }
+    }
+
+    /// Run the key presses the dialogs' buttons sent this frame through
+    /// `App::handle_key`, as typed keys, and repaint to show the result.
+    /// Without attached sources there is no runtime, so they are dropped.
+    fn run_dialog_keys(&mut self, ctx: &egui::Context) {
+        let keys = dialogs::take_keys(ctx);
+        let Some(sources) = self.sources.as_ref() else {
+            return;
+        };
+        if keys.is_empty() {
+            return;
+        }
+        for key in keys {
+            sources.runtime.block_on(self.app.handle_key(key));
+        }
+        ctx.request_repaint();
     }
 
     /// Move pending agent events and log records into the [`App`].

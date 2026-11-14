@@ -13,6 +13,7 @@ mod support;
 
 use std::path::PathBuf;
 
+use codemason_gui::dialogs::shortcuts::SHORTCUTS_TITLE;
 use codemason_gui::panels::prompt::{ATTACHMENTS_LABEL, SLASH_LABEL};
 
 use codemason_app_core::app::{App, ConfiguredProvider, ProviderSource, QueuedInput};
@@ -399,7 +400,7 @@ fn test_prompt_left_moves_over_a_combining_sequence() {
 }
 
 #[test]
-fn test_prompt_question_mark_types_and_never_locks() {
+fn test_prompt_question_mark_on_empty_prompt_opens_shortcuts() {
     let (_rt, mut harness) = rig(|_| {});
 
     harness.input_mut().events.extend([
@@ -409,13 +410,78 @@ fn test_prompt_question_mark_types_and_never_locks() {
     harness.run();
 
     let app = harness.state().app();
-    assert_eq!(app.session.input, "?");
-    assert!(!app.show_shortcuts, "the GUI has no shortcuts panel yet");
-    assert!(!app.is_input_locked());
+    assert_eq!(
+        app.session.input, "",
+        "the `?` that opens the panel never types"
+    );
+    assert!(
+        app.show_shortcuts,
+        "`?` on an empty prompt opens the panel, as in the TUI"
+    );
+    assert!(
+        app.is_input_locked(),
+        "the open panel holds the keyboard, as in the TUI"
+    );
+    assert!(
+        harness
+            .query_by_role_and_label(Role::Dialog, SHORTCUTS_TITLE)
+            .is_some(),
+        "the panel is drawn"
+    );
 }
 
 #[test]
-fn test_prompt_forwarded_question_mark_never_opens_shortcuts() {
+fn test_prompt_question_mark_inside_text_types() {
+    let (_rt, mut harness) = rig(|_| {});
+    focus_prompt(&mut harness);
+    prompt(&harness).type_text("why");
+    harness.run();
+
+    harness.input_mut().events.extend([
+        key_event(egui::Key::Questionmark, true),
+        egui::Event::Text("?".to_string()),
+    ]);
+    harness.run();
+
+    let app = harness.state().app();
+    assert_eq!(app.session.input, "why?");
+    assert!(!app.show_shortcuts);
+}
+
+#[test]
+fn test_prompt_text_then_question_mark_in_one_frame_types() {
+    let (_rt, mut harness) = rig(|_| {});
+
+    // "a?" typed fast: the `?` follows text, so the prompt is not empty.
+    harness.input_mut().events.extend([
+        key_event(egui::Key::A, true),
+        egui::Event::Text("a".to_string()),
+        key_event(egui::Key::Questionmark, true),
+        egui::Event::Text("?".to_string()),
+    ]);
+    harness.run();
+    harness.run();
+
+    let app = harness.state().app();
+    assert_eq!(app.session.input, "a?");
+    assert!(!app.show_shortcuts);
+}
+
+#[test]
+fn test_prompt_forwarded_question_mark_matches_tui() {
+    // What the TUI does with `?` while a compaction locks the prompt.
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let tui_shows = runtime.block_on(async {
+        let mut app = support::make_app();
+        app.session.compact_in_progress = true;
+        app.handle_key(codemason_app_core::input_event::KeyInput {
+            key: codemason_app_core::input_event::Key::Char('?'),
+            mods: codemason_app_core::input_event::Modifiers::NONE,
+        })
+        .await;
+        (app.show_shortcuts, app.session.input.clone())
+    });
+    drop(runtime);
     let (_rt, mut harness) = rig(|app| app.session.compact_in_progress = true);
 
     // A locked prompt forwards every key to the App.
@@ -425,7 +491,59 @@ fn test_prompt_forwarded_question_mark_never_opens_shortcuts() {
     ]);
     harness.run();
 
-    assert!(!harness.state().app().show_shortcuts);
+    let app = harness.state().app();
+    assert_eq!((app.show_shortcuts, app.session.input.clone()), tui_shows);
+}
+
+#[test]
+fn test_prompt_typing_keeps_another_focused_widget() {
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let app = {
+        let _enter = runtime.enter();
+        support::make_app()
+    };
+    let (_events_tx, events) = tokio::sync::mpsc::unbounded_channel();
+    let (_logs_tx, logs) = tui_log_channel(16);
+    let shell = Shell::new(app)
+        .with_keymap(default_keymap(Platform::Linux))
+        .with_sources(events, logs, runtime.handle().clone());
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(800.0, 600.0))
+        .build_ui_state(
+            |ui, (shell, other): &mut (Shell, String)| {
+                shell.update(ui);
+                egui::Area::new(egui::Id::unique("other_field"))
+                    .fixed_pos(egui::pos2(20.0, 20.0))
+                    .show(ui.ctx(), |ui| {
+                        ui.horizontal(|ui| {
+                            let label = ui.label("Other field");
+                            ui.text_edit_singleline(other).labelled_by(label.id);
+                        });
+                    });
+            },
+            (shell, String::new()),
+        );
+    harness.run();
+    harness
+        .get_by_role_and_label(Role::TextInput, "Other field")
+        .focus();
+    harness.run();
+
+    harness.input_mut().events.extend([
+        key_event(egui::Key::A, true),
+        egui::Event::Text("a".to_string()),
+        key_event(egui::Key::A, false),
+    ]);
+    harness.run();
+
+    let (shell, other) = harness.state();
+    assert_eq!(other, "a", "the focused field keeps its typing");
+    assert_eq!(shell.app().session.input, "", "the prompt takes nothing");
+    assert!(
+        !harness
+            .get_by_role_and_label(Role::MultilineTextInput, PROMPT_LABEL)
+            .is_focused()
+    );
 }
 
 #[test]

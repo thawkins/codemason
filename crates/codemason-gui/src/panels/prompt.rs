@@ -28,7 +28,15 @@
 //!   commit, a paste or an editing key (`keys::is_prompt_edit_key`) makes
 //!   the prompt take the focus, so the editor applies it once and by
 //!   grapheme, never the App's char-based editing (carriage returns are
-//!   stripped from a paste, as the TUI does);
+//!   stripped from a paste, as the TUI does). It takes the focus only when
+//!   no widget has it and no modal is open: another focused widget keeps
+//!   its typing ([`Focus::Widget`]);
+//! - while an app-core modal locks the prompt, the router gets
+//!   [`Focus::Modal`] and the App every key; a composition the IME had not
+//!   committed is removed from the buffer, since the editor keeps marked
+//!   text in it while composing;
+//! - `?` on an empty prompt goes to the App, which opens the shortcuts
+//!   panel, as in the TUI; after text it types;
 //! - Up and Down go to the App on the first and last logical line (input
 //!   history, as the TUI's `HistoryUp`/`HistoryDown`), and between lines
 //!   stay with the editor;
@@ -81,6 +89,7 @@ const ANY_APP_KEY: Focus = Focus::Prompt {
     completion_open: true,
     up_to_app: true,
     down_to_app: true,
+    question_opens_shortcuts: true,
 };
 
 /// Rows of a completion list shown at once (the TUI's
@@ -113,13 +122,16 @@ impl PromptInput {
     ///
     /// * `ctx` - the frame's context, before any widget reads input.
     /// * `app` - the App, for whether the prompt is editable and whether a
-    ///   completion menu is open.
+    ///   completion menu is open; a composition the IME had not committed when
+    ///   a modal locked the prompt is removed from its input buffer.
     ///
     /// # Returns
     ///
     /// The focus to pass to [`crate::keys::KeyRouter::route`]:
-    /// [`Focus::Prompt`] while the prompt is focused and editable.
-    pub fn prepare(&mut self, ctx: &egui::Context, app: &App) -> Focus {
+    /// [`Focus::Prompt`] while the prompt is focused and editable,
+    /// [`Focus::Modal`] while an app-core modal locks it, [`Focus::Widget`]
+    /// while another widget has the keyboard, else [`Focus::Elsewhere`].
+    pub fn prepare(&mut self, ctx: &egui::Context, app: &mut App) -> Focus {
         if !self.deferred.is_empty() {
             let deferred = std::mem::take(&mut self.deferred);
             ctx.input_mut(|input| {
@@ -128,10 +140,23 @@ impl PromptInput {
             });
         }
         let id = prompt_id();
+        let focused_id = ctx.memory(|m| m.focused());
         // A locked prompt (a modal owns the keys) takes no typing; the App
-        // gets every key.
-        let mut focused = !app.is_input_locked() && ctx.memory(|m| m.has_focus(id));
-        if !focused && !app.is_input_locked() && ctx.input(|i| types_into_prompt(&i.events)) {
+        // gets every key, and a dialog's own text field keeps its typing.
+        if app.is_input_locked() {
+            if self.composer.is_composing() {
+                self.drop_preedit(ctx, app);
+            }
+            let field_focused = ctx.text_edit_focused() && focused_id != Some(id);
+            return Focus::Modal { field_focused };
+        }
+        let mut focused = focused_id == Some(id);
+        let other_focused = focused_id.is_some_and(|other| other != id);
+        let modal_open = ctx.memory(|m| m.top_modal_layer().is_some());
+        // Typing takes the focus only from nobody: never from another widget
+        // or from under a modal.
+        if !focused && !other_focused && !modal_open && ctx.input(|i| types_into_prompt(&i.events))
+        {
             ctx.memory_mut(|m| m.request_focus(id));
             focused = true;
         }
@@ -139,7 +164,11 @@ impl PromptInput {
             if self.composer.is_composing() {
                 self.composer = Composer::new();
             }
-            return Focus::Elsewhere;
+            return if other_focused {
+                Focus::Widget
+            } else {
+                Focus::Elsewhere
+            };
         }
         let composer = &mut self.composer;
         let deferred = &mut self.deferred;
@@ -163,7 +192,54 @@ impl PromptInput {
             completion_open: completion_open(app),
             up_to_app,
             down_to_app,
+            question_opens_shortcuts: app.shortcuts_panel_enabled && app.session.input.is_empty(),
         }
+    }
+
+    /// Remove the IME's uncommitted (marked) text from the App's input
+    /// buffer and end the composition.
+    ///
+    /// egui's `TextEdit` keeps the marked text inside the buffer, selected,
+    /// while the IME composes. When a modal locks the prompt mid-composition
+    /// the editor stops taking IME events, so that text would stay in
+    /// `App::session.input` as if typed. It is removed when the editor's
+    /// selection still holds exactly the composer's marked text, and the
+    /// editor state is reset so it no longer treats the range as a
+    /// composition. The platform IME is turned off with the prompt (it no
+    /// longer asks for it), which drops its copy.
+    fn drop_preedit(&mut self, ctx: &egui::Context, app: &mut App) {
+        let id = prompt_id();
+        let preedit = self.composer.preedit().map(|p| p.text.to_owned());
+        let range = egui::TextEdit::load_state(ctx, id).and_then(|state| state.cursor.char_range());
+        self.composer = Composer::new();
+        let (Some(preedit), Some(range)) = (preedit, range) else {
+            return;
+        };
+        let (a, b) = (range.primary.index.0, range.secondary.index.0);
+        let (start, end) = (a.min(b), a.max(b));
+        let marked: String = app
+            .session
+            .input
+            .chars()
+            .skip(start)
+            .take(end - start)
+            .collect();
+        if marked != preedit {
+            return;
+        }
+        app.session.input = app
+            .session
+            .input
+            .chars()
+            .take(start)
+            .chain(app.session.input.chars().skip(end))
+            .collect();
+        let mut state = egui::text_edit::TextEditState::default();
+        state
+            .cursor
+            .set_char_range(Some(CCursorRange::one(CCursor::new(start))));
+        state.store(ctx, id);
+        app.input_edited(start);
     }
 }
 
