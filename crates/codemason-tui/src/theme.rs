@@ -243,7 +243,7 @@ pub const ICON_SELECTED: &str = "▸ ";
 /// Unselected indicator (space)
 pub const ICON_UNSELECTED: &str = "  ";
 /// Attachment chip prefix used in the input bar and image attachment lines.
-pub const ICON_ATTACHMENT: &str = "[attach]";
+pub const ICON_ATTACHMENT: &str = crate::message_text::ICON_ATTACHMENT;
 
 /// Focus indicator constants module for keyboard navigation.
 pub mod focus {

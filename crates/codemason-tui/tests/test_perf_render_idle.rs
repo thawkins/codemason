@@ -319,7 +319,7 @@ fn test_input_render_cache_updates_on_edit() {
         .input_render_cache
         .lines
         .iter()
-        .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+        .flat_map(|l| l.spans.iter().map(|s| s.text.to_string()))
         .collect();
     assert!(text.contains("hello!"), "row text must reflect the edit");
 }
@@ -327,7 +327,10 @@ fn test_input_render_cache_updates_on_edit() {
 #[test]
 fn test_input_render_cache_default_is_empty() {
     let cache = InputRenderCache::default();
-    assert_eq!(cache.lines, [] as [ratatui::prelude::Line<'_>; 0]);
+    assert_eq!(
+        cache.lines,
+        [] as [codemason_app_core::styled::StyledLine; 0]
+    );
     assert_eq!(cache.height, 0);
 }
 
@@ -346,6 +349,9 @@ fn test_input_height_matches_wrapped_rows() {
             cache.lines.len() + 2,
             "height must be rows + 2 border rows for {input:?}"
         );
-        assert_ne!(cache.lines, [] as [ratatui::prelude::Line<'_>; 0]);
+        assert_ne!(
+            cache.lines,
+            [] as [codemason_app_core::styled::StyledLine; 0]
+        );
     }
 }

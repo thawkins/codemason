@@ -17,7 +17,11 @@ fn test_messages_to_lines_renders_agent_notice_bright_yellow_one_line_per_item()
         }],
     );
 
-    let lines = messages_to_lines(&[message], &HashMap::new(), &HashMap::new(), "/project");
+    let lines: Vec<ratatui::text::Line<'static>> =
+        messages_to_lines(&[message], &HashMap::new(), &HashMap::new(), "/project")
+            .iter()
+            .map(crate::adapters::to_ratatui_line)
+            .collect();
     let rendered: Vec<String> = lines.iter().map(ToString::to_string).collect();
 
     // Header plus each list item gets its own line.
@@ -65,7 +69,11 @@ fn test_messages_to_lines_renders_full_thinktool_output_multiline() {
         }],
     );
 
-    let lines = messages_to_lines(&[message], &HashMap::new(), &HashMap::new(), "/project");
+    let lines: Vec<ratatui::text::Line<'static>> =
+        messages_to_lines(&[message], &HashMap::new(), &HashMap::new(), "/project")
+            .iter()
+            .map(crate::adapters::to_ratatui_line)
+            .collect();
     let rendered: Vec<String> = lines.iter().map(ToString::to_string).collect();
 
     assert!(
@@ -110,7 +118,11 @@ fn test_messages_to_lines_renders_full_agent_complete_output_multiline() {
         }],
     );
 
-    let lines = messages_to_lines(&[message], &HashMap::new(), &HashMap::new(), "/project");
+    let lines: Vec<ratatui::text::Line<'static>> =
+        messages_to_lines(&[message], &HashMap::new(), &HashMap::new(), "/project")
+            .iter()
+            .map(crate::adapters::to_ratatui_line)
+            .collect();
     let rendered: Vec<String> = lines.iter().map(ToString::to_string).collect();
 
     // Each summary line must be rendered as its own ratatui Line. A single

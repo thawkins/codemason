@@ -5,6 +5,7 @@
 
 use anyhow::Result;
 use codemason_app_core::geometry::Area;
+use codemason_app_core::styled::StyledLine;
 use lru::LruCache;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -481,8 +482,8 @@ pub struct ModelPickerEntry {
 
 /// Cached rendered lines for a single message (FR-003, FR-006).
 ///
-/// The raw `lines` are width-independent (they are the un-wrapped ratatui
-/// `Line` values produced by `message_to_lines`).  The `wrapped_lines` are
+/// The raw `lines` are width-independent (they are the un-wrapped
+/// [`StyledLine`] values produced by `message_to_lines`).  The `wrapped_lines` are
 /// the same lines pre-wrapped at the cached terminal width (styles were
 /// preserved); `wrapped_count` is `wrapped_lines.len()`, and `content_lines`
 /// is the plain-text projection of the wrapped rows (for text-selection
@@ -491,9 +492,9 @@ pub struct ModelPickerEntry {
 #[derive(Clone)]
 pub struct MessageLineGroup {
     /// Un-wrapped rendered lines for this message.
-    pub lines: Vec<ratatui::text::Line<'static>>,
+    pub lines: Vec<StyledLine>,
     /// Pre-wrapped styled lines at the cached width (one per display row).
-    pub wrapped_lines: Vec<ratatui::text::Line<'static>>,
+    pub wrapped_lines: Vec<StyledLine>,
     /// Word-wrapped plain-text content lines (for text-selection copy).
     pub content_lines: Vec<String>,
     /// Number of wrapped lines this message occupies at the cached width.
@@ -512,9 +513,9 @@ pub struct MessageLineGroup {
 #[derive(Clone)]
 pub struct LogLineGroup {
     /// Un-wrapped rendered lines for this log entry.
-    pub lines: Vec<ratatui::text::Line<'static>>,
+    pub lines: Vec<StyledLine>,
     /// Pre-wrapped styled lines at the cached width (one per display row).
-    pub wrapped_lines: Vec<ratatui::text::Line<'static>>,
+    pub wrapped_lines: Vec<StyledLine>,
     /// Word-wrapped plain-text content lines (for text-selection copy).
     pub content_lines: Vec<String>,
     /// Number of wrapped lines this entry occupies at the cached width.
@@ -1593,7 +1594,7 @@ pub enum OutputViewTarget {
 #[derive(Clone, Default)]
 pub struct OutputViewLineCache {
     /// Pre-wrapped styled lines at the cached width (one per display row).
-    pub wrapped_lines: Vec<ratatui::text::Line<'static>>,
+    pub wrapped_lines: Vec<StyledLine>,
     /// Word-wrapped plain-text content lines (for text-selection copy).
     pub content_lines: Vec<String>,
     /// Number of wrapped lines the target occupies at the cached width.
@@ -1628,7 +1629,7 @@ pub struct InputRenderCache {
     /// Inner width the cached rows were wrapped at.
     pub width: u16,
     /// Wrapped styled rows (one per display row).
-    pub lines: Vec<ratatui::text::Line<'static>>,
+    pub lines: Vec<StyledLine>,
     /// Height the input widget occupies at the cached width (rows + borders).
     pub height: u16,
     /// Cursor position (display row, column) inside the wrapped rows.

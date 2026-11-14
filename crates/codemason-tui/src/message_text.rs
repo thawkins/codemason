@@ -2,7 +2,7 @@
 //!
 //! Tool-call header summaries, result summaries, inline diff counts, path
 //! shortening, agent-notice bubbles and narrated-tool-call scrubbing. These
-//! were the ratatui-free part of `widgets::message_widget` (which re-exports
+//! were the terminal-free part of `widgets::message_widget` (which re-exports
 //! them); styled output uses the frontend-neutral [`StyledLine`].
 //!
 //! Depends on `codemason-agent`/`codemason-types` (messages, string helpers)
@@ -29,6 +29,13 @@ pub const INDENT_SPACES: &str = "                ";
 pub fn is_agent_notice(text: &str) -> bool {
     text.trim_start().starts_with(AGENT_NOTICE_PREFIX)
 }
+
+/// Style of think-tool and reasoning text (lavender italics, readable on
+/// dark backgrounds); the terminal theme's `think()` style.
+pub const THINK_STYLE: TextStyle = TextStyle::new().fg(ThemeColor::Rgb(210, 210, 255)).italic();
+
+/// Prefix of attachment chips in the input bar and image attachment lines.
+pub const ICON_ATTACHMENT: &str = "[attach]";
 
 /// Render an agent-notice bubble as bright-yellow lines, one item per line,
 /// followed by a trailing blank line to separate the bubble from following content.
@@ -1373,8 +1380,8 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
         "agent_complete" => {
             let summary = get_str(&["summary"]).unwrap_or_default();
             // Only the first line goes in the compact header; embedding a
-            // multi-line summary here joins its words when rendered (ratatui
-            // strips '\n' graphemes inside a Span).  The full summary is
+            // multi-line summary here joins its words when rendered (the
+            // renderer strips '\n' graphemes inside a Span).  The full summary is
             // rendered line-by-line in the result section below.
             let first_line = summary.lines().next().unwrap_or_default();
             trunc120(first_line)

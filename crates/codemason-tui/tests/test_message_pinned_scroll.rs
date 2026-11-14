@@ -118,7 +118,7 @@ fn test_wrapped_rows_never_exceed_inner_width() {
     let inner_width = (area.width - 2) as usize;
     for (i, group) in app.session.message_line_cache.iter().enumerate() {
         for (j, row) in group.wrapped_lines.iter().enumerate() {
-            let width: usize = row.spans.iter().map(|s| s.content.width()).sum();
+            let width: usize = row.spans.iter().map(|s| s.text.width()).sum();
             assert!(
                 width <= inner_width,
                 "cache group {i} row {j} is {width} wide, exceeds inner width {inner_width}"
@@ -220,8 +220,14 @@ fn test_wrap_row_counts_match_paragraph_line_count() {
             render_message_area(&mut app, area);
 
             let group = &app.session.message_line_cache[0];
-            let para = ratatui::widgets::Paragraph::new(group.lines.clone())
-                .wrap(ratatui::widgets::Wrap { trim: false });
+            let para = ratatui::widgets::Paragraph::new(
+                group
+                    .lines
+                    .iter()
+                    .map(codemason_tui::adapters::to_ratatui_line)
+                    .collect::<Vec<_>>(),
+            )
+            .wrap(ratatui::widgets::Wrap { trim: false });
             let expected = para.line_count(pane_width - 2);
             assert_eq!(
                 group.wrapped_count as usize,
@@ -292,12 +298,7 @@ fn test_pinned_tail_not_shifted_by_whitespace_only_rows() {
         .message_line_cache
         .iter()
         .flat_map(|g| g.wrapped_lines.iter())
-        .map(|l| {
-            l.spans
-                .iter()
-                .map(|s| s.content.clone())
-                .collect::<String>()
-        })
+        .map(|l| l.spans.iter().map(|s| s.text.clone()).collect::<String>())
         .collect();
     let expected: Vec<String> = cached[cached.len() - visible..].to_vec();
     // Drop the border rows (first and last painted rows) before comparing.

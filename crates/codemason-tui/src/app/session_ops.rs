@@ -5509,7 +5509,7 @@ impl App {
     /// buffer is rebuilt from the per-message cache - so a copy always reads
     /// fresh rows even mid-stream.
     pub fn ensure_copy_content_lines(&mut self) {
-        crate::layout::ensure_message_copy_lines(self);
+        crate::message_lines::ensure_message_copy_lines(self);
     }
 
     /// PERF-043/PERF-041: reset the per-message cache and its staleness

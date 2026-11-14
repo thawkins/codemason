@@ -243,7 +243,7 @@ async fn test_output_view_empty_child_session_cache_is_stable() {
     // Sanity: the placeholder occupied at least one cached row.
     assert_ne!(
         view.line_cache.wrapped_lines,
-        [] as [ratatui::prelude::Line<'_>; 0]
+        [] as [codemason_app_core::styled::StyledLine; 0]
     );
 }
 

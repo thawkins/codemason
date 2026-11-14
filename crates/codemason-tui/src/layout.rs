@@ -12,9 +12,12 @@ use std::path::Path;
 
 use crate::app::{image_dimensions_or_placeholder, sanitize_for_display, short_id};
 
-use crate::adapters::{area_to_rect, rect_to_area};
-use crate::widgets::message_widget::make_relative_path;
+use crate::adapters::{area_to_rect, from_ratatui_line, rect_to_area, to_ratatui_line};
+use crate::line_wrap::{wrap_line_styled, wrapped_lines_to_strings};
+pub use crate::message_lines::ensure_message_copy_lines;
+use crate::message_lines::{build_step_map_for_messages, message_to_lines, messages_to_lines};
 use codemason_app_core::geometry::Area;
+use codemason_app_core::styled::StyledLine;
 use codemason_types::ThinkingLevel;
 use codemason_types::sanitize_terminal::sanitize_terminal;
 use codemason_types::strutil::{truncate_bytes, truncate_bytes_no_ellipsis};
@@ -38,17 +41,12 @@ use crate::utils::{
 };
 use codemason_agent::team::MemberStatus;
 
-use codemason_agent::message::{Message, MessagePart, Role, ToolCallStatus};
+use codemason_agent::message::Message;
 use codemason_storage::storage::MemoryRow;
 
 use crate::app::{
     App, ContextAction, LogLevel, ModelPickerEntry, OutputViewTarget, PROVIDER_LIST,
     ProviderSetupStep, SelectionPane, StorePane,
-};
-use crate::widgets::message_widget::{
-    INDENT_SPACES, agent_notice_ratatui_lines, canonical_tool_name, capitalize_tool_name,
-    is_agent_notice, read_line_range, scrub_narrated_ratatui_lines, tool_inline_diff,
-    tool_input_summary, tool_result_summary,
 };
 use codemason_connectors::CataloguePane;
 
@@ -5244,7 +5242,10 @@ fn refresh_input_render_cache(app: &mut App, inner_width: u16) {
             inner_width as usize,
             selection,
             &prefix,
-        );
+        )
+        .iter()
+        .map(from_ratatui_line)
+        .collect();
         cache.selection = selection;
     }
     if !cursor_current {
@@ -5262,180 +5263,6 @@ fn refresh_input_render_cache(app: &mut App, inner_width: u16) {
     cache.width = inner_width;
 }
 
-/// Wrap one rendered [`Line`] into styled display rows that match ratatui's
-/// `Paragraph` word-wrapping (`Wrap { trim: false }`).
-///
-/// Rows are broken exactly where ratatui's `WordWrapper` (`ratatui-widgets`
-/// `reflow.rs`, `WordWrapper::process_input`) breaks them, and each row keeps
-/// the original span styles.  Because no row ever exceeds the target width,
-/// re-wrapping a row inside `Paragraph` is a no-op: the cache geometry and the
-/// painted output stay in one coordinate system.
-fn wrap_line_styled(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
-    use unicode_segmentation::UnicodeSegmentation;
-    use unicode_width::UnicodeWidthStr;
-
-    if width == 0 {
-        return vec![unbounded_line(line)];
-    }
-
-    let max = width;
-    // Flat stream of (grapheme symbol, patched style) mirroring
-    // `Paragraph::styled_graphemes` (line style patched with span style).
-    // ratatui 0.30 filters every grapheme that contains a control character
-    // (`filter(|g| !g.contains(char::is_control))`), not just `"\n"` as 0.29
-    // did, so tabs must be dropped here too or the port over-counts rows.
-    let base = line.style;
-    let graphemes: Vec<(String, ratatui::style::Style)> = line
-        .spans
-        .iter()
-        .flat_map(|span| {
-            let span_style = base.patch(span.style);
-            span.content
-                .graphemes(true)
-                .filter(|g| !g.contains(char::is_control))
-                .map(move |g| (g.to_string(), span_style))
-        })
-        .collect();
-
-    // Port of `WordWrapper::process_input` (trim = false).  State:
-    // `row` is the display row being built, `word` the current word buffer,
-    // `ws` the pending whitespace run.
-    let mut rows: Vec<Vec<(String, ratatui::style::Style)>> = Vec::new();
-    let mut row: Vec<(String, ratatui::style::Style)> = Vec::new();
-    let mut row_width: usize = 0;
-    let mut word: Vec<(String, ratatui::style::Style)> = Vec::new();
-    let mut word_width: usize = 0;
-    let mut ws: Vec<(String, ratatui::style::Style)> = Vec::new();
-    let mut ws_width: usize = 0;
-    let mut non_ws_previous = false;
-
-    for (g, style) in graphemes {
-        // ratatui treats NBSP as a regular (non-whitespace) grapheme
-        // and ZWSP (zero-width space) as whitespace, so the port must agree
-        // with `StyledGrapheme::is_whitespace` or the wrapped geometry
-        // drifts from the painted output.
-        let is_ws = (g.chars().all(char::is_whitespace) && g != "\u{00a0}") || g == "\u{200b}";
-        // Symbols wider than the limit are ignored (as in WordWrapper).
-        if g.width() > max {
-            continue;
-        }
-        let gw = g.width();
-
-        let word_found = non_ws_previous && is_ws;
-        // The completed word (with its preceding whitespace run) would
-        // overflow even on an otherwise empty row.
-        let untrimmed_overflow = row.is_empty() && word_width + ws_width + gw > max;
-
-        // Flush the completed word to the row (trim = false keeps the
-        // leading whitespace run).
-        if word_found || untrimmed_overflow {
-            row.append(&mut ws);
-            row_width += ws_width;
-            row.append(&mut word);
-            row_width += word_width;
-            ws_width = 0;
-            word_width = 0;
-        }
-
-        let row_full = row_width >= max;
-        let pending_word_overflow = gw > 0 && row_width + ws_width + word_width >= max;
-
-        if row_full || pending_word_overflow {
-            let remaining = max.saturating_sub(row_width);
-            rows.push(std::mem::take(&mut row));
-            row_width = 0;
-
-            // Drop whitespace up to the end of the emitted row.
-            while let Some((front, _)) = ws.first() {
-                let fw = front.width();
-                if fw > remaining {
-                    break;
-                }
-                ws_width -= fw;
-                ws.remove(0);
-            }
-
-            // The wrapping whitespace symbol is consumed by the break.
-            // (WordWrapper skips the counter update on this path too.)
-            if is_ws && ws.is_empty() {
-                continue;
-            }
-        }
-
-        if is_ws {
-            ws.push((g, style));
-            ws_width += gw;
-        } else {
-            word.push((g, style));
-            word_width += gw;
-        }
-        non_ws_previous = !is_ws;
-    }
-
-    // Tail: emit whatever is still buffered for this input line.  With
-    // `trim = false` the pending whitespace run stays on the final row;
-    // ratatui only emits a separate blank row for a whitespace-only input
-    // when `trim` is set (`&& self.trim` in `WordWrapper::process_input`),
-    // so the port must not add one here or the cache gains a phantom row.
-    row.append(&mut ws);
-    row.append(&mut word);
-    if !row.is_empty() {
-        rows.push(row);
-    } else if rows.is_empty() {
-        // Whitespace-independent blank input line: WordWrapper still emits a
-        // single (blank) row so blank separator lines keep their height.
-        rows.push(vec![]);
-    }
-
-    rows.into_iter().map(cells_to_line).collect()
-}
-
-/// Convert a wrapped row's grapheme/style cells back into one styled `Line`,
-/// collapsing adjacent same-style graphemes into single spans.
-fn cells_to_line(cells: Vec<(String, ratatui::style::Style)>) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(cells.len());
-    let mut text = String::new();
-    let mut cur_style: Option<ratatui::style::Style> = None;
-    for (g, st) in cells {
-        if let Some(style) = cur_style.filter(|s| *s != st) {
-            if !text.is_empty() {
-                spans.push(Span::styled(std::mem::take(&mut text), style));
-            }
-        }
-        cur_style = Some(st);
-        text.push_str(&g);
-    }
-    if !text.is_empty() {
-        spans.push(Span::styled(text, cur_style.unwrap_or_default()));
-    }
-    Line::from(spans)
-}
-
-/// Re-anchor an un-wrapped [`Line`] as a `'static` line for the width == 0
-/// degenerate case (no wrapping possible).
-fn unbounded_line(line: &Line<'_>) -> Line<'static> {
-    Line::from(
-        line.spans
-            .iter()
-            .map(|s| Span::styled(s.content.to_string(), s.style))
-            .collect::<Vec<_>>(),
-    )
-    .style(line.style)
-}
-
-/// Plain-text projection of pre-wrapped [`Line`]s for text-selection copy.
-fn wrapped_lines_to_strings(wrapped: &[Line<'_>]) -> Vec<String> {
-    wrapped
-        .iter()
-        .map(|l| {
-            l.spans
-                .iter()
-                .map(|s| s.content.as_ref())
-                .collect::<String>()
-        })
-        .collect()
-}
-
 /// Slice a flat pre-wrapped line list to the visible window.
 ///
 /// `scroll_from_top` is the offset into the wrapped-row coordinate space from
@@ -5443,7 +5270,7 @@ fn wrapped_lines_to_strings(wrapped: &[Line<'_>]) -> Vec<String> {
 /// screen. The result is suitable for passing to [`Paragraph::new`] without
 /// `.wrap()` because every row is already wrapped to the inner width.
 fn slice_flat_wrapped_window(
-    lines: &[Line<'static>],
+    lines: &[StyledLine],
     scroll_from_top: u16,
     visible: u16,
 ) -> Vec<Line<'static>> {
@@ -5457,7 +5284,7 @@ fn slice_flat_wrapped_window(
         if i >= window_end {
             break;
         }
-        window.push(line.clone());
+        window.push(to_ratatui_line(line));
     }
     window
 }
@@ -5472,7 +5299,7 @@ fn slice_group_wrapped_window<G>(
     groups: &[G],
     scroll_from_top: u16,
     visible: u16,
-    get_lines: impl Fn(&G) -> &[Line<'static>],
+    get_lines: impl Fn(&G) -> &[StyledLine],
 ) -> Vec<Line<'static>> {
     let mut window = Vec::with_capacity(visible as usize + 1);
     let window_end = scroll_from_top.saturating_add(visible.saturating_add(1));
@@ -5500,7 +5327,7 @@ fn slice_group_wrapped_window<G>(
             if li >= end_in_group {
                 continue 'outer;
             }
-            window.push(line.clone());
+            window.push(to_ratatui_line(line));
         }
     }
     window
@@ -6450,7 +6277,7 @@ fn render_memory_view_overlay(frame: &mut Frame, app: &mut App) {
         }));
 
         // Store the rendered rows once - no `lines.clone()` duplicate.
-        view.line_cache.wrapped_lines = lines;
+        view.line_cache.wrapped_lines = lines.iter().map(from_ratatui_line).collect();
         view.line_cache.cache_width = cache_width;
         view.line_cache.content_lines = wrapped_lines_to_strings(&view.line_cache.wrapped_lines);
         view.line_cache.wrapped_count = view.line_cache.wrapped_lines.len() as u16;
@@ -6592,18 +6419,7 @@ fn render_research_view_overlay(frame: &mut Frame, app: &mut App) {
 
     if need_rebuild {
         let lines = markdown_to_lines(&view.markdown, &base, cache_width as usize);
-        view.line_cache.wrapped_lines = lines
-            .into_iter()
-            .map(|l| {
-                Line::from(
-                    l.spans
-                        .iter()
-                        .map(|s| Span::styled(s.content.to_string(), s.style))
-                        .collect::<Vec<_>>(),
-                )
-                .style(l.style)
-            })
-            .collect();
+        view.line_cache.wrapped_lines = lines.iter().map(from_ratatui_line).collect();
         view.line_cache.cache_width = cache_width;
         view.line_cache.content_lines = wrapped_lines_to_strings(&view.line_cache.wrapped_lines);
         view.line_cache.wrapped_count = view.line_cache.wrapped_lines.len() as u16;
@@ -6875,7 +6691,10 @@ pub fn markdown_to_lines_testable<'a>(
 /// PERF-042: the streaming re-render throttle depends on `wrap_line_styled`
 /// being the single wrapping path the message cache uses; benches guard it.
 pub fn wrap_line_styled_testable(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
-    wrap_line_styled(line, width)
+    wrap_line_styled(&from_ratatui_line(line), width)
+        .iter()
+        .map(to_ratatui_line)
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7088,7 +6907,10 @@ fn render_log_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     for (i, entry) in all_entries.iter().enumerate() {
         let group = &mut app.log_line_cache[i];
         if group.version != entry.seq {
-            group.lines = log_entry_to_lines(entry, &app.sid_to_display_name);
+            group.lines = log_entry_to_lines(entry, &app.sid_to_display_name)
+                .iter()
+                .map(from_ratatui_line)
+                .collect();
             group.version = entry.seq;
             // Pre-wrap this entry's lines at the current width so scroll
             // geometry, selection copy, and the rendered window all share
@@ -7879,7 +7701,7 @@ fn render_output_view_overlay(frame: &mut Frame, app: &mut App) {
         || need_rewrap;
 
     if cache_stale {
-        let mut lines: Vec<Line<'static>> = Vec::new();
+        let mut lines: Vec<StyledLine> = Vec::new();
         if let Some(ref msgs) = session_messages {
             // Build a step map from the message transcript itself so that
             // storage-backed sessions (sub-agents / teammates) get the same
@@ -7894,10 +7716,10 @@ fn render_output_view_overlay(frame: &mut Frame, app: &mut App) {
         }
 
         if lines.is_empty() {
-            lines.push(Line::from(Span::styled(
+            lines.push(from_ratatui_line(&Line::from(Span::styled(
                 "No output yet for this target",
                 Style::default().fg(Color::DarkGray),
-            )));
+            ))));
         }
 
         // PERF-048: store the rendered rows once, in `wrapped_lines`; the
@@ -8140,436 +7962,6 @@ fn render_teams_window_overlay(frame: &mut Frame, app: &mut App) {
     crate::layout_teams::render_teams_subpanel(frame, app, geo.content);
 
     render_window_key_legend(frame, TEAMS_WINDOW_LEGEND, geo.legend);
-}
-
-/// Render a single message into formatted lines (FR-003, FR-006).
-///
-/// Delegates to `messages_to_lines` with a single-message slice so the
-/// per-message line cache can re-render only the changed message during
-/// streaming instead of rebuilding the entire timeline.
-fn message_to_lines(
-    msg: &Message,
-    tool_step_map: &std::collections::HashMap<String, (String, u32, u32)>,
-    sid_to_display: &std::collections::HashMap<String, String>,
-    cwd: &str,
-) -> Vec<Line<'static>> {
-    messages_to_lines(
-        std::slice::from_ref(msg),
-        tool_step_map,
-        sid_to_display,
-        cwd,
-    )
-}
-
-/// Build a `(call_id -> (short_sid, step, substep))` map from the
-/// message transcript itself. This lets storage-backed sessions (sub-agents,
-/// teammates, resumed sessions) render the same `[N.M]` step/parallel-tool
-/// prefixes as the primary live session, without relying on the transient
-/// in-memory `tool_step_map` populated from `ToolCallStart` events.
-fn build_step_map_for_messages(
-    messages: &[Message],
-) -> std::collections::HashMap<String, (String, u32, u32)> {
-    let mut map = std::collections::HashMap::new();
-    let mut step = 0u32;
-    for msg in messages {
-        if msg.role != Role::Assistant {
-            continue;
-        }
-        let tool_call_count = msg
-            .parts
-            .iter()
-            .filter(|p| matches!(p, MessagePart::ToolCall { .. }))
-            .count();
-        if tool_call_count == 0 {
-            continue;
-        }
-        step += 1;
-        let mut substep = 0u32;
-        for part in &msg.parts {
-            if let MessagePart::ToolCall { call_id, .. } = part {
-                substep += 1;
-                let short_sid = {
-                    let s = &msg.session_id;
-                    let start = s.char_indices().rev().nth(7).map(|(i, _)| i).unwrap_or(0);
-                    s[start..].to_string()
-                };
-                map.insert(call_id.clone(), (short_sid, step, substep));
-            }
-        }
-    }
-    map
-}
-
-/// Render a slice of messages into formatted lines using the rich format
-/// from the primary Messages panel.  Both `render_messages` and
-/// `render_output_view_overlay` delegate here so teammate output looks
-/// identical to the lead agent's chat window.
-fn messages_to_lines(
-    messages: &[Message],
-    tool_step_map: &std::collections::HashMap<String, (String, u32, u32)>,
-    #[allow(clippy::used_underscore_binding)] _sid_to_display: &std::collections::HashMap<
-        String,
-        String,
-    >,
-    cwd: &str,
-) -> Vec<Line<'static>> {
-    let mut lines: Vec<Line<'static>> = Vec::new();
-
-    for msg in messages {
-        for part in &msg.parts {
-            match part {
-                MessagePart::Text { text } => {
-                    // Agent notices are rendered in bright yellow, one item per line.
-                    if msg.role == Role::Assistant && is_agent_notice(text) {
-                        lines.extend(agent_notice_ratatui_lines(text));
-                        continue;
-                    }
-
-                    // SEC-080: this is the LIVE transcript renderer, which
-                    // previously emitted model/tool text via `Span::raw` with no
-                    // neutralisation (only the log panel sanitised). Assistant
-                    // text can carry an escape sequence copied from a tool result
-                    // or fetched page, so neutralise it here as well.
-                    let text = sanitize_terminal(text);
-                    let text: &str = &text;
-
-                    let (dot, dot_style, indent) = match msg.role {
-                        Role::User => (
-                            "You: ",
-                            Style::default()
-                                .fg(Color::Cyan)
-                                .add_modifier(Modifier::BOLD),
-                            5,
-                        ),
-                        // Context-compaction summaries are internal
-                        // bookkeeping, not the agent's own output: label them
-                        // so a mid-run auto-compaction summary (which uses the
-                        // same "## Objective / ## Work State" shape as a
-                        // sub-agent's final report) is never mistaken for the
-                        // completion report in the output overlay.
-                        Role::Compaction => {
-                            ("[compaction] ", Style::default().fg(Color::DarkGray), 13)
-                        }
-                        Role::Assistant => (
-                            "* ",
-                            Style::default()
-                                .fg(Color::Magenta)
-                                .add_modifier(Modifier::BOLD),
-                            2,
-                        ),
-                    };
-                    for (i, line) in text.lines().enumerate() {
-                        if i == 0 {
-                            // Blank line before the "You:" prompt for visual separation.
-                            if msg.role == Role::User {
-                                lines.push(Line::from(String::new()));
-                            }
-                            lines.push(Line::from(vec![
-                                Span::styled(dot, dot_style),
-                                Span::raw(line.to_owned()),
-                            ]));
-                        } else {
-                            // PERF-047: indentation is emitted as its own
-                            // borrowed span instead of `format!`-ing a fresh
-                            // String with `repeat()` per line (two allocations
-                            // saved per continuation line).
-                            lines.push(Line::from(vec![
-                                Span::raw(&INDENT_SPACES[..indent]),
-                                Span::raw(line.to_string()),
-                            ]));
-                        }
-                    }
-                }
-                MessagePart::ToolCall {
-                    tool,
-                    call_id,
-                    state,
-                } => {
-                    let step_tag = if let Some((_sid, step, substep)) = tool_step_map.get(call_id) {
-                        format!("[{step}.{substep}] ")
-                    } else {
-                        String::new()
-                    };
-                    let (indicator, ind_style, name_style) = match state.status {
-                        ToolCallStatus::Completed => (
-                            "* ",
-                            Style::default().fg(Color::Green),
-                            Style::default()
-                                .fg(Color::Green)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        ToolCallStatus::Error => (
-                            "[x] ",
-                            Style::default().fg(Color::Red),
-                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                        ),
-                        ToolCallStatus::Running | ToolCallStatus::Pending => (
-                            "* ",
-                            Style::default().fg(Color::DarkGray),
-                            Style::default().fg(Color::DarkGray),
-                        ),
-                    };
-
-                    let display_name = capitalize_tool_name(tool);
-                    let summary = tool_input_summary(tool, &state.input, cwd);
-
-                    let inline_diff = if state.status == ToolCallStatus::Completed {
-                        tool_inline_diff(tool, &state.output)
-                    } else {
-                        None
-                    };
-
-                    let mut spans = vec![
-                        Span::styled(indicator, ind_style),
-                        Span::styled(
-                            step_tag,
-                            Style::default()
-                                .fg(Color::Yellow)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    ];
-                    // The tool name always comes immediately after the step
-                    // counter, with every other parameter rendered after it.
-                    //
-                    // A `think` call renders its own thought under the header
-                    // from its tool state, so the header keeps the name only -
-                    // unlike the other tools there is no input summary to
-                    // print, and printing the model's full argument inline
-                    // would duplicate the lines that follow.
-                    let (name_span, argument_span) = if canonical_tool_name(tool) == "think" {
-                        (display_name, None)
-                    } else if summary.is_empty() {
-                        (display_name, None)
-                    } else {
-                        (
-                            format!("{} ", display_name),
-                            Some(Span::styled(summary, Style::default().fg(Color::DarkGray))),
-                        )
-                    };
-                    spans.push(Span::styled(name_span, name_style));
-                    if let Some(argument) = argument_span {
-                        spans.push(argument);
-                    }
-                    if tool == "read" {
-                        if let Some(range) = read_line_range(&state.output) {
-                            spans.push(Span::styled(
-                                format!(" {}", range),
-                                Style::default()
-                                    .fg(Color::White)
-                                    .add_modifier(Modifier::BOLD),
-                            ));
-                        }
-                    }
-                    if let Some((added, removed)) = inline_diff {
-                        spans.push(Span::styled(" (", Style::default().fg(Color::DarkGray)));
-                        spans.push(Span::styled(
-                            format!("+{}", added),
-                            Style::default().fg(Color::Green),
-                        ));
-                        spans.push(Span::styled(" ", Style::default().fg(Color::DarkGray)));
-                        spans.push(Span::styled(
-                            format!("-{}", removed),
-                            Style::default().fg(Color::Red),
-                        ));
-                        spans.push(Span::styled(")", Style::default().fg(Color::DarkGray)));
-                    }
-                    // Add duration_ms display for completed tool calls
-                    if state.status == ToolCallStatus::Completed {
-                        if let Some(duration_ms) = state.duration_ms {
-                            let duration_str = if duration_ms < 1000 {
-                                format!(" ({}ms)", duration_ms)
-                            } else {
-                                format!(" ({:.1}s)", duration_ms as f64 / 1000.0)
-                            };
-                            spans.push(Span::styled(
-                                duration_str,
-                                Style::default().fg(Color::DarkGray),
-                            ));
-                        }
-                    }
-                    lines.push(Line::from(spans));
-
-                    if state.status == ToolCallStatus::Completed {
-                        if tool == "think" {
-                            if let Some(thought) = state
-                                .output
-                                .as_ref()
-                                .and_then(|out| out.get("thought"))
-                                .and_then(|v| v.as_str())
-                                .or_else(|| {
-                                    state
-                                        .output
-                                        .as_ref()
-                                        .and_then(|out| out.get("thinking"))
-                                        .and_then(|v| v.as_str())
-                                })
-                                .or_else(|| {
-                                    state
-                                        .output
-                                        .as_ref()
-                                        .and_then(|out| out.get("text"))
-                                        .and_then(|v| v.as_str())
-                                })
-                                .or_else(|| {
-                                    state
-                                        .input
-                                        .get("thought")
-                                        .and_then(|v| v.as_str())
-                                        .filter(|_| state.output.is_none())
-                                })
-                            {
-                                // SEC-080: `thought` is tool output; neutralise
-                                // any embedded terminal escapes before rendering.
-                                let thought = sanitize_terminal(thought);
-                                let mut thought_lines = Vec::new();
-                                for line in thought.as_ref().lines() {
-                                    thought_lines.push(Line::from(Span::styled(
-                                        format!("  {}", line),
-                                        theme::think(),
-                                    )));
-                                }
-                                // A model may narrate its next tool call as
-                                // markup INSIDE the thought; the loop recovers
-                                // and executes that call, so the transcript
-                                // shows the executed call instead of the raw
-                                // narration.
-                                lines.extend(scrub_narrated_ratatui_lines(thought_lines));
-                            }
-                        } else if tool == "multiedit" || tool == "multi_edit" {
-                            if let Some(file_stats) = state
-                                .output
-                                .as_ref()
-                                .and_then(|out| out.get("file_stats"))
-                                .and_then(|v| v.as_array())
-                            {
-                                let rel_paths: Vec<String> = file_stats
-                                    .iter()
-                                    .map(|fs| {
-                                        fs.get("path")
-                                            .and_then(|p| p.as_str())
-                                            .map(|p| make_relative_path(p, cwd))
-                                            .unwrap_or_default()
-                                    })
-                                    .collect();
-                                let max_len = rel_paths.iter().map(|p| p.len()).max().unwrap_or(0);
-                                for (fs, rel_path) in file_stats.iter().zip(rel_paths.iter()) {
-                                    let added =
-                                        fs.get("added").and_then(|v| v.as_u64()).unwrap_or(0);
-                                    let removed =
-                                        fs.get("removed").and_then(|v| v.as_u64()).unwrap_or(0);
-                                    let padding =
-                                        " ".repeat(max_len.saturating_sub(rel_path.len()));
-                                    lines.push(Line::from(vec![
-                                        Span::styled(
-                                            format!("  └ {}{} ", rel_path, padding),
-                                            Style::default().fg(Color::DarkGray),
-                                        ),
-                                        Span::styled(
-                                            format!("+{}", added),
-                                            Style::default().fg(Color::Green),
-                                        ),
-                                        Span::styled(" ", Style::default()),
-                                        Span::styled(
-                                            format!("-{}", removed),
-                                            Style::default().fg(Color::Red),
-                                        ),
-                                    ]));
-                                }
-                            } else if let Some(result) =
-                                tool_result_summary(tool, &state.output, &state.input, cwd)
-                            {
-                                // SEC-080: tool output is untrusted; neutralise
-                                // any terminal escapes before rendering.
-                                let result = sanitize_terminal(&result);
-                                lines.push(Line::from(Span::styled(
-                                    format!("  └ {}", result),
-                                    Style::default().fg(Color::DarkGray),
-                                )));
-                            }
-                        } else if tool == "agent_complete" {
-                            // Render the full task-completion summary one output line
-                            // per ratatui Line. Embedding a multi-line summary in a
-                            // single Line does not work: ratatui strips '\n'
-                            // graphemes inside a Span, so the summary would render
-                            // as one continuous paragraph.
-                            let summary = state
-                                .output
-                                .as_ref()
-                                .and_then(|out| out.get("summary"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or_default();
-                            // SEC-080: summary is tool output; neutralise escapes.
-                            let summary = sanitize_terminal(summary);
-                            let summary: &str = &summary;
-                            if summary.is_empty() {
-                                lines.push(Line::from(Span::styled(
-                                    "  \\- Task complete",
-                                    Style::default().fg(Color::Green),
-                                )));
-                            } else {
-                                for line in summary.lines() {
-                                    lines.push(Line::from(Span::styled(
-                                        format!("  \\- {line}"),
-                                        Style::default().fg(Color::Green),
-                                    )));
-                                }
-                            }
-                        } else if tool != "Edit"
-                            && let Some(result) =
-                                tool_result_summary(tool, &state.output, &state.input, cwd)
-                        {
-                            // SEC-080: tool output is untrusted; neutralise escapes.
-                            let result = sanitize_terminal(&result);
-                            lines.push(Line::from(Span::styled(
-                                format!("  └ {}", result),
-                                Style::default().fg(Color::DarkGray),
-                            )));
-                        }
-                    }
-                    if state.status == ToolCallStatus::Error {
-                        if let Some(ref err) = state.error {
-                            // SEC-080: tool error text is untrusted; neutralise.
-                            let err = sanitize_terminal(err);
-                            lines.push(Line::from(Span::styled(
-                                format!("  └ {}", err),
-                                Style::default().fg(Color::Red),
-                            )));
-                        }
-                    }
-                }
-                MessagePart::Reasoning { text, .. } => {
-                    // SEC-080: reasoning text is model output and may embed an
-                    // escape sequence; neutralise before rendering.
-                    let text = sanitize_terminal(text);
-                    let mut reasoning_lines = Vec::new();
-                    for line in text.as_ref().lines() {
-                        reasoning_lines.push(Line::from(Span::styled(
-                            format!("  {}", line),
-                            theme::think(),
-                        )));
-                    }
-                    // Reasoning text is also a place models narrate tool-call
-                    // markup into; scrub it the same way as think outputs.
-                    lines.extend(scrub_narrated_ratatui_lines(reasoning_lines));
-                }
-                MessagePart::Image(img) => {
-                    let name = img
-                        .path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("image");
-                    lines.push(Line::from(Span::styled(
-                        format!("  {} [image: {}]", theme::ICON_ATTACHMENT, name),
-                        Style::default().fg(Color::Yellow),
-                    )));
-                }
-            }
-
-            lines.push(Line::from(""));
-        }
-    }
-
-    lines
 }
 
 /// Render the message timeline panel into `area`.
@@ -8825,55 +8217,6 @@ pub fn render_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-/// PERF-041: render any per-message cache group that is still behind its
-/// message, then rebuild the flat plain-text copy buffer from the cache.
-///
-/// The render loop throttles re-rendering of an actively-streaming group
-/// (PERF-042), so at the moment a copy is requested that group may still hold
-/// the previous frame's rows.  Render the stale groups first so the copy
-/// reads exactly what is on screen, then project the wrapped rows into
-/// `message_content_lines`.
-pub fn ensure_message_copy_lines(app: &mut App) {
-    let w = app.session.message_cache_width.max(1) as usize;
-    // Render only the groups whose `edit_seq` is behind (usually the single
-    // streaming message), so a copy costs one group render at most.
-    for i in 0..app.session.message_line_cache.len() {
-        let stale = app
-            .session
-            .messages
-            .get(i)
-            .map(|msg| app.session.message_line_cache[i].edit_seq != msg.edit_seq)
-            .unwrap_or(false);
-        if !stale {
-            continue;
-        }
-        let lines = message_to_lines(
-            &app.session.messages[i],
-            &app.tool_step_map,
-            &app.sid_to_display_name,
-            &app.cwd,
-        );
-        let edit_seq = app.session.messages[i].edit_seq;
-        let group = &mut app.session.message_line_cache[i];
-        group.lines = lines;
-        group.edit_seq = edit_seq;
-        group.wrapped_lines = group
-            .lines
-            .iter()
-            .flat_map(|l| wrap_line_styled(l, w))
-            .collect();
-        group.content_lines = wrapped_lines_to_strings(&group.wrapped_lines);
-        group.wrapped_count = group.wrapped_lines.len() as u16;
-    }
-    app.session.message_cache_dirty_from = app.session.message_line_cache.len();
-    let mut rebuilt = Vec::new();
-    for group in &app.session.message_line_cache {
-        rebuilt.extend(group.content_lines.iter().cloned());
-    }
-    app.session.message_content_lines = rebuilt;
-    app.session.message_content_lines_dirty = false;
-}
-
 fn render_input(frame: &mut Frame, app: &App, area: Rect) {
     // Build title: show staged attachments in the block title. FR-058 (amended):
     // teammate focus no longer redirects the input box, so the title never names
@@ -8935,7 +8278,7 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
         // `refresh_input_render_cache` instead of re-wrapping and re-measuring
         // the buffer on every frame.
         let cache = &app.session.input_render_cache;
-        let wrapped_lines = cache.lines.clone();
+        let wrapped_lines: Vec<Line<'static>> = cache.lines.iter().map(to_ratatui_line).collect();
         let paragraph = Paragraph::new(wrapped_lines).block(block);
         frame.render_widget(paragraph, area);
 

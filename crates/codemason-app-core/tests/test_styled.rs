@@ -40,3 +40,12 @@ fn test_styled_line_from_spans() {
     assert_eq!(line.spans[1].style, red);
     assert_eq!(StyledLine::from(StyledSpan::raw("z")).text(), "z");
 }
+
+#[test]
+fn test_styled_line_display_is_plain_text() {
+    let line = StyledLine::from(vec![
+        StyledSpan::styled("a", TextStyle::new().bold()),
+        StyledSpan::raw("b"),
+    ]);
+    assert_eq!(line.to_string(), "ab");
+}
