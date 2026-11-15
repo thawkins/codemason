@@ -27,6 +27,8 @@ trap 'rm -rf "${PKG_ROOT}"' EXIT
 mkdir -p "${PKG_ROOT}/usr/local/lib/codemason"
 cp "${BINARY_PATH}" "${PKG_ROOT}/usr/local/lib/codemason/codemason"
 chmod 755 "${PKG_ROOT}/usr/local/lib/codemason/codemason"
+# The licence notices of the fonts embedded in the binary.
+cp "${ROOT_DIR}/THIRD-PARTY-NOTICES.txt" "${PKG_ROOT}/usr/local/lib/codemason/"
 
 # Verify we are actually packaging an arm64 binary.
 ARCH="$(file "${PKG_ROOT}/usr/local/lib/codemason/codemason" | grep -o 'arm64' || true)"

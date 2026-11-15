@@ -145,10 +145,6 @@ jobs:
           Copy-Item "target\x86_64-pc-windows-msvc\release\codemason.exe" "target\release\codemason.exe" -Force
         shell: powershell
 
-      - name: Create WiX source files
-        run: cargo wix init --package codemason
-        shell: powershell
-
       - name: Build .msi package
         run: |
           cargo wix --no-build --package codemason --target x86_64-pc-windows-msvc --output "codemason-${{ github.ref_name }}-windows-x86_64.msi"

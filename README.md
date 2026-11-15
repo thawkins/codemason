@@ -1049,6 +1049,12 @@ Related documents:
 
 MIT
 
-The GUI bundles the Hack Bold font (`crates/codemason-gui/assets/fonts/Hack-Bold.ttf`,
-Hack v3.003, Source Foundry), used under the MIT licence and the Bitstream Vera
-licence. The full notices are in `crates/codemason-gui/assets/fonts/Hack-LICENSE.txt`.
+The GUI embeds font software: the Hack Bold font
+(`crates/codemason-gui/assets/fonts/Hack-Bold.ttf`, Hack v3.003, Source Foundry;
+MIT and Bitstream Vera licences) and egui's default fonts (Hack Regular, Noto
+Emoji under the SIL Open Font License 1.1, Ubuntu Light under the Ubuntu Font
+Licence 1.0, and the MIT-licensed emoji-icon-font). The full notices are in
+[`THIRD-PARTY-NOTICES.txt`](THIRD-PARTY-NOTICES.txt), which every package ships:
+`/usr/share/doc/codemason/THIRD-PARTY-NOTICES.txt` in the `.deb` and `.rpm`, the
+install folder for the Windows `.msi`, and `/usr/local/lib/codemason/` for the
+macOS `.pkg`.

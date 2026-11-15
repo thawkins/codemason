@@ -41,6 +41,7 @@ assets = [
     ["README.md", "usr/share/doc/codemason/README.md", "644"],
     ["LICENSE", "usr/share/doc/codemason/LICENSE", "644"],
     ["CHANGELOG.md", "usr/share/doc/codemason/CHANGELOG.md", "644"],
+    ["THIRD-PARTY-NOTICES.txt", "usr/share/doc/codemason/THIRD-PARTY-NOTICES.txt", "644"],
 ]
 
 [package.metadata.generate-rpm]
@@ -49,6 +50,7 @@ assets = [
     { source = "README.md", dest = "/usr/share/doc/codemason/README.md", mode = "644" },
     { source = "LICENSE", dest = "/usr/share/doc/codemason/LICENSE", mode = "644" },
     { source = "CHANGELOG.md", dest = "/usr/share/doc/codemason/CHANGELOG.md", mode = "644" },
+    { source = "THIRD-PARTY-NOTICES.txt", dest = "/usr/share/doc/codemason/THIRD-PARTY-NOTICES.txt", mode = "644" },
 ]
 
 [package.metadata.wix]
