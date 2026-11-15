@@ -194,7 +194,13 @@ impl WindowGeometry {
             None,
             &Defaults::new(DEFAULT_SIZE, MIN_SIZE),
         );
-        placed.position_px != saved.position_px || placed.normal.size != saved.normal.size
+        placed.position_px != saved.position_px
+            || placed
+                .normal
+                .size
+                .iter()
+                .zip(saved.normal.size)
+                .any(|(placed, saved)| (placed - saved).abs() > 0.5)
     }
 
     /// Record the window state eframe reports this frame. A minimized
