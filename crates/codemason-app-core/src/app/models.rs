@@ -257,10 +257,6 @@ impl App {
                 sanitize_for_display(text)
             }
         };
-        // `sanitize_for_display` strips the ANSI sentinel codes the worker used
-        // to protect `[red]...[/red]` spans through the markdown pass; convert
-        // those sentinels back into the TUI's own `[red]...[/red]` markers.
-        let rendered = crate::app::md_worker::restore_red_markers(&rendered);
         let cleaned = rendered
             .lines()
             .map(|l| l.trim_end())
