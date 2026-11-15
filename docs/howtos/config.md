@@ -1848,6 +1848,7 @@ Each automation definition:
 | `backend` | `Option<String>` | `None` (`local`) | Execution backend the run is confined to (FR-033). |
 | `dispatch` | `Vec<DispatchTarget>` | `[]` | Third-party notifications on run completion. |
 | `enabled` | `bool` | `true` | Whether the automation is active. |
+| `webhook_secret_env` | `Option<String>` | `None` | Env var holding this automation's webhook secret. `POST /auto/<id>` needs `Authorization: Bearer <secret>` or `X-Hub-Signature-256: sha256=<HMAC-SHA256 of the body>`; without a secret every webhook is refused. |
 
 Each dispatch target: `kind` (`slack`/`github`/`linear`/`notion`/`webhook`),
 optional `url`, optional `token_env` (the environment variable holding the

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Security
+
+- Security: the automation webhook `POST /auto/<id>` requires the automation's own secret. Name the environment variable holding it in `webhook_secret_env`, then send `Authorization: Bearer <secret>` or a GitHub-style `X-Hub-Signature-256: sha256=<HMAC-SHA256 of the body>`. An automation without a secret refuses every webhook (`403`). Before, any web page could start an agent run with a cross-origin `text/plain` POST. **Existing webhook automations stop accepting requests until `webhook_secret_env` is set.**
+
+### Fixed
+
+- Fixed: `cdmn serve` with no `openai.token` or `CODEMASON_TOKEN` prints the bearer token it generated for the run to stderr; before, the token was never shown and every protected route answered `401`.
+
 ## [1.0.170] - 2026-11-15
 
 Initial GUI release.

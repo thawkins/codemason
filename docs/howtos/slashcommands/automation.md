@@ -35,6 +35,7 @@ Automations are declared under the `automation` block in `.codemason/codemason.j
         "agent": "general",            // agent to run (defaults to defaultAgent)
         "prompt": "Triage {{payload}}", // {{payload}} is the trigger payload
         "trigger": { "kind": "webhook" },
+        "webhook_secret_env": "ON_ISSUE_WEBHOOK_SECRET", // env var holding the webhook secret
         "backend": "local",            // execution backend the run is confined to
         "dispatch": [                  // optional third-party notifications
           { "kind": "slack", "url": "https://hooks.slack.com/...", "token_env": "SLACK_BOT_TOKEN" }
@@ -73,7 +74,7 @@ A target with no `url` is inert.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| `POST` | `/auto/<id>` | public | Webhook ingress; enqueues a run with the body as context (FR-013) |
+| `POST` | `/auto/<id>` | automation secret | Webhook ingress; enqueues a run with the body as context (FR-013). Requires `Authorization: Bearer <secret>` or `X-Hub-Signature-256: sha256=<HMAC-SHA256 of the body>`, where the secret is the value of the env var named by `webhook_secret_env`. An automation without one refuses webhooks (`403`); a wrong credential is `401`. |
 | `GET` | `/automation` | bearer | List configured automations and next-due times |
 | `GET` | `/automation/runs/<id>` | bearer | List an automation's run history |
 | `POST` | `/automation/<id>/run` | bearer | Enqueue a manual run |
@@ -90,8 +91,9 @@ codemason automation help
 ## Examples
 
 ```
-# Webhook ingress (from an external system)
+# Webhook ingress (from an external system), with the automation's secret
 curl -s -X POST http://127.0.0.1:3000/auto/on-issue \
+  -H "Authorization: Bearer $ON_ISSUE_WEBHOOK_SECRET" \
   -H "Content-Type: application/json" \
   -d '{"issue":"42","title":"fix login"}'
 
