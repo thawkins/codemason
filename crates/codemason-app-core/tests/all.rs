@@ -567,6 +567,8 @@ mod test_telemetry_export_notice;
 mod test_telemetry_slash;
 #[path = "test_text_selection.rs"]
 mod test_text_selection;
+#[path = "test_think_narration_scrub.rs"]
+mod test_think_narration_scrub;
 #[path = "test_thinking_defaults.rs"]
 mod test_thinking_defaults;
 #[path = "test_thinking_selector.rs"]

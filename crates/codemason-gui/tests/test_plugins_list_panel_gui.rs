@@ -168,6 +168,15 @@ async fn plugins_list_opens_a_panel_with_the_pinned_table_and_capabilities() {
     );
     // The leading body lines are plugin table rows, exposed as `view.rows` so the
     // panel can toggle the highlighted plugin (FR-009).
+    assert_eq!(
+        app.plugins_list.as_ref().unwrap().view.rows.len(),
+        1,
+        "one plugin row identity expected"
+    );
+    assert_eq!(
+        app.plugins_list.as_ref().unwrap().view.rows[0].id,
+        "codex-weather-00"
+    );
     assert!(
         body.iter().any(|l| l.starts_with("- codex-weather-00:")),
         "the contributions line must name the plugin: {body:?}"
@@ -211,5 +220,9 @@ async fn plugins_list_space_toggles_the_highlighted_plugin() {
 
     // A second Space disables it again.
     press(&mut app, KeyCode::Char(' ')).await;
-    let _state = app.plugins_list.as_ref().expect("panel open");
+    let state = app.plugins_list.as_ref().expect("panel open");
+    assert!(
+        !state.view.rows[0].enabled,
+        "a second Space must disable the plugin"
+    );
 }
