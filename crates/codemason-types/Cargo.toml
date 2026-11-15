@@ -19,7 +19,6 @@ tracing = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 regex = "1"
 memchr = "2"
-rusqlite = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
