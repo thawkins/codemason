@@ -3143,6 +3143,7 @@ impl Config {
         if stripped_provider_api {
             rejected.push("provider.<id>.api");
         }
+        overlay.strip_unprivileged_project_sections(&mut rejected);
 
         if !rejected.is_empty() {
             tracing::warn!(
@@ -3154,6 +3155,86 @@ impl Config {
         }
 
         Self::merge_inner(base, overlay)
+    }
+
+    /// Drop the sections a project overlay may not set beyond the SEC list in
+    /// [`Config::merge_project`], recording each one that was present in
+    /// `rejected` (deep-refactor audit car 1, decisions O-01 and O-02).
+    ///
+    /// - `execution_backend` / `backends`: a remote backend receives a stored
+    ///   provider credential as its bearer token and the whole turn, a container
+    ///   backend gets the named secrets as env vars in an image the project
+    ///   picks, and `"local"` downgrades a user sandbox to host execution.
+    /// - `automation`: schedules unattended runs and posts any env var
+    ///   (`token_env`) to a URL the project picks.
+    /// - `gitlab`: `instance_url` receives the stored GitLab token.
+    /// - `plugins`: replacing the section wipes the user's `permissions` gate,
+    ///   which gives an enabled plugin the full host API, and raises budgets.
+    /// - `connectors`: replaced wholesale, including catalogue URLs.
+    /// - search API keys: a project key routes the user's queries into the
+    ///   project's vendor account.
+    /// - budgets and safety switches: `loop` (steps, cost, retries,
+    ///   checkpoints), `prices`, `input_queue_capacity`, the background-agent
+    ///   limits, `activity_log` and `edit_log`.
+    fn strip_unprivileged_project_sections(&mut self, rejected: &mut Vec<&'static str>) {
+        if self.execution_backend.take().is_some() {
+            rejected.push("execution_backend");
+        }
+        if !self.backends.is_empty() {
+            self.backends.clear();
+            rejected.push("backends");
+        }
+        if self.automation.take().is_some() {
+            rejected.push("automation");
+        }
+        let gitlab = std::mem::take(&mut self.gitlab);
+        if gitlab.instance_url.is_some() || gitlab.token.is_some() || gitlab.username.is_some() {
+            rejected.push("gitlab");
+        }
+        if self.plugins.take().is_some() {
+            rejected.push("plugins");
+        }
+        if self.connectors.take().is_some() {
+            rejected.push("connectors");
+        }
+        let mut search_keys = false;
+        for key in [
+            &mut self.tavily_api_key,
+            &mut self.langsearch_api_key,
+            &mut self.perplexity_api_key,
+            &mut self.exa_api_key,
+            &mut self.serper_api_key,
+        ] {
+            search_keys |= key.take().is_some();
+        }
+        if search_keys {
+            rejected.push("search API keys");
+        }
+        if !self.r#loop.is_default() {
+            self.r#loop = LoopConfig::default();
+            rejected.push("loop");
+        }
+        if !self.prices.is_empty() {
+            self.prices.clear();
+            rejected.push("prices");
+        }
+        if self.input_queue_capacity.take().is_some() {
+            rejected.push("input_queue_capacity");
+        }
+        if self.experimental.max_background_agents != default_max_background_agents()
+            || self.experimental.background_agent_timeout != default_background_agent_timeout()
+        {
+            self.experimental.max_background_agents = default_max_background_agents();
+            self.experimental.background_agent_timeout = default_background_agent_timeout();
+            rejected.push("experimental background-agent limits");
+        }
+        // `activity_log` defaults to true and only `false` overrides the base;
+        // `edit_log` defaults to false and only `true` overrides it.
+        if !self.activity_log || self.edit_log {
+            self.activity_log = true;
+            self.edit_log = false;
+            rejected.push("activity_log / edit_log");
+        }
     }
 
     fn merge_inner(mut base: Self, overlay: Self) -> Self {

@@ -69,7 +69,7 @@ impl Drop for EnvGuard {
     }
 }
 
-/// Enter an isolated tempdir project with the given project config contents.
+/// Enter an isolated tempdir project whose user-global config holds `config`.
 fn enter_project(
     config: &str,
 ) -> (
@@ -85,9 +85,12 @@ fn enter_project(
     unsafe { std::env::remove_var("CODEMASON_CONFIG_CONTENT") };
     std::env::set_current_dir(temp.path()).expect("set cwd");
 
-    let codemason_dir = temp.path().join(".codemason");
-    std::fs::create_dir_all(&codemason_dir).expect("create .codemason");
-    std::fs::write(codemason_dir.join("codemason.json"), config).expect("write project config");
+    std::fs::create_dir_all(temp.path().join(".codemason")).expect("create .codemason");
+    // Privileged sections are honoured only in the user-global config, which
+    // XDG_CONFIG_HOME above points into the tempdir.
+    let global_dir = temp.path().join(".config").join("codemason");
+    std::fs::create_dir_all(&global_dir).expect("create global config dir");
+    std::fs::write(global_dir.join("codemason.json"), config).expect("write global config");
     (guard, env_guard, temp)
 }
 
@@ -220,9 +223,10 @@ async fn panel_switches_the_active_backend_and_persists_it() {
     // The switch is only accepted when the docker runtime is healthy; on a host
     // with no runtime the row is `unavailable` and the switch is refused. Assert
     // whichever path the host took is internally consistent.
-    let config: codemason_config::Config =
-        serde_json::from_str(&std::fs::read_to_string(".codemason/codemason.json").expect("read"))
-            .expect("parse config");
+    let config: codemason_config::Config = serde_json::from_str(
+        &std::fs::read_to_string(".config/codemason/codemason.json").expect("read"),
+    )
+    .expect("parse config");
     let persisted = serde_json::to_value(&config).expect("serialise");
     if app.session.active_backend == "docker" {
         assert_eq!(
