@@ -1856,7 +1856,6 @@ dependencies = [
  "libc",
  "memchr",
  "regex",
- "rusqlite",
  "serde",
  "serde_json",
  "serial_test",

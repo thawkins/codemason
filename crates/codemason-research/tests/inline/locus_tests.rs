@@ -139,3 +139,58 @@ fn snippet_does_not_panic_on_multibyte_boundary() {
     let snippet = extract_snippet(&body, "performance");
     assert!(snippet.to_lowercase().contains("performance"));
 }
+
+/// The previous implementation, kept as the reference the faster search must
+/// match exactly: the first char index whose lowercased remainder starts with
+/// the lowercased keyword.
+fn reference_snippet(body: &str, keyword: &str) -> String {
+    let kw_lower = keyword.to_lowercase();
+    let Some(pos) = body
+        .char_indices()
+        .map(|(i, _)| i)
+        .find(|&i| body[i..].to_lowercase().starts_with(&kw_lower))
+    else {
+        return String::new();
+    };
+    let start = body.floor_char_boundary(pos.saturating_sub(40));
+    let end = body.ceil_char_boundary((pos + keyword.len() + 40).min(body.len()));
+    body[start..end].replace('\n', " ").trim().to_string()
+}
+
+#[test]
+fn snippet_matches_the_reference_search() {
+    let bodies = [
+        "Performance first, then performance again.",
+        "no keyword in here at all",
+        "PERFORMANCE",
+        "perf ormance performanc performance.",
+        "\u{130}\u{130}\u{130} performance after dotted capitals",
+        "\u{1E9E}\u{1E9E} Security matters \u{2014} security!",
+        "\u{3A3}\u{3A3}\u{3A3} the word Latency comes late \u{65e5}\u{672c}",
+        "",
+    ];
+    for body in bodies {
+        for keyword in ["performance", "security", "latency", "x"] {
+            assert_eq!(
+                extract_snippet(body, keyword),
+                reference_snippet(body, keyword),
+                "body {body:?}, keyword {keyword:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn snippet_of_a_large_body_is_linear() {
+    // D-18 / RS-03: the keyword at the end of a 256 KiB body took about 4.75 s
+    // when the whole remainder was lowercased at every char index.
+    let body = format!("{} performance tail.", "a ".repeat(128 * 1024));
+    let started = std::time::Instant::now();
+    let snippet = extract_snippet(&body, "performance");
+    let elapsed = started.elapsed();
+    assert!(snippet.contains("performance"));
+    assert!(
+        elapsed < std::time::Duration::from_secs(1),
+        "a 256 KiB body must not take {elapsed:?}"
+    );
+}
