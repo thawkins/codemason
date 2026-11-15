@@ -68,6 +68,34 @@ pub const MAX_EXTRACTED_BYTES: u64 = 256 * 1024 * 1024;
 /// company.
 pub const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(1);
 
+/// Longest a single `git` invocation of a `git+` install may run before it is
+/// killed. A shallow clone of a plugin repository takes seconds; the cap stops
+/// a hostile or stalled remote from hanging `/plugins add` forever.
+pub const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(5);
+
+/// Test-only override of [`GIT_TIMEOUT`] and of the cloned-tree size cap
+/// ([`MAX_EXTRACTED_BYTES`]); set once per process by
+/// [`set_git_limits_override`].
+static GIT_LIMITS_OVERRIDE: std::sync::OnceLock<(std::time::Duration, u64)> =
+    std::sync::OnceLock::new();
+
+/// Override the `git+` install limits for this process (tests only), so a
+/// timeout or an oversized clone can be exercised without waiting minutes or
+/// writing hundreds of MiB. The first call wins.
+#[doc(hidden)]
+pub fn set_git_limits_override(timeout: std::time::Duration, max_tree_bytes: u64) {
+    // INTENTIONAL: a second call is a no-op by design (first call wins).
+    let _ = GIT_LIMITS_OVERRIDE.set((timeout, max_tree_bytes));
+}
+
+/// The effective `(timeout, max cloned-tree bytes)` for a `git+` install.
+fn git_limits() -> (std::time::Duration, u64) {
+    GIT_LIMITS_OVERRIDE
+        .get()
+        .copied()
+        .unwrap_or((GIT_TIMEOUT, MAX_EXTRACTED_BYTES))
+}
+
 /// Read/write chunk size for streaming a download to disk.
 const STREAM_CHUNK_BYTES: usize = 65_536;
 
@@ -434,12 +462,15 @@ fn git_ref(raw: &str) -> Option<String> {
 ///
 /// Validated with the same charset as [`git_ref`]: the subpath reaches
 /// `git sparse-checkout set <subpath>`, where a leading `-` would again be
-/// parsed as an option (SEC-codemason-plugins-001).
+/// parsed as an option (SEC-codemason-plugins-001). An absolute subpath is
+/// dropped too: `repo_dir.join("/x")` would name `/x` itself, outside the
+/// clone.
 fn git_subpath(raw: &str) -> Option<String> {
     let trimmed = raw.trim().trim_start_matches("./");
     if trimmed.is_empty() {
         None
-    } else if is_safe_git_argument(trimmed) && !trimmed.contains("..") {
+    } else if is_safe_git_argument(trimmed) && !trimmed.contains("..") && !trimmed.starts_with('/')
+    {
         Some(trimmed.to_string())
     } else {
         None
@@ -545,7 +576,39 @@ fn git_clone_stage(source: &str, staging: &Path) -> Result<PathBuf, AddError> {
     if !root.is_dir() {
         return Err(AddError::NotAPlugin(root.display().to_string()));
     }
+    // The archive path caps what it extracts; a clone gets the same total cap
+    // on the tree it is about to install.
+    let max = git_limits().1;
+    let size = tree_size(&root, max).map_err(io_err)?;
+    if size > max {
+        return Err(AddError::TooLarge { size, max });
+    }
     Ok(root)
+}
+
+/// Total size in bytes of the regular files under `root`, skipping `.git`
+/// and never following symlinks. Stops counting once the total passes
+/// `stop_after`, so a huge tree is not walked in full.
+fn tree_size(root: &Path, stop_after: u64) -> std::io::Result<u64> {
+    let mut total: u64 = 0;
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                if entry.file_name() != ".git" {
+                    pending.push(entry.path());
+                }
+            } else if file_type.is_file() {
+                total = total.saturating_add(entry.metadata()?.len());
+                if total > stop_after {
+                    return Ok(total);
+                }
+            }
+        }
+    }
+    Ok(total)
 }
 
 /// Join a plugin id onto the store root, refusing anything that is not a
@@ -573,27 +636,65 @@ fn confined_dest_dir(store: &Path, id: &str) -> Result<PathBuf, AddError> {
 }
 
 /// Run one non-interactive `git` invocation, returning a contained error on a
-/// missing binary or a non-zero exit.
+/// missing binary, a non-zero exit, or a run longer than [`GIT_TIMEOUT`].
+///
+/// stderr is drained on a separate thread while the deadline is polled: a
+/// child blocked on a full pipe would otherwise never exit. Stalled HTTP
+/// transfers are also aborted by git itself (`GIT_HTTP_LOW_SPEED_*`), so the
+/// remote helper does not outlive a killed `git`.
 fn git_run(args: &[&str], cwd: Option<&Path>) -> Result<(), AddError> {
+    use std::io::Read as _;
+
     let verb = args.first().copied().unwrap_or("git");
     let mut command = std::process::Command::new("git");
     command
         .args(args)
         // Never prompt for credentials; a private repo fails instead of hanging.
         .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_ASKPASS", "");
+        .env("GIT_ASKPASS", "")
+        // Abort a transfer slower than 1 KiB/s for 30 s.
+        .env("GIT_HTTP_LOW_SPEED_LIMIT", "1024")
+        .env("GIT_HTTP_LOW_SPEED_TIME", "30")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
     if let Some(dir) = cwd {
         command.current_dir(dir);
     }
-    let output = command
-        .output()
-        .map_err(|e| AddError::Io(IoError::message(format!("git {verb}: {e}"))))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AddError::Io(IoError::message(format!(
-            "git {verb}: {}",
-            stderr.trim()
-        ))));
+    let git_err = |detail: String| AddError::Io(IoError::message(format!("git {verb}: {detail}")));
+    let mut child = command.spawn().map_err(|e| git_err(e.to_string()))?;
+    let stderr_reader = child.stderr.take().map(|mut pipe| {
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            // INTENTIONAL: stderr is diagnostic only; a read error leaves it empty.
+            let _ = pipe.read_to_string(&mut text);
+            text
+        })
+    });
+
+    let timeout = git_limits().0;
+    let deadline = std::time::Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|e| git_err(e.to_string()))? {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            // INTENTIONAL: the child may already have exited; either way it is gone.
+            let _ = child.kill();
+            // INTENTIONAL: reap the killed child; its status is irrelevant.
+            let _ = child.wait();
+            return Err(git_err(format!(
+                "timed out after {}s",
+                timeout.as_secs_f64()
+            )));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    if !status.success() {
+        let stderr = stderr_reader
+            .and_then(|reader| reader.join().ok())
+            .unwrap_or_default();
+        return Err(git_err(stderr.trim().to_string()));
     }
     Ok(())
 }
