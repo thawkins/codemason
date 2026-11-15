@@ -126,6 +126,8 @@ mod test_palette;
 mod test_panels;
 #[path = "test_prompt.rs"]
 mod test_prompt;
+#[path = "test_provider_dialog_masking_gui.rs"]
+mod test_provider_dialog_masking_gui;
 #[path = "test_research.rs"]
 mod test_research;
 #[path = "test_runtime_context.rs"]

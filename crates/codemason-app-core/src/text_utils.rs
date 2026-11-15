@@ -13,6 +13,26 @@ pub fn is_ollama_family(provider_id: &str) -> bool {
     provider_id == "ollama" || provider_id == "ollama_cloud"
 }
 
+/// Mask a credential for display (SEC-codemason-tui-002, MS-03).
+///
+/// The provider-setup dialog shows the API key and the GitLab personal
+/// access token through this function, so a live credential is never drawn
+/// verbatim. A secret longer than twelve characters keeps its first and last
+/// four characters; a shorter one is masked completely. The masked string
+/// has as many characters as `text`.
+///
+/// # Arguments
+///
+/// * `text` - the secret to mask.
+///
+/// # Returns
+///
+/// The secret with every character outside the kept edges replaced by `*`.
+#[must_use]
+pub fn mask_secret(text: &str) -> String {
+    codemason_types::sanitize::mask_edges(text, 4, 12)
+}
+
 /// Current wall-clock time as Unix milliseconds.
 ///
 /// Returns `0` if the system clock is set before the Unix epoch (which cannot

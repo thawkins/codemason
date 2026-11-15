@@ -11,7 +11,8 @@
 //!   entry moves the step's highlight (what Up and Down move), and Continue
 //!   sends Enter;
 //! - a step with text fields shows them as the App holds them (secrets
-//!   masked as the TUI masks them), with the active field marked; typing
+//!   masked by `codemason_app_core::text_utils::mask_secret`), with the
+//!   active field marked; typing
 //!   reaches them as key presses through the router, as in the TUI, and a
 //!   paste (Ctrl+V, which egui reports as a paste event alone) goes to
 //!   `App::paste_text_into_provider_setup` ([`prepare`]);
@@ -21,11 +22,12 @@
 //! The model lists of the flow are drawn by [`super::model_picker`].
 //!
 //! Dependencies: `codemason-app-core`, `codemason-config` (telemetry
-//! protocol), `codemason-types` (thinking levels, secret masking), `craft-ui`
+//! protocol), `codemason-types` (thinking levels), `craft-ui`
 //! (`ComboBox`) and `egui`.
 
 use codemason_app_core::app::{App, DeviceFlowKind, PROVIDER_LIST, ProviderSetupStep};
 use codemason_app_core::input_event::{Key, KeyInput};
+use codemason_app_core::text_utils::mask_secret;
 use codemason_config::OtelProtocol;
 use codemason_types::ThinkingLevel;
 
@@ -99,12 +101,6 @@ impl StepView {
         });
         self
     }
-}
-
-/// Mask a secret as the TUI does (`mask_secret`: the first and last four
-/// characters of a long key, the rest hidden).
-fn mask(text: &str) -> String {
-    codemason_types::sanitize::mask_edges(text, 4, 12)
 }
 
 /// The TUI's name for a thinking level.
@@ -230,7 +226,7 @@ fn view(step: &ProviderSetupStep) -> StepView {
             );
             view.fields.push(Field {
                 label: "API key",
-                value: mask(key_field.text()),
+                value: mask_secret(key_field.text()),
                 active: *active_field == 0,
             });
             if provider_id == "generic_openai" || provider_id == "azure_foundry" {
@@ -299,7 +295,7 @@ fn view(step: &ProviderSetupStep) -> StepView {
             });
             view.fields.push(Field {
                 label: "Personal access token",
-                value: mask(token_input),
+                value: mask_secret(token_input),
                 active: *active_field == 1,
             });
             view.error = error.clone();
