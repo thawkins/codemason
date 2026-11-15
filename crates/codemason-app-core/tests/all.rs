@@ -531,6 +531,8 @@ mod test_slash_teams_deep;
 mod test_slash_tools;
 #[path = "test_spec_jtbd.rs"]
 mod test_spec_jtbd;
+#[path = "test_startup_services.rs"]
+mod test_startup_services;
 #[path = "test_startup_session.rs"]
 mod test_startup_session;
 #[path = "test_status_expiry.rs"]

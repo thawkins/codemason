@@ -121,6 +121,14 @@ impl App {
         session_processor: &SessionProcessor,
         mcp_timeout: Duration,
     ) {
+        // Stop the schedulers started at launch (FR-017) so no cron or
+        // automation run starts during teardown.
+        if let Some(cron) = self.cron_scheduler.take() {
+            cron.stop();
+        }
+        if let Some(automation) = self.automation_scheduler.take() {
+            automation.stop();
+        }
         // Dropping a job aborts it (`Drop for SwarmAutoComplete`); doing it
         // here rather than when the App drops also covers a platform whose
         // process ends without dropping the App (macOS `terminate:`).
@@ -153,5 +161,8 @@ impl App {
         drop(self.code_index_watch_session.take());
         // ...and the parked indexes of other open projects (MULTISESSION M8).
         self.stop_project_services();
+        // Detach the fallback reindex thread rather than join it: it observes
+        // the stop request above, and a join could hang the exit.
+        drop(self.code_index_fallback_thread.take());
     }
 }

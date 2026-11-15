@@ -3754,6 +3754,17 @@ pub struct App {
     pub code_index_bg_result: Arc<std::sync::Mutex<Option<Result<(String, String), String>>>>,
     /// Active file watcher + background worker session for the code index.
     pub code_index_watch_session: Option<codemason_codeindex::WatchSession>,
+    /// Receives the background code-index startup result
+    /// ([`App::start_background_services`]); `None` once applied.
+    pub(crate) code_index_startup_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<super::startup::CodeIndexStartupResult>>,
+    /// Fallback one-shot reindex thread, when the code-index watcher could
+    /// not start; detached on quit.
+    pub(crate) code_index_fallback_thread: Option<std::thread::JoinHandle<()>>,
+    /// The cron scheduler started at launch; stopped on quit.
+    pub cron_scheduler: Option<super::cron::CronSchedulerHandle>,
+    /// The automation scheduler, when the config enables automation.
+    pub automation_scheduler: Option<codemason_agent::automation::AutomationSchedulerHandle>,
     /// Active MCP discovery dialog, if any.
     pub mcp_discover: Option<McpDiscoverState>,
     /// Active `/plugins list` dialog, if any (spec `plugins` FR-009).

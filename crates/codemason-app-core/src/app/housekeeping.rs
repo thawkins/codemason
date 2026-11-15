@@ -52,6 +52,9 @@ impl App {
         // its own internal cadence, and the frontend keeps a wake scheduled
         // for the end of the interval so a quiet period is still polled
         // (stat refreshes, expiry transitions, spinner reaping).
+        // The background code-index startup result is applied as soon as it
+        // arrives, not on the housekeeping cadence.
+        self.poll_code_index_startup();
         if self.run_housekeeping_if_due() {
             // Stream /new scaffold progress and surface the finished summary.
             self.poll_newproj_result();
