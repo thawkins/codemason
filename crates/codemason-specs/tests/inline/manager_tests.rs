@@ -131,6 +131,31 @@ async fn test_manager_search_snippet_when_lowercase_changes_length() {
     );
 }
 
+#[tokio::test]
+async fn test_manager_search_snippet_with_a_word_final_sigma() {
+    // Review of RS-02: the query lowers a word-final capital sigma to U+03C2,
+    // so the spec text must be lowered the same way (not char by char).
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let id = SpecId::new("sigma").unwrap();
+    let spec_md = "intro \u{39F}\u{3A3} outro \u{130}\n".to_string();
+    SpecIo::create_spec_dir(root, &id, &spec_md, "# Plan\n")
+        .await
+        .unwrap();
+
+    let mgr = SpecManager::new(root);
+    let results = mgr.search_specs("\u{39F}\u{3A3}").await.unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(
+        results[0]
+            .snippets
+            .iter()
+            .any(|s| s.contains("\u{39F}\u{3A3}")),
+        "snippets missed the match: {:?}",
+        results[0].snippets
+    );
+}
+
 #[test]
 fn test_spec_filter_builder() {
     let f = SpecFilter::new()

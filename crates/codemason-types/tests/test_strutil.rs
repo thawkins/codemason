@@ -60,3 +60,23 @@ fn test_truncate_bytes_em_dash_at_400_boundary() {
     // ellipsis (M1 switched the marker away from U+2014).
     assert_eq!(result, format!("{prefix}..."));
 }
+
+#[test]
+fn test_strutil_lowercase_range_to_original_maps_length_changes_back() {
+    use codemason_types::strutil::lowercase_range_to_original;
+    // U+0130 lowercases to 3 bytes; the match sits after three of them.
+    let text = "\u{130}\u{130}\u{130} needle";
+    let lowered = text.to_lowercase();
+    let start = lowered.find("needle").expect("match");
+    let (s, e) = lowercase_range_to_original(text, start, start + "needle".len());
+    assert_eq!(&text[s..e], "needle");
+    // ASCII: identical offsets; a word-final sigma keeps its byte length.
+    assert_eq!(lowercase_range_to_original("abc", 1, 2), (1, 2));
+    let greek = "x \u{39F}\u{3A3} y";
+    let lowered = greek.to_lowercase();
+    let start = lowered.find("\u{3BF}\u{3C2}").expect("final sigma form");
+    let (s, e) = lowercase_range_to_original(greek, start, start + "\u{3BF}\u{3C2}".len());
+    assert_eq!(&greek[s..e], "\u{39F}\u{3A3}");
+    // A range at the very end maps to the end.
+    assert_eq!(lowercase_range_to_original("ab", 2, 2), (2, 2));
+}

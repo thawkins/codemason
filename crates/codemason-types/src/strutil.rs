@@ -313,3 +313,38 @@ pub fn format_duration_hms(secs: i64) -> String {
 pub fn format_mmss(secs: u64) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
+
+/// Map the byte range `start..end` of a match found in `text.to_lowercase()`
+/// back to the matching byte range of `text`.
+///
+/// Lowercasing can change a char's byte length (U+0130 becomes three bytes),
+/// so offsets in the lowered string are not offsets in `text`. `to_lowercase`
+/// lowers each char on its own, except a word-final capital sigma, whose two
+/// lowercase forms have the same byte length; so walking `text` and summing
+/// each char's lowercase byte length reproduces the lowered offsets exactly.
+/// A boundary inside one char's expansion widens to that whole char.
+///
+/// # Arguments
+///
+/// * `text` - the original text.
+/// * `start`, `end` - a byte range of `text.to_lowercase()`.
+///
+/// # Returns
+///
+/// The `(start, end)` byte range in `text`, on char boundaries.
+#[must_use]
+pub fn lowercase_range_to_original(text: &str, start: usize, end: usize) -> (usize, usize) {
+    let mut lowered_at = 0;
+    let mut original_start = None;
+    for (idx, c) in text.char_indices() {
+        if original_start.is_some() && end <= lowered_at {
+            return (original_start.unwrap_or(idx), idx);
+        }
+        let len: usize = c.to_lowercase().map(char::len_utf8).sum();
+        if original_start.is_none() && start < lowered_at + len {
+            original_start = Some(idx);
+        }
+        lowered_at += len;
+    }
+    (original_start.unwrap_or(text.len()), text.len())
+}

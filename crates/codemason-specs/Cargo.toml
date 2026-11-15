@@ -19,6 +19,8 @@ path = "tests/all.rs"
 # delegates its trailing flags here so accepted values and error text cannot
 # drift from the `/new` surface.
 codemason-tools-extended = { path = "../codemason-tools-extended" }
+# `strutil::lowercase_range_to_original` maps search matches back to the spec text.
+codemason-types = { path = "../codemason-types" }
 serde = { version = "1.0", features = ["derive"] }
 # Completion timestamps in PLAN.md status cells are RFC 3339 UTC strings.
 chrono = { workspace = true }

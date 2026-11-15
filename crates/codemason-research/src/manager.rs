@@ -1580,28 +1580,26 @@ fn lev(a: &str, b: &str) -> usize {
     prev[b.len()]
 }
 
-/// Find the first case-insensitive occurrence of `query_lower` (already
-/// lowercased) in `text`, returning `(byte_idx, byte_len)` measured in
-/// `text`'s own byte offsets.
+/// Find `query_lower` in `text` case-insensitively and return the match's
+/// `(byte_offset, byte_len)` in `text` itself (RS-02).
 ///
-/// Lowercasing can change a char's byte length (U+0130 lowercases to the
-/// 3-byte `i\u{307}`), so an offset found in `text.to_lowercase()` is not
-/// valid in `text` (RS-02). `text` is lowered char by char while recording,
-/// for every lowered byte, the offset of the original char it came from, and
-/// the match is mapped back through that table.
+/// ASCII text is searched in an ASCII-lowered copy, whose offsets are the
+/// original offsets. Other text is searched in `str::to_lowercase()`, the
+/// same lowering the query went through, so a word-final sigma still matches.
+/// The one match is then mapped back with
+/// [`codemason_types::strutil::lowercase_range_to_original`], without a
+/// per-byte offset table.
 fn find_case_insensitive(text: &str, query_lower: &str) -> Option<(usize, usize)> {
-    let mut lowered = String::with_capacity(text.len());
-    let mut origin: Vec<usize> = Vec::with_capacity(text.len() + 1);
-    for (idx, c) in text.char_indices() {
-        for lc in c.to_lowercase() {
-            lowered.push(lc);
-        }
-        origin.resize(lowered.len(), idx);
+    if text.is_ascii() {
+        let start = text.to_ascii_lowercase().find(query_lower)?;
+        return Some((start, query_lower.len()));
     }
-    origin.push(text.len());
-    let start = lowered.find(query_lower)?;
-    let orig_start = *origin.get(start)?;
-    let orig_end = *origin.get(start + query_lower.len())?;
+    let start = text.to_lowercase().find(query_lower)?;
+    let (orig_start, orig_end) = codemason_types::strutil::lowercase_range_to_original(
+        text,
+        start,
+        start + query_lower.len(),
+    );
     Some((orig_start, orig_end - orig_start))
 }
 
