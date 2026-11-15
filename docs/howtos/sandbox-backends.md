@@ -134,10 +134,14 @@ Health is computed from the config and the host, with a live probe only for
 
 ### 2.4 Persistence
 
-A successful switch writes `execution_backend: "<kind>"` into the loaded config
-file - the project-local `.codemason/codemason.json` when one was loaded, otherwise the
-global config (`persist_active_backend` / `backend_config_path`) - using an atomic
-temp-file-then-rename update. The per-turn config cache is then invalidated, so
+A successful switch writes `execution_backend: "<kind>"` into the user-global
+config (or the explicit `--config <file>` in that mode; `persist_active_backend`
+/ `backend_config_path`) using an atomic temp-file-then-rename update. It is
+never written to a project-local `.codemason/codemason.json`: a project file may
+not set `execution_backend` or `backends`, since repository content could
+otherwise point a stored credential at its own server or downgrade the sandbox.
+To give one project its own backend, set it in that project's properties in the
+sessions sidebar, which are stored in your own database. The per-turn config cache is then invalidated, so
 the change takes effect on the **next** turn. After a switch the status bar shows
 `Backend:<kind>` in cyan.
 
@@ -482,7 +486,9 @@ injected as the container environment variable `EXAMPLE_API_KEY`.
 
 ### Step 4 - Declare the backend
 
-Add the descriptor and select it. In the project-local `.codemason/codemason.json`:
+Add the descriptor and select it. In the user-global
+`~/.config/codemason/codemason.json` (a project-local `.codemason/codemason.json`
+may not set `execution_backend` or `backends`):
 
 ```jsonc
 {

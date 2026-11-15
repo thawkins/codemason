@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Security
+
+- Security: a project-local `.codemason/codemason.json` may no longer set `execution_backend`, `backends`, `automation`, `gitlab`, `plugins`, `connectors`, the search API keys, `loop`, `prices`, `input_queue_capacity`, the background-agent limits, `activity_log` or `edit_log`; they are ignored with a warning, like `mcp` and `hooks` already were. A cloned repository could use them to send a stored provider or GitLab key to its own server, post an environment variable from an unattended automation, downgrade a docker sandbox to the host, lift a plugin's permission gate, or raise budgets. Move any of these you set per project into `~/.config/codemason/codemason.json`.
+- Security: toggles (`/codeindex`, `/security`, i18n, `/gcf`) edit only their own key in the config file that was loaded, so user-global secrets are no longer copied into a project's `.codemason/codemason.json`, and the edit lands in that project's file rather than one relative to the process directory.
+
+### Fixed
+
+- Fixed: `/codeindex on|off` no longer overwrites the user-global config with defaults when the project config fails to parse; the failure is reported and the status shows `(unsaved)`.
+
+### Changed
+
+- Changed: `/backend` saves the switch to the user-global config (or the `--config` file) instead of the project file; choose a per-project backend in the project's properties in the sessions sidebar.
+
 ## [1.0.170] - 2026-11-15
 
 Initial GUI release.

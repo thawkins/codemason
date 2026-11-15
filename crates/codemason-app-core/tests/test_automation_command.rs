@@ -59,7 +59,7 @@ impl Drop for EnvGuard {
     }
 }
 
-/// Enter an isolated tempdir project with the given project config contents.
+/// Enter an isolated tempdir project whose user-global config holds `config`.
 fn enter_project(
     config: &str,
 ) -> (
@@ -75,9 +75,12 @@ fn enter_project(
     unsafe { std::env::remove_var("CODEMASON_CONFIG_CONTENT") };
     std::env::set_current_dir(temp.path()).expect("set cwd");
 
-    let codemason_dir = temp.path().join(".codemason");
-    std::fs::create_dir_all(&codemason_dir).expect("create .codemason");
-    std::fs::write(codemason_dir.join("codemason.json"), config).expect("write project config");
+    std::fs::create_dir_all(temp.path().join(".codemason")).expect("create .codemason");
+    // Privileged sections are honoured only in the user-global config, which
+    // XDG_CONFIG_HOME above points into the tempdir.
+    let global_dir = temp.path().join(".config").join("codemason");
+    std::fs::create_dir_all(&global_dir).expect("create global config dir");
+    std::fs::write(global_dir.join("codemason.json"), config).expect("write global config");
     (guard, env_guard, temp)
 }
 
