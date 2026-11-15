@@ -2354,7 +2354,9 @@ The automation service runs a named agent on a **schedule** or from a
 **webhook**, confined to a chosen execution backend, with durable run history
 (spec `openhands` FR-013, FR-014, FR-018, FR-033).
 
-Declare automations under the `automation` block in `.codemason/codemason.json`:
+Declare automations under the `automation` block in the user-global
+`~/.config/codemason/codemason.json` (a project-local `.codemason/codemason.json` may not
+set `automation`):
 
 ```jsonc
 {

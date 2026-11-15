@@ -217,11 +217,11 @@ async fn master_switch_disables_the_subsystem() {
     // disabled subsystem and discover nothing; `help` remains available.
     let _lock = crate::global_env_lock();
     let (_guard, temp) = enter_temp_dir();
-    std::fs::write(
-        temp.path().join(".codemason").join("codemason.json"),
+    // Privileged sections are honoured only in the user-global config.
+    let _global = support::GlobalConfigGuard::install(
+        temp.path(),
         r#"{ "connectors": { "enabled": false } }"#,
-    )
-    .expect("config writable");
+    );
 
     let mut app = support::make_app();
     app.session.session_id = Some("test-session".to_string());

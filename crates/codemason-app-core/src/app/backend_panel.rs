@@ -7,7 +7,7 @@
 //! ([`codemason_agent::backend::BackendRegistry`]); this module is its read model
 //! for the TUI: it builds a fixed list of rows (id, kind, health, connection)
 //! when the panel opens, renders them, and persists a switch by writing the
-//! `execution_backend` key into the loaded config file.
+//! `execution_backend` key into the user-global config file.
 //!
 //! The panel never executes a tool and never re-probes health: a `local` row is
 //! always `ok`, a `docker`/`podman` row is `ok` when its runtime resolves on
@@ -306,12 +306,17 @@ impl App {
         }
     }
 
-    /// Persist `execution_backend: "<kind>"` into the loaded config file and set
-    /// the in-memory active backend.
+    /// Persist `execution_backend: "<kind>"` into the user-global config file
+    /// (see [`Self::backend_config_path`]) and set the in-memory active backend.
     fn persist_active_backend(&mut self, kind: &str) -> Result<(), String> {
         let path = self
             .backend_config_path()
             .ok_or_else(|| "no config destination found".to_string())?;
+        // A first switch may be the first write to the user-global config.
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create {}: {e}", parent.display()))?;
+        }
         crate::app::state::atomic_config_update(&path, |json| {
             let obj = json
                 .as_object_mut()
@@ -328,32 +333,16 @@ impl App {
         Ok(())
     }
 
-    /// The config file a backend switch is written to: the project-local
-    /// `.codemason/codemason.json` the focused session's effective config loaded,
-    /// else that config's first file, else the global config.
+    /// The config file a backend switch is written to: the explicit
+    /// `--config <file>` in that mode, else the user-global config.
+    ///
+    /// Never the project-local `.codemason/codemason.json`: a project file may
+    /// not set `execution_backend` (it could downgrade the user's sandbox), so
+    /// a switch written there would be ignored on the next load. A per-project
+    /// backend is chosen in the project's properties instead, which live in the
+    /// user's own storage, not in the repository.
     fn backend_config_path(&self) -> Option<PathBuf> {
-        let is_project = |path: &&PathBuf| {
-            path.file_name().is_some_and(|f| f == "codemason.json")
-                && path
-                    .parent()
-                    .and_then(|parent| parent.file_name())
-                    .is_some_and(|f| f == ".codemason")
-        };
-        // The session's effective config (MULTISESSION M8): its own project
-        // file, or the launch configuration it inherits.
-        let paths = match codemason_agent::Config::load_for(&self.cwd_path) {
-            Ok(config) => config.config_paths,
-            Err(e) => {
-                tracing::warn!(error = %e, "could not load session config for /backend");
-                self.config_paths.clone()
-            }
-        };
-        if let Some(project) = paths.iter().find(is_project) {
-            return Some(project.clone());
-        }
-        paths
-            .first()
-            .cloned()
+        codemason_config::Config::config_write_target()
             .or_else(codemason_config::Config::global_config_path)
     }
 }

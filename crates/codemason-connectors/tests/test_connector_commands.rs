@@ -7,6 +7,10 @@
 //! the usage/attribution renderers, and the shared dispatcher are exercised
 //! crate-side with no live session.
 
+// Rust 2024 marks `std::env::set_var` unsafe; the tests redirect
+// `XDG_CONFIG_HOME` under the crate-wide env lock.
+#![allow(unsafe_code)]
+
 mod support;
 
 use support::TempTree;
@@ -31,30 +35,46 @@ fn cwd_test_lock() -> std::sync::MutexGuard<'static, ()> {
     crate::global_env_lock()
 }
 
-/// RAII cwd guard so a temp working directory is restored on drop.
-struct CwdGuard(PathBuf);
+/// RAII guard restoring the working directory and `XDG_CONFIG_HOME` on drop.
+struct CwdGuard(PathBuf, Option<std::ffi::OsString>);
 
 impl Drop for CwdGuard {
     fn drop(&mut self) {
         let _ = std::env::set_current_dir(&self.0);
+        // env-isolation: restored under the crate-wide lock the test holds.
+        // SAFETY: single-threaded under `cwd_test_lock`.
+        match self.1.take() {
+            Some(prev) => unsafe { std::env::set_var("XDG_CONFIG_HOME", prev) },
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
+        }
     }
 }
 
 /// Enter a fresh temp working directory and return the guard plus its tree.
 fn enter_temp_dir(name: &str) -> (CwdGuard, TempTree) {
     let original = std::env::current_dir().expect("cwd");
+    let prev_xdg = std::env::var_os("XDG_CONFIG_HOME");
     let tree = TempTree::new(name);
     std::env::set_current_dir(tree.path()).expect("set cwd");
-    (CwdGuard(original), tree)
+    // The user-global config lives in the tree, so the developer's real one is
+    // never read. env-isolation: the caller holds `cwd_test_lock`.
+    // SAFETY: single-threaded under `cwd_test_lock`.
+    unsafe { std::env::set_var("XDG_CONFIG_HOME", tree.path().join(".config")) };
+    codemason_config::Config::invalidate_load_cache();
+    (CwdGuard(original, prev_xdg), tree)
 }
 
-/// Write a `connectors` block into the temp tree's `codemason.json`.
+/// Write a `connectors` block into the temp tree's user-global
+/// `codemason.json` (a project-local file may not set `connectors`).
 fn write_connectors_config(tree: &TempTree, body: &str) {
+    let global_dir = tree.path().join(".config").join("codemason");
+    std::fs::create_dir_all(&global_dir).expect("global config dir");
     std::fs::write(
-        tree.path().join(".codemason").join("codemason.json"),
+        global_dir.join("codemason.json"),
         format!(r#"{{ "connectors": {body} }}"#),
     )
     .expect("config writable");
+    codemason_config::Config::invalidate_load_cache();
 }
 
 /// A valid descriptor with a `token` auth shape and a declared credential name.

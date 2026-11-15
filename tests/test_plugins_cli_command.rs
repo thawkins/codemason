@@ -39,6 +39,15 @@ impl Fixture {
         self.temp.path()
     }
 
+    /// Write `json` as the user-global config the spawned `codemason` reads
+    /// (`XDG_CONFIG_HOME` points at `<fixture>/config`). Privileged sections
+    /// such as `plugins` and `connectors` are ignored in a project-local file.
+    fn write_global_config(&self, json: &str) {
+        let dir = self.temp.path().join("config").join("codemason");
+        std::fs::create_dir_all(&dir).expect("global config dir");
+        std::fs::write(dir.join("codemason.json"), json).expect("config writable");
+    }
+
     /// Run `codemason` with `args` against this fixture's isolated environment.
     fn codemason(&self, args: &[&str]) -> Output {
         let config = self.temp.path().join("config");
@@ -232,11 +241,9 @@ fn stores_reports_each_effective_endpoint_and_its_source() {
     // An override present in the project config tags that store `config` and
     // names the configured URL, while the other keeps its default.
     std::fs::create_dir_all(fx.path().join(".codemason")).expect(".codemason dir");
-    std::fs::write(
-        fx.path().join(".codemason/codemason.json"),
+    fx.write_global_config(
         r#"{ "plugins": { "stores": { "codex": { "url": "https://cfg.example/codex.json" } } } }"#,
-    )
-    .expect("config writable");
+    );
 
     let overridden = stdout(&fx.codemason(&["plugins", "stores"]));
     assert!(
@@ -306,11 +313,9 @@ fn marketplace_show_lists_each_store_section_with_a_name_url_description_row() {
     // A `plugins.stores.codex.url` override names the configured URL with a
     // `(config)` description tag; the unconfigured store keeps its default.
     std::fs::create_dir_all(fx.path().join(".codemason")).expect(".codemason dir");
-    std::fs::write(
-        fx.path().join(".codemason/codemason.json"),
+    fx.write_global_config(
         r#"{ "plugins": { "stores": { "codex": { "url": "https://cfg.example/codex.json" } } } }"#,
-    )
-    .expect("config writable");
+    );
 
     let overridden = stdout(&fx.codemason(&["plugins", "marketplace", "show"]));
     assert!(
@@ -362,11 +367,7 @@ fn master_switch_disables_the_subsystem() {
     // prints usage.
     let fx = Fixture::new();
     std::fs::create_dir_all(fx.path().join(".codemason")).expect(".codemason dir");
-    std::fs::write(
-        fx.path().join(".codemason/codemason.json"),
-        r#"{ "plugins": { "enabled": false } }"#,
-    )
-    .expect("config writable");
+    fx.write_global_config(r#"{ "plugins": { "enabled": false } }"#);
 
     let listed = stdout(&fx.codemason(&["plugins", "list"]));
     assert!(listed.contains("[err]"), "{listed}");

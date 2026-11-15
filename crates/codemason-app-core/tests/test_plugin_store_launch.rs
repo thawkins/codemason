@@ -89,9 +89,8 @@ impl Drop for LaunchEnv {
     }
 }
 
-/// Enter an isolated project whose `.codemason/codemason.json` holds `config_json`,
-/// with the global config dir redirected into the tempdir so the developer's
-/// real config is never read.
+/// Enter an isolated project whose user-global config (redirected into the
+/// tempdir, so the developer's real config is never read) holds `config_json`.
 #[allow(clippy::await_holding_lock)]
 fn enter_project(config_json: &str) -> (MutexGuard<'static, ()>, LaunchEnv, tempfile::TempDir) {
     let guard = crate::global_env_lock();
@@ -102,10 +101,11 @@ fn enter_project(config_json: &str) -> (MutexGuard<'static, ()>, LaunchEnv, temp
     unsafe { std::env::remove_var("CODEMASON_CONFIG") };
     unsafe { std::env::remove_var("CODEMASON_CONFIG_CONTENT") };
     std::env::set_current_dir(temp.path()).expect("set cwd");
-    let codemason_dir = temp.path().join(".codemason");
-    std::fs::create_dir_all(&codemason_dir).expect("create .codemason");
-    std::fs::write(codemason_dir.join("codemason.json"), config_json)
-        .expect("write project config");
+    std::fs::create_dir_all(temp.path().join(".codemason")).expect("create .codemason");
+    // Privileged sections are honoured only in the user-global config.
+    let global_dir = temp.path().join(".config").join("codemason");
+    std::fs::create_dir_all(&global_dir).expect("create global config dir");
+    std::fs::write(global_dir.join("codemason.json"), config_json).expect("write global config");
     (guard, env, temp)
 }
 
