@@ -33,10 +33,10 @@ use codemason_app_core::app::blueprints::{
 };
 use codemason_app_core::app::toolchain::{self, CommandProbe, LanguageClass, ReportRow};
 use codemason_app_core::app::{
-    BackendPanelRow, BackendPanelState, ModelPickerRowsCache, StatusBarCache, hard_break_lines,
-    image_dimensions_or_placeholder, sanitize_for_display,
+    BackendPanelRow, BackendPanelState, MdWorker, ModelPickerRowsCache, StatusBarCache,
+    hard_break_lines, image_dimensions_or_placeholder, sanitize_for_display,
 };
-use codemason_app_core::{clipboard, tracing_layer};
+use codemason_app_core::{clipboard, research_progress, tracing_layer};
 use tracing_subscriber::layer::SubscriberExt as _;
 
 #[path = "slash_support/mod.rs"]
@@ -3076,4 +3076,134 @@ async fn reverse_hook_refuses_without_a_provider_token() {
         .unwrap_or_default();
     assert!(text.contains("No GitHub token configured"), "got {text}");
     drop(temp);
+}
+
+// ===========================================================================
+// MdWorker and research progress rendering (restored: wrongly classified as
+// terminal rendering by a helper-name collision)
+// ===========================================================================
+
+#[test]
+fn md_worker_renders_markdown_to_text() {
+    let worker = MdWorker::new();
+    let rendered = worker
+        .render("# Heading\n\nA paragraph with **bold** text.")
+        .expect("render");
+    assert!(rendered.contains("Heading"), "rendered: {rendered}");
+    assert!(rendered.contains("paragraph"), "rendered: {rendered}");
+}
+
+#[test]
+fn md_worker_pads_a_long_code_span_inside_a_table_cell() {
+    let worker = MdWorker::new();
+    // A single-code-span cell longer than 40 characters gets a trailing space
+    // so html2text's size estimate and the rendered width agree.
+    let long = "a".repeat(60);
+    let markdown = format!("| Command | Description |\n|---|---|\n| `{long}` | text |\n");
+    let rendered = worker.render(&markdown).expect("render");
+    assert!(rendered.contains("Command"), "rendered: {rendered}");
+    assert!(rendered.contains("Description"), "rendered: {rendered}");
+    assert!(rendered.contains(&long), "the code span must survive");
+}
+
+#[test]
+fn md_worker_leaves_a_short_code_cell_unchanged() {
+    let worker = MdWorker::new();
+    let markdown = "| A | B |\n|---|---|\n| `short` | value |\n";
+    let rendered = worker.render(markdown).expect("render");
+    assert!(rendered.contains("short"), "rendered: {rendered}");
+    assert!(rendered.contains("value"), "rendered: {rendered}");
+}
+
+#[test]
+fn md_worker_handles_a_multi_token_cell_and_a_pipe_escape() {
+    let worker = MdWorker::new();
+    // `foo` bar  -> not a single code span, left alone.
+    // A backslash-pipe inside a code span must not split the cell.
+    let long = "b".repeat(50);
+    let markdown = format!(
+        "| Flag | Note |\n|---|---|\n| `foo` bar | mixed |\n| `--a \\| --b` | sep |\n| `{long}` | long |\n"
+    );
+    let rendered = worker.render(&markdown).expect("render");
+    assert!(rendered.contains("mixed"), "rendered: {rendered}");
+    assert!(rendered.contains("long"), "rendered: {rendered}");
+}
+
+#[test]
+fn md_worker_ignores_tables_inside_fenced_code() {
+    let worker = MdWorker::new();
+    let markdown = "```\n| A | B |\n|---|---|\n| `x` | y |\n```\n";
+    let rendered = worker.render(markdown).expect("render");
+    assert!(rendered.contains('|'), "rendered: {rendered}");
+}
+
+#[test]
+fn md_worker_restores_red_markers_round_trip() {
+    let worker = MdWorker::new();
+    let rendered = worker.render("[red]disabled[/red]").expect("render");
+    assert!(
+        rendered.contains("[red]") && rendered.contains("[/red]"),
+        "red markers must survive the pipeline: {rendered}"
+    );
+    assert!(rendered.contains("disabled"), "rendered: {rendered}");
+}
+
+#[test]
+fn md_worker_leaves_unclosed_red_marker_text_intact() {
+    let worker = MdWorker::new();
+    let rendered = worker.render("[red]unterminated").expect("render");
+    assert!(rendered.contains("unterminated"), "rendered: {rendered}");
+    assert!(!rendered.contains("codemason-red"), "rendered: {rendered}");
+}
+
+#[test]
+fn md_worker_renders_repeated_requests() {
+    let worker = MdWorker::new();
+    for i in 0..3 {
+        let rendered = worker.render(&format!("request {i}")).expect("render");
+        assert!(rendered.contains(&format!("request {i}")), "{rendered}");
+    }
+}
+
+#[test]
+fn research_progress_render_includes_the_options_and_final_counts() {
+    let mut progress = research_progress::ResearchProgress::new("run-x", "topic-y");
+    progress.apply(
+        codemason_research::session::SessionPhase::Setup,
+        research_progress::StepStatus::Done,
+        "options in use: mode: tiered",
+    );
+    progress.apply(
+        codemason_research::session::SessionPhase::Synthesize,
+        research_progress::StepStatus::Started,
+        "multi\nline detail",
+    );
+    progress.finish(4, 1, 1, 2);
+    let rendered = progress.render();
+    assert!(rendered.contains("Research Progress - `run-x`"));
+    assert!(rendered.contains("Options: mode: tiered"));
+    assert!(rendered.contains("multi"));
+    assert!(rendered.contains("line detail"));
+}
+
+#[test]
+fn md_worker_leaves_a_table_when_prose_follows() {
+    let worker = MdWorker::new();
+    let long = "c".repeat(55);
+    let markdown = format!(
+        "Intro line.\n\n| Command | Description |\n|---|---|\n| `{long}` | text |\n\nAfter the table `{long}` is prose.\n"
+    );
+    let rendered = worker.render(&markdown).expect("render");
+    assert!(rendered.contains("Intro line."), "rendered: {rendered}");
+    assert!(rendered.contains("After the table"), "rendered: {rendered}");
+    assert!(rendered.contains("Command"), "rendered: {rendered}");
+}
+
+#[test]
+fn md_worker_handles_a_separator_only_row_and_a_ragged_table() {
+    let worker = MdWorker::new();
+    // A separator line that opens the document, then a row with no cells.
+    let markdown = "|---|---|\n| one |\n\n| a | b |\n|---|---|\n| `x` | y |\n";
+    let rendered = worker.render(markdown).expect("render");
+    assert!(rendered.contains("one"), "rendered: {rendered}");
 }
