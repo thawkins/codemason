@@ -48,7 +48,7 @@ jobs:
       - name: Build release binary
         run: |
           cargo build --release --target x86_64-unknown-linux-gnu
-          cp "target/x86_64-unknown-linux-gnu/release/codemason" "${{ env.ASSET_NAME }}"
+          cp "target/x86_64-unknown-linux-gnu/release/cdmn" "${{ env.ASSET_NAME }}"
 
       - name: Install packaging tools
         run: |
@@ -95,12 +95,12 @@ jobs:
       - name: Build release binary
         run: |
           cargo build --release --target aarch64-apple-darwin
-          cp "target/aarch64-apple-darwin/release/codemason" "${{ env.ASSET_NAME }}"
+          cp "target/aarch64-apple-darwin/release/cdmn" "${{ env.ASSET_NAME }}"
 
       - name: Build .pkg installer
         run: |
           ./scripts/macos-pkg.sh "${{ env.VERSION }}" \
-            "target/aarch64-apple-darwin/release/codemason" \
+            "target/aarch64-apple-darwin/release/cdmn" \
             "$(pwd)"
 
       - name: Upload build artifacts
@@ -133,7 +133,7 @@ jobs:
       - name: Build release binary
         run: |
           cargo build --release --target x86_64-pc-windows-msvc
-          cp "target/x86_64-pc-windows-msvc/release/codemason.exe" "$env:ASSET_NAME"
+          cp "target/x86_64-pc-windows-msvc/release/cdmn.exe" "$env:ASSET_NAME"
         shell: powershell
 
       - name: Install WiX packaging tool
@@ -142,7 +142,7 @@ jobs:
       - name: Stage binary for WiX
         run: |
           New-Item -ItemType Directory -Force -Path target\release | Out-Null
-          Copy-Item "target\x86_64-pc-windows-msvc\release\codemason.exe" "target\release\codemason.exe" -Force
+          Copy-Item "target\x86_64-pc-windows-msvc\release\cdmn.exe" "target\release\cdmn.exe" -Force
         shell: powershell
 
       - name: Build .msi package
