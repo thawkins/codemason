@@ -393,3 +393,108 @@ async fn write_rejects_traversal_through_missing_directory() {
         "nothing may be written outside the root"
     );
 }
+
+// ============================================================================
+// Dangling symlinks (regression: a dangling link was treated as a missing
+// tail and checked lexically, so `Write` followed it outside the root)
+// ============================================================================
+
+/// Creates `root/<name>` as a symlink to a not-yet-existing file in a fresh
+/// sibling directory outside `root`, and returns `(link, outside_target)`.
+fn dangling_link_outside(root: &Path, name: &str) -> (PathBuf, PathBuf) {
+    let outside = tmp_dir().join("victim.txt");
+    let link = root.join(name);
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    (link, outside)
+}
+
+#[test]
+fn check_rejects_dangling_symlink_to_outside_root() {
+    let dir = tmp_dir();
+    let (link, _) = dangling_link_outside(&dir, "evil");
+    assert!(
+        check_path_within_root(&link, &dir).is_err(),
+        "a dangling symlink pointing outside the root must be rejected"
+    );
+}
+
+#[test]
+fn check_cached_rejects_dangling_symlink_to_outside_root() {
+    let dir = tmp_dir();
+    let (link, _) = dangling_link_outside(&dir, "evil");
+    let cache = codemason_tools_core::CanonicalPathCache::new();
+    assert!(
+        codemason_tools_core::check_path_within_root_cached(&link, &dir, &cache).is_err(),
+        "the cached check must reject a dangling symlink pointing outside the root"
+    );
+}
+
+#[test]
+fn check_rejects_missing_child_of_dangling_symlink_dir() {
+    let dir = tmp_dir();
+    let outside_dir = tmp_dir().join("not-yet");
+    let link = dir.join("linkdir");
+    std::os::unix::fs::symlink(&outside_dir, &link).unwrap();
+    assert!(check_path_within_root(&link.join("sub").join("f.txt"), &dir).is_err());
+}
+
+#[test]
+fn check_allows_dangling_symlink_that_stays_inside_root() {
+    let dir = tmp_dir();
+    let link = dir.join("later");
+    std::os::unix::fs::symlink(dir.join("created-later.txt"), &link).unwrap();
+    assert!(check_path_within_root(&link, &dir).is_ok());
+    let relative = dir.join("rel");
+    std::os::unix::fs::symlink("created-later.txt", &relative).unwrap();
+    assert!(check_path_within_root(&relative, &dir).is_ok());
+}
+
+#[test]
+fn check_rejects_symlink_loop() {
+    let dir = tmp_dir();
+    std::os::unix::fs::symlink(dir.join("b"), dir.join("a")).unwrap();
+    std::os::unix::fs::symlink(dir.join("a"), dir.join("b")).unwrap();
+    assert!(check_path_within_root(&dir.join("a"), &dir).is_err());
+}
+
+#[tokio::test]
+async fn write_refuses_to_follow_dangling_symlink_outside_root() {
+    let dir = tmp_dir();
+    let (_, outside) = dangling_link_outside(&dir, "evil");
+    let out = WriteTool
+        .execute(json!({"path": "evil", "content": "pwned"}), &ctx(&dir))
+        .await;
+    assert!(
+        out.is_err(),
+        "write through a dangling link must fail: {out:?}"
+    );
+    assert!(!outside.exists(), "nothing may be created outside the root");
+}
+
+#[tokio::test]
+async fn create_refuses_to_follow_dangling_symlink_outside_root() {
+    let dir = tmp_dir();
+    let (_, outside) = dangling_link_outside(&dir, "evil");
+    let out = CreateTool
+        .execute(json!({"path": "evil", "content": "pwned"}), &ctx(&dir))
+        .await;
+    assert!(
+        out.is_err(),
+        "create through a dangling link must fail: {out:?}"
+    );
+    assert!(!outside.exists(), "nothing may be created outside the root");
+}
+
+#[tokio::test]
+async fn append_refuses_to_follow_dangling_symlink_outside_root() {
+    let dir = tmp_dir();
+    let (_, outside) = dangling_link_outside(&dir, "evil");
+    let out = AppendFileTool
+        .execute(json!({"path": "evil", "content": "pwned"}), &ctx(&dir))
+        .await;
+    assert!(
+        out.is_err(),
+        "append through a dangling link must fail: {out:?}"
+    );
+    assert!(!outside.exists(), "nothing may be created outside the root");
+}

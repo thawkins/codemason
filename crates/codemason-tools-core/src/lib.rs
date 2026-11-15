@@ -267,8 +267,14 @@ pub fn check_path_within_any_root(path: &Path, roots: &[&Path]) -> anyhow::Resul
 /// remaining components lexically. A `..` in the missing tail is applied as a
 /// pop, never dropped: once `ghost` is created the OS resolves
 /// `wd/ghost/../../x` to the parent of `wd`, so the check must see that
-/// location too. Lexical popping is sound because no component of the missing
-/// tail can be a symlink, and the prefix it may pop into is already canonical.
+/// location too.
+///
+/// A component that does not resolve may still be a *dangling symlink*; the
+/// OS follows it when the file is created. So when the walk meets one, it
+/// restarts on the link target (relative targets are taken against the link's
+/// directory) plus the remaining tail, up to [`MAX_SYMLINK_HOPS`] times. Only
+/// once no unresolved component is a symlink is lexical popping sound, since
+/// the prefix it may pop into is already canonical.
 ///
 /// # Arguments
 ///
@@ -279,12 +285,46 @@ pub fn check_path_within_any_root(path: &Path, roots: &[&Path]) -> anyhow::Resul
 ///
 /// # Errors
 ///
-/// Propagates any error `canonical_of` returns.
+/// Propagates any error `canonical_of` returns or reading a link fails with,
+/// and fails when following links takes more than [`MAX_SYMLINK_HOPS`] hops.
 fn resolve_missing_path(
     path: &Path,
     fallback_root: PathBuf,
     mut canonical_of: impl FnMut(&Path) -> anyhow::Result<Option<PathBuf>>,
 ) -> anyhow::Result<PathBuf> {
+    let mut current = path.to_path_buf();
+    for _ in 0..=MAX_SYMLINK_HOPS {
+        match resolve_missing_path_once(&current, &fallback_root, &mut canonical_of)? {
+            MissingPath::Resolved(resolved) => return Ok(resolved),
+            MissingPath::FollowLink(next) => current = next,
+        }
+    }
+    anyhow::bail!(
+        "Path validation failed: too many levels of symbolic links in '{}'",
+        path.display()
+    );
+}
+
+/// Most symlinks [`resolve_missing_path`] follows, matching Linux's `ELOOP`
+/// limit for path resolution.
+const MAX_SYMLINK_HOPS: usize = 40;
+
+/// Outcome of one walk in [`resolve_missing_path`].
+enum MissingPath {
+    /// The path's would-be canonical form.
+    Resolved(PathBuf),
+    /// A dangling symlink was met; resolve this path (link target plus the
+    /// remaining tail) instead.
+    FollowLink(PathBuf),
+}
+
+/// One walk of [`resolve_missing_path`]: resolves `path`, or reports the
+/// path to restart on when an unresolved component is a dangling symlink.
+fn resolve_missing_path_once(
+    path: &Path,
+    fallback_root: &Path,
+    canonical_of: &mut impl FnMut(&Path) -> anyhow::Result<Option<PathBuf>>,
+) -> anyhow::Result<MissingPath> {
     use std::path::Component;
 
     let mut existing: &Path = path;
@@ -293,13 +333,23 @@ fn resolve_missing_path(
         if let Some(c) = canonical_of(existing)? {
             break c;
         }
+        let is_symlink =
+            std::fs::symlink_metadata(existing).is_ok_and(|meta| meta.file_type().is_symlink());
+        if is_symlink {
+            let target = std::fs::read_link(existing)?;
+            let mut next = existing.parent().unwrap_or(Path::new("")).join(target);
+            for part in tail.iter().rev() {
+                next.push(part.as_os_str());
+            }
+            return Ok(MissingPath::FollowLink(next));
+        }
         match existing.components().next_back() {
             Some(c @ (Component::Normal(_) | Component::ParentDir)) => tail.push(c),
             Some(Component::CurDir | Component::RootDir | Component::Prefix(_)) | None => {}
         }
         match existing.parent() {
             Some(parent) => existing = parent,
-            None => break fallback_root,
+            None => break fallback_root.to_path_buf(),
         }
     };
     for part in tail.iter().rev() {
@@ -310,7 +360,7 @@ fn resolve_missing_path(
             other => base.push(other.as_os_str()),
         }
     }
-    Ok(base)
+    Ok(MissingPath::Resolved(base))
 }
 
 /// Cached variant of [`check_path_within_any_root`] (FR-017).
