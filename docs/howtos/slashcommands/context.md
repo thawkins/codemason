@@ -89,5 +89,10 @@ The cache is also invalidated automatically after agent file edits; manual
 
 ## Related
 
+- `Alt+C` - toggle the **Context pane**, the live breakdown of what the next
+  request sends to the model (the context window, each prompt partition with
+  its share, the total and the free headroom). It is a pane, not a
+  subcommand: `/context` manages the cache, `Alt+C` shows the result. See
+  `GUI-QUICKSTART.md` section 13a.
 - `/undo` - remove the last turn pair from the conversation
 - `/reload` - reload configuration, agents, MCP, and skills

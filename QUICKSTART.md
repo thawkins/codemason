@@ -2083,7 +2083,7 @@ Type `/` in the input to open an autocomplete menu:
 | `/codeindex communities` | Run community detection and list communities |
 | `/codeindex godnodes [n]` | Show top-N most-connected symbols |
 | `/codeindex help` | Show code index help |
-| `/context` | Toggle the `Alt+C` context panel (live context-window breakdown) |
+| `/context refresh` \| `/context help` | Manage the prompt context cache (`refresh` recomputes file tree, git status and README); `Alt+C` toggles the live context-window panel |
 | `/cron add \|remove\|enable\|disable\|list\|detail\|log\|help` | Schedule and manage recurring agent runs |
 | `/spec create <name> <title> [--from-research <name>]` | Create a new spec (SPEC.md + PLAN.md + TESTPLAN.md) |
 | `/spec specify <name> <feature> [--from-research <name>]` | Generate SPEC.md only (EARS spec with clarification markers) |
@@ -2207,6 +2207,12 @@ Notes:
 | `Shift+Tab` | Cycle agents |
 | `PageUp/PageDown` | Scroll messages |
 | `Ctrl+PageUp/Down` | Scroll log panel |
+| `Alt+L` (macOS `Cmd+Shift+L`) | Toggle the Log pane |
+| `Alt+P` (macOS `Cmd+Shift+P`) | Toggle the Profile pane |
+| `Alt+I` (macOS `Cmd+Shift+I`) | Toggle the TASKS pane |
+| `Alt+M` (macOS `Cmd+Shift+M`) | Toggle the Memory pane |
+| `Alt+C` | Toggle the Context pane (what the next request sends to the model) |
+| `Alt+A` / `Alt+T` | Toggle the Agents / Teams window |
 | `Alt+Q` (macOS `Cmd+Alt+Q`) | Open the queue-control menu (`Next` / `Stop`/`Resume` / `Clear` / `Show`) |
 | `Alt+S` | Show/focus/hide the session sidebar |
 | `Ctrl+N` | New session |

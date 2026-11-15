@@ -1,7 +1,7 @@
 <div style="page-break-after: always; text-align: center; padding-top: 15em;">
 
 <h1 style="font-size: 3em; margin-bottom: 0.2em;">codemason</h1>
-<h2 style="font-size: 1.5em; font-weight: normal; color: #555; margin-top: 0;">Technical Specification</h2>        <p style="margin-top: 4em; font-size: 1.1em;">        <strong>Version:</strong> 1.0.169</p>
+<h2 style="font-size: 1.5em; font-weight: normal; color: #555; margin-top: 0;">Technical Specification</h2>        <p style="margin-top: 4em; font-size: 1.1em;">        <strong>Version:</strong> 1.0.170</p>
         <p style="font-size: 1.1em;">
           <strong>Date:</strong> 2026-11-13
       </p>
@@ -310,7 +310,7 @@ graph TB
 | `codemason-codeindex` | Tree-sitter parsing, SQLite/Tantivy index, file watcher | ~14,200 |
 | `codemason-server` | Axum HTTP routes and SSE streaming | ~6,100 |
 | `codemason-app-core` | Frontend-neutral application core: `App` state, key handling, slash commands, event handlers | ~67,300 |
-| `codemason-gui` | egui desktop frontend: dockable panes, native dialogs, craft-keymap shortcuts | ~12,200 |
+| `codemason-gui` | egui desktop frontend: dockable panes, native dialogs, craft-keymap shortcuts | ~12,500 |
 | `codemason-bench` | Criterion benchmarks shared between GUI and CLI | ~6,800 |
 | `codemason-specs` | Spec lifecycle management, SDD artifact generation, consistency validation, constitution parsing | ~9,100 |
 | `codemason-research` | Research types, gatherers, and plan-dep parser | ~39,000 |
@@ -2040,20 +2040,25 @@ Keyboard shortcuts for the window are craft-keymap commands: `panel.log`
 (`Alt+L` | `Cmd+Shift+L`), `panel.profile` (`Alt+P` | `Cmd+Shift+P`),
 `panel.tasks` (`Alt+I` | `Cmd+Shift+I`), `panel.memory` (`Alt+M` |
 `Cmd+Shift+M`), `queue.menu` (`Alt+Q` | `Cmd+Alt+Q`) and `app.quit` (`Ctrl+D` |
-`Cmd+Q`). Every other key is forwarded to `App::handle_key`; an Alt+character
-chord with no binding is ignored and never typed, `Esc` stops a running agent
-(the `Alt+X` binding was removed), and `Tab` completes the slash-command menu.
+`Cmd+Q`). The side-panel toggles (`Alt+S` sessions, `Alt+A` agents, `Alt+T`
+teams, `Alt+C` context) route through `App::handle_key` to the same
+`show_*_panel` state the panes read. Every other key is forwarded to
+`App::handle_key`; an Alt+character chord with no binding is ignored and never
+typed, `Esc` stops a running agent (the `Alt+X` binding was removed), and `Tab`
+completes the slash-command menu.
 
 ### 6.1 GUI Layout
 
 The GUI is a set of dockable panes (Messages, Prompt, Sessions, Log, Profile,
-Tasks, Memory, Active agents, Teams, Queue): drag a tab to move or float a pane;
-the layout persists. The panels below are those panes and the modal dialogs:
+Tasks, Memory, Context, Active agents, Teams, Queue): drag a tab to move or
+float a pane; the layout persists. The panels below are those panes and the
+modal dialogs:
 
 | Panel | Purpose |
 |-------|---------|
 | Chat | Conversation stream with markdown and syntax highlighting |
 | Log | Step-numbered tool calls with pretty-printed JSON |
+| Context (`Alt+C`) | What the next request sends to the model: the selected model's context window, the tokens sent on the last turn, each partition (system prompt with its skills/memory/`agents.md` breakdown, tool catalog, tool metadata, history with its message count) with its token estimate and share of the window, the total, the free headroom and the bytes streamed to and from the model. Display-only: `codemason_app_core::context_panel` builds the lines and `crates/codemason-gui/src/panels/context.rs` draws them; percentages read `unknown` when the provider advertises no context window |
 | Status bar | Provider/model, context usage, compression indicator, YOLO state; service states use plain ASCII text tags (`CDX:`, `LOG:`, `AUTO:`, `EDIT:`, `TELE:`, `YOLO:`, `GCF:`, `BUSY: `), and message-window tool categories use ASCII marker prefixes (`[file]`, `[dir]`, `[search]`, `[exec]`, `[git]`, `[team]`, ...) |
 | Teammate strip | One row of pills under the status bar, one per active teammate (status glyph, clipped name, focused highlight, `Alt+^v:cycle` hint); omitted when no team is active (spec `agentui` FR-027) |
 | Agents window | `Agents`-button popup listing the primary agent and an ancestor-indented sub-agent tree with status, elapsed time, step count, `[stop]`/`[x]` status glyphs, and a background-shell section; openable from the keyboard with `Alt+A` (the chord resolves to `InputAction::ToggleAgentsWindow` and calls the same `App::toggle_agents_window` the button click does, so both share one visibility path, one no-subject no-op and one redraw flag - spec `agentssetup` FR-022); keyboard-first: a block cursor (`Up`/`Down`/`PgUp`/`PgDn`) selects a row, `Space` toggles suspend/resume, `Del` arms the kill confirmation, `Enter` opens the row's output view, and clicking a row selects it; the FR-077 key legend sits in the footer (spec `agentui` FR-006..FR-016) |

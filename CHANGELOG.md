@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.0.170] - 2026-11-15
+
+Initial GUI release.
+
+The egui window replaces the ratatui terminal frontend: plain `cdmn` opens the
+desktop GUI, the frontend-neutral code lives in `codemason-app-core` and the
+window in `codemason-gui`, and the `codemason-tui` crate with `ratatui` and
+`crossterm` is gone. This release also carries the post-migration review pass
+(CI, packaging, tests, visibility) and the Context pane (`Alt+C`).
+
 ### Changed
 
 - Changed: permission requests ignore answers for 500 ms after they appear, and accept one answer only, so a double press cannot approve the next request unseen (TUI and GUI).
@@ -20,6 +30,70 @@
 - Removed: Alt+X stop-agent shortcut and its confirmation dialog; Esc stops a running agent. An Alt+letter chord with no binding is ignored and is not typed.
 - Removed: the `codemason-tui` crate and the `ratatui` and `crossterm` dependencies; the frontend-neutral code lives in `codemason-app-core` and the window in `codemason-gui`.
 - Removed: `src/stderr_spool.rs`, the fd-2 redirection the terminal frontend used while it owned the alternate screen.
+
+### Added - Context pane in the GUI (`Alt+C`) (`62a138e`)
+
+- `Alt+C` set `App::show_context_panel` and hid the other side panels, but the GUI
+  never drew a Context pane, so the shortcut only hid panes. The TUI's context
+  panel is ported: `codemason_app_core::context_panel` builds its
+  frontend-neutral lines (context window, sent-to-model, every partition with
+  its share of the window, message count, total, free headroom and stream I/O),
+  and the new `crates/codemason-gui/src/panels/context.rs` draws them. The dock
+  shows the pane from `show_context_panel`, and closing its tab hides it through
+  app-core's `Alt+C` toggle.
+- The ported context-panel GUI tests draw the pane and check its text (the
+  assertions dropped with the terminal frame are restored), and new
+  `test_panels` cases drive `Alt+C` and the tab close through the shell.
+  `GUI-QUICKSTART.md` (section 13a) and SPEC section 6.1 document the pane.
+
+### Fixed - post-migration review pass (CI, packaging, tests, visibility)
+
+- `fix(ci)`: the release workflow copied `target/.../codemason`, but the binary
+  target is named `cdmn`, so every release job failed at the copy step. The bug
+  predates the GUI migration (`35d3857`).
+- `fix(packaging)`: `THIRD-PARTY-NOTICES.txt` collects the full texts of every
+  font the binary embeds (Hack Bold, egui's Hack Regular / Noto Emoji / Ubuntu
+  Light / emoji-icon-font) and is now installed by the `.deb` and `.rpm`
+  (`/usr/share/doc/codemason/`), the `.msi` (install folder, via the committed
+  `wix/main.wxs`, so the release job no longer runs `cargo wix init`) and the
+  macOS `.pkg` (`/usr/local/lib/codemason/`) (`e5f06f7`); README points at it.
+- `fix(security)`: the MS-03 tests masked secrets with a local copy of the rule,
+  so a change that showed the API key or GitLab PAT verbatim in the provider
+  dialog would have left them green. The rule now lives in
+  `codemason_app_core::text_utils::mask_secret`, which both the GUI provider
+  dialog and the MS-03 tests call, and a kittest case renders the dialog and
+  checks that only the masked key and PAT are drawn (`d781ac0`).
+- `fix(app-core)`: `REQUEST_SWEEP_INTERVAL`, `CodeIndexStartupResult` and
+  `SwarmAutoComplete` were `pub` inside crate-private modules, which the CI
+  dead-code job (`-D unreachable_pub`) rejects; they are narrowed to
+  `pub(crate)` (`ff00f42`). `CodeIndexStartupResult` also gains a `Debug`
+  implementation (`a6d4b8e`), and the unread `StatusBarCache` and
+  `ModelPickerRowsCache` modules are removed (`2590f1a`).
+- `test(gui)`: the session menu lists Terminal only when `open_in::launch_spec`
+  finds an emulator; the GUI port dropped the TUI tests' early return for a
+  machine without one, so both tests failed in CI looking for the missing menu
+  item. The guard and its `has_terminal` helper are restored on the app-core
+  paths (`7c4df33`).
+- `test`: the no-display CLI test is gated to X11/Wayland platforms, because
+  `check_display` returns `Ok` on macOS and Windows, where `cdmn` would open a
+  real window and hang until nextest kills it (`f5557e0`).
+
+### Docs - last ten commits written up
+
+- README's side-pane list, SPEC section 6 (the keymap paragraph and the pane
+  list) and the section 6.1 panel table now name the Context pane and the
+  `Alt+C`/`Alt+S`/`Alt+A`/`Alt+T` side-panel chords; QUICKSTART's key table
+  gains the pane toggles it was missing (`Alt+L`, `Alt+P`, `Alt+I`, `Alt+M`,
+  `Alt+C`, `Alt+A`/`Alt+T`) and its `/context` row now describes the cache
+  subcommands instead of claiming `/context` toggles the pane; the tutorial's
+  key table gains `Alt+C`; `docs/howtos/slashcommands/context.md` cross-links
+  the pane.
+- STATS re-measures the three tables on this tree: gui 117 -> 122 files and
+  31,105 -> 31,799 lines, `codemason-app-core` 156,862 -> 156,438 lines
+  (237 test files, 3,309 tests), `codemason-types` 77 -> 73 files and
+  17,024 -> 16,611 lines (44 test files, 453 tests), for 2,169 crate files,
+  786,651 lines, 1,186 test files and 15,634 crate tests (15,718 with the
+  root package).
 
 ### Added - TUI to egui GUI migration plan
 

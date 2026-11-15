@@ -586,6 +586,7 @@ The keys are the Linux/Windows chords; `GUI-QUICKSTART.md` gives the macOS forms
 | `Alt+P` | Toggle Profile panel |
 | `Alt+I` | Toggle TASKS panel |
 | `Alt+M` | Toggle Memory panel |
+| `Alt+C` | Toggle Context pane (what the next request sends to the model) |
 | `Alt+O` | Toggle autopilot mode |
 | `Alt+A` | Toggle the Agents window (same toggle as the `Agents` button) |
 | `Alt+T` | Toggle the Teams window (same toggle as the `Teams` button) |

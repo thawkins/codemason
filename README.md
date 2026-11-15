@@ -162,7 +162,9 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   for attaching images and opening projects, and a message input queue (`Alt+Q`
   menu / `/queue`) that keeps the prompt editable while the agent executes; side
   panes for memory (`Alt+M` | `Cmd+Shift+M`), the log, the profiler, tasks
-  (`Alt+I` | `Cmd+Shift+I`), agents and teams. The window opens maximized the
+  (`Alt+I` | `Cmd+Shift+I`), the context panel (`Alt+C`, what the next request
+  sends to the model: the window, each prompt partition with its share, the
+  total and the free headroom), agents and teams. The window opens maximized the
   first time, then remembers its size, position and layout. Without a display
   (an SSH session) `cdmn` exits with a pointer to `cdmn run`
 - **Telemetry export health** — every OTLP metric export outcome is classified
@@ -1023,7 +1025,7 @@ Key optimisations include:
 
 ## Project Status
 
-**v1.0.169** — The core architecture, tool system, GUI, HTTP server, memory system,
+**v1.0.170** — The core architecture, tool system, GUI, HTTP server, memory system,
 teams/swarm coordination, spec
 management, skills system, research system, plugin and connector systems, pluggable
 execution backends, ACP integration, the automation service, and multi-layered

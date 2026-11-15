@@ -1287,7 +1287,7 @@ dependencies = [
 
 [[package]]
 name = "codemason"
-version = "1.0.169"
+version = "1.0.170"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1321,7 +1321,7 @@ dependencies = [
 
 [[package]]
 name = "codemason-agent"
-version = "1.0.169"
+version = "1.0.170"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1385,7 +1385,7 @@ dependencies = [
 
 [[package]]
 name = "codemason-app-core"
-version = "1.0.169"
+version = "1.0.170"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1432,7 +1432,7 @@ dependencies = [
 
 [[package]]
 name = "codemason-bench"
-version = "1.0.169"
+version = "1.0.170"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1457,7 +1457,7 @@ dependencies = [
 
 [[package]]
 name = "codemason-codeindex"
-version = "1.0.169"
+version = "1.0.170"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1533,7 +1533,7 @@ dependencies = [
 
 [[package]]
 name = "codemason-gui"
-version = "1.0.169"
+version = "1.0.170"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1569,7 +1569,7 @@ dependencies = [
 
 [[package]]
 name = "codemason-hyperresearch"
-version = "1.0.169"
+version = "1.0.170"
 dependencies = [
  "anyhow",
  "clap",
@@ -1632,7 +1632,7 @@ dependencies = [
 
 [[package]]
 name = "codemason-research"
-version = "1.0.169"
+version = "1.0.170"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1662,7 +1662,7 @@ dependencies = [
 
 [[package]]
 name = "codemason-server"
-version = "1.0.169"
+version = "1.0.170"
 dependencies = [
  "anyhow",
  "async-stream",
