@@ -95,6 +95,7 @@ fn definition(
         backend: backend.map(str::to_string),
         dispatch: Vec::new(),
         enabled: true,
+        webhook_secret_env: None,
     }
 }
 

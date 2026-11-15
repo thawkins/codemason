@@ -6,6 +6,20 @@
 //! `AGENTS.md` ("Test Layout") and
 //! `docs/reports/testconsolidation-review.md`.
 
+/// The binary-wide lock every test that mutates a process-global (env vars)
+/// takes. See AGENTS.md ("Test Layout").
+pub fn global_env_mutex() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
+/// Take [`global_env_mutex`], tolerating poisoning from a failed test.
+pub fn global_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    global_env_mutex()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[path = "research_sandbox.rs"]
 pub mod research_sandbox;
 #[path = "support/mod.rs"]
