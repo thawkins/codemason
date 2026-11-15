@@ -276,11 +276,9 @@ fn parse_git_source_refuses_option_like_refs_and_subpaths() {
         "an option-looking ref must be dropped, not forwarded to git"
     );
 
-    let spec = parse_git_source(&format!("git+https://x/y#main:{INJECTION}"))
-        .expect("the source shape still parses");
     assert!(
-        spec.subpath.is_none(),
-        "an option-looking subpath must be dropped, not forwarded to git"
+        parse_git_source(&format!("git+https://x/y#main:{INJECTION}")).is_none(),
+        "an option-looking subpath must refuse the source, not be forwarded to git"
     );
 
     let spec = parse_git_source("git+https://x/y#--config=core.sshCommand=x")
@@ -294,8 +292,6 @@ fn parse_git_source_refuses_option_like_refs_and_subpaths() {
 fn parse_git_source_refuses_unsafe_characters() {
     for raw in [
         "git+https://x/y#main;rm -rf $HOME",
-        "git+https://x/y#main:`id`",
-        "git+https://x/y#main:../../etc",
         "git+https://x/y#main\nfetch",
     ] {
         let spec = parse_git_source(raw).expect("the source shape still parses");
@@ -303,6 +299,13 @@ fn parse_git_source_refuses_unsafe_characters() {
             spec.subpath.is_none(),
             "{raw} must not yield a subpath for git"
         );
+    }
+    // An unsafe `:<subpath>` refuses the whole source.
+    for raw in [
+        "git+https://x/y#main:`id`",
+        "git+https://x/y#main:../../etc",
+    ] {
+        assert!(parse_git_source(raw).is_none(), "{raw} must be refused");
     }
 
     // The legitimate forms keep working.
@@ -373,4 +376,126 @@ fn add_installs_a_whole_repo_source_whose_claude_manifest_is_nested() {
     let source = format!("git+{url}#main");
     let outcome = add(&dirs, &temp, &source, false).expect("the nested-manifest plugin installs");
     assert_eq!(outcome.parsed.descriptor.id, "nested-root-plugin");
+}
+
+// -- SI-05: a `git+` install is bounded in time and size ----------------------
+
+/// Both limit tests set the same override: it is process-wide and first-call
+/// wins, so they agree even when run in one process.
+const TEST_GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+const TEST_MAX_TREE_BYTES: u64 = 2048;
+
+fn set_test_git_limits() {
+    codemason_plugins::add::set_git_limits_override(TEST_GIT_TIMEOUT, TEST_MAX_TREE_BYTES);
+}
+
+#[test]
+fn add_git_source_times_out_on_a_remote_that_never_answers() {
+    set_test_git_limits();
+    // Accepts the TCP connection (via the backlog) and never says a word.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let root = temp_dir("git-timeout");
+
+    let started = std::time::Instant::now();
+    let err = add(
+        &store_dirs(&root),
+        &root,
+        &format!("git+https://127.0.0.1:{port}/stall.git#main"),
+        false,
+    )
+    .expect_err("a silent remote must fail");
+    let elapsed = started.elapsed();
+    drop(listener);
+
+    let AddError::Io(io) = &err else {
+        panic!("expected AddError::Io, got {err:?}");
+    };
+    assert!(
+        io.message_str().contains("timed out"),
+        "got: {}",
+        io.message_str()
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(20),
+        "the clone must be killed at the timeout, took {elapsed:?}"
+    );
+}
+
+#[test]
+fn add_git_source_refuses_a_tree_over_the_size_cap() {
+    set_test_git_limits();
+    let root = temp_dir("git-too-large");
+    let (url, remote) = remote_with_plugin(&root, ".", "Big");
+    std::fs::write(remote.join("blob.bin"), vec![b'x'; 8192]).expect("blob");
+    git(&remote, &["add", "-A"]);
+    git(&remote, &["commit", "-q", "-m", "blob"]);
+
+    let err = add(&store_dirs(&root), &root, &format!("git+{url}"), false)
+        .expect_err("an oversized clone must be refused");
+    assert!(
+        matches!(err, AddError::TooLarge { max, .. } if max == TEST_MAX_TREE_BYTES),
+        "got {err:?}"
+    );
+    assert!(!root.join("store/big").exists(), "nothing may be installed");
+}
+
+/// The cap counts `.git` too: a whole-repository install keeps it, so a small
+/// checkout with a large object store must not slip under the cap.
+#[test]
+fn add_git_source_counts_git_metadata_in_the_size_cap() {
+    set_test_git_limits();
+    let root = temp_dir("git-meta-too-large");
+    let (url, remote) = remote_with_plugin(&root, ".", "Meta");
+    // 1500 incompressible bytes: the checkout stays under the 2 KiB test cap,
+    // but the packed object in `.git` pushes the total over it.
+    let mut state: u32 = 0x1234_5678;
+    let noise: Vec<u8> = (0..1500)
+        .map(|_| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 24) as u8
+        })
+        .collect();
+    std::fs::write(remote.join("noise.bin"), noise).expect("noise");
+    git(&remote, &["add", "-A"]);
+    git(&remote, &["commit", "-q", "-m", "noise"]);
+
+    let err = add(&store_dirs(&root), &root, &format!("git+{url}"), false)
+        .expect_err("the .git metadata must count toward the cap");
+    assert!(
+        matches!(err, AddError::TooLarge { max, .. } if max == TEST_MAX_TREE_BYTES),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn parse_git_source_refuses_an_absolute_or_option_like_subpath() {
+    for raw in ["git+https://x/y#main:/etc", "git+https://x/y#main:-x"] {
+        assert!(parse_git_source(raw).is_none(), "{raw} must be refused");
+    }
+}
+
+/// End-to-end: an unsafe subpath refuses the install instead of falling back
+/// to the whole repository, and nothing is cloned or installed.
+#[test]
+fn add_refuses_an_unsafe_subpath_instead_of_installing_the_whole_repo() {
+    let temp = temp_dir("git-bad-subpath");
+    let (url, _remote) = remote_with_plugin(&temp, ".", "whole-repo");
+    for subpath in ["/etc", "-x"] {
+        let err = add(
+            &store_dirs(&temp),
+            &temp,
+            &format!("git+{url}#main:{subpath}"),
+            false,
+        )
+        .expect_err("an unsafe subpath must be refused");
+        assert!(
+            matches!(err, AddError::UnknownSource(_)),
+            "{subpath}: got {err:?}"
+        );
+    }
+    assert!(
+        codemason_plugins::scan_dirs(store_dirs(&temp)).is_empty(),
+        "nothing may be installed"
+    );
 }

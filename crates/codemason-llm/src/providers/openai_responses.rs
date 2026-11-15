@@ -481,7 +481,7 @@ impl ResponsesApiClient {
                         Err(e) => {
                             // SEC: the raw SSE frame carries streamed model output;
                             // redact before logging.
-                            tracing::warn!(provider = "openai_responses", error = %e, data = %codemason_types::sanitize::redact_secrets(data), "failed to parse SSE event");
+                            tracing::warn!(provider = "openai_responses", error = %e, data = %crate::provider::http_client::redact_frame(data), "failed to parse SSE event");
                             continue;
                         }
                     };

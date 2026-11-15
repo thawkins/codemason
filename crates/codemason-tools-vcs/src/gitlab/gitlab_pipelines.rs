@@ -14,6 +14,13 @@ const MAX_JOB_PAGES: u32 = 50;
 /// Maximum jobs `gitlab_list_jobs` will collect (SEC-codemason-tools-vcs-007).
 const MAX_JOB_ENTRIES: usize = 2_000;
 
+/// Bytes of a job trace's tail `gitlab_get_job_log` keeps in memory; enough
+/// for its 2000-line maximum on typical CI output.
+const JOB_TRACE_TAIL_BYTES: usize = 1024 * 1024;
+
+/// Bytes of an error response body kept for the error message.
+const ERROR_BODY_TAIL_BYTES: usize = 4096;
+
 // -- helpers ------------------------------------------------------------------
 
 /// Create an authenticated client and detect the project path.
@@ -510,23 +517,37 @@ impl Tool for GitLabGetJobLogTool {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let body = crate::http_client::read_tail(resp, ERROR_BODY_TAIL_BYTES)
+                .await
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
             anyhow::bail!("GitLab API error {status} fetching job trace: {body}");
         }
 
-        let full_log = resp.text().await.context("Failed to read job trace")?;
-
-        // Return last `tail` lines
-        let lines: Vec<&str> = full_log.lines().collect();
-        let start = lines.len().saturating_sub(tail);
-        let truncated = start > 0;
-        let output_lines = &lines[start..];
+        // A job trace is attacker-influenced and can be gigabytes: stream it,
+        // keep only a bounded tail, and count lines over the whole body.
+        let counted = crate::http_client::read_tail_counting_lines(resp, JOB_TRACE_TAIL_BYTES)
+            .await
+            .context("Failed to read job trace")?;
+        let total_lines = counted.total_lines;
+        let tail_text = String::from_utf8_lossy(&counted.tail);
+        let mut lines: Vec<&str> = tail_text.lines().collect();
+        // When the byte cut split a line, the first retained line is only its
+        // suffix: drop it, unless it is all that is left (one line longer than
+        // the buffer), which is then returned as a marked partial.
+        let partial_first = counted.starts_mid_line;
+        if partial_first && lines.len() > 1 {
+            lines.remove(0);
+        }
+        let output_lines = &lines[lines.len().saturating_sub(tail)..];
+        let returned_partial = partial_first && lines.len() == 1;
+        let truncated = (output_lines.len() as u64) < total_lines || returned_partial;
 
         let mut content = String::new();
         if truncated {
             content.push_str(&format!(
-                "--- showing last {tail} of {} lines ---\n",
-                lines.len()
+                "--- showing last {} of {total_lines} lines ---\n",
+                output_lines.len()
             ));
         }
         content.push_str(&output_lines.join("\n"));
@@ -535,7 +556,7 @@ impl Tool for GitLabGetJobLogTool {
             content,
             metadata: Some(json!({
                 "job_id": job_id,
-                "total_lines": lines.len(),
+                "total_lines": total_lines,
                 "returned_lines": output_lines.len(),
                 "truncated": truncated,
             })),
