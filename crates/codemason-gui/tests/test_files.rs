@@ -168,25 +168,41 @@ fn permitted_folder(harness: &mut Harness<'static, Shell>, tag: &str, name: &str
     folder.canonicalize().expect("canonical folder")
 }
 
+/// Answer the shell's file dialogs with `answer` from now on, recording
+/// each request.
+fn answer_with(harness: &mut Harness<'static, Shell>, answer: Answer) -> Rc<RefCell<Vec<Request>>> {
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&requests);
+    harness
+        .state_mut()
+        .set_file_dialog_override(Some(Box::new(move |request: &Request| {
+            seen.borrow_mut().push(request.clone());
+            answer.clone()
+        })));
+    requests
+}
+
+/// Exactly one dialog was asked, and it chose a folder.
+fn assert_folder_dialog(requests: &Rc<RefCell<Vec<Request>>>) {
+    let requests = requests.borrow();
+    assert_eq!(requests.len(), 1, "one dialog was asked");
+    let Request::File(dialog) = &requests[0] else {
+        panic!("a file dialog was asked: {:?}", requests[0]);
+    };
+    assert_eq!(dialog.kind, Kind::Folder);
+}
+
 #[test]
 fn test_open_project_dialog_registers_the_folder_as_a_project() {
     // The permitted roots read the process cwd and config overrides.
     let _env = crate::global_env_lock();
-    let (_runtime, mut harness, requests) = rig(Answer::Cancelled);
+    let (_runtime, mut harness, _) = rig(Answer::Cancelled);
     let folder = permitted_folder(&mut harness, "open-project", "Ann's App");
-    let answer = folder.clone();
-    harness
-        .state_mut()
-        .set_file_dialog_override(Some(Box::new(move |_: &Request| {
-            Answer::Paths(vec![answer.clone()])
-        })));
+    let requests = answer_with(&mut harness, Answer::Paths(vec![folder.clone()]));
 
     choose(&mut harness, OPEN_PROJECT_LABEL);
 
-    assert!(
-        requests.borrow().is_empty(),
-        "the replaced override answered"
-    );
+    assert_folder_dialog(&requests);
     // `/project add` registers the checkout the folder belongs to (here
     // the enclosing workspace repository), as it does for a typed path.
     let text = transcript(harness.state().app());
@@ -212,18 +228,13 @@ fn test_new_project_dir_dialog_opens_a_session_in_any_folder_name() {
         ("new-spaces", "two words here"),
         ("new-dashes", "draft --x"),
     ] {
-        let (_runtime, mut harness, requests) = rig(Answer::Cancelled);
+        let (_runtime, mut harness, _) = rig(Answer::Cancelled);
         let folder = permitted_folder(&mut harness, tag, name);
-        let answer = folder.clone();
-        harness
-            .state_mut()
-            .set_file_dialog_override(Some(Box::new(move |_: &Request| {
-                Answer::Paths(vec![answer.clone()])
-            })));
+        let requests = answer_with(&mut harness, Answer::Paths(vec![folder.clone()]));
 
         choose(&mut harness, NEW_PROJECT_DIR_LABEL);
 
-        assert!(requests.borrow().is_empty());
+        assert_folder_dialog(&requests);
         let app = harness.state().app();
         assert_eq!(
             app.session.directory, folder,
@@ -233,6 +244,33 @@ fn test_new_project_dir_dialog_opens_a_session_in_any_folder_name() {
         assert_eq!(app.cwd_path, folder, "{name:?}: the App moved into it");
         assert_ne!(app.session.session_id.as_deref(), Some(SESSION));
     }
+}
+
+#[test]
+fn test_new_project_dir_refusal_expires_like_a_typed_command() {
+    // The permitted roots read the process cwd and config overrides.
+    let _env = crate::global_env_lock();
+    let (_runtime, mut harness, _) = rig(Answer::Cancelled);
+    // A folder outside every permitted root (only a scratch root is allowed).
+    let root = scratch("refused-root");
+    let outside = scratch("refused-outside");
+    support::allow_session_root(harness.state().app(), &root);
+    let requests = answer_with(&mut harness, Answer::Paths(vec![outside]));
+
+    choose(&mut harness, NEW_PROJECT_DIR_LABEL);
+
+    assert_folder_dialog(&requests);
+    let app = harness.state().app();
+    assert!(
+        app.status.starts_with("session: ") && app.status.contains("outside"),
+        "refused: {}",
+        app.status
+    );
+    assert_eq!(app.session.session_id.as_deref(), Some(SESSION));
+    // The status expiry is armed on the refusal, as after a typed command,
+    // so it returns to "ready" after the grace period.
+    assert!(app.status_set_at.is_some(), "status expiry armed");
+    assert_eq!(app.status_snapshot, app.status);
 }
 
 #[test]

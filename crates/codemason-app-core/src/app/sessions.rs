@@ -626,7 +626,8 @@ impl App {
     /// then [`App::open_new_session_in`]), for a path a frontend's folder
     /// picker chose: the path is never parsed as command text, so quotes,
     /// spaces and words starting with `--` are part of the folder name.
-    /// A refusal is shown in the status line, as `/session` shows it.
+    /// A refusal is shown in the status line, as `/session` shows it, and
+    /// expires like a typed command's status.
     ///
     /// # Arguments
     ///
@@ -639,6 +640,9 @@ impl App {
             self.status = format!("session: {message}");
         }
         self.sidebar.dirty = true;
+        // As after a typed command: the status returns to "ready" after the
+        // grace period.
+        self.arm_status_expiry();
     }
 
     /// Starts a new session working in `directory` and focuses it; the
