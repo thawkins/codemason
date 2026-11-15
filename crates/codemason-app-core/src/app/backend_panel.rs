@@ -312,6 +312,11 @@ impl App {
         let path = self
             .backend_config_path()
             .ok_or_else(|| "no config destination found".to_string())?;
+        // A first switch may be the first write to the user-global config.
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create {}: {e}", parent.display()))?;
+        }
         crate::app::state::atomic_config_update(&path, |json| {
             let obj = json
                 .as_object_mut()
