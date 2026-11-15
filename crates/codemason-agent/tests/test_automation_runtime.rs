@@ -241,6 +241,7 @@ fn definition(id: &str, trigger: AutomationTriggerKind, enabled: bool) -> Automa
         backend: None,
         dispatch: Vec::new(),
         enabled,
+        webhook_secret_env: None,
     }
 }
 

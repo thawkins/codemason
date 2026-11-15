@@ -24,7 +24,7 @@ use axum::{
     Json, Router,
     body::Bytes,
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -36,7 +36,8 @@ use codemason_agent::automation::{
 };
 
 use super::{
-    AppState, check_rate_limit, error_response, internal_error_response, serialize_response,
+    AppState, check_rate_limit, constant_time_eq, error_response, internal_error_response,
+    serialize_response,
 };
 
 /// Resolve the execution-backend descriptor a session override names, if any
@@ -113,14 +114,14 @@ fn payload_text(body: &Bytes) -> String {
 /// `POST /auto/{id}` - webhook ingress (FR-013).
 ///
 /// SEC-061: the ingress is mounted on the unauthenticated outer router (an
-/// external system such as a GitHub webhook has no bearer token), so it shares
-/// the process-wide rate limiter under a dedicated `"webhook"` key. The
-/// automation config exposes no webhook secret, so a per-request signature
-/// cannot be verified here; the rate limit is the enforced guard until a secret
-/// field is added to [`codemason_config::AutomationConfig`].
+/// external system such as a GitHub webhook has no server bearer token), so it
+/// shares the process-wide rate limiter under a dedicated `"webhook"` key and
+/// requires the automation's own secret ([`verify_webhook_secret`]). Without
+/// it, any web page could start an agent run with a CORS "simple request".
 async fn webhook_ingest(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> Response {
     if let Some(rate_limited) = check_rate_limit(&state, "webhook").await {
@@ -130,6 +131,12 @@ async fn webhook_ingest(
     if let Some(response) = guard_automation(&svc, &id) {
         return response;
     }
+    let secret_env = svc
+        .definition(&id)
+        .and_then(|definition| definition.webhook_secret_env.clone());
+    if let Err(refusal) = verify_webhook_secret(&id, secret_env.as_deref(), &headers, &body) {
+        return refusal;
+    }
     let payload = payload_text(&body);
     match svc
         .enqueue(&id, codemason_types::AutomationTrigger::Webhook, &payload)
@@ -138,6 +145,72 @@ async fn webhook_ingest(
         Ok(run) => accepted_run(&run),
         Err(e) => internal_error_response("automation webhook enqueue", e).into_response(),
     }
+}
+
+/// Accept a webhook request only when it carries the automation's secret.
+///
+/// The secret is read from the environment variable `secret_env` names. The
+/// request must send either `Authorization: Bearer <secret>` or a GitHub-style
+/// `X-Hub-Signature-256: sha256=<hex HMAC-SHA256 of the raw body>`; both are
+/// compared in constant time. An automation without a configured, non-empty
+/// secret accepts no webhook at all (`403`); a missing or wrong credential is
+/// `401`.
+fn verify_webhook_secret(
+    id: &str,
+    secret_env: Option<&str>,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<(), Response> {
+    let secret = secret_env
+        .and_then(|name| std::env::var(name).ok())
+        .filter(|value| !value.is_empty());
+    let Some(secret) = secret else {
+        return Err(error_response(
+            StatusCode::FORBIDDEN,
+            format!(
+                "automation `{id}` has no webhook secret configured; set `webhook_secret_env` \
+                 to the name of an environment variable holding one"
+            ),
+        )
+        .into_response());
+    };
+    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    let bearer_ok = header("authorization")
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .is_some_and(|token| constant_time_eq(token, &secret));
+    let signature_ok = header("x-hub-signature-256")
+        .and_then(|v| v.strip_prefix("sha256="))
+        .zip(hmac_sha256_hex(&secret, body))
+        .is_some_and(|(sent, expected)| constant_time_eq(&sent.to_ascii_lowercase(), &expected));
+    if bearer_ok || signature_ok {
+        Ok(())
+    } else {
+        Err(error_response(
+            StatusCode::UNAUTHORIZED,
+            "invalid or missing webhook credential",
+        )
+        .into_response())
+    }
+}
+
+/// Lower-case hex HMAC-SHA256 of `body` keyed with `secret`, or `None` if
+/// the MAC cannot be built (HMAC takes any key length, so not in practice);
+/// the caller then rejects the signature.
+fn hmac_sha256_hex(secret: &str, body: &[u8]) -> Option<String> {
+    use hmac::{KeyInit as _, Mac as _};
+    use std::fmt::Write as _;
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes()).ok()?;
+    mac.update(body);
+    Some(
+        mac.finalize()
+            .into_bytes()
+            .iter()
+            .fold(String::with_capacity(64), |mut out, byte| {
+                // INTENTIONAL: writing to a String cannot fail.
+                let _ = write!(out, "{byte:02x}");
+                out
+            }),
+    )
 }
 
 /// Refuse an enabled-definition request early: `503` when the service is disabled
