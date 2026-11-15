@@ -2063,6 +2063,11 @@ impl App {
                 ref session_id,
                 ref team_name,
             } if self.is_current_session(session_id) => {
+                // The `team_cleanup` tool has already removed the directory;
+                // stop a finalising swarm's job so it runs no further hooks
+                // for the removed team (best effort: it may have raced the
+                // removal already).
+                self.stop_swarm_autocomplete(team_name).await;
                 self.session.active_team = None;
                 self.session.team_members.clear();
                 self.session.team_message_counts.clear();

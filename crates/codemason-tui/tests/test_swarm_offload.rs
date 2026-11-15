@@ -426,3 +426,82 @@ async fn test_app_exit_aborts_the_job_and_leaves_the_store_consistent() {
     assert_eq!(status("t1"), TaskStatus::Completed);
     assert_eq!(status("t2"), TaskStatus::InProgress);
 }
+
+/// A `TaskCompleted` hook script that records its pid in `runs.log`, starts
+/// a grandchild (`head`, blocked on the FIFO `gate`) whose pid it records in
+/// `kids.log`, and waits for it: the hook process is `sh`, and the blocked
+/// process is its child, in the hook's process group.
+fn grandchild_hook(dir: &Path, gate: &Path) -> PathBuf {
+    let status = std::process::Command::new("mkfifo")
+        .arg(gate)
+        .status()
+        .expect("run mkfifo");
+    assert!(status.success(), "mkfifo failed");
+    let script = dir.join("grandchild-hook.sh");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\necho $$ >> '{runs}'\nhead -c 1 '{gate}' >/dev/null &\necho $! >> '{kids}'\nwait\n",
+            runs = dir.join("runs.log").display(),
+            kids = dir.join("kids.log").display(),
+            gate = gate.display()
+        ),
+    )
+    .expect("write hook script");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+        .expect("make hook executable");
+    script
+}
+
+/// Yield until the hook has recorded its grandchild's pid.
+async fn grandchild_started(dir: &Path) -> u32 {
+    loop {
+        let kids = std::fs::read_to_string(dir.join("kids.log")).unwrap_or_default();
+        if let Some(pid) = kids.lines().next().and_then(|l| l.trim().parse().ok()) {
+            return pid;
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_swarm_cancel_kills_the_hooks_whole_process_group() {
+    let dir = scratch("group");
+    let gate = dir.join("gate");
+    let hook = grandchild_hook(&dir, &gate);
+    let mut app = finishing_swarm_of(&dir, &hook, &["t1", "t2"]).await;
+    assert!(pass_is_immediate(&mut app), "the pass waited on the hook");
+    let hook_pid = hook_started(&dir).await;
+    let grandchild = grandchild_started(&dir).await;
+
+    app.execute_slash_command("/swarm cancel").await;
+
+    assert!(!app.swarm_autocomplete_in_flight(), "the job was stopped");
+    hook_ended(hook_pid).await;
+    // The grandchild was killed with the group, not left blocked on the gate.
+    hook_ended(grandchild).await;
+    assert_eq!(
+        hook_runs(&dir),
+        vec![hook_pid],
+        "no hook ran after the stop"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_team_cleaned_up_event_stops_the_job() {
+    let dir = scratch("cleaned-up");
+    let (mut app, pid) = swarm_blocked_in_its_hook(&dir).await;
+
+    // The lead's `team_cleanup` tool removed the team and reports it.
+    app.handle_event(codemason_agent::event::Event::TeamCleanedUp {
+        session_id: "lead-session".to_string(),
+        team_name: TEAM.to_string(),
+    })
+    .await;
+
+    assert_job_stopped(&app, &dir, pid).await;
+    assert!(app.session.active_team.is_none());
+    assert!(app.session.swarm_state.is_none());
+}

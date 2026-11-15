@@ -341,9 +341,11 @@ pub enum HookOutcome {
 /// If `stdin_data` is `Some`, it is piped to the child process on stdin.
 ///
 /// SEC-codemason-team-005 (SECTASKS T-047): the command runs under a hard
-/// [`HOOK_TIMEOUT`] and its process group is killed on expiry, so a hook that
-/// never exits (or that spawns a long-lived child) cannot wedge the tool call
-/// or leak processes. Feedback returned to the model is capped at
+/// [`HOOK_TIMEOUT`] in its own process group (on unix), and the whole group
+/// is killed on expiry, so a hook that never exits (or that spawns a
+/// long-lived child) cannot wedge the tool call or leak processes. A caller
+/// that drops this future before the hook ends (an aborted task, a runtime
+/// shutting down) kills the group the same way. Feedback returned to the model is capped at
 /// [`MAX_HOOK_FEEDBACK_BYTES`]. The command itself is validated by
 /// [`validate_hook_command`] before it is spawned.
 ///
@@ -378,8 +380,12 @@ pub async fn run_hook(
     child_cmd.stderr(std::process::Stdio::piped());
     // A caller that abandons the hook (an aborted task, a runtime shutting
     // down) drops this future; the hook process is killed with it rather
-    // than left running unwatched.
+    // than left running unwatched (its group too: `HookGroupGuard`).
     child_cmd.kill_on_drop(true);
+    // Its own process group (pgid = its pid), so `kill_hook_process_group`
+    // reaches whatever the hook spawned.
+    #[cfg(unix)]
+    child_cmd.process_group(0);
 
     let child = child_cmd.spawn();
 
@@ -402,6 +408,8 @@ pub async fn run_hook(
             // timeout path can terminate the whole process group; the hook
             // runs unsandboxed, so leaving its children behind is a leak.
             let pid = child_proc.id();
+            // Until the hook has ended, dropping this future kills its group.
+            let mut group = HookGroupGuard(pid);
             // Write stdin data if provided.
             if let Some(data) = stdin_data
                 && let Some(mut stdin) = child_proc.stdin.take()
@@ -414,7 +422,12 @@ pub async fn run_hook(
 
             let waited =
                 match tokio::time::timeout(HOOK_TIMEOUT, child_proc.wait_with_output()).await {
-                    Ok(result) => result,
+                    Ok(result) => {
+                        // The hook has ended (and been reaped): its pid, and
+                        // so its group id, may be reused from here on.
+                        group.disarm();
+                        result
+                    }
                     Err(_) => {
                         warn!(
                             command,
@@ -424,6 +437,7 @@ pub async fn run_hook(
                         if let Some(pid) = pid {
                             kill_hook_process_group(pid);
                         }
+                        group.disarm();
                         record_hook_failure(
                             team_dir,
                             &HookFailure::new(
@@ -512,12 +526,36 @@ pub fn validate_hook_command(command: &str) -> std::result::Result<(), &'static 
     Ok(())
 }
 
+/// Kills a running hook's process group when the future running it is
+/// dropped before the hook has ended. Disarmed once the hook has exited
+/// (or been killed on timeout), since its pid may then be reused.
+struct HookGroupGuard(Option<u32>);
+
+impl HookGroupGuard {
+    /// The hook has ended: nothing is left to kill.
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for HookGroupGuard {
+    fn drop(&mut self) {
+        // While the hook is unreaped (its `Child` is being dropped with this
+        // future), its pid is still its group id, so this cannot hit another
+        // process group.
+        if let Some(pid) = self.0.take() {
+            kill_hook_process_group(pid);
+        }
+    }
+}
+
 /// Kill a hook's process group so its children cannot be orphaned.
 ///
-/// Mirrors the MCP shutdown teardown (`mcp::kill_stdio_child`): the command is
-/// spawned without `process_group(0)`, so the group id equals the child pid and
-/// `killpg` reaches whatever the hook spawned. A pid that is not a group leader
-/// returns `ESRCH` and the plain `kill` fallback covers it.
+/// Mirrors the MCP shutdown teardown (`mcp::kill_stdio_child`). On unix
+/// `run_hook` spawns the command with `process_group(0)`, so the group id
+/// equals the child pid and `killpg` reaches whatever the hook spawned. The
+/// plain `kill` covers a pid that is not a group leader (`killpg` returns
+/// `ESRCH` then).
 #[cfg(unix)]
 #[allow(unsafe_code)]
 fn kill_hook_process_group(pid: u32) {
