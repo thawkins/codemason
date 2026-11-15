@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Performance
+
+- Performance: research locus snippets are found in linear time; a keyword near the end of a 256 KiB source took seconds before.
+- Performance: `codemason-types` no longer depends on bundled SQLite, so builds no longer wait for it before compiling every other crate.
+
 ### Security
 
 - Security: a project-local `.codemason/codemason.json` may no longer set `execution_backend`, `backends`, `automation`, `gitlab`, `plugins`, `connectors`, the search API keys, `loop`, `prices`, `input_queue_capacity`, the background-agent limits, `activity_log` or `edit_log`; they are ignored with a warning, like `mcp` and `hooks` already were. A cloned repository could use them to send a stored provider or GitLab key to its own server, post an environment variable from an unattended automation, downgrade a docker sandbox to the host, lift a plugin's permission gate, or raise budgets. Move any of these you set per project into `~/.config/codemason/codemason.json`.
