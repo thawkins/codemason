@@ -743,7 +743,7 @@ fn extract_archive(
 fn extract_zip(bytes: &[u8], staging: &Path) -> Result<(), ExtractError> {
     use std::io::{Cursor, Read as _};
 
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes.to_vec()))
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|e| ExtractError::Message(format!("zip open: {e}")))?;
     // ANTIPAT M17: the per-entry cap does not bound the total, so track a
     // running total across every entry and abort past MAX_EXTRACTED_BYTES.
@@ -764,8 +764,13 @@ fn extract_zip(bytes: &[u8], staging: &Path) -> Result<(), ExtractError> {
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(ExtractError::Io)?;
         }
+        // Bound the read itself: the per-entry cap or the remaining total
+        // headroom, plus one byte so an oversized entry is detected without
+        // first decompressing all of it into memory.
+        let remaining = MAX_EXTRACTED_BYTES.saturating_sub(total);
         let mut body = Vec::new();
-        entry
+        (&mut entry)
+            .take(MAX_ARCHIVE_BYTES.min(remaining).saturating_add(1))
             .read_to_end(&mut body)
             .map_err(|e| ExtractError::Message(format!("zip entry {name}: {e}")))?;
         if body.len() as u64 > MAX_ARCHIVE_BYTES {
@@ -787,7 +792,7 @@ fn extract_zip(bytes: &[u8], staging: &Path) -> Result<(), ExtractError> {
 fn extract_tar_gz(bytes: &[u8], staging: &Path) -> Result<(), ExtractError> {
     use std::io::{Cursor, Read as _};
 
-    let decoder = flate2::read::GzDecoder::new(Cursor::new(bytes.to_vec()));
+    let decoder = flate2::read::GzDecoder::new(Cursor::new(bytes));
     let mut archive = tar::Archive::new(decoder);
     let entries = archive
         .entries()
@@ -809,8 +814,13 @@ fn extract_tar_gz(bytes: &[u8], staging: &Path) -> Result<(), ExtractError> {
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(ExtractError::Io)?;
         }
+        // Bound the read itself: the per-entry cap or the remaining total
+        // headroom, plus one byte so an oversized entry is detected without
+        // first decompressing all of it into memory.
+        let remaining = MAX_EXTRACTED_BYTES.saturating_sub(total);
         let mut body = Vec::new();
-        entry
+        (&mut entry)
+            .take(MAX_ARCHIVE_BYTES.min(remaining).saturating_add(1))
             .read_to_end(&mut body)
             .map_err(|e| ExtractError::Message(format!("tar entry {name}: {e}")))?;
         if body.len() as u64 > MAX_ARCHIVE_BYTES {

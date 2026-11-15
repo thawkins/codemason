@@ -252,6 +252,83 @@ fn add_oversize_archive_is_refused() {
     );
 }
 
+/// Peak resident set size of this process in KiB (`VmHWM`), Linux only.
+#[cfg(target_os = "linux")]
+fn peak_rss_kib() -> u64 {
+    let status = std::fs::read_to_string("/proc/self/status").unwrap();
+    status
+        .lines()
+        .find_map(|l| l.strip_prefix("VmHWM:"))
+        .and_then(|v| v.split_whitespace().next()?.parse().ok())
+        .unwrap()
+}
+
+/// Size of the single highly compressible entry in the bomb archives: far
+/// past `MAX_ARCHIVE_BYTES`, yet only a few hundred KiB once compressed.
+#[cfg(target_os = "linux")]
+const BOMB_ENTRY_BYTES: u64 = 300 * 1024 * 1024;
+
+/// An oversized entry must be rejected without decompressing it into memory:
+/// the read is bounded at the cap, so peak RSS grows by far less than the
+/// entry's size. Before the bound, the whole entry was buffered first.
+#[cfg(target_os = "linux")]
+fn assert_bomb_refused_with_bounded_memory(archive: &Path, tree: &TempTree) {
+    let before = peak_rss_kib();
+    let err = add(&dirs(tree), &tree.0, archive.to_str().unwrap(), false).unwrap_err();
+    let grown_mib = peak_rss_kib().saturating_sub(before) / 1024;
+    assert!(
+        matches!(err, AddError::Io(_) | AddError::TooLarge { .. }),
+        "an oversized entry must be refused, got {err:?}"
+    );
+    assert!(
+        grown_mib < 120,
+        "peak RSS grew {grown_mib} MiB: the entry was read past the cap"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn add_tar_gz_bomb_is_refused_without_buffering_the_entry() {
+    let tree = TempTree::new("tgz-bomb");
+    let path = tree.0.join("src/bomb.tar.gz");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let file = std::fs::File::create(&path).unwrap();
+    let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::fast());
+    let mut builder = tar::Builder::new(encoder);
+    let mut header = tar::Header::new_gnu();
+    header.set_entry_type(tar::EntryType::Regular);
+    header.set_size(BOMB_ENTRY_BYTES);
+    header.set_mode(0o644);
+    header.set_cksum();
+    let zeros = std::io::Read::take(std::io::repeat(0), BOMB_ENTRY_BYTES);
+    builder.append_data(&mut header, "bomb.bin", zeros).unwrap();
+    builder.into_inner().unwrap().finish().unwrap();
+
+    assert_bomb_refused_with_bounded_memory(&path, &tree);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn add_zip_bomb_is_refused_without_buffering_the_entry() {
+    let tree = TempTree::new("zip-bomb");
+    let path = tree.0.join("src/bomb.zip");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let file = std::fs::File::create(&path).unwrap();
+    let mut writer = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .large_file(true);
+    writer.start_file("bomb.bin", options).unwrap();
+    std::io::copy(
+        &mut std::io::Read::take(std::io::repeat(0), BOMB_ENTRY_BYTES),
+        &mut writer,
+    )
+    .unwrap();
+    writer.finish().unwrap();
+
+    assert_bomb_refused_with_bounded_memory(&path, &tree);
+}
+
 // -- URL sources (FR-010) ----------------------------------------------------
 
 #[test]
