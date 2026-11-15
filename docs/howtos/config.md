@@ -183,9 +183,22 @@ strips the privileged keys before the merge and logs each rejected key at
 `bash`/`dirs` lists, `telemetry`, `hooks`, `openai`, `mcp` (a stdio server
 spawns a subprocess with no permission prompt), `acp` (an ACP agent spawns
 verbatim, and the section controls the editor-facing server), or any provider's
-`api` block (which redirects the provider credential and prompt stream). Put
-those in the user-global `~/.config/codemason/codemason.json`. The rest of a project
-provider entry (`thinking`, `env`, `models`) still merges.
+`api` block (which redirects the provider credential and prompt stream). Nor
+may it set `execution_backend` or `backends` (a remote backend receives a stored
+credential, and `"local"` would downgrade a sandbox), `automation` (unattended
+runs that can post an env var to any URL), `gitlab` (whose `instance_url`
+receives the GitLab token), `plugins` or `connectors`, the search API keys
+(`tavily_api_key`, `langsearch_api_key`, `perplexity_api_key`, `exa_api_key`,
+`serper_api_key`), or the budgets and safety switches `loop`, `prices`,
+`input_queue_capacity`, `experimental.max_background_agents` /
+`background_agent_timeout`, `activity_log` and `edit_log`. Put those in the
+user-global `~/.config/codemason/codemason.json`. The rest of a project provider
+entry (`thinking`, `env`, `models`) still merges.
+
+A setting toggled from the app (`/codeindex`, `/security`, i18n, `/gcf`) is
+written by editing only that key in the file the config was loaded from
+(`Config::set_source_value`); the merged config is never written back, so a
+global value is never copied into a project file.
 
 | Section | Strategy |
 | ------- | -------- |
