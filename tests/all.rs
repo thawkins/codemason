@@ -33,6 +33,9 @@ pub fn global_env_lock() -> std::sync::MutexGuard<'static, ()> {
 #[path = "test_cli_config_flag.rs"]
 mod test_cli_config_flag;
 
+#[path = "test_cli_gui_default.rs"]
+mod test_cli_gui_default;
+
 #[path = "test_connectors_cli_command.rs"]
 mod test_connectors_cli_command;
 

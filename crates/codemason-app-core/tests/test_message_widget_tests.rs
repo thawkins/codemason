@@ -1,4 +1,5 @@
-//! External tests for `tests` from `crates/codemason-tui/src/widgets/message_widget.rs`
+//! External tests for the tool-call display text in `crates/codemason-app-core/src/message_text.rs`
+//! (formerly the terminal renderer's `message_widget.rs`).
 //!
 //! Relocated from the inline `#[cfg(test)]` module.
 

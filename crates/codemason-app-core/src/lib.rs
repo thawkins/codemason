@@ -1,13 +1,11 @@
-//! Frontend-neutral types shared by the terminal and GUI frontends.
+//! Frontend-neutral application logic and types behind the desktop GUI.
 //!
 //! Holds styled text ([`styled`]), input events ([`input_event`]), geometry
 //! ([`geometry`]), the frontend-neutral application state ([`app::App`]) with
 //! its input handling ([`input`], [`input_field`]) and the supporting state
-//! modules moved from `codemason-tui` (status, theme mode, sidebar and menu
-//! state, research progress, message text and line wrapping, markdown
-//! rendering, log channel).
-//! `codemason-tui` keeps only rendering and terminal setup and re-exports
-//! these modules under their old paths.
+//! modules (status, theme mode, sidebar and menu state, research progress,
+//! message text and line wrapping, markdown rendering, the log channel and
+//! its tracing layer). `codemason-gui` renders them.
 
 #![deny(unsafe_code)]
 

@@ -40,6 +40,3 @@ crates/codemason-tools-extended/src/masterfetch/metadata.rs 12
 crates/codemason-tools-extended/src/masterfetch/youtube.rs 1
 crates/codemason-tools-extended/src/project_scaffold/recipes.rs 2
 crates/codemason-tools-extended/src/project_scaffold/stack.rs 7
-crates/codemason-tui/build.rs 2
-crates/codemason-tui/examples/support/mod.rs 2
-crates/codemason-tui/examples/toolchain_tc_pass.rs 1

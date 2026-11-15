@@ -21,13 +21,13 @@ authors = ["Tim Hawkins <tim.thawkins@gmail.com>"]
 name = "codemason"
 # One integration-test binary for the root crate (see AGENTS.md, "Test Layout").
 autotests = false
-description = "An AI coding agent for the terminal, built in Rust."
+description = "An AI coding agent desktop app, built in Rust."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-keywords = ["ai", "agent", "llm", "cli", "tui"]
+keywords = ["ai", "agent", "llm", "cli", "gui"]
 categories = ["command-line-utilities", "development-tools"]
 
 [package.metadata.deb]
@@ -180,7 +180,6 @@ codemason-llm = { path = "crates/codemason-llm" }
 codemason-plugins = { path = "crates/codemason-plugins" }
 codemason-server = { path = "crates/codemason-server" }
 codemason-app-core = { path = "crates/codemason-app-core" }
-codemason-tui = { path = "crates/codemason-tui" }
 codemason-gui = { path = "crates/codemason-gui" }
 
 # -- GUI frontend (egui) -----------------------------------------------------
@@ -256,10 +255,6 @@ clap = { version = "4", features = ["derive"] }
 axum = { version = "0.8", features = ["macros"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
-
-# ── TUI ──────────────────────────────────────────────────────────────────
-ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
-crossterm = "0.28"
 
 # ── File / path / text ──────────────────────────────────────────────────
 globset = "0.4"
@@ -375,7 +370,7 @@ default = []
 # The `telemetry` feature is no longer required; telemetry is hardwired into the
 # binary by default via `codemason-telemetry`'s own default feature. Kept as an
 # alias for compatibility with any scripts still passing --features telemetry.
-telemetry = ["codemason-tui/telemetry"]
+telemetry = []
 # ACP server endpoint on stdio for ACP-capable editors (spec `openhands`
 # FR-022, FR-028). Off by default; also gated at runtime by the
 # `acp.server_enabled` config key. Enable with `--features acp-server`.
@@ -404,7 +399,7 @@ codemason-connectors = { workspace = true }
 codemason-llm = { workspace = true }
 codemason-plugins = { workspace = true }
 codemason-server = { workspace = true }
-codemason-tui = { workspace = true }
+codemason-app-core = { workspace = true }
 codemason-gui = { workspace = true }
 codemason-specs = { workspace = true }
 codemason-research = { workspace = true }

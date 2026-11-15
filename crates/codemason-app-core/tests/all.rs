@@ -325,6 +325,8 @@ mod test_memory_clear_confirm;
 mod test_memory_panel;
 #[path = "test_message_edit_seq_cache.rs"]
 mod test_message_edit_seq_cache;
+#[path = "test_message_widget_duration_tests.rs"]
+mod test_message_widget_duration_tests;
 #[path = "test_message_widget_more.rs"]
 mod test_message_widget_more;
 #[path = "test_message_widget_summaries.rs"]
@@ -339,6 +341,8 @@ mod test_misc_modules_deep;
 mod test_models_state_misc;
 #[path = "test_modules_arms_deep.rs"]
 mod test_modules_arms_deep;
+#[path = "test_ms03_mask_secret.rs"]
+mod test_ms03_mask_secret;
 #[path = "test_ms04_tui_source_guards.rs"]
 mod test_ms04_tui_source_guards;
 #[path = "test_multisession.rs"]

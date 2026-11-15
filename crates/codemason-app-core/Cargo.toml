@@ -5,7 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Frontend-neutral application state, input handling and types shared by the terminal and GUI frontends"
+description = "Frontend-neutral application state, input handling and types behind the codemason GUI"
 
 [lints]
 workspace = true
@@ -46,9 +46,8 @@ uuid = { workspace = true }
 html2text = { workspace = true }
 pulldown-cmark = "0.13"
 tempfile = "3.5"
-# Width/grapheme handling for the message/log line caches (must match
-# the terminal renderer's word wrapper so pre-wrapped cache rows are stable;
-# keep them on the versions codemason-tui and its renderer resolve).
+# Width/grapheme handling for the message/log line caches (the word wrapper
+# in `line_wrap` measures graphemes with these).
 unicode-segmentation = "1.12"
 unicode-width = "0.2"
 

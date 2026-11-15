@@ -1772,54 +1772,6 @@ impl App {
         Ok(())
     }
 
-    /// Return a human-readable cost estimate for a provider/model pair, if the
-    /// registry advertises pricing information for the model.
-    #[doc(hidden)]
-    pub fn estimate_entry_cost(&self, provider_id: &str, model_id: &str) -> Option<String> {
-        let model = self
-            .provider_registry
-            .resolve_model(provider_id, model_id)?;
-        let avg = f64::midpoint(model.cost.input, model.cost.output);
-        if avg <= 0.0 {
-            return None;
-        }
-        Some(format!("~${:.2}/M", avg))
-    }
-
-    /// Resolve a router tier entry `(provider_id, model_id)` into a fully
-    /// populated [`ModelPickerEntry`] so the router setup UI can display the
-    /// model's properties (context window, features, thinking levels, cost
-    /// tier) alongside the assignment.
-    ///
-    /// Lookup first tries cached/discovered entries (which retain the richest
-    /// metadata, including cost multipliers for Copilot), then falls back to the
-    /// provider registry's static default catalog via [`ProviderRegistry::resolve_model`].
-    /// Returns `None` when neither source advertises the model, in which case
-    /// the caller renders a minimal `provider / model` label.
-    #[doc(hidden)]
-    pub fn router_model_picker_entry(
-        &self,
-        provider_id: &str,
-        model_id: &str,
-    ) -> Option<ModelPickerEntry> {
-        // Prefer cached/discovered entries: they include provider-specific
-        // metadata such as Copilot premium-request multipliers.
-        let cached = self.models_for_provider(provider_id);
-        if let Some(entry) = cached
-            .iter()
-            .find(|e| e.id == model_id || e.id.split_once('@').map(|(b, _)| b) == Some(model_id))
-        {
-            return Some(entry.clone());
-        }
-
-        // Fall back to the registry's static default-model catalog.
-        let model = self
-            .provider_registry
-            .resolve_model(provider_id, model_id)?;
-        let avg_cost = f64::midpoint(model.cost.input, model.cost.output);
-        Some(self.model_to_picker_entry(model, avg_cost))
-    }
-
     /// Render a detailed `/provider show` report for a single configured
     /// provider: id, name, source, configured models, and thinking settings.
     pub(crate) fn provider_config_report(&self, prov: &ConfiguredProvider) -> String {

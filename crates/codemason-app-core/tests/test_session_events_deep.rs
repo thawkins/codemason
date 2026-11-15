@@ -1,9 +1,8 @@
-//! Deep coverage for `src/lib.rs`, `src/app/session_ops.rs`,
-//! `src/app/event_handler.rs`, and `src/app/connector.rs`.
+//! Deep coverage for `src/app/session_ops.rs`, `src/app/event_handler.rs`,
+//! and `src/app/connector.rs`.
 //!
 //! These exercise the remaining public surfaces the existing suites leave
-//! untouched: the `lib.rs` test-wrapper deadline/should-render helpers and the
-//! `App`/`StderrSpool` re-exports; the connector-catalogue and plugin-store
+//! untouched: the connector-catalogue and plugin-store
 //! panel state helpers in `session_ops.rs`; the event-handler arms whose
 //! variants the other suites never construct (the Copilot device-flow result,
 //! `RouterClassification`, `ServiceStartError`, `ModelDownloadProgress`, the
@@ -116,19 +115,6 @@ fn open_plugin_store(kind: StoreKind, entries: Vec<StoreEntry>) -> App {
     browser.set_entries(entries);
     app.plugin_store = Some(browser);
     app
-}
-
-// ===========================================================================
-// lib.rs - re-exports and the deadline / render test wrappers
-// ===========================================================================
-
-#[test]
-fn lib_reexports_app_and_stderr_spool_are_nameable() {
-    let app: App = support::make_app();
-    assert!(app.session.session_id.is_none());
-    // Naming the crate-root `StderrSpool` re-export proves it is public; it is a
-    // `codemason_types::stderr_spool::Spool` alias.
-    let _spool: Option<codemason_types::stderr_spool::Spool> = None;
 }
 
 // ===========================================================================

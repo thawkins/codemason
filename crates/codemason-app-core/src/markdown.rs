@@ -3,8 +3,8 @@
 //! [`markdown_to_styled`] turns a markdown document (a `RESEARCH.md` body,
 //! for the `/research open` viewer) into styled lines: headings, lists,
 //! code blocks (monospace), inline code (monospace), links, images as
-//! placeholders, rules and a closing viewer footer. The terminal frontend
-//! converts the lines to ratatui lines; the GUI lays them out with egui.
+//! placeholders, rules and a closing viewer footer. The GUI lays the lines
+//! out with egui.
 //!
 //! Dependencies: `pulldown-cmark` (parsing) and [`crate::app`]
 //! (`sanitize_for_display`, `image_dimensions_or_placeholder`).

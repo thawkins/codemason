@@ -6,7 +6,7 @@
 //! `codemason-agent` cannot depend on `codemason-tui` (the TUI depends on the agent
 //! crate, not the other way around), so this catalog is a hand-maintained
 //! mirror consumed by the `commands_info` tool. A drift-check test lives in
-//! `crates/codemason-tui/tests/test_command_catalog.rs` and fails when the two
+//! `crates/codemason-app-core/tests/test_command_catalog.rs` and fails when the two
 //! tables diverge.
 
 /// One entry in the static slash-command catalog.

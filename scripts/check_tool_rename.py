@@ -783,7 +783,7 @@ RESOLVER_FILES: dict[str, str] = {
         "the dispatch pipeline's name resolution and did-you-mean hint",
     "crates/codemason-config/src/permission.rs":
         "`Permission::from`, the permission-vocabulary resolver (FR-028)",
-    "crates/codemason-tui/src/widgets/message_widget.rs":
+    "crates/codemason-app-core/src/message_text.rs":
         "the tool-label renderer that maps a stored name onto its label",
 }
 

@@ -1,10 +1,18 @@
-//! MS-03 regression tests for credential masking in the TUI.
+//! MS-03 regression tests for credential masking in the provider dialog.
 //!
 //! SEC-codemason-tui-002 (SECTASKS T-045): the provider-setup dialog rendered the
 //! API key and the GitLab PAT verbatim, so a live credential was readable
 //! during a screen share, a terminal recording, or a shoulder-surf.
+//!
+//! Ported from the removed terminal UI, whose `mask_secret` the GUI provider
+//! dialog mirrors: both mask with `codemason_types::sanitize::mask_edges(text,
+//! 4, 12)`, so these tests pin that call.
 
-use codemason_tui::layout::mask_secret;
+/// The provider dialog's masking rule: keep the first and last four
+/// characters of a secret longer than twelve, mask everything else.
+fn mask_secret(text: &str) -> String {
+    codemason_types::sanitize::mask_edges(text, 4, 12)
+}
 
 #[test]
 fn test_short_secret_is_fully_masked() {

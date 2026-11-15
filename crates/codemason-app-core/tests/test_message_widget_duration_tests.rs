@@ -1,9 +1,10 @@
-//! External tests for `duration_tests` from `crates/codemason-tui/src/widgets/message_widget.rs`
+//! Tool-call duration display in the transcript lines.
 //!
-//! Relocated from the inline `#[cfg(test)]` module.
+//! Ported from the removed terminal UI's `message_widget.rs` duration tests to
+//! app-core's [`message_to_lines`], the transcript renderer the GUI draws.
 
 use codemason_agent::message::{Message, MessagePart, Role, ToolCallState, ToolCallStatus};
-use codemason_tui::widgets::message_widget::MessageWidget;
+use codemason_app_core::message_lines::message_to_lines;
 use serde_json::json;
 
 /// Test that duration_ms is displayed for completed tool calls.
@@ -28,16 +29,20 @@ fn test_toolcall_duration_displayed_when_completed() {
 
     let tool_step_map: std::collections::HashMap<String, (String, u32, u32)> =
         std::collections::HashMap::new();
-    let widget = MessageWidget::new(&msg, "/tmp", &tool_step_map);
-    let lines = widget.to_lines();
+    let lines = message_to_lines(
+        &msg,
+        &tool_step_map,
+        &std::collections::HashMap::<String, String>::new(),
+        "/tmp",
+    );
 
     // Find the tool call line and check for duration (tool name is capitalized to "Read")
     let tool_line = lines
         .iter()
-        .find(|line| line.spans.iter().any(|span| span.content.contains("Read")))
+        .find(|line| line.spans.iter().any(|span| span.text.contains("Read")))
         .expect("Should find a line with 'Read' tool");
 
-    let line_text: String = tool_line.spans.iter().map(|s| s.content.as_ref()).collect();
+    let line_text: String = tool_line.spans.iter().map(|s| s.text.as_str()).collect();
     assert!(
         line_text.contains("1.2s") || line_text.contains("1234ms"),
         "Duration should be displayed in tool call line. Got: {}",
@@ -66,16 +71,20 @@ fn test_toolcall_duration_not_displayed_when_running() {
 
     let tool_step_map: std::collections::HashMap<String, (String, u32, u32)> =
         std::collections::HashMap::new();
-    let widget = MessageWidget::new(&msg, "/tmp", &tool_step_map);
-    let lines = widget.to_lines();
+    let lines = message_to_lines(
+        &msg,
+        &tool_step_map,
+        &std::collections::HashMap::<String, String>::new(),
+        "/tmp",
+    );
 
     // Find the tool call line (tool name is capitalized to "Read")
     let tool_line = lines
         .iter()
-        .find(|line| line.spans.iter().any(|span| span.content.contains("Read")))
+        .find(|line| line.spans.iter().any(|span| span.text.contains("Read")))
         .expect("Should find a line with 'Read' tool");
 
-    let line_text: String = tool_line.spans.iter().map(|s| s.content.as_ref()).collect();
+    let line_text: String = tool_line.spans.iter().map(|s| s.text.as_str()).collect();
     // Check that duration pattern is NOT present - look for " (XXXms)" or " (X.Xs)"
     // The "test.txt" path contains 's' so we need to be specific
     assert!(
@@ -105,16 +114,20 @@ fn test_toolcall_duration_not_displayed_when_none() {
 
     let tool_step_map: std::collections::HashMap<String, (String, u32, u32)> =
         std::collections::HashMap::new();
-    let widget = MessageWidget::new(&msg, "/tmp", &tool_step_map);
-    let lines = widget.to_lines();
+    let lines = message_to_lines(
+        &msg,
+        &tool_step_map,
+        &std::collections::HashMap::<String, String>::new(),
+        "/tmp",
+    );
 
     // Find the tool call line (tool name is capitalized to "Read")
     let tool_line = lines
         .iter()
-        .find(|line| line.spans.iter().any(|span| span.content.contains("Read")))
+        .find(|line| line.spans.iter().any(|span| span.text.contains("Read")))
         .expect("Should find a line with 'Read' tool");
 
-    let line_text: String = tool_line.spans.iter().map(|s| s.content.as_ref()).collect();
+    let line_text: String = tool_line.spans.iter().map(|s| s.text.as_str()).collect();
     // Duration format is " (XXXms)" or " (X.Xs)" - check for that specific pattern
     // The result summary line contains "lines read" which is fine
     // We just need to ensure there's no duration parenthetical
@@ -146,16 +159,20 @@ fn test_toolcall_duration_shows_ms_for_short_duration() {
 
     let tool_step_map: std::collections::HashMap<String, (String, u32, u32)> =
         std::collections::HashMap::new();
-    let widget = MessageWidget::new(&msg, "/tmp", &tool_step_map);
-    let lines = widget.to_lines();
+    let lines = message_to_lines(
+        &msg,
+        &tool_step_map,
+        &std::collections::HashMap::<String, String>::new(),
+        "/tmp",
+    );
 
     // Find the tool call line (tool name is capitalized to "Read")
     let tool_line = lines
         .iter()
-        .find(|line| line.spans.iter().any(|span| span.content.contains("Read")))
+        .find(|line| line.spans.iter().any(|span| span.text.contains("Read")))
         .expect("Should find a line with 'Read' tool");
 
-    let line_text: String = tool_line.spans.iter().map(|s| s.content.as_ref()).collect();
+    let line_text: String = tool_line.spans.iter().map(|s| s.text.as_str()).collect();
     assert!(
         line_text.contains("456ms"),
         "Short durations should show as ms. Got: {}",
@@ -187,15 +204,19 @@ fn test_toolcall_duration_with_inline_diff() {
 
     let tool_step_map: std::collections::HashMap<String, (String, u32, u32)> =
         std::collections::HashMap::new();
-    let widget = MessageWidget::new(&msg, "/tmp", &tool_step_map);
-    let lines = widget.to_lines();
+    let lines = message_to_lines(
+        &msg,
+        &tool_step_map,
+        &std::collections::HashMap::<String, String>::new(),
+        "/tmp",
+    );
 
     let tool_line = lines
         .iter()
-        .find(|line| line.spans.iter().any(|span| span.content.contains("Edit")))
+        .find(|line| line.spans.iter().any(|span| span.text.contains("Edit")))
         .expect("Should find a line with 'Edit' tool");
 
-    let line_text: String = tool_line.spans.iter().map(|s| s.content.as_ref()).collect();
+    let line_text: String = tool_line.spans.iter().map(|s| s.text.as_str()).collect();
     assert!(
         line_text.contains("1.5s") && line_text.contains("+15") && line_text.contains("-10"),
         "Duration should appear alongside inline diff. Got: {}",
@@ -231,17 +252,24 @@ fn test_tool_name_immediately_follows_step_counter() {
         std::collections::HashMap::new();
     tool_step_map.insert("call-001".to_string(), ("sess".to_string(), 3, 2));
 
-    let widget = MessageWidget::new(&msg, "/tmp", &tool_step_map);
-    let lines = widget.to_lines();
+    let lines = message_to_lines(
+        &msg,
+        &tool_step_map,
+        &std::collections::HashMap::<String, String>::new(),
+        "/tmp",
+    );
 
     let tool_line = lines
         .iter()
-        .find(|line| line.spans.iter().any(|span| span.content.contains("Bg")))
+        .find(|line| line.spans.iter().any(|span| span.text.contains("Bg")))
         .expect("Should find a line with the 'Bg' tool name");
 
-    let line_text: String = tool_line.spans.iter().map(|s| s.content.as_ref()).collect();
+    let line_text: String = tool_line.spans.iter().map(|s| s.text.as_str()).collect();
+    // The shared transcript renderer leads a tool-call header with its status
+    // marker (`* ` for a completed call); the step counter and the tool name
+    // follow it with nothing in between.
     assert!(
-        line_text.starts_with("[3.2] Bg"),
+        line_text.starts_with("* [3.2] Bg"),
         "Tool name must immediately follow the step counter. Got: {line_text}"
     );
     assert!(

@@ -571,7 +571,7 @@ fn read_workspace_file(relative: &str) -> String {
 fn test_all_three_restriction_sites_report_and_the_prompt_path_does_not() {
     // FR-029's second clause is only met if the report happens where a skill's
     // list becomes a *restriction*. `Skill` and the TUI `/skill` trigger are
-    // driven end to end above and in `crates/codemason-tui/tests/test_skill_command.rs`;
+    // driven end to end above and in `crates/codemason-app-core/tests/test_skill_command.rs`;
     // the forked resolver needs a live `SessionProcessor`, so the wiring of all
     // three - and, more importantly, the *absence* of the fourth - is pinned by
     // reading the sources. A per-turn prompt path is the failure mode the

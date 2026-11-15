@@ -13,7 +13,7 @@
 //!   with populated and missing files (FR-015), and scroll-offset bounds
 //!   (FR-009).
 //!
-//! Tests live in `crates/codemason-tui/tests/` per the AGENTS.md test
+//! Tests live in `crates/codemason-app-core/tests/` per the AGENTS.md test
 //! organization rule (no inline `#[cfg(test)]` modules in `src/`).
 
 #[path = "support/mod.rs"]

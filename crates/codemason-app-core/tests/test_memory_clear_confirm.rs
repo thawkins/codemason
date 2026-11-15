@@ -6,7 +6,7 @@
 //! - `No` and `Esc` leave memory unchanged,
 //! - the dialog defaults to `No` so a stray `Enter` cannot clear memory.
 //!
-//! Tests live in `crates/codemason-tui/tests/` per the AGENTS.md test
+//! Tests live in `crates/codemason-app-core/tests/` per the AGENTS.md test
 //! organization rule (no inline `#[cfg(test)]` modules in `src/`).
 
 #[path = "support/mod.rs"]

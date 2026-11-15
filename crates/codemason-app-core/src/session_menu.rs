@@ -188,21 +188,6 @@ impl SessionMenu {
             .map_or(0, |last| self.line_of(last) + 1)
     }
 
-    /// Moves `scroll` so the highlighted item's line is among the
-    /// `visible` painted lines.
-    #[doc(hidden)]
-    pub fn keep_cursor_visible(&mut self, visible: usize) {
-        let line = self.line_of(self.cursor);
-        if visible == 0 {
-            self.scroll = 0;
-        } else if line < self.scroll {
-            self.scroll = line;
-        } else if line >= self.scroll + visible {
-            self.scroll = line + 1 - visible;
-        }
-        self.scroll = self.scroll.min(self.line_count().saturating_sub(visible));
-    }
-
     /// Whether `(column, row)` is inside the painted area.
     fn contains(&self, column: u16, row: u16) -> bool {
         self.area.width > 0 && self.area.contains((column, row))

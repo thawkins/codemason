@@ -48,21 +48,12 @@ const SIDEBAR_KEY: &str = "tui.sessions.sidebar";
 pub const DEFAULT_WIDTH: u16 = 32;
 /// Narrowest the sidebar can be dragged to.
 pub const MIN_WIDTH: u16 = 20;
-/// Below this terminal width the sidebar hides itself (FR-10).
-pub const MIN_TERMINAL_WIDTH: u16 = 100;
-/// Narrowest room, name and chevron included, that still shows a project's
-/// description on its heading: ` (` plus one character plus `)`.
-#[doc(hidden)]
-pub const HEADER_NOTE_MIN: usize = 3;
 /// Section key of the `Pinned` pseudo-project; NUL keeps it apart from ids.
 #[doc(hidden)]
 pub const PINNED_KEY: &str = "\0pinned";
 /// ASCII marker shown before a session's request count; it stands for a
 /// branch.
 pub const BRANCH_MARK: char = 'Y';
-/// Narrowest title a session row keeps before it gives up its age column.
-#[doc(hidden)]
-pub const MIN_TITLE_WIDTH: usize = 12;
 
 /// Sidebar layout and cached session data.
 #[derive(Debug)]

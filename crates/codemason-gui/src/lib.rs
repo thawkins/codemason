@@ -1,10 +1,9 @@
 //! Desktop GUI frontend for codemason, built on eframe/egui.
 //!
 //! The crate renders the frontend-neutral [`codemason_app_core::app::App`]
-//! in a native window. It is the GUI counterpart of `codemason-tui` and must
-//! not depend on it.
+//! in a native window. It is the interactive frontend of `cdmn`.
 //!
-//! - [`run_gui`] is the entry point the `cdmn --gui` launch path calls.
+//! - [`run_gui`] is the entry point the interactive `cdmn` launch path calls.
 //! - [`main_thread`] hands the built session to the process main thread,
 //!   which runs the eframe window ([`MainThreadHost::serve`]).
 //! - [`Shell`] is the `eframe::App` that draws the window.
@@ -72,7 +71,7 @@ pub enum GuiLaunchError {
     /// `WAYLAND_DISPLAY` is set on an X11/Wayland platform).
     #[error(
         "no graphical display found: neither DISPLAY nor WAYLAND_DISPLAY is set; \
-         run cdmn without --gui to use the terminal UI"
+         use `cdmn run <prompt>` for headless mode"
     )]
     NoDisplay,
     /// The windowing or rendering backend failed to start or run.
@@ -80,8 +79,7 @@ pub enum GuiLaunchError {
     Backend(String),
 }
 
-/// Everything [`run_gui`] needs: the same inputs `codemason_tui::run_tui`
-/// takes, gathered in one struct.
+/// Everything [`run_gui`] needs, gathered in one struct.
 pub struct GuiOptions {
     /// Shared agent event bus.
     pub event_bus: Arc<EventBus>,

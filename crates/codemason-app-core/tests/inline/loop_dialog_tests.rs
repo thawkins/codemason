@@ -1,7 +1,7 @@
 //! Unit tests for the `/loop` setup dialog state machine (spec `agentloop`,
 //! task T-014): field navigation, comma-list parsing, and spec composition
 //! (FR-002, FR-005). Dialog integration tests live in
-//! `crates/codemason-tui/tests/test_loop_dialog.rs`.
+//! `crates/codemason-app-core/tests/test_loop_dialog.rs`.
 
 use crate::app::loop_dialog::{
     LoopSetupField, LoopSetupState, build_spec_from_state, parse_comma_list, parse_optional_u64,

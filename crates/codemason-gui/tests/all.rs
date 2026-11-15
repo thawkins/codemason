@@ -50,6 +50,8 @@ mod test_research;
 mod test_runtime_context;
 #[path = "test_side_panels.rs"]
 mod test_side_panels;
+#[path = "test_status_bar.rs"]
+mod test_status_bar;
 #[path = "test_theme.rs"]
 mod test_theme;
 #[path = "test_window.rs"]

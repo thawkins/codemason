@@ -2,8 +2,8 @@
 //!
 //! Entry point for the codemason terminal AI coding agent. Parses CLI arguments,
 //! loads configuration, initialises storage and the event bus, and dispatches
-//! to the requested sub-command (TUI, headless run, HTTP server, session
-//! management, auth, or config display).
+//! to the requested sub-command (desktop GUI, headless run, HTTP server,
+//! session management, auth, or config display).
 
 #![deny(unsafe_code)]
 
@@ -27,6 +27,8 @@ use codemason_agent::{
     telemetry::{ShutdownGuard, TelemetrySubsystem, TracingLogsLayer},
     tool,
 };
+use codemason_app_core::app::StartupSession;
+use codemason_app_core::log_channel::tui_log_channel;
 use codemason_connectors::{ConnectorSession, store_dirs};
 
 mod cli;
@@ -36,9 +38,11 @@ use crate::cli_out::{cliprint, cliprintln, cliprintln_err};
 mod cli_surface;
 mod connectors;
 mod crash_dump;
+mod interactive_mode;
 mod panic_hook;
 mod plugins;
-mod stderr_spool;
+
+use crate::interactive_mode::{InteractiveArgs, Mode};
 
 /// ACP server endpoint on stdio for IDE clients (spec `openhands` T-008;
 /// FR-022, FR-028).
@@ -83,24 +87,20 @@ struct Cli {
     #[arg(long, global = true, default_value = "info")]
     log_level: String,
 
-    /// Start a fresh TUI session instead of reopening the sessions that were
+    /// Start a fresh session instead of reopening the sessions that were
     /// open when codemason last exited
     #[arg(long = "new")]
     new_session: bool,
 
-    /// Disable TUI, use plain stdout
-    #[arg(long, global = true)]
-    no_tui: bool,
-
-    /// Open the desktop GUI instead of the terminal UI
-    #[arg(long, global = true, conflicts_with = "no_tui")]
-    gui: bool,
+    /// The interactive frontend flags (`--no-tui`, `--gui`).
+    #[command(flatten)]
+    interactive: InteractiveArgs,
 
     /// Auto-approve all permissions
     #[arg(long, alias = "no-prompt", global = true)]
     yes: bool,
 
-    /// Show the log panel in the TUI
+    /// Show the log panel in the GUI
     #[arg(long, global = true)]
     log: bool,
 
@@ -409,7 +409,7 @@ fn working_dir() -> PathBuf {
 
 /// Print the codemason ASCII art startup banner to stdout.
 fn print_banner() {
-    for line in codemason_tui::logo::LOGO {
+    for line in codemason_app_core::logo::LOGO {
         cliprintln!("{line}");
     }
     cliprintln!(
@@ -527,11 +527,10 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
 
     // Initialize tracing.
     //
-    // For TUI mode: install a channel-based layer so all tracing output is
-    // captured by the log panel rather than written directly to stdout (which
-    // would corrupt the alternate-screen rendering).
+    // For GUI mode: install a channel-based layer so all tracing output is
+    // captured by the GUI's log panel.
     //
-    // For non-TUI modes (--no-tui, headless run, server, etc.): fall back to
+    // For non-GUI modes (--no-tui, headless run, server, etc.): fall back to
     // the normal fmt subscriber so logs appear in the terminal as usual.
     let t0 = Instant::now();
     // `--log-level all` is the operator's "record everything" spelling. It is
@@ -555,18 +554,18 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
         );
         EnvFilter::new("warn")
     });
-    // `--gui` with no reachable display fails here, before the tracing layer
-    // and the stderr spool take over the terminal, so the reason is visible.
-    if cli.gui {
-        codemason_gui::check_display()?;
-    }
-    let tui_will_run = !cli.no_tui
+    let gui_will_run = cli.interactive.mode() == Mode::Gui
         && matches!(
             cli.command,
             None | Some(Commands::Session {
                 command: SessionCommands::Resume { .. }
             })
         );
+    // An interactive run with no reachable display fails here, before the
+    // tracing layer takes over, so the reason is visible on the terminal.
+    if gui_will_run {
+        codemason_gui::check_display()?;
+    }
     // Commands whose stdout is a machine-readable document or report (`openapi`
     // emits the OpenAPI JSON or the generated TypeScript client; `models` prints
     // a `provider/model` line per model that both humans and the `--wire-matrix`
@@ -600,13 +599,13 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
     // the layer costs one check per event and exports nothing.
     let logs_layer = TracingLogsLayer::disabled();
     let logs_cell = logs_layer.cell();
-    let tui_log_rx = if tui_will_run {
+    let gui_log_rx = if gui_will_run {
         use tracing_subscriber::layer::SubscriberExt as _;
         use tracing_subscriber::util::SubscriberInitExt as _;
-        let (tx, rx) = codemason_tui::tracing_layer::tui_log_channel(512);
+        let (tx, rx) = codemason_app_core::tracing_layer::tui_log_channel(512);
         tracing_subscriber::registry()
             .with(filter)
-            .with(codemason_tui::tracing_layer::TuiTracingLayer::new(tx))
+            .with(codemason_app_core::tracing_layer::TuiTracingLayer::new(tx))
             .with(logs_layer)
             .init();
         Some(rx)
@@ -634,18 +633,7 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
         None
     };
     startup.record("Tracing init", t0.elapsed());
-    tracing::info!(log_level = %cli.log_level, tui_mode = tui_will_run, "Tracing initialized");
-
-    // In TUI mode the alternate screen paints over raw stderr, so the default
-    // panic hook, `cliprintln_err!`, and any C-library diagnostic would be lost.
-    // Redirect fd 2 into a truncating spool (`log/logwindow/stderr-*.log`) and
-    // mirror it into the log panel; non-TUI modes keep writing to the terminal.
-    // The GUI paints in its own window, so stderr stays on the terminal.
-    let stderr_spool = if tui_will_run && !cli.gui {
-        stderr_spool::install(&working_dir.join("log").join("logwindow"))
-    } else {
-        None
-    };
+    tracing::info!(log_level = %cli.log_level, gui_mode = gui_will_run, "Tracing initialized");
 
     // Load config
     let t0 = Instant::now();
@@ -1250,9 +1238,9 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
     let storage_for_shutdown = Arc::clone(&storage);
     match cli.command {
         None => {
-            // Default: run TUI
-            if cli.no_tui {
-                tracing::info!("Starting interactive mode (plain, no TUI)");
+            // Default: open the desktop GUI (`--no-tui` keeps plain stdio).
+            if cli.interactive.mode() == Mode::Plain {
+                tracing::info!("Starting interactive mode (plain, no GUI)");
                 use tokio::io::AsyncBufReadExt;
 
                 let mut resolved_agent = resolved_agent.clone();
@@ -1292,7 +1280,11 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
                         Err(e) => tracing::error!(error = %e, "Failed to process message"),
                     }
                 }
-            } else if cli.gui {
+            } else {
+                print_banner();
+                // `run_gui`'s future is large; box it so it is heap-allocated
+                // rather than inlined into this caller's future
+                // (clippy::large_futures).
                 Box::pin(codemason_gui::run_gui(codemason_gui::GuiOptions {
                     event_bus,
                     storage,
@@ -1301,44 +1293,17 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
                     agent: (*resolved_agent).clone(),
                     show_log: cli.log,
                     startup: if cli.new_session {
-                        codemason_tui::StartupSession::New
+                        StartupSession::New
                     } else {
-                        codemason_tui::StartupSession::Restore
+                        StartupSession::Restore
                     },
-                    log_rx: tui_log_rx
-                        .unwrap_or_else(|| codemason_tui::tracing_layer::tui_log_channel(1).1),
+                    log_rx: gui_log_rx.unwrap_or_else(|| tui_log_channel(1).1),
                     db_path: db_path.clone(),
                     config_paths: config.read().await.config_paths.clone(),
                     timings: startup,
-                    stderr_spool: stderr_spool.clone(),
+                    stderr_spool: None,
                     launcher: gui_launcher,
                 }))
-                .await?;
-            } else {
-                // Print startup banner before entering TUI alternate screen
-                print_banner();
-                // `run_tui`'s future is large; box it so it is heap-allocated
-                // rather than inlined into this caller's future
-                // (clippy::large_futures).
-                Box::pin(codemason_tui::run_tui(
-                    event_bus,
-                    storage,
-                    provider_registry,
-                    session_processor,
-                    (*resolved_agent).clone(),
-                    cli.log,
-                    if cli.new_session {
-                        codemason_tui::StartupSession::New
-                    } else {
-                        codemason_tui::StartupSession::Restore
-                    },
-                    tui_log_rx
-                        .unwrap_or_else(|| codemason_tui::tracing_layer::tui_log_channel(1).1),
-                    db_path.clone(),
-                    config.read().await.config_paths.clone(),
-                    startup,
-                    stderr_spool.clone(),
-                ))
                 .await?;
             }
         }
@@ -1557,49 +1522,29 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
                 }
             }
             SessionCommands::Resume { id } => {
-                // Verify session exists before launching TUI
+                // Verify session exists before launching the GUI
                 if storage.get_session(&id)?.is_none() {
                     anyhow::bail!("Session not found: {id}");
                 }
                 tracing::info!(session_id = %id, "Resuming session");
-                if cli.gui {
-                    Box::pin(codemason_gui::run_gui(codemason_gui::GuiOptions {
-                        event_bus,
-                        storage,
-                        provider_registry,
-                        session_processor,
-                        agent: (*resolved_agent).clone(),
-                        show_log: cli.log,
-                        startup: codemason_tui::StartupSession::Resume(id),
-                        log_rx: tui_log_rx
-                            .unwrap_or_else(|| codemason_tui::tracing_layer::tui_log_channel(1).1),
-                        db_path: db_path.clone(),
-                        config_paths: config.read().await.config_paths.clone(),
-                        timings: startup,
-                        stderr_spool: stderr_spool.clone(),
-                        launcher: gui_launcher,
-                    }))
-                    .await?;
-                } else {
-                    print_banner();
-                    // See the `run_tui` call above: box the large future.
-                    Box::pin(codemason_tui::run_tui(
-                        event_bus,
-                        storage,
-                        provider_registry,
-                        session_processor,
-                        (*resolved_agent).clone(),
-                        cli.log,
-                        codemason_tui::StartupSession::Resume(id),
-                        tui_log_rx
-                            .unwrap_or_else(|| codemason_tui::tracing_layer::tui_log_channel(1).1),
-                        db_path.clone(),
-                        config.read().await.config_paths.clone(),
-                        startup,
-                        stderr_spool.clone(),
-                    ))
-                    .await?;
-                }
+                print_banner();
+                // See the `run_gui` call above: box the large future.
+                Box::pin(codemason_gui::run_gui(codemason_gui::GuiOptions {
+                    event_bus,
+                    storage,
+                    provider_registry,
+                    session_processor,
+                    agent: (*resolved_agent).clone(),
+                    show_log: cli.log,
+                    startup: StartupSession::Resume(id),
+                    log_rx: gui_log_rx.unwrap_or_else(|| tui_log_channel(1).1),
+                    db_path: db_path.clone(),
+                    config_paths: config.read().await.config_paths.clone(),
+                    timings: startup,
+                    stderr_spool: None,
+                    launcher: gui_launcher,
+                }))
+                .await?;
             }
             SessionCommands::ExportArchive {
                 id,
@@ -2124,19 +2069,6 @@ fn main_body(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
         && let Some(exit) = e.downcast_ref::<cli::CliExit>()
     {
         std::process::exit(exit.code);
-    }
-    // In TUI mode stderr is redirected into the log spool, so an error that
-    // aborts startup (a config parse failure, a storage open failure) would
-    // otherwise vanish: Rust prints the `Error:` line from `main` returning
-    // `Err` to real stderr, which the spool swallows, and the process exits
-    // with no visible diagnostic. Echo it to stdout - the terminal the user is
-    // looking at - so the failure is never silent. The tracing fmt subscriber
-    // is the writer of stdout in non-TUI runs, but this is the documented
-    // CLI-presentation surface and no tracing writer is live on an error path.
-    if let Err(e) = &result
-        && stderr_spool::is_active()
-    {
-        cliprintln!("codemason: {e}");
     }
     result
 }

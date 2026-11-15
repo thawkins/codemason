@@ -112,8 +112,8 @@ pub fn run_cli(args: &[String]) -> Result<()> {
 /// Run the shared plugin dispatch ladder for the CLI surface.
 ///
 /// Seeds the collision surface (FR-024) from the built-in tool registry and the
-/// `SLASH_COMMANDS` triggers so it matches the live TUI surface. No MCP client is
-/// connected for a one-shot CLI invocation, so a plugin's MCP tool counts stay
+/// `SLASH_COMMANDS` triggers so it matches the live interactive surface. No MCP
+/// client is connected for a one-shot CLI invocation, so a plugin's MCP tool counts stay
 /// `?` (unknown, not zero): the count is only known from a live connection.
 ///
 /// Returns `None` for subcommands the shared ladder does not own, so the caller
@@ -130,7 +130,7 @@ fn run_plugin_subcommand_offline(
         sub,
         rest,
         registry.list().into_iter().collect(),
-        codemason_tui::app::SLASH_COMMANDS
+        codemason_app_core::app::SLASH_COMMANDS
             .iter()
             .map(|c| c.trigger.to_string())
             .collect(),
