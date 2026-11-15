@@ -325,6 +325,18 @@ pub struct CodeIndexStartupResult {
     elapsed: std::time::Duration,
 }
 
+impl std::fmt::Debug for CodeIndexStartupResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CodeIndexStartupResult")
+            .field("has_index", &self.index.is_some())
+            .field("watching", &self.watch_session.is_some())
+            .field("fallback_reindex", &self.fallback_thread.is_some())
+            .field("message", &self.message)
+            .field("elapsed", &self.elapsed)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Open and watch the code index for `cwd` when the config enables it
 /// (blocking; runs on a blocking thread).
 fn open_code_index(
