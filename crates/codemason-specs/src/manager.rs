@@ -577,6 +577,12 @@ fn update_frontmatter(
 /// Takes both the original and an already-lowercased copy of the text so
 /// callers that have already lowercased (search) do not pay for a second
 /// full-text lowercasing per snippet batch.
+///
+/// `text_lower` is only used directly when `text` is ASCII: lowercasing
+/// non-ASCII text can change byte lengths (U+0130 lowercases to the 3-byte
+/// `i\u{307}`), so its offsets would not be valid in `text` (RS-02). For
+/// non-ASCII text the match offsets are mapped back to `text` through a
+/// per-char lowering table.
 fn extract_snippets_lowered(
     text: &str,
     text_lower: &str,
@@ -586,12 +592,25 @@ fn extract_snippets_lowered(
     let mut snippets = Vec::new();
     let window = 40usize;
 
-    for (idx, _) in text_lower.match_indices(query) {
+    // `text_lower` is `text.to_lowercase()`, the same lowering the query went
+    // through. For ASCII its offsets are the original offsets; otherwise each
+    // match is mapped back to `text` (RS-02).
+    let ascii = text.is_ascii();
+    for (lower_idx, _) in text_lower.match_indices(query) {
         if snippets.len() >= max_snippets {
             break;
         }
+        let (idx, match_end) = if ascii {
+            (lower_idx, lower_idx + query.len())
+        } else {
+            codemason_types::strutil::lowercase_range_to_original(
+                text,
+                lower_idx,
+                lower_idx + query.len(),
+            )
+        };
         let start = idx.saturating_sub(window);
-        let end = (idx + query.len() + window).min(text.len());
+        let end = (match_end + window).min(text.len());
         // Align byte indices to char boundaries in the original UTF-8 text so slicing
         // does not panic on multi-byte characters (e.g. em-dashes).
         let start_char = text.floor_char_boundary(start);

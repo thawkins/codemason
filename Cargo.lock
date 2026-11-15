@@ -1696,6 +1696,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "codemason-tools-extended",
+ "codemason-types",
  "regex",
  "serde",
  "serde_json",

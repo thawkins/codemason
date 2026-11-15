@@ -130,3 +130,6 @@ mod test_vcs_registry_coverage;
 
 #[path = "test_request_binding.rs"]
 mod test_request_binding;
+
+#[path = "test_git_large_output.rs"]
+mod test_git_large_output;

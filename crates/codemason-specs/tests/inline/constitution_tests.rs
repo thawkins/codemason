@@ -502,3 +502,14 @@ fn test_apply_multiple_amendments_sequentially() {
     assert_eq!(c2.amendments[0].rationale, "First");
     assert_eq!(c2.amendments[1].rationale, "Second");
 }
+
+#[test]
+fn test_parse_article_heading_with_en_and_em_dash() {
+    // RS-05: `## Article 3 \u{2013} Title` and the em-dash form must parse.
+    for dash in ["\u{2013}", "\u{2014}"] {
+        let c = parse_constitution(&format!("## Article 3 {dash} Library-First\n\nBody.\n"));
+        assert_eq!(c.articles.len(), 1, "dash {dash:?}");
+        assert_eq!(c.articles[0].number, 3);
+        assert_eq!(c.articles[0].title, "Library-First");
+    }
+}

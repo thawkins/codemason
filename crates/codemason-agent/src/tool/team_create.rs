@@ -336,32 +336,50 @@ impl Tool for TeamCreateTool {
                                         .and_then(|v| v.as_str())
                                         .unwrap_or("untitled")
                                         .to_string();
-                                    let id = store.next_task_id().unwrap_or_else(|_| {
-                                        format!("task-{}", chrono::Utc::now().timestamp_millis())
-                                    });
-                                    let mut task = crate::team::task::Task::new(&id, &title);
-                                    if let Some(desc) =
-                                        obj.get("description").and_then(|v| v.as_str())
-                                    {
-                                        task.description = desc.to_string();
-                                    }
-                                    // FR-017: `add_task` fires the `TaskCreated`
+                                    let description = obj
+                                        .get("description")
+                                        .and_then(|v| v.as_str())
+                                        .map(str::to_string);
+                                    // FR-017: the add fires the `TaskCreated`
                                     // hook from the mutation, so a seeded task
                                     // runs the same gate a `team_task_create`
                                     // call does. A rejection removes the seed.
-                                    let task_outcome = store.add_task(task.clone()).await;
-                                    if let Ok(HookOutcome::Feedback(feedback)) = task_outcome {
-                                        if let Ok(ts) = TaskStore::open(&store.dir) {
-                                            // INTENTIONAL: best-effort store cleanup
-                                            let _ = ts.remove_task(&id);
+                                    // AA-04: the id is allocated under the
+                                    // task-store lock, so a concurrent creator
+                                    // cannot take it first.
+                                    let task_outcome = store
+                                        .add_task_with_next_id(|id| {
+                                            let mut task =
+                                                crate::team::task::Task::new(&id, &title);
+                                            if let Some(desc) = description {
+                                                task.description = desc;
+                                            }
+                                            task
+                                        })
+                                        .await;
+                                    match task_outcome {
+                                        Ok((task, HookOutcome::Feedback(feedback))) => {
+                                            if let Ok(ts) = TaskStore::open(&store.dir) {
+                                                // INTENTIONAL: best-effort store cleanup
+                                                let _ = ts.remove_task(&task.id);
+                                            }
+                                            // The feedback is the hook's own stdout: redact
+                                            // it before it reaches the log (audit finding).
+                                            tracing::warn!(
+                                                task_id = %task.id,
+                                                feedback = %codemason_types::sanitize::redact_secrets(&feedback),
+                                                "TaskCreated hook rejected seeded task"
+                                            );
                                         }
-                                        // The feedback is the hook's own stdout: redact
-                                        // it before it reaches the log (audit finding).
-                                        tracing::warn!(
-                                            task_id = %id,
-                                            feedback = %codemason_types::sanitize::redact_secrets(&feedback),
-                                            "TaskCreated hook rejected seeded task"
-                                        );
+                                        Ok((_, HookOutcome::Allow)) => {}
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                team = %name,
+                                                title = %title,
+                                                error = %e,
+                                                "could not add seeded task"
+                                            );
+                                        }
                                     }
                                 }
                             }

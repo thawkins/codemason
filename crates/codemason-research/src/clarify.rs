@@ -14,7 +14,8 @@ use std::sync::LazyLock;
 /// `/research` clarification check.
 static CONCRETE_ID_RE: LazyLock<Regex> = LazyLock::new(|| {
     // INVARIANT: compile-time-constant regex; the call cannot fail at runtime.
-    Regex::new(r"\b(20\d{2}|19\d{2}|v\d+\.\d+|version \d+\.?d+)").expect("valid concrete-id regex")
+    Regex::new(r"\b(20\d{2}|19\d{2}|v\d+\.\d+|version \d+(?:\.\d+)?\b)")
+        .expect("valid concrete-id regex")
 });
 
 /// Returns a single clarifying question when the topic looks ambiguous.

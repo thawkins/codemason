@@ -44,6 +44,23 @@ async fn about_reports_build_info() {
 }
 
 #[tokio::test]
+async fn about_reports_compile_time_build_time() {
+    // AG-09: "Built:" was filled with the current time, not the build time.
+    let mut app = app();
+    app.execute_slash_command("/about").await;
+    // The stored message may have its column padding collapsed.
+    let text = last_message(&app)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let expected = format!(
+        "Built: {}",
+        codemason_agent::tool::codemason_info::BUILD_TIME
+    );
+    assert!(text.contains(&expected), "expected {expected:?} in: {text}");
+}
+
+#[tokio::test]
 async fn agents_lists_builtins() {
     let mut app = app();
     app.execute_slash_command("/agents").await;

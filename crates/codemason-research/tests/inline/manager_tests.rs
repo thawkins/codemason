@@ -489,6 +489,99 @@ fn extract_snippet_does_not_panic_on_byte_boundary() {
     assert!(snippet.contains("world"));
 }
 
+/// RS-02: write a body whose lowercase form is longer than the original
+/// (U+0130 lowercases to two chars, 3 bytes) and return the manager.
+async fn manager_with_length_changing_body() -> (TempDir, ResearchManager) {
+    let tmp = TempDir::new().unwrap();
+    let mgr = ResearchManager::new(tmp.path());
+    let item = mgr
+        .create("rust-async", "Rust Async", "topic")
+        .await
+        .unwrap();
+    let path = ResearchIo::resolve_research_md(tmp.path(), &item.name, item.created_at)
+        .await
+        .unwrap();
+    // Keep the frontmatter so the item still lists; replace only the body.
+    let existing = tokio::fs::read_to_string(&path).await.unwrap();
+    let (fm, _) = ResearchIo::split_frontmatter(&existing);
+    // Trailing filler keeps a stale (lowercased-text) offset inside the
+    // original body, so a wrong offset yields a snippet without the match.
+    let body = format!(
+        "---\n{fm}\n---\n\n{} needle {}\n",
+        "\u{130}".repeat(300),
+        "x".repeat(1000)
+    );
+    tokio::fs::write(&path, body).await.unwrap();
+    (tmp, mgr)
+}
+
+#[tokio::test]
+async fn search_snippet_contains_match_when_lowercase_changes_length_full_scan() {
+    let (tmp, mgr) = manager_with_length_changing_body().await;
+    tokio::fs::remove_file(ResearchIo::cache_path(tmp.path()))
+        .await
+        .unwrap();
+    let hits = mgr.search("needle", 10).await.unwrap();
+    assert_eq!(hits.len(), 1);
+    assert!(
+        hits[0].snippet.contains("needle"),
+        "snippet missed the match: {:?}",
+        hits[0].snippet
+    );
+}
+
+#[tokio::test]
+async fn search_snippet_contains_match_when_lowercase_changes_length_cached() {
+    let (_tmp, mgr) = manager_with_length_changing_body().await;
+    mgr.refresh_index().await.unwrap();
+    let hits = mgr.search("needle", 10).await.unwrap();
+    assert_eq!(hits.len(), 1);
+    assert!(
+        hits[0].snippet.contains("needle"),
+        "snippet missed the match: {:?}",
+        hits[0].snippet
+    );
+}
+
+/// A research item whose body is `body` (frontmatter kept so it still lists).
+async fn manager_with_body(body: &str) -> (TempDir, ResearchManager) {
+    let tmp = TempDir::new().unwrap();
+    let mgr = ResearchManager::new(tmp.path());
+    let item = mgr.create("greek", "Greek", "topic").await.unwrap();
+    let path = ResearchIo::resolve_research_md(tmp.path(), &item.name, item.created_at)
+        .await
+        .unwrap();
+    let existing = tokio::fs::read_to_string(&path).await.unwrap();
+    let (fm, _) = ResearchIo::split_frontmatter(&existing);
+    tokio::fs::write(&path, format!("---\n{fm}\n---\n\n{body}\n"))
+        .await
+        .unwrap();
+    (tmp, mgr)
+}
+
+/// A word-final capital sigma lowercases to U+03C2 in the query but to U+03C3
+/// when lowered char by char, so the body must be lowered the same way as the
+/// query (review of RS-02).
+#[tokio::test]
+async fn search_matches_a_word_final_sigma_in_both_paths() {
+    let body = format!("intro \u{39F}\u{3A3} outro {}", "\u{130}".repeat(3));
+    let (tmp, mgr) = manager_with_body(&body).await;
+    for cached in [false, true] {
+        if cached {
+            mgr.refresh_index().await.unwrap();
+        } else {
+            let _ = tokio::fs::remove_file(ResearchIo::cache_path(tmp.path())).await;
+        }
+        let hits = mgr.search("\u{39F}\u{3A3}", 10).await.unwrap();
+        assert_eq!(hits.len(), 1, "cached={cached}");
+        assert!(
+            hits[0].snippet.contains("\u{39F}\u{3A3}"),
+            "cached={cached}: snippet missed the match: {:?}",
+            hits[0].snippet
+        );
+    }
+}
+
 #[test]
 fn render_document_for_renders_full_document() {
     let name = sample_name();

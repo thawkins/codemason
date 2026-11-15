@@ -529,7 +529,7 @@ impl ResearchManager {
         let q_lower = q.to_lowercase();
 
         // Try the cache first (G-002).
-        if let Some(hits) = self.search_via_cache(&q_lower, q.len(), max_hits).await? {
+        if let Some(hits) = self.search_via_cache(&q_lower, max_hits).await? {
             return Ok(hits);
         }
 
@@ -550,9 +550,8 @@ impl ResearchManager {
                 Ok(b) => b,
                 Err(_) => continue,
             };
-            let lower = body.to_lowercase();
-            if let Some(byte_idx) = lower.find(&q_lower) {
-                let snippet = extract_snippet(&body, byte_idx, q.len(), 80);
+            if let Some((byte_idx, match_len)) = find_case_insensitive(&body, &q_lower) {
+                let snippet = extract_snippet(&body, byte_idx, match_len, 80);
                 out.push(SearchHit {
                     name: item.name.to_string(),
                     title: item.title,
@@ -573,7 +572,6 @@ impl ResearchManager {
     async fn search_via_cache(
         &self,
         q_lower: &str,
-        q_len: usize,
         max_hits: usize,
     ) -> Result<Option<Vec<SearchHit>>> {
         let cache_path = ResearchIo::cache_path(&self.research_root);
@@ -653,9 +651,9 @@ impl ResearchManager {
 
         let mut out = Vec::new();
         for entry in &sorted {
-            let lower = entry.search_text.to_lowercase();
-            if let Some(byte_idx) = lower.find(q_lower) {
-                let snippet = extract_snippet(&entry.search_text, byte_idx, q_len, 80);
+            if let Some((byte_idx, match_len)) = find_case_insensitive(&entry.search_text, q_lower)
+            {
+                let snippet = extract_snippet(&entry.search_text, byte_idx, match_len, 80);
                 let name = match ResearchName::try_new(&entry.name) {
                     Ok(n) => n,
                     Err(_) => continue,
@@ -1580,6 +1578,29 @@ fn lev(a: &str, b: &str) -> usize {
         std::mem::swap(&mut prev, &mut curr);
     }
     prev[b.len()]
+}
+
+/// Find `query_lower` in `text` case-insensitively and return the match's
+/// `(byte_offset, byte_len)` in `text` itself (RS-02).
+///
+/// ASCII text is searched in an ASCII-lowered copy, whose offsets are the
+/// original offsets. Other text is searched in `str::to_lowercase()`, the
+/// same lowering the query went through, so a word-final sigma still matches.
+/// The one match is then mapped back with
+/// [`codemason_types::strutil::lowercase_range_to_original`], without a
+/// per-byte offset table.
+fn find_case_insensitive(text: &str, query_lower: &str) -> Option<(usize, usize)> {
+    if text.is_ascii() {
+        let start = text.to_ascii_lowercase().find(query_lower)?;
+        return Some((start, query_lower.len()));
+    }
+    let start = text.to_lowercase().find(query_lower)?;
+    let (orig_start, orig_end) = codemason_types::strutil::lowercase_range_to_original(
+        text,
+        start,
+        start + query_lower.len(),
+    );
+    Some((orig_start, orig_end - orig_start))
 }
 
 /// Extract a snippet around `byte_idx` (length `q_len`) bounded to

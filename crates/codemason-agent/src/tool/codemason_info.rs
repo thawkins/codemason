@@ -15,8 +15,10 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
 use super::{Tool, ToolContext, ToolOutput};
 
-/// Compile-time build time, embedded by `build.rs`.
-const BUILD_TIME: &str = env!("BUILD_TIME");
+/// Compile-time build time (`YYYY-MM-DD HH:MM:SS UTC`), embedded by `build.rs`.
+///
+/// Public so the `/about` slash command reports the same build time as this tool.
+pub const BUILD_TIME: &str = env!("BUILD_TIME");
 /// Best-effort git commit hash, embedded by `build.rs` when available.
 const GIT_COMMIT: Option<&str> = option_env!("GIT_COMMIT");
 /// Best-effort git commit subject, embedded by `build.rs` when available.

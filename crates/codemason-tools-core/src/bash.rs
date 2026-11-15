@@ -381,17 +381,25 @@ const DEFAULT_TIMEOUT_SECS: u64 = 120;
 /// whatever was captured rather than hanging forever.
 const POST_EXIT_DRAIN_TIMEOUT_SECS: u64 = 5;
 
-/// Upper bound on how many bytes of stdout/stderr are buffered in memory per
-/// stream while a command runs.
+/// Upper bound on how many leading bytes of stdout/stderr are buffered in
+/// memory per stream while a command runs.
 ///
 /// A long-running command such as `cargo test --workspace` can emit a huge
 /// volume of output. Buffering it all unboundedly drives memory pressure and
 /// can trigger the OOM killer (`systemd-oomd`), which kills the very process we
-/// are waiting on. We cap each stream at this size; once the cap is reached the
-/// reader keeps draining the pipe (so the child never blocks on a full pipe)
-/// but discards the excess. The final result is still truncated to ~31 KB by
-/// [`truncate_output`], so the cap only bounds intermediate memory use.
+/// are waiting on. Each stream keeps its first `MAX_CAPTURE_BYTES` (the head)
+/// plus a rolling window of its last [`TAIL_CAPTURE_BYTES`] (the tail); bytes
+/// between the two are discarded while the reader keeps draining the pipe (so
+/// the child never blocks on a full pipe), and the newlines in them are
+/// counted. [`truncate_output`] then shows ~15 KB of the head and ~15 KB of the
+/// true tail, adding the discarded lines to its omitted-lines count.
 const MAX_CAPTURE_BYTES: usize = 2 * 1024 * 1024;
+
+/// Size of the rolling tail window kept per stream once the head is full.
+///
+/// Must exceed the 15 000-byte tail [`truncate_output`] shows, so the shown
+/// tail always comes from real end-of-stream bytes.
+const TAIL_CAPTURE_BYTES: usize = 64 * 1024;
 
 // Safe commands: only these exact prefixes are auto-approved without user prompting.
 // The check is prefix-based: a command is safe if it equals the entry exactly OR starts
@@ -1254,7 +1262,11 @@ fn describe_exit_status(status: &std::process::ExitStatus) -> String {
 
 /// Truncate very long command output, keeping the first 15k + last 15k chars
 /// (CC1-T7). Returns the input unchanged when it fits within the budget.
-fn truncate_output(content: String) -> String {
+///
+/// `dropped_lines` is the number of lines the capture discarded between each
+/// stream's head and tail (see [`SharedCapture::dropped_lines`]); those lines
+/// always fall inside the omitted middle and are added to its count.
+fn truncate_output(content: String, dropped_lines: usize) -> String {
     const FIRST_CHARS: usize = 15_000;
     const LAST_CHARS: usize = 15_000;
     const MAX_OUTPUT: usize = FIRST_CHARS + LAST_CHARS + 1000; // allow for separator
@@ -1283,7 +1295,7 @@ fn truncate_output(content: String) -> String {
     };
     let last_part = &content[last_start..];
 
-    let omitted_lines = content[first_end..last_start].lines().count();
+    let omitted_lines = content[first_end..last_start].lines().count() + dropped_lines;
     format!(
         "{}\n\n... ({} lines omitted) ...\n\n{}",
         first_part, omitted_lines, last_part
@@ -1403,6 +1415,9 @@ struct PartialOutput {
     output: std::process::Output,
     partial_stdout: String,
     partial_stderr: String,
+    /// Lines the capture discarded between head and tail (see
+    /// [`SharedCapture::dropped_lines`]), passed to [`truncate_output`].
+    dropped_lines: usize,
     timed_out: bool,
 }
 
@@ -1414,8 +1429,8 @@ struct PartialOutput {
 /// lost.
 #[derive(Default)]
 struct SharedCapture {
-    stdout: Arc<Mutex<Vec<u8>>>,
-    stderr: Arc<Mutex<Vec<u8>>>,
+    stdout: Arc<Mutex<StreamCapture>>,
+    stderr: Arc<Mutex<StreamCapture>>,
     /// Process-group id (== direct child PID) recorded by `run_with_output`
     /// after spawn, read back by the timeout handler to `killpg` survivors.
     /// A `OnceLock` shared via `Arc` is required because tokio may poll the
@@ -1429,37 +1444,65 @@ impl SharedCapture {
         Arc::new(Self::default())
     }
 
-    /// Append `chunk` to `buf`, stopping once [`MAX_CAPTURE_BYTES`] is reached.
-    fn append(buf: &Mutex<Vec<u8>>, chunk: &[u8]) {
-        let mut b = buf
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if b.len() < MAX_CAPTURE_BYTES {
-            let room = MAX_CAPTURE_BYTES - b.len();
-            b.extend_from_slice(&chunk[..chunk.len().min(room)]);
+    /// Append `chunk` to the stream capture `buf` (see [`StreamCapture::push`]).
+    fn append(buf: &Mutex<StreamCapture>, chunk: &[u8]) {
+        Self::lock(buf).push(chunk);
+    }
+
+    /// Snapshot the captured stdout (head followed by tail) as lossy UTF-8.
+    fn stdout_str(&self) -> String {
+        Self::lock(&self.stdout).to_lossy_string()
+    }
+
+    /// Snapshot the captured stderr (head followed by tail) as lossy UTF-8.
+    fn stderr_str(&self) -> String {
+        Self::lock(&self.stderr).to_lossy_string()
+    }
+
+    /// Total lines discarded between head and tail across both streams.
+    fn dropped_lines(&self) -> usize {
+        Self::lock(&self.stdout).dropped_lines + Self::lock(&self.stderr).dropped_lines
+    }
+
+    /// Lock a stream buffer, recovering from poisoning.
+    fn lock(buf: &Mutex<StreamCapture>) -> std::sync::MutexGuard<'_, StreamCapture> {
+        buf.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// Bounded capture of one output stream: a fixed head plus a rolling tail.
+///
+/// The first [`MAX_CAPTURE_BYTES`] go to `head`; later bytes go to `tail`,
+/// which keeps only the last [`TAIL_CAPTURE_BYTES`]. Bytes evicted from the
+/// tail are discarded, and the newlines among them are counted in
+/// `dropped_lines` so the rendered omitted-lines count covers the whole stream.
+#[derive(Default)]
+struct StreamCapture {
+    head: Vec<u8>,
+    tail: std::collections::VecDeque<u8>,
+    dropped_lines: usize,
+}
+
+impl StreamCapture {
+    /// Append `chunk`, filling the head first and then the rolling tail.
+    fn push(&mut self, chunk: &[u8]) {
+        let room = MAX_CAPTURE_BYTES.saturating_sub(self.head.len());
+        let (to_head, rest) = chunk.split_at(chunk.len().min(room));
+        self.head.extend_from_slice(to_head);
+        self.tail.extend(rest);
+        let excess = self.tail.len().saturating_sub(TAIL_CAPTURE_BYTES);
+        if excess > 0 {
+            self.dropped_lines += self.tail.drain(..excess).filter(|&b| b == b'\n').count();
         }
     }
 
-    /// Snapshot the captured stdout as lossy UTF-8.
-    fn stdout_str(&self) -> String {
-        String::from_utf8_lossy(
-            &self
-                .stdout
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )
-        .into_owned()
-    }
-
-    /// Snapshot the captured stderr as lossy UTF-8.
-    fn stderr_str(&self) -> String {
-        String::from_utf8_lossy(
-            &self
-                .stderr
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )
-        .into_owned()
+    /// Render head followed by tail as lossy UTF-8.
+    fn to_lossy_string(&self) -> String {
+        let mut bytes = Vec::with_capacity(self.head.len() + self.tail.len());
+        bytes.extend_from_slice(&self.head);
+        bytes.extend(&self.tail);
+        String::from_utf8_lossy(&bytes).into_owned()
     }
 }
 
@@ -1640,6 +1683,7 @@ impl Tool for BashTool {
                             output: o.output,
                             partial_stdout: String::new(),
                             partial_stderr: String::new(),
+                            dropped_lines: capture.dropped_lines(),
                             timed_out: false,
                         })),
                         // Infallible: the sleep arm only marks the timeout; the
@@ -1653,6 +1697,7 @@ impl Tool for BashTool {
                                 },
                                 partial_stdout: capture.stdout_str(),
                                 partial_stderr: capture.stderr_str(),
+                                dropped_lines: capture.dropped_lines(),
                                 timed_out: true,
                             }))
                         }
@@ -1737,7 +1782,7 @@ impl Tool for BashTool {
                     partial.push_str("[stderr]\n");
                     partial.push_str(&output.partial_stderr);
                 }
-                let partial = truncate_output(partial);
+                let partial = truncate_output(partial, output.dropped_lines);
                 // SEC-codemason-tools-core-005 (SECTASKS T-042): the partial
                 // buffer is raw command output - a command that prints a
                 // credential and then stalls (`gh auth token; sleep 600`) would
@@ -1776,7 +1821,7 @@ impl Tool for BashTool {
                     content = "(no output)".to_string();
                 }
 
-                let content = truncate_output(content);
+                let content = truncate_output(content, output.dropped_lines);
                 // SEC-codemason-tools-core-005 (SECTASKS T-042): redact secrets
                 // from the normal completion path too - the content is captured
                 // into the session store and re-sent to the model.

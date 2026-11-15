@@ -96,7 +96,8 @@ fn strip_leading_noise(s: &str) -> String {
             // Map the matched prefix length back to the original slice so we
             // keep the original casing of the remainder.
             let kept = &trimmed[phrase.len()..];
-            let after = kept.trim_start_matches([' ', ',', ':', '|', '-', '-', '*']);
+            let after =
+                kept.trim_start_matches([' ', ',', ':', '|', '-', '\u{2013}', '\u{2014}', '*']);
             return after.trim().to_string();
         }
     }

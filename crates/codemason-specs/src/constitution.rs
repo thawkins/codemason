@@ -419,8 +419,10 @@ fn parse_articles(content: &str) -> Vec<Article> {
 fn parse_article_heading(line: &str) -> Option<(u32, String)> {
     let rest = line.strip_prefix("## Article ")?;
     // The number is the leading run of digits, optionally followed by a
-    // separator (`:` or `-` or `-`) and then the title.
-    let sep_pos = rest.find([':', '-', '-']).unwrap_or(rest.len());
+    // separator (`:`, `-`, an en dash or an em dash) and then the title.
+    let sep_pos = rest
+        .find([':', '-', '\u{2013}', '\u{2014}'])
+        .unwrap_or(rest.len());
     let num_str = rest[..sep_pos].trim();
     let number: u32 = num_str.parse().ok()?;
     // Skip past the separator to get the title

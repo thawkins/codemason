@@ -115,6 +115,25 @@ fn test_sanitize_for_id_length_limit() {
     assert!(result.len() <= 20, "Result should be limited to 20 chars");
 }
 
+/// AA-01: a non-ASCII agent name used to panic in `String::truncate(20)`
+/// because byte 20 fell inside a multi-byte char.
+#[test]
+fn test_sanitize_for_id_non_ascii_cuts_at_char_boundary() {
+    let name = "\u{65e5}\u{672c}\u{8a9e}\u{30a8}\u{30fc}\u{30b8}\u{30a7}\u{30f3}\u{30c8}\u{30c6}\u{30b9}\u{30c8}";
+    let result = sanitize_for_id(name);
+    assert!(result.len() <= 20, "result must stay within 20 bytes");
+    assert!(
+        name.starts_with(&result),
+        "result must be a prefix of the name"
+    );
+    assert_eq!(result.chars().count(), 6, "3-byte chars: 6 fit in 20 bytes");
+    let id = make_task_id(name);
+    assert!(
+        id.starts_with(&result),
+        "task id uses the sanitized prefix: {id}"
+    );
+}
+
 /// The `SubagentComplete` event `summary` remains truncated to 2000
 /// chars for TUI display - this is separate from the full result.
 #[test]

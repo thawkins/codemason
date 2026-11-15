@@ -174,10 +174,16 @@ pub fn run_git_output(args: &[&str], cwd: &std::path::Path) -> Result<GitOutput>
         .spawn()
         .context("failed to execute `git` - is git installed?")?;
 
+    // TL-01: drain both pipes on reader threads while polling for exit. A
+    // child that fills a pipe buffer (about 64 KiB) blocks on its write, so
+    // polling `try_wait` alone would wait until the timeout kills it.
+    let stdout_reader = child.stdout.take().map(spawn_pipe_reader);
+    let stderr_reader = child.stderr.take().map(spawn_pipe_reader);
+
     let deadline = std::time::Instant::now() + GIT_TIMEOUT;
-    loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_status)) => break,
+            Ok(Some(status)) => break status,
             Ok(None) => {
                 if std::time::Instant::now() >= deadline {
                     let _ = child.kill(); // INTENTIONAL: process teardown is best-effort
@@ -192,17 +198,50 @@ pub fn run_git_output(args: &[&str], cwd: &std::path::Path) -> Result<GitOutput>
             }
             Err(e) => return Err(anyhow::Error::from(e).context("git wait failed")),
         }
-    }
+    };
 
-    let output = child
-        .wait_with_output()
-        .context("failed to collect git output")?;
+    let stdout = join_pipe_reader(stdout_reader).context("failed to collect git output")?;
+    let stderr = join_pipe_reader(stderr_reader).context("failed to collect git output")?;
 
     Ok(GitOutput {
-        stdout: output.stdout,
-        stderr: output.stderr,
-        success: output.status.success(),
+        stdout,
+        stderr,
+        success: status.success(),
     })
+}
+
+/// Handle to a thread reading one child pipe to EOF.
+type PipeReader = std::thread::JoinHandle<std::io::Result<Vec<u8>>>;
+
+/// Spawn a thread that reads `pipe` to EOF and returns the bytes.
+///
+/// # Arguments
+///
+/// * `pipe` - the child's stdout or stderr handle.
+///
+/// # Returns
+///
+/// A handle to collect with [`join_pipe_reader`].
+fn spawn_pipe_reader<R: std::io::Read + Send + 'static>(mut pipe: R) -> PipeReader {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        pipe.read_to_end(&mut buf).map(|_| buf)
+    })
+}
+
+/// Join a reader thread started by [`spawn_pipe_reader`].
+///
+/// # Errors
+///
+/// Returns an error if the read failed or the reader thread panicked.
+fn join_pipe_reader(reader: Option<PipeReader>) -> Result<Vec<u8>> {
+    match reader {
+        Some(handle) => handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("git output reader thread panicked"))?
+            .map_err(anyhow::Error::from),
+        None => Ok(Vec::new()),
+    }
 }
 
 /// Timeout-bounded `git` invocation off the async runtime.

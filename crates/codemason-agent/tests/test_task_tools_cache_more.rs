@@ -342,6 +342,67 @@ async fn team_create_seeds_a_task_from_task_seed_json() {
     );
 }
 
+/// AA-04: blueprint seed tasks took a snapshot id from `next_task_id()` and
+/// then called `add_task`, so a concurrent creator on the same team could
+/// take that id first; the duplicate-id `Err` was dropped silently and the
+/// seeded task was lost. Seeds now allocate their id under the store lock.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn team_create_seeds_survive_a_concurrent_task_creator() {
+    const SEEDS: usize = 150;
+    const RIVALS: usize = 150;
+    let ws = workspace();
+    let bp_dir = ws.path().join(".codemason/blueprints/teams/racebp");
+    std::fs::create_dir_all(&bp_dir).expect("blueprint dir");
+    let seeds: Vec<_> = (0..SEEDS)
+        .map(|i| json!({ "title": format!("seed-{i}") }))
+        .collect();
+    std::fs::write(
+        bp_dir.join("task-seed.json"),
+        serde_json::Value::Array(seeds).to_string(),
+    )
+    .expect("write task-seed.json");
+
+    let team_dir = ws.path().join(".codemason/teams/race-team");
+    let rival_dir = team_dir.clone();
+    let rival = tokio::spawn(async move {
+        while !rival_dir.join("tasks.json").exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        let store = codemason_agent::team::TaskStore::open(&rival_dir).expect("task store");
+        for i in 0..RIVALS {
+            store
+                .add_task_with_next_id(|id| {
+                    codemason_agent::team::Task::new(&id, &format!("rival-{i}"))
+                })
+                .await
+                .expect("rival add");
+        }
+    });
+
+    let ctx = ctx_in(ws.path(), Arc::new(EventBus::new(16)));
+    team_create_tool()
+        .execute(
+            json!({ "blueprint": "racebp", "context": "x", "name": "race-team" }),
+            &ctx,
+        )
+        .await
+        .expect("team_create with a task seed succeeds");
+    rival.await.expect("rival task");
+
+    let tasks = codemason_agent::team::TaskStore::open(&team_dir)
+        .expect("task store")
+        .read()
+        .expect("read tasks");
+    let missing: Vec<usize> = (0..SEEDS)
+        .filter(|i| {
+            let title = format!("seed-{i}");
+            !tasks.tasks.iter().any(|t| t.title == title)
+        })
+        .collect();
+    assert!(missing.is_empty(), "seeded tasks lost: {missing:?}");
+    assert_eq!(tasks.tasks.len(), SEEDS + RIVALS);
+}
+
 #[tokio::test]
 async fn team_create_records_failed_blueprint_spawns() {
     let ws = workspace();

@@ -14,12 +14,6 @@ USAGE:
     hyperresearch <COMMAND>
 
 COMMANDS:
-    note      Create, read, update, and list vault notes
-    fetch     Fetch a URL into the vault
-    search    Query the vault index
-    index     Regenerate INDEX.md
-    mcp       Run the stdio MCP server
-    serve     Run the HTTP server
     help      Show this message
 ";
 

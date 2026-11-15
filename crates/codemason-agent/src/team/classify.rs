@@ -141,7 +141,10 @@ const KEYWORD_MAP: &[(&[&str], &str)] = &[
 /// no hint is present.
 #[must_use]
 pub fn extract_explicit_agent_type(text: &str) -> Option<String> {
-    let lower = text.to_lowercase();
+    // AA-02: ASCII-only folding keeps byte offsets identical to `text`, so
+    // the offset found in `lower` is valid for slicing `text`. The markers
+    // are ASCII, so nothing a full Unicode fold would match is lost.
+    let lower = text.to_ascii_lowercase();
     for prefix in ["[agent:", "[agent_type:", "(agent:", "(agent_type:"] {
         if let Some(start) = lower.find(prefix) {
             let rest = &text[start + prefix.len()..];
@@ -164,7 +167,10 @@ pub fn extract_explicit_agent_type(text: &str) -> Option<String> {
 /// Returns the original text unchanged if no hint is found.
 #[must_use]
 pub fn strip_explicit_agent_type_hint(text: &str) -> String {
-    let lower = text.to_lowercase();
+    // AA-02: ASCII-only folding keeps byte offsets identical to `text`, so
+    // the offset found in `lower` is valid for slicing `text`. The markers
+    // are ASCII, so nothing a full Unicode fold would match is lost.
+    let lower = text.to_ascii_lowercase();
     for prefix in ["[agent:", "[agent_type:", "(agent:", "(agent_type:"] {
         if let Some(start) = lower.find(prefix) {
             let rest = &text[start + prefix.len()..];

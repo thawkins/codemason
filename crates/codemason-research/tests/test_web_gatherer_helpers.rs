@@ -53,6 +53,15 @@ fn clean_title_strips_leading_cookie_banner() {
 }
 
 #[test]
+fn clean_title_strips_en_and_em_dash_after_nav_phrase() {
+    // RS-05: en/em dashes separating a nav phrase from the title are noise.
+    for dash in ["\u{2013}", "\u{2014}"] {
+        let out = clean_web_source_title(&format!("Skip to content {dash} Rust Async Book"), "");
+        assert_eq!(out, "Rust Async Book", "dash {dash:?}");
+    }
+}
+
+#[test]
 fn clean_title_truncates_long_title_at_word_boundary() {
     let long = "This is a genuinely long and meaningful article title that goes well beyond the one hundred and twenty character cap so it must be truncated by the gatherer";
     let out = clean_web_source_title(long, "");
