@@ -6,6 +6,7 @@
 
 - Security: a project-local `.codemason/codemason.json` may no longer set `execution_backend`, `backends`, `automation`, `gitlab`, `plugins`, `connectors`, the search API keys, `loop`, `prices`, `input_queue_capacity`, the background-agent limits, `activity_log` or `edit_log`; they are ignored with a warning, like `mcp` and `hooks` already were. A cloned repository could use them to send a stored provider or GitLab key to its own server, post an environment variable from an unattended automation, downgrade a docker sandbox to the host, lift a plugin's permission gate, or raise budgets. Move any of these you set per project into `~/.config/codemason/codemason.json`.
 - Security: toggles (`/codeindex`, `/security`, i18n, `/gcf`) edit only their own key in the config file that was loaded, so user-global secrets are no longer copied into a project's `.codemason/codemason.json`, and the edit lands in that project's file rather than one relative to the process directory.
+- Security: the automation webhook `POST /auto/<id>` requires the automation's own secret. Name the environment variable holding it in `webhook_secret_env`, then send `Authorization: Bearer <secret>` or a GitHub-style `X-Hub-Signature-256: sha256=<HMAC-SHA256 of the body>`. An automation without a secret refuses every webhook (`403`). Before, any web page could start an agent run with a cross-origin `text/plain` POST. **Existing webhook automations stop accepting requests until `webhook_secret_env` is set.**
 
 ### Fixed
 
@@ -26,6 +27,7 @@
 - Fixed: `/plugins add` with a `git+` source kills a `git` command after 5 minutes, aborts stalled HTTP transfers, refuses a cloned tree over the 256 MiB extraction cap, and refuses a source whose `:<subpath>` is unsafe (leading `/` or `-`, `..`) instead of installing the whole repository.
 - Fixed: `gitlab_get_job_log` streams the job trace into a 1 MiB tail instead of reading it whole; `total_lines` and the "showing last N of M lines" header still count the full trace.
 - Fixed: the ollama, ollama_cloud and openai_responses providers cap a logged malformed stream frame at 512 bytes, like the other providers.
+- Fixed: `cdmn serve` with no `openai.token` or `CODEMASON_TOKEN` prints the bearer token it generated for the run to stderr; before, the token was never shown and every protected route answered `401`.
 
 ### Changed
 

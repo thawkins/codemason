@@ -1537,7 +1537,8 @@ other codemason process first.
 Run codemason as a headless API server for IDE integrations or remote use:
 
 ```bash
-# Start the server (prints a bearer token for auth)
+# Start the server. Without openai.token / CODEMASON_TOKEN it prints a
+# bearer token generated for this run to stderr.
 cdmn serve
 
 # With a custom bind address (default 127.0.0.1:3000)
@@ -2368,6 +2369,7 @@ set `automation`):
         "agent": "general",
         "prompt": "Triage issue {{payload}}",
         "trigger": { "kind": "webhook" },
+        "webhook_secret_env": "ON_ISSUE_WEBHOOK_SECRET",
         "backend": "local"
       },
       {
@@ -2399,8 +2401,11 @@ cdmn automation run nightly
 ### HTTP
 
 ```sh
-# Webhook ingress (public; no bearer token)
+# Webhook ingress: no server token, but the automation's own secret (the value
+# of the env var named by webhook_secret_env). A GitHub webhook can instead
+# sign the body: X-Hub-Signature-256: sha256=<HMAC-SHA256>.
 curl -s -X POST http://127.0.0.1:3000/auto/on-issue \
+  -H "Authorization: Bearer $ON_ISSUE_WEBHOOK_SECRET" \
   -H "Content-Type: application/json" \
   -d '{"issue":"42","title":"fix login"}'
 # → 202 {"run_id":"...","automation_id":"on-issue","trigger":"webhook","backend":"local"}

@@ -1422,7 +1422,17 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
             } else if let Some(token) = openai_token {
                 token
             } else {
-                uuid::Uuid::new_v4().to_string()
+                // No configured token: generate one for this run and print it,
+                // or every protected route would answer 401 with no way to
+                // learn the credential (SI-02; owner decision O-04). stderr,
+                // so it never mixes with piped stdout.
+                let token = uuid::Uuid::new_v4().to_string();
+                eprintln!(
+                    "cdmn serve: no bearer token configured (openai.token or CODEMASON_TOKEN); \
+                     using a token generated for this run:\n  {token}\n\
+                     Send it as `Authorization: Bearer <token>`."
+                );
+                token
             };
             // Automation scheduler (spec `openhands` T-016; FR-014): when the
             // project config enables the subsystem, tick the scheduled

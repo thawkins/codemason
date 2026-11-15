@@ -2586,8 +2586,12 @@ The HTTP API uses Bearer token authentication:
 curl -H "Authorization: Bearer $CODEMASON_TOKEN" ...
 ```
 
-`CODEMASON_TOKEN` is read from the environment. If unset, the server may allow
-local requests without authentication depending on build configuration.
+The token is `openai.token`, else `CODEMASON_TOKEN` from the environment. If
+neither is set, `cdmn serve` generates a token for that run and prints it to
+stderr; every protected route requires it. The webhook ingress `POST /auto/<id>`
+is the only unauthenticated action route, and it requires the automation's own
+secret (`webhook_secret_env`; `Authorization: Bearer <secret>` or
+`X-Hub-Signature-256`).
 
 The OpenAI-compatible surface (`/v1/models`, `/v1/chat/completions`) uses the
 same bearer token as the native API (FR-024) - codemason runs one server token. The

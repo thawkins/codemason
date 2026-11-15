@@ -19,6 +19,7 @@
 //!         "agent": "general",      // agent to run
 //!         "prompt": "Triage issue {{payload}}",
 //!         "trigger": { "kind": "webhook" },        // or { "kind": "schedule", "schedule": "every 2m" }
+//!         "webhook_secret_env": "ON_ISSUE_WEBHOOK_SECRET", // required to accept webhooks
 //!         "backend": "local",      // execution backend the run is confined to
 //!         "dispatch": [
 //!           { "kind": "slack", "channel": "alerts", "token_env": "SLACK_BOT_TOKEN" }
@@ -32,7 +33,8 @@
 //! # Secret safety
 //!
 //! A dispatch target names the environment variable its credential is read from
-//! (`token_env`); the credential value is never stored in the config file
+//! (`token_env`), and an automation names the one holding its webhook secret
+//! (`webhook_secret_env`); neither value is ever stored in the config file
 //! (FR-035). A `slack`/`linear`/`notion` target without a `token_env` (or a
 //! `github`/`webhook` target without a `url`) is inert, not an error.
 
@@ -133,6 +135,15 @@ pub struct AutomationDefinition {
     /// Whether the automation is active. Default: `true`.
     #[serde(default = "crate::config::default_true")]
     pub enabled: bool,
+    /// The environment variable holding this automation's webhook secret.
+    ///
+    /// `POST /auto/<id>` is public, so it is accepted only with
+    /// `Authorization: Bearer <secret>` or a GitHub-style
+    /// `X-Hub-Signature-256: sha256=<hex HMAC-SHA256 of the body>`. Without a
+    /// configured, non-empty secret every webhook request is refused. Like a
+    /// dispatch `token_env`, the value itself never appears in the config file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_secret_env: Option<String>,
 }
 
 impl AutomationDefinition {

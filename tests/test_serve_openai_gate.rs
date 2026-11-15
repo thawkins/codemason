@@ -143,3 +143,69 @@ fn serve_starts_the_surface_when_a_token_is_configured() {
         }
     }
 }
+
+/// Spawn `cdmn serve` with `trusted`, collect stderr for up to `wait`, then
+/// kill it and return what it printed.
+fn serve_stderr(fixture: &Fixture, trusted: &Path, wait: Duration) -> String {
+    use std::io::Read as _;
+    let home = fixture.temp.path().join("home");
+    let config_home = fixture.temp.path().join("config");
+    std::fs::create_dir_all(&home).expect("home dir");
+    std::fs::create_dir_all(&config_home).expect("config dir");
+    let mut child: Child = Command::new(env!("CARGO_BIN_EXE_cdmn"))
+        .args(["serve", "--addr", "127.0.0.1:0", "--config"])
+        .arg(trusted)
+        .current_dir(fixture.temp.path())
+        .env("HOME", &home)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env_remove("CODEMASON_TOKEN")
+        .env_remove("CODEMASON_CONFIG")
+        .env_remove("CODEMASON_CONFIG_CONTENT")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn codemason serve");
+    let mut pipe = child.stderr.take().expect("stderr");
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = pipe.read_to_string(&mut text);
+        text
+    });
+    std::thread::sleep(wait);
+    let _ = child.kill();
+    let _ = child.wait();
+    reader.join().expect("stderr reader")
+}
+
+#[test]
+fn serve_prints_the_generated_token_when_none_is_configured() {
+    // SI-02: with no configured token, the generated one must be shown, or
+    // every protected route answers 401 with no way to learn the credential.
+    let fixture = Fixture::new();
+    let trusted = fixture.trusted_config("{}");
+    let stderr = serve_stderr(&fixture, &trusted, Duration::from_secs(3));
+    let token = stderr
+        .lines()
+        .skip_while(|line| !line.contains("using a token generated for this run"))
+        .nth(1)
+        .map(str::trim)
+        .unwrap_or_else(|| panic!("the generated token must be printed: {stderr}"));
+    assert!(
+        uuid::Uuid::parse_str(token).is_ok(),
+        "the printed token is the generated UUID: {token:?}"
+    );
+}
+
+#[test]
+fn serve_does_not_print_a_configured_token() {
+    let fixture = Fixture::new();
+    let trusted =
+        fixture.trusted_config(r#"{ "openai": { "token": "sk-codemason-local-test-0002" } }"#);
+    let stderr = serve_stderr(&fixture, &trusted, Duration::from_secs(3));
+    assert!(
+        !stderr.contains("sk-codemason-local-test-0002")
+            && !stderr.contains("generated for this run"),
+        "a configured token must never be echoed: {stderr}"
+    );
+}

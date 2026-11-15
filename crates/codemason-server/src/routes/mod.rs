@@ -243,6 +243,16 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// The credential of an `Authorization: Bearer <token>` header. The scheme
+/// name is matched case-insensitively (RFC 9110 section 11.1); the token is
+/// returned as sent, for a case-sensitive comparison.
+pub(crate) fn bearer_token(authorization: &str) -> Option<&str> {
+    authorization
+        .get(..7)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("bearer "))
+        .map(|_| &authorization[7..])
+}
+
 /// Compare two secret strings in constant time.
 ///
 /// FUNC-066: hash both sides to a fixed 32-byte BLAKE3 digest before comparing.
@@ -273,11 +283,7 @@ async fn auth_middleware(
         .get("authorization")
         .and_then(|v| v.to_str().ok());
 
-    let provided = auth_header.and_then(|h| {
-        h.get(..7)
-            .filter(|p| p.eq_ignore_ascii_case("bearer "))
-            .map(|_| &h[7..])
-    });
+    let provided = auth_header.and_then(bearer_token);
 
     match provided {
         Some(token) if constant_time_eq(token, &state.auth_token) => next.run(request).await,

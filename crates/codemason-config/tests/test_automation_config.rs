@@ -100,6 +100,7 @@ fn overlay_automation_block_wins_wholesale() {
             backend: None,
             dispatch: Vec::new(),
             enabled: true,
+            webhook_secret_env: None,
         }],
         ..AutomationConfig::default()
     };
