@@ -284,3 +284,22 @@ async fn webhook_ingress_refuses_an_automation_without_a_secret() {
         "the refusal names the setting: {body}"
     );
 }
+
+/// The `Bearer` scheme name is case-insensitive (RFC 9110); the secret is not.
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn webhook_ingress_accepts_the_bearer_scheme_in_any_case() {
+    let _secret = SecretEnv::set(Some(WEBHOOK_SECRET));
+    for scheme in ["bearer", "BEARER", "BeArEr"] {
+        let header = format!("{scheme} {WEBHOOK_SECRET}");
+        let resp = post_on_issue(&[("Authorization", header.as_str())]).await;
+        assert_eq!(resp.status(), StatusCode::ACCEPTED, "scheme {scheme}");
+    }
+    let wrong_case_secret = format!("Bearer {}", WEBHOOK_SECRET.to_uppercase());
+    let resp = post_on_issue(&[("Authorization", wrong_case_secret.as_str())]).await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "the secret stays case-sensitive"
+    );
+}

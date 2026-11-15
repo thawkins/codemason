@@ -36,8 +36,8 @@ use codemason_agent::automation::{
 };
 
 use super::{
-    AppState, check_rate_limit, constant_time_eq, error_response, internal_error_response,
-    serialize_response,
+    AppState, bearer_token, check_rate_limit, constant_time_eq, error_response,
+    internal_error_response, serialize_response,
 };
 
 /// Resolve the execution-backend descriptor a session override names, if any
@@ -179,7 +179,7 @@ fn webhook_secret_refusal(
     };
     let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
     let bearer_ok = header("authorization")
-        .and_then(|v| v.strip_prefix("Bearer "))
+        .and_then(bearer_token)
         .is_some_and(|token| constant_time_eq(token, &secret));
     let signature_ok = header("x-hub-signature-256")
         .and_then(|v| v.strip_prefix("sha256="))
