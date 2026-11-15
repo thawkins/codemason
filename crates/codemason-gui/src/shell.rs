@@ -76,7 +76,7 @@ use crate::panels::teams::teams_ui;
 use crate::platform::clipboard;
 use crate::platform::files::{self, FileDialogs, file_menu};
 use crate::platform::menu::{self, MenuAction};
-use crate::platform::window::CloseGuard;
+use crate::platform::window::{CloseGuard, WindowGeometry};
 use crate::theme::ThemeApplier;
 
 /// Most log records moved into the app per frame, so a burst cannot stall
@@ -124,6 +124,8 @@ pub struct Shell {
     quit_finished: bool,
     /// The native menu bar (macOS) and the layout it shows.
     native_menu: Option<(craft_menu::NativeMenu, craft_menu::Layout)>,
+    /// The saved window geometry, kept up to date while the window runs.
+    geometry: Option<WindowGeometry>,
 }
 
 impl std::fmt::Debug for Shell {
@@ -170,6 +172,7 @@ impl Shell {
             close: CloseGuard::default(),
             quit_finished: false,
             native_menu: None,
+            geometry: None,
         }
     }
 
@@ -214,6 +217,23 @@ impl Shell {
     #[must_use]
     pub fn with_keymap(mut self, keymap: craft_keymap::Keymap) -> Self {
         self.keys = KeyRouter::new(keymap);
+        self
+    }
+
+    /// Keep `geometry` (the window placement eframe opened the window with)
+    /// up to date: each frame records the window's state, a change is written
+    /// once it holds, and the exit steps write it.
+    ///
+    /// # Arguments
+    ///
+    /// * `geometry` - the saved window geometry.
+    ///
+    /// # Returns
+    ///
+    /// The shell tracking the window's geometry.
+    #[must_use]
+    pub fn with_window_geometry(mut self, geometry: WindowGeometry) -> Self {
+        self.geometry = Some(geometry);
         self
     }
 
@@ -579,6 +599,9 @@ impl Shell {
         self.housekeeping(ctx);
         self.poll_timers(ctx);
         clipboard::forward_copies(ctx);
+        if let Some(geometry) = self.geometry.as_mut() {
+            geometry.track(ctx);
+        }
         // Menu clicks (Quit asks the window to close, as the close button).
         self.run_native_menu(ctx);
         // A close request quits, or asks first while a turn runs.
@@ -614,6 +637,9 @@ impl Shell {
         }
         if self.layout_dirty {
             self.save_layout();
+        }
+        if let Some(geometry) = self.geometry.as_mut() {
+            geometry.save();
         }
     }
 

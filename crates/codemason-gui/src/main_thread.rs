@@ -25,6 +25,9 @@ use codemason_app_core::log_channel::TuiLogReceiver;
 use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 
+use craft_window::restore::{Monitor, MonitorKey};
+
+use crate::platform::window::{self, WindowGeometry};
 use crate::{GuiLaunchError, Shell, bridge, dock, keys};
 
 /// Window title and eframe application name.
@@ -134,8 +137,13 @@ fn run_window(launch: GuiLaunch) -> Result<(), GuiLaunchError> {
         runtime,
     } = launch;
     let mut bridge_task = None;
+    // The saved geometry opens the window as the user left it (maximized
+    // on first launch).
+    let geometry = window::window_path().map_or_else(WindowGeometry::in_memory, |path| {
+        WindowGeometry::open(&path)
+    });
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title(APP_NAME),
+        viewport: geometry.viewport(egui::ViewportBuilder::default().with_title(APP_NAME)),
         ..Default::default()
     };
     // The whole window runs inside the runtime context: the creator, every
@@ -157,7 +165,33 @@ fn run_window(launch: GuiLaunch) -> Result<(), GuiLaunchError> {
                 cc.egui_ctx.clone(),
                 event_tx,
             ));
-            let mut shell = Shell::new(app).with_sources(event_rx, logs, runtime.clone());
+            // Monitors are known only now that the window exists: a saved
+            // rect no monitor shows opens maximized instead.
+            if let Some(window) = cc.winit_window() {
+                let monitors: Vec<Monitor> = window
+                    .available_monitors()
+                    .map(|m| {
+                        let size = m.size();
+                        let pos = m.position();
+                        Monitor::new(
+                            MonitorKey::new(
+                                m.name().unwrap_or_default(),
+                                [size.width, size.height],
+                            ),
+                            [pos.x, pos.y],
+                            [size.width, size.height],
+                            m.scale_factor() as f32,
+                        )
+                    })
+                    .collect();
+                if geometry.off_screen(&monitors) {
+                    cc.egui_ctx
+                        .send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+                }
+            }
+            let mut shell = Shell::new(app)
+                .with_sources(event_rx, logs, runtime.clone())
+                .with_window_geometry(geometry);
             if let Some(path) = dock::layout_path() {
                 shell = shell.with_layout_file(path);
             }

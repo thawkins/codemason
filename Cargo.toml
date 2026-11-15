@@ -203,6 +203,9 @@ craft-quit = { git = "https://github.com/storytold/craft-libs", rev = "d15bf1f35
 # Menu model and layouts (platform-free) plus the macOS menu-bar backend
 # (muda, macOS only) from the same craft-libs rev.
 craft-menu = { git = "https://github.com/storytold/craft-libs", rev = "d15bf1f35b17b759870f9e5111b9a5d243f64888" }
+# Window restore (saved placement per window, off-screen placement rules)
+# from the same craft-libs rev; only the egui-free `restore` feature.
+craft-window = { git = "https://github.com/storytold/craft-libs", rev = "d15bf1f35b17b759870f9e5111b9a5d243f64888", default-features = false, features = ["restore"] }
 
 # ── Hashing / file-locking ───────────────────────────────────────────────
 num_cpus = "1.16"

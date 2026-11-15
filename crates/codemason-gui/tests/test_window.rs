@@ -1,6 +1,7 @@
 //! Tests for the window lifecycle (`codemason_gui::platform::window`): the
 //! close confirmation while an agent turn runs, and the quit steps a close
-//! shares with `/quit`.
+//! shares with `/quit`, and the window geometry restore (first launch
+//! maximized, then the state the user left).
 //!
 //! GUI assertions use egui_kittest accessibility queries. A close request is
 //! injected as the `ViewportEvent::Close` eframe delivers for the close
@@ -18,13 +19,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use codemason_app_core::app::App;
 use codemason_app_core::log_channel::tui_log_channel;
 use codemason_gui::Shell;
-use codemason_gui::platform::window::{CANCEL_QUIT, CONFIRM_QUIT, QUIT_TITLE};
+use codemason_gui::platform::window::{CANCEL_QUIT, CONFIRM_QUIT, QUIT_TITLE, WindowGeometry};
+use craft_window::restore::{Monitor, MonitorKey};
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 
 /// A shell over `app` with sources attached, and the runtime driving it.
 fn rig(configure: impl FnOnce(&mut App)) -> (tokio::runtime::Runtime, Harness<'static, Shell>) {
+    rig_with(configure, |shell| shell)
+}
+
+/// [`rig`], with `wrap` applied to the shell before the harness takes it.
+fn rig_with(
+    configure: impl FnOnce(&mut App),
+    wrap: impl FnOnce(Shell) -> Shell,
+) -> (tokio::runtime::Runtime, Harness<'static, Shell>) {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     let app = {
         let _enter = runtime.enter();
@@ -35,7 +45,7 @@ fn rig(configure: impl FnOnce(&mut App)) -> (tokio::runtime::Runtime, Harness<'s
     };
     let (_events_tx, events) = tokio::sync::mpsc::unbounded_channel();
     let (_logs_tx, logs) = tui_log_channel(16);
-    let shell = Shell::new(app).with_sources(events, logs, runtime.handle().clone());
+    let shell = wrap(Shell::new(app).with_sources(events, logs, runtime.handle().clone()));
     let harness = Harness::builder()
         .with_size(egui::vec2(1000.0, 800.0))
         .build_ui_state(|ui, shell: &mut Shell| shell.update(ui), shell);
@@ -187,4 +197,128 @@ fn test_quit_command_with_running_turn_closes_without_prompt() {
     harness.step();
     assert!(!prompt_shown(&harness));
     assert!(!commands(&harness).contains(&egui::ViewportCommand::CancelClose));
+}
+
+/// The viewport the saved geometry at `path` opens the window with.
+fn opened_with(path: &std::path::Path) -> egui::ViewportBuilder {
+    WindowGeometry::open(path).viewport(egui::ViewportBuilder::default())
+}
+
+/// The window state eframe reports for a normal (not maximized) window with
+/// its outer top-left at `pos` and an inner size of `size`, in points on a
+/// monitor of scale `scale`.
+fn normal_info(pos: [f32; 2], size: [f32; 2], scale: f32) -> egui::ViewportInfo {
+    egui::ViewportInfo {
+        native_pixels_per_point: Some(scale),
+        outer_rect: Some(egui::Rect::from_min_size(
+            egui::pos2(pos[0], pos[1]),
+            egui::vec2(size[0], size[1] + 30.0),
+        )),
+        inner_rect: Some(egui::Rect::from_min_size(
+            egui::pos2(pos[0], pos[1] + 30.0),
+            egui::vec2(size[0], size[1]),
+        )),
+        maximized: Some(false),
+        minimized: Some(false),
+        fullscreen: Some(false),
+        ..egui::ViewportInfo::default()
+    }
+}
+
+#[test]
+fn test_first_launch_opens_maximized() {
+    let path = scratch("first").join("gui-window.json");
+    let viewport = opened_with(&path);
+    assert_eq!(viewport.maximized, Some(true), "no saved geometry yet");
+}
+
+#[test]
+fn test_window_rect_roundtrips() {
+    let path = scratch("roundtrip").join("gui-window.json");
+    let mut geometry = WindowGeometry::open(&path);
+    geometry.record(&normal_info([120.0, 80.0], [900.0, 640.0], 2.0), 1.0);
+    geometry.save();
+
+    let viewport = opened_with(&path);
+    assert_ne!(viewport.maximized, Some(true), "the user left it normal");
+    assert_eq!(viewport.inner_size, Some(egui::vec2(900.0, 640.0)));
+    assert_eq!(viewport.position, Some(egui::pos2(120.0, 80.0)));
+}
+
+#[test]
+fn test_saved_maximized_window_reopens_maximized() {
+    let path = scratch("maximized").join("gui-window.json");
+    let mut geometry = WindowGeometry::open(&path);
+    geometry.record(&normal_info([50.0, 40.0], [800.0, 600.0], 1.0), 1.0);
+    let mut maximized = normal_info([0.0, 0.0], [1920.0, 1050.0], 1.0);
+    maximized.maximized = Some(true);
+    geometry.record(&maximized, 1.0);
+    geometry.save();
+
+    let viewport = opened_with(&path);
+    assert_eq!(viewport.maximized, Some(true));
+    // Un-maximizing goes back to the last normal rect.
+    assert_eq!(viewport.inner_size, Some(egui::vec2(800.0, 600.0)));
+}
+
+#[test]
+fn test_corrupt_window_file_falls_back_to_maximized() {
+    let dir = scratch("corrupt");
+    let path = dir.join("gui-window.json");
+    std::fs::write(&path, "{ this is not json").expect("write corrupt file");
+    assert_eq!(opened_with(&path).maximized, Some(true));
+
+    // A file that parses but holds no usable size falls back too.
+    std::fs::write(
+        &path,
+        r#"{"schema_version":1,"windows":{"main":{"normal":{"pos":[0,0],"size":[0,-5]}}}}"#,
+    )
+    .expect("write bad size");
+    assert_eq!(opened_with(&path).maximized, Some(true));
+}
+
+#[test]
+fn test_off_screen_window_falls_back_to_maximized() {
+    let path = scratch("offscreen").join("gui-window.json");
+    let mut geometry = WindowGeometry::open(&path);
+    geometry.record(&normal_info([9000.0, 7000.0], [800.0, 600.0], 1.0), 1.0);
+    geometry.save();
+
+    let monitors = [Monitor::new(
+        MonitorKey::new("DP-1", [1920, 1080]),
+        [0, 0],
+        [1920, 1080],
+        1.0,
+    )];
+    let reopened = WindowGeometry::open(&path);
+    assert!(
+        reopened.off_screen(&monitors),
+        "no monitor shows its title bar"
+    );
+
+    let mut on_screen = WindowGeometry::open(&path);
+    on_screen.record(&normal_info([100.0, 100.0], [800.0, 600.0], 1.0), 1.0);
+    assert!(!on_screen.off_screen(&monitors));
+}
+
+#[test]
+fn test_shell_saves_the_window_rect_on_close() {
+    let path = scratch("shell-close").join("gui-window.json");
+    let geometry = WindowGeometry::open(&path);
+    let (_runtime, mut harness) = rig_with(|_| {}, |shell| shell.with_window_geometry(geometry));
+    // The window as eframe reports it: normal, at (64, 48), 1000x700.
+    harness.input_mut().viewports.insert(
+        egui::ViewportId::ROOT,
+        normal_info([64.0, 48.0], [1000.0, 700.0], 1.0),
+    );
+    harness.step();
+
+    request_close(&mut harness);
+    harness.step();
+    assert!(!harness.state().app().is_running);
+
+    let viewport = opened_with(&path);
+    assert_ne!(viewport.maximized, Some(true));
+    assert_eq!(viewport.inner_size, Some(egui::vec2(1000.0, 700.0)));
+    assert_eq!(viewport.position, Some(egui::pos2(64.0, 48.0)));
 }

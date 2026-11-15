@@ -1603,6 +1603,7 @@ dependencies = [
  "craft-menu",
  "craft-quit",
  "craft-ui",
+ "craft-window",
  "eframe",
  "egui",
  "egui_kittest",
@@ -2178,6 +2179,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-atomic"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=d15bf1f35b17b759870f9e5111b9a5d243f64888#d15bf1f35b17b759870f9e5111b9a5d243f64888"
+dependencies = [
+ "rustix 1.1.6",
+]
+
+[[package]]
 name = "craft-dialogs"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=d15bf1f35b17b759870f9e5111b9a5d243f64888#d15bf1f35b17b759870f9e5111b9a5d243f64888"
@@ -2253,6 +2262,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-settings"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=d15bf1f35b17b759870f9e5111b9a5d243f64888#d15bf1f35b17b759870f9e5111b9a5d243f64888"
+dependencies = [
+ "craft-atomic",
+ "dirs",
+ "serde",
+ "toml_edit",
+]
+
+[[package]]
 name = "craft-ui"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=d15bf1f35b17b759870f9e5111b9a5d243f64888#d15bf1f35b17b759870f9e5111b9a5d243f64888"
@@ -2273,6 +2293,18 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "craft-window"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=d15bf1f35b17b759870f9e5111b9a5d243f64888#d15bf1f35b17b759870f9e5111b9a5d243f64888"
+dependencies = [
+ "craft-atomic",
+ "craft-settings",
+ "serde",
+ "serde_json",
+ "wayland-client",
 ]
 
 [[package]]
@@ -9417,8 +9449,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3641d5bbb5349a79e1020a242d251efbc546ad8048d133958323ce9c40a9c9c"
 dependencies = [
  "indexmap",
+ "serde_core",
+ "serde_spanned",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 
@@ -9430,6 +9465,12 @@ checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
 dependencies = [
  "winnow",
 ]
+
+[[package]]
+name = "toml_writer"
+version = "1.2.0+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "009dbb7700f11c55ef83aebbe4c0e9cf1f1ac0844bd8d6f00dc38f302026e13a"
 
 [[package]]
 name = "tonic"

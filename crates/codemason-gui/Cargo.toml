@@ -27,6 +27,7 @@ craft-keymap = { workspace = true }
 craft-menu = { workspace = true }
 craft-quit = { workspace = true }
 craft-ui = { workspace = true, features = ["system_fonts"] }
+craft-window = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }
