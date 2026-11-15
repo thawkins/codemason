@@ -92,6 +92,9 @@ pub struct WindowGeometry {
     store: Store,
     /// The placement recorded last frame, to write a change once it holds.
     last: Option<Placement>,
+    /// The last write failed and was reported; later failures stay quiet
+    /// until a write succeeds (a persistent error would warn every frame).
+    save_failed: bool,
 }
 
 impl WindowGeometry {
@@ -110,6 +113,7 @@ impl WindowGeometry {
         Self {
             store: Store::at(path),
             last: None,
+            save_failed: false,
         }
     }
 
@@ -123,6 +127,7 @@ impl WindowGeometry {
         Self {
             store: Store::in_memory(),
             last: None,
+            save_failed: false,
         }
     }
 
@@ -259,10 +264,17 @@ impl WindowGeometry {
         }
     }
 
-    /// Write the geometry file if it changed since the last write.
+    /// Write the geometry file if it changed since the last write. A
+    /// failure is warned about once, until a write succeeds again.
     pub fn save(&mut self) {
-        if let Err(err) = self.store.save() {
-            tracing::warn!(%err, "cannot save the window geometry");
+        match self.store.save() {
+            Ok(_) => self.save_failed = false,
+            Err(err) => {
+                if !self.save_failed {
+                    tracing::warn!(%err, "cannot save the window geometry");
+                }
+                self.save_failed = true;
+            }
         }
     }
 }

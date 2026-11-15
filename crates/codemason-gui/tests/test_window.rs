@@ -363,3 +363,58 @@ fn test_shell_saves_the_window_rect_on_close() {
     assert_eq!(viewport.inner_size, Some(egui::vec2(1000.0, 700.0)));
     assert_eq!(viewport.position, Some(egui::pos2(64.0, 48.0)));
 }
+
+/// Collects formatted log lines, to count the warnings a test triggers.
+#[derive(Clone, Default)]
+struct LogLines(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for LogLines {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("log lines").extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn test_persistent_geometry_write_error_warns_once() {
+    // Opened with no file (a first launch), then a directory takes the
+    // file's place: every atomic write's rename onto it fails.
+    let path = scratch("write-error").join("gui-window.json");
+    let geometry = WindowGeometry::open(&path);
+    std::fs::create_dir(&path).expect("directory in the file's place");
+    let (_runtime, mut harness) = rig_with(|_| {}, |shell| shell.with_window_geometry(geometry));
+    let lines = LogLines::default();
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || writer.clone())
+        .with_ansi(false)
+        .finish();
+    tracing::subscriber::with_default(subscriber, || {
+        // A settled window, frame after frame: each stable frame retries.
+        harness.input_mut().viewports.insert(
+            egui::ViewportId::ROOT,
+            normal_info([64.0, 48.0], [1000.0, 700.0], 1.0),
+        );
+        for _ in 0..5 {
+            harness.step();
+        }
+        // Moved and settled again: still failing, still quiet.
+        harness.input_mut().viewports.insert(
+            egui::ViewportId::ROOT,
+            normal_info([80.0, 48.0], [900.0, 700.0], 1.0),
+        );
+        for _ in 0..5 {
+            harness.step();
+        }
+    });
+    let text = String::from_utf8(lines.0.lock().expect("log lines").clone()).expect("utf-8");
+    assert_eq!(
+        text.matches("cannot save the window geometry").count(),
+        1,
+        "one warning for a persistent error, got:\n{text}"
+    );
+}
