@@ -1539,8 +1539,10 @@ dependencies = [
  "chrono",
  "codemason-agent",
  "codemason-app-core",
+ "codemason-codeindex",
  "codemason-config",
  "codemason-connectors",
+ "codemason-llm",
  "codemason-plugins",
  "codemason-storage",
  "codemason-tools-core",
@@ -1557,10 +1559,12 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "unicode-width",
 ]
 
 [[package]]
