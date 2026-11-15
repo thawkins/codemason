@@ -25,6 +25,16 @@ fn on_plain_thread(
     configure: impl FnOnce(&mut App) + Send + 'static,
     drive: impl FnOnce(&mut Harness<'static, Shell>) + Send + 'static,
 ) {
+    on_plain_thread_via(Shell::update, configure, drive);
+}
+
+/// [`on_plain_thread`], drawing each frame with `frame` (`Shell::update`, or
+/// the public `Shell::show` alone).
+fn on_plain_thread_via(
+    frame: fn(&mut Shell, &mut egui::Ui),
+    configure: impl FnOnce(&mut App) + Send + 'static,
+    drive: impl FnOnce(&mut Harness<'static, Shell>) + Send + 'static,
+) {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     let app = {
         let _enter = runtime.enter();
@@ -43,7 +53,7 @@ fn on_plain_thread(
         let shell = Shell::new(app).with_sources(events, logs, handle);
         let mut harness = Harness::builder()
             .with_size(egui::vec2(1000.0, 800.0))
-            .build_ui_state(|ui, shell: &mut Shell| shell.update(ui), shell);
+            .build_ui_state(move |ui, shell: &mut Shell| frame(shell, ui), shell);
         // The window's fonts: a new session's banner draws block glyphs.
         codemason_gui::fonts::install(&harness.ctx, craft_ui::fonts::SystemFonts::Off);
         drive(&mut harness);
@@ -86,6 +96,27 @@ fn test_sidebar_new_session_click_outside_the_runtime() {
     // `spawn_blocking` (`App::announce_session_startup`): the reported
     // "no reactor running" panic.
     on_plain_thread(
+        |app| app.sidebar.visible = true,
+        |harness| {
+            harness.run();
+            let before = harness.state().app().session.session_id.clone();
+            harness.get_by_label_contains("+ New session").click();
+            harness.run();
+            assert_ne!(
+                harness.state().app().session.session_id,
+                before,
+                "a new session was opened"
+            );
+        },
+    );
+}
+
+#[test]
+fn test_show_alone_enters_the_runtime() {
+    // `Shell::show` is public: a caller that draws with it directly (not
+    // through `update`) reaches the same sidebar click.
+    on_plain_thread_via(
+        Shell::show,
         |app| app.sidebar.visible = true,
         |harness| {
             harness.run();

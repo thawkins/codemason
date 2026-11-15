@@ -378,6 +378,11 @@ impl Shell {
     ///
     /// * `ui` - the root ui of the window.
     pub fn show(&mut self, ui: &mut egui::Ui) {
+        // Panels and dialogs call App methods directly (a sidebar click
+        // opens a session, which spawns): enter the runtime here too, so a
+        // caller other than `draw_frame` cannot reach them outside it.
+        let runtime = self.runtime();
+        let _context = runtime.as_ref().map(Handle::enter);
         // A changed theme mode restyles the window (a repaint is requested,
         // so the next pass draws with the new visuals).
         self.theme.sync(ui.ctx(), self.app.theme_mode);
