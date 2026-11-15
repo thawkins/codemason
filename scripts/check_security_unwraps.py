@@ -13,7 +13,7 @@ fails when any file exceeds its baseline, or when a file that previously had
 none gains one. Existing sites are grandfathered with their counts, so the gate
 is enforceable today and still blocks every new occurrence.
 
-Scope: ``crates/*/src/**/*.rs``. ``#[cfg(test)]`` module bodies are blanked out
+Scope: ``crates/*/src/**/*.rs`` and the root binary's ``src/**/*.rs``. ``#[cfg(test)]`` module bodies are blanked out
 and ``tests``/``benches`` directories are skipped entirely, because test and
 bench code may use ``.unwrap()`` freely.
 
@@ -38,6 +38,8 @@ import sys
 
 BASELINE_PATH = pathlib.Path("scripts/security-unwrap-baseline.txt")
 SCAN_ROOT = pathlib.Path("crates")
+# The root `codemason` binary crate; scanned alongside `crates/`.
+BIN_ROOT = pathlib.Path("src")
 
 # `.unwrap()` / `.expect("...")` — any receiver. Matched textually, as the
 # poisoning-lock guard does, so no type information is required.
@@ -120,7 +122,7 @@ def count_sites(path: pathlib.Path, src: str) -> int:
 def scan() -> dict[str, int]:
     """Return ``{relative path: panicking site count}`` for the whole workspace."""
     counts: dict[str, int] = {}
-    for path in sorted(SCAN_ROOT.rglob("*.rs")):
+    for path in sorted([*SCAN_ROOT.rglob("*.rs"), *BIN_ROOT.rglob("*.rs")]):
         parts = path.parts
         if "tests" in parts or "benches" in parts:
             continue

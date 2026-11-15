@@ -6,6 +6,7 @@
 
 - Performance: research locus snippets are found in linear time; a keyword near the end of a 256 KiB source took seconds before.
 - Performance: `codemason-types` no longer depends on bundled SQLite, so builds no longer wait for it before compiling every other crate.
+- Performance: shipped binaries no longer compile dependencies used only by tests and benches: tower-http's `fs` and `trace` features, `memchr` in `codemason-types`, and test-only `rustc-hash`, `tempfile`, `tokio-stream`, `codemason-plugins` and `serde_json` edges.
 
 ### Security
 
@@ -36,6 +37,8 @@
 
 ### Changed
 
+- Changed: the unwrap and poisoned-lock guards (`scripts/check-security-unwraps.sh`, `scripts/check-poison-locks.sh`) scan the root binary's `src/` as well as `crates/`.
+- Changed: `deny.toml` drops the stale `ring` licence clarification (ring 0.17 declares its own licence) and names `webpki-root-certs` correctly.
 - Changed: `/backend` saves the switch to the user-global config (or the `--config` file) instead of the project file; choose a per-project backend in the project's properties in the sessions sidebar.
 
 ## [1.0.170] - 2026-11-15

@@ -11,7 +11,7 @@ sensitive-data redaction, Prometheus exposition, and graceful shutdown.
 
 ## External Dependencies
 
-- url, serde_json, thiserror, tracing, tracing-subscriber, tokio, parking_lot
+- url, thiserror, tracing, tracing-subscriber, tokio, parking_lot
 - opentelemetry, opentelemetry_sdk, opentelemetry-otlp (optional, behind the default-on `telemetry` feature)
 
 ## Public API (crate root)

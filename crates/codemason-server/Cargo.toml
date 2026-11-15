@@ -24,7 +24,7 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 axum = { workspace = true }
-tower-http = { workspace = true, features = ["fs", "cors", "timeout"] }
+tower-http = { workspace = true, features = ["cors", "timeout"] }
 tokio-stream = { workspace = true }
 futures = { workspace = true }
 async-stream = { workspace = true }
@@ -45,13 +45,14 @@ tower = { workspace = true }
 criterion = { workspace = true }
 parking_lot = { workspace = true }
 http-body-util = "0.1"
-serde_json = { workspace = true }
+# `ServeDir` is only exercised by `tests/test_web_ui.rs`; production serves the
+# embedded UI without it.
+tower-http = { workspace = true, features = ["fs"] }
 # The OpenAI-surface integration test scripts a local `Provider`/`LlmClient`
 # so the agent loop can run without a network call; `async-trait` is needed to
-# implement those traits and `codemason-types` for the shared message/thinking
-# types the mock returns.
+# implement those traits (`codemason-types`, for the shared message/thinking
+# types the mock returns, is already a normal dependency).
 async-trait = { workspace = true }
-codemason-types = { workspace = true }
 
 [[bench]]
 name = "bench_sse"

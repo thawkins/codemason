@@ -23,7 +23,7 @@ storage, LLM, tools, and types crates behind the agent runtime.
 
 ## External Dependencies
 
-- tokio, tokio-stream, futures, async-trait, serde, serde_json, serde_norway, anyhow, thiserror, tracing
+- tokio, futures, async-trait, serde, serde_json, serde_norway, anyhow, thiserror, tracing
 - rmcp (MCP client SDK)
 - dashmap, parking_lot, rustc-hash, num_cpus, sysinfo
 - chrono, uuid, regex, globset, similar, url, base64, sha2, hex
