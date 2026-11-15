@@ -1,6 +1,6 @@
-//! Crash-dump and stderr-spool integration tests.
+//! Crash-dump integration tests.
 //!
-//! Exercises the two failure-capture paths directly. `crash_dump` lives in the
+//! Exercises the crash-marker failure-capture path directly. `crash_dump` lives in the
 //! binary crate, so this test re-imports its source with `#[path]` and supplies
 //! the `chrono`/`serde`/`serde_json`/`libc` it depends on — none of which are
 //! re-declared here because they come from the workspace-level build graph.
@@ -39,28 +39,4 @@ fn crash_marker_records_and_reports_unclean_exit() {
         .expect("unclean exit expected");
     assert!(found.is_unclean());
     assert!(found.core_dump_hint.contains("core"));
-}
-
-/// The truncating spool is shared with the TUI and must hold the newest lines.
-mod stderr_spool {
-    use codemason_types::stderr_spool::{SPOOL_MAX_LINES, Spool};
-
-    #[test]
-    fn spool_holds_only_the_newest_lines() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("stderr.log");
-        let spool = Spool::new(path.clone());
-
-        for i in 0..(SPOOL_MAX_LINES + 250) {
-            spool.write(format!("line-{i}\n").as_bytes());
-        }
-
-        let content = std::fs::read_to_string(&path).expect("read");
-        let lines: Vec<&str> = content.lines().collect();
-        assert_eq!(lines.len(), SPOOL_MAX_LINES);
-        assert_eq!(
-            lines[lines.len() - 1],
-            format!("line-{}", SPOOL_MAX_LINES + 249)
-        );
-    }
 }

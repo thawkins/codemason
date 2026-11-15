@@ -119,12 +119,6 @@ mod test_secret_registry_cap;
 #[path = "test_shared_guards.rs"]
 mod test_shared_guards;
 
-#[path = "test_spool_debug_and_errors.rs"]
-mod test_spool_debug_and_errors;
-
-#[path = "test_spool_module.rs"]
-mod test_spool_module;
-
 #[path = "test_startup_timings.rs"]
 mod test_startup_timings;
 

@@ -36,7 +36,6 @@ pub mod sanitize;
 /// SEC-codemason-types-001 (SECTASKS T-023): terminal-escape neutralisation.
 pub mod sanitize_terminal;
 pub mod startup;
-pub mod stderr_spool;
 pub mod strutil;
 pub mod thinking;
 /// The one decoder for accumulated tool-call argument text (spec
