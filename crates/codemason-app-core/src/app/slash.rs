@@ -5864,7 +5864,7 @@ Tools: `TaskCreate`, `TaskUpdate`, `TaskGet`, `TaskList`.\n";
                 self.provider_setup = Some(ProviderSetupStep::ResetProvider { selected: 0 });
             }
             "quit" | "exit" => {
-                self.is_running = false;
+                self.quit();
             }
             "reload" => {
                 if is_help_args(args) {

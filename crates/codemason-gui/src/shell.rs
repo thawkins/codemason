@@ -75,6 +75,7 @@ use crate::panels::tasks::tasks_ui;
 use crate::panels::teams::teams_ui;
 use crate::platform::clipboard;
 use crate::platform::files::{self, FileDialogs, file_menu};
+use crate::platform::window::CloseGuard;
 use crate::theme::ThemeApplier;
 
 /// Most log records moved into the app per frame, so a burst cannot stall
@@ -116,6 +117,10 @@ pub struct Shell {
     theme: ThemeApplier,
     /// The native file dialogs the File menu queues.
     files: FileDialogs,
+    /// What a close request does: quit, or ask while a turn runs.
+    close: CloseGuard,
+    /// app-core's exit steps have run (once, whichever path quit).
+    quit_finished: bool,
 }
 
 impl std::fmt::Debug for Shell {
@@ -159,6 +164,8 @@ impl Shell {
             close_keys: Vec::new(),
             theme: ThemeApplier::default(),
             files: FileDialogs::new(),
+            close: CloseGuard::default(),
+            quit_finished: false,
         }
     }
 
@@ -257,6 +264,7 @@ impl Shell {
             sessions_rect = self.show_dock(ui, &palette);
         });
         dialogs::show(ui.ctx(), &mut self.app);
+        self.close.show(ui.ctx(), &mut self.app);
         self.unfocus_sidebar_on_press_outside(ui.ctx(), sessions_rect);
         self.run_close_keys(ui.ctx());
         self.save_layout_when_due(ui.ctx());
@@ -427,13 +435,21 @@ impl Shell {
         if !self.layout_dirty {
             return;
         }
-        let Some(path) = self.layout_file.as_ref() else {
+        if self.layout_file.is_none() {
             return;
-        };
+        }
         let closing = ctx.input(|i| i.viewport().close_requested()) || !self.app.is_running;
         if !closing && ctx.input(|i| i.pointer.any_down()) {
             return;
         }
+        self.save_layout();
+    }
+
+    /// Save the layout to the layout file, if there is one.
+    fn save_layout(&mut self) {
+        let Some(path) = self.layout_file.as_ref() else {
+            return;
+        };
         if let Err(err) = dock::save_dock(path, &self.layout, &self.hidden) {
             tracing::warn!(path = %path.display(), %err, "cannot save GUI layout");
         }
@@ -481,9 +497,39 @@ impl Shell {
         self.housekeeping(ctx);
         self.poll_timers(ctx);
         clipboard::forward_copies(ctx);
-        // `/quit` (or any other path that stops the app) closes the window.
+        // A close request quits, or asks first while a turn runs.
+        self.close.logic(ctx, &mut self.app);
+        // `/quit` (or any other path that stops the app) runs the exit steps
+        // and closes the window.
         if !self.app.is_running {
+            self.finish_quit();
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        // Last, so it sees the guard's `CancelClose`: on macOS an accepted
+        // close becomes `-[NSApplication terminate:]`.
+        craft_quit::on_close_request(ctx);
+    }
+
+    /// Run app-core's exit steps once, whichever path quit: the same steps,
+    /// in the same order, the terminal frontend runs after its loop
+    /// (`App::save_on_quit`, then `App::stop_services_on_quit`), and save a
+    /// changed layout (on macOS the process ends before another frame).
+    /// Without attached sources there is no runtime, so only the first step
+    /// runs.
+    fn finish_quit(&mut self) {
+        if self.quit_finished {
+            return;
+        }
+        self.quit_finished = true;
+        self.app.save_on_quit();
+        if let Some(sources) = self.sources.as_ref() {
+            let processor = std::sync::Arc::clone(&self.app.session_processor);
+            sources
+                .runtime
+                .block_on(self.app.stop_services_on_quit(&processor));
+        }
+        if self.layout_dirty {
+            self.save_layout();
         }
     }
 
@@ -496,7 +542,11 @@ impl Shell {
         clipboard::attach_pasted_images(ui.ctx(), &mut self.app);
         let focus = self.prompt.prepare(ui.ctx(), &mut self.app);
         dialogs::prepare(ui.ctx(), &mut self.app);
-        self.route_keys(ui.ctx(), focus);
+        // While the quit confirmation asks, keys stay with it (Esc cancels
+        // the dialog, not the turn).
+        if !self.close.is_asking() {
+            self.route_keys(ui.ctx(), focus);
+        }
         // `/quit` (or any other path that stops the app) closes the window,
         // which ends `run_gui` the same way closing the window does.
         if !self.app.is_running {
@@ -726,5 +776,13 @@ impl eframe::App for Shell {
         self.draw_frame(ui);
         // Show a dialog the File menu queued, with the window as parent.
         self.files.show_pending(Some(frame));
+    }
+
+    fn on_exit(&mut self) {
+        // Normally the close path has already run the exit steps. An exit
+        // that skipped it (macOS `applicationWillTerminate:` at logout)
+        // still saves what `/quit` saves.
+        self.app.quit();
+        self.finish_quit();
     }
 }

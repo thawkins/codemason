@@ -48,6 +48,8 @@ mod test_research;
 mod test_side_panels;
 #[path = "test_theme.rs"]
 mod test_theme;
+#[path = "test_window.rs"]
+mod test_window;
 
 /// The one mutex that serialises every test mutating a process-global
 /// (environment variables, cwd) in this binary.

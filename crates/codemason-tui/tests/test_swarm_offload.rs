@@ -427,6 +427,30 @@ async fn test_app_exit_aborts_the_job_and_leaves_the_store_consistent() {
     assert_eq!(status("t2"), TaskStatus::InProgress);
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_quit_steps_abort_the_job_before_the_app_drops() {
+    let dir = scratch("quit-steps");
+    let (mut app, pid) = swarm_blocked_in_its_hook(&dir).await;
+
+    // The quit path both frontends run (the GUI's window close included).
+    // On macOS the GUI's process ends without dropping the App, so these
+    // steps, not `Drop`, must stop the job.
+    app.quit();
+    app.save_on_quit();
+    let processor = std::sync::Arc::clone(&app.session_processor);
+    app.stop_services_on_quit(&processor).await;
+
+    assert!(!app.swarm_autocomplete_in_flight(), "the job is gone");
+    hook_ended(pid).await;
+    assert_eq!(
+        hook_runs(&dir),
+        vec![pid],
+        "no hook ran after the quit steps"
+    );
+    drop(app);
+}
+
 /// A `TaskCompleted` hook script that records its pid in `runs.log`, starts
 /// a grandchild (`head`, blocked on the FIFO `gate`) whose pid it records in
 /// `kids.log`, and waits for it: the hook process is `sh`, and the blocked

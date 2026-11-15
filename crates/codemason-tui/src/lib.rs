@@ -995,21 +995,10 @@ pub async fn run_tui(
         std::process::exit(0);
     });
 
-    // Drop the in-memory input queue at teardown; it is never persisted
-    // (spec `inputqueue` NFR-005).
-    app.clear_input_queue();
-
-    // Final synchronous save if history was modified since last flush.
-    if app.history_dirty {
-        if let Err(e) = app.save_history() {
-            tracing::warn!("Failed to save input history: {}", e);
-        }
-    }
-
-    // -- Signal cancellation to abort any active LLM streams --
-    if let Some(ref flag) = app.session.cancel_flag {
-        flag.store(true, std::sync::atomic::Ordering::Relaxed);
-    }
+    // The quit path's first step, shared with the GUI: drop the never
+    // persisted input queue, save dirty input history, and cancel any active
+    // LLM stream.
+    app.save_on_quit();
 
     // -- Restore terminal FIRST so the user gets a clean shell immediately --
     // Drop the terminal guard now (before slow cleanup) to leave alternate screen
@@ -1020,28 +1009,12 @@ pub async fn run_tui(
     // Stop the cron scheduler (FR-017: non-blocking background task).
     cron_scheduler.stop();
 
-    // Kill every MCP stdio server child codemason spawned. Without this the child
-    // outlives codemason as an orphan (reparented to init), keeps the stdio pipe
-    // open, and prints its own teardown errors after codemason exits - and the next
-    // start finds a stale server still holding whatever endpoint it bound. The
-    // 3 s force-exit safety net above bounds this, and `McpClient::drop` repeats
-    // the kill if this teardown is cut short.
-    session_processor.shutdown_mcp().await;
-
-    // Cancel any in-flight code-index reindex (initial watcher reindex or
-    // fallback one-shot) BEFORE stopping the watcher/worker, so a detached
-    // CPU-bound reindex thread stops spinning between chunks instead of
-    // running for the whole teardown window (exit 200%-CPU fix).
-    if let Some(ref index) = app.code_index {
-        index.request_stop();
-    }
-
-    // Stop code index watcher (if running) - this has a Drop impl that calls stop()
-    if let Some(session) = app.code_index_watch_session.take() {
-        drop(session);
-    }
-    // ...and the parked indexes of other open projects (MULTISESSION M8).
-    app.stop_project_services();
+    // The quit path's second step, shared with the GUI: abort the swarm hook
+    // jobs, kill every MCP stdio server child codemason spawned (bounded by
+    // the 3 s force-exit safety net above), cancel any in-flight code-index
+    // reindex before stopping the watcher, and stop the parked projects'
+    // indexes.
+    app.stop_services_on_quit(&session_processor).await;
 
     // Detach the fallback reindex thread instead of joining it: the thread
     // now observes the cancel flag (set above via index.request_stop()), and

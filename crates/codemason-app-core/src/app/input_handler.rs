@@ -1450,7 +1450,7 @@ impl App {
                 }
                 InputAction::ConfirmQuit => {
                     if self.quit_armed {
-                        self.is_running = false;
+                        self.quit();
                     } else {
                         self.status = "Press Ctrl+C first, then Ctrl+D to quit".to_string();
                     }

@@ -24,6 +24,7 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 craft-dialogs = { workspace = true }
 craft-keymap = { workspace = true }
+craft-quit = { workspace = true }
 craft-ui = { workspace = true, features = ["system_fonts"] }
 eframe = { workspace = true }
 egui = { workspace = true }
