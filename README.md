@@ -914,7 +914,7 @@ commit, and — with `--github` or `--gitlab` — creates a private hosting
 repository, sets it as `origin`, and pushes.
 
 ```bash
-# Add a framework stack (Rust: axum, warp, raylib, gtk4; `/new help` lists them all)
+# Add a framework stack (Rust: axum, warp, raylib, gtk4, ratatui; `/new help` lists them all)
 cdmn new --language rust --type cmdline --stack axum
 
 # Create the project on GitHub or GitLab (mutually exclusive)

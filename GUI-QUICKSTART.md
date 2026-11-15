@@ -321,7 +321,7 @@ window's own File menu.
 
 ### Clipboard
 
-- **`Ctrl+C` | `Cmd+C`** — copy the selection in the prompt to the clipboard.
+- **`Ctrl+C` | `Cmd+C`** — copy the keyboard selection to the clipboard when one is active; otherwise it arms quit (confirm with `Ctrl+D`).
 - **`Ctrl+X` | `Cmd+X`** — cut the selection from the prompt.
 - **`Ctrl+V` | `Cmd+V`** — paste at the cursor, replacing any active selection.
 - **Right-click** in the prompt — opens a context menu with **Copy**, **Cut**
@@ -671,7 +671,7 @@ the created files. Generated content:
 ```
 
 `--stack axum` layers an axum server starter over the base Rust layout
-(`warp`, `raylib` and `gtk4` are also known stacks; `/new help` lists them all); `--github` creates a private
+(`warp`, `raylib`, `gtk4` and `ratatui` are also known stacks; `/new help` lists them all); `--github` creates a private
 GitHub repository, sets it as `origin`, and pushes. Use `--gitlab` instead
 for GitLab. The two hosting flags are mutually exclusive, and a failed
 remote step never undoes the local scaffold.
@@ -1066,7 +1066,7 @@ project's), with the token in `GH_ENTERPRISE_TOKEN`:
 ## Panes and layout
 
 Every panel is a dockable pane: Messages, Prompt, Sessions, Log, Profile,
-Tasks, Memory, Active agents, Teams and Queue. The Messages and Prompt panes are
+Tasks, Memory, Active agents, and Teams. The Messages and Prompt panes are
 the window's canvas: they cannot be closed or tabbed, but other panes can be
 split beside them.
 
@@ -1119,7 +1119,7 @@ reopens maximized.
 | `Shift+Enter` / `Alt+Enter`     | `Shift+Enter`         | New line in prompt                          |
 | `Esc`                           | `Esc`                 | Cancel current agent operation              |
 | `Ctrl+D`                        | `Cmd+Q`               | Quit codemason                              |
-| `Ctrl+C`                        | `Cmd+C`               | Copy selection / arm quit                   |
+| `Ctrl+C`                        | `Cmd+C`               | Copy kb selection / arm quit                 |
 | `Alt+L`                         | `Cmd+Shift+L`         | Toggle Log pane                             |
 | `Alt+P`                         | `Cmd+Shift+P`         | Toggle Profile pane                         |
 | `Alt+I`                         | `Cmd+Shift+I`         | Toggle TASKS pane                           |

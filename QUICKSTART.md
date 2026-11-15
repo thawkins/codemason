@@ -1805,7 +1805,7 @@ run `/new help` for the full list —
 starter documentation (`README.md`, `QUICKSTART.md`, `STATS.md`, `docs/`),
 and a git repository with an initial commit. Add `--github` or `--gitlab`
 (mutually exclusive) to also create a private hosting repository and push;
-add `--stack axum`/`--stack gtk4` (Rust; `/new help` lists the rest) to layer a framework starter on top. In the GUI the
+add `--stack axum`/`--stack gtk4`/`--stack ratatui` (Rust; `/new help` lists the rest) to layer a framework starter on top. In the GUI the
 scaffold steps stream into the message window as they complete.
 
 ```bash
