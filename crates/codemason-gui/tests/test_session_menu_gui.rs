@@ -622,6 +622,10 @@ async fn test_session_menu_terminal_opens_a_terminal_at_the_session_directory() 
     set_session_directory(&mut app, &a, &worktree);
     app.sidebar.launch_log = Some(Vec::new());
 
+    if !has_terminal() {
+        return;
+    }
+
     menu_on(&mut app, &a, &MenuAction::Terminal).await;
     app.handle_key_event(key(KeyCode::Enter)).await;
 
@@ -649,6 +653,10 @@ async fn test_session_menu_terminal_reports_a_missing_worktree_in_a_dialog() {
     set_session_directory(&mut app, &a, &missing);
     app.sidebar.launch_log = Some(Vec::new());
 
+    if !has_terminal() {
+        return;
+    }
+
     menu_on(&mut app, &a, &MenuAction::Terminal).await;
     app.handle_key_event(key(KeyCode::Enter)).await;
 
@@ -671,6 +679,17 @@ async fn test_session_menu_terminal_reports_a_missing_worktree_in_a_dialog() {
     // `Enter` closes it and nothing else happens.
     app.handle_key_event(key(KeyCode::Enter)).await;
     assert!(!app.notice_open, "Enter closes the notice");
+}
+
+/// Whether this machine can start a terminal, so a build environment without
+/// one skips the terminal tests rather than failing them.
+fn has_terminal() -> bool {
+    codemason_app_core::open_in::launch_spec(
+        codemason_app_core::open_in::OpenTarget::Terminal,
+        &std::path::PathBuf::from("/"),
+        &codemason_app_core::open_in::LaunchEnv::current(),
+    )
+    .is_some()
 }
 
 /// Points session `id` at `directory`: its open view when it has one, and its
