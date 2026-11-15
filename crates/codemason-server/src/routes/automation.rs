@@ -116,7 +116,7 @@ fn payload_text(body: &Bytes) -> String {
 /// SEC-061: the ingress is mounted on the unauthenticated outer router (an
 /// external system such as a GitHub webhook has no server bearer token), so it
 /// shares the process-wide rate limiter under a dedicated `"webhook"` key and
-/// requires the automation's own secret ([`verify_webhook_secret`]). Without
+/// requires the automation's own secret ([`webhook_secret_refusal`]). Without
 /// it, any web page could start an agent run with a CORS "simple request".
 async fn webhook_ingest(
     State(state): State<AppState>,
@@ -134,7 +134,7 @@ async fn webhook_ingest(
     let secret_env = svc
         .definition(&id)
         .and_then(|definition| definition.webhook_secret_env.clone());
-    if let Err(refusal) = verify_webhook_secret(&id, secret_env.as_deref(), &headers, &body) {
+    if let Some(refusal) = webhook_secret_refusal(&id, secret_env.as_deref(), &headers, &body) {
         return refusal;
     }
     let payload = payload_text(&body);
@@ -147,7 +147,8 @@ async fn webhook_ingest(
     }
 }
 
-/// Accept a webhook request only when it carries the automation's secret.
+/// Refuse a webhook request that does not carry the automation's secret:
+/// returns the refusal response, or `None` when the request may proceed.
 ///
 /// The secret is read from the environment variable `secret_env` names. The
 /// request must send either `Authorization: Bearer <secret>` or a GitHub-style
@@ -155,24 +156,26 @@ async fn webhook_ingest(
 /// compared in constant time. An automation without a configured, non-empty
 /// secret accepts no webhook at all (`403`); a missing or wrong credential is
 /// `401`.
-fn verify_webhook_secret(
+fn webhook_secret_refusal(
     id: &str,
     secret_env: Option<&str>,
     headers: &HeaderMap,
     body: &[u8],
-) -> Result<(), Response> {
+) -> Option<Response> {
     let secret = secret_env
         .and_then(|name| std::env::var(name).ok())
         .filter(|value| !value.is_empty());
     let Some(secret) = secret else {
-        return Err(error_response(
-            StatusCode::FORBIDDEN,
-            format!(
-                "automation `{id}` has no webhook secret configured; set `webhook_secret_env` \
+        return Some(
+            error_response(
+                StatusCode::FORBIDDEN,
+                format!(
+                    "automation `{id}` has no webhook secret configured; set `webhook_secret_env` \
                  to the name of an environment variable holding one"
-            ),
-        )
-        .into_response());
+                ),
+            )
+            .into_response(),
+        );
     };
     let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
     let bearer_ok = header("authorization")
@@ -183,13 +186,15 @@ fn verify_webhook_secret(
         .zip(hmac_sha256_hex(&secret, body))
         .is_some_and(|(sent, expected)| constant_time_eq(&sent.to_ascii_lowercase(), &expected));
     if bearer_ok || signature_ok {
-        Ok(())
+        None
     } else {
-        Err(error_response(
-            StatusCode::UNAUTHORIZED,
-            "invalid or missing webhook credential",
+        Some(
+            error_response(
+                StatusCode::UNAUTHORIZED,
+                "invalid or missing webhook credential",
+            )
+            .into_response(),
         )
-        .into_response())
     }
 }
 
