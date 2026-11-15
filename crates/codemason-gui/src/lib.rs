@@ -59,7 +59,6 @@ use codemason_agent::session::processor::SessionProcessor;
 use codemason_agent::storage::Storage;
 use codemason_app_core::app::{App, StartupSession};
 use codemason_app_core::log_channel::TuiLogReceiver;
-use codemason_types::stderr_spool::Spool as StderrSpool;
 
 pub use main_thread::{GuiLaunch, GuiLauncher, MainThreadHost, main_thread_channel};
 pub use shell::Shell;
@@ -103,8 +102,6 @@ pub struct GuiOptions {
     pub config_paths: Vec<PathBuf>,
     /// Startup phase timings recorded so far.
     pub timings: StartupTimings,
-    /// Raw-stderr spool, when the binary installed one.
-    pub stderr_spool: Option<StderrSpool>,
     /// Hands the built session to the process main thread's
     /// [`MainThreadHost`], which runs the window.
     pub launcher: GuiLauncher,
@@ -151,7 +148,10 @@ pub fn check_display() -> Result<(), GuiLaunchError> {
 /// Run the GUI application until its window is closed.
 ///
 /// Runs on the tokio runtime thread (`codemason-main` in `cdmn`). It checks
-/// the display and builds the [`App`] here, then hands the `App`, the log
+/// the display, builds the [`App`] and runs its startup sequence
+/// ([`App::run_startup`]: provider wiring, health check, and the first
+/// session restored, created or resumed per `opts.startup`) here, then hands
+/// the `App`, the log
 /// receiver, the event bus and a runtime [`tokio::runtime::Handle`] to the
 /// process main thread through `opts.launcher`. The main thread's
 /// [`MainThreadHost`] runs the eframe window there, while agent work keeps
@@ -185,14 +185,12 @@ pub async fn run_gui(opts: GuiOptions) -> anyhow::Result<()> {
         log_rx,
         db_path,
         launcher,
-        // Consumed by the later session-startup and log-panel tasks.
-        config_paths: _,
-        timings: _,
-        stderr_spool: _,
+        config_paths,
+        timings,
     } = opts;
     tracing::info!(?startup, "starting GUI frontend");
 
-    let app = App::new(
+    let mut app = App::new(
         Arc::clone(&event_bus),
         storage,
         provider_registry,
@@ -201,6 +199,11 @@ pub async fn run_gui(opts: GuiOptions) -> anyhow::Result<()> {
         show_log,
         db_path,
     );
+    // Runs here, on the runtime thread and inside its context, before the
+    // window exists: it spawns the health check and Auto-fix watcher on the
+    // runtime and does the blocking session and history reads off the UI
+    // thread.
+    app.run_startup(&startup, config_paths, timings).await;
     launcher
         .launch(GuiLaunch {
             app,

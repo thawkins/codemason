@@ -1301,7 +1301,6 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
                     db_path: db_path.clone(),
                     config_paths: config.read().await.config_paths.clone(),
                     timings: startup,
-                    stderr_spool: None,
                     launcher: gui_launcher,
                 }))
                 .await?;
@@ -1541,7 +1540,6 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
                     db_path: db_path.clone(),
                     config_paths: config.read().await.config_paths.clone(),
                     timings: startup,
-                    stderr_spool: None,
                     launcher: gui_launcher,
                 }))
                 .await?;
