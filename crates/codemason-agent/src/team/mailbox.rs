@@ -30,6 +30,7 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 
 use anyhow::{Context, Result};
@@ -298,7 +299,8 @@ impl Mailbox {
     /// companion lock file).
     ///
     /// M6-T5: if the mailbox file cannot be parsed (corrupt JSON), it is
-    /// moved aside to `<path>.corrupt.<timestamp>` and an empty mailbox is
+    /// moved aside to a unique `<stem>.corrupt.<timestamp>-<seq>.json` (under the
+    /// exclusive lock, AA-03) and an empty mailbox is
     /// returned, rather than propagating the parse error and permanently
     /// disabling the inbox. The incident is logged via `tracing::warn`.
     ///
@@ -319,18 +321,65 @@ impl Mailbox {
         }
         match parse_messages(&raw) {
             Ok(msgs) => Ok(msgs),
+            // M6-T5: move the corrupt file aside so the inbox can recover.
+            Err(_) => self.recover_corrupt("read_all"),
+        }
+    }
+
+    /// M6-T5 / AA-03: re-read the mailbox under the **exclusive** lock and,
+    /// if it is still corrupt, move it aside before releasing the lock.
+    ///
+    /// The readers parse outside the lock, so a concurrent `push` may have
+    /// rewritten or appended to the file since their read. Doing the
+    /// re-check and rename under the exclusive lock means no `push` can
+    /// append between the decision and the rename, so a push either lands
+    /// in the file being judged or in the fresh live mailbox.
+    ///
+    /// Returns the parsed messages when the re-read file is valid (it was
+    /// rewritten since the caller's read) and an empty list after a
+    /// move-aside.
+    fn recover_corrupt(&self, op: &str) -> Result<Vec<MailboxMessage>> {
+        let lock = acquire_lock(&self.path, true)?;
+        let raw = match fs::read_to_string(&self.path) {
+            Ok(raw) => raw,
+            // Another reader already moved it aside.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => {
+                return Err(e).with_context(|| format!("read mailbox {}", self.path.display()));
+            }
+        };
+        let result = match parse_messages(&raw) {
+            Ok(msgs) => Ok(msgs),
             Err(e) => {
                 tracing::warn!(
                     path = %self.path.display(),
+                    op,
                     error = %e,
                     "mailbox is corrupt; moving aside and returning empty"
                 );
-                // M6-T5: move the corrupt file aside so the inbox can recover.
-                let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
-                let corrupt_path = self.path.with_extension(format!("corrupt.{ts}.json"));
-                let _ = fs::rename(&self.path, &corrupt_path);
+                self.move_aside_locked();
                 Ok(Vec::new())
             }
+        };
+        drop(lock);
+        result
+    }
+
+    /// Rename the corrupt mailbox to a unique `<stem>.corrupt.<ts>-<seq>.json`
+    /// path. The caller must hold the exclusive lock (AA-03). A failed rename
+    /// is logged: the inbox then stays corrupt and the next read retries.
+    fn move_aside_locked(&self) {
+        static ASIDE_SEQ: AtomicU64 = AtomicU64::new(0);
+        let ts = chrono::Utc::now().format("%Y%m%dT%H%M%S%9fZ");
+        let seq = ASIDE_SEQ.fetch_add(1, Ordering::Relaxed);
+        let corrupt_path = self.path.with_extension(format!("corrupt.{ts}-{seq}.json"));
+        if let Err(e) = fs::rename(&self.path, &corrupt_path) {
+            tracing::error!(
+                path = %self.path.display(),
+                aside = %corrupt_path.display(),
+                error = %e,
+                "could not move corrupt mailbox aside"
+            );
         }
     }
 
@@ -485,20 +534,11 @@ impl Mailbox {
             return Ok(Vec::new());
         }
         // M6-T5: recover from corruption instead of disabling the inbox.
-        match parse_messages(&raw) {
-            Ok(messages) => Ok(messages.into_iter().filter(|m| !m.read).collect()),
-            Err(e) => {
-                tracing::warn!(
-                    path = %self.path.display(),
-                    error = %e,
-                    "mailbox is corrupt (peek_unread); moving aside"
-                );
-                let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
-                let corrupt_path = self.path.with_extension(format!("corrupt.{ts}.json"));
-                let _ = fs::rename(&self.path, &corrupt_path);
-                Ok(Vec::new())
-            }
-        }
+        let messages = match parse_messages(&raw) {
+            Ok(messages) => messages,
+            Err(_) => self.recover_corrupt("peek_unread")?,
+        };
+        Ok(messages.into_iter().filter(|m| !m.read).collect())
     }
 
     /// Return all unread messages and mark them as read (acquires an exclusive lock).
@@ -533,10 +573,9 @@ impl Mailbox {
                     error = %e,
                     "mailbox is corrupt (drain_unread); moving aside"
                 );
+                // AA-03: rename while still holding the exclusive lock.
+                self.move_aside_locked();
                 drop(lock);
-                let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
-                let corrupt_path = self.path.with_extension(format!("corrupt.{ts}.json"));
-                let _ = fs::rename(&self.path, &corrupt_path);
                 return Ok(Vec::new());
             }
         };

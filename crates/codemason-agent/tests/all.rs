@@ -310,6 +310,9 @@ mod test_loop_termination;
 #[path = "test_m3_lifecycle.rs"]
 mod test_m3_lifecycle;
 
+#[path = "test_mailbox_corrupt_recovery.rs"]
+mod test_mailbox_corrupt_recovery;
+
 #[path = "test_m4_delivery.rs"]
 mod test_m4_delivery;
 

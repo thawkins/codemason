@@ -123,9 +123,10 @@ fn sanitize_for_id(name: &str) -> String {
     if result.ends_with('-') {
         result.pop();
     }
-    // Limit to 20 chars to keep IDs readable
+    // Limit to 20 bytes to keep IDs readable; cut at a char boundary so a
+    // non-ASCII name (kept by `is_alphanumeric`) cannot panic (AA-01).
     if result.len() > 20 {
-        result.truncate(20);
+        result = codemason_types::strutil::truncate_bytes_no_ellipsis(&result, 20);
     }
     // Ensure we have something - fallback to "task" if empty
     if result.is_empty() {
