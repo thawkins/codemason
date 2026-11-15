@@ -466,6 +466,8 @@ impl Shell {
     ///
     /// * `ui` - the root ui of the window.
     pub fn update(&mut self, ui: &mut egui::Ui) {
+        let runtime = self.runtime();
+        let _context = runtime.as_ref().map(Handle::enter);
         self.logic(ui.ctx());
         self.draw_frame(ui);
         self.files.show_pending(None);
@@ -489,6 +491,10 @@ impl Shell {
     ///
     /// * `ctx` - the window's context.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        // Every App call below runs inside the runtime context (see
+        // `Self::runtime`).
+        let runtime = self.runtime();
+        let _context = runtime.as_ref().map(Handle::enter);
         // App actions run on this thread; their clipboard writes go to the
         // window's clipboard (`forward_copies`).
         clipboard::route_copies_to_window();
@@ -535,6 +541,10 @@ impl Shell {
 
     /// Route this frame's keys and draw it (the shown half of a frame).
     fn draw_frame(&mut self, ui: &mut egui::Ui) {
+        // Panels and dialogs call App methods directly (a sidebar click
+        // opens a session); they run inside the runtime context too.
+        let runtime = self.runtime();
+        let _context = runtime.as_ref().map(Handle::enter);
         // A context-menu item chosen last frame acts on the prompt editor
         // before the prompt reads this frame's input.
         dialogs::context_menu::apply_pending(ui.ctx());
@@ -555,6 +565,19 @@ impl Shell {
         self.show(ui);
         self.run_dialog_keys(ui.ctx());
         clipboard::forward_copies(ui.ctx());
+    }
+
+    /// The runtime the App's async work runs on, to enter for a whole frame.
+    ///
+    /// eframe runs the window on the process main thread, which is not a
+    /// runtime thread. App methods that `tokio::spawn` or `spawn_blocking`
+    /// (a session start announces its instruction files with
+    /// `spawn_blocking`) panic there with "there is no reactor running"
+    /// unless the runtime context is entered, so every entry point from
+    /// eframe enters it for its whole duration, not only around
+    /// `Handle::block_on`. `None` without attached sources.
+    fn runtime(&self) -> Option<Handle> {
+        self.sources.as_ref().map(|sources| sources.runtime.clone())
     }
 
     /// Answer every file dialog with `answer_with` instead of a native
@@ -772,6 +795,8 @@ impl eframe::App for Shell {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let runtime = self.runtime();
+        let _context = runtime.as_ref().map(Handle::enter);
         // eframe has just called `logic` for this frame.
         self.draw_frame(ui);
         // Show a dialog the File menu queued, with the window as parent.
@@ -779,6 +804,8 @@ impl eframe::App for Shell {
     }
 
     fn on_exit(&mut self) {
+        let runtime = self.runtime();
+        let _context = runtime.as_ref().map(Handle::enter);
         // Normally the close path has already run the exit steps. An exit
         // that skipped it (macOS `applicationWillTerminate:` at logout)
         // still saves what `/quit` saves.

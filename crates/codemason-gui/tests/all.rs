@@ -44,6 +44,8 @@ mod test_panels;
 mod test_prompt;
 #[path = "test_research.rs"]
 mod test_research;
+#[path = "test_runtime_context.rs"]
+mod test_runtime_context;
 #[path = "test_side_panels.rs"]
 mod test_side_panels;
 #[path = "test_theme.rs"]

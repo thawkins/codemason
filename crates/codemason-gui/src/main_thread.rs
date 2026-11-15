@@ -138,6 +138,11 @@ fn run_window(launch: GuiLaunch) -> Result<(), GuiLaunchError> {
         viewport: egui::ViewportBuilder::default().with_title(APP_NAME),
         ..Default::default()
     };
+    // The whole window runs inside the runtime context: the creator, every
+    // eframe callback and the drop of the App when the window closes may
+    // call App code that spawns on the runtime (the shell also enters it per
+    // frame, for harnesses that drive it without this host).
+    let host_context = runtime.enter();
     let result = eframe::run_native(
         APP_NAME,
         native_options,
@@ -163,6 +168,7 @@ fn run_window(launch: GuiLaunch) -> Result<(), GuiLaunchError> {
             Ok(Box::new(shell))
         }),
     );
+    drop(host_context);
     if let Some(task) = bridge_task {
         task.abort();
     }
