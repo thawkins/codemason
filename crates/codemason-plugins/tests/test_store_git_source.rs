@@ -276,11 +276,9 @@ fn parse_git_source_refuses_option_like_refs_and_subpaths() {
         "an option-looking ref must be dropped, not forwarded to git"
     );
 
-    let spec = parse_git_source(&format!("git+https://x/y#main:{INJECTION}"))
-        .expect("the source shape still parses");
     assert!(
-        spec.subpath.is_none(),
-        "an option-looking subpath must be dropped, not forwarded to git"
+        parse_git_source(&format!("git+https://x/y#main:{INJECTION}")).is_none(),
+        "an option-looking subpath must refuse the source, not be forwarded to git"
     );
 
     let spec = parse_git_source("git+https://x/y#--config=core.sshCommand=x")
@@ -294,8 +292,6 @@ fn parse_git_source_refuses_option_like_refs_and_subpaths() {
 fn parse_git_source_refuses_unsafe_characters() {
     for raw in [
         "git+https://x/y#main;rm -rf $HOME",
-        "git+https://x/y#main:`id`",
-        "git+https://x/y#main:../../etc",
         "git+https://x/y#main\nfetch",
     ] {
         let spec = parse_git_source(raw).expect("the source shape still parses");
@@ -303,6 +299,13 @@ fn parse_git_source_refuses_unsafe_characters() {
             spec.subpath.is_none(),
             "{raw} must not yield a subpath for git"
         );
+    }
+    // An unsafe `:<subpath>` refuses the whole source.
+    for raw in [
+        "git+https://x/y#main:`id`",
+        "git+https://x/y#main:../../etc",
+    ] {
+        assert!(parse_git_source(raw).is_none(), "{raw} must be refused");
     }
 
     // The legitimate forms keep working.
@@ -438,10 +441,33 @@ fn add_git_source_refuses_a_tree_over_the_size_cap() {
 }
 
 #[test]
-fn parse_git_source_drops_an_absolute_subpath() {
-    let spec = parse_git_source("git+https://x/y#main:/etc").expect("the shape parses");
-    assert_eq!(
-        spec.subpath, None,
-        "an absolute subpath must never be joined"
+fn parse_git_source_refuses_an_absolute_or_option_like_subpath() {
+    for raw in ["git+https://x/y#main:/etc", "git+https://x/y#main:-x"] {
+        assert!(parse_git_source(raw).is_none(), "{raw} must be refused");
+    }
+}
+
+/// End-to-end: an unsafe subpath refuses the install instead of falling back
+/// to the whole repository, and nothing is cloned or installed.
+#[test]
+fn add_refuses_an_unsafe_subpath_instead_of_installing_the_whole_repo() {
+    let temp = temp_dir("git-bad-subpath");
+    let (url, _remote) = remote_with_plugin(&temp, ".", "whole-repo");
+    for subpath in ["/etc", "-x"] {
+        let err = add(
+            &store_dirs(&temp),
+            &temp,
+            &format!("git+{url}#main:{subpath}"),
+            false,
+        )
+        .expect_err("an unsafe subpath must be refused");
+        assert!(
+            matches!(err, AddError::UnknownSource(_)),
+            "{subpath}: got {err:?}"
+        );
+    }
+    assert!(
+        codemason_plugins::scan_dirs(store_dirs(&temp)).is_empty(),
+        "nothing may be installed"
     );
 }

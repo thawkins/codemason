@@ -414,6 +414,10 @@ pub struct GitSource {
 /// installed, mirroring the local-directory source the same command already
 /// accepts. Every other scheme (ssh, git, http) returns `None`, so it can never
 /// reach the clone (FR-024).
+///
+/// An unsafe ref is dropped (the default branch is used instead), but an
+/// unsafe `:<subpath>` (leading `/` or `-`, a `..` segment, or a character
+/// outside `[A-Za-z0-9._/-]`) refuses the whole source with `None`.
 #[must_use]
 pub fn parse_git_source(source: &str) -> Option<GitSource> {
     let rest = source.strip_prefix("git+")?;
@@ -427,7 +431,16 @@ pub fn parse_git_source(source: &str) -> Option<GitSource> {
     let (ref_name, subpath) = match fragment {
         None => (None, None),
         Some(fragment) => match fragment.split_once(':') {
-            Some((r, path)) => (git_ref(r), git_subpath(path)),
+            Some((r, path)) => {
+                let subpath = git_subpath(path);
+                // A subpath that was given but fails validation refuses the
+                // whole source: dropping it would mean "install the entire
+                // repository", which is not what the source asked for.
+                if subpath.is_none() && !path.trim().trim_start_matches("./").is_empty() {
+                    return None;
+                }
+                (git_ref(r), subpath)
+            }
             None => (git_ref(fragment), None),
         },
     };
