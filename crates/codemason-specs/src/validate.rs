@@ -147,7 +147,7 @@ static RE_INLINE_REQUIREMENT: LazyLock<Regex> =
     LazyLock::new(|| static_regex(r"^(FR|NFR)-(\d+)\.\s+(.*)$"));
 
 static RE_REQUIREMENT_HEADER: LazyLock<Regex> =
-    LazyLock::new(|| static_regex(r"^(#{2,3})\s+(FR|NFR)-(\d+)\s*[---]\s*(.*)$"));
+    LazyLock::new(|| static_regex(r"^(#{2,3})\s+(FR|NFR)-(\d+)\s*[\u{2013}\u{2014}-]\s*(.*)$"));
 
 static RE_STATUS_FRONTMATTER: LazyLock<Regex> =
     LazyLock::new(|| static_regex(r"^status:\s*(\S+)$"));

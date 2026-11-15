@@ -398,6 +398,19 @@ fn test_parse_requirements() {
 }
 
 #[test]
+fn test_parse_requirements_heading_dash_separators() {
+    // The FR/NFR heading separator may be an ASCII '-', an en dash or an
+    // em dash (the dashes were lost to an ASCII clean-up).
+    for dash in ["-", "\u{2013}", "\u{2014}"] {
+        let md = format!("### FR-001 {dash} First\n`The system shall do A.`\n");
+        let reqs = parse_requirements(&md);
+        assert_eq!(reqs.len(), 1, "dash {dash:?}");
+        assert_eq!(reqs[0].id, "FR-001");
+        assert_eq!(reqs[0].title, "First", "dash {dash:?}");
+    }
+}
+
+#[test]
 fn test_parse_requirements_no_ears() {
     let md = "### FR-001 - No EARS\n\nJust text.\n";
     let reqs = parse_requirements(md);
