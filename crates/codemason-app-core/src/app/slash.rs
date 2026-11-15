@@ -4158,7 +4158,7 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                                  \x20 Authors:\n\
                                  \x20   Tim Hawkins <tim.thawkins@gmail.com>\n",
                     env!("CARGO_PKG_VERSION"),
-                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+                    codemason_agent::tool::codemason_info::BUILD_TIME,
                 );
                 self.append_assistant_text(&format!("From: /about\n{about}"));
                 self.status = "about".to_string();
