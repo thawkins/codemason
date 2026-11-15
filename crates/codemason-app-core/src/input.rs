@@ -2168,10 +2168,10 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyInput) {
             }
             Key::Char(c) => {
                 if active_field == 0 {
-                    url_input.insert(url_cursor, c);
+                    url_input.insert(char_byte_offset(&url_input, url_cursor), c);
                     url_cursor += 1;
                 } else {
-                    token_input.insert(token_cursor, c);
+                    token_input.insert(char_byte_offset(&token_input, token_cursor), c);
                     token_cursor += 1;
                 }
                 app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
@@ -2187,11 +2187,11 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyInput) {
                 if active_field == 0 {
                     if url_cursor > 0 {
                         url_cursor -= 1;
-                        url_input.remove(url_cursor);
+                        url_input.remove(char_byte_offset(&url_input, url_cursor));
                     }
                 } else if token_cursor > 0 {
                     token_cursor -= 1;
-                    token_input.remove(token_cursor);
+                    token_input.remove(char_byte_offset(&token_input, token_cursor));
                 }
                 app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
                     url_input,
@@ -2219,10 +2219,10 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyInput) {
             }
             Key::Right => {
                 if active_field == 0 {
-                    if url_cursor < url_input.len() {
+                    if url_cursor < url_input.chars().count() {
                         url_cursor += 1;
                     }
-                } else if token_cursor < token_input.len() {
+                } else if token_cursor < token_input.chars().count() {
                     token_cursor += 1;
                 }
                 app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
@@ -2251,9 +2251,9 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyInput) {
             }
             Key::End => {
                 if active_field == 0 {
-                    url_cursor = url_input.len();
+                    url_cursor = url_input.chars().count();
                 } else {
-                    token_cursor = token_input.len();
+                    token_cursor = token_input.chars().count();
                 }
                 app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
                     url_input,
@@ -3315,4 +3315,16 @@ fn swap_otlp_default_port(endpoint: &str, from_port: &str, to_port: &str) -> Opt
         &endpoint[..after_scheme],
         &endpoint[authority_end..]
     ))
+}
+
+/// Byte offset of the char at char index `char_idx` in `text`.
+///
+/// The GitLab setup dialog keeps `url_cursor` / `token_cursor` as char
+/// indices (the paste path in `app/models.rs` does too); `String::insert` and
+/// `String::remove` take byte offsets. An index at or past the end maps to
+/// `text.len()`.
+fn char_byte_offset(text: &str, char_idx: usize) -> usize {
+    text.char_indices()
+        .nth(char_idx)
+        .map_or(text.len(), |(byte, _)| byte)
 }
