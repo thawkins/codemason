@@ -79,16 +79,81 @@ fn test_shell_applies_a_finished_compaction_without_input() {
     assert!(app.session.compact_result.lock().expect("slot").is_none());
 }
 
+/// The delay of the next repaint the last frame asked for.
+fn repaint_delay(harness: &Harness<'static, Shell>) -> Duration {
+    harness.output().viewport_output[&egui::ViewportId::ROOT].repaint_delay
+}
+
 #[test]
-fn test_shell_schedules_a_wake_for_the_next_housekeeping_pass() {
-    let (_runtime, mut harness) = rig(|_| {});
+fn test_idle_shell_requests_no_repaint() {
+    let (_runtime, mut harness) = rig(|app| {
+        app.status_set_at = None;
+        // The sidebar's request-count sweep is a periodic step (below).
+        app.sidebar.visible = false;
+    });
     harness.run();
 
-    let delay = harness.output().viewport_output[&egui::ViewportId::ROOT].repaint_delay;
     assert!(
-        delay <= HOUSEKEEPING_INTERVAL,
-        "an idle shell must wake within {HOUSEKEEPING_INTERVAL:?}, got {delay:?}"
+        !harness.state().app().has_pending_work(),
+        "nothing outstanding"
     );
+    assert_eq!(
+        repaint_delay(&harness),
+        Duration::MAX,
+        "an idle shell sleeps until input or the next timer"
+    );
+
+    // With the sidebar shown, the only wake is its next request-count sweep.
+    {
+        let app = harness.state_mut().app_mut();
+        app.sidebar.visible = true;
+        app.last_request_sweep = Some(Instant::now());
+    }
+    // Showing the pane repaints at once; then the shell settles.
+    harness.run();
+    let delay = repaint_delay(&harness);
+    assert!(
+        delay > HOUSEKEEPING_INTERVAL && delay <= Duration::from_secs(20),
+        "the sweep wakes, not the 200 ms pass: {delay:?}"
+    );
+}
+
+#[test]
+fn test_pending_job_keeps_waking_and_its_result_lands_without_input() {
+    let (_runtime, mut harness) = rig(|app| {
+        app.status_set_at = None;
+        app.sidebar.visible = false;
+        app.session.messages = vec![Message::user_text(SESSION, "before compaction")];
+    });
+    harness.run();
+    assert_eq!(repaint_delay(&harness), Duration::MAX);
+
+    // A compaction job starts: it holds its result slot while it runs.
+    let slot = {
+        let app = harness.state_mut().app_mut();
+        app.session.compact_in_progress = true;
+        std::sync::Arc::clone(&app.session.compact_result)
+    };
+    make_housekeeping_due(harness.state_mut().app_mut());
+    harness.step();
+    assert!(harness.state().app().has_pending_work());
+    assert!(
+        repaint_delay(&harness) <= HOUSEKEEPING_INTERVAL,
+        "a running job keeps the housekeeping wake, got {:?}",
+        repaint_delay(&harness)
+    );
+
+    // The job finishes: it fills the slot and lets go of it. The next wake
+    // applies the result with no input, and the shell goes back to sleep.
+    *slot.lock().expect("compact slot") =
+        Some(Ok(vec![Message::user_text(SESSION, "compacted history")]));
+    drop(slot);
+    make_housekeeping_due(harness.state_mut().app_mut());
+    harness.step();
+    harness.get_by_label_contains("You: compacted history");
+    harness.run();
+    assert!(!harness.state().app().has_pending_work());
+    assert_eq!(repaint_delay(&harness), Duration::MAX);
 }
 
 #[test]

@@ -10,6 +10,7 @@ pub use self::state::*;
 mod helpers;
 mod housekeeping;
 mod output_content;
+mod pending;
 mod quit;
 #[doc(hidden)]
 pub use helpers::short_id;

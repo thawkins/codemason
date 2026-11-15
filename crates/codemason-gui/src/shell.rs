@@ -577,10 +577,11 @@ impl Shell {
     /// eframe calls `eframe::App::logic` before every frame and, while the
     /// window is minimised or hidden (when it runs no frame at all), on
     /// every requested repaint, at most every 100 ms for an invisible
-    /// window. The pass always requests the next wake (at most
-    /// `HOUSEKEEPING_INTERVAL` away), so swarm unblocking and completion,
-    /// autopilot, timed-question defaults and the history flush keep going
-    /// while the window is hidden, as in the TUI. It reads no input and
+    /// window. While background work is outstanding the pass requests the
+    /// next wake (at most `HOUSEKEEPING_INTERVAL` away), and the timers
+    /// request theirs, so swarm unblocking and completion, autopilot,
+    /// timed-question defaults and the history flush keep going while the
+    /// window is hidden, as in the TUI. It reads no input and
     /// draws nothing.
     ///
     /// # Arguments
@@ -721,11 +722,11 @@ impl Shell {
     /// rollback, `/swarm`, `/bench`, sub-agent launches, background
     /// sessions, store fetches, ...), gated by `HOUSEKEEPING_INTERVAL`, then
     /// the history flush. It runs on every [`Self::logic`] call, as the
-    /// terminal frontend runs it every loop wake, and asks for a wake when
-    /// the next pass is due: background jobs fill shared slots without
-    /// waking anything, so that wake (the TUI's loop keeps the same one) is
-    /// what lands their results while the user is idle or the window is
-    /// hidden.
+    /// terminal frontend runs it every loop wake. Background jobs fill
+    /// shared slots without waking anything, so while one is outstanding
+    /// (`App::has_pending_work`) it asks for a wake when the next pass is
+    /// due, which lands the result while the user is idle or the window is
+    /// hidden; with nothing outstanding the window sleeps.
     ///
     /// It runs on the UI thread through `Handle::block_on`, like
     /// `App::handle_event`, the same pass the TUI runs on its render loop.
@@ -741,11 +742,18 @@ impl Shell {
         };
         let processor = std::sync::Arc::clone(&self.app.session_processor);
         sources.runtime.block_on(self.app.housekeeping(&processor));
-        ctx.request_repaint_after(
-            self.app
-                .housekeeping_due_at()
-                .saturating_duration_since(std::time::Instant::now()),
-        );
+        // Keep the wake for the next pass only while something is
+        // outstanding (`App::has_pending_work`); otherwise sleep until
+        // input, an agent event (the bridge wakes the window), the next
+        // timer (`Self::poll_timers`) or a periodic step.
+        let due = if self.app.has_pending_work() {
+            Some(self.app.housekeeping_due_at())
+        } else {
+            self.app.next_periodic_due()
+        };
+        if let Some(due) = due {
+            ctx.request_repaint_after(due.saturating_duration_since(std::time::Instant::now()));
+        }
     }
 
     /// Run the App's wall-clock timers (`App::poll_timers`: status expiry,

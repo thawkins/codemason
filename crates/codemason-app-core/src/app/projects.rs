@@ -19,7 +19,7 @@ use super::helpers::{from_cmd, short_session_id};
 use super::state::App;
 
 /// How often the poll loop looks for projects whose request counts are due.
-const REQUEST_SWEEP_INTERVAL: Duration = Duration::from_secs(20);
+pub const REQUEST_SWEEP_INTERVAL: Duration = Duration::from_secs(20);
 
 /// Body of `/project help`.
 pub(super) const PROJECT_HELP: &str = "## /project - Projects\n\n\
