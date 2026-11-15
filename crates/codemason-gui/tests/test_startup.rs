@@ -18,32 +18,41 @@ use codemason_agent::StartupTimings;
 use codemason_app_core::app::StartupSession;
 use codemason_gui::{GuiOptions, main_thread_channel, run_gui};
 
-/// Restores the environment variables a test changed, even if it panics.
-struct EnvRestore(Vec<(&'static str, Option<OsString>)>);
+/// Restores the environment variables a test changed, even if it panics,
+/// then releases the env lock it holds (the lock field is declared last).
+struct EnvRestore {
+    vars: Vec<(&'static str, Option<OsString>)>,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
 
 impl Drop for EnvRestore {
     fn drop(&mut self) {
-        for (name, value) in &self.0 {
+        for (name, value) in &self.vars {
             match value {
-                // SAFETY: the caller holds `crate::global_env_lock()`.
+                // SAFETY: `self._lock` serialises every env mutation.
                 Some(v) => unsafe { std::env::set_var(name, v) },
-                // SAFETY: the caller holds `crate::global_env_lock()`.
+                // SAFETY: `self._lock` serialises every env mutation.
                 None => unsafe { std::env::remove_var(name) },
             }
         }
     }
 }
 
-/// Point the display check at a dummy display and the user config dirs at a
-/// scratch tree, returning the guard that restores them.
+/// Take the binary-wide env lock, point the display check at a dummy display
+/// and the user config dirs at a scratch tree, and return the guard that
+/// restores them and holds the lock (a test must not take it again).
 fn scratch_env(tag: &str) -> EnvRestore {
+    let lock = crate::global_env_lock();
     let scratch = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("target/temp")
         .join(format!("gui-startup-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&scratch).expect("scratch dir");
     let names = ["DISPLAY", "XDG_CONFIG_HOME", "HOME"];
-    let restore = EnvRestore(names.iter().map(|n| (*n, std::env::var_os(n))).collect());
-    // SAFETY: the caller holds `crate::global_env_lock()`.
+    let restore = EnvRestore {
+        vars: names.iter().map(|n| (*n, std::env::var_os(n))).collect(),
+        _lock: lock,
+    };
+    // SAFETY: `restore` holds the env lock.
     unsafe {
         std::env::set_var("DISPLAY", ":99");
         std::env::set_var("XDG_CONFIG_HOME", scratch.join("config"));
@@ -101,7 +110,6 @@ async fn launched_session(
 #[tokio::test(flavor = "multi_thread")]
 #[allow(clippy::await_holding_lock)] // the lock pins DISPLAY/HOME for the whole launch
 async fn test_run_gui_resume_focuses_the_requested_session() {
-    let _guard = crate::global_env_lock();
     let _env = scratch_env("resume");
 
     let (focused, stored) = Box::pin(launched_session(|id| {
@@ -115,7 +123,6 @@ async fn test_run_gui_resume_focuses_the_requested_session() {
 #[tokio::test(flavor = "multi_thread")]
 #[allow(clippy::await_holding_lock)] // the lock pins DISPLAY/HOME for the whole launch
 async fn test_run_gui_new_starts_a_fresh_session() {
-    let _guard = crate::global_env_lock();
     let _env = scratch_env("new");
 
     let (focused, stored) = Box::pin(launched_session(|_| StartupSession::New)).await;
