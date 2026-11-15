@@ -266,7 +266,6 @@ impl App {
         // The window is looked up from the model list when it is needed.
         self.session.selected_model_ctx_window = None;
         self.session.cached_provider_model_label = None;
-        self.status_bar_cache = None;
     }
 
     /// Starts a new session in `project` and focuses it; the previous

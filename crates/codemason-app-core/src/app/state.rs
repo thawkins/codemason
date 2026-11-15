@@ -3990,18 +3990,6 @@ pub struct App {
     /// eliminates the per-cache-miss `std::thread::spawn` overhead that the
     /// previous implementation incurred on every streaming text delta.
     pub md_worker: crate::app::MdWorker,
-    // -- Status bar span cache (FR-003, FR-008) ------------------------------
-    /// Cached rendered status-bar spans and the signature they were built
-    /// from.  When the signature matches on the next render, the cached
-    /// spans are reused directly, avoiding per-frame `format!()` and
-    /// `String::clone()` calls (FR-003).
-    pub status_bar_cache: Option<crate::app::StatusBarCache>,
-    // -- Model picker row cache (FR-003) -------------------------------------
-    /// Cached pre-built table rows for the `SelectModel` picker dialog.
-    /// Rebuilt only when the model list changes (new discovery results),
-    /// avoiding per-frame `format!()` calls for every model's context
-    /// window, cost tier, thinking levels, and feature indicators.
-    pub model_picker_rows_cache: Option<crate::app::ModelPickerRowsCache>,
 
     // -- Message timeline line cache (FR-003, FR-006) ------------------------
     /// PERF-045: instant of the last housekeeping-poll pass.  The cheap,

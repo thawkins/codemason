@@ -1,6 +1,5 @@
-//! Deep coverage for the smaller `codemason-tui` modules: the status-bar and
-//! model-picker caches, the tracing layer that routes log records to the TUI
-//! log panel, the markdown worker, the `/toolchain` report engine, the team
+//! Deep coverage for the smaller `codemason-tui` modules: the tracing layer
+//! that routes log records to the TUI log panel, the markdown worker, the `/toolchain` report engine, the team
 //! blueprint helpers, the clipboard temp-file lifecycle, the layout utilities,
 //! the execution-backend switcher panel, the graphify skill generator, the
 //! goal-loop setup dialog, the cron scheduler, and the layout render branches
@@ -76,14 +75,6 @@ fn task_entry(
         time_bound_secs: None,
     }
 }
-
-// ===========================================================================
-// status_bar_cache
-// ===========================================================================
-
-// ===========================================================================
-// model_picker_cache
-// ===========================================================================
 
 // ===========================================================================
 // tracing_layer

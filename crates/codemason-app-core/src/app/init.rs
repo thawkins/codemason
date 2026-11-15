@@ -454,8 +454,6 @@ impl App {
             history_save_deadline: None,
             md_render_cache: LruCache::new(NonZeroUsize::new(256).expect("256 > 0")),
             md_worker: crate::app::MdWorker::new(),
-            status_bar_cache: None,
-            model_picker_rows_cache: None,
             jobs_last_poll: std::time::Instant::now(),
             housekeeping_runs: 0,
             sid_to_display_name: HashMap::new(),

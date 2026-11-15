@@ -372,7 +372,6 @@ impl App {
         self.context_menu = None;
         self.slash_menu = None;
         self.file_menu = None;
-        self.status_bar_cache = None;
         self.needs_redraw = true;
         let short = self
             .session
