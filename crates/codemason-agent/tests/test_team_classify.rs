@@ -116,3 +116,40 @@ fn test_is_known_agent_type() {
     assert!(is_known_agent_type("Coder"));
     assert!(!is_known_agent_type("not-an-agent"));
 }
+
+/// AA-02: the marker was found in `to_lowercase()` and the original text was
+/// sliced with that offset; length-changing case folds shifted the slice.
+#[test]
+fn test_extract_explicit_agent_type_non_ascii_prefix_offsets() {
+    // U+1E9E (3 bytes) lowercases to U+00DF (2 bytes).
+    assert_eq!(
+        extract_explicit_agent_type("\u{1e9e} [agent: coder]"),
+        Some("coder".to_string())
+    );
+    // U+0130 (2 bytes) lowercases to "i\u{307}" (3 bytes).
+    assert_eq!(
+        extract_explicit_agent_type("\u{130}[agent:x]"),
+        Some("x".to_string())
+    );
+    assert_eq!(
+        extract_explicit_agent_type("\u{130} [agent:\u{65e5}\u{672c}]"),
+        Some("\u{65e5}\u{672c}".to_string())
+    );
+}
+
+/// AA-02: the strip path used the same shifted offsets.
+#[test]
+fn test_strip_explicit_agent_type_hint_non_ascii_prefix_offsets() {
+    assert_eq!(
+        strip_explicit_agent_type_hint("\u{1e9e} [agent: coder] go"),
+        "\u{1e9e} go"
+    );
+    assert_eq!(
+        strip_explicit_agent_type_hint("\u{130}[agent:x] go"),
+        "\u{130} go"
+    );
+    assert_eq!(
+        strip_explicit_agent_type_hint("\u{130} [agent:\u{65e5}\u{672c}] go"),
+        "\u{130} go"
+    );
+}
