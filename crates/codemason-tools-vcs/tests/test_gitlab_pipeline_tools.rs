@@ -423,6 +423,41 @@ async fn test_gitlab_get_job_log_tails_plain_text_trace() {
 }
 
 #[tokio::test]
+async fn test_gitlab_get_job_log_tails_a_trace_larger_than_the_buffer() {
+    let _lock = crate::global_env_lock();
+    let server = MockServer::start().await;
+    // About 3.4 MiB of trace, ending with a newline: well past the in-memory
+    // tail buffer, so the tail and the line count come from the streamed read.
+    let total: usize = 300_000;
+    let trace: String = (1..=total).map(|i| format!("line {i:06}\n")).collect();
+    Mock::given(method("GET"))
+        .and(path(format!("/api/v4/projects/{ENC}/jobs/42/trace")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(trace))
+        .mount(&server)
+        .await;
+
+    let (ctx, _env, _dir) = context_for(&server, "group/project");
+    let out = GitLabGetJobLogTool
+        .execute(json!({"job_id": 42, "tail": 2000}), &ctx)
+        .await
+        .expect("job log");
+
+    let meta = out.metadata.expect("metadata");
+    assert_eq!(meta["total_lines"], total);
+    assert_eq!(meta["returned_lines"], 2000);
+    assert_eq!(meta["truncated"], true);
+    assert!(
+        out.content.starts_with(&format!(
+            "--- showing last 2000 of {total} lines ---\nline {:06}\n",
+            total - 1999
+        )),
+        "{}",
+        &out.content[..200]
+    );
+    assert!(out.content.ends_with(&format!("line {total:06}")));
+}
+
+#[tokio::test]
 async fn test_gitlab_get_job_log_surfaces_api_error() {
     let _lock = crate::global_env_lock();
     let server = MockServer::start().await;

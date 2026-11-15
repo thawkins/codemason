@@ -54,11 +54,34 @@ pub fn shared_client() -> Client {
 ///
 /// Returns an error when a body chunk cannot be read.
 pub async fn read_tail(resp: reqwest::Response, limit: usize) -> reqwest::Result<Vec<u8>> {
+    read_tail_counting_lines(resp, limit)
+        .await
+        .map(|(tail, _)| tail)
+}
+
+/// Like [`read_tail`], but also counts the lines of the *whole* body, with
+/// the same rule as [`str::lines`]: every `\n` ends a line, plus one more
+/// for trailing bytes after the last `\n`. An empty body has zero lines.
+///
+/// # Errors
+///
+/// Returns an error when a body chunk cannot be read.
+pub async fn read_tail_counting_lines(
+    resp: reqwest::Response,
+    limit: usize,
+) -> reqwest::Result<(Vec<u8>, u64)> {
     use futures::StreamExt as _;
     let mut stream = resp.bytes_stream();
     let mut tail: Vec<u8> = Vec::new();
+    let mut newlines: u64 = 0;
+    let mut last_byte: Option<u8> = None;
     while let Some(chunk) = stream.next().await {
-        tail.extend_from_slice(&chunk?);
+        let chunk = chunk?;
+        newlines += chunk.iter().filter(|&&b| b == b'\n').count() as u64;
+        if let Some(&b) = chunk.last() {
+            last_byte = Some(b);
+        }
+        tail.extend_from_slice(&chunk);
         // Trim only once the buffer is twice the limit, so each byte is
         // moved at most a few times.
         if tail.len() > limit.saturating_mul(2) {
@@ -68,5 +91,10 @@ pub async fn read_tail(resp: reqwest::Response, limit: usize) -> reqwest::Result
     if tail.len() > limit {
         tail.drain(..tail.len() - limit);
     }
-    Ok(tail)
+    let lines = match last_byte {
+        None => 0,
+        Some(b'\n') => newlines,
+        Some(_) => newlines + 1,
+    };
+    Ok((tail, lines))
 }
