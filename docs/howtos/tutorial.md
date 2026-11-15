@@ -14,7 +14,7 @@ cross-referenced so you can go deeper without re-reading material here.
 ## Table of Contents
 
 1. [Prerequisites](#1-prerequisites)
-2. [Starting the GUI](#2-starting-the-tui)
+2. [Starting the GUI](#2-starting-the-gui)
 3. [Selecting a Mode (Agent Preset)](#3-selecting-a-mode-agent-preset)
 4. [Setting Up a New Project](#4-setting-up-a-new-project)
 5. [Generating Code for the Project](#5-generating-code-for-the-project)
