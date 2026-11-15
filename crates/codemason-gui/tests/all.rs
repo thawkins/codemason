@@ -90,6 +90,8 @@ pub fn permission_bits_enforced() -> bool {
     })
 }
 
+#[path = "test_bridge.rs"]
+mod test_bridge;
 #[path = "test_clipboard.rs"]
 mod test_clipboard;
 #[path = "test_dialogs.rs"]

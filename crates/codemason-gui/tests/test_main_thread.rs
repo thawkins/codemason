@@ -14,7 +14,7 @@ fn make_launch() -> (GuiLaunch, codemason_app_core::log_channel::TuiLogSender) {
     let (log_tx, log_rx) = codemason_app_core::log_channel::tui_log_channel(4);
     let launch = GuiLaunch {
         app: support::make_app(),
-        event_bus: EventBus::default(),
+        events: EventBus::default().subscribe(),
         logs: log_rx,
         runtime: tokio::runtime::Handle::current(),
     };

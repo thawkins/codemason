@@ -26,6 +26,7 @@
 //!   restyles the window when the mode changes.
 //! - [`bridge::spawn_event_bridge`] forwards agent events from the
 //!   [`EventBus`] into the shell's queue and wakes egui.
+//! - [`signal`] turns Ctrl+C and SIGTERM into the window's normal quit.
 //!
 //! Dependencies: `eframe`/`egui` (the storytold forks, via the workspace
 //! `[patch.crates-io]` table), `craft-ui` (docking, IME, combo boxes),
@@ -45,6 +46,7 @@ pub mod palette;
 pub mod panels;
 pub mod platform;
 pub mod shell;
+pub mod signal;
 pub mod styled_text;
 pub mod theme;
 
@@ -152,7 +154,8 @@ pub fn check_display() -> Result<(), GuiLaunchError> {
 /// ([`App::run_startup`]: provider wiring, health check, and the first
 /// session restored, created or resumed per `opts.startup`) here, then hands
 /// the `App`, the log
-/// receiver, the event bus and a runtime [`tokio::runtime::Handle`] to the
+/// receiver, an event-bus receiver (subscribed before startup, so startup
+/// events are kept) and a runtime [`tokio::runtime::Handle`] to the
 /// process main thread through `opts.launcher`. The main thread's
 /// [`MainThreadHost`] runs the eframe window there, while agent work keeps
 /// running on this runtime and reaches the window through the event bridge.
@@ -190,6 +193,10 @@ pub async fn run_gui(opts: GuiOptions) -> anyhow::Result<()> {
     } = opts;
     tracing::info!(?startup, "starting GUI frontend");
 
+    // Subscribe before startup: the bus does not replay, and startup
+    // publishes events (the instruction-file notice of a fresh session,
+    // early watcher and scheduler events) the window must show.
+    let events = event_bus.subscribe();
     let mut app = App::new(
         Arc::clone(&event_bus),
         storage,
@@ -207,7 +214,7 @@ pub async fn run_gui(opts: GuiOptions) -> anyhow::Result<()> {
     launcher
         .launch(GuiLaunch {
             app,
-            event_bus: (*event_bus).clone(),
+            events,
             logs: log_rx,
             runtime: tokio::runtime::Handle::current(),
         })

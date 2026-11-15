@@ -47,6 +47,8 @@
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use codemason_agent::event::Event;
 use codemason_app_core::app::{App, LogLevel, SelectionPane};
@@ -131,6 +133,8 @@ pub struct Shell {
     native_menu: Option<(craft_menu::NativeMenu, craft_menu::Layout)>,
     /// The saved window geometry, kept up to date while the window runs.
     geometry: Option<WindowGeometry>,
+    /// Set by the Ctrl+C / SIGTERM task ([`crate::signal`]): quit.
+    shutdown_signal: Option<Arc<AtomicBool>>,
 }
 
 impl std::fmt::Debug for Shell {
@@ -180,6 +184,7 @@ impl Shell {
             quit_mcp_timeout: codemason_app_core::app::quit::MCP_SHUTDOWN_TIMEOUT,
             native_menu: None,
             geometry: None,
+            shutdown_signal: None,
         }
     }
 
@@ -280,6 +285,23 @@ impl Shell {
     #[must_use]
     pub fn with_force_exit(mut self) -> Self {
         self.force_exit = true;
+        self
+    }
+
+    /// Quit through the normal quit path once `flag` is set: the flag
+    /// [`crate::signal::spawn_shutdown_signal_task`] sets on Ctrl+C or
+    /// SIGTERM. [`Self::logic`] checks it each pass.
+    ///
+    /// # Arguments
+    ///
+    /// * `flag` - the shutdown flag.
+    ///
+    /// # Returns
+    ///
+    /// The shell watching the flag.
+    #[must_use]
+    pub fn with_shutdown_signal(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.shutdown_signal = Some(flag);
         self
     }
 
@@ -649,6 +671,15 @@ impl Shell {
         self.run_native_menu(ctx);
         // A close request quits, or asks first while a turn runs.
         self.close.logic(ctx, &mut self.app);
+        // Ctrl+C / SIGTERM quits as `/quit` does.
+        if self.app.is_running
+            && self
+                .shutdown_signal
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        {
+            self.app.quit();
+        }
         // `/quit` (or any other path that stops the app) runs the exit steps
         // and closes the window.
         if !self.app.is_running {

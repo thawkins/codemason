@@ -19,7 +19,7 @@
 
 use std::sync::mpsc;
 
-use codemason_agent::event::{Event, EventBus};
+use codemason_agent::event::Event;
 use codemason_app_core::app::App;
 use codemason_app_core::log_channel::TuiLogReceiver;
 use tokio::runtime::Handle;
@@ -28,7 +28,7 @@ use tokio::sync::oneshot;
 use craft_window::restore::{Monitor, MonitorKey};
 
 use crate::platform::window::{self, WindowGeometry};
-use crate::{GuiLaunchError, Shell, bridge, dock, keys};
+use crate::{GuiLaunchError, Shell, bridge, dock, keys, signal};
 
 /// Window title and eframe application name.
 const APP_NAME: &str = "codemason";
@@ -37,8 +37,9 @@ const APP_NAME: &str = "codemason";
 pub struct GuiLaunch {
     /// The application state, built on the runtime thread.
     pub app: App,
-    /// The agent event bus the bridge subscribes to.
-    pub event_bus: EventBus,
+    /// The agent event-bus receiver the bridge drains, subscribed before
+    /// the App's startup ran so the events it published are queued.
+    pub events: tokio::sync::broadcast::Receiver<Event>,
     /// Tracing records for the log panel.
     pub logs: TuiLogReceiver,
     /// The runtime that drives agent work and `App::handle_event`.
@@ -132,11 +133,12 @@ impl MainThreadHost {
 fn run_window(launch: GuiLaunch) -> Result<(), GuiLaunchError> {
     let GuiLaunch {
         app,
-        event_bus,
+        events,
         logs,
         runtime,
     } = launch;
     let mut bridge_task = None;
+    let mut signal_task = None;
     // The saved geometry opens the window as the user left it (maximized
     // on first launch).
     let geometry = window::window_path().map_or_else(WindowGeometry::in_memory, |path| {
@@ -160,11 +162,17 @@ fn run_window(launch: GuiLaunch) -> Result<(), GuiLaunchError> {
             crate::fonts::install(&cc.egui_ctx, craft_ui::fonts::SystemFonts::AfterCraft);
             let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
             let _enter = runtime.enter();
+            // The bridge adds broadcast lags to the App's counter, so the
+            // Agents panel reconcile repairs dropped subagent events.
             bridge_task = Some(bridge::spawn_event_bridge(
-                event_bus,
+                events,
                 cc.egui_ctx.clone(),
                 event_tx,
+                std::sync::Arc::clone(&app.tui_event_lag),
             ));
+            // Ctrl+C / SIGTERM quit through the normal quit path.
+            let (shutdown, task) = signal::spawn_shutdown_signal_task(cc.egui_ctx.clone());
+            signal_task = Some(task);
             // Monitors are known only now that the window exists: a saved
             // rect no monitor shows opens maximized instead.
             if let Some(window) = cc.winit_window() {
@@ -192,7 +200,8 @@ fn run_window(launch: GuiLaunch) -> Result<(), GuiLaunchError> {
             let mut shell = Shell::new(app)
                 .with_sources(event_rx, logs, runtime.clone())
                 .with_window_geometry(geometry)
-                .with_force_exit();
+                .with_force_exit()
+                .with_shutdown_signal(shutdown);
             if let Some(path) = dock::layout_path() {
                 shell = shell.with_layout_file(path);
             }
@@ -213,6 +222,9 @@ fn run_window(launch: GuiLaunch) -> Result<(), GuiLaunchError> {
     );
     drop(host_context);
     if let Some(task) = bridge_task {
+        task.abort();
+    }
+    if let Some(task) = signal_task {
         task.abort();
     }
     result.map_err(|e| GuiLaunchError::Backend(e.to_string()))

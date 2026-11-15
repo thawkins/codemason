@@ -1,4 +1,4 @@
-//! Bridge from the agent [`EventBus`] to the GUI.
+//! Bridge from the agent `EventBus` to the GUI.
 //!
 //! The broadcast bus drops events for a slow receiver, so (as in the terminal
 //! frontend) a task drains it into an unbounded queue that the [`Shell`]
@@ -7,9 +7,19 @@
 //!
 //! eframe owns the UI thread; this task runs on a tokio worker thread.
 //!
+//! The receiver is subscribed by [`crate::run_gui`] before the App's startup
+//! runs, so events published during startup (instruction-file notices,
+//! early watcher and scheduler events) are queued for the window. A lag is
+//! added to the App's shared lag counter (`App::tui_event_lag`), which the
+//! Agents panel reconcile poll watches to repair dropped subagent events.
+//!
 //! [`Shell`]: crate::Shell
 
-use codemason_agent::event::{Event, EventBus};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use codemason_agent::event::Event;
+use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
@@ -20,20 +30,22 @@ use tokio::task::JoinHandle;
 ///
 /// # Arguments
 ///
-/// * `bus` - the agent event bus to subscribe to.
+/// * `bus_rx` - a receiver subscribed to the agent event bus.
 /// * `ctx` - the egui context to wake with `request_repaint` after each event.
 /// * `queue` - the sending half of the queue the [`crate::Shell`] drains.
+/// * `lag` - the App's broadcast-lag counter; each lag adds the number of
+///   skipped events.
 ///
 /// # Returns
 ///
 /// The task handle. The task ends when the bus closes or the queue's
 /// receiver is dropped (the window closed).
 pub fn spawn_event_bridge(
-    bus: EventBus,
+    mut bus_rx: Receiver<Event>,
     ctx: egui::Context,
     queue: UnboundedSender<Event>,
+    lag: Arc<AtomicU64>,
 ) -> JoinHandle<()> {
-    let mut bus_rx = bus.subscribe();
     tokio::spawn(async move {
         loop {
             match bus_rx.recv().await {
@@ -45,6 +57,8 @@ pub fn spawn_event_bridge(
                 }
                 Err(RecvError::Lagged(n)) => {
                     tracing::warn!("{n} broadcast events skipped in GUI bridge task");
+                    lag.fetch_add(n, Ordering::Relaxed);
+                    ctx.request_repaint();
                 }
                 Err(RecvError::Closed) => break,
             }

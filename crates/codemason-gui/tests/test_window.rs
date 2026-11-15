@@ -214,6 +214,40 @@ fn test_close_request_idle_closes_immediately() {
 }
 
 #[test]
+fn test_shutdown_signal_flag_runs_the_quit_path() {
+    let dir = scratch("signal");
+    let history = dir.join("history");
+    let path = history.clone();
+    let signal = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&signal);
+    let (_runtime, mut harness) = rig_with(
+        move |app| {
+            // A typed line whose debounced flush has not run yet.
+            app.history_file_path = Some(path);
+            app.input_history = vec!["typed before the signal".to_string()];
+            app.history_dirty = true;
+            app.history_save_deadline =
+                Some(std::time::Instant::now() + std::time::Duration::from_hours(1));
+        },
+        move |shell| shell.with_shutdown_signal(flag),
+    );
+    harness.run();
+    assert!(harness.state().app().is_running);
+
+    // What the Ctrl+C / SIGTERM task does when the signal arrives.
+    signal.store(true, Ordering::Relaxed);
+    harness.step();
+
+    assert!(
+        !harness.state().app().is_running,
+        "the signal quits the app"
+    );
+    assert!(commands(&harness).contains(&egui::ViewportCommand::Close));
+    let saved = std::fs::read_to_string(&history).expect("history saved on quit");
+    assert!(saved.contains("typed before the signal"), "got {saved:?}");
+}
+
+#[test]
 fn test_quit_command_with_running_turn_closes_without_prompt() {
     let cancel = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&cancel);

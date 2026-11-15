@@ -67,6 +67,16 @@ fn scratch_env(tag: &str) -> EnvRestore {
 async fn launched_session(
     startup: impl FnOnce(&str) -> StartupSession,
 ) -> (Option<String>, String) {
+    let ((focused, _), stored) = Box::pin(launched_with(startup, |_| None::<()>)).await;
+    (focused, stored)
+}
+
+/// [`launched_session`], also returning what `inspect` read from the launch
+/// the host received (before the window would be built from it).
+async fn launched_with<T: Send + 'static>(
+    startup: impl FnOnce(&str) -> StartupSession,
+    mut inspect: impl FnMut(&mut codemason_gui::GuiLaunch) -> Option<T> + Send + 'static,
+) -> ((Option<String>, Option<T>), String) {
     let seed = support::make_app();
     let stored = seed
         .session_processor
@@ -80,11 +90,13 @@ async fn launched_session(
     let (launcher, host) = main_thread_channel();
     let host_thread = std::thread::spawn(move || {
         let mut focused = None;
-        host.serve_with(|launch| {
+        let mut inspected = None;
+        host.serve_with(|mut launch| {
             focused = Some(launch.app.session.session_id.clone());
+            inspected = inspect(&mut launch);
             Ok(())
         });
-        focused.flatten()
+        (focused.flatten(), inspected)
     });
 
     let (_log_tx, log_rx) = codemason_app_core::log_channel::tui_log_channel(4);
@@ -129,4 +141,30 @@ async fn test_run_gui_new_starts_a_fresh_session() {
 
     let focused = focused.expect("a fresh session is focused");
     assert_ne!(focused, stored, "--new must not reuse a stored session");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::await_holding_lock)] // the lock pins DISPLAY/HOME for the whole launch
+async fn test_run_gui_startup_notice_reaches_the_gui_receiver() {
+    let _env = scratch_env("notice");
+
+    // A fresh session announces its instruction files with an
+    // `AgentNotice` during startup, before the window exists; the receiver
+    // the launch carries must already hold it.
+    let ((focused, notice), _stored) = Box::pin(launched_with(
+        |_| StartupSession::New,
+        |launch| loop {
+            match launch.events.blocking_recv() {
+                Ok(codemason_agent::event::Event::AgentNotice { session_id, .. }) => {
+                    break Some(session_id);
+                }
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break None,
+            }
+        },
+    ))
+    .await;
+
+    let focused = focused.expect("a fresh session is focused");
+    assert_eq!(notice.as_deref(), Some(focused.as_str()));
 }
