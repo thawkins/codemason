@@ -160,3 +160,77 @@ fn test_graph_phase_end_clears_only_graph_indicator() {
         "idx indicator must stay clear after the graph phase ends"
     );
 }
+
+/// The transcript as the message window shows it: app-core's styled lines for
+/// every message (what the GUI's Messages pane draws), joined as text.
+fn transcript_lines(app: &App) -> String {
+    codemason_app_core::message_lines::messages_to_lines(
+        &app.session.messages,
+        &app.tool_step_map,
+        &app.sid_to_display_name,
+        &app.cwd,
+    )
+    .iter()
+    .map(codemason_app_core::styled::StyledLine::text)
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+#[test]
+fn test_poll_codeindex_bg_result_drains_completion() {
+    let mut app = make_app();
+    app.session.session_id = Some("test-session".to_string());
+    app.code_index_graph_spawned = true;
+    app.status = "[wait] codeindex: building graph…".to_string();
+
+    let payload = Ok((
+        "\u{2705} Graph built: 42 edges (30 EXTRACTED, 12 INFERRED) in 100ms.".to_string(),
+        "codeindex: graph built (42 edges)".to_string(),
+    ));
+    {
+        let mut guard = app.code_index_bg_result.lock().unwrap();
+        *guard = Some(payload);
+    }
+
+    app.poll_codeindex_bg_result();
+
+    assert_eq!(app.status, "codeindex: graph built (42 edges)");
+    assert!(
+        !app.code_index_graph_spawned,
+        "spawned latch must clear once the result is drained"
+    );
+    // The message window shows the transcript lines app-core renders (the GUI
+    // draws `message_lines::messages_to_lines` over the session's messages).
+    let window = transcript_lines(&app);
+    assert!(
+        window.contains("Graph built: 42 edges"),
+        "message window must show the completion message; got: {window}"
+    );
+}
+
+#[test]
+fn test_poll_codeindex_bg_result_reports_error() {
+    let mut app = make_app();
+    app.session.session_id = Some("test-session".to_string());
+    app.code_index_reindex_spawned = true;
+    {
+        let mut guard = app.code_index_bg_result.lock().unwrap();
+        *guard = Some(Err("Re-index failed: disk on fire".to_string()));
+    }
+
+    app.poll_codeindex_bg_result();
+
+    assert!(!app.code_index_reindex_spawned);
+    assert!(
+        app.status.contains("failed"),
+        "status must surface the failure; got: {}",
+        app.status
+    );
+    // The message window shows the transcript lines app-core renders (the GUI
+    // draws `message_lines::messages_to_lines` over the session's messages).
+    let window = transcript_lines(&app);
+    assert!(
+        window.contains("Re-index failed"),
+        "message window must show the error; got: {window}"
+    );
+}

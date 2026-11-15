@@ -42,3 +42,13 @@ fn test_gitlab_pat_is_masked() {
     );
     assert!(masked.starts_with("glpa"));
 }
+
+/// Restored from `test_layout_extra.rs::mask_secret_boundaries`.
+#[test]
+fn test_mask_secret_boundaries() {
+    assert_eq!(mask_secret(""), "");
+    assert_eq!(mask_secret("123456789012"), "************");
+    let masked = mask_secret("sk-abcdefghijklmnop");
+    assert!(masked.starts_with("sk-a"));
+    assert!(masked.ends_with("mnop"));
+}

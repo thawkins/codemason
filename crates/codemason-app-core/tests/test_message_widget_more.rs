@@ -825,3 +825,284 @@ fn result_summary_pdf_write_uses_path() {
 // ===========================================================================
 // MessageWidget render arms not covered elsewhere
 // ===========================================================================
+
+// ---------------------------------------------------------------------------
+// tool_input_summary arms (restored: app-core logic the terminal tests reached
+// through a `widgets::message_widget` re-export)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn input_summary_git_arms() {
+    use codemason_app_core::message_text::tool_input_summary;
+    let cwd = "/home/user/project";
+    assert_eq!(
+        tool_input_summary("git_add", &json!({"all": true}), cwd),
+        "add -A"
+    );
+    assert_eq!(
+        tool_input_summary("git_add", &json!({"update": true}), cwd),
+        "add -u"
+    );
+    assert_eq!(
+        tool_input_summary("git_branch", &json!({"all": false}), cwd),
+        "branch list (local)"
+    );
+    assert_eq!(
+        tool_input_summary("git_checkout", &json!({"branch": "main"}), cwd),
+        "checkout main"
+    );
+    assert_eq!(
+        tool_input_summary(
+            "git_clone",
+            &json!({"url": "https://example.org/x.git"}),
+            cwd
+        ),
+        "clone https://example.org/x.git"
+    );
+    assert_eq!(
+        tool_input_summary("git_commit", &json!({"message": "fix"}), cwd),
+        "commit: fix"
+    );
+    assert_eq!(
+        tool_input_summary("git_diff", &json!({"target": "staged"}), cwd),
+        "diff staged"
+    );
+    assert_eq!(
+        tool_input_summary("git_push", &json!({"remote": "origin"}), cwd),
+        "push origin"
+    );
+    assert_eq!(
+        tool_input_summary("git_status", &json!({"short": true}), cwd),
+        "status --short"
+    );
+    assert_eq!(
+        tool_input_summary("git_show", &json!({"ref": "HEAD"}), cwd),
+        "show HEAD"
+    );
+    assert_eq!(
+        tool_input_summary("git_stash", &json!({"action": "pop"}), cwd),
+        "stash pop"
+    );
+    assert_eq!(tool_input_summary("git_tag", &json!({}), cwd), "tag -l");
+}
+
+#[test]
+fn input_summary_gitlab_arms() {
+    use codemason_app_core::message_text::tool_input_summary;
+    let cwd = "/home/user/project";
+    assert_eq!(
+        tool_input_summary("gitlab_list_issues", &json!({"state": "opened"}), cwd),
+        "issues (opened)"
+    );
+    assert_eq!(
+        tool_input_summary("gitlab_get_mr", &json!({"iid": 7}), cwd),
+        "MR #7"
+    );
+    assert_eq!(
+        tool_input_summary("gitlab_create_mr", &json!({"title": "Feat"}), cwd),
+        "new MR: Feat"
+    );
+    assert_eq!(
+        tool_input_summary("gitlab_merge_mr", &json!({"iid": 8}), cwd),
+        "merge !8"
+    );
+    assert_eq!(
+        tool_input_summary("gitlab_get_job", &json!({"job_id": 9}), cwd),
+        "job #9"
+    );
+    assert_eq!(
+        tool_input_summary("gitlab_cancel_pipeline", &json!({"pipeline_id": 5}), cwd),
+        "cancel pipeline #5"
+    );
+}
+
+#[test]
+fn input_summary_github_arms() {
+    use codemason_app_core::message_text::tool_input_summary;
+    let cwd = "/home/user/project";
+    assert_eq!(
+        tool_input_summary("github_list_issues", &json!({"state": "open"}), cwd),
+        "issues (open)"
+    );
+    assert_eq!(
+        tool_input_summary("github_get_issue", &json!({"number": 5}), cwd),
+        "issue #5"
+    );
+    assert_eq!(
+        tool_input_summary("github_create_issue", &json!({"title": "Bug"}), cwd),
+        "new issue: Bug"
+    );
+    assert_eq!(
+        tool_input_summary("github_create_pr", &json!({"title": "Feat"}), cwd),
+        "new PR: Feat"
+    );
+    assert_eq!(
+        tool_input_summary("github_merge_pr", &json!({"number": 9}), cwd),
+        "merge #9"
+    );
+    assert_eq!(
+        tool_input_summary("github_review_pr", &json!({"number": 9}), cwd),
+        "review #9"
+    );
+}
+
+#[test]
+fn input_summary_lsp_codeindex_spec_team_arms() {
+    use codemason_app_core::message_text::tool_input_summary;
+    let cwd = "/home/user/project";
+    assert_eq!(
+        tool_input_summary(
+            "lsp_definition",
+            &json!({"path": "src/lib.rs", "line": 3, "column": 5}),
+            cwd
+        ),
+        "src/lib.rs L3:5"
+    );
+    assert_eq!(
+        tool_input_summary("lsp_symbols", &json!({"path": "src/lib.rs"}), cwd),
+        "src/lib.rs"
+    );
+    assert_eq!(
+        tool_input_summary("lsp_diagnostics", &json!({}), cwd),
+        "analyze"
+    );
+    assert_eq!(
+        tool_input_summary(
+            "codeindex_search",
+            &json!({"query": "foo", "kind": "function", "language": "rust"}),
+            cwd
+        ),
+        "\"foo\" kind:function lang:rust"
+    );
+    assert_eq!(
+        tool_input_summary("codeindex_status", &json!({"enabled": false}), cwd),
+        "status: off"
+    );
+    assert_eq!(
+        tool_input_summary("codeindex_reindex", &json!({}), cwd),
+        "reindex"
+    );
+    assert_eq!(
+        tool_input_summary("codeindex_godnodes", &json!({"n": 5}), cwd),
+        "god nodes (top 5)"
+    );
+    assert_eq!(
+        tool_input_summary("codeindex_communities", &json!({}), cwd),
+        "communities"
+    );
+    assert_eq!(
+        tool_input_summary("spec_list", &json!({"status": "draft"}), cwd),
+        "list (draft)"
+    );
+    assert_eq!(
+        tool_input_summary("spec_read", &json!({"spec_id": "auth"}), cwd),
+        "read auth"
+    );
+    assert_eq!(
+        tool_input_summary("spec_search", &json!({"query": "login"}), cwd),
+        "search \"login\""
+    );
+    assert_eq!(
+        tool_input_summary("spec_coverage", &json!({"spec_id": "auth"}), cwd),
+        "coverage auth"
+    );
+    assert_eq!(
+        tool_input_summary("team_create", &json!({"name": "alpha"}), cwd),
+        "create alpha"
+    );
+    assert_eq!(tool_input_summary("team_status", &json!({}), cwd), "status");
+    assert_eq!(
+        tool_input_summary("team_task_list", &json!({}), cwd),
+        "list tasks"
+    );
+    assert_eq!(
+        tool_input_summary("team_read_messages", &json!({}), cwd),
+        "read messages"
+    );
+    assert_eq!(
+        tool_input_summary("team_submit_plan", &json!({}), cwd),
+        "submit plan"
+    );
+    assert_eq!(
+        tool_input_summary("cancel_agent", &json!({"task_id": "abcdef0123456789"}), cwd),
+        "cancel abcdef01"
+    );
+    assert_eq!(
+        tool_input_summary("list_agents", &json!({"status": "running"}), cwd),
+        "filter: running"
+    );
+}
+
+#[test]
+fn input_summary_misc_arms() {
+    use codemason_app_core::message_text::tool_input_summary;
+    let cwd = "/home/user/project";
+    assert_eq!(tool_input_summary("metadata", &json!({}), cwd), "metadata");
+    assert_eq!(tool_input_summary("truncate", &json!({}), cwd), "truncate");
+    assert_eq!(
+        tool_input_summary("read_line_range", &json!({"start_line": 1}), cwd),
+        "line range"
+    );
+    assert_eq!(
+        tool_input_summary(
+            "pdf_write",
+            &json!({"path": "/home/user/project/out.pdf"}),
+            cwd
+        ),
+        "out.pdf"
+    );
+    assert_eq!(
+        tool_input_summary("memory_recall", &json!({"query": "fact"}), cwd),
+        "recall \"fact\""
+    );
+    assert_eq!(
+        tool_input_summary("memory_forget", &json!({"id": "3"}), cwd),
+        "forget 3"
+    );
+    assert_eq!(
+        tool_input_summary(
+            "cron_add",
+            &json!({"id": "nightly", "schedule": "every 1h"}),
+            cwd
+        ),
+        "add `nightly` every 1h"
+    );
+    assert_eq!(
+        tool_input_summary("cron_remove", &json!({"id": "nightly"}), cwd),
+        "remove `nightly`"
+    );
+    assert_eq!(
+        tool_input_summary("cron_list", &json!({}), cwd),
+        "list events"
+    );
+    assert_eq!(
+        tool_input_summary("cron_enable", &json!({"id": "nightly"}), cwd),
+        "enable `nightly`"
+    );
+    assert_eq!(
+        tool_input_summary("cron_disable", &json!({"id": "nightly"}), cwd),
+        "disable `nightly`"
+    );
+    assert_eq!(
+        tool_input_summary("model_info", &json!({"format": "json"}), cwd),
+        "model info (json)"
+    );
+}
+
+#[test]
+fn input_summary_codeindex_dependencies_and_explain() {
+    use codemason_app_core::message_text::tool_input_summary;
+    let cwd = "/home/user/project";
+    let s = tool_input_summary(
+        "codeindex_dependencies",
+        &json!({"path": "src/lib.rs", "direction": "dependents"}),
+        cwd,
+    );
+    assert_eq!(s, "dependents: src/lib.rs");
+    let s = tool_input_summary("codeindex_explain", &json!({"symbol": "Foo"}), cwd);
+    assert_eq!(s, "explain Foo");
+    let s = tool_input_summary("codeindex_path", &json!({"from": "A", "to": "B"}), cwd);
+    assert_eq!(s, "path A → B");
+    let s = tool_input_summary("codeindex_references", &json!({"symbol": "Foo"}), cwd);
+    assert_eq!(s, "refs: Foo");
+}

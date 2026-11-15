@@ -69,3 +69,26 @@ fn stream_min_interval_constant() {
         codemason_app_core::message_lines::MESSAGE_STREAM_MIN_INTERVAL >= std::time::Duration::ZERO
     );
 }
+
+/// Restored: app-core's `line_wrap::wrap_line_styled`, which the terminal's
+/// `wrap_line_styled_testable` wrapped.
+#[test]
+fn wrap_line_styled_testable_edges() {
+    use codemason_app_core::line_wrap::wrap_line_styled;
+    use codemason_app_core::styled::StyledLine;
+    // Width 0 -> a single unbounded line.
+    let out = wrap_line_styled(&StyledLine::raw("hello world"), 0);
+    assert_eq!(out.len(), 1);
+
+    // Narrow width wraps into several rows.
+    let out = wrap_line_styled(&StyledLine::raw("one two three four"), 5);
+    assert!(out.len() >= 2);
+
+    // Tabs are filtered (the wrapper drops control graphemes, as the terminal renderer did).
+    let _ = wrap_line_styled(&StyledLine::raw("a\tb"), 4);
+
+    // Wide Unicode and zero-width handling.
+    let _ = wrap_line_styled(&StyledLine::raw("中文 中文"), 3);
+    let _ = wrap_line_styled(&StyledLine::raw("a\u{200b}b"), 4);
+    let _ = wrap_line_styled(&StyledLine::raw("a\u{00a0}b"), 4);
+}

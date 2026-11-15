@@ -3207,3 +3207,34 @@ fn md_worker_handles_a_separator_only_row_and_a_ragged_table() {
     let rendered = worker.render(markdown).expect("render");
     assert!(rendered.contains("one"), "rendered: {rendered}");
 }
+
+/// Restored: the terminal's `utils::format_elapsed` and `utils::short_id` were
+/// one-line wrappers over these `codemason_types::strutil` helpers.
+#[test]
+fn utils_format_elapsed_and_short_id() {
+    assert_eq!(
+        codemason_types::strutil::format_duration_compact(
+            (chrono::Utc::now() - chrono::Utc::now()).num_seconds()
+        ),
+        "0s"
+    );
+    // The last eight characters (the unique suffix) are kept.
+    assert_eq!(
+        codemason_types::strutil::short_suffix("session-0123456789abcdef", 8),
+        "89abcdef"
+    );
+    assert_eq!(codemason_types::strutil::short_suffix("short", 8), "short");
+    // FR-008: the abbreviation comes from the shared `short_suffix` helper, so
+    // a multi-byte id is cut on a char boundary instead of panicking.
+    assert_eq!(
+        codemason_types::strutil::short_suffix("\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}", 8),
+        "\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}"
+    );
+    assert_eq!(
+        codemason_types::strutil::short_suffix(
+            "\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}",
+            8
+        ),
+        "\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}"
+    );
+}

@@ -1391,3 +1391,28 @@ fn state_message_append_is_readable() {
             .contains("hello")
     );
 }
+
+/// Restored from `theme_status_category_all_methods`: the app-core
+/// `StatusCategory` methods. The terminal's `color()` / `style()` calls and its
+/// "Working is bold" check were the ratatui `StatusStyle` trait, deleted with
+/// the terminal UI.
+#[test]
+fn theme_status_category_all_methods() {
+    // Every test in this file is gated on the binary-wide cwd/env lock: the
+    // `/slash` arms and the GitHub/GitLab credential chains read `cwd`,
+    // `XDG_CONFIG_HOME`, `PATH` and the token env vars, all process-global
+    // under one-binary-per-crate (AGENTS.md "Test Layout").
+    let _cwd_guard = crate::global_env_lock();
+    for category in [
+        StatusCategory::Info,
+        StatusCategory::Success,
+        StatusCategory::Warning,
+        StatusCategory::Error,
+        StatusCategory::Working,
+    ] {
+        assert_ne!(category.icon(), "");
+        assert_ne!(category.display_name(), "");
+        let formatted = category.format("hello");
+        assert!(formatted.contains("hello"));
+    }
+}
