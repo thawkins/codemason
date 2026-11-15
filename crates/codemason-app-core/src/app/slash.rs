@@ -11636,14 +11636,18 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                 match sub {
                     "on" | "enable" => {
                         self.code_index_enabled = true;
-                        // Use the explicit setter so the value is marked as
-                        // user-specified and persisted to the config file (it
-                        // would otherwise be stripped by the default-omission
-                        // behaviour and lost on restart if a global config
-                        // disagrees).
-                        let mut cfg =
-                            codemason_agent::Config::load_for(&self.cwd_path).unwrap_or_default();
-                        cfg.code_index.set_enabled(true);
+                        // Persist by writing `code_index.enabled: true` into the
+                        // loaded source file, and only that key. A config that
+                        // fails to load is reported, never replaced by defaults:
+                        // `unwrap_or_default()` here once saved an empty config
+                        // over the user's global file.
+                        let persisted =
+                            codemason_agent::Config::load_for(&self.cwd_path).and_then(|cfg| {
+                                cfg.set_source_value(
+                                    &["code_index", "enabled"],
+                                    serde_json::json!(true),
+                                )
+                            });
                         if self.code_index.is_some() {
                             // Already active - just ensure watcher is running
                             if self.code_index_watch_session.is_none() {
@@ -11707,8 +11711,8 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                                 }
                             }
                         }
-                        match cfg.save_to_source() {
-                            Ok(()) => {
+                        match persisted {
+                            Ok(_) => {
                                 // P-2: invalidate the cached config so the next turn
                                 // picks up the newly-saved file.
                                 self.session_processor.invalidate_config_cache();
@@ -11728,14 +11732,18 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                     }
                     "off" | "disable" => {
                         self.code_index_enabled = false;
-                        // Use the explicit setter so `enabled: false` is marked
-                        // user-specified and written to the config file. Without
-                        // this, a config that previously omitted `enabled` (i.e.
-                        // defaulted to true) would not persist the disable, and
-                        // codeindex would silently re-enable on restart.
-                        let mut cfg =
-                            codemason_agent::Config::load_for(&self.cwd_path).unwrap_or_default();
-                        cfg.code_index.set_enabled(false);
+                        // Persist by writing `code_index.enabled: false` into the
+                        // loaded source file, and only that key. A config that
+                        // fails to load is reported, never replaced by defaults:
+                        // `unwrap_or_default()` here once saved an empty config
+                        // over the user's global file.
+                        let persisted =
+                            codemason_agent::Config::load_for(&self.cwd_path).and_then(|cfg| {
+                                cfg.set_source_value(
+                                    &["code_index", "enabled"],
+                                    serde_json::json!(false),
+                                )
+                            });
                         let was_active = self.code_index.is_some();
                         // Stop the file watcher + background worker first
                         if let Some(ref mut session) = self.code_index_watch_session {
@@ -11754,8 +11762,8 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                                 "[i] **Code index:** disabled. It was not currently active.",
                             );
                         }
-                        match cfg.save_to_source() {
-                            Ok(()) => {
+                        match persisted {
+                            Ok(_) => {
                                 // P-2: invalidate the cached config so the next turn
                                 // picks up the newly-saved file.
                                 self.session_processor.invalidate_config_cache();

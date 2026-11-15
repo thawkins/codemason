@@ -32,6 +32,8 @@ mod test_codeindex_permission_matching;
 
 #[path = "test_codeindex_toggle_persistence.rs"]
 mod test_codeindex_toggle_persistence;
+#[path = "test_config_source_edit.rs"]
+mod test_config_source_edit;
 
 #[path = "test_compaction.rs"]
 mod test_compaction;

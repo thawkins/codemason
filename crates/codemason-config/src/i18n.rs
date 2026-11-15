@@ -415,10 +415,15 @@ pub fn persist(enabled: Option<bool>, locale: Option<&str>) -> anyhow::Result<()
     if let Some(locale) = locale {
         section.locale = locale.trim().to_string();
     }
+    // Edit only the changed `i18n` fields in the loaded source file: saving
+    // the merged config would copy every other layer's values into it.
+    if enabled.is_some() {
+        config.set_source_value(&["i18n", "enabled"], serde_json::json!(section.enabled))?;
+    }
+    if locale.is_some() {
+        config.set_source_value(&["i18n", "locale"], serde_json::json!(section.locale))?;
+    }
     config.i18n = Some(section);
-    config.save_to_source()?;
-    // `save_to_source` already dropped the M-025 load cache, so this re-reads
-    // the freshly written file and applies the new state.
     sync_from_config(&config);
     Ok(())
 }

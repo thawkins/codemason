@@ -165,6 +165,8 @@ mod test_codeindex_empty_graph_guard;
 mod test_codeindex_indicators;
 #[path = "test_codeindex_skillgen.rs"]
 mod test_codeindex_skillgen;
+#[path = "test_codeindex_toggle_safety.rs"]
+mod test_codeindex_toggle_safety;
 #[path = "test_command_catalog.rs"]
 mod test_command_catalog;
 #[path = "test_compaction_result.rs"]

@@ -2271,24 +2271,17 @@ impl Config {
     /// The file is only touched when the serialised JSON differs from the
     /// existing content, avoiding unnecessary writes and timestamp churn.
     ///
+    /// **This writes the whole merged config**, including values that came
+    /// from other layers (user-global secrets into a project file, project
+    /// values into the global file). A toggle that changes one setting must
+    /// use [`Config::set_source_value`] / [`Config::edit_source_config`]
+    /// instead, which edit only that key.
+    ///
     /// # Errors
     ///
     /// Returns an error if the file cannot be written.
     pub fn save_to_source(&self) -> anyhow::Result<()> {
-        let project_path = PathBuf::from(".codemason/codemason.json");
-        let was_loaded_from_project = self.config_paths.iter().any(|p| {
-            p.file_name().is_some_and(|f| f == "codemason.json")
-                && p.parent()
-                    .is_some_and(|parent| parent.file_name().is_some_and(|f| f == ".codemason"))
-        });
-        let path = if let Some(explicit) = Self::config_write_target() {
-            explicit
-        } else if was_loaded_from_project {
-            project_path
-        } else {
-            Self::global_config_path()
-                .ok_or_else(|| anyhow::anyhow!("no config directory found"))?
-        };
+        let path = self.source_path()?;
 
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -2704,13 +2697,99 @@ impl Config {
             None => Self::global_config_path()
                 .ok_or_else(|| anyhow::anyhow!("no config directory found"))?,
         };
+        Self::edit_config_file(path, "global config", edit)
+    }
+
+    /// Atomically edit the config file **this config was loaded from** as raw
+    /// JSON, preserving every key the editor does not touch.
+    ///
+    /// The target is the explicit `--config <file>` in that mode, else the
+    /// project-local `.codemason/codemason.json` recorded in
+    /// [`Config::config_paths`] (the loaded path itself, not one relative to
+    /// the process cwd), else the user-global file. Unlike
+    /// [`Config::save_to_source`], nothing from the merged config is written:
+    /// a user-global secret never lands in a project file.
+    ///
+    /// The editor returns `Ok(true)` when it changed something; `Ok(false)`
+    /// writes nothing. Returns the path that was edited.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no target can be resolved, the existing file cannot
+    /// be read or parsed or is not a JSON object (it is then left untouched),
+    /// the editor fails, or the write fails.
+    pub fn edit_source_config<F>(&self, edit: F) -> anyhow::Result<PathBuf>
+    where
+        F: FnOnce(&mut serde_json::Map<String, serde_json::Value>) -> anyhow::Result<bool>,
+    {
+        Self::edit_config_file(self.source_path()?, "config", edit)
+    }
+
+    /// Set the value at `path` (object keys, outermost first) in the config
+    /// file this config was loaded from, creating missing objects along the
+    /// way; see [`Config::edit_source_config`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Config::edit_source_config`], and when `path` is empty or an
+    /// intermediate key holds a non-object value.
+    pub fn set_source_value(
+        &self,
+        path: &[&str],
+        value: serde_json::Value,
+    ) -> anyhow::Result<PathBuf> {
+        let (last, parents) = path
+            .split_last()
+            .ok_or_else(|| anyhow::anyhow!("set_source_value: empty key path"))?;
+        self.edit_source_config(|root| {
+            let mut object = root;
+            for key in parents {
+                object = object
+                    .entry((*key).to_string())
+                    .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+                    .as_object_mut()
+                    .ok_or_else(|| anyhow::anyhow!("config key '{key}' is not an object"))?;
+            }
+            if object.get(*last) == Some(&value) {
+                return Ok(false);
+            }
+            object.insert((*last).to_string(), value);
+            Ok(true)
+        })
+    }
+
+    /// The file [`Config::save_to_source`] and [`Config::edit_source_config`]
+    /// write: the explicit `--config` target, else the loaded project file,
+    /// else the user-global file.
+    fn source_path(&self) -> anyhow::Result<PathBuf> {
+        if let Some(explicit) = Self::config_write_target() {
+            return Ok(explicit);
+        }
+        let loaded_project = self.config_paths.iter().find(|p| {
+            p.file_name().is_some_and(|f| f == "codemason.json")
+                && p.parent()
+                    .is_some_and(|parent| parent.file_name().is_some_and(|f| f == ".codemason"))
+        });
+        match loaded_project {
+            Some(project) => Ok(project.clone()),
+            None => Self::global_config_path()
+                .ok_or_else(|| anyhow::anyhow!("no config directory found")),
+        }
+    }
+
+    /// The raw-JSON read-edit-write shared by [`Config::edit_global_config`]
+    /// and [`Config::edit_source_config`]. `label` names the file in errors.
+    fn edit_config_file<F>(path: PathBuf, label: &str, edit: F) -> anyhow::Result<PathBuf>
+    where
+        F: FnOnce(&mut serde_json::Map<String, serde_json::Value>) -> anyhow::Result<bool>,
+    {
         // Only a missing (or blank) file starts from an empty object. Any other
         // read failure - permission denied, invalid UTF-8 - must propagate:
         // treating it as empty would overwrite the user's whole file with the
         // single edited key.
         let mut json: serde_json::Value = match std::fs::read_to_string(&path) {
             Ok(raw) if !raw.trim().is_empty() => serde_json::from_str(&raw).map_err(|e| {
-                anyhow::anyhow!("Failed to parse global config '{}': {}", path.display(), e)
+                anyhow::anyhow!("Failed to parse {label} '{}': {}", path.display(), e)
             })?,
             Ok(_) => serde_json::Value::Object(serde_json::Map::new()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -2718,21 +2797,26 @@ impl Config {
             }
             Err(e) => {
                 return Err(anyhow::anyhow!(
-                    "Failed to read global config '{}': {}",
+                    "Failed to read {label} '{}': {}",
                     path.display(),
                     e
                 ));
             }
         };
-        let object = json.as_object_mut().ok_or_else(|| {
-            anyhow::anyhow!("global config '{}' is not a JSON object", path.display())
-        })?;
+        let object = json
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("{label} '{}' is not a JSON object", path.display()))?;
         if !edit(object)? {
             return Ok(path);
         }
 
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
         let json = serde_json::to_string_pretty(&json)
-            .map_err(|e| anyhow::anyhow!("Failed to serialise global config: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to serialise {label}: {}", e))?;
         Self::write_config_if_changed(&path, &json)?;
         // The write changed a file the load cache is keyed on; drop it so the
         // next `load` re-reads the new value.

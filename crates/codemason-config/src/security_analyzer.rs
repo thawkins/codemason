@@ -112,11 +112,11 @@ impl SecurityAnalyzerConfig {
 /// Propagates config load and write failures rather than silently discarding
 /// the change.
 pub fn persist(enabled: bool) -> anyhow::Result<()> {
-    let mut config = crate::config::Config::load()?;
-    config
-        .security_analyzer
-        .get_or_insert_with(SecurityAnalyzerConfig::default)
-        .enabled = enabled;
-    config.save_to_source()?;
+    // Edit only `security_analyzer.enabled` in the loaded source file: saving
+    // the merged config would copy every other layer's values into it.
+    crate::config::Config::load()?.set_source_value(
+        &["security_analyzer", "enabled"],
+        serde_json::json!(enabled),
+    )?;
     Ok(())
 }
