@@ -46,6 +46,9 @@ mod test_bedrock_provider;
 #[path = "test_env_key.rs"]
 mod test_env_key;
 
+#[path = "test_gemini_malformed_line.rs"]
+mod test_gemini_malformed_line;
+
 #[path = "test_gemini_stream_spin.rs"]
 mod test_gemini_stream_spin;
 

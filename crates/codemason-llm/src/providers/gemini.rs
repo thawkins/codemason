@@ -540,17 +540,9 @@ impl LlmClient for GeminiClient {
             // flushed per frame. The accumulator also mints the call id (FR-019), so
             // Gemini no longer invents an `fc_...` spelling of its own.
             let mut acc = ToolCallAccumulator::new(GEMINI, "gemini");
-            // Bounded retries for a line that stays unparseable even after more
-            // data arrives. A genuinely malformed line (e.g. truncated garbage
-            // from a proxy) would otherwise be re-queued on every chunk and
-            // head-of-line block every event behind it until the connection
-            // closes. After `MAX_MALFORMED_RETRIES` attempts the line is
-            // dropped with a warning so the rest of the stream can proceed.
-            const MAX_MALFORMED_RETRIES: u32 = 3;
-            // Persists across chunks while the same line sits at the head of
-            // the buffer; reset only when a line parses successfully so the
-            // retry budget belongs to the line, not the chunk.
-            let mut malformed_retries: u32 = 0;
+            // Set once the body ends: the parse loop then runs one last time
+            // over the leftover buffer before the outer loop exits.
+            let mut stream_done = false;
             // Gemini repeats `usageMetadata` on every chunk as running totals.
             // Keep the latest and emit ONE `Usage` per response at end of
             // stream (before `Finish`) so consumers that sum usage events do
@@ -570,13 +562,13 @@ impl LlmClient for GeminiClient {
                 .await
                 {
                     Ok(Some(r)) => match r {
-                        Ok(c) => c,
+                        Ok(c) => Some(c),
                         Err(e) => {
                             yield StreamEvent::Error { message: e.to_string() };
                             break;
                         }
                     },
-                    Ok(None) => break,
+                    Ok(None) => None,
                     Err(_) => {
                         yield StreamEvent::Error {
                             message: format!(
@@ -591,16 +583,26 @@ impl LlmClient for GeminiClient {
                 // Gemini streams JSON objects, not SSE, but the accumulation
                 // buffer is bounded the same way: a peer that never emits a
                 // line terminator must not grow it without limit.
-                if let Err(e) = super::http_client::append_chunk_guarded(
-                    &mut buffer,
-                    &mut pending_utf8,
-                    &chunk,
-                    "Gemini",
-                ) {
-                    yield StreamEvent::Error {
-                        message: e.to_string(),
-                    };
-                    return;
+                if let Some(chunk) = chunk {
+                    if let Err(e) = super::http_client::append_chunk_guarded(
+                        &mut buffer,
+                        &mut pending_utf8,
+                        &chunk,
+                        "Gemini",
+                    ) {
+                        yield StreamEvent::Error {
+                            message: e.to_string(),
+                        };
+                        return;
+                    }
+                } else {
+                    // End of stream: terminate an unterminated final line so
+                    // the parse loop below handles the leftover buffer line by
+                    // line, through the same frame handling as every other line.
+                    stream_done = true;
+                    if !buffer.is_empty() {
+                        buffer.push('\n');
+                    }
                 }
 
                 // Try to parse complete JSON objects from buffer
@@ -625,38 +627,19 @@ impl LlmClient for GeminiClient {
 
                     let parsed: Value = match serde_json::from_str(line) {
                         Ok(v) => v,
-                        Err(_) => {
-                            if malformed_retries < MAX_MALFORMED_RETRIES {
-                                // Put the unparseable line back and wait for more
-                                // data from the outer stream loop. Using `break`
-                                // exits this inner buffer-parsing loop so the outer
-                                // `stream.next().await` can fetch the next chunk
-                                // to complete the partial JSON object. Using
-                                // `continue` here would re-enter this inner loop
-                                // and find the same `\n` we just re-inserted,
-                                // spinning at 100% CPU forever. The retry counter
-                                // persists across chunks so a permanently broken
-                                // line is eventually dropped below.
-                                buffer = format!("{}\n{}", line, buffer);
-                                malformed_retries += 1;
-                                break;
-                            }
-                            // Permanently malformed: drop the line so events
-                            // behind it are not blocked for the rest of the
-                            // stream.
+                        Err(e) => {
+                            // `take_sse_line` only returns complete lines, so no
+                            // later chunk can complete this one: drop it now so
+                            // the frames behind it are not held back (LC-02).
                             tracing::warn!(
-                                line_len = line.len(),
-                                retries = malformed_retries,
-                                "Gemini stream: dropping malformed line after retries"
+                                provider = "gemini",
+                                line = %super::http_client::redact_frame(line),
+                                error = %e,
+                                "Gemini stream: dropping malformed line"
                             );
-                            malformed_retries = 0;
                             continue;
                         }
                     };
-
-                    // Parsed cleanly: the retry budget applies to the next
-                    // line, not this one.
-                    malformed_retries = 0;
 
                     // Record usage metadata (running totals, repeated per chunk).
                     if let Some(usage) = parsed.get("usageMetadata") {
@@ -729,16 +712,10 @@ impl LlmClient for GeminiClient {
                         }
                     }
                 }
-            }
 
-            // Handle any remaining data in buffer
-            if !buffer.trim().is_empty() {
-                let line = buffer.trim().trim_end_matches(',').trim();
-                if !line.is_empty() && line != "[,]"
-                    && let Ok(parsed) = serde_json::from_str::<Value>(line)
-                        && let Some(usage) = parsed.get("usageMetadata") {
-                            pending_usage = merge_usage(pending_usage, usage);
-                        }
+                if stream_done {
+                    break;
+                }
             }
 
             // F2: end-of-stream flush. A `functionCall` deferred after the

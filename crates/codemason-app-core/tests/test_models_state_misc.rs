@@ -1169,6 +1169,25 @@ async fn cron_scheduler_start_stop_and_drop() {
 // ===========================================================================
 
 #[test]
+fn models_render_markdown_keeps_mcp_status_glyphs_for_every_state() {
+    // AG-06: `/mcp` labels servers `[green] connected`, `[yellow] needs auth`
+    // and `[red] failed: ..`. The markdown pipeline dropped the unclosed
+    // `[red]` tag, so failed rows lost their glyph while the others kept it.
+    let _cwd_guard = crate::global_env_lock();
+    let mut app = support::make_app();
+    let rendered = app.render_markdown_unconditionally(
+        "From: /mcp\n\n- a: [green] connected\n- b: [yellow] needs auth\n- c: [red] failed: boom\n",
+    );
+    for glyph in [
+        "[green] connected",
+        "[yellow] needs auth",
+        "[red] failed: boom",
+    ] {
+        assert!(rendered.contains(glyph), "missing {glyph:?} in: {rendered}");
+    }
+}
+
+#[test]
 fn models_render_markdown_unconditionally_renders_markdown() {
     // Every test in this file is gated on the binary-wide cwd/env lock: the
     // `/slash` arms and the GitHub/GitLab credential chains read `cwd`,

@@ -231,6 +231,8 @@ mod test_gcf_indicator;
 mod test_gcf_slash_registration;
 #[path = "test_geometry.rs"]
 mod test_geometry;
+#[path = "test_gitlab_setup_unicode.rs"]
+mod test_gitlab_setup_unicode;
 #[path = "test_govcreate_dispatch.rs"]
 mod test_govcreate_dispatch;
 #[path = "test_govcreate_poll.rs"]

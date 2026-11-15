@@ -212,12 +212,14 @@ pub fn preprocess_markdown_tables(markdown: &str) -> String {
 /// Sentinel tokens used to mark a `[red]...[/red]` span. `preprocess_red_markers`
 /// rewrites the markers into these before the markdown->HTML->text pass, and
 /// `restore_red_markers` converts the surviving tokens back into `[red]...[/red]`
-/// markers, so `/tools` can render disabled tool rows in red.
+/// markers. No renderer colours the markers: like `[green]` / `[yellow]` they
+/// are shown as literal text, and this pass only keeps the markdown pipeline
+/// from mangling them.
 ///
 /// The tokens are deliberately made of printable characters: `html2text`
 /// parses the intermediate HTML with html5ever, which silently drops C0 control
 /// bytes such as `ESC`, so an ANSI escape sentinel would not survive the pass.
-/// `@@` is safe because the `/tools` table cells never contain it.
+/// `@@` is safe because slash-command output never contains it.
 const RED_OPEN: &str = "@@codemason-red@@";
 const RED_CLOSE: &str = "@@/codemason-red@@";
 
@@ -227,7 +229,8 @@ const RED_CLOSE: &str = "@@/codemason-red@@";
 /// The tokens are plain printable text at this stage, so they survive
 /// `html2text` untouched and `restore_red_markers` can convert them back
 /// afterwards. The match is non-greedy and may span lines; an unclosed `[red]`
-/// is dropped.
+/// (a status glyph such as `/mcp`'s `[red] failed: ..`) is kept as literal text,
+/// the same as `[green]` / `[yellow]`.
 #[doc(hidden)]
 pub fn preprocess_red_markers(md: &str) -> String {
     const OPEN: &str = "[red]";
@@ -237,9 +240,8 @@ pub fn preprocess_red_markers(md: &str) -> String {
     while let Some(start) = rest.find(OPEN) {
         let after_open = &rest[start + OPEN.len()..];
         let Some(end) = after_open.find(CLOSE) else {
-            // Unclosed marker: drop the tag and keep the remaining text.
-            out.push_str(&rest[..start]);
-            out.push_str(after_open);
+            // Unclosed marker: a status glyph, not a span. Keep it verbatim.
+            out.push_str(rest);
             return out;
         };
         out.push_str(&rest[..start]);
