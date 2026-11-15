@@ -73,6 +73,9 @@ pub const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_mins
 /// a hostile or stalled remote from hanging `/plugins add` forever.
 pub const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(5);
 
+/// Bytes of a `git` command's stderr kept for its error message.
+const GIT_STDERR_TAIL_BYTES: usize = 16 * 1024;
+
 /// Test-only override of [`GIT_TIMEOUT`] and of the cloned-tree size cap
 /// ([`MAX_EXTRACTED_BYTES`]); set once per process by
 /// [`set_git_limits_override`].
@@ -599,9 +602,10 @@ fn git_clone_stage(source: &str, staging: &Path) -> Result<PathBuf, AddError> {
     Ok(root)
 }
 
-/// Total size in bytes of the regular files under `root`, skipping `.git`
-/// and never following symlinks. Stops counting once the total passes
-/// `stop_after`, so a huge tree is not walked in full.
+/// Total size in bytes of the regular files under `root`, `.git` included
+/// (a whole-repository install keeps it, and the digest reads it), never
+/// following symlinks. Stops counting once the total passes `stop_after`, so
+/// a huge tree is not walked in full.
 fn tree_size(root: &Path, stop_after: u64) -> std::io::Result<u64> {
     let mut total: u64 = 0;
     let mut pending = vec![root.to_path_buf()];
@@ -610,9 +614,7 @@ fn tree_size(root: &Path, stop_after: u64) -> std::io::Result<u64> {
             let entry = entry?;
             let file_type = entry.file_type()?;
             if file_type.is_dir() {
-                if entry.file_name() != ".git" {
-                    pending.push(entry.path());
-                }
+                pending.push(entry.path());
             } else if file_type.is_file() {
                 total = total.saturating_add(entry.metadata()?.len());
                 if total > stop_after {
@@ -678,10 +680,26 @@ fn git_run(args: &[&str], cwd: Option<&Path>) -> Result<(), AddError> {
     let mut child = command.spawn().map_err(|e| git_err(e.to_string()))?;
     let stderr_reader = child.stderr.take().map(|mut pipe| {
         std::thread::spawn(move || {
-            let mut text = String::new();
-            // INTENTIONAL: stderr is diagnostic only; a read error leaves it empty.
-            let _ = pipe.read_to_string(&mut text);
-            text
+            // Drain everything (a full pipe would block git) but keep only the
+            // last GIT_STDERR_TAIL_BYTES: a hostile server can stream unbounded
+            // progress output.
+            let mut kept: Vec<u8> = Vec::new();
+            let mut chunk = [0_u8; 8192];
+            loop {
+                match pipe.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        kept.extend_from_slice(&chunk[..n]);
+                        if kept.len() > GIT_STDERR_TAIL_BYTES * 2 {
+                            kept.drain(..kept.len() - GIT_STDERR_TAIL_BYTES);
+                        }
+                    }
+                }
+            }
+            if kept.len() > GIT_STDERR_TAIL_BYTES {
+                kept.drain(..kept.len() - GIT_STDERR_TAIL_BYTES);
+            }
+            String::from_utf8_lossy(&kept).into_owned()
         })
     });
 

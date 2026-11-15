@@ -440,6 +440,34 @@ fn add_git_source_refuses_a_tree_over_the_size_cap() {
     assert!(!root.join("store/big").exists(), "nothing may be installed");
 }
 
+/// The cap counts `.git` too: a whole-repository install keeps it, so a small
+/// checkout with a large object store must not slip under the cap.
+#[test]
+fn add_git_source_counts_git_metadata_in_the_size_cap() {
+    set_test_git_limits();
+    let root = temp_dir("git-meta-too-large");
+    let (url, remote) = remote_with_plugin(&root, ".", "Meta");
+    // 1500 incompressible bytes: the checkout stays under the 2 KiB test cap,
+    // but the packed object in `.git` pushes the total over it.
+    let mut state: u32 = 0x1234_5678;
+    let noise: Vec<u8> = (0..1500)
+        .map(|_| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 24) as u8
+        })
+        .collect();
+    std::fs::write(remote.join("noise.bin"), noise).expect("noise");
+    git(&remote, &["add", "-A"]);
+    git(&remote, &["commit", "-q", "-m", "noise"]);
+
+    let err = add(&store_dirs(&root), &root, &format!("git+{url}"), false)
+        .expect_err("the .git metadata must count toward the cap");
+    assert!(
+        matches!(err, AddError::TooLarge { max, .. } if max == TEST_MAX_TREE_BYTES),
+        "got {err:?}"
+    );
+}
+
 #[test]
 fn parse_git_source_refuses_an_absolute_or_option_like_subpath() {
     for raw in ["git+https://x/y#main:/etc", "git+https://x/y#main:-x"] {
