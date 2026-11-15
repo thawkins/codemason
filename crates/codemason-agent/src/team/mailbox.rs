@@ -197,6 +197,19 @@ impl MailboxMessage {
 /// `foo.json.lock`).  The lock file is a stable file whose inode never
 /// changes, so `flock` remains effective across atomic renames of the data
 /// file.
+/// Test-only probe run with the mailbox's lock-file path just before a corrupt
+/// mailbox is renamed aside, so a test can check the exclusive lock is still
+/// held at the rename (AA-03). `None` (the default) does nothing.
+static MOVE_ASIDE_PROBE: RwLock<Option<fn(&Path)>> = RwLock::new(None);
+
+/// Install (or clear) the [`MOVE_ASIDE_PROBE`]. Tests only.
+#[doc(hidden)]
+pub fn set_move_aside_probe(probe: Option<fn(&Path)>) {
+    *MOVE_ASIDE_PROBE
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = probe;
+}
+
 fn lock_path(path: &Path) -> PathBuf {
     let mut name = path.as_os_str().to_os_string();
     name.push(".lock");
@@ -373,6 +386,12 @@ impl Mailbox {
         let ts = chrono::Utc::now().format("%Y%m%dT%H%M%S%9fZ");
         let seq = ASIDE_SEQ.fetch_add(1, Ordering::Relaxed);
         let corrupt_path = self.path.with_extension(format!("corrupt.{ts}-{seq}.json"));
+        let probe = *MOVE_ASIDE_PROBE
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(probe) = probe {
+            probe(&lock_path(&self.path));
+        }
         if let Err(e) = fs::rename(&self.path, &corrupt_path) {
             tracing::error!(
                 path = %self.path.display(),

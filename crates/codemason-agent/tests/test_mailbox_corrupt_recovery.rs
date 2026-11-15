@@ -142,3 +142,58 @@ fn test_mailbox_corrupt_recoveries_get_unique_aside_names() {
         "each recovery keeps its own file: {asides:?}"
     );
 }
+
+/// What the move-aside probe saw: 0 = not run, 1 = lock held (correct),
+/// 2 = lock free at the rename (the message-loss race).
+static PROBE_SAW: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Runs just before the rename: a writer must not be able to take the lock.
+fn probe_lock_is_held(lock_path: &Path) {
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .read(true)
+        .open(lock_path)
+        .unwrap();
+    let saw = match file.try_lock() {
+        Ok(()) => {
+            let _ = file.unlock();
+            2
+        }
+        Err(_) => 1,
+    };
+    PROBE_SAW.store(saw, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Review of AA-03: blocking the initial lock does not prove the lock is
+/// still held at the rename. The probe runs at the rename itself and must
+/// find the lock taken, for every recovering entry point.
+#[test]
+fn test_mailbox_corrupt_rename_happens_while_the_lock_is_held() {
+    let _env = crate::global_env_lock();
+    codemason_agent::team::mailbox::set_move_aside_probe(Some(probe_lock_is_held));
+    let ops: [(&str, fn(&Mailbox)); 3] = [
+        ("read_all", |m| assert!(m.read_all().unwrap().is_empty())),
+        ("peek_unread", |m| {
+            assert!(m.peek_unread().unwrap().is_empty())
+        }),
+        ("drain_unread", |m| {
+            assert!(m.drain_unread().unwrap().is_empty())
+        }),
+    ];
+    for (name, op) in ops {
+        let (_tmp, dir) = setup_workspace();
+        let team_dir = dir.join("aa03-probe");
+        let path = write_corrupt_mailbox(&team_dir);
+        PROBE_SAW.store(0, std::sync::atomic::Ordering::SeqCst);
+        op(&Mailbox::open(&team_dir, "tm-001").unwrap());
+        assert!(!path.exists(), "{name}: the corrupt mailbox is moved aside");
+        assert_eq!(
+            PROBE_SAW.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "{name}: the mailbox lock must still be held at the rename"
+        );
+    }
+    codemason_agent::team::mailbox::set_move_aside_probe(None);
+}
