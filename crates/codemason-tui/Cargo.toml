@@ -62,18 +62,6 @@ filetime = "0.2"
 unicode-width = "0.2"
 
 [[bench]]
-name = "bench_markdown"
-harness = false
-
-[[bench]]
-name = "bench_cursor"
-harness = false
-
-[[bench]]
-name = "bench_history"
-harness = false
-
-[[bench]]
 name = "bench_panels"
 harness = false
 

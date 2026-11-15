@@ -54,9 +54,22 @@ unicode-width = "0.2"
 
 [dev-dependencies]
 axum = { workspace = true }
+criterion = { workspace = true }
 filetime = "0.2"
 parking_lot = { workspace = true }
 
 [[test]]
 name = "all"
 path = "tests/all.rs"
+
+[[bench]]
+name = "bench_markdown"
+harness = false
+
+[[bench]]
+name = "bench_cursor"
+harness = false
+
+[[bench]]
+name = "bench_history"
+harness = false

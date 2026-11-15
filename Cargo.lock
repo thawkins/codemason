@@ -1465,6 +1465,7 @@ dependencies = [
  "codemason-tools-extended",
  "codemason-tools-vcs",
  "codemason-types",
+ "criterion",
  "dirs",
  "filetime",
  "fs2",
