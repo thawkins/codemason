@@ -200,6 +200,9 @@ craft-dialogs = { git = "https://github.com/storytold/craft-libs", rev = "d15bf1
 # Window close routed through the platform quit (macOS `terminate:` instead of
 # closing the window, which crashes AppKit) from the same craft-libs rev.
 craft-quit = { git = "https://github.com/storytold/craft-libs", rev = "d15bf1f35b17b759870f9e5111b9a5d243f64888", features = ["egui"] }
+# Menu model and layouts (platform-free) plus the macOS menu-bar backend
+# (muda, macOS only) from the same craft-libs rev.
+craft-menu = { git = "https://github.com/storytold/craft-libs", rev = "d15bf1f35b17b759870f9e5111b9a5d243f64888" }
 
 # ── Hashing / file-locking ───────────────────────────────────────────────
 num_cpus = "1.16"

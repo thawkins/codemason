@@ -161,10 +161,18 @@ fn run_window(launch: GuiLaunch) -> Result<(), GuiLaunchError> {
             if let Some(path) = dock::layout_path() {
                 shell = shell.with_layout_file(path);
             }
-            if let Some(path) = keys::keys_path() {
-                let platform = craft_keymap::egui::platform(&cc.egui_ctx);
-                shell = shell.with_keymap(keys::load_keymap(platform, &path));
+            let platform = craft_keymap::egui::platform(&cc.egui_ctx);
+            let keymap = match keys::keys_path() {
+                Some(path) => keys::load_keymap(platform, &path),
+                None => keys::default_keymap(platform),
+            };
+            // The macOS menu bar (About, Quit asking first, the panel
+            // toggles); nothing elsewhere.
+            #[cfg(target_os = "macos")]
+            if let Some(native) = crate::platform::menu::install(&cc.egui_ctx, &keymap) {
+                shell = shell.with_native_menu(native, &keymap);
             }
+            shell = shell.with_keymap(keymap);
             Ok(Box::new(shell))
         }),
     );

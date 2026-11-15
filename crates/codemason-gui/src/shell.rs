@@ -75,6 +75,7 @@ use crate::panels::tasks::tasks_ui;
 use crate::panels::teams::teams_ui;
 use crate::platform::clipboard;
 use crate::platform::files::{self, FileDialogs, file_menu};
+use crate::platform::menu::{self, MenuAction};
 use crate::platform::window::CloseGuard;
 use crate::theme::ThemeApplier;
 
@@ -121,6 +122,8 @@ pub struct Shell {
     close: CloseGuard,
     /// app-core's exit steps have run (once, whichever path quit).
     quit_finished: bool,
+    /// The native menu bar (macOS) and the layout it shows.
+    native_menu: Option<(craft_menu::NativeMenu, craft_menu::Layout)>,
 }
 
 impl std::fmt::Debug for Shell {
@@ -166,6 +169,7 @@ impl Shell {
             files: FileDialogs::new(),
             close: CloseGuard::default(),
             quit_finished: false,
+            native_menu: None,
         }
     }
 
@@ -211,6 +215,78 @@ impl Shell {
     pub fn with_keymap(mut self, keymap: craft_keymap::Keymap) -> Self {
         self.keys = KeyRouter::new(keymap);
         self
+    }
+
+    /// Drive `native` (the macOS menu bar from [`menu::install`]) each
+    /// frame: its clicks run their App action, its key equivalents reach the
+    /// key router as key presses, and its built-in Quit takes the close path.
+    ///
+    /// # Arguments
+    ///
+    /// * `native` - the installed menu's driver.
+    /// * `keymap` - the keymap its items show the shortcuts of.
+    ///
+    /// # Returns
+    ///
+    /// The shell driving the menu.
+    #[must_use]
+    pub fn with_native_menu(
+        mut self,
+        native: craft_menu::NativeMenu,
+        keymap: &craft_keymap::Keymap,
+    ) -> Self {
+        self.native_menu = Some((native, menu::mac_menu_layout(keymap)));
+        self
+    }
+
+    /// Before egui reads the frame's input: add the native menu's key
+    /// equivalents as the key presses they were (eframe's
+    /// `raw_input_hook`). Nothing without a native menu.
+    ///
+    /// # Arguments
+    ///
+    /// * `raw` - the frame's raw input.
+    pub fn native_menu_input(&mut self, raw: &mut egui::RawInput) {
+        if let Some((native, _)) = self.native_menu.as_mut() {
+            native.raw_input(raw);
+        }
+    }
+
+    /// Run the native menu's clicks and keep it in step: while a dialog
+    /// holds the keyboard only the built-in items run (Quit still asks the
+    /// window to close). Without attached sources the clicks are dropped.
+    fn run_native_menu(&mut self, ctx: &egui::Context) {
+        let modal = dialogs::locks_prompt(&self.app) || self.close.is_asking();
+        let Some((native, layout)) = self.native_menu.as_mut() else {
+            return;
+        };
+        native.set_gate(craft_menu::Gate {
+            modal,
+            text_editing: ctx.egui_wants_keyboard_input(),
+            ..craft_menu::Gate::default()
+        });
+        let clicks = native.take_clicks(ctx);
+        let clashes = native.sync_with(0, || layout.clone());
+        if !clashes.is_empty() {
+            tracing::debug!(?clashes, "native menu shortcut clashes");
+        }
+        let Some(sources) = self.sources.as_ref() else {
+            return;
+        };
+        for command in clicks {
+            match menu::menu_action(&command) {
+                Some(MenuAction::Key(key)) => {
+                    sources.runtime.block_on(self.app.handle_key(key));
+                }
+                Some(MenuAction::Slash(line)) => {
+                    sources
+                        .runtime
+                        .block_on(self.app.execute_slash_command(line));
+                }
+                None => tracing::debug!(?command, "menu command without an action"),
+            }
+            ctx.request_repaint();
+        }
     }
 
     /// Attach the queues the shell drains each frame.
@@ -503,6 +579,8 @@ impl Shell {
         self.housekeeping(ctx);
         self.poll_timers(ctx);
         clipboard::forward_copies(ctx);
+        // Menu clicks (Quit asks the window to close, as the close button).
+        self.run_native_menu(ctx);
         // A close request quits, or asks first while a turn runs.
         self.close.logic(ctx, &mut self.app);
         // `/quit` (or any other path that stops the app) runs the exit steps
@@ -801,6 +879,10 @@ impl eframe::App for Shell {
         self.draw_frame(ui);
         // Show a dialog the File menu queued, with the window as parent.
         self.files.show_pending(Some(frame));
+    }
+
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.native_menu_input(raw_input);
     }
 
     fn on_exit(&mut self) {

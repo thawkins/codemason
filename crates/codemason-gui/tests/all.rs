@@ -32,6 +32,8 @@ mod test_launch;
 mod test_main_thread;
 #[path = "test_markdown.rs"]
 mod test_markdown;
+#[path = "test_menu.rs"]
+mod test_menu;
 #[path = "test_messages.rs"]
 mod test_messages;
 #[path = "test_overlays.rs"]
