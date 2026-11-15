@@ -32,3 +32,11 @@ fn specific_comparison_is_clear() {
 fn year_makes_topic_concrete() {
     assert!(needs_clarification("Rust async runtimes in 2024").is_none());
 }
+
+#[test]
+fn version_number_without_dot_is_concrete() {
+    // RS-01: "version 16" names a concrete release and must not trigger a
+    // clarifying question (the old regex demanded a literal `d`).
+    assert!(needs_clarification("postgres version 16 upgrade notes").is_none());
+    assert!(needs_clarification("postgres version 16.2 upgrade notes").is_none());
+}
