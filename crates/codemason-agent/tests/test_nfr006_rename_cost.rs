@@ -103,7 +103,7 @@ struct TableReader {
 /// Every legitimate reader of the FR-023 table in non-test source (NFR-006).
 ///
 /// Ten *functions* and four module-scope items, in four crates (`codemason-types`,
-/// `codemason-agent`, `codemason-config`, `codemason-tui`). Two of them sit in the
+/// `codemason-agent`, `codemason-config`, `codemason-app-core`). Two of them sit in the
 /// dispatch crate and are the reason the exemption has to be per function:
 /// see the module docs.
 const TABLE_READERS: &[TableReader] = &[
@@ -174,15 +174,15 @@ const TABLE_READERS: &[TableReader] = &[
         function: "after_spelling_of",
         reason: "the both-columns lookup the load-time self-mapping rule needs",
     },
-    // `message_widget.rs` names the table by its full path inside
+    // `message_text.rs` names the table by its full path inside
     // `canonical_tool_name` and imports nothing from it, so that function entry
     // is the only one that can match; a module-scope entry would be a dead
     // exemption and the reverse check rejects those.
     TableReader {
-        file: "crates/codemason-tui/src/widgets/message_widget.rs",
+        file: "crates/codemason-app-core/src/message_text.rs",
         function: "canonical_tool_name",
         reason: "paints a STORED pre-rename tool-call record (FR-028 replays it verbatim); \
-                 a TUI render arm, not an agent-loop stage, and it never reaches dispatch",
+                 a display-text arm, not an agent-loop stage, and it never reaches dispatch",
     },
     TableReader {
         file: "crates/codemason-types/src/tool_bridge.rs",
