@@ -122,6 +122,11 @@ pub struct Shell {
     close: CloseGuard,
     /// app-core's exit steps have run (once, whichever path quit).
     quit_finished: bool,
+    /// Arm app-core's exit safety net when quitting (the real window only;
+    /// a test process must not be ended by it).
+    force_exit: bool,
+    /// The longest the exit steps wait for the MCP servers to stop.
+    quit_mcp_timeout: std::time::Duration,
     /// The native menu bar (macOS) and the layout it shows.
     native_menu: Option<(craft_menu::NativeMenu, craft_menu::Layout)>,
     /// The saved window geometry, kept up to date while the window runs.
@@ -171,6 +176,8 @@ impl Shell {
             files: FileDialogs::new(),
             close: CloseGuard::default(),
             quit_finished: false,
+            force_exit: false,
+            quit_mcp_timeout: codemason_app_core::app::quit::MCP_SHUTDOWN_TIMEOUT,
             native_menu: None,
             geometry: None,
         }
@@ -257,6 +264,36 @@ impl Shell {
     ) -> Self {
         self.native_menu = Some((native, menu::mac_menu_layout(keymap)));
         self
+    }
+
+    /// Arm app-core's exit safety net ([`quit::arm_force_exit`]) when the
+    /// window quits, as the terminal frontend does: the process ends
+    /// [`quit::FORCE_EXIT_AFTER`] after the session is saved if teardown has
+    /// not finished. For the real window only.
+    ///
+    /// [`quit::arm_force_exit`]: codemason_app_core::app::quit::arm_force_exit
+    /// [`quit::FORCE_EXIT_AFTER`]: codemason_app_core::app::quit::FORCE_EXIT_AFTER
+    ///
+    /// # Returns
+    ///
+    /// The shell arming the net on quit.
+    #[must_use]
+    pub fn with_force_exit(mut self) -> Self {
+        self.force_exit = true;
+        self
+    }
+
+    /// Wait at most `timeout` for the MCP servers to stop when quitting
+    /// (default [`MCP_SHUTDOWN_TIMEOUT`]; tests pass a short bound).
+    ///
+    /// [`MCP_SHUTDOWN_TIMEOUT`]: codemason_app_core::app::quit::MCP_SHUTDOWN_TIMEOUT
+    ///
+    /// # Arguments
+    ///
+    /// * `timeout` - the longest wait for the MCP shutdown.
+    #[doc(hidden)]
+    pub fn set_quit_mcp_timeout(&mut self, timeout: std::time::Duration) {
+        self.quit_mcp_timeout = timeout;
     }
 
     /// Before egui reads the frame's input: add the native menu's key
@@ -621,26 +658,34 @@ impl Shell {
     /// Run app-core's exit steps once, whichever path quit: the same steps,
     /// in the same order, the terminal frontend runs after its loop
     /// (`App::save_on_quit`, then `App::stop_services_on_quit`), and save a
-    /// changed layout (on macOS the process ends before another frame).
-    /// Without attached sources there is no runtime, so only the first step
-    /// runs.
+    /// changed layout and the window geometry (on macOS the process ends
+    /// before another frame). Everything is saved first; then the exit
+    /// safety net is armed (with [`Self::with_force_exit`]) and the services
+    /// are stopped, the MCP shutdown bounded. Without attached sources there
+    /// is no runtime, so the services step does not run.
     fn finish_quit(&mut self) {
         if self.quit_finished {
             return;
         }
         self.quit_finished = true;
         self.app.save_on_quit();
-        if let Some(sources) = self.sources.as_ref() {
-            let processor = std::sync::Arc::clone(&self.app.session_processor);
-            sources
-                .runtime
-                .block_on(self.app.stop_services_on_quit(&processor));
-        }
         if self.layout_dirty {
             self.save_layout();
         }
         if let Some(geometry) = self.geometry.as_mut() {
             geometry.save();
+        }
+        if self.force_exit {
+            codemason_app_core::app::quit::arm_force_exit(
+                codemason_app_core::app::quit::FORCE_EXIT_AFTER,
+            );
+        }
+        if let Some(sources) = self.sources.as_ref() {
+            let processor = std::sync::Arc::clone(&self.app.session_processor);
+            sources.runtime.block_on(
+                self.app
+                    .stop_services_on_quit_within(&processor, self.quit_mcp_timeout),
+            );
         }
     }
 

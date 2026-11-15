@@ -14,11 +14,47 @@
 //! GUI runs them back to back. [`App::turn_running`] tells the GUI whether
 //! closing the window must ask first.
 //!
+//! Neither step may hang the exit: the MCP shutdown is bounded by
+//! [`MCP_SHUTDOWN_TIMEOUT`], and both frontends arm the same safety net,
+//! [`arm_force_exit`], which ends the process [`FORCE_EXIT_AFTER`] after it
+//! is armed if teardown is still running.
+//!
 //! Depends on `codemason_agent`'s `SessionProcessor` for the MCP shutdown.
+
+use std::time::Duration;
 
 use codemason_agent::session::processor::SessionProcessor;
 
 use super::App;
+
+/// How long after [`arm_force_exit`] the process is ended if teardown still
+/// runs (a wedged tty, a blocked write, an MCP server that will not stop).
+pub const FORCE_EXIT_AFTER: Duration = Duration::from_secs(3);
+
+/// The longest [`App::stop_services_on_quit`] waits for the MCP servers to
+/// stop. A running turn inside an MCP tool call holds the client's read lock
+/// until the call ends (up to the tool-call timeout, 120 s); the shutdown
+/// needs the write lock, so it gives up after this and leaves the children to
+/// `McpClient::drop` and the process exit. Shorter than [`FORCE_EXIT_AFTER`]
+/// so a normal quit never depends on the forced exit.
+pub const MCP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Arm the exit safety net both frontends use: a native thread that ends the
+/// process (exit code 0) once `after` has passed. Arm it after the session is
+/// saved ([`App::save_on_quit`]) and before the steps that can hang.
+///
+/// A native thread, not a tokio task: a task is cancelled as soon as the
+/// runtime starts dropping, which is exactly the hang it exists to escape.
+///
+/// # Arguments
+///
+/// * `after` - how long teardown may run, normally [`FORCE_EXIT_AFTER`].
+pub fn arm_force_exit(after: Duration) {
+    std::thread::spawn(move || {
+        std::thread::sleep(after);
+        std::process::exit(0);
+    });
+}
 
 impl App {
     /// Stop the app, as `/quit` and `/exit` do: the frontend leaves its loop
@@ -68,6 +104,23 @@ impl App {
     /// * `session_processor` - the processor whose MCP servers are stopped
     ///   (the TUI passes the one it was started with).
     pub async fn stop_services_on_quit(&mut self, session_processor: &SessionProcessor) {
+        self.stop_services_on_quit_within(session_processor, MCP_SHUTDOWN_TIMEOUT)
+            .await;
+    }
+
+    /// [`App::stop_services_on_quit`], waiting at most `mcp_timeout` for the
+    /// MCP servers to stop (tests pass a short bound).
+    ///
+    /// # Arguments
+    ///
+    /// * `session_processor` - the processor whose MCP servers are stopped.
+    /// * `mcp_timeout` - the longest wait for the MCP shutdown.
+    #[doc(hidden)]
+    pub async fn stop_services_on_quit_within(
+        &mut self,
+        session_processor: &SessionProcessor,
+        mcp_timeout: Duration,
+    ) {
         // Dropping a job aborts it (`Drop for SwarmAutoComplete`); doing it
         // here rather than when the App drops also covers a platform whose
         // process ends without dropping the App (macOS `terminate:`).
@@ -81,7 +134,15 @@ impl App {
         // the stdio pipe open and prints its own teardown errors after
         // codemason exits; `McpClient::drop` repeats the kill if this is cut
         // short.
-        session_processor.shutdown_mcp().await;
+        if tokio::time::timeout(mcp_timeout, session_processor.shutdown_mcp())
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                ?mcp_timeout,
+                "MCP servers did not stop in time (a tool call holds the client); exiting anyway"
+            );
+        }
         // Cancel an in-flight reindex BEFORE stopping the watcher, so a
         // detached CPU-bound reindex thread stops between chunks instead of
         // running for the whole teardown (exit 200%-CPU fix).

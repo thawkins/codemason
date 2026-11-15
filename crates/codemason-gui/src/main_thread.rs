@@ -191,7 +191,8 @@ fn run_window(launch: GuiLaunch) -> Result<(), GuiLaunchError> {
             }
             let mut shell = Shell::new(app)
                 .with_sources(event_rx, logs, runtime.clone())
-                .with_window_geometry(geometry);
+                .with_window_geometry(geometry)
+                .with_force_exit();
             if let Some(path) = dock::layout_path() {
                 shell = shell.with_layout_file(path);
             }

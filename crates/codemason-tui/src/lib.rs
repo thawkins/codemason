@@ -990,10 +990,8 @@ pub async fn run_tui(
     // cancelled the moment the runtime began dropping at end of main -
     // exactly the hang scenario it exists to escape - leaving abandoned
     // blocking-pool joins unbounded. A native thread survives runtime drop.
-    std::thread::spawn(|| {
-        std::thread::sleep(std::time::Duration::from_secs(3));
-        std::process::exit(0);
-    });
+    // The net is app-core's, shared with the GUI.
+    codemason_app_core::app::quit::arm_force_exit(codemason_app_core::app::quit::FORCE_EXIT_AFTER);
 
     // The quit path's first step, shared with the GUI: drop the never
     // persisted input queue, save dirty input history, and cancel any active

@@ -15,6 +15,7 @@ mod support;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use codemason_app_core::app::App;
 use codemason_app_core::log_channel::tui_log_channel;
@@ -145,6 +146,46 @@ fn test_close_request_with_running_turn_prompts() {
     harness.step();
     assert!(!commands(&harness).contains(&egui::ViewportCommand::CancelClose));
     assert!(!prompt_shown(&harness));
+}
+
+#[test]
+fn test_confirmed_quit_with_a_held_mcp_lock_returns_within_the_bound() {
+    // A turn inside an MCP tool call holds the client's read lock until the
+    // call ends (up to 120 s); the quit's MCP shutdown needs the write lock.
+    let client = Arc::new(tokio::sync::RwLock::new(
+        codemason_agent::mcp::McpClient::new(),
+    ));
+    let tool_call = client.try_read().expect("the tool call's read lock");
+    let cancel = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&cancel);
+    let shared = Arc::clone(&client);
+    let (_runtime, mut harness) = rig(move |app| {
+        app.session.is_processing = true;
+        app.session.cancel_flag = Some(flag);
+        assert!(app.session_processor.mcp_client.set(shared).is_ok());
+    });
+    let bound = Duration::from_millis(50);
+    harness.state_mut().set_quit_mcp_timeout(bound);
+    harness.run();
+
+    request_close(&mut harness);
+    harness.step();
+    harness.step();
+    harness.get_by_label(CONFIRM_QUIT).click();
+    let confirmed = Instant::now();
+    harness.step();
+    harness.step();
+
+    assert!(!harness.state().app().is_running, "confirming quits");
+    assert!(
+        cancel.load(Ordering::Relaxed),
+        "the session's exit step ran"
+    );
+    assert!(commands(&harness).contains(&egui::ViewportCommand::Close));
+    // Generous next to the 50 ms bound, far below the 120 s the lock is held.
+    let took = confirmed.elapsed();
+    assert!(took < Duration::from_secs(2), "the quit took {took:?}");
+    drop(tool_call);
 }
 
 #[test]
