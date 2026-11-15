@@ -27,7 +27,7 @@ If `codemason` is not on your `PATH`, use the full path after building:
 
 A window opens with the message pane and the prompt in the middle, the status
 bar along the bottom, and the other panels (sessions, log, profile, tasks,
-memory, agents, teams) docked around them when shown. The window opens
+memory, context, agents, teams) docked around them when shown. The window opens
 maximized the first time; after that it remembers its size and position. You can
 start typing in the prompt immediately.
 
@@ -921,6 +921,27 @@ Remember that we prefer tracing over println in this project
 - **`Scroll`** with the mouse wheel or drag the scrollbar.
 - Press **`Alt+M` | `Cmd+Shift+M`** again to hide the pane.
 
+## 13a. Context panel — `Alt+C`
+
+Press **`Alt+C`** to toggle the **Context pane**, docked on the right by
+default. Opening it hides the Log, Profile, TASKS and Memory panes.
+
+The Context panel shows what the next request sends to the model:
+
+- the selected model's **context window** and the tokens **sent to the model**
+  on the last turn;
+- each partition with its token estimate and share of the window: the
+  **system prompt** (with its skills, memory and `agents.md` breakdown), the
+  **tool catalog**, the **tool metadata** and the **history**, with the
+  history's message count;
+- the **total**, the **free** headroom, and the bytes streamed to and from
+  the model (`io: ^out vin`).
+
+Percentages read `unknown` when the provider advertises no context window. The
+panel is display-only: nothing in it is sent to the model.
+
+- Press **`Alt+C`** again to hide the pane.
+
 ## Multiple sessions and the session sidebar
 
 codemason can hold several sessions at once, each in its own project
@@ -1066,7 +1087,7 @@ project's), with the token in `GH_ENTERPRISE_TOKEN`:
 ## Panes and layout
 
 Every panel is a dockable pane: Messages, Prompt, Sessions, Log, Profile,
-Tasks, Memory, Active agents, and Teams. The Messages and Prompt panes are
+Tasks, Memory, Context, Active agents, and Teams. The Messages and Prompt panes are
 the window's canvas: they cannot be closed or tabbed, but other panes can be
 split beside them.
 
@@ -1085,6 +1106,7 @@ The panes and their shortcuts:
 | `Alt+P`       | `Cmd+Shift+P` | Profile   | Live agent-loop profiler output                   |
 | `Alt+I`       | `Cmd+Shift+I` | TASKS     | Session tasks and status                          |
 | `Alt+M`       | `Cmd+Shift+M` | Memory    | Project/user memory and structured-memory summary |
+| `Alt+C`       | -             | Context   | What fills the model's context window             |
 | `Alt+S`       | -             | Sessions  | Session sidebar                                   |
 | `Alt+A`       | -             | Active agents | Running sub-agents                            |
 | `Alt+T`       | -             | Teams     | Agent teams                                       |
@@ -1124,6 +1146,7 @@ reopens maximized.
 | `Alt+P`                         | `Cmd+Shift+P`         | Toggle Profile pane                         |
 | `Alt+I`                         | `Cmd+Shift+I`         | Toggle TASKS pane                           |
 | `Alt+M`                         | `Cmd+Shift+M`         | Toggle Memory pane                          |
+| `Alt+C`                         | -                     | Toggle Context pane                         |
 | `Alt+Q`                         | `Cmd+Alt+Q`           | Open the queue-control menu (Next/Stop/Clear/Show) |
 | `Alt+O`                         | -                     | Toggle autopilot mode                       |
 | `Alt+S`                         | -                     | Show/focus/hide the Sessions pane           |

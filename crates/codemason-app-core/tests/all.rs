@@ -183,6 +183,8 @@ mod test_connector_catalogue_marketplace_warning;
 mod test_connector_catalogue_panel;
 #[path = "test_connectors_command.rs"]
 mod test_connectors_command;
+#[path = "test_context_panel_lines.rs"]
+mod test_context_panel_lines;
 #[path = "test_context_panel_t004.rs"]
 mod test_context_panel_t004;
 #[path = "test_context_panel_t005.rs"]

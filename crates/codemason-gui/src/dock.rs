@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use codemason_app_core::app::App;
-use codemason_app_core::input_event::KeyInput;
+use codemason_app_core::input_event::{Key, KeyInput, Modifiers};
 use craft_ui::docking::{Action, DockError, Layout, Location, Node, PanelState, Permissions};
 use craft_ui::layout::{SplitAxis, SplitSize};
 use serde::{Deserialize, Serialize};
@@ -58,6 +58,8 @@ pub enum PaneId {
     Tasks,
     /// The memory browser.
     Memory,
+    /// The context-window breakdown (`Alt+C`).
+    Context,
     /// The running agents.
     ActiveAgents,
     /// The agent teams.
@@ -68,7 +70,7 @@ pub enum PaneId {
 
 impl PaneId {
     /// Every pane, in declaration order.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Messages,
         Self::Prompt,
         Self::Sessions,
@@ -76,6 +78,7 @@ impl PaneId {
         Self::Profile,
         Self::Tasks,
         Self::Memory,
+        Self::Context,
         Self::ActiveAgents,
         Self::Teams,
         Self::Queue,
@@ -96,6 +99,7 @@ impl PaneId {
             Self::Profile => "Profile",
             Self::Tasks => "Tasks",
             Self::Memory => "Memory",
+            Self::Context => "Context",
             Self::ActiveAgents => "Active agents",
             Self::Teams => "Teams",
             Self::Queue => "Queue",
@@ -123,6 +127,7 @@ impl PaneId {
             | Self::Profile
             | Self::Tasks
             | Self::Memory
+            | Self::Context
             | Self::ActiveAgents
             | Self::Teams
             | Self::Queue => Permissions::default(),
@@ -152,6 +157,7 @@ pub fn pane_wanted(app: &App, pane: PaneId) -> bool {
         PaneId::Profile => app.show_profile,
         PaneId::Tasks => app.show_tasks_panel,
         PaneId::Memory => app.show_memory,
+        PaneId::Context => app.show_context_panel,
         PaneId::ActiveAgents => app.show_agents_window,
         PaneId::Teams => app.show_teams_window,
         PaneId::Queue => false,
@@ -169,7 +175,9 @@ pub fn pane_wanted(app: &App, pane: PaneId) -> bool {
 /// `App::close_agents_window`, `App::close_teams_window`). The log, profile,
 /// tasks and memory panels are hidden by their toggle chord, which the
 /// caller sends through `App::handle_key` exactly as the keyboard shortcut
-/// does: this function returns it.
+/// does: this function returns it. The Context panel has no keymap command
+/// (its `Alt+C` reaches app-core as a plain key), so its chord is returned
+/// as that key press.
 ///
 /// # Arguments
 ///
@@ -203,6 +211,12 @@ pub fn close_in_app(app: &mut App, pane: PaneId) -> Option<KeyInput> {
         PaneId::Profile => "panel.profile",
         PaneId::Tasks => "panel.tasks",
         PaneId::Memory => "panel.memory",
+        PaneId::Context => {
+            return Some(KeyInput {
+                key: Key::Char('c'),
+                mods: Modifiers::ALT,
+            });
+        }
     };
     crate::keys::command_key_input(&craft_keymap::CommandRef::new(command))
 }
@@ -231,6 +245,7 @@ pub fn pane_takes_keys(app: &App, pane: PaneId) -> bool {
         | PaneId::Log
         | PaneId::Profile
         | PaneId::Tasks
+        | PaneId::Context
         | PaneId::Queue => false,
     }
 }
@@ -316,8 +331,8 @@ fn split(
 /// Build the layout a first launch (or an unreadable layout file) uses.
 ///
 /// Sessions, profile and memory sit in a left column; the transcript sits
-/// above the prompt in the centre; agents, teams, tasks and the queue sit
-/// above the log in a right column. Every [`PaneId`] is shown.
+/// above the prompt in the centre; agents, teams, tasks, the queue and the
+/// context breakdown sit above the log in a right column. Every [`PaneId`] is shown.
 ///
 /// # Returns
 ///
@@ -338,6 +353,7 @@ pub fn default_layout() -> Layout<PaneId> {
             PaneId::Teams,
             PaneId::Tasks,
             PaneId::Queue,
+            PaneId::Context,
         ]),
         tabs(vec![PaneId::Log]),
     );

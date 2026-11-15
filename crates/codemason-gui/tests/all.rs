@@ -171,6 +171,8 @@ mod test_alt_t_teams_window_gui;
 mod test_connector_catalogue_mouse_gui;
 #[path = "test_connector_catalogue_panel_gui.rs"]
 mod test_connector_catalogue_panel_gui;
+#[path = "test_context_panel_t002_gui.rs"]
+mod test_context_panel_t002_gui;
 #[path = "test_context_panel_t010_gui.rs"]
 mod test_context_panel_t010_gui;
 #[path = "test_context_panel_t012_gui.rs"]

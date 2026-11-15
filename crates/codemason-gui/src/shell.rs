@@ -8,8 +8,9 @@
 //! above the prompt editor ([`prompt_ui`]), which edits the App's own input
 //! buffer, the sessions sidebar ([`SessionsView`]), the log panel
 //! ([`log_ui`]), the profiler table ([`profile_ui`]), the task list
-//! ([`tasks_ui`]), the memories ([`memory_ui`]) and the Agents and Teams
-//! window tables ([`agents_ui`], [`teams_ui`]). The queue pane, whose list
+//! ([`tasks_ui`]), the memories ([`memory_ui`]), the context-window
+//! breakdown ([`context_ui`]) and the Agents and Teams window tables
+//! ([`agents_ui`], [`teams_ui`]). The queue pane, whose list
 //! is drawn above the prompt, draws a labelled placeholder.
 //!
 //! # Dock visibility and persistence
@@ -64,6 +65,7 @@ use crate::dock::{self, HiddenPanes, PaneId};
 use crate::keys::{Focus, KeyRouter, default_keymap};
 use crate::palette::{Palette, palette_for};
 use crate::panels::agents::agents_ui;
+use crate::panels::context::context_ui;
 use crate::panels::log::log_ui;
 use crate::panels::memory::memory_ui;
 use crate::panels::messages::MessagesView;
@@ -538,6 +540,7 @@ impl Shell {
                 PaneId::Profile => profile_ui(ui, app, palette),
                 PaneId::Tasks => tasks_ui(ui, app, palette),
                 PaneId::Memory => memory_ui(ui, app, palette),
+                PaneId::Context => context_ui(ui, app, palette),
                 PaneId::ActiveAgents => agents_ui(ui, app, palette),
                 PaneId::Teams => teams_ui(ui, app, palette),
                 PaneId::Queue => placeholder(ui, *pane),

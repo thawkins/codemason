@@ -21,6 +21,7 @@ use codemason_gui::Shell;
 use codemason_gui::dialogs::session_menu::SESSION_MENU_TITLE;
 use codemason_gui::dock::{PaneId, default_layout, load_dock, load_layout, save_layout};
 use codemason_gui::keys::default_keymap;
+use codemason_gui::panels::context::CONTEXT_LABEL;
 use codemason_gui::panels::log::LOG_LABEL;
 use codemason_gui::panels::profile::PROFILE_LABEL;
 use codemason_gui::panels::prompt::PROMPT_LABEL;
@@ -158,6 +159,13 @@ fn sessions_shown(harness: &Harness<'static, Shell>) -> bool {
 fn log_shown(harness: &Harness<'static, Shell>) -> bool {
     harness
         .query_by_role_and_label(Role::Log, LOG_LABEL)
+        .is_some()
+}
+
+/// Whether the Context panel is drawn.
+fn context_shown(harness: &Harness<'static, Shell>) -> bool {
+    harness
+        .query_by_role_and_label(Role::List, CONTEXT_LABEL)
         .is_some()
 }
 
@@ -309,6 +317,62 @@ fn test_log_panel_alt_l_shows_and_hides_the_pane() {
     assert!(!log_shown(&rig.harness));
     assert!(!rig.harness.state().layout().contains(&PaneId::Log));
     assert_eq!(rig.harness.state().app().session.input, "");
+}
+
+#[test]
+fn test_context_panel_alt_c_shows_and_hides_the_pane() {
+    let mut rig = rig(|_, app| app.show_log = true);
+    rig.harness.run();
+    focus_prompt(&mut rig.harness);
+    assert!(!context_shown(&rig.harness));
+    assert!(!rig.harness.state().layout().contains(&PaneId::Context));
+
+    // Alt+C shows the Context pane, with its breakdown, in place of the
+    // other side panels app-core hides.
+    alt(&mut rig.harness, egui::Key::C, "c");
+    rig.harness.run();
+    let app = rig.harness.state().app();
+    assert!(app.show_context_panel);
+    assert_eq!(app.status, "context panel visible");
+    assert!(
+        !app.show_log,
+        "app-core hides the log for the Context panel"
+    );
+    assert!(context_shown(&rig.harness));
+    assert!(rig.harness.state().layout().contains(&PaneId::Context));
+    assert!(!rig.harness.state().layout().contains(&PaneId::Log));
+    rig.harness.get_by_label_contains("Context window");
+    rig.harness.get_by_label_contains("System prompt");
+    rig.harness.get_by_label_contains("0 messages");
+
+    alt(&mut rig.harness, egui::Key::C, "c");
+    rig.harness.run();
+    assert!(!rig.harness.state().app().show_context_panel);
+    assert!(!context_shown(&rig.harness));
+    assert!(!rig.harness.state().layout().contains(&PaneId::Context));
+    assert_eq!(rig.harness.state().app().session.input, "");
+    assert!(rig.harness.state().app().session.messages.is_empty());
+}
+
+#[test]
+fn test_dock_closing_the_context_tab_clears_its_flag() {
+    let mut rig = rig(|_, app| app.show_context_panel = true);
+    rig.harness.run();
+    assert!(context_shown(&rig.harness));
+
+    rig.harness
+        .get_by_role_and_label(Role::Tab, CONTEXT_LABEL)
+        .click_secondary();
+    rig.harness.run();
+    rig.harness.get_by_label("Close Panel").click();
+    rig.harness.run();
+    rig.harness.run();
+
+    let app = rig.harness.state().app();
+    assert!(!app.show_context_panel);
+    assert_eq!(app.status, "context panel hidden", "app-core's toggle ran");
+    assert!(!rig.harness.state().layout().contains(&PaneId::Context));
+    assert!(!context_shown(&rig.harness));
 }
 
 #[test]

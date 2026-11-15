@@ -12,6 +12,7 @@
 pub mod app;
 pub mod branch_names;
 pub mod clipboard;
+pub mod context_panel;
 pub mod deck_progress;
 pub mod geometry;
 pub mod input;

@@ -10,14 +10,16 @@
 //! - [`profile`] is the agent-loop profiler table ([`crate::dock::PaneId::Profile`]).
 //! - [`tasks`] is the session's task list ([`crate::dock::PaneId::Tasks`]).
 //! - [`memory`] is the project's memories ([`crate::dock::PaneId::Memory`]).
+//! - [`context`] is the context-window breakdown ([`crate::dock::PaneId::Context`]).
 //! - [`agents`] is the Agents window table
 //!   ([`crate::dock::PaneId::ActiveAgents`]).
 //! - [`teams`] is the Teams window table ([`crate::dock::PaneId::Teams`]).
 //! - [`research`] is the research and deck progress views, drawn above
 //!   the transcript while a `/research` run is going.
-//! - [`rows`] is the line list those five panels draw with.
+//! - [`rows`] is the line list the side panels draw with.
 
 pub mod agents;
+pub mod context;
 pub mod log;
 pub mod memory;
 pub mod messages;

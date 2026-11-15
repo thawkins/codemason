@@ -9,12 +9,13 @@
 //! that cannot run headlessly (a live LLM turn, real font/terminal rendering)
 //! are called out in the affected test's doc comments.
 //!
-//! Ported to codemason-gui when the terminal UI was removed: these tests of
-//! the original `crates/codemason-tui/tests/test_context_panel_t016.rs` check App state that
-//! depends on what a frame publishes (row maps, the sidebar rows, the
-//! memory rows). Each terminal draw is replaced by
-//! `crate::frame::publish`, which draws the GUI panels the App shows;
-//! assertions that read the drawn terminal frame were dropped with it.
+//! Ported to codemason-gui when the terminal UI was removed: each terminal
+//! draw of the original `crates/codemason-tui/tests/test_context_panel_t016.rs`
+//! is replaced by a GUI frame (`crate::frame::publish`) that returns the
+//! Context pane's text (`crate::frame::context_text`) while the panel is
+//! shown. Assertions on terminal geometry (the reserved column, the chat
+//! width) have no GUI equivalent: the dock places the pane, and
+//! `test_context_panel_t002_gui` checks that the shell shows and hides it.
 
 mod support;
 
@@ -25,10 +26,16 @@ use crate::term_events::{KeyCode, KeyEvent, KeyModifiers};
 use codemason_agent::message::{Message, MessagePart, Role};
 use codemason_app_core::app::App;
 
-/// `draw` without its terminal draw: the setup it performs, then
-/// a GUI frame (`crate::frame::publish`).
-fn draw_effects(app: &mut App, _cols: u16, _rows: u16) {
+/// `draw` without its terminal draw: a GUI frame (`crate::frame::publish`),
+/// returning the Context pane's drawn text while the panel is shown (empty
+/// otherwise).
+fn draw_effects(app: &mut App, _cols: u16, _rows: u16) -> String {
     crate::frame::publish(app);
+    if app.show_context_panel {
+        crate::frame::context_text(app)
+    } else {
+        String::new()
+    }
 }
 
 /// Send the Alt+C key chord TC-001 presses.
@@ -75,8 +82,9 @@ async fn tc001_alt_c_toggles_panel_open_and_closed() {
     assert_eq!(app.status, "context panel visible");
 
     // Step 2: a right-hand panel appears; the chat area shrinks.
-    draw_effects(&mut app, 100, 30);
-    let _first_area = app.context_panel_area;
+    let first = draw_effects(&mut app, 100, 30);
+    let titled = first.lines().any(|line| line == "Context");
+    assert!(titled, "step 2: panel titled Context");
 
     drain_snapshot_polling(&mut app).await;
 
@@ -104,14 +112,19 @@ async fn tc002_system_prompt_row_and_model_capacity() {
     app.session.selected_model = Some(format!("{prov}/{model}"));
     app.show_context_panel = true;
     drain_snapshot_polling(&mut app).await;
-    draw_effects(&mut app, 100, 40);
+    let text = draw_effects(&mut app, 100, 40);
     let snapshot = app.context_effective_snapshot();
     assert_eq!(
         snapshot.context_window_tokens,
         Some(window),
         "panel resolves the selected model's advertised capacity (FR-010)"
     );
+    assert!(text.contains("System prompt"), "capacity row present");
     assert!(snapshot.system_prompt_tokens > 0, "partition is non-zero");
+    assert!(
+        text.contains('%'),
+        "percentages render when window is known"
+    );
 
     // FR-011: when no provider reports a limit, percentages read "unknown"
     // while absolute token counts remain visible. Force all three capacity
@@ -124,7 +137,12 @@ async fn tc002_system_prompt_row_and_model_capacity() {
     assert!(app.active_context_window_tokens().is_none());
     app.show_context_panel = true;
     drain_snapshot_polling(&mut app).await;
-    draw_effects(&mut app, 100, 40);
+    let text = draw_effects(&mut app, 100, 40);
+    assert!(text.contains("unknown"), "FR-011: unknown percentages");
+    assert!(
+        text.contains("tk"),
+        "FR-011: absolute token counts still shown"
+    );
 }
 
 #[tokio::test]
@@ -132,9 +150,11 @@ async fn tc003_tool_catalog_and_metadata_rows() {
     let mut app = support::make_app();
     app.show_context_panel = true;
     drain_snapshot_polling(&mut app).await;
-    draw_effects(&mut app, 100, 40);
+    let text = draw_effects(&mut app, 100, 40);
     let snapshot = app.context_effective_snapshot();
 
+    assert!(text.contains("Tool catalog"), "catalog row present");
+    assert!(text.contains("Tool metadata"), "metadata row present");
     assert!(
         snapshot.tool_catalog_tokens > 0,
         "default registry exposes many tools (FR-006)"
@@ -173,7 +193,7 @@ async fn tc004_history_updated_after_chat() {
     ));
     app.schedule_context_snapshot_refresh();
     drain_snapshot_polling(&mut app).await;
-    draw_effects(&mut app, 100, 40);
+    let text = draw_effects(&mut app, 100, 40);
 
     assert!(
         app.conversation_history_token_count() > before_tokens,
@@ -186,6 +206,7 @@ async fn tc004_history_updated_after_chat() {
     );
     let snapshot = app.context_effective_snapshot();
     assert!(snapshot.history_tokens > 0);
+    assert!(text.contains("2 messages"), "message count re-read");
 }
 
 #[tokio::test]

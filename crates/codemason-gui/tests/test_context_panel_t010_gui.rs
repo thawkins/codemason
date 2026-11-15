@@ -8,12 +8,10 @@
 //! the user re-opening the panel. These tests pin that behaviour: mutating
 //! the underlying state changes the rendered values on the next frame.
 //!
-//! Ported to codemason-gui when the terminal UI was removed: these tests of
-//! the original `crates/codemason-tui/tests/test_context_panel_t010.rs` check App state that
-//! depends on what a frame publishes (row maps, the sidebar rows, the
-//! memory rows). Each terminal draw is replaced by
-//! `crate::frame::publish`, which draws the GUI panels the App shows;
-//! assertions that read the drawn terminal frame were dropped with it.
+//! Ported to codemason-gui when the terminal UI was removed: each terminal
+//! draw of the original `crates/codemason-tui/tests/test_context_panel_t010.rs`
+//! is replaced by `crate::frame::context_text`, which draws the GUI Context
+//! pane and returns its text.
 
 mod support;
 
@@ -39,7 +37,7 @@ fn test_panel_reflects_new_message_without_reopening() {
         }],
     ));
 
-    crate::frame::publish(&mut app);
+    let rendered = crate::frame::context_text(&mut app);
 
     assert!(
         app.conversation_history_token_count() > before,
@@ -47,6 +45,10 @@ fn test_panel_reflects_new_message_without_reopening() {
     );
 
     // Rendered output must now include "1 messages".
+    assert!(
+        rendered.contains("1 messages"),
+        "panel must refresh the message count without re-opening; got:\n{rendered}"
+    );
 }
 
 #[test]
@@ -76,7 +78,7 @@ fn test_panel_reflects_scroll_clamp_after_content_shrink() {
         }],
     ));
 
-    crate::frame::publish(&mut app);
+    crate::frame::context_text(&mut app);
 
     let after = app.context_partition_snapshot();
     assert!(
