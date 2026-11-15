@@ -272,9 +272,10 @@ pub fn check_path_within_any_root(path: &Path, roots: &[&Path]) -> anyhow::Resul
 /// A component that does not resolve may still be a *dangling symlink*; the
 /// OS follows it when the file is created. So when the walk meets one, it
 /// restarts on the link target (relative targets are taken against the link's
-/// directory) plus the remaining tail, up to [`MAX_SYMLINK_HOPS`] times. Only
-/// once no unresolved component is a symlink is lexical popping sound, since
-/// the prefix it may pop into is already canonical.
+/// directory) plus the remaining tail, up to [`MAX_SYMLINK_HOPS`] times. A
+/// `..` in the tail can pop back into existing directories, so after replaying
+/// one the walk also restarts on the resulting `..`-free path, which resolves
+/// whatever the replayed components now name.
 ///
 /// # Arguments
 ///
@@ -313,8 +314,8 @@ const MAX_SYMLINK_HOPS: usize = 40;
 enum MissingPath {
     /// The path's would-be canonical form.
     Resolved(PathBuf),
-    /// A dangling symlink was met; resolve this path (link target plus the
-    /// remaining tail) instead.
+    /// A dangling symlink was met, or a `..` was replayed; resolve this path
+    /// (link target plus the remaining tail, or the `..`-free result) instead.
     FollowLink(PathBuf),
 }
 
@@ -352,13 +353,22 @@ fn resolve_missing_path_once(
             None => break fallback_root.to_path_buf(),
         }
     };
+    let mut popped = false;
     for part in tail.iter().rev() {
         match part {
             Component::ParentDir => {
                 base.pop();
+                popped = true;
             }
             other => base.push(other.as_os_str()),
         }
+    }
+    // A `..` can pop back into existing directories, so the components pushed
+    // after it may name existing entries - including a dangling symlink - that
+    // were never resolved (`ghost/../evil`). Restart on the now `..`-free path
+    // so they are; it cannot pop again, so this restarts at most once per hop.
+    if popped {
+        return Ok(MissingPath::FollowLink(base));
     }
     Ok(MissingPath::Resolved(base))
 }
