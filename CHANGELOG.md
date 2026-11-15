@@ -10,6 +10,11 @@
 ### Fixed
 
 - Fixed: `/codeindex on|off` no longer overwrites the user-global config with defaults when the project config fails to parse; the failure is reported and the status shows `(unsaved)`.
+- Fixed: the file-tool containment check follows a dangling symlink to where the OS would create the file, so `Write`, `Create`, `AppendFile` and `CopyFile` can no longer be redirected outside the workspace by a link pointing outside it; symlink loops are refused.
+- Fixed: `/plugins add` bounds each archive entry read at the size cap, so a small zip or tar.gz holding a huge, highly compressible entry is refused without being decompressed into memory.
+- Fixed: `/plugins add` with a `git+` source kills a `git` command after 5 minutes, aborts stalled HTTP transfers, refuses a cloned tree over the 256 MiB extraction cap, and refuses a source whose `:<subpath>` is unsafe (leading `/` or `-`, `..`) instead of installing the whole repository.
+- Fixed: `gitlab_get_job_log` streams the job trace into a 1 MiB tail instead of reading it whole; `total_lines` and the "showing last N of M lines" header still count the full trace.
+- Fixed: the ollama, ollama_cloud and openai_responses providers cap a logged malformed stream frame at 512 bytes, like the other providers.
 
 ### Changed
 
