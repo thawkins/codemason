@@ -17,7 +17,7 @@
 
 ## Executive Summary
 
-Codemason is an open-source AI coding agent for the terminal, written entirely in
+Codemason is an open-source AI coding agent with a desktop GUI and a CLI, written entirely in
 Rust and distributed as a single statically-linked binary with zero external
 runtime dependencies. It orchestrates multiple LLM providers — Anthropic,
 OpenAI, GitHub Copilot, Google Gemini, Hugging Face, Ollama (local and cloud), xAI
@@ -43,12 +43,12 @@ processor manages the conversation with the LLM provider, the agent system
 defines personality and capabilities via profiles, and the tool registry
 dispatches execution requests. An asynchronous event bus (built on tokio)
 connects all components, enabling real-time streaming of tokens, tool results,
-and status updates to both the TUI and the HTTP API.
+and status updates to both the GUI and the HTTP API.
 
 ```mermaid
 graph LR
-    User[User] --> TUI[TUI / HTTP API]
-    TUI --> SP[Session Processor]
+    User[User] --> GUI[GUI / HTTP API]
+    GUI --> SP[Session Processor]
     SP --> LLM[LLM Provider]
     SP --> AP[Agent Profile]
     SP --> TR[Tool Registry]
@@ -63,7 +63,7 @@ graph LR
 | Capability | Summary |
 |-----------|---------|
 | **Multi-provider LLM** | Every provider registered in `codemason-llm` (`crates/codemason-llm/src/providers/`), with automatic model discovery, health monitoring, streaming, vision, and reasoning levels |
-| **Terminal UI** | Full-screen ratatui interface with streaming markdown, syntax highlighting, slash commands, and image support |
+| **Desktop GUI** | egui window with dockable panes, streaming markdown, syntax highlighting, slash commands, native file dialogs, and image support; the default frontend (`cdmn run` stays headless) |
 | **HTTP Server** | REST + SSE API (Axum) for headless operation and external integrations |
 | **Tool System** | Broad tool coverage across file ops, shell, search, GitHub, GitLab, code index, memory, teams, sub-agents, PDF, web, and MCP |
 | **Code Intelligence** | Tree-sitter parsing (15+ languages), Tantivy FTS, symbol/reference search, and code index queries |
@@ -87,7 +87,7 @@ sessions and headless CI/CD integration via its HTTP API.
 |--------|--------|
 | **Language** | Rust (edition 2024) |
 | **Async runtime** | tokio |
-| **TUI framework** | ratatui + crossterm |
+| **GUI framework** | egui / eframe, with craft-ui docking and craft-keymap shortcuts (`codemason-gui`) |
 | **HTTP framework** | Axum |
 | **Database** | SQLite (rusqlite, compiled-in) |
 | **Full-text search** | Tantivy |
@@ -99,7 +99,7 @@ sessions and headless CI/CD integration via its HTTP API.
 ### Project Status
 
 Codemason is in **beta**. The core architecture, tool system,
-TUI, HTTP server, memory system, spec management, skills system, research system,
+GUI, HTTP server, memory system, spec management, skills system, research system,
 multi-agent coordination, security layer, telemetry, code index semantic graph,
 plugin system, connector system (§19C), execution backends (§19D), the Agent
 Client Protocol client and server (§19E), the automation service (§19F), and
@@ -123,7 +123,7 @@ below documents the current state of all subsystems.
 
 ### Part II: User Interface & API
 
-- [6. Terminal User Interface (TUI)](#6-terminal-user-interface-tui)
+- [6. Graphical User Interface (GUI)](#6-graphical-user-interface-gui)
 - [7. HTTP Server & API](#7-http-server--api)
 
 ### Part III: Data & Knowledge Systems
@@ -178,7 +178,7 @@ below documents the current state of all subsystems.
 | 4 | [Event Bus Flow](#23-event-bus-flow) | Architecture | Internal pub/sub message routing |
 | 5 | [Session & Tool Execution Flow](#35-session--tool-execution-flow) | Core Features | LLM call → permission → tool dispatch loop |
 | 6 | [Provider Selection Flow](#36-provider-selection-flow) | Core Features | Multi-provider routing and health checks |
-| 7 | [TUI Component Architecture](#63-tui-component-architecture) | Terminal User Interface | UI layout and event wiring |
+| 7 | [GUI Component Architecture](#63-gui-component-architecture) | Graphical User Interface | UI layout and event wiring |
 | 8 | [HTTP API Request Flow](#75-http-api-request-flow) | HTTP Server & API | REST + SSE lifecycle |
 | 9 | [Code Index Pipeline](#83-architecture) | Code Index | File scan → parse → index → search |
 | 10 | [Permission Security Layers](#41-permission-security-layers) | Security & Permissions | 5-layer defense-in-depth |
@@ -199,7 +199,7 @@ below documents the current state of all subsystems.
 
 ## 1. Overview
 
-Codemason is an AI coding agent for the terminal, built in Rust. It provides multi-provider LLM orchestration, a built-in tool system, terminal UI, and client/server architecture — all compiled into a single statically-linked binary named `cdmn`.
+Codemason is an AI coding agent with a desktop GUI and a CLI, built in Rust. It provides multi-provider LLM orchestration, a built-in tool system, and client/server architecture — all compiled into a single statically-linked binary named `cdmn`.
 
 Codemason was forked from ragent: crates are named `codemason-*`, environment
 variables use the `CODEMASON_` prefix, project and user state live in
@@ -213,7 +213,7 @@ variables use the `CODEMASON_` prefix, project and user state live in
 | **Multi-provider** | 13 first-class LLM provider IDs with auto-discovery and health checks |
 | **Tool-rich** | A tool registry grouped into permission categories; `cdmn --dry-run --json run x` reports the live total (`mf_screenshot` is engine-gated, spec `openhands` FR-029) |
 | **Local-first** | SQLite, Tantivy, and tree-sitter compiled in; no external services required |
-| **Streaming** | Real-time token, tool, and event streaming via TUI and HTTP SSE |
+| **Streaming** | Real-time token, tool, and event streaming via GUI and HTTP SSE |
 | **Extensible** | Custom agents, skills, MCP servers, and provider modules |
 | **Secure by default** | Permission system, bash safety, file guards, secret redaction |
 
@@ -256,7 +256,8 @@ graph TB
         K[codemason-tools-core]
         L[codemason-tools-extended]
         M[codemason-tools-vcs]
-        N[codemason-tui]
+        N[codemason-gui]
+        AC[codemason-app-core]
         O[codemason-types]
         P[codemason-research]
         S[codemason-surface]
@@ -308,8 +309,9 @@ graph TB
 | `codemason-agent` | Session processor, agent resolution, tool registry, memory, MCP; team runtime + the `team_*` tools (former `codemason-team` shim folded in) | ~77,300 |
 | `codemason-codeindex` | Tree-sitter parsing, SQLite/Tantivy index, file watcher | ~14,200 |
 | `codemason-server` | Axum HTTP routes and SSE streaming | ~6,100 |
-| `codemason-tui` | Ratatui terminal interface | ~72,300 |
-| `codemason-bench` | Criterion benchmarks shared between TUI and CLI | ~6,800 |
+| `codemason-app-core` | Frontend-neutral application core: `App` state, key handling, slash commands, event handlers | ~67,300 |
+| `codemason-gui` | egui desktop frontend: dockable panes, native dialogs, craft-keymap shortcuts | ~12,200 |
+| `codemason-bench` | Criterion benchmarks shared between GUI and CLI | ~6,800 |
 | `codemason-specs` | Spec lifecycle management, SDD artifact generation, consistency validation, constitution parsing | ~9,100 |
 | `codemason-research` | Research types, gatherers, and plan-dep parser | ~39,000 |
 | `codemason-plugins` | Plugin discovery, dialect manifests, sandboxed JS runtime, lifecycle, skills/MCP/commands/agents/hooks bridges, `/plugins` surface | ~11,400 |
@@ -331,7 +333,9 @@ graph TD
     A[codemason-agent]
     CI[codemason-codeindex]
     SV[codemason-server]
-    TU[codemason-tui]
+    TU[codemason-gui]
+    AC[codemason-app-core]
+    AC --> TU
     SP[codemason-specs]
     RS[codemason-research]
     B[codemason-bench]
@@ -378,13 +382,13 @@ graph TD
 **Figure 3:** Crate Dependency Graph — Inter-crate dependency relationships
 
 Per-crate `fn`-definition counts (lexical lower bounds, re-measured 2026-10-21):
-`codemason-tui` 6,054 · `codemason-agent` 4,630 · `codemason-tools-extended` 2,956 ·
+`codemason-agent` 4,630 · `codemason-tools-extended` 2,956 ·
 `codemason-research` 2,513 · `codemason-codeindex` 1,130 · `codemason-llm` 1,102 ·
 `codemason-tools-core` 1,001 · `codemason-plugins` 991 · `codemason-specs` 981 ·
 `codemason-tools-vcs` 941 · `codemason-connectors` 907 · `codemason-config` 787 ·
 `codemason-types` 590 · `codemason-storage` 585 · `codemason-telemetry` 550 ·
 `codemason-bench` 412 · `codemason-server` 363 · root `codemason` binary 159 ·
-`codemason-surface` 114 — 26,768 workspace-wide (8,985 in `src/`, 17,667 in
+`codemason-surface` 114 — 26,768 workspace-wide, measured before the GUI crate was removed (8,985 in `src/`, 17,667 in
 `tests/`, 66% test code).
 
 ### 2.3 Event Bus Flow
@@ -395,11 +399,11 @@ component can publish and subscribe to strongly-typed events.
 ```mermaid
 graph LR
     SP[Session Processor] --> EB[Event Bus]
-    TUI[TUI] --> EB
+    GUI[GUI] --> EB
     HTTP[HTTP Server] --> EB
     Tools[Tool Executors] --> EB
     EB --> SP
-    EB --> TUI
+    EB --> GUI
     EB --> HTTP
     EB --> Storage[Storage / Memory]
     EB --> Teams[Team Manager]
@@ -796,8 +800,8 @@ against a remembered number:
 | `tool_info` | `ToolContext::tool_registry.all_tools()` | case 5 |
 | `commands_info` | `command_catalog::COMMAND_CATALOG` (`/tools` publishes `TOOLS_SUBS`) | case 6 |
 | outbound provider `ChatRequest.tools` | `definitions()`, via `get_cached_tool_definitions` | case 7 |
-| `/tools list` | `definitions()` | TUI case 1 |
-| `/bug-report` `Tools registered` line | `list().len()` | TUI case 2 |
+| `/tools list` | `definitions()` | GUI case 1 |
+| `/bug-report` `Tools registered` line | `list().len()` | GUI case 2 |
 
 `/tools list` reports every tool the registry holds - the same set `definitions()`
 returns and the same set sent to the provider - so its row count is the tool count.
@@ -1053,15 +1057,14 @@ precedence over sub-agent tasks. Covered by
 `::cancel_names_the_live_ids_when_no_task_matches` and
 `::cancel_reports_the_registry_status_of_a_finished_task`.
 
-### 3.9 Failure Capture: Panic Reports, Crash Dumps, and the stderr Spool
+### 3.9 Failure Capture: Panic Reports and Crash Dumps
 
-Three complementary mechanisms cover the three ways a codemason process can die.
+Two complementary mechanisms cover the two ways a codemason process can die.
 
 | Failure | Captured by | Where the evidence lands |
 |---------|-------------|--------------------------|
 | Unwinding panic (in-process) | `panic_hook::install` — writes the payload, location, environment, and a forced backtrace, then chains to the default hook | `log/panics/panic-<timestamp>.log` |
 | Abort — stack overflow, `SIGKILL`, `std::process::abort` | OS core dump (no in-process hook can run) | `coredumpctl` entry / `core_pattern` file; detection marker at `log/panics/last-crash.json` |
-| Raw stderr while the TUI owns the alternate screen | `stderr_spool::install` — fd-2 redirection drained into a truncating spool | `log/logwindow/stderr-<timestamp>.log` plus the log panel |
 
 **Stack overflows cannot be trapped in-process.** The Rust runtime prints
 `thread '...' has overflowed its stack` and calls `abort()`; nothing after that
@@ -1075,16 +1078,9 @@ list/info/debug <pid>` when `/proc/sys/kernel/core_pattern` pipes into a helper
 (typical `systemd-coredump` hosts), otherwise the `core_pattern` file path or
 the macOS `/cores` convention. A clean exit never reports.
 
-**The stderr spool** exists because the TUI paints the alternate screen: the
-default panic hook, `eprintln!`, and C-library diagnostics would be overwritten
-by the next frame. In TUI mode the binary replaces fd 2 with the write end of a
-pipe and drains it on a dedicated thread into
-`codemason_types::stderr_spool::Spool` (`SPOOL_MAX_LINES = 1000`); the TUI mirrors
-each chunk into the log panel as `stderr: <line>`. The spool counts newlines per
-write and, once the 1000-line cap is exceeded, rewrites the file with only its
-newest 1000 lines — the rewrite is skipped entirely for a write containing no
-newline, so the common case costs one append. Non-TUI modes (`--no-tui`,
-headless `run`, `serve`) leave stderr attached to the terminal.
+**There is no stderr spool.** The GUI does not own the terminal's alternate
+screen, so the fd-2 redirection (`src/stderr_spool.rs`) was removed with the TUI;
+the GUI leaves stderr attached to the terminal that launched it.
 
 ---
 
@@ -1138,7 +1134,7 @@ sequenceDiagram
     participant Tool as Tool Executor
     participant SP as Session Processor
     participant Bus as Event Bus
-    participant UI as TUI / HTTP API
+    participant UI as GUI / HTTP API
     participant User as User
     Tool->>SP: request permission
     SP->>Bus: PermissionRequested
@@ -1254,7 +1250,6 @@ Each guard is a named helper or an explicit bound.
 | Telemetry privilege stripping | `codemason-config` | telemetry enablement and endpoint overrides come from the user-global config only |
 | OTLP export health monitor | `codemason-telemetry` | every export outcome is classified and counted; 5 consecutive failures disable export instead of retrying a dead endpoint, and each failure surfaces as an `Agent Notice` with the masked endpoint |
 | Blocking OTLP exporter | `codemason-telemetry::subsystem::build_provider` | the OTLP exporter uses the blocking reqwest client (`reqwest-blocking-client`) under the default `PeriodicReader`, so an export needs no Tokio reactor and `flush` is safe from any thread |
-| Thread-aware TUI panic hook | `codemason-tui::run_tui` | terminal teardown runs only when the panicking thread is the UI thread, so a background-worker panic cannot destroy the alternate screen |
 | Safe-command allowlist + in-crate calculator | `codemason-tools-core` | the allowlist is read-only commands only, interpreters always go through the permission gate, banned tools are consulted first, and `calculator` evaluates arithmetic in-process (no `python3 -c`) |
 | VCS argument hardening | `codemason-tools-vcs` | `reject_option_like` on every ref/branch/tag/remote/path, `--` before positionals, `validate_clone_directory` confines the clone target, and a `gitlab:<host>` host is accepted only when it matches the configured instance |
 
@@ -1273,7 +1268,7 @@ delay**, and **origin-scoped credential attachment**.
 | Credential env seeding | binary startup | every credential env var is registered with the secret registry before any log can be written |
 | `redact_secrets` on tool output | `codemason-tools-core::bash`, `codemason-tools-vcs::github_actions` | bash partial/completed output and CI log excerpts are redacted before they reach the model or the session store |
 | `is_allowed_request_header` | `codemason-tools-extended::http_request` | only `accept`, `accept-language`, `content-type` and `user-agent` may be set; routing, hop-by-hop and credential headers are refused |
-| `mask_secret` | `codemason-tui::layout` | the provider-setup dialog masks the API key and the GitLab PAT |
+| `mask` | `codemason-gui::dialogs::provider` | the provider-setup dialog masks the API key and the GitLab PAT |
 | `check_path_within_workspace` | `codemason-tools-extended::ToolContext` | `pdf_write` confines its output path |
 | `build_exclude_matcher` / `clear_index_dir` | `codemason-codeindex` | the configured exclusion globs are applied and the FTS recovery wipe refuses a symlinked directory |
 | Scratch-dir confinement (`bash_scratch_dir`, `restrict_to_owner`) | `codemason-tools-core::bash` | the wrapper script and `export -p` state file live in a 0700 directory as 0600 files |
@@ -1281,7 +1276,6 @@ delay**, and **origin-scoped credential attachment**.
 | `MAX_GAP_EXPANSION` / `MAX_CONTRADICTION_REQUIREMENTS` | `codemason-specs::validate` | numbering-gap expansion and contradiction detection are bounded |
 | `MAX_MESSAGE_BYTES` / `validate_hook_command` / `HOOK_TIMEOUT` | `codemason-agent::team` | mailbox messages are size-capped, team hook commands are validated, hooks time out at 30 s with a process-group kill, and feedback is capped |
 | `positive_duration_secs` / checked arithmetic | `codemason-types::cron` | `CronSchedule` returns `None` instead of panicking on an invariant violation and uses `checked_mul` / `saturating_mul` |
-| `SPOOL_MAX_BYTES` | `codemason-types::stderr_spool` | the spool enforces a byte ceiling on every write, including newline-free ones |
 | `split_bash_command` substitution depth | `codemason-agent::session::permissions` | a `;`/`&&` inside `$( ... )` does not split the command into a separately-judged sub-command |
 | `same_origin_as` | `codemason-tools-vcs::github` | the Bearer token is attached only when the resolved URL matches the configured API origin |
 
@@ -1315,8 +1309,7 @@ The same guard shapes at the remaining call sites: an explicit **cap/budget**, a
 | char-boundary diff split | `codemason-storage::snapshot` | `apply_unified_diff` splits on the first char, so a multibyte diff line cannot panic |
 | `is_safe_memory_component` | `codemason-agent::team::config` | `resolve_memory_dir` rejects a multi-component or `..` agent name |
 | `CardinalityCache::resolve` sanitisation | `codemason-telemetry::cardinality` | values are passed through `sanitize_attr_value` inside `resolve` and a poisoned lock fails closed to the unknown bucket |
-| `parse_alog_run_id_yes` validation | `codemason-tui::app::helpers` | `/alog export` accepts only `[A-Za-z0-9_-]+` run ids |
-| log-window spool mode | `codemason-tui::app::session_ops` | the spool is created 0600 and the mode is re-asserted on every open |
+| `parse_alog_run_id_yes` validation | `codemason-app-core::app::helpers` | `/alog export` accepts only `[A-Za-z0-9_-]+` run ids |
 | `bash_scratch_dir` private fallback | `codemason-tools-core::bash` | a failed private-dir creation falls back to a process-private 0700 directory, never to shared temp |
 | tree-walk budget | `codemason-tools-vcs::github` | the GitHub recursive tree walk carries a `MAX_TREE_REQUESTS`/`MAX_TREE_ENTRIES` budget, matching the GitLab equivalent |
 | `redacted_event_debug` / SSE device-code masking | `codemason-server::sse` | credential-bearing events expose presence-only fields on the SSE stream and a redacted rendering for log sites |
@@ -1414,7 +1407,7 @@ occurrence is rejected. An intentional call is exempted with a same-line
 - `Config` does not derive `Debug`; a hand-written impl renders a JSON form
   routed through `codemason_types::sanitize::redact_secrets`, so an API key,
   GitLab token, bot token, webhook URL, or client secret cannot be printed.
-- Crash markers, panic reports, and the stderr spool are created owner-only
+- Crash markers and panic reports are created owner-only
   (`0o600`), and the `/bug-report` dump is written `0o600` too. The crash
   record's argv is redacted before serialisation, because
   `cdmn auth openai sk-...` would otherwise persist a live credential to a
@@ -1473,7 +1466,7 @@ permissions. It is intended for trusted local environments and is persisted
 to `codemason.json`.
 
 ```bash
-/yolo        # toggle in TUI
+/yolo        # toggle in GUI
 --yes        # CLI flag
 ```
 
@@ -1866,7 +1859,7 @@ Rules:
 
 Surfaces: the startup pass (on `spawn_blocking`, so it never stalls startup),
 `cdmn db prune [--days N] [--dry-run]`, and `/db prune [--days N] [--dry-run]`
-in the TUI. A real TUI prune asks for confirmation and the dialog opens on `No`,
+in the GUI. A real GUI prune asks for confirmation and the dialog opens on `No`,
 so a stray `Enter` deletes nothing.
 
 See `docs/sqlite.md` for the storage-level detail (pragma table and the
@@ -1912,7 +1905,7 @@ Rules:
   collector answers with `404`.
 - **The logs signal composes, it does not redirect.** A
   `tracing_subscriber::Layer` (`codemason_telemetry::logs::TracingLogsLayer`) is
-  installed beside the existing sinks, so the TUI log panel (or stderr in a
+  installed beside the existing sinks, so the GUI log panel (or stderr in a
   headless run) keeps every event `--log-level` admits and only the remote
   export is filtered by `logs.level`.
 - **One switch, both signals.** `/telemetry on` enables metrics **and** logs
@@ -1930,7 +1923,7 @@ Rules:
   `... [truncated]` marker) and attributes through the metric sensitive-data
   guard.
 - **Export failures are visible.** `codemason_telemetry::export_health` classifies
-  every metric export outcome; the TUI turns each into an `Agent Notice` naming
+  every metric export outcome; the GUI turns each into an `Agent Notice` naming
   the consecutive-failure count, the reason and the masked endpoint, and five
   consecutive failures switch telemetry off (persisting `enabled: false`)
   rather than retrying a dead collector forever.
@@ -1944,7 +1937,7 @@ Rules:
   a `RetiringPipeline` (Prometheus handle aborted, logs cell cleared, providers
   taken) under the runtime lock and shut down on a named background thread
   (`otel-retire`) once the lock is released, so `/telemetry off` against a dead
-  collector does not stall the TUI for the export timeout. `shutdown()` joins
+  collector does not stall the GUI for the export timeout. `shutdown()` joins
   the outstanding retire threads outside any lock, so an exit right after
   `/telemetry off` still delivers the final export.
 - **Both signals fail independently.** `flush()` and `shutdown()` attempt the
@@ -1973,7 +1966,7 @@ Rules:
   endpoint is refused when TLS is unavailable.
 
 Surfaces: `/telemetry help|on|off|setup|counters` plus `/telemetry logs [<level>]`
-(the level only - enabling and disabling is `/telemetry on|off`) in the TUI, the
+(the level only - enabling and disabling is `/telemetry on|off`) in the GUI, the
 `Logs level` row in `/telemetry setup` (an empty field keeps the default
 `info`; saving the dialog turns both signals on), `/telemetry counters` and the
 telemetry panel, and `docs/howtos/config.md` for the per-field reference.
@@ -1998,7 +1991,7 @@ that parse as a JSON object or array are re-encoded inside a
 `[BEGIN GCF generic]` ... `[END GCF]` labelled block, but only when the GCF
 output is at least 10 % smaller than the raw JSON (results that save nothing
 stay raw). Any encode failure falls back to the raw JSON, so the model always
-receives the full information content (FR-007). TUI rendering, the activity
+receives the full information content (FR-007). GUI rendering, the activity
 log, memory extraction, hooks, and compaction keep seeing the raw JSON; only
 the model-facing copy is re-encoded (FR-005). While GCF is enabled the system
 prompt also gains a short reading primer so the model can decode the block
@@ -2029,11 +2022,33 @@ the enabled/disabled state.
 
 ---
 
-## 6. Terminal User Interface (TUI)
+## 6. Graphical User Interface (GUI)
 
-### 6.1 TUI Layout
+The frontend is the `codemason-gui` crate: an egui window (eframe) over the
+frontend-neutral `codemason-app-core` crate, which owns `App` state, key
+handling, slash commands and the event handlers. Plain `cdmn` opens the GUI
+(`--gui` is accepted as a no-op); with no `DISPLAY` or `WAYLAND_DISPLAY` on
+Linux or the BSDs it exits with a message pointing at `cdmn run`. The headless
+modes (`cdmn run`, `serve`, ACP) are unchanged, and `--no-tui` keeps the plain
+stdin/stdout mode. The window opens maximized the first time and then restores
+its size, position and maximized state (`gui-window.json`); the dock layout is
+persisted in `gui-layout.json` and shortcut overrides in `gui-keys.json`, all in
+the codemason config directory. The font stack bundles Hack Bold (MIT and
+Bitstream Vera licences, `crates/codemason-gui/assets/fonts/Hack-LICENSE.txt`).
 
-The TUI is a ratatui full-screen interface with these panels:
+Keyboard shortcuts for the window are craft-keymap commands: `panel.log`
+(`Alt+L` | `Cmd+Shift+L`), `panel.profile` (`Alt+P` | `Cmd+Shift+P`),
+`panel.tasks` (`Alt+I` | `Cmd+Shift+I`), `panel.memory` (`Alt+M` |
+`Cmd+Shift+M`), `queue.menu` (`Alt+Q` | `Cmd+Alt+Q`) and `app.quit` (`Ctrl+D` |
+`Cmd+Q`). Every other key is forwarded to `App::handle_key`; an Alt+character
+chord with no binding is ignored and never typed, `Esc` stops a running agent
+(the `Alt+X` binding was removed), and `Tab` completes the slash-command menu.
+
+### 6.1 GUI Layout
+
+The GUI is a set of dockable panes (Messages, Prompt, Sessions, Log, Profile,
+Tasks, Memory, Active agents, Teams, Queue): drag a tab to move or float a pane;
+the layout persists. The panels below are those panes and the modal dialogs:
 
 | Panel | Purpose |
 |-------|---------|
@@ -2043,7 +2058,7 @@ The TUI is a ratatui full-screen interface with these panels:
 | Teammate strip | One row of pills under the status bar, one per active teammate (status glyph, clipped name, focused highlight, `Alt+^v:cycle` hint); omitted when no team is active (spec `agentui` FR-027) |
 | Agents window | `Agents`-button popup listing the primary agent and an ancestor-indented sub-agent tree with status, elapsed time, step count, `[stop]`/`[x]` status glyphs, and a background-shell section; openable from the keyboard with `Alt+A` (the chord resolves to `InputAction::ToggleAgentsWindow` and calls the same `App::toggle_agents_window` the button click does, so both share one visibility path, one no-subject no-op and one redraw flag - spec `agentssetup` FR-022); keyboard-first: a block cursor (`Up`/`Down`/`PgUp`/`PgDn`) selects a row, `Space` toggles suspend/resume, `Del` arms the kill confirmation, `Enter` opens the row's output view, and clicking a row selects it; the FR-077 key legend sits in the footer (spec `agentui` FR-006..FR-016) |
 | Teams window | `Teams`-button popup listing the lead plus every teammate with focus markers, status words from `MemberStatus::display_label()`, model column (inherited global model suppressed), and claimed/done/sent/recv counters; the block cursor plus `Enter`/`Space`/`Del` drive focus, suspend and shutdown; clicking a teammate selects it (spec `agentui` FR-017..FR-026) |
-| Session sidebar | Left-hand list of every session: `+ New session`, `/ Search`, `Pinned`, then one section per project (launch project first; projects with no sessions are listed too). A project heading shows the project name, a chevron (`v` open, `>` collapsed) and `[github]` / `[gitlab]` when the remote is known. `Pinned` is always listed, even when nothing is pinned, and dragging a session row onto it pins that session. A blank, non-selectable line sits above `Pinned` and above each project heading (the cursor skips it). User sections (by name) follow `Pinned`. A session row shows the title, relative age, `#N` with the number of pull/merge requests the session has had (blue while one is bound, grey after unbinding; `#!N` when Auto-fix is paused waiting on the user; history in `session_request_history`, schema 12; a request still recorded as open is re-read from the forge at most once per 5 minutes, so the `PR/MRs` submenu shows `[merged]`/`[closed]` without Auto-fix), a branch marker `Y` with the count of pull/merge requests for the session's branch, and a right-aligned attention marker (`!` waiting, `*` running, `x` failed, `o` unread, including a persisted unread mark). Filter, per-project collapse, drag resize, `Alt+S` toggle, per-session, project-heading and multi-selection context menus (`m`, `Shift+F10`, right-click; section 6.1c); `v` or `Ctrl`+click selects sessions (marked `*`), `Esc` clears the selection; a project with no sessions whose directory no longer exists is not listed, nor is a parent folder (not a git repository, containing another project) with no open session unless codemason was launched in it; a project's remote is detected in the background the first time the sidebar is shown, without a session being opened in it; hidden below 100 columns (specs `MULTISESSION` M5, `projects`, `SESSIONMENU`) |
+| Session sidebar | Left-hand list of every session: `+ New session`, `/ Search`, `Pinned`, then one section per project (launch project first; projects with no sessions are listed too). A project heading shows the project name, a chevron (`v` open, `>` collapsed) and `[github]` / `[gitlab]` when the remote is known. `Pinned` is always listed, even when nothing is pinned, and dragging a session row onto it pins that session. A blank, non-selectable line sits above `Pinned` and above each project heading (the cursor skips it). User sections (by name) follow `Pinned`. A session row shows the title, relative age, `#N` with the number of pull/merge requests the session has had (blue while one is bound, grey after unbinding; `#!N` when Auto-fix is paused waiting on the user; history in `session_request_history`, schema 12; a request still recorded as open is re-read from the forge at most once per 5 minutes, so the `PR/MRs` submenu shows `[merged]`/`[closed]` without Auto-fix), a branch marker `Y` with the count of pull/merge requests for the session's branch, and a right-aligned attention marker (`!` waiting, `*` running, `x` failed, `o` unread, including a persisted unread mark). Filter, per-project collapse, drag resize, `Alt+S` toggle, per-session, project-heading and multi-selection context menus (`m`, `Shift+F10`, right-click; section 6.1c); `v` or `Ctrl`+click selects sessions (marked `*`), `Esc` clears the selection; a project with no sessions whose directory no longer exists is not listed, nor is a parent folder (not a git repository, containing another project) with no open session unless codemason was launched in it; a project's remote is detected in the background the first time the sidebar is shown, without a session being opened in it(specs `MULTISESSION` M5, `projects`, `SESSIONMENU`) |
 | Input | Command-line with slash-command autocomplete |
 | Permission dialog | Modal approval dialog with live countdown (120 s) |
 | Question dialog | Modal user question (free-text or multiple-choice) |
@@ -2051,14 +2066,14 @@ The TUI is a ratatui full-screen interface with these panels:
 
 ### 6.1a Multiple sessions
 
-The TUI focuses one session (`App::session`) and parks the others in a
+The GUI focuses one session (`App::session`) and parks the others in a
 most-recently-focused registry (`App::background`). Bus events are routed
 to the session that owns them (its own id, a sub-agent's parent, or a
 teammate's lead); work for a background session runs the normal handlers
 with that session swapped into focus, so background sessions keep running
 and their permission requests queue on them rather than opening a dialog.
 Each session carries its own directory, model, permission and question
-queues, and run state; focusing a session moves the TUI's working
+queues, and run state; focusing a session moves the GUI's working
 directory there, and the agent loop loads a session's own
 `.codemason/codemason.json` when its directory has one (`Config::load_for`).
 The open sessions are saved under the `tui.sessions.open` setting and
@@ -2100,7 +2115,7 @@ on first use. Design and tasks: `specs/projects/PLAN.md`.
   (`worktrees/<project>-<id>/<branch>`) and runs the session there. The
   branch is an existing local branch, else the remote's branch of that name
   (tracked), else a new branch from the remote's default branch (or `HEAD`).
-  The session still belongs to the owning project. In the TUI and over
+  The session still belongs to the owning project. In the GUI and over
   HTTP, a session can only be started in a project whose checkout is inside
   the launch directory or a `dirs.allowed_roots` entry, the same rule as
   `/session new <path>` (SEC-062); the check is on the checkout, so an
@@ -2138,7 +2153,7 @@ on first use. Design and tasks: `specs/projects/PLAN.md`.
 
 Each session row in the sidebar has a context menu, opened with `m` or
 `Shift+F10` while the sidebar is focused, or by right-clicking the row
-(`crates/codemason-tui/src/session_menu.rs`). Items run with `Enter`, a click,
+(`crates/codemason-app-core/src/session_menu.rs`). Items run with `Enter`, a click,
 or their accelerator letter; `Esc` closes a submenu, then the menu. Design
 and milestones: `docs/plans/SESSIONMENU.md`.
 
@@ -2162,7 +2177,7 @@ the project's menu. Greyed items cannot run now and do nothing.
 | Item | Key | Action |
 |------|-----|--------|
 | New session | `N` | Starts a session in the project; same as `n` on the heading |
-| New session on branch | `B` | Prefills `/session new --project <name> --branch <adjective>_<surname>`; same as `b`. The project is named by its stored name (quoted when it has spaces), or by its id when another project shares the name. The branch is a random name in Docker's container naming scheme (`crates/codemason-tui/src/branch_names.rs`, e.g. `focused_turing`) that is not already a local or remote branch, editable before `Enter` |
+| New session on branch | `B` | Prefills `/session new --project <name> --branch <adjective>_<surname>`; same as `b`. The project is named by its stored name (quoted when it has spaces), or by its id when another project shares the name. The branch is a random name in Docker's container naming scheme (`crates/codemason-app-core/src/branch_names.rs`, e.g. `focused_turing`) that is not already a local or remote branch, editable before `Enter` |
 | Open in | | Submenu: opens the project's worktree in an editor, file manager or terminal |
 | Rename project | `R` | Prefills `/project rename --project <id> <name>` |
 | Properties... | `P` | Opens the project's Properties dialog (below) |
@@ -2172,7 +2187,7 @@ the project's menu. Greyed items cannot run now and do nothing.
 | Archive all (N) | `A` | Archives the N sessions listed under the heading (pinned and sectioned ones are not listed there); a running one is skipped and reported |
 | Delete all sessions (N) | `D` | One Yes/No question (default No) for all N, then deletes them as `Delete` does |
 
-**Project Properties.** A modal dialog (`crates/codemason-tui/src/project_properties.rs`)
+**Project Properties.** A modal dialog (`crates/codemason-app-core/src/project_properties.rs`)
 with three settings; a setting left unset follows the global configuration.
 `Tab`/`Shift+Tab` (or `Up`/`Down`) move between fields, `Left`/`Right` step
 through a choice's enabled entries, `Space` opens its full list, `Enter`
@@ -2226,7 +2241,7 @@ on GitHub, MR / `!` on GitLab.
 
 **Auto-fix** (`crates/codemason-agent/src/autofix.rs`). With Auto-fix on
 (default off; `vcs.autofix.default_on` turns it on for a session's first
-binding), one watcher task started with the TUI polls each bound, open
+binding), one watcher task started with the GUI polls each bound, open
 request every `vcs.autofix.poll_secs` (default 60, minimum 30) and at once
 after `/autofix on`. A poll reads the request's state and head commit and:
 
@@ -2255,7 +2270,7 @@ items already acted on are stored in `autofix_events`, so a restart neither
 loses nor repeats a trigger, and a second codemason process that loses the
 insert race does not wake the session again. Each kind with new items
 publishes `Event::AutofixTrigger { session_id, kind, summary, prompt }`. The
-TUI sends the prompt to the session as a user message, or queues it when
+GUI sends the prompt to the session as a user message, or queues it when
 the session is busy; a session that is not open is opened in the
 background. A background session is marked unread and the
 `on_notification` hook runs with `CODEMASON_NOTIFICATION_KIND=autofix`. The
@@ -2341,12 +2356,12 @@ repository and does not use ETags.
 | `/mcp [status]\|config\|discover\|connect <id>\|disconnect <id>` | MCP server status, discovery location report, and enable/disable |
 | `/update` / `/update install` | Auto-update (reserved; not implemented) |
 
-### 6.3 TUI Component Architecture
+### 6.3 GUI Component Architecture
 
 ```mermaid
 graph LR
     App[App State] --> EventLoop[Event Loop]
-    EventLoop --> Terminal[Terminal]
+    EventLoop --> Window[egui Window]
     App --> Chat[Chat Widget]
     App --> Log[Log Widget]
     App --> Input[Input Widget]
@@ -2356,7 +2371,7 @@ graph LR
     EventBus --> App
 ```
 
-**Figure 7:** TUI Component Architecture — UI layout and event wiring
+**Figure 7:** GUI Component Architecture — UI layout and event wiring
 
 ### 6.5 Plugin-Store Category and Marketplace Navigators
 
@@ -2667,7 +2682,7 @@ over indexed symbols that captures relationships such as `calls`, `imports`,
 The graph is built on demand via `/codeindex graph build` (or
 `/codeindex graph lang <language>` for a per-language subgraph) and persisted
 in the `graph_edges` SQLite table. Graph builds run on a dedicated OS thread
-(`codeindex-graph-build`) via `CodeIndex::spawn_graph_build`, so the TUI event
+(`codeindex-graph-build`) via `CodeIndex::spawn_graph_build`, so the GUI event
 loop stays responsive while the derivation runs; a double-build guard refuses
 overlapping builds.
 
@@ -2711,7 +2726,7 @@ vs "not built" without a separate graph query.
 
 ### 8.6 Code Index Status Indicators
 
-The TUI status bar (second line, top-right) shows two bold busy indicators
+The GUI status bar (second line, top-right) shows two bold busy indicators
 while the code index works:
 
 - `IDX` glyph (`idx`) -- the FTS/store indexes are being updated (a reindex
@@ -3009,7 +3024,7 @@ The `/new` slash command scaffolds a new project in the current working
 directory (spec `newproj`); see section 11A for the full behaviour. The
 pipeline is flag validation -> empty-directory guard -> no-silent-overwrite
 file emission -> git init + initial commit -> optional GitHub/GitLab remote
-create + push with failure containment -> summary report. In the TUI the
+create + push with failure containment -> summary report. In the GUI the
 blocking emit/git/remote steps run on a worker thread while streamed
 progress lines update a single in-place progress message.
 
@@ -3063,7 +3078,7 @@ A research session runs in phases:
    context on either side, and a `relevance` note that names the matched
    keyword(s) and the first matching line.
 4. **Specs** — cross-reference prior specs under `specs/`.
-5. **Synthesize** — (TUI only, when an active model is configured) send the
+5. **Synthesize** — (GUI only, when an active model is configured) send the
    captured source bodies to the LLM and ask for Summary, Findings,
    In-Project Cross-References, and Open Questions. The session emits a
    `SynthesizeResult` event so the UI can distinguish LLM-synthesized output
@@ -3109,7 +3124,7 @@ default via `research.evaluate.enabled: true`.
 
 ### 11.3 AI-Driven Synthesis
 
-When the TUI builds a `ResearchSession` with an active provider/model, an
+When the GUI builds a `ResearchSession` with an active provider/model, an
 `LlmAnalysisEngine` is wired in. The engine sends a single prompt containing
 truncated source bodies and requests structured markdown sections. The result
 is parsed and used to populate the final `RESEARCH.md`.
@@ -3142,7 +3157,7 @@ Every report (`RESEARCH-<YYYY-MM-DD>.md`) contains:
   content capped at 80 characters, so the headline reflects the synthesis
   rather than the original prompt) plus an optional `invocation` line recording
   the verbatim front-end command (`cdmn research create ...` from the CLI,
-  `/research ...` from the TUI, or a `POST /research` summary from the HTTP
+  `/research ...` from the GUI, or a `POST /research` summary from the HTTP
   API) so the
   `/research update` command can replay the run
   - `# Title:` heading
@@ -3198,7 +3213,7 @@ Every report (`RESEARCH-<YYYY-MM-DD>.md`) contains:
     `LEGACY_CORPA_FILE_NAME`). No command joins a hardcoded file name; every
     read surface (`ResearchManager::{list, show_validated, set_status, search,
     complete_gathering, write_document, continue_item}`, `cdmn research open`
-    and the TUI `/research open`) resolves the report first.
+    and the GUI `/research open`) resolves the report first.
 
   When an LLM is configured, `/research create` also runs a concept-extraction
   step (spec researchcluster) after synthesis: the gathered corpus is assembled
@@ -3326,7 +3341,7 @@ in-memory strings; the implementation contains no `unsafe` code and no
 | `/research open <name>` | Show the path to the item's report (the newest dated `RESEARCH-<date>.md`, or the legacy `RESEARCH.md`) |
 | `/research show <name> [--json]` | Show metadata and sources (each labelled with its own kind) |
 | `/research search <query> [--json]` | Search across every item's resolved report file |
-| `/research delete <name> --yes` | Delete a research item (the TUI requires `--yes`; the CLI prompts) |
+| `/research delete <name> --yes` | Delete a research item (the GUI requires `--yes`; the CLI prompts) |
 | `/research archive <name>` | Archive a research item |
 | `/research config` | Print the effective `research` settings as JSON |
 | `/research deck <name>` | Write `DECK-<YYYY-MM-DD>.md` for the item: a deterministic, LLM-free slide deck diffing two of its dated reports (§11.4.1) |
@@ -3427,7 +3442,7 @@ the deadline: every candidate produced by the search stage is fetched to
 completion and in-flight fetches always run to completion (or their own
 `fetch_timeout_secs` cap). At the
 start of a web-gathering phase the system emits a `web_phase_start` `RunStep`
-carrying the remaining effective deadline in seconds; the TUI renders this as a
+carrying the remaining effective deadline in seconds; the GUI renders this as a
 live `web:M:SS` countdown in the status-bar wait segment, computed from a stored
 wall-clock `Instant` at render time and updated at least once per second while
 the phase is active (FR-009, FR-010, FR-013). The same deadline is applied to
@@ -3477,14 +3492,14 @@ binary entry for `src/lib.rs` / `src/<name>/__init__.py` / `<name>.go` /
 `src/index.ts`), optional stack overlays (Rust: `axum`, `warp`, `raylib`;
 unknown stacks warn and fall back to the base layout), and the documentation
 scaffold (`README.md`, `QUICKSTART.md`, `STATS.md`, `docs/`) rendered from
-the same recipe data as the code artifacts. In the TUI the command runs as a
+the same recipe data as the code artifacts. In the GUI the command runs as a
 foreground operation with streamed progress lines in the message window (a
 worker thread performs the blocking emit/git/remote steps; no sub-agent and
 no LLM turn is involved). `/new help` (and bare `/new`) prints a usage page
 whose language/type value lists are derived from the scaffolder's own
 registries. See `docs/howtos/newproj.md` for the user manual.
 
-The TUI and CLI surfaces share one pipeline engine:
+The GUI and CLI surfaces share one pipeline engine:
 `project_scaffold::plan_and_emit()` in
 `crates/codemason-tools-extended/src/project_scaffold/mod.rs` performs flag
 validation, the empty-directory guard, file emission, stack overlay, and
@@ -3639,7 +3654,7 @@ well as the primary prompt.
 An entry that matches no registered tool is reported once per `(entry, declarer)`
 by `tool::allowed_tools::report_unresolved_allowed_tools_once`, naming the entry
 and the declaring skill, from the three places a skill's list becomes a
-restriction: `Skill` (`action=read|load`), the TUI `/skill` (and bare `/<name>`)
+restriction: `Skill` (`action=read|load`), the GUI `/skill` (and bare `/<name>`)
 trigger, and the forked-skill resolver. The per-turn prompt path deliberately does
 not report - it visits every discovered manifest, including plugin skills the
 session never runs, and a per-turn scan adds cost for an entry that constrains
@@ -3721,14 +3736,14 @@ Suspended, blocked and plan-pending members are not woken
 through `TeamStore::update`, which holds the exclusive lock from read to write.
 
 **Team runtime.** Before tool dispatch, the session processor binds a
-`TeamManager` for the team its session leads, in every entry point (TUI,
+`TeamManager` for the team its session leads, in every entry point (GUI,
 `run`, `serve`, ACP). See `SessionProcessor::ensure_team_manager`. It reconciles
 members queued in `Spawning` and starts the watchdog. A `team_spawn` that runs
 before the runtime is bound is refused with an instruction to retry. The
 processor holds the runtime in a rebindable `TeamManagerSlot`. A manager whose
 team is gone is unbound, atomically. The processor keeps a live manager of
 another team rather than replacing it, so concurrent sessions do not fight over
-the slot. The TUI rebinds when its active team changes. A manager refuses to spawn into a team it does not drive.
+the slot. The GUI rebinds when its active team changes. A manager refuses to spawn into a team it does not drive.
 `team_shutdown_teammate` and `team_task_cancel` fall back to acting on disk when
 the bound manager drives another team.
 
@@ -3938,7 +3953,7 @@ Swarm decomposition returns a JSON or Markdown list of subtasks:
 ### 15.4 Swarm State
 
 Swarm state is tracked in memory and via the team store when teammates are
-used. The TUI active-agents panel shows per-agent status and progress.
+used. The GUI active-agents panel shows per-agent status and progress.
 
 ### 15.5 Limitations
 
@@ -4023,7 +4038,7 @@ chat injection while remaining visible in the Agents panel and
 
 The Agents panel paints that contract per row (spec `agentssetup` FR-020). The
 `Event::SubagentStart` variant carries `detached` alongside `background`, the
-task registry fills both from the entry it actually spawned, and the TUI stores
+task registry fills both from the entry it actually spawned, and the GUI stores
 them on the painted row, so the panel's type column reads `fg`, `bg` or
 `detached` from the registry instead of inferring it from `background` (which a
 detached run also sets). The flag travels to remote consumers in the SSE
@@ -4278,7 +4293,7 @@ failed rather than silently vanishing from the count. Covered by
 **One definition of "finished" (`TaskStatus::is_terminal`).** `Completed`,
 `Failed`, `Cancelled` and `TimedOut` are terminal; `Running`, `Suspended` and
 `Terminating` are not. Reaping (`drain_completed`), result injection, kill
-refusal, both wait tools and the TUI Agents panel all consult that one predicate,
+refusal, both wait tools and the GUI Agents panel all consult that one predicate,
 so a new status cannot be classified as finished on one path and live on another
 (`codemason_agent::tool::wait_agents::is_settled` is a thin delegate to it).
 `drain_completed` previously treated anything that was not `Running` as settled,
@@ -4361,7 +4376,7 @@ literals so a regression cannot agree with itself.
 
 ### 16.4.2 Live sub-agent output overlay
 
-The TUI output-view overlay (click a row in the Agents panel, or `Alt+A` /
+The GUI output-view overlay (click a row in the Agents panel, or `Alt+A` /
 the Agents popup) renders the target session's persisted transcript from
 SQLite, so a running sub-agent's steps are visible mid-run, not only after
 completion. Two mechanisms keep the overlay in step with the run:
@@ -4392,7 +4407,7 @@ token counters.
 Codemason supports scheduling agent runs with a cron-like system. Users can
 schedule one-shot or repeating events, each with a designated agent type and an
 initial prompt. Events are persisted to SQLite and evaluated by a background
-scheduler while the TUI session is running.
+scheduler while the GUI session is running.
 
 ### 16A.1 Schedule Grammar
 
@@ -4445,7 +4460,7 @@ The model can also manage cron events directly via the LLM-callable tools
 
 ### 16A.3 Scheduler
 
-A background scheduler task runs while the TUI session is active, ticking every
+A background scheduler task runs while the GUI session is active, ticking every
 30 seconds. On each tick, it queries all enabled events whose `next_due` has
 passed and spawns a background agent run for each. For repeating events,
 `next_due` is advanced by one duration interval. For one-shot events, the event
@@ -4488,7 +4503,7 @@ the future. The original `start_at` timestamp is preserved unchanged.
 | `Coordinator` | High-level task decomposition and dispatch |
 | `AgentPool` | Manages active sub-agents |
 | `ConflictResolver` | Detects and resolves conflicting edits |
-| `TransportAdapters` | Bridges TUI, HTTP, and mailbox transports |
+| `TransportAdapters` | Bridges GUI, HTTP, and mailbox transports |
 
 ### 17.2 Coordinator API
 
@@ -4516,7 +4531,7 @@ When multiple agents edit the same file, the conflict resolver:
 
 | Adapter | Use |
 |---------|-----|
-| TUI | Real-time UI updates |
+| GUI | Real-time UI updates |
 | HTTP SSE | Remote clients |
 | Mailbox | Team teammate notifications |
 
@@ -4775,7 +4790,7 @@ rejected as not-MCP.
 The startup connect loop publishes the shared `McpClient` **before** connecting
 the first server, so every reader (the tool registry, `/mcp`, the startup
 report) sees the live handle from the beginning; a one-shot run no longer races
-the loop. Startup does not block on the loop: the TUI adopts whatever state the
+the loop. Startup does not block on the loop: the GUI adopts whatever state the
 loop has published, then prints its one-shot per-server report off the loop's
 completion sentinel (an empty-id `McpStatusChanged { status: "initialized" }`
 event), once, after every server has settled. The report prints one `[mcp]` line
@@ -4793,7 +4808,7 @@ The connect loop publishes this client-derived status (`connected`, else
 `failed: <reason>`) on its per-server `McpStatusChanged` event, so `/mcp` shows the
 reason as well.
 
-The TUI reconciles the session tool registry against the live client whenever a
+The GUI reconciles the session tool registry against the live client whenever a
 connect settles or a server is enabled/disabled: a registered MCP tool whose
 `mcp_<sanitized-server>_` name prefix no longer matches any Connected server is
 removed (`ToolRegistry::remove_all`), so a multi-segment id like
@@ -4801,7 +4816,7 @@ removed (`ToolRegistry::remove_all`), so a multi-segment id like
 rather than by its first `_`-segment, and disabling a server leaves no dead
 wrappers for the model to call. The registered name itself comes from one
 place, `McpToolWrapper::codemason_name_for`, which the wrapper constructor and the
-TUI both use.
+GUI both use.
 
 #### 19.4.3 Discovery-location report (`/mcp config`)
 
@@ -4987,7 +5002,7 @@ credential must be resolved from an environment variable.
 ### 19C.6 The `/connectors` command family
 
 Thirteen subcommands, dispatched through
-`crates/codemason-tui/src/app/connector.rs`, registered in `SLASH_COMMANDS`, and
+`crates/codemason-app-core/src/app/connector.rs`, registered in `SLASH_COMMANDS`, and
 listed in the command catalog and the `/` autocomplete menu (seeded from the
 crate's `CONNECTOR_SUBCOMMANDS` token list so the menu cannot drift from the
 usage block) (FR-004):
@@ -5022,7 +5037,7 @@ share one filter model. The single-reference subcommands (`remove`, `enable`,
 canonical id, slug, or display name; the reference is resolved to the installed
 connector's canonical id before the lifecycle call.
 
-The TUI drives a single published lifecycle session. `src/main.rs` resolves the
+The GUI drives a single published lifecycle session. `src/main.rs` resolves the
 enabled connectors through the bridge into the same background connect loop that
 starts the configured `codemason.json` and plugin-contributed servers, then
 publishes a `ConnectorSession` and its status snapshot on the session processor
@@ -5034,7 +5049,7 @@ connected after startup reports a real count (T-008).
 
 ### 19C.7 Catalogue browser (`/connectors claude`)
 
-A modal overlay in `crates/codemason-tui/src/layout.rs`, wearing the same design
+A modal overlay in `crates/codemason-app-core/src/layout.rs`, wearing the same design
 language as the plugin-store panel (spec `connectors` FR-047): a calm slate accent
 frame capped at 140x41; a structured title line (catalogue name badge, accent
 counts, and the active `search`/`category`/`marketplace` filters; a
@@ -5260,10 +5275,10 @@ separate store can drift from the configured backends. Each
   backend the config resolves to, preferring the active descriptor's id, then the
   first entry whose kind matches the effective kind (FR-019).
 
-The registry is consumed by the TUI backend surface (T-005, FR-008) to show the
+The registry is consumed by the GUI backend surface (T-005, FR-008) to show the
 active backend and the health of every registered backend.
 
-The TUI surface is the `/backend` family (`crates/codemason-tui/src/app/backend_panel.rs`,
+The GUI surface is the `/backend` family (`crates/codemason-app-core/src/app/backend_panel.rs`,
 `App::handle_backend_command`): with no argument (or `show`/`list`) it opens an
 interactive switcher panel that renders the active backend and a health row for
 every registered backend, and the status bar's second line opens with
@@ -5278,7 +5293,7 @@ over the registry rather than a second source of truth.
 ### 19D.8 LLM security analyzer (T-015; FR-006, FR-016, FR-017)
 
 The security analyzer is an opt-in permission mode (`security_analyzer.enabled`,
-or the TUI `/security on` / `security-analyzer` alias, which persists the flag).
+or the GUI `/security on` / `security-analyzer` alias, which persists the flag).
 Instead of deciding a proposed tool action from the static rules alone, codemason
 asks a model for an `allow` / `ask` / `deny` verdict with a rationale, published
 as `Event::SecurityVerdict` *before* the action is permitted or refused (FR-017)
@@ -5449,7 +5464,7 @@ dispatch targets:
 - **Scheduler (FR-014).** `AutomationService::spawn_scheduler` ticks every
   `scheduler_tick_secs`, enqueues a run when a schedule automation's due time
   passes (skipping one whose previous run is still in flight), and advances its
-  next-due time with `CronSchedule::advance_next_due`. The TUI (`codemason-tui`)
+  next-due time with `CronSchedule::advance_next_due`. The GUI (`codemason-app-core`)
   and `cdmn serve` each start one scheduler when the config enables the
   service.
 - **Run history (FR-018).** `codemason-storage`'s `automation_runs` table records
@@ -5482,7 +5497,7 @@ generic JSON POST). A target names its credential's environment variable
 
 | Surface | Command / path |
 | ------- | -------------- |
-| TUI | `/automation [list]`, `/automation runs <id>`, `/automation run <id>`, `/automation help` |
+| GUI | `/automation [list]`, `/automation runs <id>`, `/automation run <id>`, `/automation help` |
 | CLI | `cdmn automation list\|runs <id>\|run <id>\|help` |
 | HTTP | `POST /auto/{id}` (public), `GET /automation`, `GET /automation/runs/{id}`, `POST /automation/{id}/run` (bearer) |
 | OpenAPI | The three admin routes and the webhook route are in the route table (`crates/codemason-server/src/routes/openapi.rs`) |
@@ -5497,7 +5512,7 @@ See `docs/howtos/slashcommands/automation.md` for the full manual.
 
 ## 20. Auto-Update Mechanism
 
-An automatic update check is on the roadmap. The TUI already reserves the `/update`
+An automatic update check is on the roadmap. The GUI already reserves the `/update`
 and `/update install` slash commands, but they currently return a "not implemented"
 message. When completed, this subsystem will:
 
@@ -5529,7 +5544,7 @@ files, and tool lists) are loaded lazily when a skill is invoked.
 
 At the end of each `process_user_message` turn, the agent accumulates token
 usage records, applies the built-in (or configured) per-model price table, and
-publishes `Event::RunCostSummary` on the event bus. Consumers such as the TUI
+publishes `Event::RunCostSummary` on the event bus. Consumers such as the GUI
 and the HTTP SSE stream use this event to surface per-run spend without having
 to accumulate per-request `TokenUsage` events themselves. The summary includes
 input tokens, output tokens, estimated USD cost, model identifier, and
@@ -5598,7 +5613,7 @@ Three consequences are part of the contract:
   `<working dir>/research`, tests pass `target/temp/codemason-server-research/`),
   `session::history::set_subagent_log_root` redirects diverted `wait_agents`
   batches, and `codemason_tui::app::set_log_root_override` /
-  `use_scratch_log_root_for_tests` redirect the TUI log-window spools. All three
+  `use_scratch_log_root_for_tests` redirect the GUI log-window spools. All three
   are `#[doc(hidden)]` `OnceLock` setters — production never calls them, so the
   shipped defaults (`<working dir>/log`, `<working dir>/research`) are unchanged.
 
@@ -5661,7 +5676,7 @@ page summarizer and concept extraction are not covered by these keys.
 - `final_report_model` — the final report synthesis.
 
 There is no `summarization_model` config key; the per-page summarization model
-is set per run with `--summarization-model` on the TUI `/research create`
+is set per run with `--summarization-model` on the GUI `/research create`
 command (FR-002).
 
 ### `research.supervisor.max_concurrent_research_units` (integer, default 5)
@@ -5673,7 +5688,7 @@ wins over this value.
 ### `research.evaluate.enabled` (boolean, default `false`)
 
 Appends a deterministic quality scorecard to every run's `RESEARCH.md`
-(FR-015). A per-run `--evaluate` on the TUI `/research create` command turns it
+(FR-015). A per-run `--evaluate` on the GUI `/research create` command turns it
 on for one run; the `cdmn research create` CLI has no `--evaluate` flag, so
 this key is how CLI runs enable it.
 
@@ -5707,5 +5722,5 @@ overrides, supervisor concurrency, and evaluation are propagated from
 `crates/codemason-research/src/run_request.rs` to the engine phases. The
 `codemason.json` `research.*` keys are read via `Config::merge` in
 `crates/codemason-config/src/config.rs` and propagated through
-`build_session_config` so CLI/TUI defaults match the config file. Callers can
+`build_session_config` so CLI/GUI defaults match the config file. Callers can
 still override per run with the corresponding flags.

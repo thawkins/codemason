@@ -10,7 +10,7 @@ a synthetic user message -- "You were previously interrupted by the user.
 Continue the task from where you left off." -- into the current session and
 spawns the agent loop again with the same session id, agent info, model and
 thinking settings, so the model picks up the task where the transcript left
-off. Halt state is tracked by the TUI: when a response finishes with
+off. Halt state is tracked by the GUI: when a response finishes with
 `FinishReason::Cancelled`, the app sets `agent_halted = true` and the status
 bar shows "halted -- /resume to continue". A normal completion clears the
 halt flag, and any new response start clears it as well.

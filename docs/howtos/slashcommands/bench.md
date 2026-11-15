@@ -5,9 +5,9 @@
 ## Overview
 
 The `/bench` command drives the codemason benchmark harness (`codemason-bench` crate). The
-TUI arm parses its arguments with `codemason_bench::parse_bench_command` and dispatches
+GUI arm parses its arguments with `codemason_bench::parse_bench_command` and dispatches
 the parsed command to the bench runtime; everything below the `/bench` prefix is
-handled by the bench crate, not the TUI itself.
+handled by the bench crate, not the GUI itself.
 
 The full guide (concepts, every subcommand, run flags, suites, workbook layout,
 workflows and troubleshooting) is [docs/userdocs/bench.md](../../userdocs/bench.md).
@@ -42,4 +42,4 @@ workflows and troubleshooting) is [docs/userdocs/bench.md](../../userdocs/bench.
 
 - `/model`  -  verify the provider and model a bench run will target
 - `/telemetry`  -  runtime metric counters recorded during runs
-- `cargo bench -p codemason-tui` and friends for criterion micro-benchmarks
+- `cargo bench -p codemason-app-core` and friends for criterion micro-benchmarks

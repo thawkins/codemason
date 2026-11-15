@@ -4,7 +4,7 @@
 
 ## Overview
 
-`/backend` is the TUI surface for the execution backend (spec `openhands`
+`/backend` is the GUI surface for the execution backend (spec `openhands`
 FR-008). An execution backend selects **where** a session's tool invocations
 actually run: `local` runs tools on the host exactly as before (the default),
 `docker`/`podman` run them inside a sandbox container, and `remote` drives a

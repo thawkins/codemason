@@ -1,16 +1,16 @@
 # /reload
 
-> "Reload customizations (/reload [all|config|mcp|skills|agents])" (SlashCommandDef, crates/codemason-tui/src/app/state.rs).
+> "Reload customizations (/reload [all|config|mcp|skills|agents])" (SlashCommandDef, crates/codemason-app-core/src/app/state.rs).
 
 ## Overview
 
-`/reload` re-reads runtime configuration into the running TUI without a
+`/reload` re-reads runtime configuration into the running GUI without a
 restart. With no argument it reloads everything (config, agents, MCP servers,
 and skills); a subcommand narrows the scope to a single subsystem. Results
 accumulate into one `From: /reload` report block, one status line per
 subsystem, with per-subsystem success (`[ok]`) or failure (`[x]`) markers.
 
-The handler is the `reload` arm in `crates/codemason-tui/src/app/slash.rs`
+The handler is the `reload` arm in `crates/codemason-app-core/src/app/slash.rs`
 (approximately lines 3727-3915). As part of every reload the bash
 allow/deny lists and directory lists are also refreshed from config.
 

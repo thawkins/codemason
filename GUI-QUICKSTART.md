@@ -1,10 +1,17 @@
-# TUI Quick Start Guide for codemason
+# GUI Quick Start Guide for codemason
 
-A hands-on guide to using **codemason** through its full-screen terminal UI.
+A hands-on guide to using **codemason** through its desktop window (the egui GUI).
+
+Keystrokes are given as Linux/Windows and macOS forms side by side, written
+`Linux/Windows | macOS`. Keys with no macOS form given (and `-` in a macOS
+column) have no macOS binding in the GUI keymap: the Linux/Windows chord is sent
+as typed, and on macOS an Option+letter that types a character types it in the
+prompt instead. Plain keys (`Enter`, `Esc`, `Tab`, arrows) are the same
+everywhere.
 
 ---
 
-## 1. Starting the TUI in your project workspace
+## 1. Starting the GUI
 
 Open a terminal in the project you want to work on and run:
 
@@ -18,8 +25,26 @@ If `codemason` is not on your `PATH`, use the full path after building:
 /path/to/codemason/target/release/cdmn
 ```
 
-The TUI opens with the input panel at the bottom, the message pane in the
-middle, and status information at the top. You can start typing immediately.
+A window opens with the message pane and the prompt in the middle, the status
+bar along the bottom, and the other panels (sessions, log, profile, tasks,
+memory, agents, teams) docked around them when shown. The window opens
+maximized the first time; after that it remembers its size and position. You can
+start typing in the prompt immediately.
+
+`--gui` is accepted and does nothing: the GUI is the default.
+
+### No display
+
+On Linux and the BSDs the GUI needs `DISPLAY` or `WAYLAND_DISPLAY`. With
+neither set (an SSH session, a container), `cdmn` exits with a message that
+points at `cdmn run`:
+
+```bash
+cdmn run "Summarise the open TODOs in this repository"
+```
+
+`cdmn run <prompt>` runs a single prompt headlessly and needs no window. The
+server and ACP modes are headless too and are unchanged.
 
 ### Useful startup flags
 
@@ -28,9 +53,12 @@ middle, and status information at the top. You can start typing immediately.
 | `--model ollama_cloud/kimi-k2.7-code` | Start with a specific model                          |
 | `--agent rust-coder`                 | Start with the `rust-coder` agent profile          |
 | `--yes`                              | Auto-approve all permission prompts (YOLO-style)     |
-| `--no-tui`                           | Skip the TUI and run a single prompt in the terminal |
-| `--log`                              | Open the TUI with the log panel already visible      |
+| `--no-tui`                           | Skip the window and run a single prompt in the terminal |
+| `--log`                              | Open the GUI with the log panel already visible      |
 | `--new`                              | Start a fresh session instead of reopening the last ones |
+
+`cdmn session resume <id>` opens the GUI on a stored session. The background
+services (cron, automation, code index, spec manager) start as before.
 
 ### Example
 
@@ -38,7 +66,7 @@ middle, and status information at the top. You can start typing immediately.
 cdmn --model ollama_cloud/kimi-k2.7-code --agent rust-coder
 ```
 
-You can also open the provider setup directly from the input box:
+You can also open the provider setup directly from the prompt:
 
 ```text
 /provider
@@ -109,7 +137,7 @@ files can consume context window.
 ### Provider setup dialog
 
 1. Start codemason.
-2. Type `/provider` in the input box.
+2. Type `/provider` in the prompt.
 3. Select a provider from the list.
 4. The API-key field is pre-filled with any existing stored key, shown unmasked
    in a wide dialog so you can edit or replace it. Press `Enter` to keep the
@@ -119,28 +147,16 @@ files can consume context window.
 6. Press `Enter` to confirm.
 
 Every list in these dialogs (provider, model, router tier, thinking level, Azure
-resource, router provider/bucket) wears the same calm-slate chrome as the
-`/plugins` and `/connectors` catalogues: an accent frame titled with the step and
-its subject, a heading strip with a live count on the left and the confirm key on
-the right, a pinned column band, a cursor-filled zebra row list, and a muted
-key-hint footer. Each list **windows around its cursor**, so a list longer than
-the dialog always keeps the highlighted row painted and the legend reads
-`Showing a-b of N`; the thinking-level list windows two lines at a time because
-each level is two lines tall. A mouse wheel notch over an open dialog steps the
-cursor one entry exactly like `Up`/`Down` (same handler), and a notch anywhere
-else is swallowed so the chat and side panels behind the modal never scroll under
-it.
+resource, router provider/bucket) is a modal over the window: move with
+`Up`/`Down` or click a row, confirm with `Enter`, close with `Esc`.
 
 If a provider is already configured, `/model` jumps straight to that provider's
 model list instead of asking you to pick a provider again. Use `/model show` to
 print metadata for the active model.
 
-The status bar at the top shows the selected provider, model, and a health
-indicator:
-
-- **● green** — provider reachable
-- **● yellow** — health check in progress
-- **✗ red** — provider unreachable or key missing
+The status bar along the bottom shows the selected provider, model, and a
+health indicator for the provider: reachable, health check in progress, or
+unreachable / key missing.
 
 When the Model Router is active the status bar shows the actual downstream
 model and tier, e.g. `Model Router (claude-sonnet-4-20250514) / complex`.
@@ -156,7 +172,7 @@ model and tier, e.g. `Model Router (claude-sonnet-4-20250514) / complex`.
 The status bar will update to something like:
 
 ```text
-ollama_cloud/kimi-k2.7-code ●
+ollama_cloud/kimi-k2.7-code
 ```
 
 Other providers work the same way; only the available model list and the
@@ -190,7 +206,7 @@ settings, and `/provider router` (or `/router help`) to set up the Model Router.
 ## 3.1 Configuration snapshots
 
 The `/config` slash command family lets you inspect and back up your global
-`codemason.json` without leaving the TUI.
+`codemason.json` without leaving the window.
 
 ```text
 /config show          # show working dir, data/config dirs, storage, code index, memory, agents
@@ -232,14 +248,13 @@ it calls `task_complete`, hits a user-defined limit, or you run `/autopilot off`
 /autopilot off
 ```
 
-`Alt+O` toggles autopilot without leaving the keyboard: it drives the same
+`Alt+O` (Linux/Windows) toggles autopilot without leaving the keyboard: it drives the same
 state machine as `/autopilot on|off`, but because a key chord cannot carry flags
 it applies a default 1800-second (`--max-time`) limit — a stray keystroke cannot
 start an unbounded run. Use `/autopilot on` with no flags when you want a run
 with no time limit. Pressing `Alt+O` again stops the run.
 
-The status bar shows `AUTO:✓ (Alt+O)` when enabled and `AUTO:✗ (Alt+O)` when
-disabled; the indicator is bold because it changes how the agent loop runs.
+The status bar shows an `AUTO` indicator that is on while autopilot runs.
 
 ---
 
@@ -251,22 +266,22 @@ code-index startup, and session creation.
 
 When an agent run completes, a transient banner appears at the top showing
 `run complete · input+output tokens · $cost · duration`. The full details are
-always written to the log panel. The banner is dismissed by any keypress; if
-you start typing the next prompt, the first character is preserved rather than
-being swallowed.
+always written to the log panel. The banner is dismissed by any keypress or its
+Dismiss button; if you start typing the next prompt, the first character is
+preserved rather than being swallowed.
 
 ---
 
 ## 4. Issuing prompts to codemason
 
-Click in the **Input** panel at the bottom and type your prompt.
+Click in the **Prompt** pane at the bottom and type your prompt.
 
 Press **`Enter`** to send.
 
 ### Multi-line prompts
 
 - Press **`Shift+Enter`** or **`Alt+Enter`** to insert a newline without sending.
-- Press **`Enter`** on an empty line or at the end of your message to submit.
+- Press **`Enter`** to submit.
 
 ### Example prompts
 
@@ -285,54 +300,60 @@ Add unit tests for the bash permission command-name extraction logic
 ### Mentions and attachments
 
 - Type **`@`** to open the file picker and mention a file in your prompt.
-- Press **`Alt+V`** to paste an image from the clipboard as an attachment.
-- Pending attachments appear above the input box before you send.
+- Type **`/`** to open the slash-command menu. **`Tab`** completes the highlighted
+  command; `Up`/`Down` move the highlight and `Esc` closes the menu.
+- Attach images: see "Attaching files" below.
+- Pending attachments appear above the prompt before you send.
 
-### Clipboard and selections
+### Attaching files
 
-- **Text selection** — click-and-drag (or hold Shift and use arrow keys) to
-  select text in the input, message, log, or side panels.
-- **`Ctrl+C`** — copy the current selection to the clipboard.
-- **`Ctrl+X`** — cut the current selection from the input.
-- **`Ctrl+V`** — paste at the cursor, replacing any active selection. Carriage
-  returns (`\r`) are stripped so Windows-copied text behaves consistently.
-- **Terminal bracketed paste** — if your terminal emits a bracketed-paste event,
-  it behaves exactly like `Ctrl+V`: it strips `\r` and replaces the active
-  selection.
-- **Right-click** — opens a context menu for the current selection. In the input
-  pane it offers **Copy**, **Cut**, and **Paste**. In provider-setup dialogs
-  (EnterKey, GitLabSetup, TelemetrySetup) it pastes the clipboard into the
-  active field.
+- **File menu** — choose **File > Attach Images...** to open the native file
+  dialog and pick one or more images (png, jpg, jpeg, gif, webp, bmp, tiff).
+  Cancelling the dialog changes nothing.
+- **Clipboard** — paste an image from the clipboard into the prompt, or press
+  **`Alt+V`** (Linux/Windows), to stage it as an attachment.
+
+The same **File** menu has **Open Project...** (register a project folder, as
+`/project add <path>`) and **New Project Folder...** (start a session in a new
+folder, as `/session new <path>`). On macOS the menu bar carries About, Quit
+(`Cmd+Q`) and a View menu with the panel toggles; the File items are in the
+window's own File menu.
+
+### Clipboard
+
+- **`Ctrl+C` | `Cmd+C`** — copy the selection in the prompt to the clipboard.
+- **`Ctrl+X` | `Cmd+X`** — cut the selection from the prompt.
+- **`Ctrl+V` | `Cmd+V`** — paste at the cursor, replacing any active selection.
+- **Right-click** in the prompt — opens a context menu with **Copy**, **Cut**
+  and **Paste**.
 - **`/clip`** — copies the entire rendered contents of the message window (the
-  plain-text transcript rows you see on screen) to the system clipboard in one
-  step.
+  plain-text transcript) to the system clipboard in one step.
+
+Transcript text in the message pane is not selectable; use `/clip` to copy it.
 
 ### Permission prompts
 
 When codemason wants to run a shell command, write a file, or perform another
-protected action, a permission dialog appears at the top of the screen. You
+protected action, a permission dialog appears over the window. You
 have 120 seconds to:
 
 - **`y`** — allow once
 - **`a`** — allow always for this session
 - **`n`** — deny
 
+The dialog's buttons do the same.
+
 The dialog title shows a live countdown (e.g. `Permission Required (1:45 remaining)`).
 
-### The input queue and the ALT-Q queue-control menu
+### The input queue and the queue-control menu
 
 The input field stays live while the agent is executing. Instead of rejecting
 your message with `busy - wait for the current turn to finish`, pressing
 **`Enter`** appends it to a bounded FIFO **input queue** (maximum 32 entries).
-A two-digit, zero-padded counter appears immediately before the prompt, for
-example:
-
-```text
-03> refactor the parser
-```
-
-The oldest queued entry runs automatically when the running turn ends, and the
-counter decrements each time. No counter is shown when the queue is empty.
+The queued entries are listed above the prompt with a count, for example `03`
+for three queued entries. The oldest queued entry runs automatically when the
+running turn ends, and the count decrements each time. Nothing is shown when the
+queue is empty.
 
 A queued entry is added to the **input history** the moment you press `Enter`
 (so `Up` recalls it immediately), not when it runs, and it is not echoed into
@@ -341,14 +362,14 @@ the message window until it is actually dispatched.
 A **slash command** (`/…`) is queued exactly like a plain message while a turn
 is running (FR-017 amendment): pressing `Enter` on `/status`, `/agent`, or a
 `queue`-style command appends it to the queue and it runs at the next turn
-boundary (or immediately via `Alt+Q` → `Next` / `/queue next`). A synchronous
+boundary (or immediately via the queue menu's `Next` / `/queue next`). A synchronous
 command leaves the boundary free, so a run of consecutive queued commands
 executes back-to-back rather than stalling behind the first. At queue capacity
 the command is rejected and restored to the input field, so nothing is lost.
 Only **bang commands** (`!…`) keep the `busy - wait for the current turn to
 finish` refusal.
 
-Press **`Alt+Q`** during a run to open the **queue-control menu** — a centred
+Press **`Alt+Q` | `Cmd+Alt+Q`** during a run to open the **queue-control menu** — a centred
 overlay with exactly four options. Use **`Up`**/**`Down`** to move the highlight
 and **`Enter`** to activate the highlighted row:
 
@@ -368,7 +389,7 @@ only removed when they are dispatched or explicitly cleared.
 
 The `Show` row opens a panel that lists every queued entry, oldest first, with a
 block cursor marking the highlighted entry. Use it to inspect, reorder, or prune
-the queue without leaving the chat screen:
+the queue without leaving the window:
 
 | Key      | Behaviour |
 | -------- | --------- |
@@ -388,7 +409,7 @@ prompt:
 | ------------ | --------- |
 | `/queue list` or `/queue` | Lists the queued entries in submission order (oldest first) with the queue depth. |
 | `/queue clear` | Empties the queue immediately; the counter disappears. |
-| `/queue next`  | Dispatching the oldest entry immediately. While a turn is still executing the action is deferred to the turn boundary (it never overlaps a running turn or a compaction); use `Alt+Q` → `Next` to stop the current turn and run it now. |
+| `/queue next`  | Dispatching the oldest entry immediately. While a turn is still executing the action is deferred to the turn boundary (it never overlaps a running turn or a compaction); use the queue menu's `Next` to stop the current turn and run it now. |
 | `/queue help`  | Shows the sub-command usage. |
 
 ---
@@ -476,7 +497,7 @@ entered values for the next `/loop` in the same session.
 
 ### Rollback flow
 
-When a loop terminates, codemason renders the change summary as a diffstat line
+When a loop terminates, codemason shows the change summary as a diffstat line
 and offers a **one-key rollback**: `Enter` accepts and restores the pre-loop
 workspace snapshot; `Esc` (or any other key) declines and keeps the changes.
 Rollback is snapshot-only when the workspace is not inside a git repository —
@@ -537,7 +558,7 @@ The `create` form supports a number of optional flags:
 Reports are saved under `research/<name>/RESEARCH-<YYYY-MM-DD>.md`. The primary
 report uses the item's creation date, so it is stable from creation onwards;
 each later run (including a same-day `/research update`) writes its own dated
-file and leaves the earlier one in place. Open the report in the TUI with
+file and leaves the earlier one in place. Open the report with
 `/research open <name>` - it resolves whichever report exists rather than
 assuming a file name. Quality-assurance detail (contradiction graph, loci
 analysis, depth investigation, reconcile, tensions, audits) is kept in the
@@ -546,22 +567,17 @@ References Index so `[#N]` citations resolve in both documents. An item created
 by an older codemason keeps its undated `RESEARCH.md` / `CORPA.md`, which resolves
 the same way.
 
-While the run is gathering, the pinned **Research Progress** message in the
-message window does not list each captured URL. Instead it maintains a compact summary table with one row per
-backend search engine (duckduckgo, brave, openalex, wikipedia, tavily, ...)
+While the run is gathering, the research progress view above the message pane
+does not list each captured URL. Instead it maintains a compact summary table
+with one row per backend search engine (duckduckgo, brave, openalex, wikipedia, tavily, ...)
 showing the counts of captured files by type (`page` / `pdf` / `yt`) and a
 `languages` cell listing every currently acquired language with its article
 count:
 
-```text
-[captures] Captured sources by search engine:
-+----------+------+-----+----+-------+---------------------+
 | engine   | page | pdf | yt | total | languages           |
-+----------+------+-----+----+-------+---------------------+
-| brave    |    3 |   0 |  0 |     3 | ENGLISH:2, FRENCH:1 |
-| openalex |    0 |   1 |  0 |     1 | ENGLISH:1           |
-+----------+------+-----+----+-------+---------------------+
-```
+| -------- | ---- | --- | -- | ----- | ------------------- |
+| brave    | 3    | 0   | 0  | 3     | ENGLISH:2, FRENCH:1 |
+| openalex | 0    | 1   | 0  | 1     | ENGLISH:1           |
 
 A `total` row aggregates every engine. Per-URL capture lines still appear in
 the log panel (not the message window) so individual fetch failures remain
@@ -655,7 +671,7 @@ the created files. Generated content:
 ```
 
 `--stack axum` layers an axum server starter over the base Rust layout
-(`warp`, `raylib`, `gtk4`, and `ratatui` are also known stacks); `--github` creates a private
+(`warp`, `raylib` and `gtk4` are also known stacks; `/new help` lists them all); `--github` creates a private
 GitHub repository, sets it as `origin`, and pushes. Use `--gitlab` instead
 for GitLab. The two hosting flags are mutually exclusive, and a failed
 remote step never undoes the local scaffold.
@@ -674,7 +690,7 @@ values (derived from the scaffolder's registries, so they cannot drift).
 ## 7b. Managing plugins with `/plugins`
 
 The **`/plugins`** slash command manages sandboxed Codex- and Claude
-Code/Desktop-dialect plugins from the TUI. Enabled plugins contribute tools
+Code/Desktop-dialect plugins from the window. Enabled plugins contribute tools
 (registered as `plugin_<id>_<tool>`) and slash commands. The same operations
 are available from a shell as `cdmn plugins <sub>`.
 
@@ -717,31 +733,28 @@ While codemason is actively streaming a response or running tools, press
 - You can type a new prompt right away.
 
 `Escape` does **not** quit the application; it only interrupts the current
-agent step.
+agent step. `Ctrl+X` also stops a running agent. (The old `Alt+X` binding was
+removed; an Alt+letter chord with no binding is ignored and is not typed.)
 
 ---
 
 ## 9. Quitting codemason
 
-To exit the TUI safely:
+To exit safely, do one of:
 
-1. Make sure the input box is focused.
-2. Press **`Ctrl+D`**.
-3. If prompted, confirm with **`Ctrl+D`** again.
+1. Press **`Ctrl+D` | `Cmd+Q`**.
+2. Type `/quit` in the prompt.
+3. Close the window.
 
-Or use the slash command:
-
-```text
-/quit
-```
-
+While an agent turn is running, closing the window asks `Quit codemason?` with
+**Quit** and **Cancel** buttons (`Esc` cancels); an idle window closes at once.
 You can also press **`Ctrl+C`** to arm quit mode, then **`Ctrl+D`** to confirm.
 
 ---
 
-## 10. Log panel — `Alt+L`
+## 10. Log panel — `Alt+L` | `Cmd+Shift+L`
 
-Press **`Alt+L`** to toggle the **Log panel** on the right side of the screen.
+Press **`Alt+L` | `Cmd+Shift+L`** to toggle the **Log pane**, docked on the right by default.
 
 The Log panel shows a time-stamped, color-coded stream of runtime events:
 
@@ -759,23 +772,15 @@ the main chat pane.
 
 ### Interacting with the Log panel
 
-- **`Scroll`** with the mouse wheel.
-- **`Drag`** the scrollbar thumb to jump through long logs.
-- **`Click`** on a log line to start a text selection; copy with `Ctrl+C`.
-- Press **`Alt+L`** again to hide the panel.
-
-The scrollbar gutter runs along the right edge of the panel. Dragging it works
-the same way as the scrollbar in the main message pane.
-
-When both Log and Profile panels are open, the side area is split vertically
-with Log on top.
+- **`Scroll`** with the mouse wheel or drag the scrollbar.
+- Press **`Alt+L` | `Cmd+Shift+L`** again to hide the pane.
+- `Ctrl+PageUp` / `Ctrl+PageDown` scroll the log.
 
 ---
 
-## 11. Profile panel — `Alt+P`
+## 11. Profile panel — `Alt+P` | `Cmd+Shift+P`
 
-Press **`Alt+P`** to toggle the **Profile panel** on the right side of the
-screen.
+Press **`Alt+P` | `Cmd+Shift+P`** to toggle the **Profile pane**.
 
 The Profile panel shows live performance data collected by the agent-loop
 profiler:
@@ -797,22 +802,18 @@ tool calls.
 
 ### Interacting with the Profile panel
 
-- **`Scroll`** with the mouse wheel.
-- **`Drag`** the scrollbar thumb.
-- Press **`Alt+P`** again to hide the panel.
+- **`Scroll`** with the mouse wheel or drag the scrollbar.
+- Press **`Alt+P` | `Cmd+Shift+P`** again to hide the pane.
 
-The scrollbar gutter runs along the right edge of the panel and can be dragged
-or clicked to jump to a position in the report.
-
-The Profile panel is mutually exclusive with TASKS and Memory panels: only one
-of Log/Profile/TASKS/Memory occupies the side column at a time (Log and Profile
-can be shown together).
+Opening the Log pane dismisses the other side panes (an app-core rule); you can
+also rearrange the panes (see "Panes and
+layout").
 
 ---
 
-## 12. TASKS panel — `Alt+I`
+## 12. TASKS panel — `Alt+I` | `Cmd+Shift+I`
 
-Press **`Alt+I`** to toggle the **TASKS panel** on the right side of the screen.
+Press **`Alt+I` | `Cmd+Shift+I`** to toggle the **TASKS pane**.
 
 The TASKS panel lists tasks for the current session, fetched from the
 SQLite-backed storage on every render. Each row shows:
@@ -857,17 +858,14 @@ immediately.
 
 ### Interacting with the TASKS panel
 
-- **`Scroll`** with the mouse wheel.
-- **`Drag`** the scrollbar thumb to move through a long task list.
-- Press **`Alt+I`** again to hide the panel.
-
-The scrollbar gutter runs along the right edge of the panel.
+- **`Scroll`** with the mouse wheel or drag the scrollbar.
+- Press **`Alt+I` | `Cmd+Shift+I`** again to hide the pane.
 
 ---
 
-## 13. Memory panel — `Alt+M`
+## 13. Memory panel — `Alt+M` | `Cmd+Shift+M`
 
-Press **`Alt+M`** to toggle the **Memory panel** on the right side of the screen.
+Press **`Alt+M` | `Cmd+Shift+M`** to toggle the **Memory pane**.
 
 The Memory panel surfaces three sources of project and user memory:
 
@@ -887,7 +885,7 @@ and can update them with `memory_write` / `memory_replace` during a session.
 
 In addition, the `memory_store` tool writes **structured memories** to the
 SQLite store with a category, tags, and confidence score. Successful writes now
-report `stored: true`, and the TUI summary and Memory panel reflect the update.
+report `stored: true`, and the Memory pane reflects the update.
 
 ### Typical uses
 
@@ -920,62 +918,15 @@ Remember that we prefer tracing over println in this project
 
 ### Interacting with the Memory panel
 
-- **`Scroll`** with the mouse wheel.
-- **`Drag`** the scrollbar thumb.
-- Press **`Alt+M`** again to hide the panel.
-
-The scrollbar gutter runs along the right edge of the panel.
-
-## Context panel — `Alt+C`
-
-Press **`Alt+C`** to toggle the **Context panel** on the right side of the
-screen. It shows a live, quantified breakdown of what currently occupies the
-active session's context window:
-
-- **Context window** — the advertised capacity of the currently selected
-  model, shown directly above the **Sent to model** row so the denominator
-  for every percentage is explicit.
-- **Sent to model** — the provider-reported input tokens of the most recent
-  LLM request, i.e. the actual context size the model received last turn
-  (the same figure the `ctx:` status-bar indicator shows). It updates as
-  each message is sent and stays at `0tk` until the first turn completes.
-- **System prompt** — the assembled prompt sent to the model (agent prompt,
-  project context, memory injection, skills catalog), with indented
-  sub-rows for the `skills`, `memory` and `agents.md` contributions.
-- **Tool catalog** — the serialised size of the tool definitions (names,
-  descriptions, parameter schemas) visible to the model.
-- **Tool metadata** — the per-tool JSON wire-envelope overhead added on top
-  of the raw catalog.
-- **History** — the conversation history token estimate and message count.
-- **Total** — the sum of the top-level partitions, plus the remaining
-  free headroom.
-
-Each row shows the estimate in tokens (raw byte count converted with the
-standard ~4-bytes-per-token heuristic, so it stays comparable with the
-`ctx:` indicator in the status bar, which shows the provider-reported prompt
-tokens from the last turn) and a percentage bar
-of the active model's advertised context window. When the provider does not
-report a window size, rows show `unknown` alongside the absolute counts.
-Values refresh automatically after messages, tool calls, model switches and
-compaction.
-
-### Interacting with the Context panel
-
-- **`Scroll`** with the mouse wheel.
-- **`Drag`** the scrollbar thumb.
-- Press **`Alt+C`** again to hide the panel.
-
-The Context panel is display-only: its contents are never sent to the model.
-
----
+- **`Scroll`** with the mouse wheel or drag the scrollbar.
+- Press **`Alt+M` | `Cmd+Shift+M`** again to hide the pane.
 
 ## Multiple sessions and the session sidebar
 
 codemason can hold several sessions at once, each in its own project
 directory. A session keeps running while you work in another one.
 
-The sidebar on the left (shown when the terminal is at least 100 columns
-wide) lists:
+The Sessions pane (docked on the left by default) lists:
 
 - `+ New session`
 - `/ Search`, which filters the list
@@ -1009,10 +960,10 @@ Keys:
 
 | Key | Action |
 | --- | ------ |
-| `Alt+S` | Show and focus, focus, or hide the sidebar |
+| `Alt+S` | Show and focus, focus, or hide the Sessions pane (Linux/Windows chord) |
 | `Ctrl+N` | New session in this project |
 | `Ctrl+Up` / `Ctrl+Down` | Previous / next session |
-| `Alt+R` | The session you were in last |
+| `Alt+R` | The session you were in last (Linux/Windows chord) |
 | `Up`/`Down`, `Enter` | (sidebar focused) move, open the row |
 | `Left`/`Right` | (sidebar focused) collapse / expand a project |
 | `p` / `a` / `F2` | (sidebar focused) pin, archive, rename |
@@ -1024,8 +975,7 @@ Keys:
 | `b` | (on a project heading) prefill the command for a new session on its own branch, with the project's name and a random branch name such as `focused_turing` (edit it before `Enter`) |
 | `Esc` | (sidebar focused) clear the selection, then the filter, then return to the input |
 
-With the mouse, click a row to open it and drag the sidebar's right border
-to resize it. The same actions are available as `/session` commands
+With the mouse, click a row to open it and drag the pane's border to resize it. The same actions are available as `/session` commands
 (`/session help`); projects are managed with `/project` (`/project help`). codemason reopens your open sessions on the next start;
 use `cdmn --new` to start fresh.
 
@@ -1113,50 +1063,83 @@ project's), with the token in `GH_ENTERPRISE_TOKEN`:
 
 ---
 
-## Side panel quick reference
+## Panes and layout
 
-| Key       | Panel     | Purpose                                           |
-| --------- | --------- | ------------------------------------------------- |
-| `Alt+L` | Log       | Runtime events, tool calls, warnings, errors      |
-| `Alt+P` | Profile   | Live agent-loop profiler output                   |
-| `Alt+I` | TASKS    | Session tasks and status                         |
-| `Alt+M` | Memory    | Project/user memory and structured-memory summary |
-| `Alt+O` | Autopilot | Toggle autonomous operation                       |
-| `Alt+C` | Context   | Token breakdown of the context window             |
+Every panel is a dockable pane: Messages, Prompt, Sessions, Log, Profile,
+Tasks, Memory, Active agents, Teams and Queue. The Messages and Prompt panes are
+the window's canvas: they cannot be closed or tabbed, but other panes can be
+split beside them.
 
-Log and Profile can be shown together (Log above, Profile below). The other
-panels are mutually exclusive: opening one closes the others.
+- **Drag a tab** to move a pane: next to another pane, into another pane's tab
+  group, or out of the window frame to float it.
+- Close a pane from its tab, or with its shortcut (`Alt+L` | `Cmd+Shift+L` for
+  Log, and so on). A hidden pane comes back where it was.
+- The layout is saved when a drag or resize ends and again when the window
+  closes, and is restored on the next start.
 
-All side panels support mouse scrolling and scrollbar dragging. Press the same
-shortcut again to close the panel.
+The panes and their shortcuts:
+
+| Linux/Windows | macOS         | Pane      | Purpose                                           |
+| ------------- | ------------- | --------- | ------------------------------------------------- |
+| `Alt+L`       | `Cmd+Shift+L` | Log       | Runtime events, tool calls, warnings, errors      |
+| `Alt+P`       | `Cmd+Shift+P` | Profile   | Live agent-loop profiler output                   |
+| `Alt+I`       | `Cmd+Shift+I` | TASKS     | Session tasks and status                          |
+| `Alt+M`       | `Cmd+Shift+M` | Memory    | Project/user memory and structured-memory summary |
+| `Alt+S`       | -             | Sessions  | Session sidebar                                   |
+| `Alt+A`       | -             | Active agents | Running sub-agents                            |
+| `Alt+T`       | -             | Teams     | Agent teams                                       |
+
+The macOS View menu holds the four panel toggles. `Alt+O` toggles autopilot.
+
+## Window and layout reset
+
+The window geometry and the dock layout are plain JSON files in the codemason
+config directory (`~/.config/codemason/` on Linux; the platform config
+directory elsewhere):
+
+| File                | Holds                                              |
+| ------------------- | -------------------------------------------------- |
+| `gui-window.json`   | Window size, position and maximized state          |
+| `gui-layout.json`   | Dock layout and where each hidden pane was         |
+| `gui-keys.json`     | Your overrides of the keymap commands (optional)   |
+
+To reset the window, quit codemason and delete `gui-window.json`: the next start
+opens maximized again. To reset the layout, delete `gui-layout.json`: the next
+start uses the default arrangement. A file that cannot be read is replaced by the
+defaults, and a window saved off screen (for example a disconnected monitor)
+reopens maximized.
 
 ---
 
 ## Common keybindings
 
-| Key                             | Action                                      |
-| ------------------------------- | ------------------------------------------- |
-| `Enter`                       | Send prompt                                 |
-| `Shift+Enter` / `Alt+Enter`   | New line in input                           |
-| `Escape`                      | Cancel current agent operation              |
-| `Ctrl+D`                      | Quit codemason                                 |
-| `Ctrl+C`                      | Copy selection / arm quit                   |
-| `Alt+L`                       | Toggle Log panel                            |
-| `Alt+P`                       | Toggle Profile panel                        |
-| `Alt+I`                       | Toggle TASKS panel                           |
-| `Alt+M`                       | Toggle Memory panel                         |
-| `Alt+O`                       | Toggle autopilot mode                       |
-| `Alt+C`                       | Toggle Context panel                        |
-| `Alt+Q`                       | Open the queue-control menu (Next/Stop/Clear/Show) |
-| `Alt+S`                       | Show/focus/hide the session sidebar         |
-| `Ctrl+N`                      | New session                                 |
-| `Ctrl+Up` / `Ctrl+Down`       | Previous / next session                     |
-| `Alt+R`                       | Most recently focused session               |
-| `Alt+V`                       | Paste image from clipboard                  |
-| `Alt+Y`                       | Toggle YOLO mode on/off                     |
-| `@`                           | Open file mention picker                    |
-| `/`                           | Open slash-command menu                     |
-| `?`                           | Show keybindings help (when input is empty) |
+| Linux/Windows                   | macOS                 | Action                                      |
+| ------------------------------- | --------------------- | ------------------------------------------- |
+| `Enter`                         | `Enter`               | Send prompt                                 |
+| `Shift+Enter` / `Alt+Enter`     | `Shift+Enter`         | New line in prompt                          |
+| `Esc`                           | `Esc`                 | Cancel current agent operation              |
+| `Ctrl+D`                        | `Cmd+Q`               | Quit codemason                              |
+| `Ctrl+C`                        | `Cmd+C`               | Copy selection / arm quit                   |
+| `Alt+L`                         | `Cmd+Shift+L`         | Toggle Log pane                             |
+| `Alt+P`                         | `Cmd+Shift+P`         | Toggle Profile pane                         |
+| `Alt+I`                         | `Cmd+Shift+I`         | Toggle TASKS pane                           |
+| `Alt+M`                         | `Cmd+Shift+M`         | Toggle Memory pane                          |
+| `Alt+Q`                         | `Cmd+Alt+Q`           | Open the queue-control menu (Next/Stop/Clear/Show) |
+| `Alt+O`                         | -                     | Toggle autopilot mode                       |
+| `Alt+S`                         | -                     | Show/focus/hide the Sessions pane           |
+| `Ctrl+N`                        | -                     | New session                                 |
+| `Ctrl+Up` / `Ctrl+Down`         | -                     | Previous / next session                     |
+| `Alt+R`                         | -                     | Most recently focused session               |
+| `Alt+V`                         | -                     | Paste image from clipboard                  |
+| `Alt+Y`                         | -                     | Toggle YOLO mode on/off                     |
+| `Tab`                           | `Tab`                 | Complete the highlighted slash command      |
+| `@`                             | `@`                   | Open file mention picker                    |
+| `/`                             | `/`                   | Open slash-command menu                     |
+| `?`                             | `?`                   | Show keybindings help (when prompt is empty)|
+
+The `-` rows are not in the GUI keymap: they are the app-core chords sent as
+typed. Their keymap-bound neighbours can be rebound in `gui-keys.json`; the
+`?` panel lists every chord the window understands.
 
 ---
 

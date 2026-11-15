@@ -4,7 +4,7 @@
 
 ## Overview
 
-`/gitlab` manages GitLab authentication for the TUI session.
+`/gitlab` manages GitLab authentication for the GUI session.
 
 `setup` opens an interactive dialog pre-filled with the existing instance
 URL (default `https://gitlab.com`) and collects three values:

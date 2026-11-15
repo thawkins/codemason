@@ -37,11 +37,11 @@ measured numbers.
 
 ## 1. Configure a Provider
 
-Codemason needs at least one LLM provider. The easiest way is via the **interactive TUI**:
+Codemason needs at least one LLM provider. The easiest way is via the **desktop GUI**:
 
 ```bash
-cdmn        # launch codemason
-# press 'p' to open the provider setup dialog
+cdmn        # launch codemason (opens the GUI window)
+# type /provider in the prompt to open the provider setup dialog
 ```
 
 The dialog walks you through:
@@ -259,7 +259,7 @@ cdmn run --agent explore "How does the config system work?"
 # Use Ollama
 cdmn run --model ollama/llama3.2 "Write a hello world in Rust"
 
-# Skip the TUI and stream to stdout
+# Skip the GUI and stream to stdout
 cdmn run --no-tui "List all tasks"
 
 # Auto-approve all tool calls (no permission prompts)
@@ -517,7 +517,7 @@ cdmn config
 Before making risky edits, snapshot the current global config:
 
 ```bash
-# Inside the TUI
+# Inside the GUI
 /config save
 ```
 
@@ -526,7 +526,7 @@ This writes a timestamped copy to `~/.config/codemason/saves/codemason.json.YYYY
 To view or restore a previous snapshot:
 
 ```bash
-# Inside the TUI
+# Inside the GUI
 /config list
 ```
 
@@ -581,7 +581,7 @@ Enable background metric export to any OTLP-compatible collector by adding a
 - `internal_port` — optional in-process Prometheus text endpoint on
   `127.0.0.1:<port>/metrics` for local scraping.
 - `logs` — opt-in OTLP **logs** signal (`enabled: false` by default). It adds a
-  `tracing` sink beside the local one rather than replacing it, so the TUI log
+  `tracing` sink beside the local one rather than replacing it, so the GUI log
   panel (or stderr in a headless run) still shows everything `--log-level`
   selects; `level` (`trace`/`debug`/`info`/`warn`/`error`, default `info`) is a
   floor for the *remote* export only. Bodies pass through the shared credential
@@ -601,7 +601,7 @@ dead collector forever.
 Each failure streak belongs to one export pipeline. A reconfigure - any
 `/telemetry on|off|logs|setup` - starts a new generation, and the retired
 pipeline is shut down on a background thread after the runtime lock is
-released, so `/telemetry off` against a dead collector never freezes the TUI
+released, so `/telemetry off` against a dead collector never freezes the GUI
 for the length of the export timeout. The retired pipeline's own final export
 is forwarded unchanged but no longer resets or extends the live streak, and
 `flush()`/`shutdown()` attempt both signals so an unhealthy log endpoint cannot
@@ -620,7 +620,7 @@ toggle follows the transport with the endpoint's OTLP default port - 4318 for
 HTTP, 4317 for gRPC - leaving a custom port alone. A changed
 `cardinality_limit` applies on reconfigure instead of at the next restart.
 
-Inside the TUI you can also run:
+Inside the GUI you can also run:
 
 ```
 /telemetry on                                # export metrics AND logs
@@ -795,7 +795,7 @@ For the full schema reference and more examples see
 
 Use Teams when you want one lead session to orchestrate multiple teammate agents in parallel.
 
-### Start a team in the TUI
+### Start a team in the GUI
 
 ```text
 /team create feature-squad
@@ -883,7 +883,7 @@ The AI agent can use these tools during a session:
 | `autofix_add`| Push the current branch, open (or reuse) its PR/MR against the branch it came from, bind it and turn Auto-fix on | `git:write` |
 | `DateTime` | Current date/time: RFC 3339 UTC instant, an optional fixed UTC-offset rendering, date/time fields, Unix timestamp | `none`          |
 
-Run `/tools` in the TUI to list every registered tool, or `cdmn --dry-run --json
+Run `/tools` in the GUI to list every registered tool, or `cdmn --dry-run --json
 run x` for the total and per-category counts (see
 [docs/howtos/tools/INDEX.md](docs/howtos/tools/INDEX.md)). `mf_screenshot` is
 registered only when a drivable headless browser engine is present — spec
@@ -925,7 +925,7 @@ default. Toggle it with the `/gcf on|off` slash command (persists
 with `/gcf show`, and read usage with `/gcf help`. While on, eligible JSON
 tool results (>= 200 chars) are re-encoded losslessly inside a
 `[BEGIN GCF generic]` ... `[END GCF]` block in the model-facing copy only,
-and the system prompt gains a short reading primer. TUI rendering, the
+and the system prompt gains a short reading primer. GUI rendering, the
 activity log, memory extraction, hooks, and compaction always keep seeing the
 raw JSON. See SPEC.md section 5.6 for details.
 
@@ -1005,7 +1005,7 @@ EOF
 
 **User invocation:**
 ```bash
-# In TUI, type:
+# In GUI, type:
 /deploy production
 
 # Or via CLI:
@@ -1110,7 +1110,7 @@ The `plugin_<id>_` namespace keeps a plugin's own tool - even one it calls
 rename retired; the bridge reports such a contribution once, names the
 replacement, and keeps the plugin's other tools working.
 
-Manage plugins from the TUI or the CLI:
+Manage plugins from the GUI or the CLI:
 
 | Command | Description |
 |---|---|
@@ -1177,7 +1177,7 @@ shape, and one or more servers; adding one installs the entry, and enabling it
 connects its servers and exposes their tools to the model. The system is
 specified in [`specs/connectors/SPEC.md`](specs/connectors/SPEC.md) (FR-001..FR-041).
 
-Manage connectors from the TUI or the CLI:
+Manage connectors from the GUI or the CLI:
 
 | Command | Description |
 |---|---|
@@ -1222,7 +1222,7 @@ Subagents are specialized agents that handle specific tasks. You can invoke them
 
 ### Switching Agents
 
-**Interactive switch (TUI):**
+**Interactive switch (GUI):**
 ```
 Tab / Shift+Tab         # Cycle through agents
 /agent                  # Open agent picker dialog
@@ -1257,7 +1257,7 @@ Agent uses:
   /new_agent agent="build" task="Run cargo check and list any errors" background=true
 ```
 
-**Via TUI Commands:**
+**Via GUI Commands:**
 
 ```
 /agents     # Open the Agents panel to see running background tasks
@@ -1279,7 +1279,7 @@ and its result is never injected back into the chat. Use it for side-effect-only
 work (writing a file, refreshing the index). Because nothing reads the reply body,
 give the prompt a file to write; every completed sub-agent (detached or not) also
 persists its full output to `log/subagents/<task-id>.md`. `/spawn` shares one
-bounded launch set with every other TUI launch path (`agents.max_launching`,
+bounded launch set with every other GUI launch path (`agents.max_launching`,
 default 4), so a second launch queues behind the busy ones and names them rather
 than being refused outright.
 
@@ -1343,7 +1343,7 @@ cdmn session list
 cdmn session list --project my-app   # one project only
 cdmn session list --json             # machine-readable
 
-# Resume a previous session (loads message history into the TUI)
+# Resume a previous session (loads message history into the GUI)
 cdmn session resume <session-id>
 
 # Export a session to a portable archive (default: session_archive.tar.gz)
@@ -1353,9 +1353,9 @@ cdmn session export-archive <session-id> -o session_archive.tar.gz
 cdmn session import session_archive.tar.gz
 ```
 
-### Multiple sessions in the TUI
+### Multiple sessions in the GUI
 
-The TUI keeps several sessions open at once. A session keeps working while
+The GUI keeps several sessions open at once. A session keeps working while
 you look at another one; when it needs you (a permission prompt or a
 question) its sidebar row shows `!` and the status bar shows `N need you`.
 
@@ -1465,7 +1465,7 @@ started in a project whose checkout is under the launch directory or a
 `dirs.allowed_roots` entry. The sidebar shows `Y` and
 the number of pull/merge requests for that branch beside the session.
 
-The same data is available outside the TUI:
+The same data is available outside the GUI:
 
 ```bash
 cdmn project list
@@ -1493,7 +1493,7 @@ To get a desktop notification when a background session needs you, add an
 ### Pruning an old transcript
 
 A session's messages can be aged out without deleting the session. The
-operation is the same in the TUI and on the CLI; the session row survives, so an
+operation is the same in the GUI and on the CLI; the session row survives, so an
 expired conversation stays listed and resumable with an empty transcript.
 
 ```bash
@@ -1509,9 +1509,9 @@ cdmn db prune --days 30
 ```
 
 ```
-/db prune --dry-run --days 30     # TUI: report the count, delete nothing
-/db prune --days 30               # TUI: asks "Delete messages older than 30 day(s)?" first
-/db help                          # TUI: subcommands, defaults, and caveats
+/db prune --dry-run --days 30     # GUI: report the count, delete nothing
+/db prune --days 30               # GUI: asks "Delete messages older than 30 day(s)?" first
+/db help                          # GUI: subcommands, defaults, and caveats
 ```
 
 `--days` accepts both `--days N` and `--days=N`; the value must be a positive day
@@ -1783,13 +1783,13 @@ cdmn run "Add input validation to the create_user endpoint"
 
 ### Scaffold a New Project
 
-The `/new` command (TUI) and `cdmn new` (CLI) scaffold a brand-new,
+The `/new` command (GUI) and `cdmn new` (CLI) scaffold a brand-new,
 agent-friendly project in an **empty** directory:
 
 ```bash
 mkdir my-project && cd my-project
 
-# TUI
+# In the GUI
 /new --language rust --type cmdline
 
 # or CLI
@@ -1805,7 +1805,7 @@ run `/new help` for the full list —
 starter documentation (`README.md`, `QUICKSTART.md`, `STATS.md`, `docs/`),
 and a git repository with an initial commit. Add `--github` or `--gitlab`
 (mutually exclusive) to also create a private hosting repository and push;
-add `--stack axum`/`--stack gtk4`/`--stack ratatui` (Rust) to layer a framework starter on top. In the TUI the
+add `--stack axum`/`--stack gtk4` (Rust; `/new help` lists the rest) to layer a framework starter on top. In the GUI the
 scaffold steps stream into the message window as they complete.
 
 ```bash
@@ -1822,7 +1822,7 @@ before turning it into a spec. The new iterative engine decomposes the topic
 into sub-questions, gathers sources for each one in parallel, verifies claims,
 detects missing links, and stops adaptively.
 
-Run any of these from the TUI prompt:
+Run any of these from the GUI prompt:
 
 ```text
 /research create rust-async async/await idioms in stable Rust
@@ -1955,10 +1955,10 @@ source tensions). The `--mode` flag selects the execution strategy:
 researchers coordinated by a lead supervisor), or `competitive`
 (supervisor graph specialised for comparing entities). In `supervisor`
 and `competitive` modes, `--max-concurrent-research-units N` caps the
-number of parallel researchers (default 5). `--summarization-model` (TUI
+number of parallel researchers (default 5). `--summarization-model` (GUI
 `/research create` only)
 selects a lightweight model for per-page webpage summaries, and
-`--evaluate` (TUI `/research create` only) appends a deterministic quality scorecard to the final report.
+`--evaluate` (GUI `/research create` only) appends a deterministic quality scorecard to the final report.
 
 The report is written to a **dated** file, `research/<name>/RESEARCH-<YYYY-MM-DD>.md`,
 alongside the QA companion `CORPA-<YYYY-MM-DD>.md`. The primary report is named
@@ -1970,7 +1970,7 @@ undated `RESEARCH.md` / `CORPA.md`, and every read surface resolves whichever
 file exists (newest dated first, legacy last).
 
 Every report frontmatter also records an `invocation` line — the
-verbatim `cdmn research create ...` command, `/research ...` TUI slash
+verbatim `cdmn research create ...` command, `/research ...` GUI slash
 command, or `POST /research` request summary that started the run. The
 `/research update <name>` command (or `cdmn research update <name>` /
 `PUT /research/<name>`) reads that line and replays the exact run,
@@ -1993,7 +1993,7 @@ cdmn spec govcreate records-arch ./docs/sad.md ./records --language python --typ
 The run acquires the document, extracts its structure, and authors the spec
 via the configured model (`--model provider/model`, else the stored
 `selected_model`). A non-empty target folder is refused unless `--force` is
-passed. In the TUI use `/spec govcreate ...` with live staged progress and
+passed. In the GUI use `/spec govcreate ...` with live staged progress and
 Escape to cancel. See `docs/howtos/spec.md` §5.19.
 
 ### Spec status from the shell
@@ -2008,23 +2008,25 @@ transition exits 1. See `docs/howtos/spec.md` §5.10.
 
 ---
 
-## 14. TUI Interaction
+## 14. GUI Interaction
 
 ### Mouse Support
 
-The TUI supports mouse interaction:
+The GUI supports mouse interaction:
 
-- **Scroll wheel** — scrolls the message pane or log panel.
-- **Scrollbar drag** — click-and-drag the scrollbar track on either pane.
-- **Text selection** — click-and-drag to select text in any pane.
-- **Right-click** — opens a context menu for the current selection. Use it to
-  **Copy**, **Cut**, or **Paste** in the input pane. In provider-setup dialogs
-  right-click pastes into the active field.
+- **Scroll wheel** — scrolls the message pane or log pane.
+- **Scrollbar drag** — click-and-drag the scrollbar track on any pane.
+- **Drag a pane tab** — move, split or float a dockable pane; the layout is
+  saved and restored on the next start (see `GUI-QUICKSTART.md`, "Panes and
+  layout").
+- **Right-click** — opens a context menu in the prompt: **Copy**, **Cut** or
+  **Paste**. In provider-setup dialogs right-click pastes into the active field.
 
-Pasting via right-click, **`Ctrl+V`**, or a terminal bracketed-paste event all
-behave the same way: carriage returns are stripped and any active selection is
-replaced by the pasted text. Press **`Alt+V`** to paste an image from the
-clipboard as an attachment.
+Pasting via right-click or **`Ctrl+V` | `Cmd+V`** behaves the same way: any
+active selection is replaced by the pasted text. Press **`Alt+V`** (Linux/Windows)
+or paste an image to attach it from the clipboard, or use **File > Attach
+Images...** for the native file dialog. Transcript text is not selectable; `/clip`
+copies the whole transcript.
 
 ### Bang Commands
 
@@ -2133,7 +2135,7 @@ Timestamps are ISO-8601 (e.g. `2025-01-15T09:00:00Z` or
 
 ### How It Works
 
-A background scheduler runs while the TUI session is active, ticking every
+A background scheduler runs while the GUI session is active, ticking every
 30 seconds. When an event's `next_due` time has passed, the scheduler
 spawns a background agent run of the configured agent type with the
 configured prompt. For repeating events, `next_due` is advanced by one
@@ -2150,7 +2152,7 @@ intervals until `next_due` is in the future.
 
 ### Benchmark Workflow
 
-The benchmark runner uses the **currently selected model/provider** in the TUI and writes one
+The benchmark runner uses the **currently selected model/provider** in the GUI and writes one
 normalized workbook per benchmark under:
 
 ```text
@@ -2201,16 +2203,18 @@ Notes:
 |-----|--------|
 | `Enter` | Send message |
 | `Shift+Enter` | Newline in input |
-| `Tab` / `Shift+Tab` | Cycle agents |
+| `Tab` | Complete the highlighted slash command (cycles agents when no `/` menu is open) |
+| `Shift+Tab` | Cycle agents |
 | `PageUp/PageDown` | Scroll messages |
 | `Ctrl+PageUp/Down` | Scroll log panel |
-| `Alt+C` | Toggle the live context-window panel |
-| `Alt+Q` | Open the queue-control menu (`Next` / `Stop`/`Resume` / `Clear` / `Show`) |
+| `Alt+Q` (macOS `Cmd+Alt+Q`) | Open the queue-control menu (`Next` / `Stop`/`Resume` / `Clear` / `Show`) |
 | `Alt+S` | Show/focus/hide the session sidebar |
 | `Ctrl+N` | New session |
 | `Ctrl+Up` / `Ctrl+Down` | Previous / next session |
 | `Alt+R` | Most recently focused session |
-| `Ctrl+C` | Abort / exit |
+| `Ctrl+C` | Copy selection / arm quit |
+| `Ctrl+D` (macOS `Cmd+Q`) | Quit |
+| `Esc` | Stop the running agent |
 
 ---
 
@@ -2371,7 +2375,7 @@ Declare automations under the `automation` block in `.codemason/codemason.json`:
 The service starts only when `automation.enabled` is `true`; an absent block
 leaves it inert.
 
-### TUI and CLI
+### GUI and CLI
 
 ```
 /automation                  # list automations, trigger, backend, next-due
@@ -2439,11 +2443,11 @@ Configuration" for the full schema):
   and `research.evaluate.enabled` set the default for every run. A per-run
   flag wins (`--research-model`, `--compression-model`,
   `--final-report-model`, `--max-concurrent-research-units`, and `--evaluate`
-  on the TUI `/research create`). Each model override (`provider:model`)
+  on the GUI `/research create`). Each model override (`provider:model`)
   selects the model for its phase; an unset phase uses the active model
   (compression falls back to the research model).
   The per-page summarization model has no config key; pass
-  `--summarization-model` to the TUI `/research create` command.
+  `--summarization-model` to the GUI `/research create` command.
 
 ```jsonc
 {

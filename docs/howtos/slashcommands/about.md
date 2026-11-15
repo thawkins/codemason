@@ -39,7 +39,7 @@ Display the banner:
 ```
   codemason - AI Coding Agent
 
-  An interactive TUI-based AI coding agent
+  An interactive GUI-based AI coding agent
   supporting multiple LLM providers.
 
   Version:     1.0.95

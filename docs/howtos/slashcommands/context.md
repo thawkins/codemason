@@ -1,6 +1,6 @@
 # /context
 
-> "Manage context cache: /context refresh | /context help" (SlashCommandDef, crates/codemason-tui/src/app/state.rs).
+> "Manage context cache: /context refresh | /context help" (SlashCommandDef, crates/codemason-app-core/src/app/state.rs).
 
 ## Overview
 
@@ -12,7 +12,7 @@ current working directory. Use it after creating, moving, or deleting files
 outside of the agent's own tool calls, or when switching branches in a
 separate terminal.
 
-The handler is the `context` arm in `crates/codemason-tui/src/app/slash.rs`
+The handler is the `context` arm in `crates/codemason-app-core/src/app/slash.rs`
 (approximately lines 2215-2235).
 
 ## Syntax

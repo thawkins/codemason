@@ -141,7 +141,7 @@ provider (FR-036).
 
 Each `session/update` notification decodes into a typed `AcpUpdate`
 (`parse_update`) and is published onto the local event bus by
-`acp_dispatch::publish_update`, so the TUI renders it exactly like a local turn:
+`acp_dispatch::publish_update`, so the GUI renders it exactly like a local turn:
 
 | ACP `sessionUpdate` kind | `AcpUpdate` | Published event |
 | ------------------------ | ----------- | --------------- |
@@ -233,7 +233,7 @@ agent to it.
 With a codemason agent named `claude` present, the `claude` agent binds by the
 name-equals-id rule. Selecting `/agent claude` and sending a message relays the
 turn to the Claude Code subprocess; its text, thought, and tool-call updates
-stream into the TUI, and the assistant text is persisted for the session.
+stream into the GUI, and the assistant text is persisted for the session.
 
 If you would rather keep the `coder` agent and delegate it, drop the second
 agent and give `coder` an option instead:
@@ -370,7 +370,7 @@ unauthenticated surface:
 When either gate is closed, `codemason acp-server` prints a diagnostic that names
 the specific closed gate and exits with a usage error (code 2). The endpoint is
 reachable only through the `codemason acp-server` subcommand - never through the
-TUI or `codemason run` - so a plain terminal launch never exposes an editor-facing
+GUI or `codemason run` - so a plain terminal launch never exposes an editor-facing
 JSON-RPC surface.
 
 ```json

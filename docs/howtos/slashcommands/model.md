@@ -4,7 +4,7 @@
 
 ## Overview
 
-`/model` manages the active LLM model selection in the TUI. With no arguments it opens
+`/model` manages the active LLM model selection in the GUI. With no arguments it opens
 the model picker for the currently configured provider; when no provider is configured
 it falls back to the provider picker. `/model show` prints a metadata report for the
 active model into the message window. Switching models happens through the interactive
@@ -123,7 +123,7 @@ it as a keystroke.
 
 ## Output
 
-- Bare form: no chat text; the TUI switches to a model-discovery status and then
+- Bare form: no chat text; the GUI switches to a model-discovery status and then
   the picker dialog (`LoadingModels` step while the provider's model list is
   fetched, then the selection list).
 - `/model show`: the metadata report appended to the message window, with the

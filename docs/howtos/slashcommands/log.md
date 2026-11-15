@@ -61,7 +61,7 @@ stats in `/editlog show` restart from zero.
 ```
 /log clear logwindow
 ```
-Empties `log/logwindow/`, removing accumulated TUI log-window session logs.
+Empties `log/logwindow/`, removing accumulated GUI log-window session logs.
 
 ```
 /log help

@@ -71,7 +71,7 @@ so a `:4318` inside a path or query is never mistaken for the port.
 
 Codemason ships OTLP **logs** whenever telemetry is on. The `tracing` events codemason
 already emits are batched to the same collector as the metrics, in addition to
-the local sink - the TUI log panel, or stderr in a headless/server run - which
+the local sink - the GUI log panel, or stderr in a headless/server run - which
 is never redirected and keeps showing everything at the level `--log-level`
 selected.
 
@@ -99,7 +99,7 @@ selected.
   in `codemason_telemetry::logs`).
 - `logs all` sets the floor below `TRACE`, so every record the layer observes
   is shipped. It is the most verbose setting; the local log is unchanged.
-- **The log window exports at each entry's own severity.** Every line the TUI
+- **The log window exports at each entry's own severity.** Every line the GUI
   log window records is also re-emitted to `tracing` as a
   record carrying the attributes `log_window = true` and `log_window_level` (the
   entry's own severity: `tool`, `info`, `warn` or `error`). **A tool call reaches
@@ -152,7 +152,7 @@ selected.
 - The change is applied to the running process immediately - no restart. A
   reconfigure detaches the old export pipeline and shuts it down on a background
   thread once the runtime lock is released, so `/telemetry off` against a dead
-  collector does not freeze the TUI for the length of the export timeout; the
+  collector does not freeze the GUI for the length of the export timeout; the
   retired pipeline's own final export still runs (the subsystem joins those
   threads on shutdown) but its result no longer resets or extends the live
   failure streak.

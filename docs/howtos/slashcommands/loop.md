@@ -99,7 +99,7 @@ Opens the setup dialog.
 ```
 
 ```
-/loop debug --cost-limit 2 Diagnose the intermittent TUI scroll panic
+/loop debug --cost-limit 2 Diagnose the intermittent GUI scroll panic
 ```
 
 ```

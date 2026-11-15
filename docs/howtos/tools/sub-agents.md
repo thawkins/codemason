@@ -137,7 +137,7 @@ Agents panel but is invisible to the delegation surface: `list_agents` omits it,
 is reaped without a chat injection while still appearing in `tasks_snapshot`.
 Because nothing reads its reply body, a detached prompt whose deliverable is a
 report MUST name a file to write; the run's full output is additionally persisted
-to `log/subagents/<task-id>.md` on completion. The TUI `/spawn` command is the
+to `log/subagents/<task-id>.md` on completion. The GUI `/spawn` command is the
 user-facing equivalent.
 
 **Example:**
@@ -172,7 +172,7 @@ read back at all.
 |----------|------|----------|-------------|
 | `task_id` | string | yes | Task identifier returned by `new_agent` |
 
-The TUI's `/cancel <prefix>` slash command calls the same
+The GUI's `/cancel <prefix>` slash command calls the same
 `AgentManager::cancel_agent` method, so a cancellation requested from the input
 line and one requested by the tool have identical semantics. The command adds
 prefix resolution: an ambiguous prefix is refused with every match listed, and an

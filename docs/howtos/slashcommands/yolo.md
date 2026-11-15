@@ -5,7 +5,7 @@
 ## Overview
 
 `/yolo` toggles YOLO mode, which disables the permission system for trusted
-environments. The state is persisted, so the mode survives TUI restarts until
+environments. The state is persisted, so the mode survives GUI restarts until
 you toggle it off again. YOLO mode bypasses far more checks than the on-screen
 enable message lists; the full bypass surface is documented below.
 
@@ -47,7 +47,7 @@ When YOLO mode is enabled the following checks are skipped:
   destructive-action checkpoints, which still require confirmation
 - The default block on packet-capture tools (`tcpdump`, `wireshark`)
 
-The enable message printed by the TUI lists only a subset of these items, so
+The enable message printed by the GUI lists only a subset of these items, so
 treat the list above as the authoritative bypass surface.
 
 ## Examples

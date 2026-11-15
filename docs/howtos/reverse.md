@@ -7,7 +7,7 @@ GitHub API, then asks the currently selected LLM model to generate a synthetic
 "creation prompt" — a detailed prompt that, if fed to a coding agent, would
 reproduce the repository from scratch.
 
-There is no `codemason reverse` CLI subcommand; the feature is TUI-only (see
+There is no `codemason reverse` CLI subcommand; the feature is GUI-only (see
 [Section 9](#9-cli-equivalents)).
 
 > **Scope:** `/spec reverse` slash commands, the `/new` scaffold flags
@@ -81,7 +81,7 @@ Open codemason and run:
 /spec reverse thrivethrough/omitme
 ```
 
-The TUI will:
+The GUI will:
 
 1. Fetch the repository metadata, root file tree, and README from the GitHub
    API.
@@ -494,7 +494,7 @@ avoid hitting the rate limit.
 
 ## 9. CLI equivalents
 
-`/spec reverse` is available only inside the TUI. The clap CLI registers no
+`/spec reverse` is available only inside the GUI. The clap CLI registers no
 `codemason reverse` subcommand, and `codemason spec` exposes only `govcreate`, so
 there is no command-line equivalent today. Run `codemason --help` for the
 subcommands that do exist.

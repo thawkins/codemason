@@ -1,14 +1,12 @@
 # codemason
 
-An AI coding agent for the terminal, built in Rust.
-
-![codemason terminal UI](assets/screens/codemasonstart.png)
+An AI coding agent with a desktop GUI and a CLI, built in Rust.
 
 ![codemason mcp start](assets/screens/codemasonmcpstartup.png)
 
 codemason is a Rust coding agent inspired by RooCode, Claude Code, Copilot CLI and
 OpenCode. It provides multi-provider LLM orchestration, a comprehensive built-in
-tool system, a terminal UI, and a client/server architecture — all compiled into a
+tool system, a desktop GUI, and a client/server architecture — all compiled into a
 single binary that links only against the system C runtime (libc, libm, libgcc_s).
 
 It is implemented in Rust as a learning exercise for the author.
@@ -17,7 +15,7 @@ codemason started as a copy of [ragent](https://github.com/thawkins/ragent).
 The binary is `cdmn`; environment variables use the `CODEMASON_` prefix and
 local state lives in `.codemason/`.
 
-Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
+Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
 [QUICKSTART.md](QUICKSTART.md) for the guided tour.
 
 ## Features
@@ -39,7 +37,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   changing the agent loop: `local` (host, the default), `docker`/`podman` (a
   per-session container whose workspace is a named volume, never a host bind mount),
   and `remote` (drive a second codemason server over REST+SSE and mirror its events
-  locally). A durable backend registry reports each backend's health, the TUI
+  locally). A durable backend registry reports each backend's health, the GUI
   `/backend` switcher shows and changes the active backend, sandbox credentials are
   resolved from the encrypted store at spawn time and injected as container
   environment variables, and a provisioning failure fails the turn rather than
@@ -117,8 +115,8 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   of a team's `config.json` goes through `TeamStore::update`, which holds the
   exclusive lock from read to write, so two teammates changing status at once no
   longer lose one change. The team runtime is bound before tool dispatch in every
-  entry point - TUI, `cdmn run`, `cdmn serve` and ACP - so `team_spawn` works
-  outside the TUI, and it is rebindable (`TeamManagerSlot`) rather than pinned to
+  entry point - GUI, `cdmn run`, `cdmn serve` and ACP - so `team_spawn` works
+  outside the GUI, and it is rebindable (`TeamManagerSlot`) rather than pinned to
   the first team the process ever created: a manager whose team is gone is
   unbound atomically, a manager refuses to spawn into a team it does not drive,
   and a teammate's loop keeps running turns while it holds an auto-claimed task
@@ -155,19 +153,18 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   the rename left unchanged)
 - **MCP** — mcp_tool (McpToolWrapper) for external Model Context Protocol servers,
   plus the dynamically registered per-server bridge tools
-- **Terminal UI** — full-screen ratatui interface with provider setup dialog,
-  slash-command autocomplete, agent cycling, streaming chat with markdown and syntax
-  highlighting, step-numbered tool calls with pretty-printed JSON in the log panel,
-  a live permission countdown timer (120-second timeout with EXPIRED state), and a
-  message input queue (`Alt+Q` menu / `/queue`) that keeps the input field editable
-  while the agent executes; side panels for context (`Alt+C`), memory (`Alt+M`),
-  telemetry (`/telemetry_panel`) and tasks (`Alt+T`). Every list-bearing `/provider` and
-  `/model` step shares one list composition with the plugin and connector
-  catalogues - accent frame, heading count, pinned column band, zebra rows, muted
-  key-hint footer - and windows around its cursor (`Showing a-b of N`) so a long
-  provider, model, thinking-level, Azure-resource or router-bucket list never clips
-  away the highlighted row; a mouse notch over an open setup dialog steps the
-  cursor exactly like `Up`/`Down` and is swallowed elsewhere
+- **Desktop GUI** — an egui window (the default frontend; `cdmn` opens it, and
+  `cdmn run` stays headless) with dockable panes you can drag, split and float,
+  a provider setup dialog, slash-command autocomplete (`Tab` completes), agent
+  cycling, streaming chat with markdown and syntax highlighting, step-numbered
+  tool calls with pretty-printed JSON in the log pane, a live permission
+  countdown timer (120-second timeout with EXPIRED state), native file dialogs
+  for attaching images and opening projects, and a message input queue (`Alt+Q`
+  menu / `/queue`) that keeps the prompt editable while the agent executes; side
+  panes for memory (`Alt+M` | `Cmd+Shift+M`), the log, the profiler, tasks
+  (`Alt+I` | `Cmd+Shift+I`), agents and teams. The window opens maximized the
+  first time, then remembers its size, position and layout. Without a display
+  (an SSH session) `cdmn` exits with a pointer to `cdmn run`
 - **Telemetry export health** — every OTLP metric export outcome is classified
   (success, non-2xx collector response, transport error, export timeout) and a
   failure is reported in the message window as an `Agent Notice` naming the
@@ -205,7 +202,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   tunes the level (`telemetry.otel.logs.level`, default `info`), which is written
   to `telemetry.otel.logs.enabled` beside `telemetry.otel.enabled`. A
   `tracing_subscriber::Layer` composes
-  with the existing sinks instead of replacing them, so the TUI log panel (or
+  with the existing sinks instead of replacing them, so the GUI log panel (or
   stderr in a headless run) keeps showing everything the local `--log-level`
   selects, and the level is only a floor for the remote export. Records post to
   the `/v1/logs` sibling of the configured endpoint on the same protocol,
@@ -218,10 +215,10 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   metrics untouched, and `/telemetry counters` plus the telemetry panel report
   the log-export state. A reconfigure detaches the old pipeline and shuts it
   down on a background thread, so `/telemetry off` against a dead collector
-  never freezes the TUI; `flush()` and `shutdown()` attempt both signals
+  never freezes the GUI; `flush()` and `shutdown()` attempt both signals
   independently, so an unhealthy log endpoint cannot drop the final metric
   batch.
-  The log window itself is an in-memory sink fed by the TUI, so every entry it
+  The log window itself is an in-memory sink fed by the GUI, so every entry it
   records - tool call start, tool arguments, tool result, tool failure, warnings
   and information lines - is also re-emitted as a
   `tracing` event **at the entry's own severity** (carrying `log_window = true`
@@ -271,7 +268,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   submenu that opens any of them in the browser
 - **Session management** — persistent conversation history stored in SQLite;
   list, resume, export-archive, and import sessions. A session's transcript can be
-  aged out with `/db prune [--days N] [--dry-run]` (TUI) or `cdmn db prune`
+  aged out with `/db prune [--days N] [--dry-run]` (GUI) or `cdmn db prune`
   (CLI): messages older than the window are deleted and **the session itself is
   kept**, so an expired conversation stays listed and resumable with an empty
   transcript. A real prune asks for confirmation first and the dialog opens on
@@ -307,7 +304,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   server types, stdio and Streamable-HTTP clients, and tool bridging; a server
   entry's `"type"` is optional and defaults to `stdio`, so a command-launched
   server needs no transport key (a config written back still carries an explicit
-  `"type"`); TUI commands
+  `"type"`); GUI commands
   (`/mcp` / `/mcp status`, `/mcp config`, `/mcp discover`, `/mcp connect <id>`,
   `/mcp disconnect <id>`, `/mcp remove <id>`) with durable global enable/disable state
   (`mcp_state.json`) and live connect/disconnect. `/mcp config` reports where
@@ -331,7 +328,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
 - **Snapshot & undo** — file snapshots before edits so changes can be rolled back
 - **Event bus** — internal tokio pub/sub for real-time UI updates across all components
 - **Background agents** — spawn and run multiple sub-agents concurrently for parallel
-  task execution, with REST API and TUI monitoring; `/spawn <agent> <prompt>`
+  task execution, with REST API and GUI monitoring; `/spawn <agent> <prompt>`
   launches a **detached** fire-and-forget sub-agent that nothing ever waits on
   (no `list_agents` entry, not awaitable via `wait_agents`, result never
   injected into the chat); every completed sub-agent run (detached or not)
@@ -522,7 +519,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   `git+<https-url>#<ref>[:<subpath>]` git source; a freshly installed plugin is
   recorded enabled and loads at the next session start (no JavaScript runs during
   the install); managed through
-  `/plugins list|add|remove|enable|disable|test|stores|marketplace|help` in the TUI
+  `/plugins list|add|remove|enable|disable|test|stores|marketplace|help` in the GUI
   (`/plugins list [--verbose]` opens an interactive table panel with the capability
   blocks listed at the end; `Space` toggles the highlighted plugin's enabled state) and
   the `cdmn plugins <sub>` CLI (`/plugins marketplace show` and `/plugins marketplace <codex|claude> list` list the marketplaces configured for each store,
@@ -549,7 +546,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   `claude [query] [--category <name>] [--refresh]`, `add <id|source> [--force]`,
   `remove <id>`, `enable <id>`, `disable <id>`, `connect <id>`,
   `disconnect <id>`, `auth <id>`, `test <id>`, `stores [--check]`,
-  `marketplace show|claude list|add|remove`, `help`) in the TUI and the
+  `marketplace show|claude list|add|remove`, `help`) in the GUI and the
   `cdmn connectors <sub>` CLI. `/connectors claude` opens an interactive,
   off-the-event-loop catalogue browser wearing the same design language as
   `/plugins claude` (filter by query, category, and marketplace; browse; install with
@@ -588,7 +585,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   output reference, and can notify Slack/GitHub/Linear/Notion/a generic webhook.
   A run executes only in its configured backend. Managed through
   `/automation [list]`, `/automation runs <id>`, `/automation run <id>`,
-  `/automation help` in the TUI, `cdmn automation list|runs <id>|run <id>` on
+  `/automation help` in the GUI, `cdmn automation list|runs <id>|run <id>` on
   the CLI, and `GET /automation`, `GET /automation/runs/{id}`,
   `POST /automation/{id}/run` over HTTP. `automation.enabled: false` (or an
   absent block) makes the subsystem inert
@@ -610,7 +607,7 @@ Start with [TUI-QUICKSTART.md](TUI-QUICKSTART.md) to run it, or
   token makes `cdmn serve` refuse to start the surface rather than serve it
   unauthenticated (FR-032). Permission checks are preserved on both paths
   (FR-038).
-- **Input queue** — the TUI input field stays editable while the primary agent
+- **Input queue** — the GUI input field stays editable while the primary agent
   executes: each `Enter` appends the message to a bounded FIFO queue (default 32
   entries, configurable via `input_queue_capacity`), a two-digit counter appears
   before the prompt, and the oldest entry runs at each turn boundary; control it
@@ -674,7 +671,7 @@ test gets its own process, so a wedged test cannot block its neighbours. Run one
 file by filter:
 
 ```bash
-cargo nextest run -p codemason-tui -E 'test(test_slash_commands::)'
+cargo nextest run -p codemason-app-core -E 'test(test_slash_commands::)'
 cargo test --workspace --doc   # doc tests: nextest does not run them
 ```
 
@@ -692,7 +689,7 @@ export GENERIC_OPENAI_API_KEY="sk-..."
 # or (for OpenRouter)
 export OPENROUTER_API_KEY="sk-or-..."
 
-# Launch the interactive TUI
+# Launch the desktop GUI
 cdmn
 
 # Run a one-shot prompt
@@ -740,7 +737,7 @@ cdmn [OPTIONS] [COMMAND]
   new          Scaffold a new project in the current directory (the `/new` command)
 ```
 
-With no command, `cdmn` launches the interactive TUI. Run `cdmn --help` for
+With no command, `cdmn` opens the desktop GUI. Run `cdmn --help` for
 the full list of commands and options, and `codemason <command> --help` for one
 command.
 
@@ -901,7 +898,7 @@ Scaffold a brand-new, agent-friendly project in an empty directory with one
 command:
 
 ```bash
-# TUI
+# In the GUI
 /new --language rust --type cmdline
 
 # CLI
@@ -917,7 +914,7 @@ commit, and — with `--github` or `--gitlab` — creates a private hosting
 repository, sets it as `origin`, and pushes.
 
 ```bash
-# Add a framework stack (Rust: axum, warp, raylib, gtk4, ratatui)
+# Add a framework stack (Rust: axum, warp, raylib, gtk4; `/new help` lists them all)
 cdmn new --language rust --type cmdline --stack axum
 
 # Create the project on GitHub or GitLab (mutually exclusive)
@@ -950,15 +947,17 @@ Docs and examples:
 
 ## Architecture
 
-The project is a Cargo workspace built from 19 focused crates:
+The project is a Cargo workspace built from 20 focused crates:
 
 | Crate                     | Purpose                                                                  |
 | ------------------------- | ------------------------------------------------------------------------ |
 | `codemason-agent`          | Agent/runtime layer: sessions, orchestration, MCP, memory, tool registry |
-| `codemason-bench`          | Benchmark runner shared between the TUI and the CLI                      |
+| `codemason-app-core`       | Frontend-neutral application core: `App` state, key handling, slash commands |
+| `codemason-bench`          | Benchmark runner shared between the GUI and the CLI                      |
 | `codemason-codeindex`      | Indexing: tree-sitter parsing, SQLite store, Tantivy FTS, file watcher   |
 | `codemason-config`         | Configuration types, defaults, and parsing                               |
 | `codemason-connectors`     | Connector catalogue, store, providers, MCP bridge, `/connectors`       |
+| `codemason-gui`            | egui desktop frontend: dockable panes, native dialogs, craft-keymap shortcuts |
 | `codemason-hyperresearch`  | Deep-research engine: decomposition, notes, citation graph, vault       |
 | `codemason-llm`            | Provider clients and model registry (every built-in provider + Model Router) |
 | `codemason-plugins`        | Codex/Claude dialect plugins, sandboxed JS runtime, `/plugins`         |
@@ -971,7 +970,6 @@ The project is a Cargo workspace built from 19 focused crates:
 | `codemason-tools-core`     | Core shell, file and search tools                                        |
 | `codemason-tools-extended` | Extended document, web, memory and codeindex tools                       |
 | `codemason-tools-vcs`      | Git, GitHub and GitLab tool surface                                      |
-| `codemason-tui`            | Ratatui terminal interface                                               |
 | `codemason-types`          | Shared IDs, events, messages and sanitization primitives                 |
 
 The binary entry point (`src/main.rs`) wires these crates together behind a clap CLI.
@@ -981,7 +979,7 @@ User Input
     │
     ▼
 ┌──────────┐    ┌──────────────┐    ┌──────────────┐
-│   TUI    │◄──►│  Event Bus   │◄──►│ HTTP Server  │
+│   GUI    │◄──►│  Event Bus   │◄──►│ HTTP Server  │
 └────┬─────┘    └──────┬───────┘    └──────┬───────┘
      │                 │                   │
      ▼                 ▼                   ▼
@@ -1001,14 +999,14 @@ User Input
 ## Performance
 
 Criterion benchmarks ship with `codemason-agent`, `codemason-bench`, `codemason-codeindex`,
-`codemason-research`, `codemason-server`, `codemason-storage`, and `codemason-tui`. See
-[`docs/userdocs/bench.md`](docs/userdocs/bench.md) for the TUI benchmark runner and
+`codemason-research`, `codemason-server`, `codemason-storage`, and `codemason-app-core`. See
+[`docs/userdocs/bench.md`](docs/userdocs/bench.md) for the benchmark runner and
 [`docs/howtos/slashcommands/bench.md`](docs/howtos/slashcommands/bench.md) for the
 `/bench` command family.
 
 ```bash
 # Run crate benchmarks
-cargo bench -p codemason-tui
+cargo bench -p codemason-app-core
 cargo bench -p codemason-agent
 cargo bench -p codemason-codeindex
 ```
@@ -1025,7 +1023,7 @@ Key optimisations include:
 
 ## Project Status
 
-**v1.0.169** — The core architecture, tool system, TUI, HTTP server, memory system,
+**v1.0.169** — The core architecture, tool system, GUI, HTTP server, memory system,
 teams/swarm coordination, spec
 management, skills system, research system, plugin and connector systems, pluggable
 execution backends, ACP integration, the automation service, and multi-layered
@@ -1041,7 +1039,7 @@ Related documents:
 - [STATS.md](STATS.md) — line, file, test and per-crate composition statistics
 - [docs/BUILDSTATS.md](docs/BUILDSTATS.md) — measured build, test and coverage time/disk cost
 - [QUICKSTART.md](QUICKSTART.md) — the guided feature tour
-- [TUI-QUICKSTART.md](TUI-QUICKSTART.md) — running and driving the terminal UI
+- [GUI-QUICKSTART.md](GUI-QUICKSTART.md) — running and driving the desktop GUI
 - [docs/howtos/](docs/howtos/) — one how-to manual per subsystem
 - [docs/howtos/tools/INDEX.md](docs/howtos/tools/INDEX.md) — the full tool catalog
 - [docs/reports/testconsolidation-review.md](docs/reports/testconsolidation-review.md)
@@ -1050,3 +1048,7 @@ Related documents:
 ## License
 
 MIT
+
+The GUI bundles the Hack Bold font (`crates/codemason-gui/assets/fonts/Hack-Bold.ttf`,
+Hack v3.003, Source Foundry), used under the MIT licence and the Bitstream Vera
+licence. The full notices are in `crates/codemason-gui/assets/fonts/Hack-LICENSE.txt`.

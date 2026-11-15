@@ -1,17 +1,17 @@
 # /startup
 
-> "Show startup timing breakdown for the current session" (SlashCommandDef, crates/codemason-tui/src/app/state.rs).
+> "Show startup timing breakdown for the current session" (SlashCommandDef, crates/codemason-app-core/src/app/state.rs).
 
 ## Overview
 
 `/startup` renders the startup timing report for the current session when the
 application recorded one, and warns when no timings were captured. Startup
-timings cover the phases between process launch and the TUI becoming
+timings cover the phases between process launch and the GUI becoming
 interactive; the report is produced by the `StartupTimings::format_report`
 renderer. Timings are session-scoped: they are only available in the session
 that performed the startup work.
 
-The handler is the `startup` arm in `crates/codemason-tui/src/app/slash.rs`
+The handler is the `startup` arm in `crates/codemason-app-core/src/app/slash.rs`
 (lines 3045-3056).
 
 ## Syntax
@@ -43,7 +43,7 @@ Startup timings:
 ```
 
 The exact columns come from `StartupTimings::format_report()` in
-`crates/codemason-tui`; this doc does not enumerate them because the renderer was
+`crates/codemason-app-core`; this doc does not enumerate them because the renderer was
 not traced for this page.
 
 ### No timings recorded

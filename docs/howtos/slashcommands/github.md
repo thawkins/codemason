@@ -4,7 +4,7 @@
 
 ## Overview
 
-`/github` manages GitHub authentication for the TUI session.
+`/github` manages GitHub authentication for the GUI session.
 
 Token sources (highest priority first):
 

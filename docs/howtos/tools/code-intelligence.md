@@ -25,7 +25,7 @@ symbol queries. Use `Grep` only for arbitrary text patterns."
 
 Tools that need the semantic graph (`codeindex_explain`, `codeindex_path`,
 `codeindex_communities`, `codeindex_godnodes`) require the graph to be built
-first via the `/codeindex graph build` TUI command; they return a
+first via the `/codeindex graph build` GUI command; they return a
 `codeindex_busy` response while the index is temporarily locked.
 
 ---

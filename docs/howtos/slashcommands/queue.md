@@ -1,6 +1,6 @@
 # /queue
 
-> "Inspect the message input queue: /queue [list|clear|next|help]" (SlashCommandDef, crates/codemason-tui/src/app/state.rs).
+> "Inspect the message input queue: /queue [list|clear|next|help]" (SlashCommandDef, crates/codemason-app-core/src/app/state.rs).
 
 ## Overview
 
@@ -120,4 +120,4 @@ bar (`queue: list empty`, `queue: cleared`, `queue: next deferred`, and so on).
   toward the front and `Del` removes it
 - `/history`  -  recall previously entered messages (a queued entry is added to
   history the moment you press `Enter`)
-- `TUI-QUICKSTART.md` §4  -  the input queue and the ALT-Q menu
+- `GUI-QUICKSTART.md` §4  -  the input queue and the ALT-Q menu

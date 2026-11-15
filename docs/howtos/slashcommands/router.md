@@ -65,7 +65,7 @@ Lists which models belong to each tier under the loaded configuration.
 /router reload
 ```
 Re-reads `.codemason/codemason.json` after you edited the `provider.router` section,
-so the new weights and boundaries take effect without restarting the TUI.
+so the new weights and boundaries take effect without restarting the GUI.
 
 ## Output
 

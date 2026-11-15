@@ -12,7 +12,7 @@ This guide covers every part of that pipeline:
 - The 7-layer bash security model
 - Autopilot mode (autonomous, auto-approving operation)
 - YOLO mode (bypass all safety checks)
-- The interactive permission dialog (TUI and HTTP)
+- The interactive permission dialog (GUI and HTTP)
 - Hardwired auto-approve rules
 - Configuration reference and worked examples
 
@@ -20,7 +20,7 @@ This guide covers every part of that pipeline:
 > permission dialog. For the full tool catalog see `docs/howtos/tools/INDEX.md`.
 > For custom agent definitions (which carry their own permission rules) see
 > `docs/howtos/custom-agents.md`. For lifecycle hooks that can also veto
-> tool calls see `docs/howtos/hooks.md`. For the TUI walkthrough see
+> tool calls see `docs/howtos/hooks.md`. For the GUI walkthrough see
 > `docs/howtos/tutorial.md`.
 
 ---
@@ -458,7 +458,7 @@ you want to step away and let the agent work.
 
 ### 6.1 Enabling Autopilot
 
-Use the `/autopilot` slash command in the TUI:
+Use the `/autopilot` slash command in the GUI:
 
 ```
 /autopilot on
@@ -491,8 +491,8 @@ Disable:
 
 ### 6.2 How Autopilot Works
 
-When autopilot is enabled, the TUI state machine (defined in
-`crates/codemason-tui/src/app/state.rs` and `event_handler.rs`) automatically
+When autopilot is enabled, the GUI state machine (defined in
+`crates/codemason-app-core/src/app/state.rs` and `event_handler.rs`) automatically
 sends a continuation prompt after each agent turn ends without the agent
 calling `agent_complete`:
 
@@ -556,7 +556,7 @@ Autopilot ends when any of the following occur:
 | User runs `/autopilot off`       | Autopilot stops, returns to interactive mode |
 | User presses `Esc`              | Cancels the running agent and autopilot     |
 
-When the agent signals completion via `agent_complete`, the TUI receives a
+When the agent signals completion via `agent_complete`, the GUI receives a
 `TaskCompleted` event and suppresses any pending continuation:
 
 ```rust
@@ -630,12 +630,12 @@ if codemason_config::yolo::is_enabled() {
 
 There are two ways to enable YOLO mode:
 
-**1. Slash command (TUI):**
+**1. Slash command (GUI):**
 ```
 /yolo
 ```
 
-**2. Keyboard shortcut (TUI):**
+**2. Keyboard shortcut (GUI):**
 ```
 Alt+Y
 ```
@@ -777,7 +777,7 @@ ruleset.
 ## 8. The Interactive Permission Dialog
 
 When the permission system returns **Ask**, the agent publishes a
-`PermissionRequested` event on the event bus. The TUI renders a modal dialog
+`PermissionRequested` event on the event bus. The GUI renders a modal dialog
 and waits for the user to respond.
 
 ### 8.1 Dialog Layout
@@ -1056,7 +1056,7 @@ entries from all sources are combined.
 |----------------|--------------|-------------------------------------------------|
 | `--yes`        | `--no-prompt`| Auto-approve all permissions (session only)     |
 | `--config PATH`|              | Override config file path                       |
-| `--no-tui`     |              | Run without TUI (plain stdout)                  |
+| `--no-tui`     |              | Run without GUI (plain stdout)                  |
 
 The `--yes` flag sets `auto_approve = true` on the session processor, which
 causes `check_permission_with_prompt` to return `Allow` immediately without
@@ -1270,7 +1270,7 @@ unattended:
 # Start with YOLO mode and auto-approve
 codemason --yes
 
-# In the TUI, enable autopilot with limits
+# In the GUI, enable autopilot with limits
 /autopilot on --max-tokens 200000 --max-time 3600
 ```
 
@@ -1282,7 +1282,7 @@ Or configure in `codemason.json`:
 }
 ```
 
-Then in the TUI:
+Then in the GUI:
 ```
 /yolo
 /autopilot on --max-time 1800
@@ -1343,7 +1343,7 @@ override any `allow` rules.
 
 | Document                          | Topic                                          |
 |-----------------------------------|------------------------------------------------|
-| `docs/howtos/tutorial.md`         | TUI walkthrough, keybindings, getting started  |
+| `docs/howtos/tutorial.md`         | GUI walkthrough, keybindings, getting started  |
 | `docs/howtos/tools/INDEX.md`      | Complete tool catalog with schemas (by category) |
 | `docs/howtos/custom-agents.md`    | Custom agent definitions with permission rules |
 | `docs/howtos/hooks.md`            | PreToolUse/PostToolUse lifecycle hooks          |
