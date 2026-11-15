@@ -9,6 +9,17 @@
 
 ### Fixed
 
+- Fixed: the local git tools (`git_diff`, `git_show`, `git_log`, ...) no longer hang for 60 s and fail when git prints more than about 64 KiB; output is read while git runs.
+- Fixed: `bash` output larger than 2 MiB shows its real last lines and an exact "lines omitted" count; before, the tail shown was from the start of the output.
+- Fixed: a message pushed to a teammate's mailbox while a corrupt mailbox was being recovered is no longer lost; recovery moves the file aside under its lock, with a unique name.
+- Fixed: tasks seeded by a team blueprint can no longer collide with tasks created at the same time.
+- Fixed: a sub-agent with a non-ASCII name, or an `[agent: ...]` hint after non-ASCII text in swarm output, no longer panics or picks the wrong agent type.
+- Fixed: a malformed line in a Gemini stream no longer causes the rest of the reply to be dropped.
+- Fixed: typing a non-ASCII character in the GitLab setup dialog no longer crashes the app.
+- Fixed: `/mcp` shows the `[red]` marker for failed servers again, and `/about` reports the real build time.
+- Fixed: research and spec search snippets contain the match even when the text has characters whose lowercase form has a different length (e.g. U+0130).
+- Fixed: spec frontmatter ends only at a whole `---` line, so a `---` inside a value or a later horizontal rule no longer hides the status check; spec and constitution headings accept en and em dashes; research recognises "version 16" as a concrete topic.
+- Fixed: `hyperresearch help` lists only the commands it accepts.
 - Fixed: `/codeindex on|off` no longer overwrites the user-global config with defaults when the project config fails to parse; the failure is reported and the status shows `(unsaved)`.
 - Fixed: the file-tool containment check follows a dangling symlink to where the OS would create the file, so `Write`, `Create`, `AppendFile` and `CopyFile` can no longer be redirected outside the workspace by a link pointing outside it; symlink loops are refused.
 - Fixed: `/plugins add` bounds each archive entry read at the size cap, so a small zip or tar.gz holding a huge, highly compressible entry is refused without being decompressed into memory.
