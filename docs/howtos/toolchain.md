@@ -6,11 +6,11 @@ installed on the local machine, at what versions, for every language the code
 index can parse. It covers the command surface, the language classification,
 the runtime mapping, the probe mechanics, and the report formats.
 
-> **Scope:** the `/toolchain` slash command (TUI-only), the
-> `crates/codemason-tui/src/app/toolchain.rs` probe engine, and the
+> **Scope:** the `/toolchain` slash command (GUI-only), the
+> `crates/codemason-app-core/src/app/toolchain.rs` probe engine, and the
 > language-to-runtime mapping. For the code index itself see
 > `docs/howtos/codeindex.md`. For the full tool catalog see
-> `docs/howtos/tools/INDEX.md`. For TUI workflow see `docs/howtos/tutorial.md`.
+> `docs/howtos/tools/INDEX.md`. For GUI workflow see `docs/howtos/tutorial.md`.
 
 ---
 
@@ -59,7 +59,7 @@ Key properties:
   `SUPPORTED_LANGUAGES` at runtime; the mapping table is exhaustiveness-
   checked against it, so the two can never drift silently.
 - **Non-blocking** — probes run on a blocking thread with a `[wait]
-  toolchain` status indicator, so the TUI stays responsive.
+  toolchain` status indicator, so the GUI stays responsive.
 - **Fault-tolerant** — a missing or misbehaving runtime never aborts the
   report; each probe is bounded by a 2-second timeout.
 
@@ -312,11 +312,11 @@ markdown summary line. `--json` is combinable with a language filter.
 
 ## 8. Non-Blocking Execution
 
-The TUI is a single-threaded UI loop; spawning dozens of child processes
+The GUI is a single-threaded UI loop; spawning dozens of child processes
 inline would stall it. `/toolchain list` therefore runs the full walk and
 probe pass on a blocking thread (`tokio::task::block_in_place` over
 `build_report_rows`) with the status bar set to `[wait] toolchain` until the
-report is ready. The same `[wait]` status prefix is the hook the TUI uses to
+report is ready. The same `[wait]` status prefix is the hook the GUI uses to
 defer event handling while an async slash command runs (shared with
 `/bench` and `/swarm`).
 
@@ -340,7 +340,7 @@ by the 2-second per-probe timeout.
 - **Fail-open reporting** — missing, failing, or slow runtimes degrade to
   `not installed` / `unknown` / `timeout` placeholders rather than aborting
   the report.
-- **TUI-safe** — blocking probes run off the UI loop with a `[wait]`
+- **GUI-safe** — blocking probes run off the UI loop with a `[wait]`
   indicator.
 
 ---
@@ -349,13 +349,13 @@ by the 2-second per-probe timeout.
 
 | Component | Location |
 |---|---|
-| Language classification + runtime mapping | `crates/codemason-tui/src/app/toolchain.rs` (`LANGUAGE_RUNTIMES`, `LanguageClass`, `LanguageRuntime`) |
+| Language classification + runtime mapping | `crates/codemason-app-core/src/app/toolchain.rs` (`LANGUAGE_RUNTIMES`, `LanguageClass`, `LanguageRuntime`) |
 | Exhaustiveness check | `toolchain.rs` (`exhaustiveness_errors`) |
 | Presence probe (`PATH` walk) | `toolchain.rs` (`probe_installed`, `resolve_in_dirs`) |
 | Version probes + overrides | `toolchain.rs` (`probe_version_args`, `version_flag_for`, `VERSION_FLAG_OVERRIDES`, `VERSION_PROBE_ARGS_OVERRIDES`, `VERSION_PROBE_TIMEOUT`) |
 | Report walk | `toolchain.rs` (`build_report_rows`) |
 | Markdown / JSON renderers | `toolchain.rs` (`render_markdown_report`, `render_json_report`) |
-| Slash dispatch + help/usage/filter/`--json` handling | `crates/codemason-tui/src/app/slash.rs` (`handle_toolchain_command`, `handle_toolchain_help`, `handle_toolchain_list`, `handle_toolchain_unknown`) |
-| Command registration + autocomplete | `crates/codemason-tui/src/app/state.rs` (`SLASH_COMMANDS`), `slash.rs` (`get_command_suggestions`) |
+| Slash dispatch + help/usage/filter/`--json` handling | `crates/codemason-app-core/src/app/slash.rs` (`handle_toolchain_command`, `handle_toolchain_help`, `handle_toolchain_list`, `handle_toolchain_unknown`) |
+| Command registration + autocomplete | `crates/codemason-app-core/src/app/state.rs` (`SLASH_COMMANDS`), `slash.rs` (`get_command_suggestions`) |
 | Spec (requirements FR-001 to FR-016, NFR-001 to NFR-003) | `specs/toolchain/SPEC.md` |
-| Manual test-plan driver | `crates/codemason-tui/examples/toolchain_tc_pass.rs` |
+| Manual test-plan driver | `crates/codemason-app-core/examples/toolchain_tc_pass.rs` |

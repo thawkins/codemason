@@ -31,11 +31,11 @@ Steps:
   - `STATS.md` — Update the project stats.
   - `SPEC.md` - Update the master spec file's feature content only.
   - `QUICKSTART.md` - Update the quickstart file's feature content only.
-  - `TUI-QUICKSTART.md` - Update the tui info file's feature content only.
+  - `GUI-QUICKSTART.md` - Update the GUI info file's feature content only.
 
   Release history has one home: `CHANGELOG.md`. Do **not** add "Version x",
   "Highlights (vX)", "Release Highlights" or version-history sections or table
-  rows to `SPEC.md`, `QUICKSTART.md` or `TUI-QUICKSTART.md`; each of them carries
+  rows to `SPEC.md`, `QUICKSTART.md` or `GUI-QUICKSTART.md`; each of them carries
   a single link to `CHANGELOG.md` instead. In those three files, edit the live
   section that describes the changed feature (command syntax, flags, config
   keys, behaviour) so it states the current behaviour, without release prose.

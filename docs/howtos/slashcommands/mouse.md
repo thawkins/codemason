@@ -4,9 +4,10 @@
 
 ## Overview
 
-`/mouse` controls whether the terminal UI responds to mouse events. When
-disabled, the interface is keyboard-only and the command lists the keyboard
-shortcuts that replace mouse interaction.
+`/mouse` sets the app's `mouse_enabled` flag and, when disabled, lists the
+keyboard shortcuts that replace mouse interaction. The GUI window does not read
+this flag: mouse input in the window is always on, so the command only changes
+the state it reports.
 
 ## Syntax
 
@@ -67,4 +68,4 @@ The bare form prints the current state and usage; `help` prints the table.
 ## Related
 
 - Keyboard shortcuts replace all mouse interactions when disabled.
-- Text selection in the message window (see the TUI quickstart).
+- Text selection in the message window (see the GUI quickstart).

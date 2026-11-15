@@ -6,7 +6,7 @@ It covers:
 
 - Team concepts and data layout
 - Blueprints — pre-built team templates
-- TUI command workflows
+- GUI command workflows
 - Tool-driven workflows
 - Work context delegation
 - Example operating patterns
@@ -132,7 +132,7 @@ The list view shows a table with blueprint name, scope (project/global), teammat
 
 ---
 
-## 4) Quick start in the TUI
+## 4) Quick start in the GUI
 
 ### Create a team from a blueprint (recommended)
 
@@ -192,7 +192,7 @@ Alias: `/teams ...` routes to `/team ...` (for example `/teams help`, `/teams bl
 
 ## 6) Tool-based workflow (lead + teammates)
 
-Teams are fully operable via tools. TUI commands are convenience wrappers.
+Teams are fully operable via tools. GUI commands are convenience wrappers.
 
 ### 6.1 Create team with context
 
@@ -211,7 +211,7 @@ The `context` parameter is critical — it tells every auto-spawned teammate **e
 
 If the team already exists, `team_create` gracefully recovers and re-applies the blueprint.
 
-The TUI's `/team create` creates the team itself and then seeds the blueprint with
+The GUI's `/team create` creates the team itself and then seeds the blueprint with
 `seed_only: true`, which applies the blueprint to the existing team and never creates
 (or re-creates) its directory. That keeps a seeding call from resurrecting a team
 directory that a concurrent `/team clear` or `/team forcecleanup` has just removed.
@@ -331,7 +331,7 @@ team could read another team's mailbox. `team_wait` without `team_name` defaults
 to the caller's own team.
 
 **The team runtime is bound before tool dispatch, in every entry point.** Only
-the TUI ever created a `TeamManager`, so in `codemason run`, `codemason serve` and ACP
+the GUI ever created a `TeamManager`, so in `codemason run`, `codemason serve` and ACP
 mode `team_spawn` reported a teammate as "queued" but never started it. The
 session processor now binds the runtime for the team its session leads
 (`SessionProcessor::ensure_team_manager`), reconciles members queued in
@@ -346,7 +346,7 @@ a `TeamManagerSlot`:
   another session bound meanwhile is kept;
 - the processor keeps a live manager of another team rather than replacing it,
   so concurrent `serve` sessions leading different teams do not flip the binding
-  on every step. The TUI, which has a single user, rebinds when its active team
+  on every step. The GUI, which has a single user, rebinds when its active team
   changes; teammates already running keep the old manager alive until they
   finish;
 - `spawn_teammate` refuses a `team_name` its manager does not drive;
@@ -419,7 +419,7 @@ Perform a focused security review of the assigned code...
 
 ---
 
-## 8) Team panel (TUI)
+## 8) Team panel (GUI)
 
 The Teams panel displays the active team in a table format:
 
@@ -444,7 +444,7 @@ Columns:
   tool invocations, not agent loop iterations. A single loop step may contain
   zero or multiple tool calls (for example, when parallel tool calls are
   enabled), so the displayed number may differ from the loop-step counter used
-  internally for log tagging. Since v1.0.73, the TUI step log also shows these
+  internally for log tagging. Since v1.0.73, the GUI step log also shows these
   tracked sub-agent/teammate tool calls with an `[agent-tag]` prefix.
 - **claimed**: Number of tasks claimed from the shared task list
 - **done**: Number of tasks completed
@@ -514,7 +514,7 @@ The LLM will:
 - UI implementation (depends on API)
 - Regression tests (depends on API + UI)
 
-4. Track in TUI:
+4. Track in GUI:
 
 ```text
 /team status

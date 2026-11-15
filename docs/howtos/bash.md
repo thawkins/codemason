@@ -94,8 +94,8 @@ The Bash tool does **not** read `Config` directly. At startup (and on `/reload`)
 copies the merged config into an in-memory snapshot via `bash_lists::load_from_config()`
 (`crates/codemason-config/src/bash_lists.rs`):
 
-- TUI startup: `App::new` in `crates/codemason-tui/src/app/init.rs`
-- `/reload`: the `"reload"` arm in `crates/codemason-tui/src/app/slash.rs`
+- GUI startup: `App::new` in `crates/codemason-app-core/src/app/init.rs`
+- `/reload`: the `"reload"` arm in `crates/codemason-app-core/src/app/slash.rs`
 
 ```rust
 pub fn load_from_config() {
@@ -303,7 +303,7 @@ Bypassed in YOLO mode only.
 
 ## The `/bash` slash commands
 
-The TUI exposes interactive management of the allowlist/denylist via `/bash`:
+The GUI exposes interactive management of the allowlist/denylist via `/bash`:
 
 ```
 /bash add allow <cmd>           # add a command prefix to the allowlist
@@ -406,8 +406,8 @@ either the global or project config it stays enabled (OR merge semantics).
 | `crates/codemason-config/src/config.rs`                        | `BashConfig` struct and defaults            |
 | `crates/codemason-config/src/bash_lists.rs`                    | Runtime allowlist/denylist snapshot         |
 | `crates/codemason-config/src/yolo.rs`                          | YOLO mode                                   |
-| `crates/codemason-tui/src/app/slash.rs`                        | `/bash` slash commands                      |
-| `crates/codemason-tui/src/app/init.rs`                         | `load_from_config()` at startup             |
+| `crates/codemason-app-core/src/app/slash.rs`                        | `/bash` slash commands                      |
+| `crates/codemason-app-core/src/app/init.rs`                         | `load_from_config()` at startup             |
 | `crates/codemason-types/src/resource.rs`                       | Process/tool semaphores (16 processes, 5 tools) |
 
 ### Config JSON keys (summary)

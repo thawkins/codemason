@@ -4,9 +4,9 @@ This guide explains how to use codemason's built-in spec management system to
 perform specification-driven design and planning. The `/spec` command family
 lets you create EARS-notation specifications, generate implementation plans,
 validate compliance, manage lifecycle status, and drive implementation — all
-from the interactive TUI.
+from the interactive GUI.
 
-The commands are exposed via the `/spec` slash command family (TUI) and the
+The commands are exposed via the `/spec` slash command family (GUI) and the
 `spec_*` LLM tools (`spec_read`, `spec_list`, `spec_search`, `spec_coverage`,
 `spec_task_update`); the spec lifecycle is managed by the `codemason-specs`
 crate.
@@ -75,7 +75,7 @@ Open codemason and create your first spec:
 /spec create websocket Add a real-time collaborative editing feature using WebSockets
 ```
 
-The TUI will:
+The GUI will:
 
 1. Create a new spec directory at `specs/websocket/`.
 2. Generate `SPEC.md` (EARS requirements), `PLAN.md` (implementation plan), and
@@ -221,7 +221,7 @@ reconnection prompt with a retry button. (Unwanted)
 
 ## 5. The `/spec` command family
 
-All commands are entered in the TUI input box.
+All commands are entered in the GUI input box.
 
 ### 5.1 `/spec help`
 
@@ -405,7 +405,7 @@ codemason spec status websocket              # prints "websocket: draft" and the
 codemason spec status websocket in_review    # prints "websocket: draft -> in_review"
 ```
 
-It uses the same code and SDD gates as the TUI command, records `cli` as the
+It uses the same code and SDD gates as the GUI command, records `cli` as the
 actor in the spec's audit trail, prints results to stdout, and exits 1 when the
 spec ID is invalid, the spec cannot be read, the status is unknown, or the
 transition is refused.
@@ -448,7 +448,7 @@ linked tasks and which do not, helping identify gaps in the implementation
 plan.
 
 The report (rendered by a shared `Spec::coverage_report()` implementation used
-by both the TUI command and the `spec_coverage` agent tool, so both consumers
+by both the GUI command and the `spec_coverage` agent tool, so both consumers
 always agree on format) contains:
 
 - **Overall Coverage** — the percentage of linked requirements whose tasks are
@@ -597,7 +597,7 @@ cause; and an existing spec directory refuses unless `--force` was passed.
 
 The same pipeline is available from the shell as
 `codemason spec govcreate <specid> <content-ref> <target-folder> [flags]` — it
-shares the TUI parser, resolves the model from `--model` or the stored
+shares the GUI parser, resolves the model from `--model` or the stored
 `selected_model` (neither configured -> exit 2), prints the staged progress and
 final report to stdout, and exits non-zero on failure.
 
@@ -702,7 +702,7 @@ Tasks within a `PLAN.md` have their own status tracking.
 | `blocked` | Task blocked or deferred | `[stop]` |
 
 The symbols come from `TaskStatus::symbol()` and are shared by the
-`/spec coverage` report, the `spec_coverage` agent tool, and the TUI task
+`/spec coverage` report, the `spec_coverage` agent tool, and the GUI task
 listing, so status rendering is consistent everywhere.
 
 ### Task table structure

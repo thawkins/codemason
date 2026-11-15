@@ -9,7 +9,7 @@ or off. When enabled, JSON-dense tool results are re-encoded in the LLM view
 as a lossless `[BEGIN GCF generic]` ... `[END GCF]` block, saving tokens
 without dropping any values.
 
-The encoding applies only to the model-facing copy of a tool result. TUI
+The encoding applies only to the model-facing copy of a tool result. GUI
 rendering, the activity log, memory extraction, PostToolUse hooks, compaction
 serialisers, and the persisted session history all keep seeing the raw JSON;
 only the observation handed to the LLM is re-encoded (the FR-005 routing map

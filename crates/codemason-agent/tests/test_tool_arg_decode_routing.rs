@@ -9,7 +9,7 @@
 //! is pinned in `test_processor_more_paths.rs`
 //! (`test_whitespace_arguments_run_the_tool_with_an_empty_object` and
 //! `test_encoded_string_arguments_run_the_tool_decoded`) and the TUI's in
-//! `crates/codemason-tui/tests/test_tool_event_state.rs`.
+//! `crates/codemason-app-core/tests/test_tool_event_state.rs`.
 //!
 //! This file pins what a *caller* can get wrong, by scanning sources:
 //!
@@ -82,7 +82,7 @@ fn bare_argument_decodes(source: &str) -> Vec<String> {
 fn no_harness_source_parses_argument_text_around_the_shared_helper() {
     for tree in [
         "crates/codemason-agent/src",
-        "crates/codemason-tui/src",
+        "crates/codemason-app-core/src",
         "src",
     ] {
         let mut files = Vec::new();
@@ -113,7 +113,7 @@ fn every_harness_decode_site_names_the_shared_helper() {
     for relative in [
         "crates/codemason-agent/src/session/processor.rs",
         "crates/codemason-agent/src/hooks/mod.rs",
-        "crates/codemason-tui/src/app/event_handler.rs",
+        "crates/codemason-app-core/src/app/event_handler.rs",
     ] {
         let source = read_workspace_file(relative);
         assert!(

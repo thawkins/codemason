@@ -47,7 +47,7 @@ instead of rebuilding the application.
 ### API key resolution
 
 At least one of `api_key` or `api_key_env` must be present for an entry to be
-loaded. When the entry is selected in the TUI, the key is resolved in this order:
+loaded. When the entry is selected in the GUI, the key is resolved in this order:
 
 1. If `api_key` is present, it is used directly.
 2. Otherwise, the environment variable named by `api_key_env` is read.
@@ -99,10 +99,10 @@ The `thinking` block follows the same format as model-specific thinking config i
 }
 ```
 
-## How it works in the TUI
+## How it works in the GUI
 
 1. Run `/setup` and choose **Azure Resource (File)**.
-2. The TUI reads `azureresources.json` and shows a list of resources.
+2. The GUI reads `azureresources.json` and shows a list of resources.
 3. Use ↑/↓ to navigate and **Enter** to select.
 4. The selection is persisted across restarts in the database.
 5. Chat requests are forwarded to the underlying `azure_foundry` provider using

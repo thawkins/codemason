@@ -9,7 +9,7 @@ permission system, or the event bus (spec `openhands` FR-001, assumption A1).
 
 This guide covers four things:
 
-- The `/backend` TUI command that lists, inspects, and switches the active backend.
+- The `/backend` GUI command that lists, inspects, and switches the active backend.
 - How the switchable backend subsystem works end to end - the trait, resolution,
   the registry, the per-session override, and the "never fall back to host" rule.
 - The configuration that declares backends.
@@ -69,10 +69,10 @@ guard, the permission system, and the always-allowed codeindex hardwiring all ru
 
 ## 2. The `/backend` Command
 
-`/backend` is the TUI surface for the execution backend (FR-008). It is
-implemented in `crates/codemason-tui/src/app/slash.rs`
+`/backend` is the GUI surface for the execution backend (FR-008). It is
+implemented in `crates/codemason-app-core/src/app/slash.rs`
 (`handle_backend_command`, dispatch arm `"backend"`) and
-`crates/codemason-tui/src/app/backend_panel.rs`. It is TUI-only - there is no
+`crates/codemason-app-core/src/app/backend_panel.rs`. It is GUI-only - there is no
 `codemason backend` CLI subcommand.
 
 ### 2.1 Syntax
@@ -319,7 +319,7 @@ POST <url>/sessions/<id>/permission/<req_id> { "decision": "allow" }
 The `send_message` route both starts the turn and streams its events, so one
 request drives the whole turn (`relay_turn`). Frames are decoded into
 `RemoteUpdate`s and re-published onto the **local** bus under the local session id
-(`crates/codemason-agent/src/session/remote_dispatch.rs`), so the TUI renders a
+(`crates/codemason-agent/src/session/remote_dispatch.rs`), so the GUI renders a
 remote turn exactly like a local one. The remote session is cached per local
 session id, so a follow-up message reuses the same remote session.
 
@@ -510,7 +510,7 @@ Notes:
 
 ### Step 5 - Activate the backend
 
-Start the TUI and check the switcher:
+Start the GUI and check the switcher:
 
 ```text
 /backend

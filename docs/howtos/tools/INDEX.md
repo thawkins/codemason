@@ -9,7 +9,7 @@ worked examples.
 > tool count: the default build registers 152 tools at v1.0.169, and
 > `codemason --dry-run --json run x` reports the live figure (the `total` item of its
 > `tools` section, followed by one item per permission category). `mf_screenshot`
-> adds one when a drivable headless browser engine is present. For TUI
+> adds one when a drivable headless browser engine is present. For GUI
 > workflow see `docs/howtos/tutorial.md`. For team coordination see
 > `docs/howtos/teams.md`.
 
@@ -50,7 +50,7 @@ All documents are also available as PDFs under `pdf/`.
 
 | Document | Covers |
 |----------|--------|
-| `docs/howtos/tutorial.md` | End-to-end TUI workflow tutorial |
+| `docs/howtos/tutorial.md` | End-to-end GUI workflow tutorial |
 | `docs/howtos/teams.md` | Multi-agent team coordination |
 | `docs/howtos/spec.md` | Spec management and SDD workflow |
 | `docs/howtos/reverse.md` | Repository reverse-engineering |

@@ -67,7 +67,7 @@ pub async fn run_cli(args: &[String]) -> Result<()> {
     // Strip the typed prefix rather than slicing by `sub.len()`: the two agree
     // today, but a byte slice indexed by `sub` would panic if they ever
     // diverged. Mirrors the TUI dispatch arm in
-    // `crates/codemason-tui/src/app/connector.rs`.
+    // `crates/codemason-app-core/src/app/connector.rs`.
     let rest = text.strip_prefix(sub).map(str::trim_start).unwrap_or("");
 
     // `claude` opens the interactive catalogue browser, which owns the screen

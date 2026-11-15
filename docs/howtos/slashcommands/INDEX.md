@@ -1,6 +1,6 @@
 # Slash Command Howtos
 
-Per-command reference documents for the codemason TUI slash commands. Each document describes the command, every subcommand and option the dispatcher implements, and worked examples. Typing `/` in the TUI opens the autocomplete menu, and `/<command> help` prints per-command help where the handler supports it.
+Per-command reference documents for the codemason GUI slash commands. Each document describes the command, every subcommand and option the dispatcher implements, and worked examples. Typing `/` in the GUI opens the autocomplete menu, and `/<command> help` prints per-command help where the handler supports it.
 
 ## Commands
 

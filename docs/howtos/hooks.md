@@ -137,7 +137,7 @@ exit code **before** parsing stdout JSON:
 | Exit code | Behaviour                                                                 |
 |-----------|---------------------------------------------------------------------------|
 | **0**     | Parse stdout JSON (see [JSON-Decision Protocol](#json-decision-protocol)). |
-| **1**     | **Warn** — allow the tool to proceed, but emit `tracing::warn!` and publish `Event::HookWarning` on the event bus so the TUI can surface it. |
+| **1**     | **Warn** — allow the tool to proceed, but emit `tracing::warn!` and publish `Event::HookWarning` on the event bus so the GUI can surface it. |
 | **2**     | **Block** — the tool call is blocked. The hook's stderr (trimmed, capped at 500 characters) is used as the block reason. Stdout JSON is **ignored**. |
 | **≥ 3**   | **Error** — treat as a hook failure (not a policy decision). Fall through to the normal permission flow with a `tracing::error!` diagnostic. |
 
@@ -218,7 +218,7 @@ tool's output, warn about the result, or flag it as policy-violated.
 |-----------|---------------------------------------------------------------------------|
 | **0**     | Parse stdout JSON for `modified_output` (see below).                      |
 | **1**     | **Warn** — emit `tracing::warn!` and publish `Event::HookWarning`. The tool result is not modified. |
-| **2**     | **Flag** — publish `Event::ToolResultFlagged` with stderr as the reason. The tool result is **not** suppressed (the call already executed), but the flag appears in the session log and TUI. |
+| **2**     | **Flag** — publish `Event::ToolResultFlagged` with stderr as the reason. The tool result is **not** suppressed (the call already executed), but the flag appears in the session log and GUI. |
 | **≥ 3**   | **Error** — treat as a hook failure. No effect on the tool result.        |
 
 ### Modified Output

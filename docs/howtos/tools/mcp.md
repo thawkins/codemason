@@ -13,7 +13,7 @@ entries, and a config written back still names its transport explicitly.
 | `mcp_tool` | Bridge to external Model Context Protocol servers. |
 
 MCP server tools surface dynamically as `mcp_<server>_<tool>` at runtime
-after discovery via the `/mcp discover` TUI command, or after `/mcp connect
+after discovery via the `/mcp discover` GUI command, or after `/mcp connect
 <id>` enables and connects a server live. Servers bridged from an enabled
 plugin's `mcpServers` section connect as `<plugin-id>.<server>` at startup.
 
@@ -45,7 +45,7 @@ The `McpToolWrapper` calls a tool hosted on a connected MCP server.
 mcp_tool server="github" tool="create_issue" arguments={"title":"Bug report"}
 ```
 
-TUI commands: `/mcp` / `/mcp status` (server table), `/mcp discover` (probe for
+GUI commands: `/mcp` / `/mcp status` (server table), `/mcp discover` (probe for
 known servers), `/mcp connect <id>` and `/mcp disconnect <id>` (enable/disable
 and connect/disconnect live, persisted globally in `<state dir>/mcp_state.json`).
 The wrapper refuses to call a disabled server's tools even when the tool is
@@ -64,7 +64,7 @@ of hanging startup; a timed-out stdio attempt has its partially-started child
 torn down before the retry so the two attempts cannot collide. Genuine errors
 are surfaced immediately without a retry.
 
-Startup does not block on the connect loop. The TUI adopts whatever state the
+Startup does not block on the connect loop. The GUI adopts whatever state the
 loop has published and prints its one-shot per-server report off the loop's
 completion sentinel, an empty-id `initialized` event:
 

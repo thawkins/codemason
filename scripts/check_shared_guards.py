@@ -51,7 +51,7 @@ LEDGER_HOME = "crates/codemason-surface/src/marketplace_ledger.rs"
 ADAPTER_SITES: dict[str, str] = {
     "crates/codemason-bench/src/data.rs": "contained_join",
     "crates/codemason-tools-vcs/src/git/mod.rs": "reject_option_like",
-    "crates/codemason-tui/src/app/helpers.rs": "truncate_chars",
+    "crates/codemason-app-core/src/app/helpers.rs": "truncate_chars",
 }
 
 # (regex, human description)

@@ -269,7 +269,7 @@ Security constraints, all enforced:
 
 ## Invoking and managing skills
 
-TUI commands:
+GUI commands:
 
 | Command | Effect |
 |---|---|

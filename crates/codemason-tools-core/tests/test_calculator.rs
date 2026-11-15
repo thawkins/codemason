@@ -4,6 +4,10 @@
 //! `CalculatorTool` and `evaluate_expression` are public, so no `#[path]`
 //! re-import is needed.
 
+// Every expected value is an exactly representable result of exact arithmetic,
+// so strict float equality is the intended assertion.
+#![allow(clippy::float_cmp)]
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};

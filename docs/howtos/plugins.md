@@ -85,7 +85,7 @@ messages, write log lines, and read files **inside its own directory only**.
 ## 2. Architecture
 
 The system lives in the **`codemason-plugins`** crate. It deliberately does **not**
-depend on `codemason-agent` (the tool registry) or `codemason-tui` (the command
+depend on `codemason-agent` (the tool registry) or `codemason-app-core` (the command
 surface); the session passes closures instead, so the crate stays a bounded,
 testable unit.
 
@@ -512,7 +512,7 @@ code cannot overflow the host stack via JS recursion.
 The same operations are available on two surfaces that share one help text and
 one set of handlers:
 
-- the **TUI slash command**: `/plugins <sub> [args...]`
+- the **GUI slash command**: `/plugins <sub> [args...]`
 - the **CLI parity surface**: `codemason plugins <sub> [args...]`
 
 ### 7.1 Subcommands
@@ -556,7 +556,7 @@ A single-root archive wrapper (e.g. GitHub's `<repo>-<ref>/`) is descended
 automatically. Archives are capped at **50 MiB** and extracted with
 path-traversal protection (no `..` or absolute entries).
 
-### 7.3 Worked examples (TUI)
+### 7.3 Worked examples (GUI)
 
 ```
 /plugins help
@@ -584,7 +584,7 @@ codemason plugins remove my-plugin
 codemason plugins help
 ```
 
-The CLI rewrites the TUI attribution lines: `From: /plugins ...` becomes a
+The CLI rewrites the GUI attribution lines: `From: /plugins ...` becomes a
 plain `codemason plugins ...` header and `## /plugins` becomes
 `## codemason plugins`.
 
@@ -755,7 +755,7 @@ never leaves the plugin enabled. Use it as the first check after any edit.
 
 codemason installs plugins from a directory, a local archive, or an `https://` URL
 with `/plugins add <source>`, and it also browses each store's official
-marketplace from the TUI. Two subcommands open an interactive browse panel over
+marketplace from the GUI. Two subcommands open an interactive browse panel over
 a store index:
 
 - `/plugins codex [query] [--category <name>] [--refresh]` - the Codex

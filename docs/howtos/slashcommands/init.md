@@ -1,6 +1,6 @@
 # /init
 
-> "Analyse the project and write a summary, or create a default config: /init [config|help]" (SlashCommandDef, crates/codemason-tui/src/app/state.rs).
+> "Analyse the project and write a summary, or create a default config: /init [config|help]" (SlashCommandDef, crates/codemason-app-core/src/app/state.rs).
 
 ## Overview
 
@@ -12,7 +12,7 @@ build/test system, conventions, and key files - is saved into structured memory
 via `memory_store` so later sessions recall it. `/init config` instead writes a
 fresh default `codemason.json` to disk when you want a starting point to edit.
 
-The handler is the `init` arm in `crates/codemason-tui/src/app/slash.rs`
+The handler is the `init` arm in `crates/codemason-app-core/src/app/slash.rs`
 (approximately lines 2655-2827).
 
 ## Syntax

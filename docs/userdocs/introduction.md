@@ -2,7 +2,7 @@
 
 ## What is codemason?
 
-codemason is an AI coding agent designed for the terminal, built entirely in Rust. Inspired by [OpenCode](https://github.com/anomalyco/opencode), codemason provides developers with a powerful tool for automating coding tasks through natural language interactions. It combines multi-provider LLM orchestration, a comprehensive tool system, and a terminal-based user interface to deliver a seamless coding experience.
+codemason is an AI coding agent with a desktop GUI and a CLI, built entirely in Rust. Inspired by [OpenCode](https://github.com/anomalyco/opencode), codemason provides developers with a powerful tool for automating coding tasks through natural language interactions. It combines multi-provider LLM orchestration, a comprehensive tool system, and a terminal-based user interface to deliver a seamless coding experience.
 
 Unlike traditional development tools, codemason operates as an intelligent assistant that understands your codebase context and can perform complex tasks ranging from code explanation and refactoring to bug detection and feature implementation.
 
@@ -21,8 +21,8 @@ codemason offers a rich set of features designed to enhance developer productivi
 - Sub-agent and team tools for background and parallel work
 - See [the tools reference](../howtos/tools/INDEX.md) for every category and the command that lists the live registry
 
-### Terminal User Interface
-- Full-screen ratatui interface with intuitive navigation
+### Desktop GUI
+- Dockable egui window with intuitive navigation
 - Provider setup dialogs and slash-command autocomplete
 - Streaming chat with step-numbered tool calls and JSON visualization
 - Agent cycling for different operational modes
@@ -67,13 +67,13 @@ For newcomers to a codebase or technology stack, codemason serves as an intellig
 By handling the mechanical aspects of coding, codemason frees mental resources for problem-solving and innovation. Developers can think at a higher level while the agent manages implementation details.
 
 ### Flexible Integration
-Whether used interactively through the terminal UI or programmatically via the HTTP API, codemason integrates seamlessly into existing development workflows without imposing rigid constraints.
+Whether used interactively through the desktop GUI or programmatically via the HTTP API, codemason integrates seamlessly into existing development workflows without imposing rigid constraints.
 
 ## Document Structure and Navigation
 
 The documentation lives in these places:
 
-- [QUICKSTART.md](../../QUICKSTART.md) and [TUI-QUICKSTART.md](../../TUI-QUICKSTART.md) - installation, configuration, and first use
+- [QUICKSTART.md](../../QUICKSTART.md) and [GUI-QUICKSTART.md](../../GUI-QUICKSTART.md) - installation, configuration, and first use
 - [docs/howtos/](../howtos/tutorial.md) - task guides, starting with the tutorial; [configuration](../howtos/config.md), [permissions](../howtos/permissions.md) and [teams](../howtos/teams.md) are there too
 - [docs/howtos/tools/INDEX.md](../howtos/tools/INDEX.md) - per-tool reference
 - [docs/howtos/slashcommands/](../howtos/slashcommands/) - per-command reference

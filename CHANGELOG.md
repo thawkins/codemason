@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed: permission requests ignore answers for 500 ms after they appear, and accept one answer only, so a double press cannot approve the next request unseen (TUI and GUI).
+- Changed: agent questions likewise ignore Enter and Esc for 500 ms after they become the front question, so a double press cannot answer the next question unseen; a question queued behind the one being answered, a permission request, or the late echo of an answer no longer clears the typed answer or moves the highlighted option (TUI and GUI).
+- Changed: the background polls the terminal event loop ran inline (compaction, rollback, `/swarm`, `/bench`, sub-agent launches, background sessions, store fetches, stat refreshes, history flush, ...) are one app-core pass, `App::housekeeping`, so both frontends apply background results the same way; `App::next_timer_due` also counts background sessions' timed questions.
+- Changed: the GUI is the default frontend. Plain `cdmn` opens the egui window (`--gui` is accepted and does nothing); with no `DISPLAY` or `WAYLAND_DISPLAY` it exits with a message pointing at `cdmn run`. `cdmn run`, `serve` and ACP are unchanged, and `cdmn --new` and `cdmn session resume <id>` open the GUI. The background services (cron, automation, code index, spec manager) start as before.
+- Changed: the window opens maximized the first time, then remembers its size, position and maximized state (`gui-window.json`); the dock layout is saved in `gui-layout.json`.
+- Changed: Tab completes the highlighted `/` slash command in the prompt (it was a no-op while the slash menu was open); with no slash menu open Tab still cycles agents.
+- Changed: `TUI-QUICKSTART.md` is now `GUI-QUICKSTART.md`, rewritten for the window (Linux/Windows and macOS shortcuts, dockable panes, attaching files, window and layout reset); README, QUICKSTART, SPEC, STATS and the how-to manuals describe the GUI; the `codemason-app-core` and `codemason-gui` crates replace `codemason-tui` in the crate tables.
+- Changed: the GUI bundles the Hack Bold font (`crates/codemason-gui/assets/fonts/Hack-Bold.ttf`, Hack v3.003, Source Foundry), used under the MIT licence and the Bitstream Vera licence; the notices are in `crates/codemason-gui/assets/fonts/Hack-LICENSE.txt` and are credited in README.
+- Changed: CI runs a `macOS build (aarch64)` job on `macos-latest` that checks every workspace target and builds and links `cdmn`, so the GUI's macOS-only code and the C dependencies are compiled on Apple's toolchain before a release.
+- Changed: the `CI Benchmarks` workflow no longer runs on every push and pull request; start it by hand from the Actions tab (`workflow_dispatch`).
+
+### Removed
+
+- Removed: Alt+X stop-agent shortcut and its confirmation dialog; Esc stops a running agent. An Alt+letter chord with no binding is ignored and is not typed.
+- Removed: the `codemason-tui` crate and the `ratatui` and `crossterm` dependencies; the frontend-neutral code lives in `codemason-app-core` and the window in `codemason-gui`.
+- Removed: `src/stderr_spool.rs`, the fd-2 redirection the terminal frontend used while it owned the alternate screen.
+
+### Added - TUI to egui GUI migration plan
+
+- `docs/superpowers/plans/2026-11-14-tui-to-egui-gui-migration.md`: a
+  five-phase plan to replace the ratatui/crossterm TUI with an egui/eframe
+  desktop GUI using the storytold craft-libs UI crates (`craft-ui`,
+  `craft-keymap`, `craft-dialogs`, `craft-window`, `craft-quit`,
+  `craft-menu`), and to migrate `TUI-QUICKSTART.md` to `GUI-QUICKSTART.md`.
+  Planning only: no code, dependency or behaviour changes yet, so SPEC,
+  README, QUICKSTART and STATS are unchanged.
+
 ### Changed - project renamed from ragent to codemason; binary is `cdmn`
 
 - Every crate is renamed `ragent-*` -> `codemason-*` (directories, package

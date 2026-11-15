@@ -70,7 +70,7 @@ Open a terminal in an **empty** directory and run codemason there:
 /new --language rust --type cmdline
 ```
 
-The TUI streams the scaffold steps into the message window as they happen:
+The GUI streams the scaffold steps into the message window as they happen:
 
 ```text
 Scaffolding 'my-project'...
@@ -317,7 +317,7 @@ already exists, the git step reuses it instead of failing on
 
 ## 7. Progress streaming and the summary
 
-In the TUI the scaffold runs as a **foreground** operation — no sub-agent,
+In the GUI the scaffold runs as a **foreground** operation — no sub-agent,
 no LLM turn. The blocking file-emission, git, and remote steps run on a
 worker thread while the UI keeps painting; each step streams a progress line
 into an in-place-updated progress message (`[ .. ]` while running, `[ ok ]`
@@ -333,7 +333,7 @@ when the emitter reached it is reported in the summary and left untouched.
 
 ## 8. CLI equivalents
 
-The same surface is available without the TUI:
+The same surface is available without the GUI:
 
 ```bash
 # Basic scaffolding

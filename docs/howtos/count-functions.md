@@ -13,10 +13,10 @@ scripts/count_functions.py crates/codemason-config/src
 scripts/count_functions.py crates/codemason-config/src --tests exclude
 
 # machine-readable, for a report
-scripts/count_functions.py crates/codemason-tui/src --json
+scripts/count_functions.py crates/codemason-app-core/src --json
 
 # per-file counts and every counted name
-scripts/count_functions.py crates/codemason-tui/src --list
+scripts/count_functions.py crates/codemason-app-core/src --list
 scripts/count_functions.py crates/codemason-config/src/config.rs --names
 ```
 

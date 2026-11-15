@@ -9,7 +9,7 @@ cross-referencing, synthesis, and a self-contained dated report output
 (`RESEARCH-<YYYY-MM-DD>.md`, with the legacy undated `RESEARCH.md` still read).
 Projects are named, persisted, and can be listed, resumed, clustered, exported,
 and imported. Create accepts a rich flag set covering depth, tier, mode, per-stage
-models, concurrency, timeouts, and source limits. The TUI runs the pipeline on
+models, concurrency, timeouts, and source limits. The GUI runs the pipeline on
 a background task while the status bar shows `[wait] research: <name>...`.
 
 ## Syntax
@@ -195,7 +195,7 @@ Continues a project with steering guidance.
 
 ## Related
 
-- `codemason research` CLI runs the same engine outside the TUI.
+- `codemason research` CLI runs the same engine outside the GUI.
 - `GET/POST/DELETE /research` HTTP endpoints mirror these operations.
 - `/research cluster` relies on the research clustering engine.
 - See docs/howtos/research.md for the research system internals.

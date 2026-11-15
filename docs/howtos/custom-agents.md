@@ -963,7 +963,7 @@ focus management
 ### Sub-agents (spawned programmatically)
 
 Sub-agents are not user-selectable via `/agent`. They are spawned
-internally by the agent loop (via `new_agent`) or by TUI features
+internally by the agent loop (via `new_agent`) or by GUI features
 like session title generation. However, they can be used directly by
 the model when it delegates work.
 
@@ -1065,12 +1065,12 @@ The model would spawn this as:
 **Permissions:** None. **Temperature:** 0.3 (low, for consistency).
 **Hidden:** Yes.
 
-This agent is spawned automatically by the TUI to generate a session
+This agent is spawned automatically by the GUI to generate a session
 title. It is not user-facing.
 
 **Example (internal):**
 
-The TUI spawns this agent after the first user message:
+The GUI spawns this agent after the first user message:
 ```json
 {"agent": "title", "task": "Generate a session title for: \"Add OAuth2 support to the Gmail tool\""}
 ```

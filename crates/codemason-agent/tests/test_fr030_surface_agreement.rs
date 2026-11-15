@@ -15,7 +15,7 @@
 //! | 7 | `test_the_outbound_provider_tool_list_is_the_registry_surface` | the wire list sent to a provider |
 //!
 //! The `/tools list` and `/bug-report` halves live beside the surfaces they
-//! render, in `crates/codemason-tui/tests/test_fr030_surface_agreement.rs`: both are
+//! render, in `crates/codemason-app-core/tests/test_fr030_surface_agreement.rs`: both are
 //! TUI render paths and this crate cannot reach them.
 //!
 //! ## Why the count alone is not the assertion

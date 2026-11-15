@@ -30,7 +30,7 @@ dialog is opened regardless of what follows `/provider_reset`.
   anything by itself until you confirm inside the dialog.
 - Resetting removes the stored credentials for the selected provider, so the next
   connection will require the key to be entered again.
-- After a reset the TUI returns to provider selection, so the next action is
+- After a reset the GUI returns to provider selection, so the next action is
   typically `/model` or `/provider` to configure a replacement provider.
 
 ## Examples
@@ -47,7 +47,7 @@ The extra token is ignored; the same reset dialog opens.
 
 ## Output
 
-- No chat text is appended. The TUI switches to the provider reset dialog, which
+- No chat text is appended. The GUI switches to the provider reset dialog, which
   lists the current provider and asks for confirmation before clearing it.
 - The status bar reflects the dialog state while it is open.
 

@@ -4,7 +4,7 @@
 
 ## Overview
 
-`/provider` is the entry point for provider configuration in the TUI. The bare form
+`/provider` is the entry point for provider configuration in the GUI. The bare form
 opens the interactive provider setup dialog, `/provider show` opens a viewer over the
 configured providers, and `/provider router` opens the model-router setup dialog
 seeded from the providers you have already configured. Provider setup covers API key
@@ -118,7 +118,7 @@ plugin and connector catalogue panels wear):
 
 ## Output
 
-- Bare and `show` forms: no chat text; a dialog state is set and the TUI renders
+- Bare and `show` forms: no chat text; a dialog state is set and the GUI renders
   the interactive provider UI.
 - `router` form: dialog state when providers exist; otherwise the
   `[warn] No concrete providers - configure one first` status line plus a log entry.

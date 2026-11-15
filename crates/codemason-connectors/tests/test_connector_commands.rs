@@ -3,7 +3,7 @@
 //!
 //! The registration itself (the `SLASH_COMMANDS` entry, the dispatch arm, and
 //! the autocomplete menu) is asserted in the TUI crate
-//! (`crates/codemason-tui/tests/test_connectors_command.rs`); here the pure parser,
+//! (`crates/codemason-app-core/tests/test_connectors_command.rs`); here the pure parser,
 //! the usage/attribution renderers, and the shared dispatcher are exercised
 //! crate-side with no live session.
 

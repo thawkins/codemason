@@ -1,0 +1,170 @@
+//! Tests for how the input field behaves while the primary agent is busy.
+//!
+//! Spec `inputqueue` (FR-002, FR-011, FR-012, FR-017) relaxes the old guard so a
+//! plain message is still accepted while a turn is executing. FR-017 was amended
+//! to also queue slash commands the same way, while bang commands and
+//! teammate-targeted messages keep their busy behaviour and are never queued.
+
+use std::sync::Arc;
+
+use crate::term_events::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+
+use crate::term_events::handle_key;
+use codemason_agent::event::Event;
+use codemason_app_core::input::InputAction;
+
+#[path = "support/mod.rs"]
+mod support;
+
+#[tokio::test]
+async fn test_enter_submits_plain_message_while_processing() {
+    let mut app = support::make_app();
+    app.session.is_processing = true;
+    app.session.input = "hello".to_string();
+
+    let action = handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).await;
+
+    match action {
+        Some(InputAction::SendMessage(text)) => assert_eq!(text, "hello"),
+        _ => panic!("expected SendMessage action while busy"),
+    }
+    assert_ne!(
+        app.status, "busy - wait for the current turn to finish",
+        "a plain message must not be rejected while the agent executes"
+    );
+}
+
+#[tokio::test]
+async fn test_enter_still_submits_when_idle() {
+    let mut app = support::make_app();
+    app.session.input = "hello".to_string();
+
+    let action = handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).await;
+
+    match action {
+        Some(InputAction::SendMessage(text)) => assert_eq!(text, "hello"),
+        _ => panic!("expected SendMessage action"),
+    }
+}
+
+#[tokio::test]
+async fn test_plain_char_is_accepted_while_processing() {
+    let mut app = support::make_app();
+    app.session.is_processing = true;
+    app.session.input = "draft".to_string();
+
+    let action = handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
+    )
+    .await;
+
+    assert!(action.is_none(), "typing a character emits no action");
+    assert_eq!(
+        app.session.input, "sdraft",
+        "the input field stays editable while the agent executes"
+    );
+    assert_ne!(
+        app.status, "busy - wait for the current turn to finish",
+        "typing must not be rejected while the agent executes"
+    );
+}
+
+#[tokio::test]
+async fn test_slash_command_is_accepted_while_processing() {
+    let mut app = support::make_app();
+    app.session.is_processing = true;
+    app.session.input = "/status".to_string();
+
+    let action = handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).await;
+
+    match action {
+        Some(InputAction::SlashCommand(cmd)) => assert_eq!(cmd, "/status"),
+        _ => panic!("FR-017 amendment: a slash command is queueable, not refused"),
+    }
+    assert_ne!(
+        app.status, "busy - wait for the current turn to finish",
+        "a slash command must not be rejected while the agent executes"
+    );
+}
+
+#[tokio::test]
+async fn test_bang_command_is_refused_while_processing() {
+    let mut app = support::make_app();
+    app.session.is_processing = true;
+    app.session.input = "! ls -la".to_string();
+
+    let action = handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).await;
+
+    assert!(action.is_none(), "bang commands keep their busy guard");
+    assert_eq!(app.status, "busy - wait for the current turn to finish");
+}
+
+#[tokio::test]
+async fn test_focused_teammate_does_not_gate_a_send_while_processing() {
+    let mut app = support::make_app();
+    app.session.is_processing = true;
+    app.session.focused_teammate = Some("teammate-1".to_string());
+    app.session.input = "hello teammate".to_string();
+
+    let action = handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).await;
+
+    // FR-058 (amended): focus no longer redirects the input box, so a focused
+    // teammate is not a reason to refuse a send - the message is queued for the
+    // lead session like any other.
+    assert!(
+        matches!(action, Some(InputAction::SendMessage(ref text)) if text == "hello teammate"),
+        "a focused teammate must not gate the send, got {action:?}"
+    );
+    assert_ne!(app.status, "busy - wait for the current turn to finish");
+}
+
+#[tokio::test]
+async fn test_key_release_events_are_ignored() {
+    let mut app = support::make_app();
+    app.session.input = "draft".to_string();
+
+    let action = handle_key(
+        &mut app,
+        KeyEvent {
+            code: KeyCode::Char('s'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Release,
+            state: KeyEventState::NONE,
+        },
+    )
+    .await;
+
+    assert!(action.is_none(), "release events should be ignored");
+    assert_eq!(app.session.input, "draft");
+}
+
+#[tokio::test]
+async fn test_agent_error_clears_processing_so_input_unblocks() {
+    let mut app = support::make_app();
+    app.session.session_id = Some("session-1".to_string());
+    app.session.is_processing = true;
+    app.session.cancel_flag = Some(Arc::new(std::sync::atomic::AtomicBool::new(false)));
+
+    app.handle_event(Event::AgentError {
+        session_id: "session-1".to_string(),
+        error: "simulated failure".to_string(),
+    })
+    .await;
+
+    assert!(
+        !app.session.is_processing,
+        "agent error should end busy input gating"
+    );
+    assert!(
+        app.session.cancel_flag.is_none(),
+        "cancel flag should be cleared on error"
+    );
+
+    app.session.input = "hello".to_string();
+    let action = handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).await;
+    match action {
+        Some(InputAction::SendMessage(text)) => assert_eq!(text, "hello"),
+        _ => panic!("expected SendMessage action after agent error"),
+    }
+}

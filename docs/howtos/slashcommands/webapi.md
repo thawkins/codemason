@@ -91,5 +91,5 @@ Stops the HTTP server.
 ## Related
 
 - `/websearch` - inspect and diagnose the web search engine configuration
-- `codemason serve --port 9100` - run the HTTP server without the TUI
+- `codemason serve --port 9100` - run the HTTP server without the GUI
 - SSE streaming and REST routes are implemented in the `codemason-server` crate

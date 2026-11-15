@@ -1,0 +1,52 @@
+[package]
+name = "codemason-gui"
+# One integration-test binary for the crate (see AGENTS.md, "Test Layout").
+autotests = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "egui/eframe desktop frontend for codemason, rendering the frontend-neutral App"
+
+[lints]
+workspace = true
+
+[dependencies]
+codemason-agent = { path = "../codemason-agent" }
+codemason-storage = { path = "../codemason-storage" }
+codemason-app-core = { workspace = true }
+codemason-connectors = { workspace = true }
+codemason-plugins = { workspace = true }
+codemason-types = { workspace = true }
+codemason-config = { workspace = true }
+codemason-tools-core = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+craft-dialogs = { workspace = true }
+craft-keymap = { workspace = true }
+craft-menu = { workspace = true }
+craft-quit = { workspace = true }
+craft-ui = { workspace = true, features = ["system_fonts"] }
+craft-window = { workspace = true }
+eframe = { workspace = true }
+egui = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+codemason-codeindex = { path = "../codemason-codeindex" }
+codemason-llm = { path = "../codemason-llm" }
+egui_kittest = { workspace = true }
+parking_lot = { workspace = true }
+tempfile = "3.5"
+unicode-width = "0.2"
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[[test]]
+name = "all"
+path = "tests/all.rs"

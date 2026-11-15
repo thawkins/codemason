@@ -17,7 +17,7 @@
 //!
 //! The fourth source - the slash-command and `/tools` menus - is a TUI render
 //! path and is pinned beside it in
-//! `crates/codemason-tui/tests/test_fr033_completion_surfaces.rs`.
+//! `crates/codemason-app-core/tests/test_fr033_completion_surfaces.rs`.
 //!
 //! ## Why "derived" is asserted by handing each surface a foreign registry
 //!

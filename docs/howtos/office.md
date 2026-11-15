@@ -165,7 +165,7 @@ resolved output path is confined to the workspace root.
 ## 8. Worked examples
 
 The examples below show the JSON arguments an agent passes to each tool. In
-the TUI you would normally just ask for the outcome ("read the table from
+the GUI you would normally just ask for the outcome ("read the table from
 report.pdf"); the model issues these calls itself.
 
 ### 8.1 Read a PDF as text
@@ -223,7 +223,7 @@ Sample PDF files for manual testing live in `assets/pdf/` (`Profile.pdf`,
 
 ## 9. Commands and configuration reference
 
-### TUI
+### GUI
 
 | Command | Effect |
 |---|---|
@@ -251,9 +251,9 @@ array of `codemason.json`, exactly as for the plain file tools.
 ## 10. Testing and sample files
 
 - Behavioural coverage for the PDF tools is indirect: the `/tools` listing
-  includes the PDF tool names, the TUI slash-command test exercises `/tools`,
+  includes the PDF tool names, the GUI slash-command test exercises `/tools`,
   and the step-log input summary for `pdf_read` is locked in by
-  `crates/codemason-tui/tests/test_tool_display.rs`.
+  `crates/codemason-app-core/tests/test_tool_display.rs`.
 - Sample asset files (`assets/pdf/Profile.pdf`, `assets/pdf/vibeSDLC.pdf`) are
   informal manual fixtures; nothing in `tests/` references them, so they are not
   CI coverage.
@@ -269,7 +269,7 @@ array of `codemason.json`, exactly as for the plain file tools.
   these tools.
 - `docs/howtos/loopprogramming.md` -- goal loops; relevant for how `pdf_write`
   participates in forced checkpoints.
-- `TUI-QUICKSTART.md` -- quick reference for slash commands including
+- `GUI-QUICKSTART.md` -- quick reference for slash commands including
   `/tools`.
 - `crates/codemason-tools-extended/DOCS.md` -- curated descriptions of the
   extended tool families.

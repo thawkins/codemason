@@ -33,9 +33,6 @@ crates/*/target/
 crates/*/log/
 crates/*/logs/
 
-# Generated WiX installer sources
-/wix/
-
 # Coverage artifacts
 *.profraw
 default.profraw

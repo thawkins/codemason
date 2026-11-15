@@ -9,7 +9,7 @@ host environment.
 | `codemason_info` | Report the running codemason version, build time, git commit, compiler, and execution details (pid, uptime, working directory, user, memory, threads). |
 | `os_info` | Report read-only host OS and hardware introspection (also `/osinfo show`). |
 | `tool_info` | Dump the whole tool registry as JSON (name, description, schema, permission category, source). |
-| `commands_info` | Dump the slash-command catalog as JSON (built-in TUI commands plus plugin-contributed ones). |
+| `commands_info` | Dump the slash-command catalog as JSON (built-in GUI commands plus plugin-contributed ones). |
 | `DateTime` | Current date and time from the system clock: RFC 3339 UTC instant, an optional fixed-offset rendering, the individual fields, and the Unix timestamp. |
 
 ---
@@ -115,7 +115,7 @@ tool_info
 
 ## commands_info
 
-Return a JSON-encoded catalog of every slash command — the built-in TUI
+Return a JSON-encoded catalog of every slash command — the built-in GUI
 commands (trigger, description, subcommands, flags) plus the commands
 contributed by enabled plugins, resolved live at call time. Read-only,
 permission category `none`, hardwired auto-approved.
@@ -141,7 +141,7 @@ both seconds and milliseconds. Read-only, permission category `none`.
 The tool reads neither the `TZ` environment variable nor the host timezone
 database, so a result never depends on ambient process state and the same call
 answers the same way on every machine; the offset it used is echoed in the
-metadata. The TUI renders the call as a `UTC+HH:MM` zone summary with the
+metadata. The GUI renders the call as a `UTC+HH:MM` zone summary with the
 formatted instant as the result.
 
 **Arguments**

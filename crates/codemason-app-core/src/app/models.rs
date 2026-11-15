@@ -1,0 +1,2281 @@
+//! Model selection, thinking-level, and provider management for the TUI.
+use std::sync::atomic::Ordering;
+
+use codemason_agent::team::TeamManager;
+use codemason_agent::team::TeamStore;
+use codemason_agent::{
+    agent::{AgentInfo, ModelRef},
+    event::Event,
+    storage::Storage,
+};
+use codemason_types::{ThinkingConfig, ThinkingLevel};
+
+use codemason_llm::providers::thinking::full_reasoning_levels;
+
+// State types from app/state.rs
+use crate::app::state::{
+    App, ConfiguredProvider, FileMenuEntry, FileMenuState, LogLevel, ModelPickerEntry,
+    PROVIDER_LIST, ProviderSetupStep, ProviderSource,
+};
+
+// Helpers
+use crate::app::helpers::{sanitize_for_display, try_extract_research_code_block};
+use crate::text_utils::is_ollama_family;
+
+// Re-export status types from theme
+
+/// Returns the model portion of a `provider/model` string, preserving any
+/// vendor slug after the first `/`.
+///
+/// `openrouter/anthropic/claude-sonnet-4` becomes
+/// `Some("anthropic/claude-sonnet-4")`; a string with no separator returns
+/// `None`. This is the canonical first-segment-only partitioning used by the
+/// TUI and CLI (openrouterprov FR-017).
+#[must_use]
+pub fn model_part_from_selected_model(model_str: &str) -> Option<&str> {
+    model_str.split_once('/').map(|(_, model)| model)
+}
+
+impl App {
+    pub(crate) fn is_ascii_table_line(line: &str) -> bool {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+        // A run of `-` (optionally broken by top/bottom junctions) is a
+        // horizontal border emitted by html2text; the left-`+`, join-`+`, and
+        // right-`+` variants all qualify as borders.  A row containing any
+        // vertical bar (`|`) is treated as a data row.
+        if trimmed.contains('│') {
+            return true;
+        }
+        trimmed.contains('─')
+            && trimmed
+                .chars()
+                .all(|c| matches!(c, '─' | '┬' | '┼' | '┴' | ' '))
+    }
+
+    pub(crate) fn table_row_cells(line: &str) -> Vec<String> {
+        line.split('│').map(|c| c.trim().to_string()).collect()
+    }
+
+    pub(crate) fn table_border(widths: &[usize]) -> String {
+        let mut out = String::from("+");
+        for w in widths {
+            out.push_str(&"-".repeat(*w + 2));
+            out.push('+');
+        }
+        out
+    }
+
+    /// Normalize ASCII table rendering: collapse repeated border rows, ensure
+    /// each table has a top border, and emit clean aligned rows for display.
+    pub fn normalize_ascii_tables(&self, rendered: &str) -> String {
+        Self::normalize_ascii_tables_impl(rendered)
+    }
+
+    fn normalize_ascii_tables_impl(rendered: &str) -> String {
+        let lines: Vec<&str> = rendered.lines().collect();
+        let mut out: Vec<String> = Vec::new();
+        let mut i = 0usize;
+
+        while i < lines.len() {
+            if !Self::is_ascii_table_line(lines[i]) {
+                out.push(lines[i].to_string());
+                i += 1;
+                continue;
+            }
+
+            let start = i;
+            while i < lines.len() && Self::is_ascii_table_line(lines[i]) {
+                i += 1;
+            }
+            let block = &lines[start..i];
+
+            let mut rows: Vec<Vec<String>> = Vec::new();
+            let mut separators: Vec<bool> = Vec::new();
+            let mut col_count = 0usize;
+            for line in block {
+                let trimmed = line.trim();
+                if trimmed.contains('│') {
+                    let cells = Self::table_row_cells(trimmed);
+                    col_count = col_count.max(cells.len());
+                    rows.push(cells);
+                    separators.push(false);
+                } else {
+                    separators.push(true);
+                    rows.push(Vec::new());
+                }
+            }
+            if col_count == 0 {
+                out.extend(block.iter().map(|s| s.to_string()));
+                continue;
+            }
+
+            // Drop every trailing separator the block ends with: the bottom
+            // border below the last data row is emitted once, by the
+            // `write_bottom` pass after the loop.
+            let mut keep = rows.len();
+            while keep > 0 && separators[keep - 1] {
+                keep -= 1;
+            }
+            let rows = &rows[..keep];
+            let separators = &separators[..keep];
+
+            // html2text strips rows in which no `<td>` carries content, but a
+            // row can still be present when every cell was a whitespace-only
+            // text node (the pipeline emits one at the top of a table whose
+            // first body row the parser dropped).  Treat such a row as a
+            // separator so it does not emit an all-blank line like
+            // `| | | ... |`, but still mark the bottom border as required so the
+            // table is not left unterminated.
+            let write_bottom = separators.iter().any(|is_sep| *is_sep)
+                || rows
+                    .iter()
+                    .any(|cells| cells.iter().all(|cell| cell.is_empty()));
+
+            let mut widths = vec![0usize; col_count];
+            for row in rows {
+                for (idx, cell) in row.iter().enumerate() {
+                    widths[idx] = widths[idx].max(cell.chars().count());
+                }
+            }
+
+            let border = Self::table_border(&widths);
+            let mut wrote_top = false;
+            for (idx, row) in rows.iter().enumerate() {
+                if separators[idx] || row.iter().all(|cell| cell.is_empty()) {
+                    if !wrote_top {
+                        out.push(border.clone());
+                        wrote_top = true;
+                    } else {
+                        out.push(border.clone());
+                    }
+                    continue;
+                }
+                if !wrote_top {
+                    out.push(border.clone());
+                    wrote_top = true;
+                }
+                let mut line = String::from("|");
+                for col in 0..col_count {
+                    let cell = row.get(col).cloned().unwrap_or_default();
+                    let pad = widths[col].saturating_sub(cell.chars().count());
+                    line.push(' ');
+                    line.push_str(&cell);
+                    line.push_str(&" ".repeat(pad));
+                    line.push(' ');
+                    line.push('|');
+                }
+                out.push(line);
+            }
+            if write_bottom {
+                out.push(border);
+            }
+        }
+        out.join("\n")
+    }
+
+    /// Return pre-rendered research text (code block or progress log) if the
+    /// input should bypass the markdown pipeline, otherwise `None`.
+    ///
+    /// `/prompt` reports are excluded: they embed whole project documents
+    /// (AGENTS.md, README, git status) containing many bare ``` fences, and
+    /// the research extractor would truncate the report at the first fence
+    /// close instead of rendering the full markdown document.
+    fn bypass_research_text(text: &str) -> Option<String> {
+        if text.starts_with(crate::app::prompt::REPORT_PREFIX) {
+            return None;
+        }
+        if let Some(research) = try_extract_research_code_block(text) {
+            return Some(research);
+        }
+        if text.starts_with("[research] Research Progress") {
+            return Some(sanitize_for_display(text));
+        }
+        None
+    }
+
+    /// Render a markdown string to ASCII for the chat log, preserving research
+    /// slash-command preformatted blocks and passing through plain runtime text
+    /// unchanged. Otherwise runs the markdown->HTML->text pipeline and normalizes
+    /// ASCII tables.
+    pub fn render_markdown_to_ascii(&mut self, text: &str) -> String {
+        if let Some(bypassed) = Self::bypass_research_text(text) {
+            return bypassed;
+        }
+        // Only convert markdown-like slash output; preserve plain runtime text.
+        if !text.starts_with("From: /") {
+            return sanitize_for_display(text);
+        }
+
+        self.render_markdown_pipeline(text)
+    }
+
+    /// Render a markdown string unconditionally through the markdown->HTML->text
+    /// pipeline.
+    ///
+    /// Unlike [`render_markdown_to_ascii`], this does NOT require a `From: /`
+    /// prefix.  Use this for standalone messages that contain markdown formatting
+    /// (e.g. `agent_complete` summaries with headers, bullet points, bold text)
+    /// so they are rendered with proper visual structure instead of appearing
+    /// as a wall of plain text.
+    ///
+    /// Research code blocks and research progress lines are still bypassed.
+    pub fn render_markdown_unconditionally(&mut self, text: &str) -> String {
+        if let Some(bypassed) = Self::bypass_research_text(text) {
+            return bypassed;
+        }
+
+        self.render_markdown_pipeline(text)
+    }
+
+    /// Shared markdown->HTML->text rendering pipeline with caching and panic
+    /// isolation.
+    fn render_markdown_pipeline(&mut self, text: &str) -> String {
+        // Check cache using FNV-1a hash of input.
+        let hash = {
+            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+            for b in text.as_bytes() {
+                h ^= u64::from(*b);
+                h = h.wrapping_mul(0x0100_0000_01b3);
+            }
+            h
+        };
+        if let Some(cached) = self.md_render_cache.get(&hash) {
+            return cached.clone();
+        }
+        // html2text may panic on malformed HTML (word-wrapper subtraction
+        // overflow); run it on a dedicated thread so any panic unwinds only
+        // that thread, never the UI thread (which installs the panic hook).
+        let rendered = self.md_worker.render(text);
+        let rendered = match rendered {
+            Ok(text) => sanitize_for_display(&text),
+            Err(_) => {
+                // Worker channel closed or worker panicked - fall back to
+                // sanitized text so the UI still shows something.
+                sanitize_for_display(text)
+            }
+        };
+        // `sanitize_for_display` strips the ANSI sentinel codes the worker used
+        // to protect `[red]...[/red]` spans through the markdown pass; convert
+        // those sentinels back into the TUI's own `[red]...[/red]` markers.
+        let rendered = crate::app::md_worker::restore_red_markers(&rendered);
+        let cleaned = rendered
+            .lines()
+            .map(|l| l.trim_end())
+            .collect::<Vec<&str>>()
+            .join("\n");
+        let result = self.normalize_ascii_tables(&cleaned);
+
+        // Limit cache size to avoid unbounded growth.
+        // Evict the least-recently-used entry rather than clearing the
+        // entire cache, which would cause a burst of re-rendering on the
+        // next 256 unique strings.
+        if self.md_render_cache.len() >= 256 {
+            self.md_render_cache.pop_lru();
+        }
+        self.md_render_cache.put(hash, result.clone());
+        result
+    }
+
+    pub(crate) fn add_to_history(&mut self, text: String) {
+        // Don't add empty or duplicate entries
+        if text.is_empty() || self.input_history.last() == Some(&text) {
+            return;
+        }
+        self.input_history.push(text);
+        self.trim_input_history();
+        // Mark dirty; the main loop will flush after the debounce window.
+        self.history_dirty = true;
+        if self.history_save_deadline.is_none() {
+            self.history_save_deadline =
+                Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
+        }
+        self.session.history_index = None;
+        self.session.history_draft.clear();
+    }
+
+    /// Trim `input_history` to [`crate::app::state::INPUT_HISTORY_MAX`] entries,
+    /// dropping the oldest first.
+    ///
+    /// The single home for the history cap: both the on-load path
+    /// (`App::load_input_history`) and the append path (`App::add_to_history`)
+    /// call this so the two policies can never diverge (MEDIUM-4).
+    pub(crate) fn trim_input_history(&mut self) {
+        if self.input_history.len() > crate::app::state::INPUT_HISTORY_MAX {
+            let overflow = self.input_history.len() - crate::app::state::INPUT_HISTORY_MAX;
+            self.input_history.drain(0..overflow);
+        }
+    }
+
+    pub(crate) fn selected_model_context_window(&self) -> Option<usize> {
+        let model = self.session.selected_model.as_deref()?;
+        let (provider_id, model_id) = model.split_once('/')?;
+        // Try the static registry first (works for providers with hardcoded default_models).
+        self.provider_registry
+            .resolve_model(provider_id, model_id)
+            .map(|m| m.context_window)
+            .filter(|w| *w > 0)
+            // Fall back to the cached context window stored during model selection
+            // (required for dynamically discovered models like ollama/ollama_cloud).
+            .or(self.session.selected_model_ctx_window.filter(|w| *w > 0))
+    }
+
+    pub(crate) fn parse_thinking_level_setting(value: &str) -> Option<ThinkingLevel> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(ThinkingLevel::Auto),
+            "off" => Some(ThinkingLevel::Off),
+            "low" => Some(ThinkingLevel::Low),
+            "medium" => Some(ThinkingLevel::Medium),
+            "high" => Some(ThinkingLevel::High),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn thinking_level_setting_value(level: ThinkingLevel) -> &'static str {
+        match level {
+            ThinkingLevel::Auto => "auto",
+            ThinkingLevel::Off => "off",
+            ThinkingLevel::Low => "low",
+            ThinkingLevel::Medium => "medium",
+            ThinkingLevel::High => "high",
+        }
+    }
+
+    pub(crate) fn thinking_level_display(level: ThinkingLevel) -> &'static str {
+        Self::thinking_level_setting_value(level)
+    }
+
+    pub(crate) fn thinking_level_is_explicit(storage: &Storage) -> bool {
+        storage
+            .get_setting("thinking_level_explicit")
+            .ok()
+            .flatten()
+            .is_some_and(|value| value == "1")
+    }
+
+    pub(crate) fn load_persisted_thinking_level(storage: &Storage) -> Option<ThinkingLevel> {
+        let level = storage
+            .get_setting("thinking_level")
+            .ok()
+            .flatten()
+            .and_then(|s| Self::parse_thinking_level_setting(&s))?;
+
+        if level == ThinkingLevel::Auto && !Self::thinking_level_is_explicit(storage) {
+            return None;
+        }
+
+        Some(level)
+    }
+
+    /// Return the short display label for a [`ThinkingLevel`] (e.g. `"Med"`).
+    #[doc(hidden)]
+    pub fn thinking_level_short(level: ThinkingLevel) -> &'static str {
+        match level {
+            ThinkingLevel::Auto => "Auto",
+            ThinkingLevel::Off => "Off",
+            ThinkingLevel::Low => "Low",
+            ThinkingLevel::Medium => "Med",
+            ThinkingLevel::High => "High",
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn format_thinking_levels(levels: &[ThinkingLevel]) -> String {
+        if levels.is_empty() {
+            "-".to_string()
+        } else {
+            levels
+                .iter()
+                .map(|level| Self::thinking_level_short(*level))
+                .collect::<Vec<_>>()
+                .join("/")
+        }
+    }
+
+    pub(crate) fn default_thinking_level_for_entry(entry: &ModelPickerEntry) -> ThinkingLevel {
+        if let Some(thinking) = &entry.thinking_config {
+            return if thinking.is_effective_enabled() {
+                thinking.level
+            } else {
+                ThinkingLevel::Off
+            };
+        }
+
+        // Ollama-family models are boolean thinkers, but we expose the full
+        // effort range to the user. Default to Low rather than Off so reasoning
+        // is enabled out of the box when the model advertises it.
+        if is_ollama_family(&entry.provider_id) && entry.reasoning {
+            return ThinkingLevel::Low;
+        }
+
+        if entry.thinking_levels.contains(&ThinkingLevel::Off) {
+            ThinkingLevel::Off
+        } else {
+            entry
+                .thinking_levels
+                .first()
+                .copied()
+                .unwrap_or(ThinkingLevel::Off)
+        }
+    }
+
+    pub(crate) fn thinking_config_for_level(level: ThinkingLevel) -> ThinkingConfig {
+        if level == ThinkingLevel::Off {
+            ThinkingConfig::off()
+        } else {
+            ThinkingConfig::new(level)
+        }
+    }
+
+    pub(crate) fn explicit_selected_thinking_config(&self) -> Option<ThinkingConfig> {
+        self.session
+            .selected_thinking_level
+            .map(Self::thinking_config_for_level)
+    }
+
+    pub(crate) fn effective_thinking_config_for_entry(entry: &ModelPickerEntry) -> ThinkingConfig {
+        entry.thinking_config.clone().unwrap_or_else(|| {
+            Self::thinking_config_for_level(Self::default_thinking_level_for_entry(entry))
+        })
+    }
+
+    pub(crate) fn model_entry_for_ref(&self, model_ref: &ModelRef) -> Option<ModelPickerEntry> {
+        self.resolved_model_entries_for_provider(&model_ref.provider_id)
+            .into_iter()
+            .find(|entry| entry.id == model_ref.model_id)
+    }
+
+    pub(crate) fn effective_thinking_config_for_agent(
+        &self,
+        agent: &AgentInfo,
+    ) -> Option<ThinkingConfig> {
+        self.explicit_selected_thinking_config()
+            .or_else(|| agent.thinking.clone())
+            .or_else(|| {
+                agent
+                    .model
+                    .as_ref()
+                    .and_then(|model_ref| self.model_entry_for_ref(model_ref))
+                    .map(|entry| Self::effective_thinking_config_for_entry(&entry))
+            })
+    }
+
+    pub(crate) fn effective_thinking_level_for_agent(
+        &self,
+        agent: &AgentInfo,
+    ) -> Option<ThinkingLevel> {
+        self.effective_thinking_config_for_agent(agent)
+            .map(|config| config.level)
+    }
+
+    pub(crate) fn persist_selected_thinking_level(&mut self, level: ThinkingLevel) {
+        self.session.selected_thinking_level = Some(level);
+        // C-006: the status-bar label includes the thinking level, so the
+        // cached label is stale once the level changes.
+        self.session.cached_provider_model_label = None;
+        let _ = self // INTENTIONAL: fallible wiring/persistence call; the in-memory state is authoritative
+            .storage
+            .set_setting("thinking_level", Self::thinking_level_setting_value(level));
+        let _ = self.storage.set_setting("thinking_level_explicit", "1"); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
+    }
+
+    pub(crate) fn apply_selected_model_and_thinking(&self, agent: &mut AgentInfo) {
+        if (!agent.model_pinned || agent.model.is_none())
+            && let Some(ref model_str) = self.session.selected_model
+            && let Some((provider, model)) = model_str.split_once('/')
+        {
+            agent.model = Some(ModelRef {
+                provider_id: provider.to_string(),
+                model_id: model.to_string(),
+            });
+        }
+
+        // If still no model, fall back to the first available provider/model.
+        if agent.model.is_none() {
+            if let Some(model_ref) =
+                codemason_agent::agent::resolve_default_model(agent, &self.provider_registry)
+            {
+                agent.model = Some(model_ref);
+            }
+        }
+
+        if let Some(thinking) = self.effective_thinking_config_for_agent(agent) {
+            agent.thinking = Some(thinking);
+        }
+    }
+
+    pub(crate) fn active_model_entry(&self) -> Option<ModelPickerEntry> {
+        let model_ref = self.session.selected_model.as_deref()?;
+        let (provider_id, model_id) = model_ref.split_once('/')?;
+        self.resolved_model_entries_for_provider(provider_id)
+            .into_iter()
+            .find(|entry| entry.id == model_id)
+    }
+
+    pub(crate) fn active_thinking_levels(&self) -> Vec<ThinkingLevel> {
+        self.active_model_entry()
+            .map(|entry| {
+                let levels = entry.thinking_levels;
+                if levels.is_empty() && is_ollama_family(&entry.provider_id) {
+                    full_reasoning_levels()
+                } else {
+                    levels
+                }
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn finalize_model_selection(
+        &mut self,
+        provider_id: String,
+        provider_name: String,
+        entry: &ModelPickerEntry,
+        thinking_level: ThinkingLevel,
+    ) -> String {
+        let model_value = format!("{}/{}", provider_id, entry.id);
+        // FUNC-027: persist the model selection explicitly. A storage failure
+        // is logged (the picker has already applied the in-memory selection, so
+        // the user is told the choice will not survive a restart) instead of
+        // being silently dropped.
+        let mut persist = |key: &str, value: &str| {
+            if let Err(e) = self.storage.set_setting(key, value) {
+                tracing::warn!(key, error = %e, "failed to persist model selection");
+                self.push_log_no_agent(
+                    LogLevel::Warn,
+                    format!("Selecting model: failed to save '{key}': {e}"),
+                );
+            }
+        };
+        persist("selected_model", &model_value);
+        persist("preferred_provider", &provider_id);
+        persist(
+            "selected_model_ctx_window",
+            &entry.context_window.to_string(),
+        );
+        // Persist the chosen model per-provider so it can be restored later (FR-003).
+        persist(&format!("provider_{}_last_model", provider_id), &entry.id);
+        self.session.selected_model = Some(model_value);
+        self.session.selected_model_ctx_window = Some(entry.context_window);
+        self.persist_selected_thinking_level(thinking_level);
+        self.configured_provider = Some(ConfiguredProvider {
+            id: provider_id,
+            name: provider_name,
+            source: ProviderSource::Database,
+        });
+        // C-006: invalidate the cached status-bar model label.
+        self.session.cached_provider_model_label = None;
+        entry.name.clone()
+    }
+
+    /// Restore the previously-selected model for the given provider from
+    /// persistent storage. Returns the restored entry, or `None` if no model
+    /// was persisted or the persisted model is no longer advertised by the
+    /// provider (in which case the stale setting is pruned).
+    pub fn try_restore_provider_model(
+        &mut self,
+        provider_id: &str,
+        provider_name: &str,
+    ) -> Option<ModelPickerEntry> {
+        let last_model_key = format!("provider_{}_last_model", provider_id);
+        let persisted = self.storage.get_setting(&last_model_key).ok().flatten();
+        let model_id = match persisted {
+            Some(ref mid) if !mid.is_empty() => mid.clone(),
+            _ => return None,
+        };
+
+        let models = self.models_for_provider(provider_id);
+        let lower_model_id = model_id.to_lowercase();
+
+        if let Some(entry) = models
+            .iter()
+            .find(|e| e.id.to_lowercase() == lower_model_id)
+        {
+            // Model still available - restore it without showing the picker (FR-003).
+            let model_value = format!("{}/{}", provider_id, entry.id);
+            let _ = self.storage.set_setting("selected_model", &model_value); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
+            let _ = self.storage.set_setting("preferred_provider", provider_id); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
+            let _ = self.storage.set_setting(
+                // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
+                "selected_model_ctx_window",
+                &entry.context_window.to_string(),
+            );
+            // Re-persist with the correct casing from the current model list.
+            let _ = self.storage.set_setting(&last_model_key, &entry.id); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
+            self.session.selected_model = Some(model_value);
+            self.session.selected_model_ctx_window = Some(entry.context_window);
+            let default_level = Self::default_thinking_level_for_entry(entry);
+            self.persist_selected_thinking_level(default_level);
+            self.configured_provider = Some(ConfiguredProvider {
+                id: provider_id.to_string(),
+                name: provider_name.to_string(),
+                source: ProviderSource::Database,
+            });
+            // C-006: invalidate the cached status-bar model label.
+            self.session.cached_provider_model_label = None;
+            return Some(entry.clone());
+        }
+
+        // Stale model - prune the persisted key (FR-004).
+        let _ = self.storage.delete_setting(&last_model_key); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
+        self.status = format!(
+            "Previous model `{}` is no longer available - please choose a new one",
+            model_id
+        );
+        None
+    }
+
+    /// Backfill `selected_model_ctx_window` from cached/default provider model
+    /// metadata so the UI does not block on provider discovery.
+    ///
+    /// Only cached or default model metadata is consulted; the context window
+    /// is refreshed later when the user opens the model picker or sends a
+    /// message and the async discovery path populates the cache.
+    pub fn backfill_model_ctx_window(&mut self) {
+        let model = match self.session.selected_model.as_deref() {
+            Some(m) => m.to_string(),
+            None => return,
+        };
+        let Some((provider_id, model_id)) = model.split_once('/') else {
+            return;
+        };
+        let previous_context_window = self.session.selected_model_ctx_window;
+
+        // Use only cached/default metadata - never block on network discovery.
+        let cached = self.cached_model_entries(provider_id);
+        let models = if !cached.is_empty() {
+            cached
+        } else {
+            // Fall back to the provider's static default model list.
+            self.provider_registry
+                .get(provider_id)
+                .map(|provider| self.picker_entries_from_models(provider.default_models()))
+                .unwrap_or_default()
+        };
+        if let Some(entry) = models.iter().find(|e| e.id == model_id) {
+            if entry.context_window > 0 && previous_context_window != Some(entry.context_window) {
+                self.session.selected_model_ctx_window = Some(entry.context_window);
+                let _ = self.storage.set_setting(
+                    // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
+                    "selected_model_ctx_window",
+                    &entry.context_window.to_string(),
+                );
+                tracing::info!(
+                    model = %model,
+                    previous_context_window = ?previous_context_window,
+                    context_window = entry.context_window,
+                    "Refreshed context window for selected model"
+                );
+            }
+        }
+    }
+
+    pub(crate) fn provider_api_key(&self, provider_id: &str) -> Option<String> {
+        let from_storage = || {
+            self.storage
+                .get_provider_auth(provider_id)
+                .ok()
+                .flatten()
+                .filter(|key| !key.is_empty())
+        };
+
+        if provider_id == "ollama_cloud" {
+            return self.ollama_cloud_api_key();
+        }
+
+        // Env-var resolution goes through the canonical credential-env helper
+        // (audit T-111) so the variable set and blank/trim policy stay in one
+        // place across crates.
+        from_storage()
+            .or_else(|| codemason_config::credential_env::provider_credential_env(provider_id))
+    }
+
+    pub(crate) fn calculate_cost_tier(
+        &self,
+        cost_input: f64,
+        cost_output: f64,
+        baseline_cost: f64,
+        request_multiplier: Option<f64>,
+    ) -> (String, String) {
+        // If we have a Copilot-style request multiplier, use it directly
+        if let Some(mult) = request_multiplier {
+            let tier = if mult == 0.0 {
+                "Included".to_string()
+            } else if mult <= 0.33 {
+                "Low".to_string()
+            } else if mult <= 1.0 {
+                "Standard".to_string()
+            } else if mult <= 3.0 {
+                "High".to_string()
+            } else {
+                "Premium".to_string()
+            };
+
+            let multiplier_str = if mult == 0.0 {
+                "0x".to_string()
+            } else if (mult - mult.round()).abs() < 0.001 {
+                format!("{:.0}x", mult)
+            } else if mult < 1.0 {
+                format!("{:.2}x", mult)
+                    .trim_end_matches('0')
+                    .trim_end_matches('.')
+                    .to_string()
+                    + "x"
+            } else {
+                format!("{:.1}x", mult)
+                    .trim_end_matches('0')
+                    .trim_end_matches('.')
+                    .to_string()
+                    + "x"
+            };
+
+            return (tier, multiplier_str);
+        }
+
+        // Standard per-token cost calculation
+        let avg_cost = f64::midpoint(cost_input, cost_output);
+
+        let tier = if avg_cost == 0.0 {
+            "Free".to_string()
+        } else if avg_cost <= 0.001 {
+            "Low".to_string()
+        } else if avg_cost <= 0.01 {
+            "Medium".to_string()
+        } else if avg_cost <= 0.1 {
+            "High".to_string()
+        } else {
+            "Premium".to_string()
+        };
+
+        let multiplier = if baseline_cost > 0.0 {
+            let factor = avg_cost / baseline_cost;
+            // Round to 1 decimal place for display
+            if factor < 0.01 {
+                "0x".to_string()
+            } else if factor < 1.0 {
+                format!("{:.1}x", factor)
+            } else if (factor - factor.round()).abs() < 0.01 {
+                format!("{:.0}x", factor)
+            } else {
+                format!("{:.1}x", factor)
+            }
+        } else {
+            "0x".to_string()
+        };
+
+        (tier, multiplier)
+    }
+
+    /// Detect the best configured provider at startup.
+    ///
+    /// Only providers with an explicit credential source (environment
+    /// variable, secure-storage key, or a config-based resource file) are
+    /// detected.  Auto-discovery via external tools (e.g. `gh auth token`)
+    /// is no longer performed.
+    pub fn detect_provider(storage: &Storage) -> Option<ConfiguredProvider> {
+        Self::get_configured_providers_impl(storage)
+            .into_iter()
+            .next()
+    }
+
+    /// Enumerate all configured providers from the database, honouring explicit
+    /// `provider_{id}_disabled` opt-out flags set via `/provider reset`.
+    pub fn get_configured_providers(storage: &Storage) -> Vec<ConfiguredProvider> {
+        Self::get_configured_providers_impl(storage)
+    }
+
+    /// Shared implementation of configured-provider enumeration.
+    ///
+    /// Only providers with an explicit credential source are returned:
+    ///
+    /// - **Environment variable** - a provider-specific env var (e.g.
+    ///   `ANTHROPIC_API_KEY`) is set and non-empty.
+    /// - **Secure storage** - a key is stored in the codemason encrypted
+    ///   credential store (`provider_auth` table).
+    /// - **Config-based resource file** - for providers like Azure Resource
+    ///   that use a user-created config file (`azureresources.json`).
+    ///
+    /// Auto-discovery via external tooling (e.g. `gh auth token` CLI, IDE
+    /// `apps.json` scraping) has been removed - those are not explicit
+    /// credential sources.
+    fn get_configured_providers_impl(storage: &Storage) -> Vec<ConfiguredProvider> {
+        // Helper: returns true when the user has explicitly reset this provider.
+        let is_disabled = |pid: &str| -> bool {
+            storage
+                .get_setting(&format!("provider_{pid}_disabled"))
+                .ok()
+                .flatten()
+                .is_some()
+        };
+
+        let mut configured: Vec<ConfiguredProvider> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        let mut push = |id: &str, name: &str, source: ProviderSource| {
+            if seen.insert(id.to_string()) {
+                configured.push(ConfiguredProvider {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    source,
+                });
+            }
+        };
+
+        // 1. Check each provider in PROVIDER_LIST order for explicit credential
+        //    sources (env vars and config-based resource files).
+        for &(pid, pname) in PROVIDER_LIST {
+            if is_disabled(pid) {
+                continue;
+            }
+            let found = match pid {
+                "bedrock" => {
+                    // Bedrock is "configured" when AWS static credentials are present
+                    // (access key + secret). Profile-based auth is handled at request
+                    // time, so we only surface it here when env-var creds exist.
+                    let has_access = std::env::var("AWS_ACCESS_KEY_ID")
+                        .ok()
+                        .as_ref()
+                        .is_some_and(|k| !k.is_empty());
+                    let has_secret = std::env::var("AWS_SECRET_ACCESS_KEY")
+                        .ok()
+                        .as_ref()
+                        .is_some_and(|k| !k.is_empty());
+                    if has_access && has_secret {
+                        Some(ProviderSource::EnvVar)
+                    } else {
+                        None
+                    }
+                }
+                "ollama" => std::env::var("OLLAMA_HOST")
+                    .ok()
+                    .filter(|k| !k.is_empty())
+                    .map(|_| ProviderSource::EnvVar),
+                "azure_resource" => {
+                    // Azure Resource is "configured" when azureresources.json exists
+                    let config_path = dirs::home_dir()
+                        .map(|h| {
+                            h.join(".config")
+                                .join("codemason")
+                                .join("azureresources.json")
+                        })
+                        .filter(|p| p.exists())
+                        .or_else(|| {
+                            let p =
+                                std::path::PathBuf::from(".codemason").join("azureresources.json");
+                            if p.exists() { Some(p) } else { None }
+                        });
+                    config_path.map(|_| ProviderSource::Database)
+                }
+                // Everything else is "configured" when its canonical credential-env
+                // variable is set (audit T-111: single source of truth).
+                _ => codemason_config::credential_env::provider_credential_env(pid)
+                    .map(|_| ProviderSource::EnvVar),
+            };
+            if let Some(source) = found {
+                push(pid, pname, source);
+            }
+        }
+
+        // 2. Check database for any stored provider auth (for providers not already found)
+        for (pid, pname) in PROVIDER_LIST {
+            if is_disabled(pid) {
+                continue;
+            }
+            if let Ok(Some(_key)) = storage.get_provider_auth(pid) {
+                push(pid, pname, ProviderSource::Database);
+            }
+        }
+
+        // 3. Honour explicit user preference: if the preferred provider is
+        //    among those with credentials, move it to the front so it is
+        //    selected first.  Providers without credentials are never pushed.
+        if let Ok(Some(preferred)) = storage.get_setting("preferred_provider") {
+            if !preferred.is_empty() && !is_disabled(&preferred) {
+                if let Some(pos) = configured.iter().position(|p| p.id == preferred) {
+                    let item = configured.remove(pos);
+                    configured.insert(0, item);
+                }
+            }
+        }
+
+        configured
+    }
+
+    /// Enumerate all configured providers **excluding** the router virtual provider.
+    ///
+    /// This is the list used by the router setup flow to populate the multi-selection
+    /// palette; the router must never route to itself (FR-004, FR-024).
+    pub fn get_configured_providers_for_router(storage: &Storage) -> Vec<ConfiguredProvider> {
+        Self::get_configured_providers(storage)
+            .into_iter()
+            .filter(|p| p.id != "router")
+            .collect()
+    }
+
+    /// Re-detect the configured provider and update `configured_provider`.
+    pub(crate) fn refresh_provider(&mut self) {
+        self.configured_provider = Self::detect_provider(&self.storage);
+        // C-006: the cached status-bar model label is stale once the provider
+        // or model changes; clear it so the next render recomputes it.
+        self.session.cached_provider_model_label = None;
+    }
+
+    /// Make the Model Router the active provider/model selection.
+    ///
+    /// Persists `selected_model`, `preferred_provider`, and the configured
+    /// provider so the router remains active across restarts (FR-049).
+    pub(crate) fn select_router_as_active(&mut self) {
+        let model_value = "router/router".to_string();
+        let _ = self.storage.set_setting("selected_model", &model_value); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
+        let _ = self.storage.set_setting("preferred_provider", "router"); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
+        let _ = self.storage.delete_setting("selected_thinking_level"); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
+
+        self.session.selected_model = Some(model_value);
+        self.session.selected_model_ctx_window = None;
+        self.session.selected_thinking_level = None;
+        self.configured_provider = Some(ConfiguredProvider {
+            id: "router".to_string(),
+            name: "Model Router".to_string(),
+            source: ProviderSource::Database,
+        });
+        // C-006: invalidate the cached status-bar model label.
+        self.session.cached_provider_model_label = None;
+    }
+
+    /// Restore router state when the persisted active model is the router.
+    ///
+    /// If `selected_model` is `router/router`, this sets the configured
+    /// provider to the router and synchronises the in-memory
+    /// `router_enabled` flag and the provider-registry `RouterProvider`
+    /// state from the saved `provider.router` configuration (FR-049).
+    pub fn restore_router_state(&mut self) {
+        let is_router = self
+            .session
+            .selected_model
+            .as_deref()
+            .map(|s| s == "router/router")
+            .unwrap_or(false);
+        if !is_router {
+            return;
+        }
+
+        self.configured_provider = Some(ConfiguredProvider {
+            id: "router".to_string(),
+            name: "Model Router".to_string(),
+            source: ProviderSource::Database,
+        });
+
+        if let Some(raw_config) = self.load_raw_router_config() {
+            self.router_enabled = raw_config.enabled;
+            if let Some(router_provider) = self
+                .provider_registry
+                .get_as_any("router")
+                .and_then(|p| p.downcast_ref::<codemason_llm::providers::router::RouterProvider>())
+            {
+                router_provider.reload_config(raw_config);
+            }
+        } else {
+            // A previous session selected the router but no `provider.router`
+            // block is present; keep it selected but leave it disabled until
+            // a cluster is configured.
+            self.router_enabled = false;
+        }
+    }
+
+    /// Paste the supplied text into the active provider-setup dialog field,
+    /// stripping carriage returns and routing to the currently focused key or
+    /// endpoint input.
+    pub fn paste_text_into_provider_setup(&mut self, text: &str) {
+        let clean: String = text.chars().filter(|&c| c != '\r').collect();
+        let Some(step) = self.provider_setup.as_mut() else {
+            return;
+        };
+        if let ProviderSetupStep::EnterKey {
+            key_field,
+            endpoint_field,
+            active_field,
+            ..
+        } = step
+        {
+            let target = if *active_field == 1 {
+                endpoint_field
+            } else {
+                key_field
+            };
+            target.insert_str(&clean);
+        } else if let ProviderSetupStep::GitLabSetup {
+            url_input,
+            url_cursor,
+            token_input,
+            token_cursor,
+            active_field,
+            ..
+        } = step
+        {
+            if *active_field == 0 {
+                let insert_pos = url_input
+                    .char_indices()
+                    .nth(*url_cursor)
+                    .map(|(byte, _)| byte)
+                    .unwrap_or_else(|| url_input.len());
+                url_input.insert_str(insert_pos, &clean);
+                *url_cursor += clean.chars().count();
+            } else {
+                let insert_pos = token_input
+                    .char_indices()
+                    .nth(*token_cursor)
+                    .map(|(byte, _)| byte)
+                    .unwrap_or_else(|| token_input.len());
+                token_input.insert_str(insert_pos, &clean);
+                *token_cursor += clean.chars().count();
+            }
+        } else if let ProviderSetupStep::TelemetrySetup {
+            endpoint_field,
+            interval_field,
+            timeout_field,
+            port_field,
+            logs_field,
+            active_field,
+            ..
+        } = step
+        {
+            let target = match *active_field {
+                0 => endpoint_field,
+                2 => interval_field,
+                3 => timeout_field,
+                4 => port_field,
+                5 => logs_field,
+                _ => return,
+            };
+            target.insert_str(&clean);
+        }
+    }
+
+    pub(crate) fn paste_provider_setup_from_clipboard(&mut self) {
+        if let Some(text) = Self::get_clipboard() {
+            self.paste_text_into_provider_setup(&text);
+        }
+    }
+
+    pub(crate) fn ensure_team_manager_for_team(
+        &mut self,
+        team_name: &str,
+        known_team_dir: Option<std::path::PathBuf>,
+    ) {
+        self.ensure_team_manager_for_team_inner(team_name, known_team_dir, false);
+    }
+
+    pub(crate) fn ensure_team_manager_for_team_inner(
+        &mut self,
+        team_name: &str,
+        known_team_dir: Option<std::path::PathBuf>,
+        reconcile: bool,
+    ) {
+        // A manager whose team is gone (closed, deleted, cleaned up) is
+        // unbound so this team gets its own runtime instead of the old one.
+        if let Some(stale) = self.session_processor.team_manager.stale() {
+            self.push_log_no_agent(
+                LogLevel::Info,
+                format!(
+                    "TeamManager for team '{}' unbound: the team is gone",
+                    stale.team_name
+                ),
+            );
+            self.session_processor.team_manager.clear_if(&stale);
+        }
+        if self
+            .session_processor
+            .team_manager
+            .get()
+            .is_some_and(|bound| bound.team_name == team_name)
+        {
+            return;
+        }
+        let Some(lead_session_id) = self.session.session_id.clone() else {
+            return;
+        };
+
+        let team_dir = if let Some(dir) = known_team_dir {
+            dir
+        } else {
+            let working_dir = self.cwd_path.clone();
+            match TeamStore::load_by_name(team_name, &working_dir) {
+                Ok(store) => store.dir,
+                Err(e) => {
+                    self.push_log_no_agent(
+                        LogLevel::Warn,
+                        format!("TeamManager init skipped: cannot load team '{team_name}': {e}"),
+                    );
+                    return;
+                }
+            }
+        };
+
+        // Parse the currently selected model so teammates inherit it in the reconcile loop.
+        let active_model: Option<codemason_agent::agent::ModelRef> =
+            self.session.selected_model.as_deref().and_then(|s| {
+                s.split_once('/')
+                    .map(|(pid, mid)| codemason_agent::agent::ModelRef {
+                        provider_id: pid.to_string(),
+                        model_id: mid.to_string(),
+                    })
+            });
+
+        let mut manager = TeamManager::new(
+            team_name.to_string(),
+            lead_session_id,
+            team_dir,
+            self.session_processor.clone(),
+            self.event_bus.clone(),
+        );
+        manager.active_model = active_model;
+        // FR-008: the spawn loop records member status through the manager
+        // itself, so it needs the `Arc` this manager lives in.
+        let manager = manager.into_arc();
+
+        // A manager bound to another team is replaced; it stays alive for as
+        // long as its own teammate tasks hold it.
+        let previous = self.session_processor.team_manager.replace(manager.clone());
+        self.push_log_no_agent(
+            LogLevel::Info,
+            match previous {
+                Some(old) => format!(
+                    "TeamManager rebound from team '{}' to team '{team_name}'",
+                    old.team_name
+                ),
+                None => format!("TeamManager initialised for team '{team_name}'"),
+            },
+        );
+        // Only reconcile when explicitly requested (i.e. when the team was seeded
+        // via the LLM tool path and members may be queued in Spawning state).
+        if reconcile {
+            manager.clone().reconcile_spawning_members();
+        }
+        // M6-T1: start the teammate watchdog so hung teammates are
+        // detected and marked Failed without waiting for team_wait.
+        manager.clone().start_watchdog();
+    }
+
+    pub(crate) fn overlay_model_config(
+        &self,
+        config: &codemason_agent::Config,
+        mut model: codemason_agent::provider::ModelInfo,
+    ) -> codemason_agent::provider::ModelInfo {
+        if let Some(provider_config) = config.provider.get(&model.provider_id) {
+            if model.thinking_config.is_none() {
+                model.thinking_config = provider_config.thinking.clone();
+            }
+
+            if let Some(model_config) = provider_config.models.get(&model.id) {
+                if let Some(name) = &model_config.name {
+                    model.name = name.clone();
+                }
+                if let Some(cost) = &model_config.cost {
+                    model.cost = codemason_config::Cost {
+                        input: cost.input,
+                        output: cost.output,
+                    };
+                }
+                if let Some(capabilities) = &model_config.capabilities {
+                    model.capabilities = codemason_config::Capabilities {
+                        reasoning: capabilities.reasoning,
+                        streaming: capabilities.streaming,
+                        vision: capabilities.vision,
+                        tool_use: capabilities.tool_use,
+                        thinking_levels: capabilities.thinking_levels.clone(),
+                    };
+                }
+                if let Some(thinking) = &model_config.thinking {
+                    model.thinking_config = Some(thinking.clone());
+                }
+            }
+        }
+
+        if model.thinking_config.is_none() {
+            model.thinking_config =
+                Some(codemason_agent::agent::default_thinking_config_for_levels(
+                    &model.capabilities.thinking_levels,
+                ));
+        }
+
+        model
+    }
+
+    pub(crate) fn model_to_picker_entry(
+        &self,
+        m: codemason_agent::provider::ModelInfo,
+        baseline_cost: f64,
+    ) -> ModelPickerEntry {
+        let (cost_tier, cost_multiplier) = self.calculate_cost_tier(
+            m.cost.input,
+            m.cost.output,
+            baseline_cost,
+            m.request_multiplier,
+        );
+        let provider_id = m.provider_id.clone();
+        let reasoning = m.capabilities.reasoning;
+        let thinking_levels =
+            if m.capabilities.thinking_levels.is_empty() && is_ollama_family(&provider_id) {
+                codemason_llm::providers::thinking::full_reasoning_levels()
+            } else {
+                m.capabilities.thinking_levels
+            };
+        ModelPickerEntry {
+            provider_id,
+            id: m.id,
+            name: m.name,
+            context_window: m.context_window,
+            max_output: m.max_output,
+            cost_input: m.cost.input,
+            cost_output: m.cost.output,
+            reasoning,
+            vision: m.capabilities.vision,
+            tool_use: m.capabilities.tool_use,
+            thinking_levels,
+            thinking_config: m.thinking_config,
+            cost_tier,
+            cost_multiplier,
+        }
+    }
+
+    pub(crate) fn picker_entries_from_models(
+        &self,
+        models: Vec<codemason_agent::provider::ModelInfo>,
+    ) -> Vec<ModelPickerEntry> {
+        let config = self.current_config();
+        let models: Vec<_> = models
+            .into_iter()
+            .map(|model| self.overlay_model_config(&config, model))
+            .collect();
+        let baseline_cost = models
+            .iter()
+            .map(|m| f64::midpoint(m.cost.input, m.cost.output))
+            .filter(|c| *c > 0.0)
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or(0.001);
+
+        let mut entries: Vec<ModelPickerEntry> = models
+            .into_iter()
+            .map(|m| self.model_to_picker_entry(m, baseline_cost))
+            .collect();
+
+        // Sort alphabetically by display name (case-insensitive), falling back to
+        // the model id for stable ordering when display names are identical.
+        entries.sort_by(|a, b| {
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+                .then_with(|| a.id.to_lowercase().cmp(&b.id.to_lowercase()))
+        });
+
+        entries
+    }
+
+    pub(crate) fn cache_discovered_models(
+        &self,
+        provider_id: &str,
+        models: &[codemason_agent::provider::ModelInfo],
+    ) {
+        if let Ok(models_json) = serde_json::to_string(models) {
+            let _ = self // INTENTIONAL: fallible wiring/persistence call; the in-memory state is authoritative
+                .storage
+                .set_discovered_models(provider_id, &models_json);
+        }
+    }
+
+    pub(crate) fn cached_model_entries(&self, provider_id: &str) -> Vec<ModelPickerEntry> {
+        self.storage
+            .get_discovered_models(provider_id)
+            .ok()
+            .flatten()
+            .and_then(|models_json| {
+                serde_json::from_str::<Vec<codemason_agent::provider::ModelInfo>>(&models_json).ok()
+            })
+            .map(|models| self.picker_entries_from_models(models))
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn selected_model_fallback_entries(
+        &self,
+        provider_id: &str,
+    ) -> Vec<ModelPickerEntry> {
+        let Some(model_ref) = self.session.selected_model.as_deref() else {
+            return Vec::new();
+        };
+        let Some((selected_provider, model_id)) = model_ref.split_once('/') else {
+            return Vec::new();
+        };
+        if selected_provider != provider_id {
+            return Vec::new();
+        }
+        vec![ModelPickerEntry {
+            provider_id: provider_id.to_string(),
+            id: model_id.to_string(),
+            name: model_id.to_string(),
+            context_window: self.session.selected_model_ctx_window.unwrap_or(0),
+            max_output: None,
+            cost_input: 0.0,
+            cost_output: 0.0,
+            reasoning: false,
+            vision: false,
+            tool_use: true,
+            thinking_levels: Vec::new(),
+            thinking_config: None,
+            cost_tier: "Unknown".to_string(),
+            cost_multiplier: "?".to_string(),
+        }]
+    }
+
+    pub(crate) fn resolved_model_entries_for_provider(
+        &self,
+        provider_id: &str,
+    ) -> Vec<ModelPickerEntry> {
+        let default_entries = || {
+            self.provider_registry
+                .get(provider_id)
+                .map(|provider| self.picker_entries_from_models(provider.default_models()))
+                .unwrap_or_default()
+        };
+
+        match provider_id {
+            "ollama" | "ollama_cloud" => {
+                let cached = self.cached_model_entries(provider_id);
+                if !cached.is_empty() {
+                    cached
+                } else {
+                    // No cached models - return the selected-model fallback so
+                    // the picker shows *something* while the async discovery
+                    // (triggered via `start_model_discovery` in the provider
+                    // setup flow) populates the cache.  Never block the UI
+                    // thread with synchronous discovery (FR-002).
+                    self.selected_model_fallback_entries(provider_id)
+                }
+            }
+            "huggingface" => {
+                let cached = self.cached_model_entries("huggingface");
+                if !cached.is_empty() {
+                    cached
+                } else {
+                    // No token and no cached/discovered models, or a token is
+                    // configured but async discovery has not yet completed.
+                    // Return an empty list so the picker shows "no models"
+                    // instead of stale hard-coded defaults; the async discovery
+                    // path will populate the cache when results arrive.
+                    Vec::new()
+                }
+            }
+            "azure_foundry" => {
+                let cached = self.cached_model_entries("azure_foundry");
+                if !cached.is_empty() {
+                    cached
+                } else {
+                    default_entries()
+                }
+            }
+            "anthropic" | "gemini" | "copilot" | "xai" | "bedrock" => {
+                let cached = self.cached_model_entries(provider_id);
+                if !cached.is_empty() {
+                    cached
+                } else {
+                    default_entries()
+                }
+            }
+            _ => {
+                let cached = self.cached_model_entries(provider_id);
+                if !cached.is_empty() {
+                    cached
+                } else {
+                    default_entries()
+                }
+            }
+        }
+    }
+
+    /// Return the list of model entries available for the given provider,
+    /// preferring cached entries, falling back to resolved defaults, and
+    /// finally to a fallback reflecting the currently selected model.
+    pub fn models_for_provider(&self, provider_id: &str) -> Vec<ModelPickerEntry> {
+        let mut models = self.resolved_model_entries_for_provider(provider_id);
+        let cached = self.cached_model_entries(provider_id);
+        if !cached.is_empty() {
+            models = cached;
+        }
+
+        if models.is_empty() {
+            return self.selected_model_fallback_entries(provider_id);
+        }
+
+        models
+    }
+
+    /// Kick off async model discovery for the given provider, emitting
+    /// `ProviderLoadingStarted` / `ProviderLoadingFinished` events so the UI
+    /// can show a spinner and populate the picker when results arrive.
+    pub(crate) fn start_model_discovery(&self, provider_id: String, provider_name: String) {
+        let registry = self.provider_registry.clone();
+        let event_bus = self.event_bus.clone();
+        event_bus.publish(Event::ProviderLoadingStarted {
+            provider_id: provider_id.clone(),
+            provider_name: provider_name.clone(),
+        });
+        tokio::spawn(async move {
+            let result = registry.get(&provider_id).map(|p| p.discover_models());
+            let (models, error) = match result {
+                Some(fut) => match fut.await {
+                    Ok(m) => (
+                        m.into_iter()
+                            .map(|model| serde_json::to_value(model).unwrap_or_default())
+                            .collect(),
+                        None,
+                    ),
+                    Err(e) => (Vec::new(), Some(format!("{e:#}"))),
+                },
+                None => (
+                    Vec::new(),
+                    Some(format!("Provider '{}' is not registered", provider_id)),
+                ),
+            };
+            event_bus.publish(Event::ProviderLoadingFinished {
+                provider_id,
+                provider_name,
+                models,
+                error,
+            });
+        });
+    }
+
+    /// Build the human-readable `"Provider / model [thinking: Level]"` label
+    /// shown in the status bar, or `None` when no provider/model is configured.
+    ///
+    /// When the active model belongs to the router virtual provider, the label
+    /// reads `"Model Router ({downstream}) / {tier}"` once a request has been
+    /// routed, showing the actual downstream model and the selected bucket.
+    /// Before the first routing decision (or when the router is not active)
+    /// it falls back to `"Model Router / router"`.
+    /// If the router is enabled but a concrete model is still selected, the
+    /// label falls back to that provider so the displayed name matches the
+    /// provider actually handling the request.
+    pub fn provider_model_label(&self) -> Option<String> {
+        self.session
+            .cached_provider_model_label
+            .clone()
+            .or_else(|| self.compute_provider_model_label())
+    }
+
+    /// Populate the cached status-bar model label (C-006). Called from the
+    /// render path where `&mut self` is available.
+    #[doc(hidden)]
+    pub fn update_cached_provider_model_label(&mut self, label: Option<String>) {
+        self.session.cached_provider_model_label = label;
+    }
+
+    #[doc(hidden)]
+    pub fn compute_provider_model_label(&self) -> Option<String> {
+        let model_ref = self.active_model_ref_string()?;
+        let (provider_id, model_id) = model_ref
+            .split_once('/')
+            .unwrap_or((&model_ref, &model_ref));
+
+        if provider_id == "router" {
+            let label = match (
+                &self.session.router_current_model,
+                &self.session.router_current_tier,
+            ) {
+                (Some(model), Some(tier)) => {
+                    format!("Model Router ({}) / {}", model, tier)
+                }
+                _ => "Model Router / router".to_string(),
+            };
+            return Some(label);
+        }
+
+        let provider_name = self
+            .configured_provider
+            .as_ref()
+            .filter(|p| p.id == provider_id)
+            .map(|p| p.name.clone())
+            .or_else(|| {
+                self.provider_registry
+                    .get(provider_id)
+                    .map(|p| p.name().to_string())
+            })
+            .unwrap_or_else(|| provider_id.to_string());
+        Some(format!("{} / {}", provider_name, model_id))
+    }
+
+    #[doc(hidden)]
+    pub fn active_model_ref_string(&self) -> Option<String> {
+        self.session.selected_model.clone().or_else(|| {
+            self.session
+                .agent_info
+                .model
+                .as_ref()
+                .map(|model| format!("{}/{}", model.provider_id, model.model_id))
+        })
+    }
+
+    pub(crate) fn active_model_metadata_report(&self) -> Option<String> {
+        let model_ref = self.active_model_ref_string()?;
+        let (provider_id, model_id) = model_ref.split_once('/').unwrap_or((&model_ref, ""));
+        let provider_name = self
+            .configured_provider
+            .as_ref()
+            .filter(|provider| provider.id == provider_id)
+            .map(|provider| provider.name.clone())
+            .or_else(|| {
+                self.provider_registry
+                    .get(provider_id)
+                    .map(|provider| provider.name().to_string())
+            })
+            .unwrap_or_else(|| provider_id.to_string());
+
+        let mut report = format!(
+            "From: /model show\n\n# Active Model\n\n- **Provider:** {} (`{}`)\n- **Model ID:** `{}`\n- **Model Ref:** `{}`\n",
+            provider_name, provider_id, model_id, model_ref
+        );
+
+        if let Some(entry) = self
+            .resolved_model_entries_for_provider(provider_id)
+            .into_iter()
+            .find(|entry| entry.id == model_id)
+        {
+            let max_output = entry
+                .max_output
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "Unknown".to_string());
+            report.push_str(&format!(
+                "\n## Capabilities\n\n- **Reasoning:** {}\n- **Vision:** {}\n- **Tool use:** {}\n\n## Limits\n\n- **Context window:** {} tokens\n- **Max output:** {}\n\n## Cost\n\n- **Input:** ${:.2} / 1M tokens\n- **Output:** ${:.2} / 1M tokens\n- **Tier:** {}\n- **Relative multiplier:** {}\n",
+                if entry.reasoning { "Yes" } else { "No" },
+                if entry.vision { "Yes" } else { "No" },
+                if entry.tool_use { "Yes" } else { "No" },
+                entry.context_window,
+                max_output,
+                entry.cost_input,
+                entry.cost_output,
+                entry.cost_tier,
+                entry.cost_multiplier,
+            ));
+            report.push_str(&format!(
+                "\n## Thinking\n\n- **Current level:** {}\n- **Supported levels:** {}\n",
+                self.effective_thinking_level_for_agent(&self.session.agent_info)
+                    .map(Self::thinking_level_display)
+                    .unwrap_or("unknown"),
+                Self::format_thinking_levels(&entry.thinking_levels),
+            ));
+
+            if entry.name != entry.id {
+                report.push_str(&format!("\n- **Display name:** {}\n", entry.name));
+            }
+        } else {
+            report.push_str("\n_Metadata could not be resolved from the provider registry._\n");
+            if let Some(context_window) = self.selected_model_context_window() {
+                report.push_str(&format!(
+                    "\n- **Cached context window:** {} tokens\n",
+                    context_window
+                ));
+            }
+        }
+
+        Some(report)
+    }
+
+    /// Render a detailed `/provider show` report for the router virtual provider,
+    /// including each tier and the provider/model pairs assigned to it (FR-010).
+    pub fn router_config_report(
+        &self,
+        _registry: &codemason_llm::provider::ProviderRegistry,
+    ) -> String {
+        let router_config = self.load_raw_router_config().unwrap_or_default();
+
+        let mut report = String::from(
+            "From: /provider show\n\n# Provider: Model Router\n\n- **ID:** `router`\n- **Name:** Model Router\n",
+        );
+        report.push_str(&format!(
+            "- **Enabled:** {}\n\n",
+            if router_config.enabled { "yes" } else { "no" }
+        ));
+
+        report.push_str("## Tier Mappings\n\n");
+        for tier in codemason_llm::providers::router_config::Tier::all() {
+            report.push_str(&format!("### {}\n\n", tier));
+            let tier_config = router_config.tier_config(*tier);
+            if tier_config.models.is_empty() {
+                report.push_str("_No models assigned._\n\n");
+            } else {
+                for entry in &tier_config.models {
+                    let provider_name = self
+                        .provider_registry
+                        .get(&entry.provider_id)
+                        .map(|p| p.name().to_string())
+                        .unwrap_or_else(|| entry.provider_id.clone());
+                    report.push_str(&format!(
+                        "- `{}` via **{}** (`{}`)\n",
+                        entry.model, provider_name, entry.provider_id
+                    ));
+                }
+                report.push('\n');
+            }
+        }
+
+        report
+    }
+
+    /// Load the raw `provider.router` block from the on-disk `codemason.json`
+    /// without being affected by `ProviderConfig` catch-all deserialisation.
+    pub(crate) fn load_raw_router_config(
+        &self,
+    ) -> Option<codemason_llm::providers::router_config::RouterConfig> {
+        for path in &self.config_paths {
+            if !path.exists() {
+                continue;
+            }
+            let raw = match std::fs::read_to_string(path) {
+                Ok(contents) => contents,
+                Err(e) => {
+                    tracing::debug!(
+                        path = %path.display(),
+                        error = %e,
+                        "failed to read router config file; skipping"
+                    );
+                    return None;
+                }
+            };
+            let json: serde_json::Value = match serde_json::from_str(&raw) {
+                Ok(value) => value,
+                Err(e) => {
+                    tracing::debug!(
+                        path = %path.display(),
+                        error = %e,
+                        "router config is not valid JSON; skipping"
+                    );
+                    return None;
+                }
+            };
+            let router_value = json.get("provider")?.get("router")?;
+            let router_config = serde_json::from_value::<
+                codemason_llm::providers::router_config::RouterConfig,
+            >(router_value.clone())
+            .ok()?;
+            return Some(router_config);
+        }
+        None
+    }
+
+    /// Build the [`ProviderSetupStep::SetupRouter`] state, seeded from the
+    /// persisted `provider.router` configuration when one exists.
+    ///
+    /// When a saved router cluster is present, its tiers (and the provider
+    /// ids referenced by them) are loaded into the draft so the user can see
+    /// and edit their existing configuration instead of starting from an
+    /// empty panel. When no configuration has been saved yet, a fresh empty
+    /// draft is used so first-time setup still presents four empty buckets.
+    ///
+    /// `selected_provider_ids` is pre-populated with the concrete providers
+    /// (from `providers`) that are referenced by any saved tier, so the left
+    /// palette reflects existing cluster membership. Providers that are no
+    /// longer configured are not pre-checked.
+    pub(crate) fn seeded_router_setup_step(
+        &self,
+        providers: Vec<ConfiguredProvider>,
+    ) -> ProviderSetupStep {
+        use codemason_llm::providers::router_config::{RouterConfig, Tier};
+
+        let (draft_config, selected_provider_ids) =
+            if let Some(saved) = self.load_raw_router_config() {
+                let provider_ids: std::collections::HashSet<String> =
+                    providers.iter().map(|p| p.id.clone()).collect();
+                let mut selected: Vec<String> = Vec::new();
+                for tier in saved.tiers.values() {
+                    for entry in &tier.models {
+                        if provider_ids.contains(&entry.provider_id)
+                            && !selected.contains(&entry.provider_id)
+                        {
+                            selected.push(entry.provider_id.clone());
+                        }
+                    }
+                }
+                (saved, selected)
+            } else {
+                (
+                    RouterConfig {
+                        enabled: false,
+                        tiers: std::collections::HashMap::new(),
+                        ..RouterConfig::default()
+                    },
+                    Vec::new(),
+                )
+            };
+
+        ProviderSetupStep::SetupRouter {
+            providers,
+            selected_provider_ids,
+            selected_provider_index: 0,
+            draft_config,
+            active_bucket: Tier::Simple,
+            active_bucket_index: 0,
+            left_pane_focused: true,
+            error: None,
+        }
+    }
+
+    /// Persist the supplied draft router cluster to `codemason.json`.
+    ///
+    /// The existing classifier weights, boundary thresholds, context window, and
+    /// timeout settings are preserved when a prior `provider.router` block
+    /// exists (FR-026). The resulting `provider.router` value is the serialised
+    /// [`RouterConfig`] itself, matching the format expected by `/router reload`
+    /// (FR-008, FR-009, FR-014).
+    pub(crate) fn save_router_config(
+        &self,
+        draft: &codemason_llm::providers::router_config::RouterConfig,
+    ) -> Result<(), String> {
+        use std::collections::HashMap;
+
+        let config_path = self.config_paths.first().cloned().unwrap_or_else(|| {
+            self.cwd_path
+                .clone()
+                .join(".codemason")
+                .join("codemason.json")
+        });
+
+        // Seed the saved config from any existing router block so we preserve
+        // weights, boundaries, and other manually-edited fields.
+        let mut saved = self.load_raw_router_config().unwrap_or_default();
+        saved.enabled = true;
+        saved.tiers = HashMap::new();
+        for (key, tier) in &draft.tiers {
+            if !tier.models.is_empty() {
+                saved.tiers.insert(key.clone(), tier.clone());
+            }
+        }
+
+        let router_value =
+            serde_json::to_value(&saved).map_err(|e| format!("serialise router config: {e}"))?;
+
+        crate::app::state::atomic_config_update(&config_path, |json| {
+            json["provider"]["router"] = router_value.clone();
+            Ok(())
+        })
+        .map_err(|e| format!("save router config: {e}"))?;
+
+        // Keep the in-memory provider registry in sync so the status bar and
+        // subsequent routing reflect the new configuration immediately.
+        if let Some(router_provider) = self
+            .provider_registry
+            .get_as_any("router")
+            .and_then(|p| p.downcast_ref::<codemason_llm::providers::router::RouterProvider>())
+        {
+            router_provider.reload_config(saved.clone());
+        }
+
+        Ok(())
+    }
+
+    /// Render a detailed `/provider show` report for a single configured
+    /// provider: id, name, source, configured models, and thinking settings.
+    pub(crate) fn provider_config_report(&self, prov: &ConfiguredProvider) -> String {
+        let mut report = format!(
+            "From: /provider show\n\n# Provider: {}\n\n- **ID:** `{}`\n- **Name:** {}\n- **Source:** {}\n",
+            prov.name,
+            prov.id,
+            prov.name,
+            match prov.source {
+                ProviderSource::EnvVar => "Environment variable",
+                ProviderSource::Database => "Database (stored credential)",
+                ProviderSource::AutoDiscovered => "Auto-discovered",
+            }
+        );
+
+        let config = self.current_config();
+        let mut has_config_section = false;
+        if let Some(provider_config) = config.provider.get(&prov.id) {
+            has_config_section = true;
+            report.push_str("\n## Configuration (codemason.json)\n\n");
+            if !provider_config.env.is_empty() {
+                report.push_str(&format!(
+                    "- **Env vars:** {}\n",
+                    provider_config.env.join(", ")
+                ));
+            }
+            if let Some(ref api) = provider_config.api {
+                if let Some(ref url) = api.base_url {
+                    report.push_str(&format!("- **API base URL:** {}\n", url));
+                }
+                if !api.headers.is_empty() {
+                    report.push_str("- **Headers:**\n");
+                    for (k, v) in &api.headers {
+                        report.push_str(&format!("  - `{}`: `{}`\n", k, v));
+                    }
+                }
+            }
+            if let Some(ref thinking) = provider_config.thinking {
+                report.push_str(&format!("- **Thinking:** {:?}\n", thinking));
+            }
+            if !provider_config.models.is_empty() {
+                report.push_str("\n**Models:**\n\n");
+                for (id, cfg) in &provider_config.models {
+                    report.push_str(&format!("- `{}`", id));
+                    if let Some(ref n) = cfg.name {
+                        report.push_str(&format!(" ({})", n));
+                    }
+                    report.push_str("\n");
+                }
+            }
+            if !provider_config.options.is_empty() {
+                report.push_str("\n**Options:**\n\n");
+                for (k, v) in &provider_config.options {
+                    report.push_str(&format!("- `{}`: {}\n", k, v));
+                }
+            }
+        }
+        // Also show stored endpoint from settings (for generic_openai / azure_foundry)
+        if prov.id == "generic_openai" || prov.id == "azure_foundry" {
+            if let Ok(Some(stored_endpoint)) =
+                self.storage.get_setting(&format!("{}_api_base", prov.id))
+            {
+                if !stored_endpoint.is_empty() {
+                    if !has_config_section {
+                        report.push_str("\n## Configuration\n\n");
+                        has_config_section = true;
+                    }
+                    report.push_str(&format!("- **Stored endpoint:** {}\n", stored_endpoint));
+                }
+            }
+        }
+        if !has_config_section {
+            report.push_str("\n_No custom configuration in codemason.json_\n");
+        }
+        let models = self.models_for_provider(&prov.id);
+        if !models.is_empty() {
+            report.push_str("\n## Available Models\n\n");
+            for m in &models {
+                report.push_str(&format!(
+                    "- `{}` (ctx: {} tokens{})\n",
+                    m.id,
+                    m.context_window,
+                    if m.name != m.id {
+                        format!(", {}", m.name)
+                    } else {
+                        String::new()
+                    }
+                ));
+            }
+        } else {
+            report.push_str("\n_No models available for this provider._\n");
+        }
+
+        report
+    }
+
+    /// Summarize accumulated LLM request stats (input/output tokens, samples,
+    /// and estimated USD cost) grouped by provider. Returns `None` when no
+    /// requests have been recorded.
+    pub(crate) fn cost_summary(&self) -> Option<String> {
+        if self.session.llm_request_stats.is_empty() {
+            return None;
+        }
+
+        #[derive(Default)]
+        struct ProviderCost {
+            input_tokens: u64,
+            output_tokens: u64,
+            samples: usize,
+            cost_usd: f64,
+        }
+
+        let mut total_input_tokens = 0u64;
+        let mut total_output_tokens = 0u64;
+        let mut total_cost = 0.0f64;
+        let mut by_provider: std::collections::HashMap<String, ProviderCost> =
+            std::collections::HashMap::new();
+
+        for sample in &self.session.llm_request_stats {
+            let (provider_id, model_id) = sample
+                .model_ref
+                .split_once('/')
+                .unwrap_or((&sample.model_ref, ""));
+            let model = self.provider_registry.resolve_model(provider_id, model_id);
+            let cost = model
+                .map(|m| {
+                    (sample.input_tokens as f64 * m.cost.input / 1_000_000.0)
+                        + (sample.output_tokens as f64 * m.cost.output / 1_000_000.0)
+                })
+                .unwrap_or(0.0);
+
+            total_input_tokens += sample.input_tokens;
+            total_output_tokens += sample.output_tokens;
+            total_cost += cost;
+
+            let entry = by_provider.entry(provider_id.to_string()).or_default();
+            entry.input_tokens += sample.input_tokens;
+            entry.output_tokens += sample.output_tokens;
+            entry.samples += 1;
+            entry.cost_usd += cost;
+        }
+
+        let session_duration = self
+            .session
+            .session_id
+            .as_deref()
+            .and_then(|sid| {
+                self.session_processor
+                    .session_manager
+                    .get_session(sid)
+                    .ok()
+                    .flatten()
+            })
+            .map(|session| chrono::Utc::now() - session.created_at)
+            .map(|duration| codemason_types::strutil::format_duration_hms(duration.num_seconds()))
+            .unwrap_or_else(|| "unknown".to_string());
+
+        let mut providers: Vec<_> = by_provider.into_iter().collect();
+        providers.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let mut out = String::from("From: /cost\n");
+        out.push_str(&format!(
+            "Samples: {}\n",
+            self.session.llm_request_stats.len()
+        ));
+        out.push_str(&format!("Session duration: {}\n", session_duration));
+        out.push_str(&format!(
+            "Total tokens: {} input / {} output\n",
+            total_input_tokens, total_output_tokens
+        ));
+        out.push_str(&format!("Estimated cost: ${:.6}\n", total_cost));
+        if !providers.is_empty() {
+            out.push_str("\nBy provider:\n");
+            for (provider, summary) in providers {
+                out.push_str(&format!(
+                    "  - {}: ${:.6} ({} in / {} out, {} samples)\n",
+                    provider,
+                    summary.cost_usd,
+                    summary.input_tokens,
+                    summary.output_tokens,
+                    summary.samples
+                ));
+            }
+        }
+
+        Some(out)
+    }
+
+    /// Spawn an async provider health check (pinging the configured endpoint)
+    /// and store the result in `provider_health` (`0` = unknown, `1` = up,
+    /// `2` = down). Resolves the Copilot token via env/IDE/`gh`/DB first.
+    ///
+    /// The Copilot token resolution (which may spawn `gh auth token` as a
+    /// subprocess) is performed **inside** the spawned async task so it does
+    /// not block the TUI render loop during startup.
+    #[doc(hidden)]
+    pub fn check_provider_health(&mut self) {
+        let provider = match &self.configured_provider {
+            Some(p) => p.clone(),
+            None => {
+                self.session.provider_health.store(0, Ordering::Relaxed);
+                return;
+            }
+        };
+        self.session.provider_health.store(0, Ordering::Relaxed);
+        let health = self.session.provider_health.clone();
+        let storage = self.storage.clone();
+
+        tokio::spawn(async move {
+            // Resolve the copilot token inside the async task so the `gh`
+            // CLI subprocess call does not block the TUI startup.
+            let copilot_token = if provider.id == "copilot" {
+                let storage = storage.clone();
+                let db_lookup = move || {
+                    storage
+                        .get_provider_auth("copilot")
+                        .ok()
+                        .flatten()
+                        .filter(|k| !k.is_empty())
+                };
+                codemason_agent::provider::copilot::resolve_copilot_github_token(Some(&db_lookup))
+            } else {
+                None
+            };
+
+            let check_start = std::time::Instant::now();
+
+            let available = match provider.id.as_str() {
+                "ollama" => tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    codemason_agent::provider::ollama::list_ollama_models(None),
+                )
+                .await
+                .map(|r| r.is_ok())
+                .unwrap_or(false),
+                "copilot" => {
+                    if let Some(token) = copilot_token {
+                        tokio::time::timeout(
+                            std::time::Duration::from_secs(8),
+                            codemason_agent::provider::copilot::check_copilot_health(&token),
+                        )
+                        .await
+                        .unwrap_or(false)
+                    } else {
+                        false
+                    }
+                }
+                // For API-key providers we trust the key is present
+                _ => true,
+            };
+
+            tracing::info!(
+                provider = %provider.id,
+                available,
+                elapsed_ms = check_start.elapsed().as_millis(),
+                "Provider health check completed"
+            );
+
+            health.store(if available { 1 } else { 2 }, Ordering::Relaxed);
+        });
+    }
+
+    /// Return the last known provider health state, or `None` if no check
+    /// has completed yet.
+    #[doc(hidden)]
+    pub fn provider_health_status(&self) -> Option<bool> {
+        match self.session.provider_health.load(Ordering::Relaxed) {
+            1 => Some(true),
+            2 => Some(false),
+            _ => None,
+        }
+    }
+
+    /// Build the `/tools` report: every registered tool, with the source it
+    /// comes from and a one-line description.
+    ///
+    /// Every registered tool is listed - there is no family switch that hides a
+    /// tool from the model, so the listing and the tool definitions the agent
+    /// sends are the same set.
+    pub(crate) fn render_tool_list(&self) -> String {
+        // The message window's markdown pipeline joins a heading line onto the
+        // `From: /tools` line (paragraph soft breaks do not survive html2text),
+        // so the blank line after the header keeps `Tools (N total):` on a line
+        // of its own. The table below follows the same rule.
+        let defs = self.session_processor.tool_registry.definitions();
+        if defs.is_empty() {
+            return String::from("From: /tools\n\nNo tools are registered.\n");
+        }
+        let mut output = String::from("From: /tools\n\n");
+        output.push_str(&format!("Tools ({} total):\n\n", defs.len()));
+        output.push_str(&format!(
+            "```text\n{:<56} {:<24} description\n{:<56} {:<24} -----------\n",
+            "name", "source", "----", "------"
+        ));
+        for def in defs.iter() {
+            // Name (56) + spacer + source (24) + spacer = 82 columns of the
+            // message window's 118 inner columns; the description is
+            // hard-truncated to 30 so no row can reach the right border.
+            output.push_str(&self.tool_row(
+                &self.session_processor.tool_registry,
+                &def.name,
+                &def.description,
+            ));
+        }
+        output.push_str("```\n");
+        output
+    }
+
+    /// Render one `/tools` table row: name (56), source (24), description (30).
+    fn tool_row(
+        &self,
+        registry: &codemason_agent::tool::ToolRegistry,
+        name: &str,
+        description: &str,
+    ) -> String {
+        let desc = codemason_types::truncate_bytes_no_ellipsis(description, 30);
+        let source = self.tool_source(registry, name);
+        format!("{name:<56} {source:<24} {desc}\n")
+    }
+
+    /// Resolve where a registered tool is provided from, for the `/tools`
+    /// source column.
+    ///
+    /// Returns, in order of precedence:
+    ///
+    /// - `mcp:<server-id>` when the tool is a bridged MCP server tool,
+    ///   resolved against the live registry via `Tool::mcp_wrapper_info` (the
+    ///   same authoritative source the `tool_info` tool uses); the name-based
+    ///   `McpToolWrapper::codemason_name_for` prefix match is only the fallback
+    ///   because a server id containing `_` cannot be recovered from the
+    ///   mangled name alone;
+    /// - `plugin:<id>` when the tool was registered by a plugin
+    ///   (name `plugin_<id>_<tool>`);
+    /// - `internal` otherwise (a core or built-in tool).
+    fn tool_source(&self, registry: &codemason_agent::tool::ToolRegistry, name: &str) -> String {
+        if let Some(tool) = registry.get(name) {
+            if let Some((server_id, _tool_name)) = tool.mcp_wrapper_info() {
+                return format!("mcp:{server_id}");
+            }
+        } else if let Some(suffix) = name.strip_prefix("mcp_") {
+            // Fallback for a name not live in the registry: match the exact
+            // `codemason_prefix_for` prefix of a live server first so a server id
+            // containing `_` is not truncated at its first segment.
+            if let Some(client) = self.session_processor.mcp_client.get()
+                && let Ok(guard) = client.try_read()
+            {
+                for server in guard.servers() {
+                    let prefix =
+                        codemason_agent::tool::McpToolWrapper::codemason_prefix_for(&server.id);
+                    if name.starts_with(&prefix) {
+                        return format!("mcp:{}", server.id);
+                    }
+                }
+            }
+            if let Some((server, _tool)) = suffix.split_once('_') {
+                return format!("mcp:{server}");
+            }
+        }
+        if let Some(rest) = name.strip_prefix("plugin_") {
+            if let Some((id, _tool)) = rest.split_once('_') {
+                return format!("plugin:{id}");
+            }
+            return "plugin".to_string();
+        }
+        "internal".to_string()
+    }
+
+    pub(crate) fn populate_directory_menu(
+        &mut self,
+        dir_rel: &std::path::Path,
+        filter: Option<&str>,
+    ) {
+        let wd = self.cwd_path.clone();
+        let abs = wd.join(dir_rel);
+        let mut entries: Vec<FileMenuEntry> = Vec::new();
+        let filter_lower = filter
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_lowercase());
+
+        if abs.is_dir() {
+            // Read the directory contents from disk (sorted)
+            if let Ok(rd) = std::fs::read_dir(&abs) {
+                let mut sorted: Vec<_> = rd.filter_map(|e| e.ok()).collect();
+                sorted.sort_by_key(|e| e.file_name());
+                for entry in sorted {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    // Skip hidden
+                    if name.starts_with('.') && !self.file_menu_show_hidden {
+                        continue;
+                    }
+                    if let Some(ref f) = filter_lower
+                        && !name.to_lowercase().contains(f)
+                    {
+                        continue;
+                    }
+                    let path_abs = entry.path();
+                    let is_dir = path_abs.is_dir();
+                    let rel = path_abs
+                        .strip_prefix(&wd)
+                        .unwrap_or(&path_abs)
+                        .to_path_buf();
+                    let display = if is_dir {
+                        format!("{}/", rel.to_string_lossy())
+                    } else {
+                        rel.to_string_lossy().to_string()
+                    };
+                    entries.push(FileMenuEntry {
+                        display,
+                        path: rel,
+                        is_dir,
+                    });
+                }
+            }
+
+            // Add parent entry if not at project root
+            if !dir_rel.as_os_str().is_empty() {
+                let parent = dir_rel.parent().unwrap_or(std::path::Path::new(""));
+                let parent_display = if parent.as_os_str().is_empty() {
+                    "../".to_string()
+                } else {
+                    format!("{}/", parent.to_string_lossy())
+                };
+                entries.insert(
+                    0,
+                    FileMenuEntry {
+                        display: parent_display,
+                        path: parent.to_path_buf(),
+                        is_dir: true,
+                    },
+                );
+            }
+
+            // Add explicit "back to fuzzy search" action.
+            entries.insert(
+                0,
+                FileMenuEntry {
+                    display: "<back to fuzzy>".to_string(),
+                    path: std::path::PathBuf::new(),
+                    is_dir: true,
+                },
+            );
+        }
+
+        if entries.is_empty() {
+            self.file_menu = None;
+        } else {
+            self.file_menu = Some(FileMenuState {
+                selected: 0,
+                matches: entries,
+                scroll_offset: 0,
+                query: filter.unwrap_or_default().to_string(),
+                current_dir: Some(dir_rel.to_path_buf()),
+            });
+        }
+    }
+
+    /// Enable autopilot mode with the given optional limits.
+    ///
+    /// Shared by `/autopilot on` and the `Alt+O` toggle so both paths start the
+    /// same state machine. Passing `None` for a limit leaves that limit disabled.
+    pub(crate) fn start_autopilot(&mut self, token_budget: Option<u64>, time_secs: Option<u64>) {
+        self.session.autopilot_enabled = true;
+        self.session.autopilot_token_budget = token_budget;
+        self.session.autopilot_time_limit_secs = time_secs;
+        self.session.autopilot_started_at = Some(std::time::Instant::now());
+    }
+
+    /// Disable autopilot mode and clear every limit and any pending continuation.
+    ///
+    /// Shared by `/autopilot off` and the `Alt+O` toggle.
+    pub(crate) fn stop_autopilot(&mut self) {
+        self.session.autopilot_enabled = false;
+        self.session.autopilot_token_budget = None;
+        self.session.autopilot_time_limit_secs = None;
+        self.session.autopilot_started_at = None;
+        self.session.autopilot_pending_continue = None;
+    }
+
+    pub(crate) fn set_profile_panel_enabled(&mut self, enabled: bool) {
+        let profiler = codemason_agent::session::profiler::agent_loop_profiler();
+        profiler.set_enabled(enabled);
+        self.show_profile = enabled;
+        if enabled {
+            // Entering profile mode: dismiss the other side panels so only one
+            // occupies the side column (FR-012 mutual-exclusion policy).
+            self.show_log = false;
+            self.show_tasks_panel = false;
+            self.show_memory = false;
+            self.show_telemetry = false;
+            self.show_context_panel = false;
+        }
+        self.status = if enabled {
+            "profile panel visible".to_string()
+        } else {
+            "profile panel hidden".to_string()
+        };
+        self.push_log_no_agent(
+            LogLevel::Info,
+            if enabled {
+                "Agent loop profiler enabled".to_string()
+            } else {
+                "Agent loop profiler disabled".to_string()
+            },
+        );
+    }
+}

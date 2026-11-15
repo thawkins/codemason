@@ -27,8 +27,6 @@ ignore = [
     # (RUSTSEC-2026-0187 is no longer ignored: the affected lopdf 0.39 copy is
     #  gone; the tree now carries lopdf 0.44.0, above the >= 0.42.0 patched
     #  floor.)
-    # (RUSTSEC-2026-0192 is no longer ignored: ttf-parser is absent from the
-    #  current tree.)
     # (RUSTSEC-2026-0367 / -0368 / -0369 are no longer ignored: the zip
     #  extraction hardening advisories no longer match the tree.)
     # (RUSTSEC-2026-0194 / -0195 are no longer ignored: quick-xml was bumped
@@ -38,6 +36,19 @@ ignore = [
     # (RUSTSEC-2026-0253 is no longer ignored: tantivy was upgraded from 0.26
     #  to 0.27, which drops the lru ^0.16.3 requirement, so the only lru left
     #  in the tree is 0.18.5 - above the 0.18.2 patched floor.)
+
+    # `ttf-parser` is unmaintained (not a vulnerability); transitive via egui/eframe (epaint fonts).
+    # No safe upgrade is available; revisit when egui is bumped.
+    "RUSTSEC-2026-0192",
+    # `zbus_names` is unmaintained (not a vulnerability); transitive via egui/eframe (accesskit_unix/atspi/zbus a11y).
+    # No safe upgrade is available; revisit when egui is bumped.
+    "RUSTSEC-2026-0371",
+    # `zvariant` is unmaintained (not a vulnerability); transitive via egui/eframe (accesskit_unix/atspi/zbus a11y).
+    # No safe upgrade is available; revisit when egui is bumped.
+    "RUSTSEC-2026-0370",
+    # `zvariant_derive` is unmaintained (not a vulnerability); transitive via egui/eframe (accesskit_unix/atspi/zbus a11y).
+    # No safe upgrade is available; revisit when egui is bumped.
+    "RUSTSEC-2026-0372",
 ]
 
 [licenses]
@@ -63,6 +74,12 @@ name = "ring"
 expression = "ISC AND MIT AND OpenSSL"
 license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 
+# epaint_default_fonts (egui) bundles font files under OFL-1.1 and the Ubuntu Font Licence;
+# those licences apply to the font files only.
+[[licenses.exceptions]]
+name = "epaint_default_fonts"
+allow = ["OFL-1.1", "Ubuntu-font-1.0"]
+
 [bans]
 # Warn on multiple versions of the same crate (common in large trees).
 multiple-versions = "warn"
@@ -71,9 +88,14 @@ multiple-versions = "warn"
 wildcards = "warn"
 
 [sources]
-# Only allow crates from crates.io and local paths.
+# Only allow crates from crates.io, local paths and the storytold forks below.
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# No git dependencies are allowed; all third-party crates come from crates.io.
-allow-git = []
+# The GUI frontend builds on the storytold egui/winit forks and craft-libs
+# (pinned by rev in the root Cargo.toml); no other git source is allowed.
+allow-git = [
+    "https://github.com/storytold/craft-libs",
+    "https://github.com/storytold/egui",
+    "https://github.com/storytold/winit",
+]

@@ -1,6 +1,6 @@
 # Benchmarking Guide
 
-This guide explains how to use codemason's built-in benchmarking system from the TUI.
+This guide explains how to use codemason's built-in benchmarking system from the GUI.
 
 The benchmark runner lets you evaluate the **currently selected provider/model** against a set of
 supported coding benchmarks, write normalized Excel workbooks, and compare results across suites
@@ -13,13 +13,13 @@ without changing output format between runs.
 The `/bench` command family provides a local benchmark workflow with:
 
 - benchmark data initialization under `benches/data/<suite>/<language>/`
-- background benchmark execution from the TUI
+- background benchmark execution from the GUI
 - one workbook per concrete benchmark suite
 - a fixed workbook schema across all suites
 - resume support for matching same-day reruns
 - status, cancel, and "open last" support for background runs
 
-Each benchmark run uses the **currently selected model** in the TUI. If you want to benchmark a
+Each benchmark run uses the **currently selected model** in the GUI. If you want to benchmark a
 different provider or model, change the selected model first, then run `/bench`.
 
 ---

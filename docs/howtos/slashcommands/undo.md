@@ -1,6 +1,6 @@
 # /undo
 
-> "Remove the last user/assistant turn pair from the conversation (/undo help)" (SlashCommandDef, crates/codemason-tui/src/app/state.rs).
+> "Remove the last user/assistant turn pair from the conversation (/undo help)" (SlashCommandDef, crates/codemason-app-core/src/app/state.rs).
 
 ## Overview
 
@@ -11,7 +11,7 @@ end of the conversation. The status bar reports how many messages were
 removed. It only edits the in-memory conversation; it does not rewrite stored
 session history.
 
-The handler is the `undo` arm in `crates/codemason-tui/src/app/slash.rs`
+The handler is the `undo` arm in `crates/codemason-app-core/src/app/slash.rs`
 (lines 5796-5851).
 
 ## Syntax

@@ -1,6 +1,6 @@
 //! Shared isolated MCP probe helper (T-309).
 //!
-//! The CLI (`src/connectors.rs`) and TUI (`crates/codemason-tui/src/app/connector.rs`)
+//! The CLI (`src/connectors.rs`) and TUI (`crates/codemason-app-core/src/app/connector.rs`)
 //! `/connectors test` harnesses both connect a brand-new, throwaway [`McpClient`]
 //! to one server and list the tools it advertises. That connect-and-list step had
 //! drifted into two byte-identical copies; it now has a single implementation

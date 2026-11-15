@@ -2,7 +2,7 @@
 
 > **Scope.** This document describes the **core ReACT agent loop** — the per-turn
 > loop that runs every time you send a message to codemason. It is *not* the
-> goal-driven `/loop` feature (see `TUI-QUICKSTART.md`, section 5, for `/loop`).
+> goal-driven `/loop` feature (see `GUI-QUICKSTART.md`, section 5, for `/loop`).
 > Where the two interact, the interaction is called out explicitly.
 
 ---
@@ -94,7 +94,7 @@ order:
 Then the reasoning stage:
 
 7. **`Event::ToolsSent`** — published **only on step 1 and only when tools
-   are offered** (`!tool_definitions.is_empty()`), so the TUI renders the
+   are offered** (`!tool_definitions.is_empty()`), so the GUI renders the
    offered tool list once.
 8. **Pre-send auto-compaction** — when `compaction.auto` is enabled and not yet
    attempted this turn, the request is token-estimated and `evaluate_trigger`
@@ -108,7 +108,7 @@ Then the reasoning stage:
    into incremental `text_buffer`, `reasoning_buffer` and accumulated
    `tool_calls`. A fatal stream error terminates the run with status `error`.
 10. **Provider-reported input tokens** — persisted into session state so the
-    TUI context panel shows the same figure next turn.
+    GUI context panel shows the same figure next turn.
 11. **Token tally** — `tracker.record_tokens(...)` is persisted; the *next*
     iteration's budget gate sees the updated totals.
 12. **Response parts** — non-empty reasoning becomes a `MessagePart::Reasoning`
@@ -211,7 +211,7 @@ Tool execution is gated by the multi-layered permission system:
 - Allow/Deny verdicts are honoured; an Allow that would auto-approve can still
   be forced into an interactive prompt when a `/loop` spec with
   `checkpoints: true` is active (destructive tools are checkpointed).
-- `--yes` / `--no-prompt` (CLI) or `/yolo` (TUI) auto-approve every prompt;
+- `--yes` / `--no-prompt` (CLI) or `/yolo` (GUI) auto-approve every prompt;
   explicit Deny rules still take precedence over allow rules.
 - A permission prompt times out to **deny** (safe default).
 
@@ -368,7 +368,7 @@ loop at its safe points. It does not change how a plain per-turn turn runs.
 | `--model <MODEL>` | Override provider/model for the loop. |
 | `--agent <AGENT>` | Agent preset driving the loop (default `general`). |
 | `--yes` (alias `--no-prompt`) | Auto-approve all permission prompts. |
-| `--no-tui` | Headless stdout instead of the TUI. |
+| `--no-tui` | Headless stdout instead of the GUI. |
 | `--maxsteps <N>` | Cap agentic loop steps (CLI help text says 500, but with no agent override the effective ceiling is the agent preset's `max_steps` — default 1024). |
 | `--no-git-context` / `--no-readme-context` | Disable git/README context injection into the system prompt. |
 | `--dry-run` | Readiness check only; never invokes model or tool. |
@@ -376,7 +376,7 @@ loop at its safe points. It does not change how a plain per-turn turn runs.
 | `codemason serve [--addr <ADDR>]` | Start the HTTP server (default `127.0.0.1:3000`). |
 | `codemason session resume <ID>` | Resume a session into a live loop. |
 
-### TUI slash commands
+### GUI slash commands
 
 | Command | Effect on the loop |
 |---|---|
@@ -469,7 +469,7 @@ exhausted, or `/autopilot off` is issued.
 
 ## 12. Related documentation
 
-- `TUI-QUICKSTART.md` — using the terminal UI (section 5 covers `/loop`)
+- `GUI-QUICKSTART.md` — using the desktop GUI (section 5 covers `/loop`)
 - `QUICKSTART.md` — installation and first-run configuration
 - `SPEC.md` — full configuration schema
 - `docs/howtos/loopprogramming.md` — the goal-driven `/loop` extension that

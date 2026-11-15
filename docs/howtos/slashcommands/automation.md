@@ -4,7 +4,7 @@
 
 ## Overview
 
-`/automation` is the TUI surface for the automation service (spec `openhands`
+`/automation` is the GUI surface for the automation service (spec `openhands`
 T-016; FR-013, FR-014, FR-018, FR-033). An **automation** is a named,
 schedulable or webhook-triggered agent run with a durable definition and run
 history.
@@ -95,7 +95,7 @@ curl -s -X POST http://127.0.0.1:3000/auto/on-issue \
   -H "Content-Type: application/json" \
   -d '{"issue":"42","title":"fix login"}'
 
-# Inspect from the TUI
+# Inspect from the GUI
 /automation
 /automation runs on-issue
 /automation run nightly

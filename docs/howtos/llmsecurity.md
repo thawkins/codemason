@@ -47,7 +47,7 @@ LLM that returns:
 
 The verdict and rationale are published as an `Event::SecurityVerdict` on the
 event bus **before** the action is permitted or refused (FR-017), so the reason a
-call was allowed, denied, or escalated to a prompt is always visible in the TUI.
+call was allowed, denied, or escalated to a prompt is always visible in the GUI.
 
 Unlike the static rules, which are deterministic and cheap, the analyzer makes one
 extra LLM call per tool action. That is the trade-off: broader contextual judgment
@@ -57,7 +57,7 @@ or escalate to a prompt.
 
 **OpenHands parity note.** The OpenHands source exposes this as an
 `--llm-approve` flag and a `SecurityAnalyzer` interface. codemason implements the same
-capability as a config-gated permission mode with a `/security` TUI surface; there
+capability as a config-gated permission mode with a `/security` GUI surface; there
 is no `--llm-approve` CLI flag. codemason already ships the static permission rules and
 the 7-layer bash validation that the analyzer layers on top of.
 
@@ -65,7 +65,7 @@ the 7-layer bash validation that the analyzer layers on top of.
 
 ## 2. Enabling It
 
-The analyzer is off by default. Enable it either from the TUI:
+The analyzer is off by default. Enable it either from the GUI:
 
 ```text
 /security on
@@ -291,7 +291,7 @@ LLM call. See `docs/howtos/config.md` section 7.39 for the full field table.
 }
 ```
 
-**Toggle it from the TUI and check state:**
+**Toggle it from the GUI and check state:**
 
 ```text
 /security on

@@ -1063,7 +1063,7 @@ fn hits(source: &str, needles: &[&str]) -> Vec<String> {
 /// each of the four surfaces drives [`SessionProcessor::process_message`], and
 /// none of them resolves a tool name of its own.
 ///
-/// - **the TUI prompt** - `crates/codemason-tui/src/app/session_ops.rs` (the
+/// - **the TUI prompt** - `crates/codemason-app-core/src/app/session_ops.rs` (the
 ///   `process_message` call the prompt submit makes);
 /// - **`codemason run`** - `src/main.rs` (the `Commands::Run` arm, which is where
 ///   the headless turn is built - `src/cli.rs` only parses the arguments);
@@ -1077,7 +1077,7 @@ fn hits(source: &str, needles: &[&str]) -> Vec<String> {
 fn test_the_inbound_paths_share_one_resolution_chain() {
     let surfaces: [(&str, &str); 4] = [
         (
-            "crates/codemason-tui/src/app/session_ops.rs",
+            "crates/codemason-app-core/src/app/session_ops.rs",
             "the TUI prompt",
         ),
         ("src/main.rs", "`codemason run`"),

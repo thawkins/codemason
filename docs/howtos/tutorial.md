@@ -1,7 +1,7 @@
 # codemason Tutorial: From Setup to Release
 
 This tutorial is a hands-on, end-to-end walkthrough for using **codemason**
-through its full-screen terminal UI. It covers the complete lifecycle of a
+through its desktop GUI. It covers the complete lifecycle of a
 project: selecting an agent mode, setting up a new project, generating code,
 debugging, and releasing to a version-control host such as GitHub.
 
@@ -14,7 +14,7 @@ cross-referenced so you can go deeper without re-reading material here.
 ## Table of Contents
 
 1. [Prerequisites](#1-prerequisites)
-2. [Starting the TUI](#2-starting-the-tui)
+2. [Starting the GUI](#2-starting-the-gui)
 3. [Selecting a Mode (Agent Preset)](#3-selecting-a-mode-agent-preset)
 4. [Setting Up a New Project](#4-setting-up-a-new-project)
 5. [Generating Code for the Project](#5-generating-code-for-the-project)
@@ -38,7 +38,7 @@ Before you begin, make sure you have:
   cluster.
   For a fully local setup, install Ollama and pull a model such as
   `qwen2.5-coder:7b`.
-- A terminal supporting 256 colours and Unicode.
+- A desktop with a display (X11, Wayland, macOS or Windows) for the GUI; without one, use `cdmn run`.
 - Git on your `PATH` if you intend to release to a VCS.
 
 You do not need a project directory yet — the next section starts from a
@@ -46,7 +46,7 @@ clean workspace.
 
 ### Selecting a provider and model
 
-If this is your first run, the TUI opens a provider setup dialog. Type
+If this is your first run, the GUI opens a provider setup dialog. Type
 `/provider` at any time to change providers:
 
 1. Select a provider from the list.
@@ -62,11 +62,11 @@ ollamacloud/kimi-k2.7-code green
 ```
 
 Use `/model` to switch models within the current provider. For the full
-provider table, see `TUI-QUICKSTART.md`.
+provider table, see `GUI-QUICKSTART.md`.
 
 ---
 
-## 2. Starting the TUI
+## 2. Starting the GUI
 
 Open a terminal and navigate to the directory where you want your new
 project to live (or create one):
@@ -77,7 +77,7 @@ cd ~/Projects/my-app
 codemason
 ```
 
-The TUI opens with three main regions:
+The GUI opens with three main regions:
 
 - **Status bar** (top) — active provider, model, agent, and health indicator.
 - **Message pane** (centre) — conversation with the agent, including tool calls.
@@ -90,15 +90,15 @@ The TUI opens with three main regions:
 | `--model ollamacloud/kimi-k2.7-code` | Start with a specific model |
 | `--agent coder` | Start with the `coder` agent profile |
 | `--yes` | Auto-approve all permission prompts |
-| `--no-tui` | Run a single prompt without the TUI |
+| `--no-tui` | Run a single prompt without the GUI |
 | `--log` | Open with the log panel already visible |
 
 ```bash
 codemason --model ollamacloud/kimi-k2.7-code --agent coder
 ```
 
-For a detailed walkthrough of the TUI layout and panels, see
-`TUI-QUICKSTART.md` in the project root.
+For a detailed walkthrough of the GUI layout and panels, see
+`GUI-QUICKSTART.md` in the project root.
 
 ---
 
@@ -121,7 +121,7 @@ tool emphasis. Switch presets at any time without restarting.
 | `task` | Focused, single-objective tasks |
 | `orchestrator` | Coordinating multiple sub-tasks or sub-agents |
 
-### Selecting a preset in the TUI
+### Selecting a preset in the GUI
 
 Type `/agent` and press `Enter` to open the interactive picker. Use the
 arrow keys to highlight a preset, then press `Enter` to confirm. Or switch
@@ -413,8 +413,6 @@ Press `Alt+L` to open the Log panel. Colour-coded events:
 | `ERR` | Error |
 | `CMP` | Compaction event |
 
-Click a log line to start a text selection; copy with `Ctrl+C`.
-
 ### 6.4 Using the Profile panel for slow operations
 
 Press `Alt+P` to open the Profile panel. It shows uptime, samples, and
@@ -574,6 +572,9 @@ See `docs/howtos/custom-agents.md` for the full schema.
 
 ## 8. Keybindings Quick Reference
 
+The keys are the Linux/Windows chords; `GUI-QUICKSTART.md` gives the macOS forms
+(for example `Cmd+Shift+L` for the Log panel and `Cmd+Q` to quit).
+
 | Key | Action |
 |-----|--------|
 | `Enter` | Send prompt |
@@ -586,7 +587,6 @@ See `docs/howtos/custom-agents.md` for the full schema.
 | `Alt+I` | Toggle TASKS panel |
 | `Alt+M` | Toggle Memory panel |
 | `Alt+O` | Toggle autopilot mode |
-| `Alt+C` | Toggle Context side panel |
 | `Alt+A` | Toggle the Agents window (same toggle as the `Agents` button) |
 | `Alt+T` | Toggle the Teams window (same toggle as the `Teams` button) |
 | `Alt+Q` | Open the queue-control menu (`Next` / `Stop` / `Clear` / `Show`) |
@@ -626,7 +626,7 @@ and it is not echoed into the message window until it is dispatched. Press
   highlighted entry one step toward the front (it runs sooner), and `Del`
   removes it. Only `Esc` dismisses the panel.
 
-`Esc` dismisses the menu without taking any action. See `TUI-QUICKSTART.md` §4.
+`Esc` dismisses the menu without taking any action. See `GUI-QUICKSTART.md` §4.
 
 The `/queue` slash command inspects the same queue from the prompt: `/queue list`
 lists the entries oldest-first, `/queue clear` empties the queue, `/queue next`
@@ -639,7 +639,7 @@ executing), and `/queue help` shows the usage.
 
 | Document | Covers |
 |----------|--------|
-| `TUI-QUICKSTART.md` | Full TUI layout, panels, startup options |
+| `GUI-QUICKSTART.md` | Full GUI layout, panels, startup options |
 | `docs/howtos/custom-agents.md` | Custom agent profiles and OASF schema |
 | `docs/howtos/teams.md` | Multi-agent team coordination |
 | `docs/howtos/spec.md` | Spec management and SDD workflow |
@@ -650,4 +650,4 @@ executing), and `/queue help` shows the usage.
 
 For topics not covered here — MCP integration, autopilot mode, prompt
 optimization, or the HTTP server — see `QUICKSTART.md` and `SPEC.md` in
-the project root, or run `/help` inside the TUI.
+the project root, or run `/help` inside the GUI.

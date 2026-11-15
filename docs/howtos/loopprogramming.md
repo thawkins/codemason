@@ -71,13 +71,13 @@ loop remains interruptible and observable like any other turn.
 | Verification | `crates/codemason-agent/src/session/verification.rs` | `run_verification_command`, `VerificationOutcome`, `verification_failure_observation` |
 | Capture / rollback | `crates/codemason-agent/src/session/loop_capture.rs` | Pre-loop snapshot, git state, change summary, `compute_change_summary` |
 | Prompt injection | `crates/codemason-agent/src/session/prompt_builders.rs` | `build_goal_loop_section` renders the `## Goal Loop` block into the turn system prompt |
-| One-shot parsing | `crates/codemason-tui/src/app/slash.rs` | `handle_loop_command` (`/loop <agent> <goal...>`) |
-| Interactive dialog | `crates/codemason-tui/src/app/loop_dialog.rs` (+ `loop_dialog/` module dir) | `LoopSetupField`, `LoopSetupState`, `build_spec_from_state`, key handling |
-| Termination rendering | `crates/codemason-tui/src/app/helpers.rs`, `event_handler.rs` | `loop_termination_banner`, `LoopTerminated` / `LoopChangeSummary` handling, rollback offer |
+| One-shot parsing | `crates/codemason-app-core/src/app/slash.rs` | `handle_loop_command` (`/loop <agent> <goal...>`) |
+| Interactive dialog | `crates/codemason-app-core/src/app/loop_dialog.rs` (+ `loop_dialog/` module dir) | `LoopSetupField`, `LoopSetupState`, `build_spec_from_state`, key handling |
+| Termination rendering | `crates/codemason-app-core/src/app/helpers.rs`, `event_handler.rs` | `loop_termination_banner`, `LoopTerminated` / `LoopChangeSummary` handling, rollback offer |
 | Config | `crates/codemason-config/src/config.rs` | `LoopConfig` serde section (`loop` key) and its defaults |
 
 `SessionProcessor::start_loop` accepts an already-built `LoopSpec`; argument
-parsing and validation live in the TUI layer.
+parsing and validation live in the GUI layer.
 
 ---
 
@@ -217,8 +217,8 @@ has been reached. The strongest form pairs the goal with a verification command:
 
 | Element | Weak | Strong |
 |---|---|---|
-| Goal | "improve the tests" | "all unit tests in `crates/codemason-tui` pass" |
-| Verify cmd | -- | `cargo test -p codemason-tui` |
+| Goal | "improve the tests" | "all unit tests in `crates/codemason-app-core` pass" |
+| Verify cmd | -- | `cargo test -p codemason-app-core` |
 | Goal | "clean up the docs" | "every `.md` file in `docs/` has a one-line summary in `docs/INDEX.md`" |
 | Verify cmd | -- | `python check_index.py` |
 
@@ -288,7 +288,7 @@ the tracker becomes stopped, after which no further stage may run.
 Note the naming: the success variant is called `GoalAchieved` internally, but
 the published status string is `completed` -- there is no `goal_achieved` status.
 
-The TUI renders a status-aware banner from
+The GUI renders a status-aware banner from
 `loop_termination_banner(status, iterations)`:
 
 | Status | Banner |
@@ -390,7 +390,7 @@ Supporting constants:
   `loop workspace is not inside a git repository (FR-018); rollback will be
   snapshot-only`.
 - **Change summary and rollback offer.** When a loop that made workspace
-  changes terminates, the processor publishes a change summary and the TUI
+  changes terminates, the processor publishes a change summary and the GUI
   offers:
 
   ```text
@@ -495,8 +495,8 @@ its default value.
 | `clear_loop_captures()` | Clear all pending pre-loop captures (rollback decline) |
 
 There is **no HTTP endpoint** for starting a loop; `/loop` is driven from the
-TUI. (`POST /sessions/{id}/messages` drives plain turns, and autopilot is the
-HTTP/TUI autonomous-continuation feature.)
+GUI. (`POST /sessions/{id}/messages` drives plain turns, and autopilot is the
+HTTP/GUI autonomous-continuation feature.)
 
 ---
 
@@ -508,8 +508,8 @@ Interactive dialog:
 
 1. `/loop`
 2. `agent`: `coder`
-3. `goal`: `cargo test -p codemason-tui passes with zero failures`
-4. `verify cmd`: `cargo test -p codemason-tui`
+3. `goal`: `cargo test -p codemason-app-core passes with zero failures`
+4. `verify cmd`: `cargo test -p codemason-app-core`
 5. `max steps`: `40`
 6. `Enter`
 
@@ -520,7 +520,7 @@ One-shot equivalent (no verify command, so the first tool-free answer ends the
 loop):
 
 ```
-/loop coder make cargo test -p codemason-tui pass with zero failures
+/loop coder make cargo test -p codemason-app-core pass with zero failures
 ```
 
 ### 13.2 Scoped refactor with protected paths
@@ -549,10 +549,10 @@ Dialog values:
 With nothing writable the loop cannot mutate the workspace; the final tool-free
 answer is the deliverable and ends the loop with `completed`.
 
-### 13.4 Budgeted doc-coverage pass (curl-driven session, then TUI loop)
+### 13.4 Budgeted doc-coverage pass (curl-driven session, then GUI loop)
 
 Start a session and drive a plain turn over HTTP (the loop itself is started in
-the TUI):
+the GUI):
 
 ```bash
 curl -s -X POST http://127.0.0.1:3000/sessions \
@@ -566,7 +566,7 @@ curl -s -X POST http://127.0.0.1:3000/sessions/<id>/messages \
   -d '{"content": "list every public function missing doc comments in crates/codemason-agent/src/session"}'
 ```
 
-Then, in the TUI against the same session, program the fix loop:
+Then, in the GUI against the same session, program the fix loop:
 
 ```
 /loop coder add doc comments to every function in the missing-docs list
@@ -589,7 +589,7 @@ codemason run --agent coder --maxsteps 50 "audit specs/agentloop against its FRs
 
 ## 14. Events and telemetry
 
-Two workspace events carry the loop lifecycle to every subscriber (TUI, SSE):
+Two workspace events carry the loop lifecycle to every subscriber (GUI, SSE):
 
 **`Event::LoopTerminated`** -- published exactly once when a stop condition
 fires. Fields:
@@ -625,7 +625,7 @@ start time. Starting a new loop resets the flag.
 - `docs/howtos/reactagent.md` -- the core per-turn ReACT agent loop (what runs
   underneath every `/loop` iteration), including `agent_perf.*`, `stream.*`, and
   compaction tuning.
-- `TUI-QUICKSTART.md` -- section "Goal-driven loops with `/loop`" for a
+- `GUI-QUICKSTART.md` -- section "Goal-driven loops with `/loop`" for a
   quick-reference version of this guide.
 - `specs/agentloop/SPEC.md` -- the requirements specification (FR-001..FR-025)
   this feature implements.

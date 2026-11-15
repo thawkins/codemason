@@ -1,12 +1,12 @@
 //! Static catalog of the built-in TUI slash commands.
 //!
 //! The authoritative slash-command registry is the `SLASH_COMMANDS` table in
-//! `crates/codemason-tui/src/app/state.rs`; the subcommand/flag suggestions come
-//! from `get_command_suggestions` in `crates/codemason-tui/src/app/slash.rs`.
+//! `crates/codemason-app-core/src/app/state.rs`; the subcommand/flag suggestions come
+//! from `get_command_suggestions` in `crates/codemason-app-core/src/app/slash.rs`.
 //! `codemason-agent` cannot depend on `codemason-tui` (the TUI depends on the agent
 //! crate, not the other way around), so this catalog is a hand-maintained
 //! mirror consumed by the `commands_info` tool. A drift-check test lives in
-//! `crates/codemason-tui/tests/test_command_catalog.rs` and fails when the two
+//! `crates/codemason-app-core/tests/test_command_catalog.rs` and fails when the two
 //! tables diverge.
 
 /// One entry in the static slash-command catalog.
@@ -26,9 +26,9 @@ pub struct CommandCatalogEntry {
 ///
 /// This is the single source every surface that offers a `/tools` form reads:
 /// `commands_info` publishes it, the TUI autocomplete menu
-/// (`get_command_suggestions`, `crates/codemason-tui/src/app/slash.rs`) offers it,
+/// (`get_command_suggestions`, `crates/codemason-app-core/src/app/slash.rs`) offers it,
 /// the menu's parameter hint (`get_parameter_hint`,
-/// `crates/codemason-tui/src/app/session_ops.rs`) is rendered from it, and the
+/// `crates/codemason-app-core/src/app/session_ops.rs`) is rendered from it, and the
 /// `/tools` handler derives both its accepted set and the forms its
 /// help page and usage warning print from it.
 ///
@@ -49,7 +49,7 @@ pub struct CommandCatalogEntry {
 pub const TOOLS_SUBS: &[&str] = &["list", "show", "help"];
 
 /// Subcommand suggestions mirrored from `get_command_suggestions`
-/// (`crates/codemason-tui/src/app/slash.rs`), which does not split plain
+/// (`crates/codemason-app-core/src/app/slash.rs`), which does not split plain
 /// subcommands from `--flags`; the split here is purely lexical (a leading
 /// `--` or `-h` marks a flag).
 const TEAM_SUBS: &[&str] = &[
@@ -198,7 +198,7 @@ const LOOP_FLAGS: &[&str] = &["--help", "-h"];
 const EMPTY: &[&str] = &[];
 
 /// Static catalog of every built-in slash command, descriptions mirrored from
-/// `SLASH_COMMANDS` in `crates/codemason-tui/src/app/state.rs`.
+/// `SLASH_COMMANDS` in `crates/codemason-app-core/src/app/state.rs`.
 pub const COMMAND_CATALOG: &[CommandCatalogEntry] = &[
     CommandCatalogEntry {
         trigger: "about",

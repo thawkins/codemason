@@ -1,10 +1,10 @@
 # /config
 
-> "Configuration: /config show|save|list|help" (SlashCommandDef, crates/codemason-tui/src/app/state.rs).
+> "Configuration: /config show|save|list|help" (SlashCommandDef, crates/codemason-app-core/src/app/state.rs).
 
 ## Overview
 
-`/config` is the in-TUI configuration inspector and backup manager. The `show`
+`/config` is the in-GUI configuration inspector and backup manager. The `show`
 form renders the resolved configuration without launching the agent: where the
 application stores its files, which config files were found on disk, and the
 final merged value of every key together with the source that supplied it. The
@@ -12,7 +12,7 @@ final merged value of every key together with the source that supplied it. The
 `config_dir/saves/` directory, and the `list` form opens an interactive picker
 over previously saved backups so one can be restored.
 
-Handlers live in `crates/codemason-tui/src/app/slash.rs` (the `config` arm,
+Handlers live in `crates/codemason-app-core/src/app/slash.rs` (the `config` arm,
 approximately lines 2238-2652). All output accumulates under a `From: /config`
 header in the message window.
 

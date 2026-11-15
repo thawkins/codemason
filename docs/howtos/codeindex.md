@@ -2,13 +2,13 @@
 
 This guide explains codemason's built-in **code index** — a tree-sitter-powered
 codebase indexing system that provides fast, structured search across all
-indexed source files. It covers the ten codeindex tools, the TUI slash
+indexed source files. It covers the ten codeindex tools, the GUI slash
 commands, supported languages, the semantic code graph, and practical
 usage patterns.
 
 > **Scope:** Code index tools, slash commands, graph analysis, language
 > support, and troubleshooting. For the full tool catalog see
-> `docs/howtos/tools/INDEX.md`. For TUI workflow see
+> `docs/howtos/tools/INDEX.md`. For GUI workflow see
 > `docs/howtos/tutorial.md`.
 
 ---
@@ -68,7 +68,7 @@ Key capabilities:
 ## 2. Enabling the Code Index
 
 The code index is controlled by the `codeindex` visibility switch (default
-`on`). Enable or disable it from the TUI:
+`on`). Enable or disable it from the GUI:
 
 ```text
 /codeindex on
@@ -532,7 +532,7 @@ where nodes are symbols and edges represent relationships (calls, type
 references, field accesses, imports). Edge confidence is tracked as a
 score.
 
-Build the graph from the TUI:
+Build the graph from the GUI:
 
 ```text
 /codeindex graph build
@@ -540,7 +540,7 @@ Build the graph from the TUI:
 
 This derives edges from the indexed symbols and stores them in the SQLite
 database. The build runs on a dedicated OS thread (`codeindex-graph-build`),
-so the TUI stays responsive: the command returns immediately with a `[wait]`
+so the GUI stays responsive: the command returns immediately with a `[wait]`
 status, the status bar animates a `graph` busy tag, and the completion
 message arrives when the build finishes. The build uses a phased lock
 discipline — a brief read-only snapshot of the derivation inputs, a
@@ -612,7 +612,7 @@ pattern that is NOT a code symbol, use `Grep`.
 
 ## 8. Slash Commands
 
-All codeindex slash commands are available in the TUI:
+All codeindex slash commands are available in the GUI:
 
 ```text
 /codeindex on              Enable codebase indexing
@@ -713,7 +713,7 @@ The semantic graph has not been built. Build it:
 The index is temporarily locked by a background operation (a reindex or a
 graph build). The tool returns immediately with a busy message instead of
 stalling; the busy report includes live `done/total` progress for the
-reindex and graph phases. The TUI status bar also animates `idx` / `graph`
+reindex and graph phases. The GUI status bar also animates `idx` / `graph`
 busy tags for the same conditions. Wait for the build to finish or check
 progress:
 
@@ -750,6 +750,6 @@ The full-text search index has no documents. Run:
 | Document | Covers |
 |----------|--------|
 | `docs/howtos/tools/INDEX.md` | Full tool catalog (149 registered static tools in the default build, 150 with a drivable headless browser engine present, + 1 dynamic tool, split by category) |
-| `docs/howtos/tutorial.md` | End-to-end TUI workflow tutorial |
+| `docs/howtos/tutorial.md` | End-to-end GUI workflow tutorial |
 | `docs/howtos/custom-agents.md` | Custom agent profiles |
-| `TUI-QUICKSTART.md` | TUI layout, panels, startup options |
+| `GUI-QUICKSTART.md` | GUI layout, panels, startup options |

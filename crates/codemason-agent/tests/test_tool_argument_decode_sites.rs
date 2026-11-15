@@ -155,7 +155,7 @@ fn dispatch_pipeline_holds_the_single_shared_decode_of_arguments() {
 fn tui_renders_arguments_through_the_shared_decoder() {
     // The TUI must not carry a second JSON rule of its own: every site that
     // turns a call's raw argument text into a value goes through the helper.
-    let source = read_workspace_file("crates/codemason-tui/src/app/event_handler.rs");
+    let source = read_workspace_file("crates/codemason-app-core/src/app/event_handler.rs");
     assert!(
         source.contains("codemason_types::tool_args::decode_tool_arguments"),
         "the TUI's tool-call renderer no longer uses the shared decoder (FR-007)"

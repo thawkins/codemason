@@ -8,7 +8,7 @@
 message list, the rendered-line cache, the tool step-numbering maps, and the
 scroll position are all reset, and the shared prompt-context cache is cleared
 so the next turn is rebuilt from scratch. The session itself is not deleted  - 
-stored history on disk is untouched; only what the TUI displays is reset.
+stored history on disk is untouched; only what the GUI displays is reset.
 
 The status bar confirms with `messages cleared` and an Info log entry records
 the action.
@@ -50,7 +50,7 @@ messages cleared
 
 ## Notes
 
-- `/clear` operates only on the TUI display layer. Sessions stored in SQLite
+- `/clear` operates only on the GUI display layer. Sessions stored in SQLite
   keep their full transcript; resuming the session restores what was stored.
 - Tool step numbering (the `1.`, `2.` step numbers shown next to tool calls)
   restarts from scratch after a clear, since the per-session step counters are

@@ -12,6 +12,10 @@ crates/codemason-agent/build.rs 2
 crates/codemason-agent/src/agent/mod.rs 2
 crates/codemason-agent/src/session/stream_buffer.rs 1
 crates/codemason-agent/src/template/mod.rs 1
+crates/codemason-app-core/src/app/init.rs 1
+crates/codemason-app-core/src/app/md_worker.rs 1
+crates/codemason-app-core/src/clipboard.rs 1
+crates/codemason-app-core/src/research_progress.rs 2
 crates/codemason-bench/src/data.rs 1
 crates/codemason-codeindex/src/parser/typescript.rs 3
 crates/codemason-codeindex/src/parser/util.rs 1
@@ -36,10 +40,3 @@ crates/codemason-tools-extended/src/masterfetch/metadata.rs 12
 crates/codemason-tools-extended/src/masterfetch/youtube.rs 1
 crates/codemason-tools-extended/src/project_scaffold/recipes.rs 2
 crates/codemason-tools-extended/src/project_scaffold/stack.rs 7
-crates/codemason-tui/build.rs 2
-crates/codemason-tui/examples/support/mod.rs 2
-crates/codemason-tui/examples/toolchain_tc_pass.rs 1
-crates/codemason-tui/src/app/init.rs 1
-crates/codemason-tui/src/app/md_worker.rs 1
-crates/codemason-tui/src/clipboard.rs 1
-crates/codemason-tui/src/research_progress.rs 2

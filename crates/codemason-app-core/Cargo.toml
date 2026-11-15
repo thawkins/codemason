@@ -1,0 +1,74 @@
+[package]
+autotests = false
+name = "codemason-app-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Frontend-neutral application state, input handling and types behind the codemason GUI"
+
+[lints]
+workspace = true
+
+[dependencies]
+codemason-agent = { path = "../codemason-agent" }
+codemason-bench = { path = "../codemason-bench" }
+codemason-codeindex = { path = "../codemason-codeindex" }
+codemason-config = { path = "../codemason-config" }
+codemason-connectors = { path = "../codemason-connectors" }
+codemason-llm = { path = "../codemason-llm" }
+codemason-plugins = { path = "../codemason-plugins" }
+codemason-research = { path = "../codemason-research" }
+codemason-server = { path = "../codemason-server" }
+codemason-specs = { path = "../codemason-specs" }
+codemason-storage = { path = "../codemason-storage" }
+codemason-telemetry = { path = "../codemason-telemetry" }
+codemason-tools-core = { path = "../codemason-tools-core" }
+codemason-tools-extended = { path = "../codemason-tools-extended" }
+codemason-tools-vcs = { path = "../codemason-tools-vcs" }
+codemason-types = { path = "../codemason-types" }
+anyhow = { workspace = true }
+arboard = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }
+fs2 = { workspace = true }
+futures = { workspace = true }
+image = { workspace = true }
+lru = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+html2text = { workspace = true }
+pulldown-cmark = "0.13"
+tempfile = "3.5"
+# Width/grapheme handling for the message/log line caches (the word wrapper
+# in `line_wrap` measures graphemes with these).
+unicode-segmentation = "1.12"
+unicode-width = "0.2"
+
+[dev-dependencies]
+axum = { workspace = true }
+criterion = { workspace = true }
+filetime = "0.2"
+parking_lot = { workspace = true }
+
+[[test]]
+name = "all"
+path = "tests/all.rs"
+
+[[bench]]
+name = "bench_markdown"
+harness = false
+
+[[bench]]
+name = "bench_cursor"
+harness = false
+
+[[bench]]
+name = "bench_history"
+harness = false

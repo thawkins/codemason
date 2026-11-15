@@ -12,7 +12,7 @@ Steps:
 1. First trigger analysis by using lsp_hover or lsp_symbols on a few key files:
    - crates/codemason-core/src/lib.rs
    - crates/codemason-core/src/config/mod.rs
-   - crates/codemason-tui/src/lib.rs
+   - crates/codemason-gui/src/lib.rs
 2. Use lsp_diagnostics to get all diagnostics
 3. Filter by severity (error vs warning vs hint)
 4. Report any errors that would prevent compilation

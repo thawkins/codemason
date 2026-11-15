@@ -544,7 +544,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         "scaffold help text listing the language ids `--language` accepts",
     ),
     Exemption(
-        "crates/codemason-tui/src/app/toolchain.rs",
+        "crates/codemason-app-core/src/app/toolchain.rs",
         ("bash",),
         'Some(LanguageRuntime::many(&["bash"])),',
         1,
@@ -612,14 +612,14 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         "TESTABLE_VERBS entry -- the English verb a requirement is validated on",
     ),
     Exemption(
-        "crates/codemason-tui/src/widgets/message_widget.rs",
+        "crates/codemason-app-core/src/message_text.rs",
         ("edit",),
         'pluralize(count, "edit", "edits")',
         1,
         "pluralize noun -- the count of edits shown in a summary line",
     ),
     Exemption(
-        "crates/codemason-tui/src/widgets/message_widget.rs",
+        "crates/codemason-app-core/src/message_text.rs",
         ("edit",),
         'pluralize(edits, "edit", "edits"),',
         1,
@@ -642,14 +642,14 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         "slash-command trigger `/bash` (the command-list editor), not a tool",
     ),
     Exemption(
-        "crates/codemason-tui/src/app/state.rs",
+        "crates/codemason-app-core/src/app/state.rs",
         ("bash",),
         'trigger: "bash",',
         1,
         "slash-command trigger `/bash` in the TUI's command table",
     ),
     Exemption(
-        "crates/codemason-tui/src/app/slash.rs",
+        "crates/codemason-app-core/src/app/slash.rs",
         ("bash",),
         '"bash" => {',
         1,
@@ -657,7 +657,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         ("e", "b"),
     ),
     Exemption(
-        "crates/codemason-tui/src/app/slash.rs",
+        "crates/codemason-app-core/src/app/slash.rs",
         ("bash",),
         '"bash",',
         1,
@@ -783,7 +783,7 @@ RESOLVER_FILES: dict[str, str] = {
         "the dispatch pipeline's name resolution and did-you-mean hint",
     "crates/codemason-config/src/permission.rs":
         "`Permission::from`, the permission-vocabulary resolver (FR-028)",
-    "crates/codemason-tui/src/widgets/message_widget.rs":
+    "crates/codemason-app-core/src/message_text.rs":
         "the tool-label renderer that maps a stored name onto its label",
 }
 

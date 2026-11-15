@@ -4,7 +4,7 @@
 
 ## Overview
 
-`/team` drives multi-agent team coordination from the TUI: create a team from
+`/team` drives multi-agent team coordination from the GUI: create a team from
 a blueprint, check team and task status, send mailbox messages to teammates,
 inspect the shared task list, and tear the team down when finished. Teammates
 themselves are spawned and coordinated with the `team_*` tools; the `/team`

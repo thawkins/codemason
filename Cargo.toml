@@ -10,8 +10,9 @@ edition = "2024"
 # `const`-context stabilisations from 1.91, so any lower floor is a claim clippy
 # rejects. Every crate inherits this via `rust-version.workspace = true`, so the
 # floor has one source of truth (audit finding: the field was previously absent,
-# and when added it understated the real floor).
-rust-version = "1.91"
+# and when added it understated the real floor). 1.95 is the floor of the
+# storytold egui/craft-libs forks the GUI frontend builds on.
+rust-version = "1.95"
 license = "MIT"
 repository = "https://github.com/thawkins/codemason"
 authors = ["Tim Hawkins <tim.thawkins@gmail.com>"]
@@ -20,13 +21,13 @@ authors = ["Tim Hawkins <tim.thawkins@gmail.com>"]
 name = "codemason"
 # One integration-test binary for the root crate (see AGENTS.md, "Test Layout").
 autotests = false
-description = "An AI coding agent for the terminal, built in Rust."
+description = "An AI coding agent desktop app, built in Rust."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-keywords = ["ai", "agent", "llm", "cli", "tui"]
+keywords = ["ai", "agent", "llm", "cli", "gui"]
 categories = ["command-line-utilities", "development-tools"]
 
 [package.metadata.deb]
@@ -40,6 +41,7 @@ assets = [
     ["README.md", "usr/share/doc/codemason/README.md", "644"],
     ["LICENSE", "usr/share/doc/codemason/LICENSE", "644"],
     ["CHANGELOG.md", "usr/share/doc/codemason/CHANGELOG.md", "644"],
+    ["THIRD-PARTY-NOTICES.txt", "usr/share/doc/codemason/THIRD-PARTY-NOTICES.txt", "644"],
 ]
 
 [package.metadata.generate-rpm]
@@ -48,6 +50,7 @@ assets = [
     { source = "README.md", dest = "/usr/share/doc/codemason/README.md", mode = "644" },
     { source = "LICENSE", dest = "/usr/share/doc/codemason/LICENSE", mode = "644" },
     { source = "CHANGELOG.md", dest = "/usr/share/doc/codemason/CHANGELOG.md", mode = "644" },
+    { source = "THIRD-PARTY-NOTICES.txt", dest = "/usr/share/doc/codemason/THIRD-PARTY-NOTICES.txt", mode = "644" },
 ]
 
 [package.metadata.wix]
@@ -178,7 +181,32 @@ codemason-connectors = { path = "crates/codemason-connectors" }
 codemason-llm = { path = "crates/codemason-llm" }
 codemason-plugins = { path = "crates/codemason-plugins" }
 codemason-server = { path = "crates/codemason-server" }
-codemason-tui = { path = "crates/codemason-tui" }
+codemason-app-core = { path = "crates/codemason-app-core" }
+codemason-gui = { path = "crates/codemason-gui" }
+
+# -- GUI frontend (egui) -----------------------------------------------------
+# Resolved to the storytold forks by the `[patch.crates-io]` table below.
+egui = "0.37"
+eframe = "0.37"
+egui_kittest = "0.37"
+# Docking layout model (craft_ui::docking) from storytold/craft-libs; `serde`
+# persists the layout. Pinned to the same rev the egui patches were copied from.
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "d15bf1f35b17b759870f9e5111b9a5d243f64888", features = ["serde"] }
+# Keyboard bindings (chords, keymap, user overrides, egui dispatch) from the
+# same craft-libs rev.
+craft-keymap = { git = "https://github.com/storytold/craft-libs", rev = "d15bf1f35b17b759870f9e5111b9a5d243f64888", features = ["egui"] }
+# Native file dialogs that never block the event loop (queued, answered on a
+# later frame) from the same craft-libs rev.
+craft-dialogs = { git = "https://github.com/storytold/craft-libs", rev = "d15bf1f35b17b759870f9e5111b9a5d243f64888" }
+# Window close routed through the platform quit (macOS `terminate:` instead of
+# closing the window, which crashes AppKit) from the same craft-libs rev.
+craft-quit = { git = "https://github.com/storytold/craft-libs", rev = "d15bf1f35b17b759870f9e5111b9a5d243f64888", features = ["egui"] }
+# Menu model and layouts (platform-free) plus the macOS menu-bar backend
+# (muda, macOS only) from the same craft-libs rev.
+craft-menu = { git = "https://github.com/storytold/craft-libs", rev = "d15bf1f35b17b759870f9e5111b9a5d243f64888" }
+# Window restore (saved placement per window, off-screen placement rules)
+# from the same craft-libs rev; only the egui-free `restore` feature.
+craft-window = { git = "https://github.com/storytold/craft-libs", rev = "d15bf1f35b17b759870f9e5111b9a5d243f64888", default-features = false, features = ["restore"] }
 
 # ── Hashing / file-locking ───────────────────────────────────────────────
 num_cpus = "1.16"
@@ -229,10 +257,6 @@ clap = { version = "4", features = ["derive"] }
 axum = { version = "0.8", features = ["macros"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
-
-# ── TUI ──────────────────────────────────────────────────────────────────
-ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
-crossterm = "0.28"
 
 # ── File / path / text ──────────────────────────────────────────────────
 globset = "0.4"
@@ -317,6 +341,23 @@ pdf-extract = { path = "vendor/pdf-extract" }
 # `WrappedBlock::flush_word` — upstream 0.16.7 computes `self.width - self.line.len`
 # with plain subtraction. See vendor/html2text/src/render/text_renderer.rs.
 html2text = { path = "vendor/html2text" }
+# egui/winit forks, copied from the storytold/craft-libs root Cargo.toml at rev
+# d15bf1f35b17b759870f9e5111b9a5d243f64888 (its vendor/ path patches are
+# craft-libs-local and are not copied; nor are egui_extras, egui_demo_lib and
+# egui_inspection, which nothing here uses yet and cargo warns about as unused
+# patches - add each back with the first crate that depends on it).
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
 
 [[bin]]
 name = "cdmn"
@@ -331,7 +372,7 @@ default = []
 # The `telemetry` feature is no longer required; telemetry is hardwired into the
 # binary by default via `codemason-telemetry`'s own default feature. Kept as an
 # alias for compatibility with any scripts still passing --features telemetry.
-telemetry = ["codemason-tui/telemetry"]
+telemetry = []
 # ACP server endpoint on stdio for ACP-capable editors (spec `openhands`
 # FR-022, FR-028). Off by default; also gated at runtime by the
 # `acp.server_enabled` config key. Enable with `--features acp-server`.
@@ -360,7 +401,8 @@ codemason-connectors = { workspace = true }
 codemason-llm = { workspace = true }
 codemason-plugins = { workspace = true }
 codemason-server = { workspace = true }
-codemason-tui = { workspace = true }
+codemason-app-core = { workspace = true }
+codemason-gui = { workspace = true }
 codemason-specs = { workspace = true }
 codemason-research = { workspace = true }
 codemason-types = { workspace = true }

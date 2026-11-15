@@ -1,6 +1,6 @@
 # /name
 
-> "Set a human-readable display name for the session: /name <display-name> | /name help" (SlashCommandDef, crates/codemason-tui/src/app/state.rs).
+> "Set a human-readable display name for the session: /name <display-name> | /name help" (SlashCommandDef, crates/codemason-app-core/src/app/state.rs).
 
 ## Overview
 
@@ -10,7 +10,7 @@ session lists and survives restarts and resume operations. Calling `/name`
 with no argument clears the existing name. Use it to label long-running work
 sessions so they are easy to find later with the `codemason session list` CLI command.
 
-The handler is the `name` arm in `crates/codemason-tui/src/app/slash.rs`
+The handler is the `name` arm in `crates/codemason-app-core/src/app/slash.rs`
 (lines 5855-5913).
 
 ## Syntax

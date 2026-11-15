@@ -163,7 +163,7 @@ cache coherent (the M-025 discipline):
   `Config::save_to_source()` calls `Config::invalidate_load_cache()`, so the
   next `load()` re-reads from disk instead of serving the pre-save config.
 
-Together these guarantee that TUI saves (`/codeindex off`, `/tools`, ...) are
+Together these guarantee that GUI saves (`/codeindex off`, `/tools`, ...) are
 immediately visible to subsequent loads in the same process — including the
 case where the save created a config file that was absent from the cached
 mtime snapshot (for example, a fresh environment with no global config, as on
@@ -1167,7 +1167,7 @@ Wraps `OtelConfig` as `telemetry.otel`.
 
 #### `OtelLogsConfig` schema (`telemetry.otel.logs`)
 
-Codemason logs through `tracing` to a local sink: the TUI log panel in a terminal
+Codemason logs through `tracing` to a local sink: the GUI log panel in a terminal
 session, or stderr in a headless/server run. When telemetry is on, a **second**
 destination - the same OTLP collector that receives the metrics - is fed from
 this block, without redirecting the local sink. There is no separate logs
@@ -1530,12 +1530,12 @@ the sandbox budgets, the store location, and per-plugin permission grants.
 
 The section merges with overlay-wins precedence (project config overrides
 user-global). Manage plugins with `/plugins list|add|remove|enable|disable|test|help`
-in the TUI or `codemason plugins <sub>` from the CLI. See
+in the GUI or `codemason plugins <sub>` from the CLI. See
 [`docs/howtos/slashcommands/plugins.md`](slashcommands/plugins.md).
 
 ### 7.32 `input_queue_capacity`
 
-Maximum number of messages the TUI message input queue may hold (spec
+Maximum number of messages the GUI message input queue may hold (spec
 `inputqueue`). While the primary agent is executing, messages submitted with
 `Enter` are staged in this bounded FIFO queue and run at each turn boundary; a
 two-digit counter appears before the prompt while entries are pending.
@@ -1553,7 +1553,7 @@ two-digit counter appears before the prompt while entries are pending.
 The field merges overlay-wins: an explicitly set project value survives an
 absent user-global value. The per-run queue is in memory only and is never
 persisted. Manage the queue with the `Alt+Q` menu or the `/queue` slash command
-(see `docs/howtos/slashcommands/queue.md` and `TUI-QUICKSTART.md` §4).
+(see `docs/howtos/slashcommands/queue.md` and `GUI-QUICKSTART.md` §4).
 
 ### 7.33 `connectors`
 
@@ -1594,7 +1594,7 @@ and the non-secret credential-name mapping.
 
 The section merges with overlay-wins precedence (project config overrides
 user-global). Manage connectors with `/connectors list|claude|add|remove|enable|disable|connect|disconnect|auth|test|stores|marketplace|help`
-in the TUI or `codemason connectors <sub>` from the CLI.
+in the GUI or `codemason connectors <sub>` from the CLI.
 
 ---
 
@@ -1605,7 +1605,7 @@ FR-026). When unset, codemason executes tools on the host exactly as before
 (`local`, FR-019). A `docker` or `podman` selection runs the shell, file, and
 search tools inside a container instead. A `remote` selection relays the whole
 turn to a second codemason server over its REST+SSE API and mirrors that server's
-event stream into the local TUI (FR-021).
+event stream into the local GUI (FR-021).
 
 ```jsonc
 {
@@ -1671,7 +1671,7 @@ remote server, posts the prompt to `POST /sessions/{id}/messages`, and mirrors
 the server's `text/event-stream` events into the local event bus so the turn
 renders exactly like a local one (FR-021). If the remote server cannot be
 reached before the turn, or drops the stream part-way through it, the turn fails
-with a connection error shown in the TUI and none of that turn's tools are
+with a connection error shown in the GUI and none of that turn's tools are
 re-executed locally (FR-031, FR-034). A remote backend with no `url` fails at
 provisioning rather than falling back to host execution.
 
@@ -1683,7 +1683,7 @@ model from it. The built-in `local` entry is always present and healthy
 (FR-019); a `docker`/`podman` entry is `ok` when its runtime is on `PATH`, else
 `unavailable`; a `remote` entry is `ok` when a `url` and a key are configured
 (FR-030), and a live `/health` probe refines that state (the probe targets the
-server's **public** `/health` endpoint, so no key is sent). The TUI backend
+server's **public** `/health` endpoint, so no key is sent). The GUI backend
 surface (T-005, FR-008) renders this registry: the active backend, each
 registered backend's health, and a switcher.
 
@@ -1701,7 +1701,7 @@ the client subsystem inert.
 `true`, codemason **serves** ACP-capable editors (Zed, VS Code, JetBrains) over
 JSON-RPC on its own stdio. Disabled by default. Serving additionally requires a
 binary built with the `acp-server` Cargo feature, and the endpoint is reachable
-only through the `codemason acp-server` subcommand (not via the TUI or `run`):
+only through the `codemason acp-server` subcommand (not via the GUI or `run`):
 
 ```json
 {
@@ -1937,7 +1937,7 @@ defaults, so a `codemason.json` that has never set them round-trips byte-identic
 | Field | Type | Default | Description |
 | ----- | ---- | ------- | ----------- |
 | `completed_history` | `usize` | `20` | Cap on the Agents panel's completed-history section (`DEFAULT_AGENTS_COMPLETED_HISTORY`). Clamped `1..=200`. |
-| `max_launching` | `usize` | `4` | Cap on concurrently launching sub-agent tasks across every TUI launch path (`DEFAULT_AGENTS_MAX_LAUNCHING`). Clamped `1..=64`. |
+| `max_launching` | `usize` | `4` | Cap on concurrently launching sub-agent tasks across every GUI launch path (`DEFAULT_AGENTS_MAX_LAUNCHING`). Clamped `1..=64`. |
 
 **Why `completed_history` exists.** The panel's completed section keeps finished
 tasks visible newest-first after their live row is gone, which is how a `[memory]`
@@ -1947,7 +1947,7 @@ memory cost stays constant in session length.
 
 **Why `max_launching` exists.** `/spawn` used to hold its own single-slot
 `Mutex`, so only one launch could be in flight from that command while every
-other path behaved differently. Every TUI launch now registers on one shared,
+other path behaved differently. Every GUI launch now registers on one shared,
 bounded launch set: a second launch queues behind the busy ones and names them
 rather than being refused outright.
 
@@ -1991,7 +1991,7 @@ every other codemason process first. See `docs/sqlite.md` for the storage-level
 detail.
 
 Surfaces: the startup pass (on a blocking thread, so it never stalls startup),
-`codemason db prune [--days N] [--dry-run]`, and the TUI `/db prune [--days N]
+`codemason db prune [--days N] [--dry-run]`, and the GUI `/db prune [--days N]
 [--dry-run]` (confirmed, with `No` preselected).
 
 ---
