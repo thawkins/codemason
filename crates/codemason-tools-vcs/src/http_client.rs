@@ -56,12 +56,25 @@ pub fn shared_client() -> Client {
 pub async fn read_tail(resp: reqwest::Response, limit: usize) -> reqwest::Result<Vec<u8>> {
     read_tail_counting_lines(resp, limit)
         .await
-        .map(|(tail, _)| tail)
+        .map(|counted| counted.tail)
 }
 
-/// Like [`read_tail`], but also counts the lines of the *whole* body, with
-/// the same rule as [`str::lines`]: every `\n` ends a line, plus one more
-/// for trailing bytes after the last `\n`. An empty body has zero lines.
+/// The bounded tail of a streamed body, from [`read_tail_counting_lines`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CountedTail {
+    /// The last `limit` bytes of the body.
+    pub tail: Vec<u8>,
+    /// Lines in the *whole* body, with the same rule as [`str::lines`]: every
+    /// `\n` ends a line, plus one more for trailing bytes after the last `\n`.
+    /// An empty body has zero lines.
+    pub total_lines: u64,
+    /// `true` when bytes before `tail` were dropped and the cut fell inside a
+    /// line, so the first line of `tail` is only that line's suffix.
+    pub starts_mid_line: bool,
+}
+
+/// Like [`read_tail`], but also counts the lines of the whole body and says
+/// whether the byte cut split a line; see [`CountedTail`].
 ///
 /// # Errors
 ///
@@ -69,15 +82,25 @@ pub async fn read_tail(resp: reqwest::Response, limit: usize) -> reqwest::Result
 pub async fn read_tail_counting_lines(
     resp: reqwest::Response,
     limit: usize,
-) -> reqwest::Result<(Vec<u8>, u64)> {
+) -> reqwest::Result<CountedTail> {
     use futures::StreamExt as _;
     let mut stream = resp.bytes_stream();
     let mut tail: Vec<u8> = Vec::new();
     let mut newlines: u64 = 0;
     let mut last_byte: Option<u8> = None;
+    // The byte just before the retained tail, once anything was dropped.
+    let mut byte_before_tail: Option<u8> = None;
+    let mut drop_front = |tail: &mut Vec<u8>, keep: usize| {
+        let cut = tail.len() - keep;
+        byte_before_tail = Some(tail[cut - 1]);
+        tail.drain(..cut);
+    };
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
-        newlines += chunk.iter().filter(|&&b| b == b'\n').count() as u64;
+        // Chunks are bounded by the HTTP body reader; a plain scan is enough.
+        #[allow(clippy::naive_bytecount)]
+        let chunk_newlines = chunk.iter().filter(|&&b| b == b'\n').count();
+        newlines += chunk_newlines as u64;
         if let Some(&b) = chunk.last() {
             last_byte = Some(b);
         }
@@ -85,16 +108,20 @@ pub async fn read_tail_counting_lines(
         // Trim only once the buffer is twice the limit, so each byte is
         // moved at most a few times.
         if tail.len() > limit.saturating_mul(2) {
-            tail.drain(..tail.len() - limit);
+            drop_front(&mut tail, limit);
         }
     }
     if tail.len() > limit {
-        tail.drain(..tail.len() - limit);
+        drop_front(&mut tail, limit);
     }
-    let lines = match last_byte {
+    let total_lines = match last_byte {
         None => 0,
         Some(b'\n') => newlines,
         Some(_) => newlines + 1,
     };
-    Ok((tail, lines))
+    Ok(CountedTail {
+        tail,
+        total_lines,
+        starts_mid_line: byte_before_tail.is_some_and(|b| b != b'\n'),
+    })
 }

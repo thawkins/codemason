@@ -526,18 +526,22 @@ impl Tool for GitLabGetJobLogTool {
 
         // A job trace is attacker-influenced and can be gigabytes: stream it,
         // keep only a bounded tail, and count lines over the whole body.
-        let (tail_bytes, total_lines) =
-            crate::http_client::read_tail_counting_lines(resp, JOB_TRACE_TAIL_BYTES)
-                .await
-                .context("Failed to read job trace")?;
-        let tail_text = String::from_utf8_lossy(&tail_bytes);
+        let counted = crate::http_client::read_tail_counting_lines(resp, JOB_TRACE_TAIL_BYTES)
+            .await
+            .context("Failed to read job trace")?;
+        let total_lines = counted.total_lines;
+        let tail_text = String::from_utf8_lossy(&counted.tail);
         let mut lines: Vec<&str> = tail_text.lines().collect();
-        // The byte cut can land mid-line; drop that partial first line.
-        if (lines.len() as u64) < total_lines && !lines.is_empty() {
+        // When the byte cut split a line, the first retained line is only its
+        // suffix: drop it, unless it is all that is left (one line longer than
+        // the buffer), which is then returned as a marked partial.
+        let partial_first = counted.starts_mid_line;
+        if partial_first && lines.len() > 1 {
             lines.remove(0);
         }
         let output_lines = &lines[lines.len().saturating_sub(tail)..];
-        let truncated = (output_lines.len() as u64) < total_lines;
+        let returned_partial = partial_first && lines.len() == 1;
+        let truncated = (output_lines.len() as u64) < total_lines || returned_partial;
 
         let mut content = String::new();
         if truncated {

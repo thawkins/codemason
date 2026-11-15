@@ -20,13 +20,13 @@
 
 use std::sync::Arc;
 
-use codemason_tools_vcs::ToolContext;
 use codemason_tools_vcs::gitlab::{
     GitLabCancelJobTool, GitLabCancelPipelineTool, GitLabGetJobLogTool, GitLabGetJobTool,
     GitLabGetPipelineTool, GitLabListJobsTool, GitLabListPipelinesTool, GitLabRetryJobTool,
     GitLabRetryPipelineTool, Tool,
 };
 use codemason_tools_vcs::storage::StorageBackend;
+use codemason_tools_vcs::{ToolContext, ToolOutput};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use wiremock::matchers::{body_json, method, path};
@@ -455,6 +455,46 @@ async fn test_gitlab_get_job_log_tails_a_trace_larger_than_the_buffer() {
         &out.content[..200]
     );
     assert!(out.content.ends_with(&format!("line {total:06}")));
+}
+
+/// Serve `trace` as job 42's log and fetch it with `tail`.
+async fn job_log_for(trace: String, tail: u64) -> ToolOutput {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/api/v4/projects/{ENC}/jobs/42/trace")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(trace))
+        .mount(&server)
+        .await;
+    let (ctx, _env, _dir) = context_for(&server, "group/project");
+    GitLabGetJobLogTool
+        .execute(json!({"job_id": 42, "tail": tail}), &ctx)
+        .await
+        .expect("job log")
+}
+
+#[tokio::test]
+async fn test_gitlab_get_job_log_keeps_a_line_when_the_cut_falls_on_a_boundary() {
+    let _lock = crate::global_env_lock();
+    // 3000 lines of exactly 1 KiB: the 1 MiB tail holds exactly the last 1024
+    // whole lines, so none of them may be dropped as "partial".
+    let trace: String = (1..=3000)
+        .map(|i| format!("{i:04}{}\n", "x".repeat(1019)))
+        .collect();
+    let out = job_log_for(trace, 2000).await;
+    let meta = out.metadata.expect("metadata");
+    assert_eq!(meta["total_lines"], 3000);
+    assert_eq!(meta["returned_lines"], 1024);
+    assert!(out.content.contains(&format!("\n1977{}", "x".repeat(1019))));
+}
+
+#[tokio::test]
+async fn test_gitlab_get_job_log_marks_a_single_oversized_line_as_truncated() {
+    let _lock = crate::global_env_lock();
+    let out = job_log_for("y".repeat(3 * 1024 * 1024), 10).await;
+    let meta = out.metadata.expect("metadata");
+    assert_eq!(meta["total_lines"], 1);
+    assert_eq!(meta["returned_lines"], 1);
+    assert_eq!(meta["truncated"], true, "a partial line must be flagged");
 }
 
 #[tokio::test]
