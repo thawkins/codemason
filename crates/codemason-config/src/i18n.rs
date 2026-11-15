@@ -415,14 +415,14 @@ pub fn persist(enabled: Option<bool>, locale: Option<&str>) -> anyhow::Result<()
     if let Some(locale) = locale {
         section.locale = locale.trim().to_string();
     }
-    // Edit only the changed `i18n` fields in the loaded source file: saving
-    // the merged config would copy every other layer's values into it.
-    if enabled.is_some() {
-        config.set_source_value(&["i18n", "enabled"], serde_json::json!(section.enabled))?;
-    }
-    if locale.is_some() {
-        config.set_source_value(&["i18n", "locale"], serde_json::json!(section.locale))?;
-    }
+    // Edit only the `i18n` section in the loaded source file (saving the
+    // merged config would copy every other layer's values into it). The whole
+    // effective section is written: `i18n` merges as a unit, so writing one
+    // field would reset the other (an inherited `locale` back to "en").
+    config.set_source_value(
+        &["i18n"],
+        serde_json::json!({ "enabled": section.enabled, "locale": section.locale }),
+    )?;
     config.i18n = Some(section);
     sync_from_config(&config);
     Ok(())

@@ -2029,7 +2029,11 @@ impl Config {
         if project_path.exists() {
             let overlay = Self::load_file(&project_path)?;
             config = Self::merge_project(config, overlay);
-            config.config_paths.push(project_path.clone());
+            // Recorded absolute, so a write after a cwd change still targets
+            // this project's file (see `Config::source_path`).
+            config
+                .config_paths
+                .push(std::path::absolute(&project_path).unwrap_or_else(|_| project_path.clone()));
             loaded = true;
         }
         // If neither global nor project config exists, create a default
@@ -2053,7 +2057,9 @@ impl Config {
                     e
                 )
             })?;
-            config.config_paths.push(project_path);
+            config
+                .config_paths
+                .push(std::path::absolute(&project_path).unwrap_or(project_path));
         }
 
         // Environment variable pointing to config file
@@ -2744,9 +2750,15 @@ impl Config {
         self.edit_source_config(|root| {
             let mut object = root;
             for key in parents {
-                object = object
+                let slot = object
                     .entry((*key).to_string())
-                    .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+                    .or_insert(serde_json::Value::Null);
+                // An explicit `null` loads as an absent optional section, so it
+                // is treated like a missing one.
+                if slot.is_null() {
+                    *slot = serde_json::Value::Object(serde_json::Map::new());
+                }
+                object = slot
                     .as_object_mut()
                     .ok_or_else(|| anyhow::anyhow!("config key '{key}' is not an object"))?;
             }
@@ -2771,10 +2783,47 @@ impl Config {
                     .is_some_and(|parent| parent.file_name().is_some_and(|f| f == ".codemason"))
         });
         match loaded_project {
-            Some(project) => Ok(project.clone()),
+            Some(project) => {
+                Self::ensure_project_file_is_contained(project)?;
+                Ok(project.clone())
+            }
             None => Self::global_config_path()
                 .ok_or_else(|| anyhow::anyhow!("no config directory found")),
         }
+    }
+
+    /// Refuse to write a project `.codemason/codemason.json` that is a symlink
+    /// or whose `.codemason` directory resolves outside the project.
+    ///
+    /// The file is repository content. A link such as
+    /// `.codemason/codemason.json -> ~/.config/codemason/codemason.json` would
+    /// make an edit read the user-global config and the atomic rename replace
+    /// the link with a regular project file holding the global secrets.
+    fn ensure_project_file_is_contained(path: &Path) -> anyhow::Result<()> {
+        let refuse = |why: &str| {
+            anyhow::anyhow!(
+                "refusing to write project config '{}': {why}",
+                path.display()
+            )
+        };
+        if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(refuse("it is a symbolic link"));
+        }
+        let dir = path
+            .parent()
+            .ok_or_else(|| refuse("it has no parent directory"))?;
+        let project = dir
+            .parent()
+            .ok_or_else(|| refuse("it has no project directory"))?;
+        let (Ok(dir), Ok(project)) = (dir.canonicalize(), project.canonicalize()) else {
+            return Err(refuse("its directory cannot be resolved"));
+        };
+        if dir != project.join(".codemason") {
+            return Err(refuse(
+                "its .codemason directory resolves outside the project",
+            ));
+        }
+        Ok(())
     }
 
     /// The raw-JSON read-edit-write shared by [`Config::edit_global_config`]

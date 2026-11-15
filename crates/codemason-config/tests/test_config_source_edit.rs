@@ -174,3 +174,98 @@ fn test_source_edit_refuses_to_overwrite_an_unparseable_source() {
         broken
     );
 }
+
+/// A project config that is a symlink to the user-global file must not be
+/// edited: the atomic rename would replace the link with a regular project
+/// file holding the global secrets.
+#[cfg(unix)]
+#[test]
+#[serial]
+fn test_source_edit_refuses_a_project_file_symlinked_to_the_global_config() {
+    let env = Isolated::new();
+    env.write_global(r#"{ "tavily_api_key": "USER-SECRET" }"#);
+    let project = env.tmp.path().join("linked");
+    std::fs::create_dir_all(project.join(".codemason")).expect("dir");
+    let link = project.join(".codemason/codemason.json");
+    std::os::unix::fs::symlink(env.global_file(), &link).expect("symlink");
+    std::env::set_current_dir(&project).expect("cwd");
+
+    let config = Config::load().expect("load");
+    let err = config
+        .set_source_value(&["code_index", "enabled"], serde_json::json!(false))
+        .expect_err("a symlinked project config must not be written");
+    assert!(err.to_string().contains("symbolic link"), "got: {err}");
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .expect("link")
+            .file_type()
+            .is_symlink(),
+        "the link must be left in place"
+    );
+    assert_eq!(
+        read_json(&env.global_file()),
+        serde_json::json!({ "tavily_api_key": "USER-SECRET" })
+    );
+}
+
+/// `"section": null` loads as an absent optional section, so a toggle must
+/// treat it like a missing one instead of failing with "not an object".
+#[test]
+#[serial]
+fn test_source_edit_replaces_a_null_section() {
+    let env = Isolated::new();
+    let project = env.project("p", r#"{ "security_analyzer": null }"#);
+    std::env::set_current_dir(&project).expect("cwd");
+
+    Config::load()
+        .expect("load")
+        .set_source_value(&["security_analyzer", "enabled"], serde_json::json!(true))
+        .expect("a null section is replaced");
+    assert_eq!(
+        read_json(&project.join(".codemason/codemason.json")),
+        serde_json::json!({ "security_analyzer": { "enabled": true } })
+    );
+}
+
+/// The project path is recorded absolute at load time, so changing the cwd
+/// between the load and the edit still writes the loaded project.
+#[test]
+#[serial]
+fn test_source_edit_after_a_cwd_change_targets_the_loaded_project() {
+    let env = Isolated::new();
+    let a = env.project("a", r#"{ "username": "a" }"#);
+    let b = env.project("b", r#"{ "username": "b" }"#);
+    std::env::set_current_dir(&a).expect("cwd a");
+    let config = Config::load().expect("load a");
+    std::env::set_current_dir(&b).expect("cwd b");
+
+    config
+        .set_source_value(&["code_index", "enabled"], serde_json::json!(false))
+        .expect("edit");
+    assert_eq!(
+        read_json(&a.join(".codemason/codemason.json")),
+        serde_json::json!({ "username": "a", "code_index": { "enabled": false } })
+    );
+    assert_eq!(
+        read_json(&b.join(".codemason/codemason.json")),
+        serde_json::json!({ "username": "b" }),
+        "the new cwd's project must be untouched"
+    );
+}
+
+/// `i18n` merges as a whole section, so `/i18n on` must keep an inherited
+/// locale rather than write `enabled` alone and reset `locale` to "en".
+#[test]
+#[serial]
+fn test_i18n_toggle_keeps_the_inherited_locale() {
+    let env = Isolated::new();
+    env.write_global(r#"{ "i18n": { "enabled": false, "locale": "fr" } }"#);
+    let project = env.project("p", r#"{ "username": "project" }"#);
+    std::env::set_current_dir(&project).expect("cwd");
+
+    codemason_config::i18n::persist(Some(true), None).expect("persist");
+    let reloaded = Config::load().expect("reload");
+    let i18n = reloaded.i18n.expect("i18n section");
+    assert!(i18n.enabled);
+    assert_eq!(i18n.locale, "fr");
+}
