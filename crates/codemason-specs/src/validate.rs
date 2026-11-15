@@ -1472,31 +1472,25 @@ pub fn validate_structure(spec: &Spec, report: &mut Report) {
         }
     }
 
-    // Check frontmatter status validity
-    for (i, line) in spec.spec_md.lines().enumerate() {
-        if line.trim() == "---" {
-            // Look for status in the next few lines
-            for j in (i + 1)..(i + 10) {
-                if let Some(l) = spec.spec_md.lines().nth(j) {
-                    if l.trim() == "---" {
-                        break;
-                    }
-                    if let Some(caps) = RE_STATUS_FRONTMATTER.captures(l.trim()) {
-                        let status_str = &caps[1];
-                        if SpecStatus::parse(status_str).is_none() {
-                            report.add(
-                                Issue::new(
-                                    Severity::Error,
-                                    Category::InvalidStatus,
-                                    format!("Unknown status value: {status_str}"),
-                                )
-                                .with_line(i + j + 2),
-                            );
-                        }
-                    }
+    // Check frontmatter status validity. The frontmatter block is the one
+    // `split_frontmatter` recognises: an opening `---` on line 1 closed by
+    // the next whole line equal to `---` (RS-04).
+    if let Some((frontmatter, _)) = crate::io::split_frontmatter(&spec.spec_md) {
+        for (k, line) in frontmatter.lines().enumerate() {
+            if let Some(caps) = RE_STATUS_FRONTMATTER.captures(line.trim()) {
+                let status_str = &caps[1];
+                if SpecStatus::parse(status_str).is_none() {
+                    // Line 1 is the opening `---`; frontmatter line k is k + 2.
+                    report.add(
+                        Issue::new(
+                            Severity::Error,
+                            Category::InvalidStatus,
+                            format!("Unknown status value: {status_str}"),
+                        )
+                        .with_line(k + 2),
+                    );
                 }
             }
-            break;
         }
     }
 
@@ -1517,11 +1511,7 @@ pub fn validate_structure(spec: &Spec, report: &mut Report) {
 }
 
 fn extract_frontmatter_status(content: &str) -> Option<String> {
-    if !content.starts_with("---") {
-        return None;
-    }
-    let end = content[3..].find("---")?;
-    let frontmatter = &content[3..3 + end];
+    let (frontmatter, _) = crate::io::split_frontmatter(content)?;
     for line in frontmatter.lines() {
         let trimmed = line.trim();
         if let Some(val) = trimmed.strip_prefix("status:") {
