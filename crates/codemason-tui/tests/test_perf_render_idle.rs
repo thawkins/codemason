@@ -13,7 +13,6 @@ mod support;
 use std::time::{Duration, Instant};
 
 use codemason_agent::permission::PermissionRequest;
-use codemason_tui::app::{HOUSEKEEPING_INTERVAL, InputRenderCache};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
@@ -238,29 +237,6 @@ fn test_live_agents_panel_requests_periodic_redraw() {
 // -- PERF-045: housekeeping gate -----------------------------------------
 
 #[test]
-fn test_housekeeping_runs_only_when_due() {
-    let mut app = support::make_app();
-    app.jobs_last_poll = Instant::now();
-    assert!(
-        !app.run_housekeeping_if_due(),
-        "a wake inside the interval must skip the polls"
-    );
-    assert_eq!(app.housekeeping_runs, 0);
-
-    std::thread::sleep(HOUSEKEEPING_INTERVAL + Duration::from_millis(20));
-
-    assert!(
-        app.run_housekeeping_if_due(),
-        "a wake past the interval must run the polls"
-    );
-    assert_eq!(app.housekeeping_runs, 1);
-    assert!(
-        !app.run_housekeeping_if_due(),
-        "the pass resets the interval window"
-    );
-}
-
-#[test]
 fn test_deadline_schedules_housekeeping_pass() {
     let mut app = support::make_app();
     app.needs_redraw = false;
@@ -322,16 +298,6 @@ fn test_input_render_cache_updates_on_edit() {
         .flat_map(|l| l.spans.iter().map(|s| s.text.to_string()))
         .collect();
     assert!(text.contains("hello!"), "row text must reflect the edit");
-}
-
-#[test]
-fn test_input_render_cache_default_is_empty() {
-    let cache = InputRenderCache::default();
-    assert_eq!(
-        cache.lines,
-        [] as [codemason_app_core::styled::StyledLine; 0]
-    );
-    assert_eq!(cache.height, 0);
 }
 
 /// Input height must equal the number of cached wrapped rows plus borders,

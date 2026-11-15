@@ -20,7 +20,6 @@ pub mod session_menu_render;
 pub mod sessions_sidebar;
 pub mod teammate_strip;
 pub mod theme;
-pub mod tracing_layer;
 pub mod utils;
 pub mod widgets;
 
@@ -31,6 +30,7 @@ pub use codemason_app_core::{
     app, branch_names, clipboard, deck_progress, input, input_field, input_prompt, line_wrap,
     log_channel, logo, message_lines, message_text, open_in, project_properties, research_adapter,
     research_progress, session_menu, sessions_sidebar_state, status, text_utils, theme_mode, tips,
+    tracing_layer,
 };
 
 /// Truncating stderr spool shared with the binary's fd-2 redirection.

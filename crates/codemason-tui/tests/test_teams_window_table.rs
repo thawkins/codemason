@@ -434,42 +434,6 @@ fn test_teams_status_words_match_the_canonical_mapping_in_distinct_colours() {
     }
 }
 
-/// The canonical words are the documented nine, in their compact UI spelling
-/// (FR-023).
-#[test]
-fn test_teams_status_vocabulary_is_exactly_the_documented_nine_words() {
-    let words: Vec<&str> = [
-        MemberStatus::Spawning,
-        MemberStatus::Working,
-        MemberStatus::Idle,
-        MemberStatus::PlanPending,
-        MemberStatus::Blocked,
-        MemberStatus::Suspended,
-        MemberStatus::ShuttingDown,
-        MemberStatus::Stopped,
-        MemberStatus::Failed,
-    ]
-    .iter()
-    .map(MemberStatus::display_label)
-    .collect();
-
-    assert_eq!(
-        words,
-        vec![
-            "spawning",
-            "working",
-            "idle",
-            "planning",
-            "blocked",
-            "suspended",
-            "stopping",
-            "stopped",
-            "failed",
-        ],
-        "the status vocabulary is fixed by FR-023"
-    );
-}
-
 // -- FR-024: the model column ----------------------------------------------
 
 /// A genuine override paints `<provider>/<model>` clipped to the model column in

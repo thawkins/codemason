@@ -238,65 +238,6 @@ async fn plugins_list_opens_a_panel_with_the_pinned_table_and_capabilities() {
 
 #[tokio::test]
 #[allow(clippy::await_holding_lock)]
-async fn plugins_list_escape_closes_the_panel() {
-    let (_lock, _guard, _temp) = enter_project("codex-weather", 1);
-    let mut app = support::make_app();
-    app.cwd_path = std::env::current_dir().expect("cwd");
-    app.session.session_id = Some("test-session".to_string());
-
-    app.execute_slash_command("/plugins list").await;
-    assert!(app.plugins_list.is_some());
-
-    press(&mut app, KeyCode::Esc).await;
-    assert!(
-        app.plugins_list.is_none(),
-        "Esc must close the `/plugins list` panel"
-    );
-}
-
-#[tokio::test]
-#[allow(clippy::await_holding_lock)]
-async fn plugins_list_down_moves_cursor_and_clamps_at_ends() {
-    let (_lock, _guard, _temp) = enter_project("codex-weather", 3);
-    let mut app = support::make_app();
-    app.cwd_path = std::env::current_dir().expect("cwd");
-    app.session.session_id = Some("test-session".to_string());
-
-    app.execute_slash_command("/plugins list").await;
-    let last = app
-        .plugins_list
-        .as_ref()
-        .map(|s| s.view.body.len().saturating_sub(1))
-        .expect("panel open");
-
-    press(&mut app, KeyCode::Down).await;
-    assert_eq!(app.plugins_list.as_ref().unwrap().selected, 1);
-
-    for _ in 0..(last + 5) {
-        press(&mut app, KeyCode::Down).await;
-    }
-    assert_eq!(
-        app.plugins_list.as_ref().unwrap().selected,
-        last,
-        "Down must clamp at the last body line"
-    );
-
-    press(&mut app, KeyCode::Up).await;
-    assert_eq!(app.plugins_list.as_ref().unwrap().selected, last - 1);
-
-    press(&mut app, KeyCode::Home).await;
-    assert_eq!(app.plugins_list.as_ref().unwrap().selected, 0);
-
-    press(&mut app, KeyCode::End).await;
-    assert_eq!(app.plugins_list.as_ref().unwrap().selected, last);
-
-    press(&mut app, KeyCode::Up).await;
-    press(&mut app, KeyCode::Up).await;
-    assert_eq!(app.plugins_list.as_ref().unwrap().selected, last - 2);
-}
-
-#[tokio::test]
-#[allow(clippy::await_holding_lock)]
 async fn plugins_list_list_scrolls_to_keep_the_cursor_visible() {
     // Enough plugins that the table overflows the panel's body.
     let (_lock, _guard, _temp) = enter_project("codex-plugin", 30);

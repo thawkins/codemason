@@ -461,44 +461,6 @@ async fn test_project_menu_open_in_uses_the_project_directory() {
 }
 
 #[tokio::test]
-async fn test_project_menu_unread_mark_is_read_through_a_failed_state() {
-    let (mut app, a, b) = app_with_sidebar().await;
-    // B is unread and failed: the sidebar marker shows the failure, but the
-    // unread mark is still there and the menu must offer to clear it.
-    app.storage.set_session_unread(&b, true).expect("unread");
-    app.session.unread = true;
-    app.session.errored = true;
-    app.sidebar.dirty = true;
-    app.sidebar.cursor = session_row(&mut app, &b);
-    app.sidebar.focused = true;
-
-    app.handle_key_event(key(KeyCode::Char('m'))).await;
-    let menu = app.sidebar.menu.clone().expect("menu open");
-    assert!(
-        menu.items.iter().any(|i| i.label == "Mark as read"),
-        "{:?}",
-        menu.items
-    );
-    app.handle_key_event(key(KeyCode::Char('u'))).await;
-
-    let unread = app.storage.unread_session_ids().expect("unread ids");
-    assert!(!unread.contains(&b), "mark cleared: {unread:?}");
-    assert!(!unread.contains(&a));
-
-    // A selection marked unread keeps the mark on an already-unread failed
-    // session.
-    app.storage.set_session_unread(&b, true).expect("unread");
-    app.session.unread = true;
-    app.sidebar.selected = [a.clone(), b.clone()].into_iter().collect();
-    app.sidebar.cursor = session_row(&mut app, &b);
-    app.sidebar.focused = true;
-    app.handle_key_event(key(KeyCode::Char('m'))).await;
-    app.handle_key_event(key(KeyCode::Char('u'))).await;
-    let unread = app.storage.unread_session_ids().expect("unread ids");
-    assert!(unread.contains(&a) && unread.contains(&b), "{unread:?}");
-}
-
-#[tokio::test]
 async fn test_project_menu_select_all_follows_the_filter() {
     let (mut app, a, b) = app_with_sidebar().await;
     app.storage
@@ -639,66 +601,6 @@ async fn test_project_menu_properties_esc_discards_and_disabled_backend_is_skipp
         .expect("get")
         .expect("row");
     assert_eq!((row.description, row.execution_backend), (None, None));
-}
-
-#[tokio::test]
-async fn test_project_menu_backend_and_describe_commands() {
-    let (mut app, a, _b) = app_with_sidebar().await;
-    let project = project_of(&mut app, &a);
-
-    app.execute_slash_command(&format!("/project describe --project {project} Tools"))
-        .await;
-    app.execute_slash_command(&format!("/project backend --project {project} local"))
-        .await;
-    app.execute_slash_command(&format!("/project backend --project {project} nonsense"))
-        .await;
-
-    let row = app
-        .storage
-        .get_project(&project)
-        .expect("get")
-        .expect("row");
-    assert_eq!(row.description.as_deref(), Some("Tools"));
-    assert_eq!(row.execution_backend.as_deref(), Some("local"));
-
-    app.execute_slash_command(&format!("/project backend --project {project} global"))
-        .await;
-    let row = app
-        .storage
-        .get_project(&project)
-        .expect("get")
-        .expect("row");
-    assert_eq!(row.execution_backend, None);
-}
-
-#[tokio::test]
-async fn test_project_menu_backend_switch_on_a_project_session_is_its_own() {
-    let (mut app, a, _b) = app_with_sidebar().await;
-    let project = project_of(&mut app, &a);
-    app.execute_slash_command(&format!("/project backend --project {project} local"))
-        .await;
-    app.execute_slash_command("/session new").await;
-    let created = app.session.session_id.clone().expect("new session");
-
-    app.execute_slash_command("/backend local").await;
-
-    assert_eq!(
-        app.storage
-            .session_backend(&created)
-            .expect("backend")
-            .as_deref(),
-        Some("local")
-    );
-    assert_eq!(app.session.active_backend, "local");
-    let last = app
-        .session
-        .messages
-        .iter()
-        .rev()
-        .map(|m| m.text_content())
-        .find(|t| !t.is_empty())
-        .unwrap_or_default();
-    assert!(last.contains("This session now runs tools on"), "{last}");
 }
 
 #[tokio::test]

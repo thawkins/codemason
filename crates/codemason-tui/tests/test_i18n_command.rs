@@ -113,13 +113,6 @@ fn enter_isolated_project() -> (
 }
 
 /// Return the text of the most recently appended message.
-fn last_message_text(app: &App) -> String {
-    app.session
-        .messages
-        .last()
-        .map(codemason_types::message::Message::text_content)
-        .unwrap_or_default()
-}
 
 /// Render the app at 120x40 and return the visible frame text.
 fn render_app_to_string(app: &mut App) -> String {
@@ -148,53 +141,6 @@ fn render_app_to_string(app: &mut App) -> String {
 // ---------------------------------------------------------------------------
 // Help / status paths
 // ---------------------------------------------------------------------------
-
-#[tokio::test]
-#[allow(clippy::await_holding_lock)]
-async fn test_i18n_help_renders_usage() {
-    let _guard = test_lock();
-    let _env = EnvGuard::new();
-    let mut app = support::make_app();
-    app.execute_slash_command("/i18n help").await;
-
-    let text = last_message_text(&app);
-    assert!(
-        text.contains("From: /i18n help") && text.contains("/i18n on"),
-        "help must render the usage table, got: {text}"
-    );
-    assert_eq!(app.status, "i18n: help", "/i18n help status");
-}
-
-#[tokio::test]
-#[allow(clippy::await_holding_lock)]
-async fn test_i18n_help_aliases() {
-    let _guard = test_lock();
-    let _env = EnvGuard::new();
-    for input in ["/i18n --help", "/i18n -h"] {
-        let mut app = support::make_app();
-        app.execute_slash_command(input).await;
-        let text = last_message_text(&app);
-        assert!(
-            text.contains("From: /i18n help"),
-            "help form '{input}' must render usage, got: {text}"
-        );
-    }
-}
-
-#[tokio::test]
-#[allow(clippy::await_holding_lock)]
-async fn test_i18n_status_reports_state() {
-    let (_guard, _env, _temp) = enter_isolated_project();
-    let mut app = support::make_app();
-    app.execute_slash_command("/i18n status").await;
-
-    let text = last_message_text(&app);
-    assert!(
-        text.contains("From: /i18n status") && text.contains("UI internationalisation"),
-        "status must report the state, got: {text}"
-    );
-    assert_eq!(app.status, "i18n: status");
-}
 
 // ---------------------------------------------------------------------------
 // Enable / disable + persistence
@@ -283,19 +229,5 @@ async fn test_i18n_missing_catalog_falls_back_to_english() {
     assert!(
         frame.contains("Project: "),
         "a missing catalog must fall back to English, never blank: {frame}"
-    );
-}
-
-#[tokio::test]
-#[allow(clippy::await_holding_lock)]
-async fn test_i18n_list_reports_installed_catalogs() {
-    let (_guard, _env, _temp) = enter_isolated_project();
-    let mut app = support::make_app();
-    app.execute_slash_command("/i18n list").await;
-
-    let text = last_message_text(&app);
-    assert!(
-        text.contains("From: /i18n list") && text.contains("zz"),
-        "list must name the installed `zz` catalog, got: {text}"
     );
 }

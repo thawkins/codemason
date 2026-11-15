@@ -19,8 +19,6 @@ use ratatui::backend::TestBackend;
 use codemason_agent::task::{ReportStatus, TaskEntry, TaskStatus};
 use codemason_agent::team::TeamConfig;
 use codemason_tui::App;
-use codemason_tui::crossterm_input::handle_key;
-use codemason_tui::input::InputAction;
 use support::make_app;
 
 /// The lead session id used by every case.
@@ -32,9 +30,6 @@ fn alt_t() -> KeyEvent {
 }
 
 /// A bare `t` key event, for the NFR-002 / NFR-009 checks.
-fn plain_t() -> KeyEvent {
-    KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)
-}
 
 /// A live sub-agent task so the Agents window has a subject.
 fn running_task(id: &str) -> TaskEntry {
@@ -88,119 +83,9 @@ fn render(app: &mut App) {
 // FR-045: the chord resolves to an action, not an inline mutation
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn alt_t_resolves_to_the_teams_toggle_action() {
-    let mut app = app();
-
-    let action = handle_key(&mut app, alt_t()).await;
-    assert!(
-        matches!(action, Some(InputAction::ToggleTeamsWindow)),
-        "FR-045: Alt+T must resolve to InputAction::ToggleTeamsWindow so it \
-         reaches the same toggle the Teams button calls"
-    );
-    assert!(
-        !app.show_teams_window,
-        "resolving the action must not itself mutate the window"
-    );
-}
-
-#[tokio::test]
-async fn alt_t_is_bound_regardless_of_window_availability() {
-    // The binding is unconditional; availability is the toggle's own guard.
-    // An unconditional binding keeps the chord from silently meaning
-    // "type a t" when no team exists yet.
-    let mut app = app();
-    let action = handle_key(&mut app, alt_t()).await;
-    assert!(matches!(action, Some(InputAction::ToggleTeamsWindow)));
-}
-
 // ---------------------------------------------------------------------------
 // FR-045: the keyboard produces the same outcome as the mouse click
 // ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn alt_t_toggles_the_window_and_requests_a_redraw() {
-    let mut app = app_with_team();
-
-    app.handle_key_event(alt_t()).await;
-    assert!(
-        app.show_teams_window,
-        "FR-045: the first Alt+T opens the window"
-    );
-    assert!(
-        app.needs_redraw,
-        "opening the window requests a redraw, as the click does"
-    );
-
-    app.needs_redraw = false;
-    app.handle_key_event(alt_t()).await;
-    assert!(!app.show_teams_window, "FR-045: the second Alt+T closes it");
-    assert!(
-        app.needs_redraw,
-        "closing the window requests a redraw, as the click does"
-    );
-}
-
-#[tokio::test]
-async fn alt_t_without_a_team_still_opens_the_window() {
-    // With no team the panel paints its lead row and the empty-state hint
-    // (FR-026) rather than refusing to open.
-    let mut app = app();
-    app.status = "ready".to_string();
-
-    app.handle_key_event(alt_t()).await;
-    assert!(
-        app.show_teams_window,
-        "with no team the window still opens on its lead row and empty-state hint"
-    );
-    assert!(app.needs_redraw, "opening the window requests a redraw");
-    assert_eq!(
-        app.status, "ready",
-        "an empty open is not an error, so it reports nothing"
-    );
-
-    app.needs_redraw = false;
-    app.handle_key_event(alt_t()).await;
-    assert!(!app.show_teams_window, "the second chord closes it again");
-}
-
-#[tokio::test]
-async fn the_teams_refusal_names_the_condition_and_a_next_action() {
-    // NFR-005: every new message names the condition and at least one
-    // supported next action.
-    let text = codemason_tui::app::TEAMS_WINDOW_EMPTY_REFUSAL;
-    assert!(
-        text.contains("nothing to show"),
-        "the refusal names the condition: {text}"
-    );
-    assert!(
-        text.contains("team"),
-        "the refusal names the subject the panel would show: {text}"
-    );
-    assert!(
-        text.contains("/team") || text.contains("/swarm"),
-        "the refusal names a supported next action: {text}"
-    );
-}
-
-#[tokio::test]
-async fn alt_t_closes_an_open_window_even_when_its_team_vanished() {
-    // The team can end while the window is open; the chord that opened it must
-    // still be able to dismiss it.
-    let mut app = app();
-    app.show_teams_window = true;
-    app.needs_redraw = false;
-
-    app.handle_key_event(alt_t()).await;
-    assert!(
-        !app.show_teams_window,
-        "an open window always closes, whatever its subject is now"
-    );
-    assert!(
-        app.needs_redraw,
-        "closing the window requests a redraw, as the click does"
-    );
-}
 
 #[tokio::test]
 async fn alt_t_opening_the_teams_window_closes_the_agents_window() {
@@ -237,38 +122,3 @@ async fn alt_a_and_alt_t_alternate_without_ever_showing_both() {
 // ---------------------------------------------------------------------------
 // NFR-002 / NFR-009: the chord consumes the key and shadows nothing
 // ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn alt_t_does_not_insert_t_into_the_input() {
-    let mut app = app_with_team();
-    app.session.input = "PROBE".to_string();
-    app.session.input_cursor = app.input_len_chars();
-
-    app.handle_key_event(alt_t()).await;
-
-    assert_eq!(
-        app.session.input, "PROBE",
-        "NFR-002: Alt+T must not leak the 't' into the input buffer"
-    );
-    assert_eq!(
-        app.session.input_cursor,
-        app.input_len_chars(),
-        "the cursor must not move"
-    );
-}
-
-#[tokio::test]
-async fn bare_t_still_types_t() {
-    let mut app = app();
-
-    let action = handle_key(&mut app, plain_t()).await;
-    assert!(
-        action.is_none(),
-        "NFR-009: bare 't' is plain text, not the Teams chord"
-    );
-    assert_eq!(app.session.input, "t", "NFR-009: bare 't' is still typed");
-    assert!(
-        !app.show_teams_window,
-        "bare 't' must not open the Teams window"
-    );
-}

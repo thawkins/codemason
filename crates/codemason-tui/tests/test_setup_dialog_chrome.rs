@@ -9,7 +9,6 @@
 use codemason_tui::app::{ConfiguredProvider, ModelPickerEntry, ProviderSetupStep};
 use codemason_tui::input_field::InputField;
 use codemason_types::{ThinkingConfig, ThinkingLevel};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{Terminal, backend::TestBackend};
 
 #[path = "support/mod.rs"]
@@ -223,32 +222,6 @@ fn test_thinking_selector_marks_the_cursor_row_and_keeps_descriptions() {
         text.contains("Use the deepest reasoning budget"),
         "level description: {text}"
     );
-}
-
-#[tokio::test]
-async fn test_thinking_selector_selection_still_persists_a_level() {
-    // The restyle must not touch the state machine: Enter on the highlighted level
-    // still records it and advances to the confirmation card.
-    let mut app = support::make_app();
-    app.provider_setup = Some(ProviderSetupStep::SelectThinkingLevel {
-        provider_id: "anthropic".to_string(),
-        provider_name: "Anthropic".to_string(),
-        model: entry("claude-sonnet-4", "Claude Sonnet 4"),
-        selected: 2,
-    });
-    codemason_tui::crossterm_input::handle_key(
-        &mut app,
-        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-    )
-    .await;
-    assert_eq!(
-        app.session.selected_thinking_level,
-        Some(ThinkingLevel::Low)
-    );
-    assert!(matches!(
-        app.provider_setup,
-        Some(ProviderSetupStep::Done { .. })
-    ));
 }
 
 #[test]

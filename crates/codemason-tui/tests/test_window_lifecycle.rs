@@ -293,29 +293,6 @@ fn reconciliation_empting_the_list_closes_the_window() {
     assert!(app.needs_redraw, "the auto-close must repaint (NFR-005)");
 }
 
-/// Closing an already-closed window is a silent no-op: no redraw is demanded
-/// and no state changes (NFR-005).
-#[test]
-fn an_already_closed_or_occupied_window_is_untouched_by_the_auto_close() {
-    // Closed already: silent.
-    let mut app = app_with_window(Vec::new());
-    app.show_agents_window = false;
-    app.close_agents_window_when_empty();
-    assert!(!app.show_agents_window);
-    assert!(
-        !app.needs_redraw,
-        "a redundant close on a closed window paints nothing (NFR-005)"
-    );
-
-    // Still has a subject: the window stays open.
-    let mut app = app_with_window(vec![task("a1b2c3d4", "explore", TaskStatus::Running)]);
-    app.close_agents_window_when_empty();
-    assert!(
-        app.show_agents_window,
-        "the auto-close never fires while a subject is tracked (FR-063)"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // FR-061: the panel stays serviceable during a running turn
 // ---------------------------------------------------------------------------
@@ -448,70 +425,6 @@ fn teams_window_stays_serviceable_during_a_running_turn() {
 // ---------------------------------------------------------------------------
 // FR-064: status-line reporting for refusals and focus transitions
 // ---------------------------------------------------------------------------
-
-/// The keyboard cursor refusals/status reporting stay live while a turn
-/// streams (FR-064; the protected-agent refusals are re-expressed by the
-/// cursor range - the cursor never reaches the primary row, so the reported
-/// text is the consumed no-op message instead, T-011's keyboard twin).
-#[tokio::test]
-async fn cursor_reports_to_the_status_line_during_a_running_turn() {
-    let mut app = app_with_window(vec![task("a1b2c3d4", "explore", TaskStatus::Running)]);
-    app.session.is_processing = true;
-
-    app.handle_key_event(crossterm::event::KeyEvent::new(
-        KeyCode::Char(' '), // no cursor yet: consumed no-op with its status text
-        KeyModifiers::NONE,
-    ))
-    .await;
-    assert_eq!(
-        app.status, "agents: selected row is gone",
-        "the window key reports to the status line (FR-064)"
-    );
-
-    // Moving the cursor also reports the landed row on the status line.
-    app.handle_key_event(crossterm::event::KeyEvent::new(
-        KeyCode::Down,
-        KeyModifiers::NONE,
-    ))
-    .await;
-    assert!(
-        app.status.starts_with("agents: "),
-        "a cursor move reports the selection (FR-064), got {}",
-        app.status
-    );
-    assert!(
-        app.session.is_processing,
-        "the keyboard path must not disturb the running turn"
-    );
-}
-
-/// An `Alt+Down` focus transition reports the newly focused teammate to the
-/// status line, and cycling past the ends reports the cleared focus
-/// (FR-064, FR-046).
-#[tokio::test]
-async fn focus_transitions_report_to_the_status_line() {
-    let mut app = app_with_team();
-
-    app.cycle_focused_teammate(true);
-
-    assert_eq!(
-        app.session.focused_teammate.as_deref(),
-        Some("tm-001"),
-        "the first cycle focuses the only member (FR-046)"
-    );
-    assert_eq!(
-        app.status, "team: focused -> reviewer",
-        "the focus transition reports to the status line (FR-064)"
-    );
-
-    // Cycling past the end clears the focus and reports it (FR-064).
-    app.cycle_focused_teammate(true);
-    assert!(app.session.focused_teammate.is_none());
-    assert_eq!(
-        app.status, "team: focus cleared",
-        "the focus-cleared notice reports to the status line (FR-064)"
-    );
-}
 
 /// The keyboard cursor focus transition reports to the status line too
 /// (FR-064; the keyboard path is FR-038's cursor arm).

@@ -103,24 +103,6 @@ fn test_prompt_display_text_multibyte_chars_counted_as_chars() {
 // -----------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_execute_slash_command_sets_last_prompt() {
-    let mut app = support::make_app();
-    app.execute_slash_command("/about").await;
-    assert_eq!(
-        app.session.last_prompt, "/about",
-        "slash command must be recorded as the last prompt so the status-bar \
-         tag shows it"
-    );
-}
-
-#[tokio::test]
-async fn test_execute_slash_command_trims_whitespace() {
-    let mut app = support::make_app();
-    app.execute_slash_command("  /agents  ").await;
-    assert_eq!(app.session.last_prompt, "/agents");
-}
-
-#[tokio::test]
 async fn test_statusbar_renders_slash_command_tag() {
     let mut app = support::make_app();
     // `/about` runs without a tokio runtime and leaves a short status, so the

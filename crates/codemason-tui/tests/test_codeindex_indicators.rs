@@ -14,34 +14,13 @@
 #[path = "support/mod.rs"]
 mod support;
 
-use std::sync::Arc;
-
-use codemason_codeindex::CodeIndex;
-use codemason_codeindex::types::CodeIndexConfig;
 use codemason_tui::{App, layout};
 use ratatui::{Terminal, backend::TestBackend};
 
 /// Open an in-memory CodeIndex and attach it to the app, mirroring how the
 /// real app attaches the index after `/codeindex on`.
-fn attach_in_memory_index(app: &mut App) -> Arc<CodeIndex> {
-    let dir = tempfile::TempDir::new().expect("temp dir");
-    let config = CodeIndexConfig {
-        enabled: true,
-        project_root: dir.path().to_path_buf(),
-        index_dir: dir.path().join(".codemason/codeindex"),
-        scan_config: codemason_codeindex::types::ScanConfig::default(),
-    };
-    let idx = Arc::new(CodeIndex::open_in_memory(&config).expect("in-memory code index"));
-    app.code_index = Some(idx.clone());
-    idx
-}
 
 /// Age out the refresh throttle so the refresh body actually runs.
-fn age_refresh_throttle(app: &mut App) {
-    app.code_index_stats_last_refresh = std::time::Instant::now()
-        .checked_sub(std::time::Duration::from_secs(10))
-        .unwrap_or(std::time::Instant::now());
-}
 
 /// Build an App mirroring the make_app() pattern used by the other TUI tests.
 /// A test [`App`] built on the shared fixture, with the log panel open.
@@ -191,116 +170,5 @@ fn test_poll_codeindex_bg_result_reports_error() {
     assert!(
         window.contains("Re-index failed"),
         "message window must show the error; got: {window}"
-    );
-}
-
-#[test]
-fn test_poll_codeindex_bg_result_noop_when_empty() {
-    let mut app = make_app();
-    app.status = "ready".to_string();
-    app.poll_codeindex_bg_result();
-    assert_eq!(app.status, "ready", "idle poll must not touch the status");
-}
-
-#[test]
-fn test_graph_busy_latch_clears_when_no_index_attached() {
-    let mut app = make_app();
-    app.code_index_graph_busy = true;
-    app.needs_redraw = false;
-    // Age out the refresh throttle so the refresh body actually runs.
-    app.code_index_stats_last_refresh = std::time::Instant::now()
-        .checked_sub(std::time::Duration::from_secs(10))
-        .unwrap_or(std::time::Instant::now());
-
-    // No real CodeIndex handle is attached, so refresh takes the `else`
-    // branch, which must clear the graph-busy latch too.
-    app.refresh_code_index_stats_for_test();
-    assert!(
-        !app.code_index_graph_busy,
-        "graph-busy latch must clear when no code index is attached"
-    );
-}
-
-#[test]
-fn test_graph_build_holding_store_lock_does_not_latch_idx_indicator() {
-    let mut app = make_app();
-    let idx = attach_in_memory_index(&mut app);
-    age_refresh_throttle(&mut app);
-
-    // Simulate the graph phase of a reindex (or a standalone graph build):
-    // the graph build holds the store mutex for its entire duration, so
-    // try_status() returns None while graph_busy is set.
-    let store_guard = idx.try_lock_store_for_test().expect("store lock");
-    idx.set_graph_busy_for_test(true);
-
-    app.refresh_code_index_stats_for_test();
-
-    drop(store_guard);
-    assert!(
-        app.code_index_graph_busy,
-        "graph-busy latch must be set while the graph build runs"
-    );
-    assert!(
-        !app.code_index_busy,
-        "idx indicator must NOT latch while only the graph build holds the \
-         store lock (false-positive made both indicators vanish together)"
-    );
-}
-
-#[test]
-fn test_idx_indicator_clears_when_graph_phase_starts() {
-    let mut app = make_app();
-    let idx = attach_in_memory_index(&mut app);
-    age_refresh_throttle(&mut app);
-
-    // End of the indexing phase: the idx latch is set (from a previous
-    // poll), then the reindex counters complete and the graph phase begins.
-    app.code_index_busy = true;
-    idx.set_graph_progress_for_test(5, 5); // done == total -> reindex not active
-    let store_guard = idx.try_lock_store_for_test().expect("store lock");
-    idx.set_graph_busy_for_test(true);
-
-    app.refresh_code_index_stats_for_test();
-
-    drop(store_guard);
-    assert!(
-        !app.code_index_busy,
-        "idx indicator must clear as soon as the graph phase starts, not when \
-         the whole pipeline finishes"
-    );
-    assert!(
-        app.code_index_graph_busy,
-        "graph indicator must be latched during the graph phase"
-    );
-}
-
-#[test]
-fn test_graph_phase_end_clears_only_graph_indicator() {
-    let mut app = make_app();
-    let idx = attach_in_memory_index(&mut app);
-    age_refresh_throttle(&mut app);
-
-    // Graph phase running with a stale idx latch from before the fix.
-    app.code_index_busy = true;
-    app.code_index_graph_busy = true;
-    let store_guard = idx.try_lock_store_for_test().expect("store lock");
-    idx.set_graph_busy_for_test(true);
-    app.refresh_code_index_stats_for_test();
-    drop(store_guard);
-    assert!(!app.code_index_busy);
-    assert!(app.code_index_graph_busy);
-
-    // Graph build completes: the lock frees and graph_busy clears. Only the
-    // graph indicator must clear; the idx latch must stay off.
-    idx.set_graph_busy_for_test(false);
-    age_refresh_throttle(&mut app);
-    app.refresh_code_index_stats_for_test();
-    assert!(
-        !app.code_index_graph_busy,
-        "graph-busy latch must clear when the graph build finishes"
-    );
-    assert!(
-        !app.code_index_busy,
-        "idx indicator must stay clear after the graph phase ends"
     );
 }

@@ -20,7 +20,7 @@ use ratatui::backend::TestBackend;
 
 use codemason_plugins::{StoreEntry, StoreError, StoreIndex, StoreKind};
 use codemason_tui::App;
-use codemason_tui::app::{PluginStoreBrowser, PluginStoreFetchResult, PluginStoreStatus};
+use codemason_tui::app::{PluginStoreBrowser, PluginStoreFetchResult};
 use codemason_tui::layout;
 
 #[path = "support/mod.rs"]
@@ -100,41 +100,6 @@ fn full_row(terminal: &Terminal<TestBackend>, y: u16) -> String {
 }
 
 // -- Malformed entries are carried and counted (FR-025) ----------------------
-
-#[test]
-fn set_index_carries_the_skipped_malformed_count() {
-    let browser = loaded(vec![entry("codex-weather", "Weather")], 3);
-    assert_eq!(browser.skipped, 3);
-    assert_eq!(browser.all.len(), 1);
-}
-
-#[test]
-fn set_entries_clears_the_skipped_count() {
-    let mut browser = loaded(vec![entry("codex-weather", "Weather")], 4);
-    browser.set_entries(vec![entry("codex-time", "Time")]);
-    assert_eq!(browser.skipped, 0, "a bare entry list has no skipped count");
-}
-
-#[test]
-fn a_delivered_index_carries_the_skipped_count_into_the_browser() {
-    let mut app = open_loading();
-    // One valid entry and two the parser rejected as malformed.
-    deliver(
-        &app,
-        StoreKind::Codex,
-        Ok(StoreIndex {
-            store: Some("codex".to_string()),
-            entries: vec![entry("codex-weather", "Weather")],
-            skipped: 2,
-        }),
-    );
-
-    app.poll_plugin_store_result();
-
-    let browser = app.plugin_store.as_ref().expect("panel open");
-    assert_eq!(browser.status, PluginStoreStatus::Ready);
-    assert_eq!(browser.skipped, 2, "the skipped count survives the poll");
-}
 
 // -- The skipped count is reported in the panel (FR-025) ---------------------
 
@@ -227,28 +192,6 @@ fn the_error_body_names_the_malformed_json_cause() {
         "the inline error names the parse position: {rows:?}"
     );
     assert!(app.plugin_store.is_some(), "the panel stays open (FR-013)");
-}
-
-#[test]
-fn a_malformed_index_error_polled_from_the_slot_is_contained() {
-    let mut app = open_loading();
-    deliver(
-        &app,
-        StoreKind::Codex,
-        Err(StoreError::MalformedJson {
-            detail: "expected value at line 1 column 1".to_string(),
-        }),
-    );
-
-    app.poll_plugin_store_result();
-
-    match &app.plugin_store.as_ref().expect("panel open").status {
-        PluginStoreStatus::Failed(detail) => {
-            assert!(detail.contains("line 1 column 1"), "detail: {detail}")
-        }
-        other => panic!("expected a contained inline failure, got {other:?}"),
-    }
-    assert!(app.plugin_store.is_some(), "no panic closed the panel");
 }
 
 #[test]

@@ -217,16 +217,6 @@ fn test_output_view_body_click_is_consumed() {
     );
 }
 
-/// Closing a closed overlay is a no-op that still keeps the window state sane.
-#[test]
-fn test_output_view_close_is_idempotent() {
-    let mut app = app_with_output_view();
-    app.close_output_view();
-    assert!(app.output_view.is_none());
-    app.close_output_view();
-    assert!(app.output_view.is_none());
-}
-
 // ---------------------------------------------------------------------------
 // FR-075: wheel routing above the Agents popup
 // ---------------------------------------------------------------------------

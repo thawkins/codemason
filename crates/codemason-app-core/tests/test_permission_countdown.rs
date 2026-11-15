@@ -1,0 +1,166 @@
+//! Test for permission dialog countdown timer display
+
+#[path = "support/mod.rs"]
+mod support;
+
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use codemason_agent::{event::Event, permission::PermissionRequest};
+use codemason_app_core::app::App;
+
+/// A test [`App`] built on the shared fixture, with the log panel open.
+fn make_app() -> App {
+    let mut app = support::make_app();
+    app.show_log = true;
+    app
+}
+
+#[test]
+fn test_permission_request_has_timeout_fields() {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let request = PermissionRequest {
+        id: "test-123".to_string(),
+        session_id: "session-456".to_string(),
+        permission: "bash".to_string(),
+        patterns: vec!["ls".to_string()],
+        metadata: serde_json::json!({
+            "command": "ls -la",
+            "created_at": now,
+            "timeout_secs": 120_u64
+        }),
+        tool_call_id: None,
+    };
+
+    assert_eq!(
+        request
+            .metadata
+            .get("timeout_secs")
+            .and_then(serde_json::Value::as_u64),
+        Some(120)
+    );
+    assert_eq!(
+        request
+            .metadata
+            .get("created_at")
+            .and_then(serde_json::Value::as_u64),
+        Some(now)
+    );
+}
+
+#[test]
+fn test_countdown_calculation_logic() {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // Simulate a request created 30 seconds ago
+    let created_at = now - 30;
+    let timeout_secs: u64 = 120;
+
+    let elapsed = now.saturating_sub(created_at);
+    let remaining = timeout_secs.saturating_sub(elapsed);
+
+    assert_eq!(elapsed, 30);
+    assert_eq!(remaining, 90);
+
+    let remaining_mins = remaining / 60;
+    let remaining_secs = remaining % 60;
+
+    assert_eq!(remaining_mins, 1);
+    assert_eq!(remaining_secs, 30);
+
+    let title = format!(" Permission Required ({remaining_mins}:{remaining_secs:02} remaining) ");
+    assert_eq!(title, " Permission Required (1:30 remaining) ");
+}
+
+#[test]
+fn test_countdown_expired() {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // Simulate a request created 130 seconds ago (expired)
+    let created_at = now - 130;
+    let timeout_secs: u64 = 120;
+
+    let elapsed = now.saturating_sub(created_at);
+    let remaining = timeout_secs.saturating_sub(elapsed);
+
+    assert_eq!(remaining, 0);
+
+    let title = if remaining == 0 {
+        " Permission Required (EXPIRED) ".to_string()
+    } else {
+        let remaining_mins = remaining / 60;
+        let remaining_secs = remaining % 60;
+        format!(" Permission Required ({remaining_mins}:{remaining_secs:02} remaining) ")
+    };
+
+    assert_eq!(title, " Permission Required (EXPIRED) ");
+}
+
+#[test]
+fn test_countdown_formats_correctly() {
+    // Test various time formats
+    let test_cases = vec![
+        (120, 2, 0, "2:00"), // 2 minutes
+        (90, 1, 30, "1:30"), // 1:30
+        (60, 1, 0, "1:00"),  // 1 minute
+        (59, 0, 59, "0:59"), // 59 seconds
+        (5, 0, 5, "0:05"),   // 5 seconds
+        (0, 0, 0, "0:00"),   // expired
+    ];
+
+    for (remaining_secs, expected_mins, expected_secs, expected_str) in test_cases {
+        let mins = remaining_secs / 60;
+        let secs = remaining_secs % 60;
+
+        assert_eq!(mins, expected_mins);
+        assert_eq!(secs, expected_secs);
+
+        let formatted = format!("{mins}:{secs:02}");
+        assert_eq!(formatted, expected_str);
+    }
+}
+
+#[tokio::test]
+async fn test_permission_requested_event_queues_120_second_timeout() {
+    let mut app = make_app();
+    app.session.session_id = Some("session-1".to_string());
+
+    app.handle_event(Event::PermissionRequested {
+        session_id: "session-1".to_string(),
+        request_id: "req-1".to_string(),
+        permission: "file:write".to_string(),
+        description: "create: crates/codemason-tui/tests/test_permission_countdown.rs".to_string(),
+        options: vec![],
+    })
+    .await;
+
+    let request = app
+        .session
+        .permission_queue
+        .front()
+        .expect("permission request should be queued");
+
+    assert_eq!(
+        request
+            .metadata
+            .get("timeout_secs")
+            .and_then(serde_json::Value::as_u64),
+        Some(120)
+    );
+    assert!(
+        request
+            .metadata
+            .get("created_at")
+            .and_then(serde_json::Value::as_u64)
+            .is_some()
+    );
+}

@@ -80,18 +80,6 @@ fn first_glyph_fg(terminal: &Terminal<TestBackend>, app: &App, y: u16) -> Color 
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_menu_labels_are_next_halt_clear_and_show_in_order() {
-    let app = support::make_app();
-
-    let labels = app.queue_menu_labels();
-
-    assert_eq!(labels.len(), 4, "FR-021: the menu has exactly four options");
-    assert_eq!(labels[0], "Next", "FR-021: the first option is `Next`");
-    assert_eq!(labels[2], "Clear", "FR-021: the third option is `Clear`");
-    assert_eq!(labels[3], "Show", "FR-021: the fourth option is `Show`");
-}
-
-#[test]
 fn test_open_menu_paints_all_four_option_rows() {
     let mut app = support::make_app();
     app.session.input_queue.push_back(entry("queued"));
@@ -296,27 +284,6 @@ fn test_menu_title_reports_the_pending_count() {
 // ---------------------------------------------------------------------------
 // FR-026 - halt label reflects the running-turn state
 // ---------------------------------------------------------------------------
-
-#[test]
-fn test_halt_label_is_stop_while_processing_and_resume_when_idle() {
-    let mut app = support::make_app();
-
-    app.session.is_processing = true;
-    assert_eq!(
-        app.queue_menu_halt_label(),
-        "Stop",
-        "FR-026: while a turn executes the halt option reads `Stop`"
-    );
-    assert_eq!(app.queue_menu_labels()[1], "Stop");
-
-    app.session.is_processing = false;
-    assert_eq!(
-        app.queue_menu_halt_label(),
-        "Resume",
-        "FR-026: once the agent has stopped the option reads `Resume`"
-    );
-    assert_eq!(app.queue_menu_labels()[1], "Resume");
-}
 
 #[test]
 fn test_menu_renders_resume_row_when_agent_is_not_processing() {

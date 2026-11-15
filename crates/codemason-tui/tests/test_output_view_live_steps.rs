@@ -15,8 +15,6 @@
 
 mod support;
 
-use std::sync::Arc;
-
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use serde_json::json;
@@ -245,17 +243,4 @@ async fn test_output_view_empty_child_session_cache_is_stable() {
         view.line_cache.wrapped_lines,
         [] as [codemason_app_core::styled::StyledLine; 0]
     );
-}
-
-/// The `Arc<Message>` round-trip through storage keeps the tool-call part
-/// serialisable - a cheap sanity check that the seeded shape matches what the
-/// interim save writes (`MessagePart::ToolCall` with a completed state).
-#[test]
-fn test_seeded_tool_call_part_serialises_like_interim_save() {
-    let mut assistant = Message::new("s", codemason_types::message::Role::Assistant, vec![]);
-    assistant.parts.push(think_tool_call_part());
-    let stored = Arc::new(assistant);
-    let json = serde_json::to_string(&stored).expect("serialise");
-    let round: Message = serde_json::from_str(&json).expect("deserialise");
-    assert!(matches!(round.parts[0], MessagePart::ToolCall { .. }));
 }

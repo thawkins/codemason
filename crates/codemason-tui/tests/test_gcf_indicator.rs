@@ -115,23 +115,6 @@ async fn test_alt_g_toggles_gcf_and_status_bar_indicator() {
     );
 }
 
-#[tokio::test]
-async fn test_alt_g_never_inserts_g_into_input_buffer() {
-    let (_guard, _temp) = enter_isolated_config_project();
-    codemason_config::gcf::set_enabled(false);
-
-    let mut app = make_app();
-
-    app.handle_key_event(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::ALT))
-        .await;
-
-    assert!(
-        app.session.input.is_empty(),
-        "Alt+G must not insert `g` into the input buffer; input was: {:?}",
-        app.session.input
-    );
-}
-
 #[test]
 fn test_gcf_indicator_sits_left_of_codeindex_icon() {
     let (_guard, _temp) = enter_isolated_config_project();

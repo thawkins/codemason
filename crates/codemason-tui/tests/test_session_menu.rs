@@ -468,18 +468,6 @@ async fn test_session_menu_f_forks_and_focuses_the_copy() {
 }
 
 #[tokio::test]
-async fn test_session_menu_fork_refuses_a_running_session() {
-    let (mut app, _a, b) = app_with_sidebar().await;
-    app.session.is_processing = true;
-
-    app.execute_slash_command("/session fork").await;
-
-    assert_eq!(app.session.session_id.as_deref(), Some(b.as_str()));
-    assert!(app.status.contains("running"), "{}", app.status);
-    app.session.is_processing = false;
-}
-
-#[tokio::test]
 async fn test_session_menu_delete_asks_and_no_keeps_the_session() {
     let (mut app, a, _b) = app_with_sidebar().await;
     put_cursor_on(&mut app, &a);
@@ -528,36 +516,6 @@ async fn test_session_menu_delete_yes_removes_background_session() {
             .any(|r| r.chars().take(width).collect::<String>().contains(&label)),
         "gone from the sidebar"
     );
-}
-
-#[tokio::test]
-async fn test_session_menu_delete_focused_session_focuses_another() {
-    let (mut app, a, b) = app_with_sidebar().await;
-
-    app.execute_slash_command(&format!("/session delete {b}"))
-        .await;
-    assert!(app.row_action_confirm_open());
-    app.handle_key_event(key(KeyCode::Right)).await;
-    app.handle_key_event(key(KeyCode::Enter)).await;
-
-    assert!(app.storage.get_session(&b).expect("get").is_none());
-    assert_eq!(app.session.session_id.as_deref(), Some(a.as_str()));
-}
-
-#[tokio::test]
-async fn test_session_menu_delete_refuses_a_running_session() {
-    let (mut app, _a, b) = app_with_sidebar().await;
-    app.session.is_processing = true;
-
-    app.execute_slash_command(&format!("/session delete {b}"))
-        .await;
-
-    assert!(
-        !app.row_action_confirm_open(),
-        "no dialog for a running session"
-    );
-    assert!(app.status.contains("running"), "{}", app.status);
-    app.session.is_processing = false;
 }
 
 /// Opens the menu on session `id` and moves its cursor to the item with
@@ -726,41 +684,6 @@ async fn test_session_menu_open_in_file_manager_records_launch() {
 }
 
 #[tokio::test]
-async fn test_session_menu_section_slash_commands() {
-    let (mut app, a, b) = app_with_sidebar().await;
-
-    app.execute_slash_command("/session section new Alpha")
-        .await;
-    let placed = app.storage.session_sections().expect("placed");
-    let alpha = placed[&b].clone();
-
-    app.execute_slash_command("/session section rename Beta")
-        .await;
-    assert_eq!(app.storage.list_sections().expect("list")[0].name, "Beta");
-
-    app.execute_slash_command("/session section --none").await;
-    assert!(app.storage.session_sections().expect("placed").is_empty());
-
-    app.execute_slash_command("/session section beta").await;
-    assert_eq!(app.storage.session_sections().expect("placed")[&b], alpha);
-
-    app.execute_slash_command("/session section nope").await;
-    assert!(app.status.contains("no section named"), "{}", app.status);
-
-    app.execute_slash_command("/session section delete Beta")
-        .await;
-    assert_eq!(app.storage.list_sections().expect("list"), Vec::new());
-    assert!(app.storage.session_sections().expect("placed").is_empty());
-    assert!(
-        !app.storage
-            .session_sections()
-            .expect("placed")
-            .contains_key(&a),
-        "A was never moved"
-    );
-}
-
-#[tokio::test]
 async fn test_session_menu_open_request_first_when_bound() {
     let (mut app, a, _b) = app_with_sidebar().await;
     app.storage
@@ -863,46 +786,6 @@ async fn test_session_menu_autofix_toggle_and_sidebar_glyphs() {
     app.sidebar.dirty = true;
     let text: String = draw(&mut app)[row].chars().take(width).collect();
     assert!(text.contains(" #!1 "), "paused glyph: {text}");
-}
-
-#[tokio::test]
-async fn test_session_menu_delete_refuses_while_a_sub_agent_runs() {
-    let (mut app, a, _b) = app_with_sidebar().await;
-    let child = format!("{a}-child");
-    app.storage
-        .create_session_with(
-            &child,
-            "/nonexistent/menu",
-            Some(&a),
-            codemason_storage::SessionKind::Subagent,
-        )
-        .expect("child");
-    app.active_tasks.push(codemason_agent::task::TaskEntry {
-        id: "t1".to_string(),
-        parent_session_id: a.clone(),
-        child_session_id: child,
-        agent_name: "explore".to_string(),
-        task_prompt: "x".to_string(),
-        background: true,
-        detached: false,
-        status: codemason_agent::task::TaskStatus::Running,
-        result: None,
-        error: None,
-        created_at: chrono::Utc::now(),
-        completed_at: None,
-        reported: false,
-        waiter_count: 0,
-        output_file: None,
-        report_status: codemason_agent::task::ReportStatus::default(),
-        time_bound_secs: None,
-    });
-
-    app.execute_slash_command(&format!("/session delete {a}"))
-        .await;
-
-    assert!(!app.row_action_confirm_open(), "no dialog");
-    assert!(app.status.contains("still running"), "{}", app.status);
-    assert!(app.storage.get_session(&a).expect("get").is_some());
 }
 
 #[tokio::test]

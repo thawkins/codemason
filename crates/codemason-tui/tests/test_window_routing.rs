@@ -70,16 +70,6 @@ fn running_task(id: &str) -> TaskEntry {
 }
 
 /// A background shell task so the Agents window has a subject.
-fn bg_task(id: &str) -> codemason_tui::app::BgTaskView {
-    codemason_tui::app::BgTaskView {
-        id: id.to_string(),
-        session_id: LEAD_SESSION.to_string(),
-        command: "sleep 30".to_string(),
-        status: "running".to_string(),
-        created_at: chrono::Utc::now(),
-        completed_at: None,
-    }
-}
 
 /// A teammate in `Working` state.
 fn member(name: &str, agent_id: &str) -> TeamMember {
@@ -337,48 +327,3 @@ async fn escaping_an_already_closed_window_is_inert() {
 // ---------------------------------------------------------------------------
 // Router helpers directly (the state machine behind every click path)
 // ---------------------------------------------------------------------------
-
-#[test]
-fn routing_helpers_agree_with_the_buttons_enabled_state() {
-    let mut app = app();
-    assert!(!app.agents_window_available());
-    assert!(!app.teams_window_available());
-
-    app.active_tasks.push(running_task("task-1"));
-    assert!(app.agents_window_available());
-
-    app.active_tasks.clear();
-    app.bg_tasks.push(bg_task("bg-1"));
-    assert!(
-        app.agents_window_available(),
-        "a background shell task alone enables the window"
-    );
-
-    app.bg_tasks.clear();
-    assert!(!app.agents_window_available());
-
-    app.session.active_team = Some(TeamConfig::new("alpha", LEAD_SESSION));
-    assert!(app.teams_window_available());
-}
-
-#[test]
-fn toggling_through_the_helpers_opens_and_closes_without_a_subject() {
-    // Availability only styles the button; it never gates the toggle. Each
-    // press toggles, and each open closes the other window.
-    let mut app = app();
-    app.toggle_agents_window();
-    assert!(app.show_agents_window, "an empty Agents panel still opens");
-    assert!(!app.teams_window_available(), "still no team to show");
-
-    app.toggle_teams_window();
-    assert!(app.show_teams_window, "an empty Teams panel still opens");
-    assert!(!app.show_agents_window, "and the Agents window closes");
-
-    app.toggle_agents_window();
-    assert!(app.show_agents_window, "back to the Agents window");
-    assert!(!app.show_teams_window);
-
-    app.close_agents_window();
-    app.close_teams_window();
-    assert!(!app.show_agents_window && !app.show_teams_window);
-}

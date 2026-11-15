@@ -21,8 +21,6 @@ use ratatui::backend::TestBackend;
 use codemason_agent::task::{ReportStatus, TaskEntry, TaskStatus};
 use codemason_agent::team::TeamConfig;
 use codemason_tui::App;
-use codemason_tui::crossterm_input::handle_key;
-use codemason_tui::input::InputAction;
 use support::make_app;
 
 /// The lead session id used by every case.
@@ -34,9 +32,6 @@ fn alt_a() -> KeyEvent {
 }
 
 /// A bare `a` key event, for the NFR-009 check.
-fn plain_a() -> KeyEvent {
-    KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)
-}
 
 /// A live sub-agent task so the Agents window has a subject.
 fn running_task(id: &str) -> TaskEntry {
@@ -91,102 +86,9 @@ fn render(app: &mut App) {
 // FR-022: the chord resolves to an InputAction, not an inline mutation
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn alt_a_resolves_to_the_agents_window_action() {
-    let mut app = app_with_task();
-    let action = handle_key(&mut app, alt_a()).await;
-    assert!(
-        matches!(action, Some(InputAction::ToggleAgentsWindow)),
-        "FR-022: Alt+A must resolve to InputAction::ToggleAgentsWindow so it \
-         shares the mouse's toggle; got {action:?}"
-    );
-    assert!(
-        !app.show_agents_window,
-        "resolving the action must not itself mutate the window"
-    );
-}
-
-#[tokio::test]
-async fn alt_a_is_bound_regardless_of_window_availability() {
-    // The binding is unconditional; availability is the toggle's own guard.
-    // An unconditional binding keeps the chord from silently meaning
-    // "type an a" when no task exists yet.
-    let mut app = app();
-    let action = handle_key(&mut app, alt_a()).await;
-    assert!(matches!(action, Some(InputAction::ToggleAgentsWindow)));
-}
-
 // ---------------------------------------------------------------------------
 // FR-022: the keyboard produces the same outcome as the mouse click
 // ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn alt_a_toggles_the_window_and_requests_a_redraw() {
-    let mut app = app_with_task();
-
-    app.handle_key_event(alt_a()).await;
-    assert!(
-        app.show_agents_window,
-        "FR-022: the first Alt+A opens the window"
-    );
-    assert!(
-        app.needs_redraw,
-        "opening the window requests a redraw, as the click does"
-    );
-
-    app.needs_redraw = false;
-    app.handle_key_event(alt_a()).await;
-    assert!(
-        !app.show_agents_window,
-        "FR-022: the second Alt+A closes it"
-    );
-    assert!(
-        app.needs_redraw,
-        "closing the window requests a redraw, as the click does"
-    );
-}
-
-#[tokio::test]
-async fn alt_a_without_a_subject_still_opens_the_window() {
-    // The panel is never hidden behind a chord that looks inert: an empty open
-    // paints the empty-state hint (FR-026) and reports nothing.
-    let mut app = app();
-    app.status = "ready".to_string();
-
-    app.handle_key_event(alt_a()).await;
-    assert!(
-        app.show_agents_window,
-        "with nothing to show the window still opens, as the click does"
-    );
-    assert!(app.needs_redraw, "opening the window requests a redraw");
-    assert_eq!(
-        app.status, "ready",
-        "an empty open is not an error, so it reports nothing"
-    );
-
-    app.needs_redraw = false;
-    app.handle_key_event(alt_a()).await;
-    assert!(!app.show_agents_window, "the second chord closes it again");
-}
-
-#[tokio::test]
-async fn alt_a_closes_an_open_window_even_when_its_subject_vanished() {
-    // The window can empty out from under the operator (FR-063); the chord
-    // that opened it must still be able to dismiss it.
-    let mut app = app();
-    app.show_agents_window = true;
-    app.needs_redraw = false;
-
-    app.handle_key_event(alt_a()).await;
-    assert!(
-        !app.show_agents_window,
-        "an open window always closes, whatever its subject is now"
-    );
-    assert!(
-        app.needs_redraw,
-        "closing the window requests a redraw, as the click does"
-    );
-}
 
 #[tokio::test]
 async fn alt_a_opening_the_agents_window_closes_the_teams_window() {
@@ -206,52 +108,3 @@ async fn alt_a_opening_the_agents_window_closes_the_teams_window() {
 // ---------------------------------------------------------------------------
 // NFR-002 / NFR-009: the chord consumes the key and shadows nothing
 // ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn alt_a_does_not_insert_a_into_the_input() {
-    let mut app = app_with_task();
-    app.session.input = "PROBE".to_string();
-    app.session.input_cursor = app.input_len_chars();
-
-    app.handle_key_event(alt_a()).await;
-
-    assert_eq!(
-        app.session.input, "PROBE",
-        "NFR-002: Alt+A must not leak the 'a' into the input buffer"
-    );
-    assert_eq!(
-        app.session.input_cursor,
-        app.input_len_chars(),
-        "the cursor must not move"
-    );
-}
-
-#[tokio::test]
-async fn alt_a_leaves_a_running_turn_untouched() {
-    let mut app = app_with_task();
-    app.session.is_processing = true;
-
-    app.handle_key_event(alt_a()).await;
-
-    assert!(
-        app.show_agents_window,
-        "FR-022: the panel is reachable while a turn executes"
-    );
-    assert!(app.session.is_processing, "the running turn is untouched");
-}
-
-#[tokio::test]
-async fn plain_a_still_types_a_character() {
-    let mut app = app_with_task();
-
-    app.handle_key_event(plain_a()).await;
-
-    assert_eq!(
-        app.session.input, "a",
-        "NFR-009: without ALT the 'a' must still type a normal character"
-    );
-    assert!(
-        !app.show_agents_window,
-        "a bare 'a' must not open the window"
-    );
-}

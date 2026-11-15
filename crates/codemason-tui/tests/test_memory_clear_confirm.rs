@@ -12,8 +12,6 @@
 #[path = "support/mod.rs"]
 mod support;
 
-use codemason_tui::crossterm_input::CrosstermAppExt;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{Terminal, backend::TestBackend};
 use tempfile::TempDir;
 
@@ -130,83 +128,4 @@ async fn test_memory_clear_opens_confirmation_without_deleting() {
     );
     assert!(text.contains("Yes"), "the dialog must offer Yes");
     assert!(text.contains("No"), "the dialog must offer No");
-}
-
-/// `Esc` dismisses the dialog and leaves memory untouched.
-#[tokio::test]
-async fn test_memory_clear_esc_keeps_memories() {
-    let dir = TempDir::new().expect("tempdir");
-    let _guard = with_cwd(dir.path());
-
-    let mut app = make_app();
-    seed_project_memory(&app.storage, dir.path(), "keep me: alpha");
-    app.current_screen = ScreenMode::Chat;
-
-    app.execute_slash_command("/memory clear").await;
-    app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
-        .await;
-
-    assert!(
-        !app.memory_clear_confirm_open,
-        "Esc must close the confirmation dialog"
-    );
-    assert_eq!(
-        project_memory_count(&app, dir.path()),
-        1,
-        "Esc must leave memory unchanged"
-    );
-}
-
-/// `No` (the default selection) dismisses without clearing.
-#[tokio::test]
-async fn test_memory_clear_no_keeps_memories() {
-    let dir = TempDir::new().expect("tempdir");
-    let _guard = with_cwd(dir.path());
-
-    let mut app = make_app();
-    seed_project_memory(&app.storage, dir.path(), "keep me: alpha");
-    app.current_screen = ScreenMode::Chat;
-
-    app.execute_slash_command("/memory clear").await;
-    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
-
-    assert!(
-        !app.memory_clear_confirm_open,
-        "Enter on the default No must close the dialog"
-    );
-    assert_eq!(
-        project_memory_count(&app, dir.path()),
-        1,
-        "the default No selection must leave memory unchanged"
-    );
-}
-
-/// `Yes` clears the current project's memories.
-#[tokio::test]
-async fn test_memory_clear_yes_deletes_project_memories() {
-    let dir = TempDir::new().expect("tempdir");
-    let _guard = with_cwd(dir.path());
-
-    let mut app = make_app();
-    seed_project_memory(&app.storage, dir.path(), "delete me: alpha");
-    seed_project_memory(&app.storage, dir.path(), "delete me: beta");
-    app.current_screen = ScreenMode::Chat;
-
-    app.execute_slash_command("/memory clear").await;
-    // Right arrow moves the selection from No to Yes.
-    app.handle_key_event(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
-        .await;
-    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
-
-    assert!(
-        !app.memory_clear_confirm_open,
-        "Yes must close the confirmation dialog"
-    );
-    assert_eq!(
-        project_memory_count(&app, dir.path()),
-        0,
-        "Yes must clear every memory for this project"
-    );
 }

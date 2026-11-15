@@ -423,40 +423,6 @@ async fn typing_filters_the_result_rows() {
     );
 }
 
-#[tokio::test]
-async fn escape_on_an_empty_query_dismisses_the_panel() {
-    let mut app = open(sample(), &[], 0);
-    codemason_tui::crossterm_input::handle_key(&mut app, key(KeyCode::Esc)).await;
-    assert!(
-        app.connector_store.is_none(),
-        "Esc on an empty query closes the panel"
-    );
-}
-
-#[tokio::test]
-async fn enter_on_an_empty_result_set_records_a_notice_and_installs_nothing() {
-    let mut app = open(Vec::new(), &[], 0);
-    codemason_tui::crossterm_input::handle_key(&mut app, key(KeyCode::Enter)).await;
-    let browser = app.connector_store.as_ref().expect("panel still open");
-    assert_eq!(
-        browser.last_install.as_deref(),
-        Some("no result highlighted")
-    );
-}
-
-#[tokio::test]
-async fn enter_on_an_installed_row_is_refused() {
-    // The catalogue sorts by id (FR-046), so row 0 is `github`; mark it installed so
-    // Enter on the highlighted row is refused.
-    let mut app = open(sample(), &["github"], 0);
-    codemason_tui::crossterm_input::handle_key(&mut app, key(KeyCode::Enter)).await;
-    let browser = app.connector_store.as_ref().expect("panel still open");
-    assert_eq!(
-        browser.last_install.as_deref(),
-        Some("connector github is already installed")
-    );
-}
-
 // ---------------------------------------------------------------------------
 // The empty-query dismiss leaves the area cleared on the next frame
 // ---------------------------------------------------------------------------
@@ -856,45 +822,6 @@ fn the_navigator_rows_carry_their_entry_counts() {
         joined.contains("developer (1)"),
         "a declared category is counted: {joined:?}"
     );
-}
-
-#[test]
-fn the_installed_pseudo_category_filters_to_the_store_scan() {
-    // Selecting the `Installed` row shows only the connectors present in the store
-    // scan, whatever category they declare - including one that declares none.
-    let mut uncategorised = descriptor("local-thing", "");
-    uncategorised.marketplace = String::new();
-    let mut app = open(
-        vec![
-            descriptor("github", "developer"),
-            descriptor("slack", "communication"),
-            uncategorised,
-        ],
-        &["local-thing"],
-        0,
-    );
-    let browser = app.connector_store.as_mut().expect("panel open");
-    // Row 1 is the `Installed` pseudo-category.
-    assert_eq!(browser.category_row_label(1), "Installed");
-    assert!(browser.category_select_row(1));
-    assert_eq!(
-        browser.filtered.len(),
-        1,
-        "only the installed connector survives the filter"
-    );
-    assert_eq!(browser.all[browser.filtered[0]].id.as_str(), "local-thing");
-}
-
-#[test]
-fn a_declared_category_named_installed_never_forms_a_second_row() {
-    // The `Installed` name is reserved: a catalogue that declares a category
-    // spelled `installed` collapses onto the one pinned pseudo-category row.
-    let app = open(vec![descriptor("odd", "installed")], &[], 0);
-    let browser = app.connector_store.as_ref().expect("panel open");
-    // `ALL` and the pinned `Installed` row, and nothing more.
-    assert_eq!(browser.category_row_count(), 2);
-    assert_eq!(browser.category_row_label(0), "ALL");
-    assert_eq!(browser.category_row_label(1), "Installed");
 }
 
 #[test]

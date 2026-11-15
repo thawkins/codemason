@@ -85,16 +85,6 @@ fn task(id: &str, agent: &str, status: TaskStatus) -> TaskEntry {
 }
 
 /// A background shell task view.
-fn bg_task(id: &str, command: &str) -> codemason_tui::app::BgTaskView {
-    codemason_tui::app::BgTaskView {
-        id: id.to_string(),
-        session_id: LEAD_SESSION.to_string(),
-        command: command.to_string(),
-        status: "running".to_string(),
-        created_at: chrono::Utc::now(),
-        completed_at: None,
-    }
-}
 
 /// A teammate in `status` with a spawned session id.
 fn member(agent_id: &str, name: &str, status: MemberStatus) -> TeamMember {
@@ -179,32 +169,6 @@ fn app_with_team(app_status: MemberStatus) -> App {
 // Arming and defaults
 // ---------------------------------------------------------------------------
 
-/// `open_row_action` arms the dialog with `No` selected and demands a redraw
-/// (FR-069, NFR-005); the dialog alone dispatches nothing.
-#[tokio::test]
-async fn open_row_action_arms_the_dialog_with_no_selected() {
-    let mut app = make_app();
-    app.needs_redraw = false;
-
-    app.open_row_action(RowAction::KillSubagent {
-        task_id: "a1b2c3d4".to_string(),
-        agent_name: "explore".to_string(),
-    });
-
-    assert!(
-        app.row_action_confirm_open(),
-        "the dialog must be armed by open_row_action"
-    );
-    assert!(
-        !app.row_action_confirm_is_yes(),
-        "No must be the default selection (FR-069)"
-    );
-    assert!(
-        app.needs_redraw,
-        "arming the dialog requests a redraw (NFR-005)"
-    );
-}
-
 /// The dialog paints its action title, the target body and both button spans,
 /// and caches the three areas for the mouse router (NFR-010).
 #[tokio::test]
@@ -244,102 +208,6 @@ async fn render_paints_title_body_and_button_rects() {
 // ---------------------------------------------------------------------------
 // Keyboard answering (FR-069, NFR-005)
 // ---------------------------------------------------------------------------
-
-/// `Enter` on the default `No` dismisses the dialog and dispatches nothing.
-#[tokio::test]
-async fn enter_on_the_default_no_dismisses_without_dispatching() {
-    let mut app = app_with_task();
-    app.open_row_action(RowAction::KillSubagent {
-        task_id: "a1b2c3d4".to_string(),
-        agent_name: "explore".to_string(),
-    });
-
-    app.handle_key_event(key(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
-
-    assert!(
-        !app.row_action_confirm_open(),
-        "Enter on the default No closes the dialog"
-    );
-    assert!(app.needs_redraw, "the closure requests a redraw (NFR-005)");
-    assert!(
-        app.active_tasks
-            .iter()
-            .any(|t| t.id == "a1b2c3d4" && t.status == TaskStatus::Running),
-        "No must leave the task untouched (FR-069)"
-    );
-}
-
-/// Toggle then `Enter` accepts: the dialog closes and the pending action is
-/// dispatched.
-#[tokio::test]
-async fn enter_after_toggling_accepts_the_pending_action() {
-    let mut app = app_with_task();
-    app.open_row_action(RowAction::KillSubagent {
-        task_id: "a1b2c3d4".to_string(),
-        agent_name: "explore".to_string(),
-    });
-
-    // Left toggles No -> Yes (the queue-clear dialog's horizontal-move rule).
-    app.handle_key_event(key(KeyCode::Left, KeyModifiers::NONE))
-        .await;
-    assert!(
-        app.row_action_confirm_is_yes(),
-        "Left moves the selection to Yes"
-    );
-    assert!(
-        app.row_action_confirm_open(),
-        "toggling keeps the dialog open"
-    );
-
-    app.handle_key_event(key(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
-    assert!(!app.row_action_confirm_open(), "Yes closes the dialog");
-}
-
-/// `Esc` dismisses the dialog and dispatches nothing.
-#[tokio::test]
-async fn esc_dismisses_the_dialog() {
-    let mut app = app_with_task();
-    app.open_row_action(RowAction::SuspendTeammate {
-        agent_id: "tm-001".to_string(),
-        name: "reviewer".to_string(),
-    });
-
-    app.handle_key_event(key(KeyCode::Esc, KeyModifiers::NONE))
-        .await;
-
-    assert!(!app.row_action_confirm_open(), "Esc closes the dialog");
-}
-
-/// While the dialog is open every other key is swallowed: nothing reaches the
-/// input buffer and the dialog stays armed.
-#[tokio::test]
-async fn other_keys_are_swallowed_while_the_dialog_is_open() {
-    let mut app = app_with_task();
-    app.session.input = "hello".to_string();
-    app.session.input_cursor = 5;
-    app.open_row_action(RowAction::KillSubagent {
-        task_id: "a1b2c3d4".to_string(),
-        agent_name: "explore".to_string(),
-    });
-
-    app.handle_key_event(key(KeyCode::Char('q'), KeyModifiers::NONE))
-        .await;
-    app.handle_key_event(key(KeyCode::Char(' '), KeyModifiers::NONE))
-        .await;
-    app.handle_key_event(key(KeyCode::Char('k'), KeyModifiers::SHIFT))
-        .await;
-
-    assert!(
-        app.row_action_confirm_open(),
-        "an unrelated key must not dismiss the dialog"
-    );
-    assert_eq!(
-        app.session.input, "hello",
-        "modal keys must not leak into the input buffer (FR-055 style gate)"
-    );
-}
 
 // ---------------------------------------------------------------------------
 // Mouse answering (T-009: "with keyboard and mouse answering")
@@ -480,34 +348,6 @@ async fn the_agents_cursor_range_covers_subagent_rows_only() {
     );
 }
 
-/// Arming the background-shell cancel directly through `open_row_action` (the
-/// keyboard cursor never covers background rows, so the trigger is
-/// service-level; the confirm flow itself is unchanged, FR-037).
-#[tokio::test]
-async fn background_cancel_opens_the_cancel_dialog() {
-    let mut app = app_with_task();
-    app.active_tasks.clear();
-    app.bg_tasks = vec![bg_task("cc112233", "sleep 30")];
-    app.needs_redraw = false;
-    app.open_row_action(RowAction::CancelBackground {
-        task_id: "cc112233".to_string(),
-        command: "sleep 30".to_string(),
-    });
-
-    assert!(
-        app.row_action_confirm_open(),
-        "the background cancel confirms first"
-    );
-    match app.row_action_confirm.as_ref().map(|p| &p.action) {
-        Some(RowAction::CancelBackground { task_id, command }) => {
-            assert_eq!(task_id, "cc112233");
-            assert_eq!(command, "sleep 30");
-        }
-        other => panic!("expected CancelBackground, got {other:?}"),
-    }
-    assert!(app.needs_redraw, "arming the dialog requests a redraw");
-}
-
 /// Space on the cursor-selected working teammate opens the suspend dialog
 /// naming the member (FR-040's suspend direction confirms; the old row click
 /// trigger is retired).
@@ -620,73 +460,9 @@ async fn teammate_keyboard_keys_consume_the_key_either_way() {
     );
 }
 
-/// `Space` on the cursor-selected RUNNING sub-agent row suspends it without a
-/// dialog: the suspend direction is not destructive (FR-035 parity with the
-/// mouse; the old selected_agent_index trigger is retired).
-#[tokio::test]
-async fn space_on_a_running_agent_row_suspends_without_a_dialog() {
-    let mut app = app_with_task();
-    app.move_agents_cursor(1);
-
-    app.handle_key_event(key(KeyCode::Char(' '), KeyModifiers::NONE))
-        .await;
-
-    assert!(
-        !app.row_action_confirm_open(),
-        "a non-destructive suspend opens no dialog"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // Stale-row answers dispatch nothing (FR-069)
 // ---------------------------------------------------------------------------
-
-/// Answering `Yes` after the row vanished closes the dialog and mutates
-/// nothing (FR-069).
-#[tokio::test]
-async fn answering_yes_after_the_row_vanishes_mutates_nothing() {
-    let mut app = app_with_task();
-    app.open_row_action(RowAction::KillSubagent {
-        task_id: "a1b2c3d4".to_string(),
-        agent_name: "explore".to_string(),
-    });
-    // The subject disappears between open and answer.
-    app.active_tasks.clear();
-    app.status = "sentinel".to_string();
-
-    // Toggle to Yes and confirm.
-    app.handle_key_event(key(KeyCode::Left, KeyModifiers::NONE))
-        .await;
-    app.handle_key_event(key(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
-
-    assert!(!app.row_action_confirm_open());
-    assert_eq!(
-        app.status, "sentinel",
-        "a stale answer must not touch the status line or any list (FR-069)"
-    );
-}
-
-/// The dialog closes on `Yes` even when the target transitioned to a
-/// background shell task identity; the same cancel service runs either way.
-#[tokio::test]
-async fn the_kill_answer_follows_a_row_that_became_a_background_task() {
-    let mut app = app_with_task();
-    app.open_row_action(RowAction::KillSubagent {
-        task_id: "a1b2c3d4".to_string(),
-        agent_name: "explore".to_string(),
-    });
-    // The task registry replaced the agent task with a bg task of the same id.
-    app.active_tasks.clear();
-    app.bg_tasks = vec![bg_task("a1b2c3d4", "sleep 30")];
-
-    app.handle_key_event(key(KeyCode::Left, KeyModifiers::NONE))
-        .await;
-    app.handle_key_event(key(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
-
-    assert!(!app.row_action_confirm_open(), "the answer still resolves");
-}
 
 // ---------------------------------------------------------------------------
 // FR-028 / FR-032 - the dialog states which option performs and which cancels

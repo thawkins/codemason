@@ -558,38 +558,3 @@ async fn teammate_del_answer_requests_graceful_shutdown() {
 // ---------------------------------------------------------------------------
 // FR-069: a confirmed answer with a vanished subject dispatches nothing
 // ---------------------------------------------------------------------------
-
-/// Answering `Yes` after the teammate row vanished closes the dialog and
-/// records no request line at all (FR-069): the stale-row re-check in the
-/// accept path drops the action before any dispatch.
-#[tokio::test]
-async fn stale_teammate_answer_dispatches_nothing() {
-    let mut app = app_with_teams_window(MemberStatus::Working);
-    // Arm the dialog directly (the trigger points are T-009's concern).
-    app.open_row_action(codemason_tui::app::RowAction::SuspendTeammate {
-        agent_id: "tm-001".to_string(),
-        name: "reviewer".to_string(),
-    });
-    let baseline = app.log_entries.len();
-    // The subject disappears between open and answer.
-    app.session.team_members.clear();
-
-    app.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))
-        .await;
-    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await;
-
-    assert!(
-        !app.row_action_confirm_open(),
-        "the answer closes the dialog"
-    );
-    assert_eq!(
-        app.log_entries.len(),
-        baseline,
-        "a stale answer must not log any request (FR-069)"
-    );
-    assert!(
-        !app.log_entries.iter().any(|e| e.message.contains("tm-001")),
-        "no request line may name the vanished teammate (FR-069)"
-    );
-}

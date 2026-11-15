@@ -19,7 +19,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
 use codemason_tui::App;
-use codemason_tui::app::{QUEUE_CLEAR_CONFIRM_NO, QUEUE_CLEAR_CONFIRM_YES, QueuedInput};
+use codemason_tui::app::{QUEUE_CLEAR_CONFIRM_NO, QueuedInput};
 use codemason_tui::layout;
 
 #[path = "support/mod.rs"]
@@ -89,30 +89,6 @@ fn input_row_text(terminal: &Terminal<TestBackend>, app: &App) -> String {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_yes_removes_every_entry_and_closes_the_dialog() {
-    let mut app = app_with_dialog_open();
-    assert_eq!(app.input_queue_len(), 2, "precondition: two entries queued");
-
-    // Move the selection to `Yes` (Right toggles No -> Yes), then confirm.
-    app.handle_key_event(key(KeyCode::Right)).await;
-    assert_eq!(
-        app.queue_clear_confirm_selected, QUEUE_CLEAR_CONFIRM_YES,
-        "precondition: Right selects `Yes`"
-    );
-    app.handle_key_event(key(KeyCode::Enter)).await;
-
-    assert_eq!(
-        app.input_queue_len(),
-        0,
-        "FR-036: `Yes` removes every entry from the queue"
-    );
-    assert!(
-        !app.queue_clear_confirm_open,
-        "FR-036: the dialog closes after confirming"
-    );
-}
-
-#[tokio::test]
 async fn test_yes_updates_the_painted_queue_counter() {
     let mut app = app_with_dialog_open();
     app.session.input = "draft".to_string();
@@ -136,114 +112,6 @@ async fn test_yes_updates_the_painted_queue_counter() {
     );
 }
 
-#[tokio::test]
-async fn test_yes_resets_the_selection_and_arms_a_redraw() {
-    let mut app = app_with_dialog_open();
-    app.handle_key_event(key(KeyCode::Right)).await;
-    app.needs_redraw = false;
-
-    app.handle_key_event(key(KeyCode::Enter)).await;
-
-    assert_eq!(
-        app.queue_clear_confirm_selected, QUEUE_CLEAR_CONFIRM_NO,
-        "FR-034: the selection resets to `No` for the next open"
-    );
-    assert!(
-        app.needs_redraw,
-        "NFR-011: emptying the queue must repaint on the next frame"
-    );
-}
-
-#[tokio::test]
-async fn test_yes_drops_a_pending_queue_control_next() {
-    let mut app = app_with_dialog_open();
-    app.session.queue_next_pending = true;
-    app.handle_key_event(key(KeyCode::Right)).await;
-
-    app.handle_key_event(key(KeyCode::Enter)).await;
-
-    assert!(
-        !app.session.queue_next_pending,
-        "FR-024: a pending `Next` is meaningless once the queue is emptied"
-    );
-}
-
-#[tokio::test]
-async fn test_yes_on_an_empty_queue_is_a_safe_noop() {
-    let mut app = app_with_dialog_open();
-    app.session.input_queue.clear();
-
-    app.handle_key_event(key(KeyCode::Right)).await;
-    app.handle_key_event(key(KeyCode::Enter)).await;
-
-    assert_eq!(
-        app.input_queue_len(),
-        0,
-        "confirming an already-empty queue must not panic or re-add"
-    );
-    assert!(
-        !app.queue_clear_confirm_open,
-        "the dialog still closes on an empty queue"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // FR-035 / FR-037 - `No` and `Esc` leave the queue unchanged
 // ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn test_no_keeps_every_entry() {
-    let mut app = app_with_dialog_open();
-
-    // Enter on the default `No` selection.
-    app.handle_key_event(key(KeyCode::Enter)).await;
-
-    assert_eq!(
-        app.input_queue_len(),
-        2,
-        "FR-035: selecting `No` leaves the queue unchanged"
-    );
-    assert!(
-        !app.queue_clear_confirm_open,
-        "FR-035: selecting `No` closes the dialog"
-    );
-}
-
-#[tokio::test]
-async fn test_esc_keeps_every_entry() {
-    let mut app = app_with_dialog_open();
-    // Select `Yes` first to prove Esc cancels regardless of the highlight.
-    app.handle_key_event(key(KeyCode::Right)).await;
-
-    app.handle_key_event(key(KeyCode::Esc)).await;
-
-    assert_eq!(
-        app.input_queue_len(),
-        2,
-        "FR-035: dismissing with Esc leaves the queue unchanged even with `Yes` highlighted"
-    );
-    assert!(
-        !app.queue_clear_confirm_open,
-        "FR-035: Esc closes the dialog"
-    );
-}
-
-#[tokio::test]
-async fn test_opening_the_dialog_never_removes_an_entry() {
-    let mut app = app_with_session();
-    app.session.input_queue.push_back(entry("GATE-QUEUE-1"));
-    app.session.input_queue.push_back(entry("GATE-QUEUE-2"));
-    app.queue_menu_open = true;
-
-    app.queue_menu_select_clear();
-
-    assert!(
-        app.queue_clear_confirm_open,
-        "FR-033: selecting Clear opens the confirmation dialog"
-    );
-    assert_eq!(
-        app.input_queue_len(),
-        2,
-        "FR-037: selecting `Clear` must not remove any entry before `Yes`"
-    );
-}

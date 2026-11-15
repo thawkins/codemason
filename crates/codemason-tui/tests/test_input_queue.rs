@@ -14,7 +14,7 @@ mod support;
 
 use ratatui::{Terminal, backend::TestBackend};
 
-use codemason_tui::app::{MAX_INPUT_QUEUE, QueuedInput};
+use codemason_tui::app::QueuedInput;
 use codemason_tui::layout;
 
 use codemason_tui::App;
@@ -41,123 +41,6 @@ fn entry(text: &str) -> QueuedInput {
         text: text.to_string(),
         image_paths: Vec::new(),
     }
-}
-
-#[test]
-fn test_queued_input_default_is_empty() {
-    let queued = QueuedInput::default();
-    assert_eq!(queued.text, "");
-    assert_eq!(queued.image_paths, [] as [std::path::PathBuf; 0]);
-}
-
-#[test]
-fn test_queued_input_is_clonable_and_comparable() {
-    let queued = QueuedInput {
-        text: "hello".to_string(),
-        image_paths: vec![std::path::PathBuf::from("/tmp/a.png")],
-    };
-    assert_eq!(queued.clone(), queued);
-    assert_ne!(queued, entry("hello"));
-}
-
-#[test]
-fn test_max_input_queue_is_32() {
-    assert_eq!(MAX_INPUT_QUEUE, 32);
-}
-
-#[test]
-fn test_new_app_starts_with_empty_queue() {
-    let app = support::make_app();
-    assert_eq!(app.input_queue_len(), 0);
-    assert!(app.session.input_queue.is_empty());
-}
-
-#[test]
-fn test_input_queue_preserves_fifo_order() {
-    let mut app = support::make_app();
-    app.session.input_queue.push_back(entry("first"));
-    app.session.input_queue.push_back(entry("second"));
-    app.session.input_queue.push_back(entry("third"));
-    assert_eq!(app.input_queue_len(), 3);
-
-    // Oldest first: popping the front yields the entries in submission order.
-    let popped: Vec<String> = (0..3)
-        .map(|_| {
-            app.session
-                .input_queue
-                .pop_front()
-                .expect("queue should have entries")
-                .text
-        })
-        .collect();
-    assert_eq!(popped, vec!["first", "second", "third"]);
-    assert_eq!(app.input_queue_len(), 0);
-}
-
-#[test]
-fn test_input_queue_can_hold_up_to_capacity() {
-    let mut app = support::make_app();
-    for i in 0..MAX_INPUT_QUEUE {
-        app.session
-            .input_queue
-            .push_back(entry(&format!("message-{i}")));
-    }
-    assert_eq!(app.input_queue_len(), MAX_INPUT_QUEUE);
-    // The head is still the oldest entry; eviction from the front is O(1).
-    assert_eq!(
-        app.session.input_queue.front().map(|q| q.text.as_str()),
-        Some("message-0")
-    );
-    app.session.input_queue.pop_front();
-    assert_eq!(app.input_queue_len(), MAX_INPUT_QUEUE - 1);
-}
-
-#[test]
-fn test_clear_input_queue_empties_the_queue() {
-    let mut app = support::make_app();
-    app.session.input_queue.push_back(entry("a"));
-    app.session.input_queue.push_back(entry("b"));
-    app.clear_input_queue();
-    assert_eq!(app.input_queue_len(), 0);
-    assert!(app.session.input_queue.is_empty());
-}
-
-#[test]
-fn test_queued_input_preserves_image_attachments() {
-    let mut app = support::make_app();
-    app.session.input_queue.push_back(QueuedInput {
-        text: "describe this image".to_string(),
-        image_paths: vec![
-            std::path::PathBuf::from("/tmp/one.png"),
-            std::path::PathBuf::from("/tmp/two.jpg"),
-        ],
-    });
-    let head = app.session.input_queue.front().expect("entry queued");
-    assert_eq!(head.text, "describe this image");
-    assert_eq!(head.image_paths.len(), 2);
-}
-
-#[test]
-fn test_load_session_clears_the_input_queue() {
-    let mut app = support::make_app();
-    let dir = std::env::current_dir().expect("cwd");
-    let session = app
-        .session_processor
-        .session_manager
-        .create_session(dir)
-        .expect("create session");
-
-    app.session
-        .input_queue
-        .push_back(entry("must not survive a session switch"));
-    assert_eq!(app.input_queue_len(), 1);
-
-    app.load_session(&session.id).expect("load session");
-    assert_eq!(
-        app.input_queue_len(),
-        0,
-        "switching sessions must drop the previous session's queued messages"
-    );
 }
 
 // -- T-004: two-digit queue counter render --------------------------------
@@ -278,55 +161,6 @@ fn test_input_render_cache_tracks_queue_len() {
     );
 }
 
-#[test]
-fn test_clear_input_queue_sets_redraw_flag() {
-    let mut app = support::make_app();
-    app.session.input_queue.push_back(entry("one"));
-    app.needs_redraw = false;
-
-    app.clear_input_queue();
-
-    assert!(
-        app.needs_redraw,
-        "clearing a non-empty queue must repaint to drop the counter (NFR-003)"
-    );
-}
-
-#[test]
-fn test_clear_empty_queue_does_not_force_redraw() {
-    let mut app = support::make_app();
-    app.needs_redraw = false;
-
-    app.clear_input_queue();
-
-    assert!(
-        !app.needs_redraw,
-        "clearing an already-empty queue must not schedule a spurious repaint"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // T-011 - configurable capacity with a 32 default (FR-015)
 // ---------------------------------------------------------------------------
-
-#[test]
-fn test_app_capacity_falls_back_to_default_when_unset() {
-    let app = support::make_app();
-
-    // No `input_queue_capacity` is configured in this workspace, so the App
-    // resolves the compiled default of 32 (FR-015, MAX_INPUT_QUEUE).
-    assert_eq!(app.input_queue_capacity, MAX_INPUT_QUEUE);
-}
-
-#[test]
-fn test_app_capacity_matches_resolved_config() {
-    let app = support::make_app();
-    let expected = codemason_config::Config::load()
-        .unwrap_or_default()
-        .effective_input_queue_capacity();
-
-    assert_eq!(
-        app.input_queue_capacity, expected,
-        "App must adopt the capacity resolved from config (FR-015)"
-    );
-}

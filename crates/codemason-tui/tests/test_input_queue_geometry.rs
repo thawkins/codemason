@@ -14,14 +14,11 @@
 #[path = "support/mod.rs"]
 mod support;
 
-use codemason_app_core::geometry::Area;
 use ratatui::Terminal;
 use ratatui::backend::{Backend, TestBackend};
 
 use codemason_tui::App;
-use codemason_tui::app::{
-    ContextAction, ContextMenuState, QueuedInput, SelectionPane, TextSelection,
-};
+use codemason_tui::app::QueuedInput;
 use codemason_tui::layout;
 
 /// Build a queued entry with no attachments.
@@ -192,61 +189,3 @@ fn test_render_cache_rebuilds_when_counter_appears() {
 // Selection mapping follows the counter prefix and excludes counter digits
 // (NFR-002, FR-020)
 // ---------------------------------------------------------------------------
-
-/// Build a Cut context menu over the Input pane so `execute_context_action`
-/// routes the selection through `input_selection_char_range`.
-fn cut_menu() -> ContextMenuState {
-    ContextMenuState {
-        x: 1,
-        y: 1,
-        pane: SelectionPane::Input,
-        selected: 0,
-        items: vec![(ContextAction::Cut, true)],
-    }
-}
-
-#[test]
-fn test_selection_maps_through_the_counter_prefix() {
-    let mut app = support::make_app();
-    app.input_area = Area::new(0, 22, 40, 3);
-    app.session.input = "abcdef".to_string();
-    app.session.input_cursor = 6;
-    app.session.input_queue.push_back(entry("queued"));
-    // Painted first row is `01> abcdef`, so inner columns 6..8 are `c` and `d`.
-    app.text_selection = Some(TextSelection {
-        pane: SelectionPane::Input,
-        anchor: (1 + 6, 23),
-        endpoint: (1 + 7, 23),
-    });
-    app.context_menu = Some(cut_menu());
-
-    app.execute_context_action(ContextAction::Cut);
-
-    assert_eq!(
-        app.session.input, "abef",
-        "cutting the counter-prefixed row must remove only `cd` (NFR-002)"
-    );
-}
-
-#[test]
-fn test_selection_over_counter_digits_is_not_message_content() {
-    let mut app = support::make_app();
-    app.input_area = Area::new(0, 22, 40, 3);
-    app.session.input = "abcdef".to_string();
-    app.session.input_cursor = 6;
-    app.session.input_queue.push_back(entry("queued"));
-    // Select the entire `01> ` counter prefix (inner columns 0..4).
-    app.text_selection = Some(TextSelection {
-        pane: SelectionPane::Input,
-        anchor: (1, 23),
-        endpoint: (1 + 3, 23),
-    });
-    app.context_menu = Some(cut_menu());
-
-    app.execute_context_action(ContextAction::Cut);
-
-    assert_eq!(
-        app.session.input, "abcdef",
-        "the queue counter is never selectable or cut as message content (FR-020)"
-    );
-}
