@@ -253,6 +253,19 @@ impl App {
 
     /// [`Self::poll_newproj_result`] with the scaffold's own session focused.
     fn poll_newproj_result_in_origin(&mut self) {
+        // Take the final outcome first: the worker deposits it only after
+        // pushing its last progress line ("scaffold complete"), so the drain
+        // below then sees every line. Draining first raced the worker: a
+        // line pushed between the drain and the take was dropped with the
+        // panel.
+        let outcome = {
+            let mut guard = self
+                .newproj_result
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.take()
+        };
+
         // Stream any fresh worker progress lines into the panel.
         let drained: Vec<String> = match self.newproj_progress.lock() {
             Ok(mut lines) => std::mem::take(&mut *lines),
@@ -275,13 +288,6 @@ impl App {
         }
 
         // Apply the final outcome once the worker has deposited it.
-        let outcome = {
-            let mut guard = self
-                .newproj_result
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            guard.take()
-        };
         let Some(outcome) = outcome else {
             return;
         };
