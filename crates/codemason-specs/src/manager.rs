@@ -577,6 +577,12 @@ fn update_frontmatter(
 /// Takes both the original and an already-lowercased copy of the text so
 /// callers that have already lowercased (search) do not pay for a second
 /// full-text lowercasing per snippet batch.
+///
+/// `text_lower` is only used directly when `text` is ASCII: lowercasing
+/// non-ASCII text can change byte lengths (U+0130 lowercases to the 3-byte
+/// `i\u{307}`), so its offsets would not be valid in `text` (RS-02). For
+/// non-ASCII text the match offsets are mapped back to `text` through a
+/// per-char lowering table.
 fn extract_snippets_lowered(
     text: &str,
     text_lower: &str,
@@ -586,12 +592,27 @@ fn extract_snippets_lowered(
     let mut snippets = Vec::new();
     let window = 40usize;
 
-    for (idx, _) in text_lower.match_indices(query) {
+    let (lowered, origin) = if text.is_ascii() {
+        (std::borrow::Cow::Borrowed(text_lower), None)
+    } else {
+        let (lowered, origin) = lowercase_with_origin(text);
+        (std::borrow::Cow::Owned(lowered), Some(origin))
+    };
+    // Map an offset in `lowered` to the original char offset in `text`.
+    let to_original = |lower_idx: usize| -> usize {
+        origin.as_ref().map_or(lower_idx, |o| {
+            o.get(lower_idx).copied().unwrap_or(text.len())
+        })
+    };
+
+    for (lower_idx, _) in lowered.match_indices(query) {
         if snippets.len() >= max_snippets {
             break;
         }
+        let idx = to_original(lower_idx);
+        let match_end = to_original(lower_idx + query.len());
         let start = idx.saturating_sub(window);
-        let end = (idx + query.len() + window).min(text.len());
+        let end = (match_end + window).min(text.len());
         // Align byte indices to char boundaries in the original UTF-8 text so slicing
         // does not panic on multi-byte characters (e.g. em-dashes).
         let start_char = text.floor_char_boundary(start);
@@ -603,6 +624,22 @@ fn extract_snippets_lowered(
     }
 
     snippets
+}
+
+/// Lowercase `text` char by char, returning the lowered string and, for
+/// every byte of it plus one end sentinel, the byte offset in `text` of the
+/// char that produced it.
+fn lowercase_with_origin(text: &str) -> (String, Vec<usize>) {
+    let mut lowered = String::with_capacity(text.len());
+    let mut origin: Vec<usize> = Vec::with_capacity(text.len() + 1);
+    for (idx, c) in text.char_indices() {
+        for lc in c.to_lowercase() {
+            lowered.push(lc);
+        }
+        origin.resize(lowered.len(), idx);
+    }
+    origin.push(text.len());
+    (lowered, origin)
 }
 
 // -- Filter / Sort types --
