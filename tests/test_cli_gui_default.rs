@@ -44,6 +44,16 @@ fn test_cli_no_tui_selects_plain_mode() {
 /// With no X11 or Wayland display, an interactive `cdmn` exits non-zero with
 /// the no-display message (pointing at headless `cdmn run`) and does not
 /// panic or fall back to a terminal UI.
+///
+/// Only X11/Wayland platforms check for a display; elsewhere `cdmn` would
+/// open a real window, so the test runs on Linux and the BSDs only.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
 #[test]
 fn test_cli_interactive_without_display_exits_with_headless_hint() {
     let scratch = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
