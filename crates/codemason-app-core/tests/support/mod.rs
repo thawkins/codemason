@@ -122,3 +122,46 @@ pub fn allow_session_root(app: &App, root: &std::path::Path) {
             env_overrides_present: false,
         });
 }
+
+/// Points the user-global config at `<dir>/.config` for the guard's lifetime
+/// and writes `json` there as `codemason/codemason.json`.
+///
+/// Privileged sections (`plugins`, `connectors`, `automation`, `backends`,
+/// ...) are ignored in a project-local `.codemason/codemason.json`, so a test
+/// that configures one must put it in the user-global file. The caller holds
+/// the crate-wide env lock for the guard's lifetime (this helper does not
+/// take it); dropping the guard restores the previous `XDG_CONFIG_HOME`.
+#[allow(dead_code)]
+pub struct GlobalConfigGuard {
+    prev_xdg: Option<std::ffi::OsString>,
+}
+
+#[allow(dead_code, unsafe_code)]
+impl GlobalConfigGuard {
+    /// Write `json` as the user-global config under `dir` and redirect to it.
+    pub fn install(dir: &std::path::Path, json: &str) -> Self {
+        let prev_xdg = std::env::var_os("XDG_CONFIG_HOME");
+        let config_home = dir.join(".config");
+        let global_dir = config_home.join("codemason");
+        std::fs::create_dir_all(&global_dir).expect("global config dir");
+        std::fs::write(global_dir.join("codemason.json"), json).expect("global config writable");
+        // env-isolation: the caller holds the crate-wide env lock for the guard's lifetime.
+        // SAFETY: single-threaded under the crate-wide env lock.
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", &config_home) };
+        codemason_config::Config::invalidate_load_cache();
+        Self { prev_xdg }
+    }
+}
+
+#[allow(unsafe_code)]
+impl Drop for GlobalConfigGuard {
+    fn drop(&mut self) {
+        // env-isolation: restores the value under the same lock the caller holds.
+        // SAFETY: single-threaded under the crate-wide env lock.
+        match self.prev_xdg.take() {
+            Some(prev) => unsafe { std::env::set_var("XDG_CONFIG_HOME", prev) },
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
+        }
+        codemason_config::Config::invalidate_load_cache();
+    }
+}

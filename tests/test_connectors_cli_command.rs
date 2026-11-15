@@ -40,6 +40,15 @@ impl Fixture {
         self.temp.path()
     }
 
+    /// Write `json` as the user-global config the spawned `codemason` reads
+    /// (`XDG_CONFIG_HOME` points at `<fixture>/config`). Privileged sections
+    /// such as `plugins` and `connectors` are ignored in a project-local file.
+    fn write_global_config(&self, json: &str) {
+        let dir = self.temp.path().join("config").join("codemason");
+        std::fs::create_dir_all(&dir).expect("global config dir");
+        std::fs::write(dir.join("codemason.json"), json).expect("config writable");
+    }
+
     /// Run `codemason` with `args` against this fixture's isolated environment.
     fn codemason(&self, args: &[&str]) -> Output {
         let config = self.temp.path().join("config");
@@ -308,11 +317,7 @@ fn master_switch_disables_the_subsystem_but_help_still_renders() {
     // disabled subsystem for a management subcommand, while `help` still prints
     // usage.
     let fx = Fixture::new();
-    std::fs::write(
-        fx.path().join(".codemason/codemason.json"),
-        r#"{ "connectors": { "enabled": false } }"#,
-    )
-    .expect("config writable");
+    fx.write_global_config(r#"{ "connectors": { "enabled": false } }"#);
 
     let listed = stdout(&fx.codemason(&["connectors", "list"]));
     assert!(listed.contains("[err]"), "{listed}");

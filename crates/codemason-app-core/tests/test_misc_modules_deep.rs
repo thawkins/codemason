@@ -1834,14 +1834,16 @@ fn tracing_layer_records_debug_formatted_fields() {
 
 #[test]
 fn backend_panel_switches_via_a_registered_descriptor() {
-    let (_guard, _env, temp) = slash_support::enter_project(
-        r#"{
-          "defaultAgent": "general",
-          "backends": [
-            { "id": "box", "name": "Docker box", "kind": "docker", "image": "alpine" }
-          ]
-        }"#,
-    );
+    let (_guard, _env, temp) = slash_support::enter_project(r#"{ "defaultAgent": "general" }"#);
+    // `backends` is honoured only in the user-global config.
+    let global = temp.path().join(".config/codemason");
+    std::fs::create_dir_all(&global).expect("global config dir");
+    std::fs::write(
+        global.join("codemason.json"),
+        r#"{ "backends": [
+              { "id": "box", "name": "Docker box", "kind": "docker", "image": "alpine" } ] }"#,
+    )
+    .expect("write global config");
     let mut app = slash_support::app_with_session();
 
     // The selector matches the registered row by kind; whether the switch is
@@ -1851,9 +1853,9 @@ fn backend_panel_switches_via_a_registered_descriptor() {
     assert!(attempted, "a registered kind is always a switch attempt");
     if app.session.active_backend == "docker" {
         assert_eq!(app.status, "backend: docker");
-        // The switch is persisted into the project config file.
-        let raw = std::fs::read_to_string(temp.path().join(".codemason/codemason.json"))
-            .expect("read project config");
+        // The switch is persisted into the user-global config file.
+        let raw = std::fs::read_to_string(temp.path().join(".config/codemason/codemason.json"))
+            .expect("read global config");
         let parsed: serde_json::Value = serde_json::from_str(&raw).expect("parse config");
         assert_eq!(
             parsed.get("execution_backend").and_then(|v| v.as_str()),
@@ -1883,8 +1885,8 @@ fn backend_panel_switch_by_bare_kind_synthesises_an_unregistered_row() {
     assert!(attempted, "the selector is case-insensitive");
     if app.session.active_backend == "docker" {
         assert_eq!(app.status, "backend: docker");
-        let raw = std::fs::read_to_string(temp.path().join(".codemason/codemason.json"))
-            .expect("read project config");
+        let raw = std::fs::read_to_string(temp.path().join(".config/codemason/codemason.json"))
+            .expect("read global config");
         let parsed: serde_json::Value = serde_json::from_str(&raw).expect("parse config");
         assert_eq!(
             parsed.get("execution_backend").and_then(|v| v.as_str()),

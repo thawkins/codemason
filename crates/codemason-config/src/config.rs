@@ -2029,7 +2029,11 @@ impl Config {
         if project_path.exists() {
             let overlay = Self::load_file(&project_path)?;
             config = Self::merge_project(config, overlay);
-            config.config_paths.push(project_path.clone());
+            // Recorded absolute, so a write after a cwd change still targets
+            // this project's file (see `Config::source_path`).
+            config
+                .config_paths
+                .push(std::path::absolute(&project_path).unwrap_or_else(|_| project_path.clone()));
             loaded = true;
         }
         // If neither global nor project config exists, create a default
@@ -2053,7 +2057,9 @@ impl Config {
                     e
                 )
             })?;
-            config.config_paths.push(project_path);
+            config
+                .config_paths
+                .push(std::path::absolute(&project_path).unwrap_or(project_path));
         }
 
         // Environment variable pointing to config file
@@ -2271,24 +2277,17 @@ impl Config {
     /// The file is only touched when the serialised JSON differs from the
     /// existing content, avoiding unnecessary writes and timestamp churn.
     ///
+    /// **This writes the whole merged config**, including values that came
+    /// from other layers (user-global secrets into a project file, project
+    /// values into the global file). A toggle that changes one setting must
+    /// use [`Config::set_source_value`] / [`Config::edit_source_config`]
+    /// instead, which edit only that key.
+    ///
     /// # Errors
     ///
     /// Returns an error if the file cannot be written.
     pub fn save_to_source(&self) -> anyhow::Result<()> {
-        let project_path = PathBuf::from(".codemason/codemason.json");
-        let was_loaded_from_project = self.config_paths.iter().any(|p| {
-            p.file_name().is_some_and(|f| f == "codemason.json")
-                && p.parent()
-                    .is_some_and(|parent| parent.file_name().is_some_and(|f| f == ".codemason"))
-        });
-        let path = if let Some(explicit) = Self::config_write_target() {
-            explicit
-        } else if was_loaded_from_project {
-            project_path
-        } else {
-            Self::global_config_path()
-                .ok_or_else(|| anyhow::anyhow!("no config directory found"))?
-        };
+        let path = self.source_path()?;
 
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -2704,13 +2703,142 @@ impl Config {
             None => Self::global_config_path()
                 .ok_or_else(|| anyhow::anyhow!("no config directory found"))?,
         };
+        Self::edit_config_file(path, "global config", edit)
+    }
+
+    /// Atomically edit the config file **this config was loaded from** as raw
+    /// JSON, preserving every key the editor does not touch.
+    ///
+    /// The target is the explicit `--config <file>` in that mode, else the
+    /// project-local `.codemason/codemason.json` recorded in
+    /// [`Config::config_paths`] (the loaded path itself, not one relative to
+    /// the process cwd), else the user-global file. Unlike
+    /// [`Config::save_to_source`], nothing from the merged config is written:
+    /// a user-global secret never lands in a project file.
+    ///
+    /// The editor returns `Ok(true)` when it changed something; `Ok(false)`
+    /// writes nothing. Returns the path that was edited.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no target can be resolved, the existing file cannot
+    /// be read or parsed or is not a JSON object (it is then left untouched),
+    /// the editor fails, or the write fails.
+    pub fn edit_source_config<F>(&self, edit: F) -> anyhow::Result<PathBuf>
+    where
+        F: FnOnce(&mut serde_json::Map<String, serde_json::Value>) -> anyhow::Result<bool>,
+    {
+        Self::edit_config_file(self.source_path()?, "config", edit)
+    }
+
+    /// Set the value at `path` (object keys, outermost first) in the config
+    /// file this config was loaded from, creating missing objects along the
+    /// way; see [`Config::edit_source_config`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Config::edit_source_config`], and when `path` is empty or an
+    /// intermediate key holds a non-object value.
+    pub fn set_source_value(
+        &self,
+        path: &[&str],
+        value: serde_json::Value,
+    ) -> anyhow::Result<PathBuf> {
+        let (last, parents) = path
+            .split_last()
+            .ok_or_else(|| anyhow::anyhow!("set_source_value: empty key path"))?;
+        self.edit_source_config(|root| {
+            let mut object = root;
+            for key in parents {
+                let slot = object
+                    .entry((*key).to_string())
+                    .or_insert(serde_json::Value::Null);
+                // An explicit `null` loads as an absent optional section, so it
+                // is treated like a missing one.
+                if slot.is_null() {
+                    *slot = serde_json::Value::Object(serde_json::Map::new());
+                }
+                object = slot
+                    .as_object_mut()
+                    .ok_or_else(|| anyhow::anyhow!("config key '{key}' is not an object"))?;
+            }
+            if object.get(*last) == Some(&value) {
+                return Ok(false);
+            }
+            object.insert((*last).to_string(), value);
+            Ok(true)
+        })
+    }
+
+    /// The file [`Config::save_to_source`] and [`Config::edit_source_config`]
+    /// write: the explicit `--config` target, else the loaded project file,
+    /// else the user-global file.
+    fn source_path(&self) -> anyhow::Result<PathBuf> {
+        if let Some(explicit) = Self::config_write_target() {
+            return Ok(explicit);
+        }
+        let loaded_project = self.config_paths.iter().find(|p| {
+            p.file_name().is_some_and(|f| f == "codemason.json")
+                && p.parent()
+                    .is_some_and(|parent| parent.file_name().is_some_and(|f| f == ".codemason"))
+        });
+        match loaded_project {
+            Some(project) => {
+                Self::ensure_project_file_is_contained(project)?;
+                Ok(project.clone())
+            }
+            None => Self::global_config_path()
+                .ok_or_else(|| anyhow::anyhow!("no config directory found")),
+        }
+    }
+
+    /// Refuse to write a project `.codemason/codemason.json` that is a symlink
+    /// or whose `.codemason` directory resolves outside the project.
+    ///
+    /// The file is repository content. A link such as
+    /// `.codemason/codemason.json -> ~/.config/codemason/codemason.json` would
+    /// make an edit read the user-global config and the atomic rename replace
+    /// the link with a regular project file holding the global secrets.
+    fn ensure_project_file_is_contained(path: &Path) -> anyhow::Result<()> {
+        let refuse = |why: &str| {
+            anyhow::anyhow!(
+                "refusing to write project config '{}': {why}",
+                path.display()
+            )
+        };
+        if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(refuse("it is a symbolic link"));
+        }
+        let dir = path
+            .parent()
+            .ok_or_else(|| refuse("it has no parent directory"))?;
+        let project = dir
+            .parent()
+            .ok_or_else(|| refuse("it has no project directory"))?;
+        let (Ok(dir), Ok(project)) = (dir.canonicalize(), project.canonicalize()) else {
+            return Err(refuse("its directory cannot be resolved"));
+        };
+        if dir != project.join(".codemason") {
+            return Err(refuse(
+                "its .codemason directory resolves outside the project",
+            ));
+        }
+        Ok(())
+    }
+
+    /// The raw-JSON read-edit-write shared by [`Config::edit_global_config`]
+    /// and [`Config::edit_source_config`]. `label` names the file in errors.
+    fn edit_config_file<F>(path: PathBuf, label: &str, edit: F) -> anyhow::Result<PathBuf>
+    where
+        F: FnOnce(&mut serde_json::Map<String, serde_json::Value>) -> anyhow::Result<bool>,
+    {
         // Only a missing (or blank) file starts from an empty object. Any other
         // read failure - permission denied, invalid UTF-8 - must propagate:
         // treating it as empty would overwrite the user's whole file with the
         // single edited key.
         let mut json: serde_json::Value = match std::fs::read_to_string(&path) {
             Ok(raw) if !raw.trim().is_empty() => serde_json::from_str(&raw).map_err(|e| {
-                anyhow::anyhow!("Failed to parse global config '{}': {}", path.display(), e)
+                anyhow::anyhow!("Failed to parse {label} '{}': {}", path.display(), e)
             })?,
             Ok(_) => serde_json::Value::Object(serde_json::Map::new()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -2718,21 +2846,26 @@ impl Config {
             }
             Err(e) => {
                 return Err(anyhow::anyhow!(
-                    "Failed to read global config '{}': {}",
+                    "Failed to read {label} '{}': {}",
                     path.display(),
                     e
                 ));
             }
         };
-        let object = json.as_object_mut().ok_or_else(|| {
-            anyhow::anyhow!("global config '{}' is not a JSON object", path.display())
-        })?;
+        let object = json
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("{label} '{}' is not a JSON object", path.display()))?;
         if !edit(object)? {
             return Ok(path);
         }
 
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
         let json = serde_json::to_string_pretty(&json)
-            .map_err(|e| anyhow::anyhow!("Failed to serialise global config: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to serialise {label}: {}", e))?;
         Self::write_config_if_changed(&path, &json)?;
         // The write changed a file the load cache is keyed on; drop it so the
         // next `load` re-reads the new value.
@@ -3143,6 +3276,7 @@ impl Config {
         if stripped_provider_api {
             rejected.push("provider.<id>.api");
         }
+        overlay.strip_unprivileged_project_sections(&mut rejected);
 
         if !rejected.is_empty() {
             tracing::warn!(
@@ -3154,6 +3288,86 @@ impl Config {
         }
 
         Self::merge_inner(base, overlay)
+    }
+
+    /// Drop the sections a project overlay may not set beyond the SEC list in
+    /// [`Config::merge_project`], recording each one that was present in
+    /// `rejected` (deep-refactor audit car 1, decisions O-01 and O-02).
+    ///
+    /// - `execution_backend` / `backends`: a remote backend receives a stored
+    ///   provider credential as its bearer token and the whole turn, a container
+    ///   backend gets the named secrets as env vars in an image the project
+    ///   picks, and `"local"` downgrades a user sandbox to host execution.
+    /// - `automation`: schedules unattended runs and posts any env var
+    ///   (`token_env`) to a URL the project picks.
+    /// - `gitlab`: `instance_url` receives the stored GitLab token.
+    /// - `plugins`: replacing the section wipes the user's `permissions` gate,
+    ///   which gives an enabled plugin the full host API, and raises budgets.
+    /// - `connectors`: replaced wholesale, including catalogue URLs.
+    /// - search API keys: a project key routes the user's queries into the
+    ///   project's vendor account.
+    /// - budgets and safety switches: `loop` (steps, cost, retries,
+    ///   checkpoints), `prices`, `input_queue_capacity`, the background-agent
+    ///   limits, `activity_log` and `edit_log`.
+    fn strip_unprivileged_project_sections(&mut self, rejected: &mut Vec<&'static str>) {
+        if self.execution_backend.take().is_some() {
+            rejected.push("execution_backend");
+        }
+        if !self.backends.is_empty() {
+            self.backends.clear();
+            rejected.push("backends");
+        }
+        if self.automation.take().is_some() {
+            rejected.push("automation");
+        }
+        let gitlab = std::mem::take(&mut self.gitlab);
+        if gitlab.instance_url.is_some() || gitlab.token.is_some() || gitlab.username.is_some() {
+            rejected.push("gitlab");
+        }
+        if self.plugins.take().is_some() {
+            rejected.push("plugins");
+        }
+        if self.connectors.take().is_some() {
+            rejected.push("connectors");
+        }
+        let mut search_keys = false;
+        for key in [
+            &mut self.tavily_api_key,
+            &mut self.langsearch_api_key,
+            &mut self.perplexity_api_key,
+            &mut self.exa_api_key,
+            &mut self.serper_api_key,
+        ] {
+            search_keys |= key.take().is_some();
+        }
+        if search_keys {
+            rejected.push("search API keys");
+        }
+        if !self.r#loop.is_default() {
+            self.r#loop = LoopConfig::default();
+            rejected.push("loop");
+        }
+        if !self.prices.is_empty() {
+            self.prices.clear();
+            rejected.push("prices");
+        }
+        if self.input_queue_capacity.take().is_some() {
+            rejected.push("input_queue_capacity");
+        }
+        if self.experimental.max_background_agents != default_max_background_agents()
+            || self.experimental.background_agent_timeout != default_background_agent_timeout()
+        {
+            self.experimental.max_background_agents = default_max_background_agents();
+            self.experimental.background_agent_timeout = default_background_agent_timeout();
+            rejected.push("experimental background-agent limits");
+        }
+        // `activity_log` defaults to true and only `false` overrides the base;
+        // `edit_log` defaults to false and only `true` overrides it.
+        if !self.activity_log || self.edit_log {
+            self.activity_log = true;
+            self.edit_log = false;
+            rejected.push("activity_log / edit_log");
+        }
     }
 
     fn merge_inner(mut base: Self, overlay: Self) -> Self {

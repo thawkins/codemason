@@ -220,11 +220,11 @@ async fn stores_tags_a_configured_endpoint_as_config() {
     // `config` and names its URL; the other store keeps its default.
     let _lock = crate::global_env_lock();
     let (_guard, temp) = enter_temp_dir();
-    std::fs::write(
-        temp.path().join(".codemason").join("codemason.json"),
+    // Privileged sections are honoured only in the user-global config.
+    let _global = support::GlobalConfigGuard::install(
+        temp.path(),
         r#"{ "plugins": { "stores": { "codex": { "url": "https://cfg.example/codex.json" } } } }"#,
-    )
-    .expect("config writable");
+    );
 
     let mut app = support::make_app();
     app.session.session_id = Some("test-session".to_string());
@@ -292,11 +292,11 @@ async fn marketplace_show_names_a_configured_endpoint() {
     // the Codex section and tags the row `(config)`; Claude keeps its default.
     let _lock = crate::global_env_lock();
     let (_guard, temp) = enter_temp_dir();
-    std::fs::write(
-        temp.path().join(".codemason").join("codemason.json"),
+    // Privileged sections are honoured only in the user-global config.
+    let _global = support::GlobalConfigGuard::install(
+        temp.path(),
         r#"{ "plugins": { "stores": { "codex": { "url": "https://cfg.example/codex.json" } } } }"#,
-    )
-    .expect("config writable");
+    );
 
     let mut app = support::make_app();
     app.session.session_id = Some("test-session".to_string());
@@ -638,11 +638,9 @@ async fn master_switch_disables_the_subsystem() {
             .join("codex-weather"),
         "codex-weather",
     );
-    std::fs::write(
-        temp.path().join(".codemason").join("codemason.json"),
-        r#"{ "plugins": { "enabled": false } }"#,
-    )
-    .expect("config writable");
+    // Privileged sections are honoured only in the user-global config.
+    let _global =
+        support::GlobalConfigGuard::install(temp.path(), r#"{ "plugins": { "enabled": false } }"#);
 
     let mut app = support::make_app();
     app.session.session_id = Some("test-session".to_string());

@@ -267,11 +267,13 @@ async fn test_gcf_off_persists_disabled_to_config_source() {
             .enabled;
         assert!(!persisted, "gcf.enabled must be persisted as false");
         let file_text = std::fs::read_to_string(&config_path).expect("read back");
-        // The section is omitted while disabled (FR-001 skip rule), so the
-        // file must not carry a gcf key at all.
-        assert!(
-            !file_text.contains("\"gcf\""),
-            "disabled state must omit the gcf key from the config file, got: {file_text}"
+        // The toggle edits only `gcf.enabled` in the source file, so "off" is
+        // written explicitly (it then also overrides a layer that says "on").
+        let written: serde_json::Value = serde_json::from_str(&file_text).expect("parse");
+        assert_eq!(
+            written.pointer("/gcf/enabled"),
+            Some(&serde_json::Value::Bool(false)),
+            "the config file must hold gcf.enabled: false, got: {file_text}"
         );
         assert_eq!(app.status, "gcf: off", "/gcf off status");
     })

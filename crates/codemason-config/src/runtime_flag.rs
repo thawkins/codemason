@@ -50,9 +50,9 @@ impl RuntimeFlag {
     ///   under every project overlay, and `save_to_source` never targets a
     ///   project file), so the value round-trips no matter which directory the
     ///   session was started in.
-    /// - A flag without one (`gcf`, whose value lives under `gcf.enabled`) falls
-    ///   back to the historical path: reload the merged config, update the
-    ///   field, and write it back to the source that was loaded.
+    /// - A flag without one (`gcf`, whose value lives under `gcf.enabled`)
+    ///   edits that key in the source file that was loaded, leaving every other
+    ///   key untouched.
     ///
     /// Any error during persistence is returned so callers can decide how to
     /// report it. A config file that cannot be loaded (e.g. it is corrupt) is
@@ -61,11 +61,12 @@ impl RuntimeFlag {
         if self.global_config_key().is_some() {
             return self.persist_to_global(enabled);
         }
-        // Legacy path for flags whose value is not a top-level key.
-        let mut config = crate::config::Config::load()
+        // Flags whose value is nested (`gcf.enabled`) edit that key in the
+        // loaded source file; saving the merged config would copy every other
+        // layer's values into it.
+        let config = crate::config::Config::load()
             .with_context(|| format!("failed to load config before persisting {}", self.name))?;
-        self.apply_to_config(&mut config, enabled);
-        config.save_to_source()?;
+        config.set_source_value(self.source_key_path(), serde_json::json!(enabled))?;
         self.set_enabled(enabled);
         Ok(())
     }
@@ -179,6 +180,20 @@ impl RuntimeFlag {
             "yolo" => config.yolo = enabled,
             other => {
                 debug_assert!(false, "unhandled runtime flag name: {other}");
+            }
+        }
+    }
+
+    /// The `codemason.json` key path this flag's value lives at.
+    fn source_key_path(&self) -> &'static [&'static str] {
+        match self.name {
+            "activity_log" => &["activity_log"],
+            "edit_log" => &["edit_log"],
+            "gcf" => &["gcf", "enabled"],
+            "yolo" => &["yolo"],
+            other => {
+                debug_assert!(false, "unhandled runtime flag name: {other}");
+                &[]
             }
         }
     }

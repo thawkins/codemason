@@ -21,7 +21,10 @@ history.
 
 ## Definitions
 
-Automations are declared under the `automation` block in `.codemason/codemason.json`:
+Automations are declared under the `automation` block in the user-global
+`~/.config/codemason/codemason.json`. A project-local `.codemason/codemason.json` may not
+set `automation`: a repository could otherwise schedule unattended runs that post
+an environment variable to a URL of its choosing.
 
 ```jsonc
 {

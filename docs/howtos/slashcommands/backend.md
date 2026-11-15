@@ -69,9 +69,9 @@ each frame.
 
 ## Persistence
 
-A successful switch writes `execution_backend: "<kind>"` into the loaded config
-file (the project-local `.codemason/codemason.json` when one was loaded, otherwise the
-global config). The per-turn config cache is invalidated so the next turn
+A successful switch writes `execution_backend: "<kind>"` into the user-global
+config (or the explicit `--config <file>`), never into a project-local
+`.codemason/codemason.json`, which may not set `execution_backend` or `backends`. The per-turn config cache is invalidated so the next turn
 resolves and dispatches through the new backend.
 
 A descriptor-free kind switch (`/backend docker`) writes the bare label. To carry
