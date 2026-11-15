@@ -489,6 +489,60 @@ fn extract_snippet_does_not_panic_on_byte_boundary() {
     assert!(snippet.contains("world"));
 }
 
+/// RS-02: write a body whose lowercase form is longer than the original
+/// (U+0130 lowercases to two chars, 3 bytes) and return the manager.
+async fn manager_with_length_changing_body() -> (TempDir, ResearchManager) {
+    let tmp = TempDir::new().unwrap();
+    let mgr = ResearchManager::new(tmp.path());
+    let item = mgr
+        .create("rust-async", "Rust Async", "topic")
+        .await
+        .unwrap();
+    let path = ResearchIo::resolve_research_md(tmp.path(), &item.name, item.created_at)
+        .await
+        .unwrap();
+    // Keep the frontmatter so the item still lists; replace only the body.
+    let existing = tokio::fs::read_to_string(&path).await.unwrap();
+    let (fm, _) = ResearchIo::split_frontmatter(&existing);
+    // Trailing filler keeps a stale (lowercased-text) offset inside the
+    // original body, so a wrong offset yields a snippet without the match.
+    let body = format!(
+        "---\n{fm}\n---\n\n{} needle {}\n",
+        "\u{130}".repeat(300),
+        "x".repeat(1000)
+    );
+    tokio::fs::write(&path, body).await.unwrap();
+    (tmp, mgr)
+}
+
+#[tokio::test]
+async fn search_snippet_contains_match_when_lowercase_changes_length_full_scan() {
+    let (tmp, mgr) = manager_with_length_changing_body().await;
+    tokio::fs::remove_file(ResearchIo::cache_path(tmp.path()))
+        .await
+        .unwrap();
+    let hits = mgr.search("needle", 10).await.unwrap();
+    assert_eq!(hits.len(), 1);
+    assert!(
+        hits[0].snippet.contains("needle"),
+        "snippet missed the match: {:?}",
+        hits[0].snippet
+    );
+}
+
+#[tokio::test]
+async fn search_snippet_contains_match_when_lowercase_changes_length_cached() {
+    let (_tmp, mgr) = manager_with_length_changing_body().await;
+    mgr.refresh_index().await.unwrap();
+    let hits = mgr.search("needle", 10).await.unwrap();
+    assert_eq!(hits.len(), 1);
+    assert!(
+        hits[0].snippet.contains("needle"),
+        "snippet missed the match: {:?}",
+        hits[0].snippet
+    );
+}
+
 #[test]
 fn render_document_for_renders_full_document() {
     let name = sample_name();

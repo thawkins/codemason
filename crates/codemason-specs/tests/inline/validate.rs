@@ -398,6 +398,19 @@ fn test_parse_requirements() {
 }
 
 #[test]
+fn test_parse_requirements_heading_dash_separators() {
+    // The FR/NFR heading separator may be an ASCII '-', an en dash or an
+    // em dash (the dashes were lost to an ASCII clean-up).
+    for dash in ["-", "\u{2013}", "\u{2014}"] {
+        let md = format!("### FR-001 {dash} First\n`The system shall do A.`\n");
+        let reqs = parse_requirements(&md);
+        assert_eq!(reqs.len(), 1, "dash {dash:?}");
+        assert_eq!(reqs[0].id, "FR-001");
+        assert_eq!(reqs[0].title, "First", "dash {dash:?}");
+    }
+}
+
+#[test]
 fn test_parse_requirements_no_ears() {
     let md = "### FR-001 - No EARS\n\nJust text.\n";
     let reqs = parse_requirements(md);
@@ -2482,5 +2495,67 @@ fn test_consistency_summary_with_only_ambiguity() {
     assert!(
         formatted.contains("gaps: 0"),
         "should show gaps: 0: {formatted}"
+    );
+}
+
+/// RS-04: swap the frontmatter of `valid_spec()` for `frontmatter`.
+fn spec_with_frontmatter(frontmatter: &str) -> Spec {
+    let mut spec = valid_spec();
+    let body = spec
+        .spec_md
+        .split_once("---\n\n")
+        .map(|(_, b)| b.to_string())
+        .unwrap();
+    spec.spec_md = format!("---\n{frontmatter}---\n\n{body}");
+    spec
+}
+
+#[test]
+fn test_validate_status_mismatch_with_dashes_inside_frontmatter_value() {
+    // RS-04: `---` inside a value must not end the frontmatter.
+    let spec = spec_with_frontmatter("title: a --- b\nstatus: approved\nid: testspec\n");
+    let report = validate(&spec);
+    assert!(
+        report.issues.iter().any(|i| i
+            .message
+            .contains("Frontmatter status 'approved' does not match")),
+        "missing status-mismatch warning: {:?}",
+        report.issues
+    );
+}
+
+#[test]
+fn test_validate_invalid_status_after_ten_frontmatter_lines() {
+    // RS-04: the status key may sit anywhere in the frontmatter block.
+    let filler: String = (0..12).map(|n| format!("key{n}: v\n")).collect();
+    let spec = spec_with_frontmatter(&format!("{filler}status: bogus\n"));
+    let report = validate(&spec);
+    let issue = report
+        .issues
+        .iter()
+        .find(|i| i.category == Category::InvalidStatus)
+        .expect("InvalidStatus issue for a status after line 10");
+    // Line 1 is the opening `---`, then 12 filler lines: status is line 14.
+    assert_eq!(issue.line, Some(14));
+}
+
+#[test]
+fn test_validate_status_in_body_after_rule_is_not_frontmatter() {
+    // RS-04: a `---` horizontal rule in the body does not open frontmatter.
+    let mut spec = valid_spec();
+    let body = spec
+        .spec_md
+        .split_once("---\n\n")
+        .map(|(_, b)| b.to_string())
+        .unwrap();
+    spec.spec_md = format!("{body}\n---\nstatus: bogus\n---\n");
+    let report = validate(&spec);
+    assert!(
+        !report
+            .issues
+            .iter()
+            .any(|i| i.category == Category::InvalidStatus),
+        "body text was treated as frontmatter: {:?}",
+        report.issues
     );
 }

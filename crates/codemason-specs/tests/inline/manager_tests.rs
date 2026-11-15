@@ -109,6 +109,28 @@ fn test_extract_snippets_multibyte_boundary() {
     assert!(snippets[0].contains("fox"));
 }
 
+#[tokio::test]
+async fn test_manager_search_snippet_when_lowercase_changes_length() {
+    // RS-02: U+0130 lowercases to 3 bytes (i + U+0307), so an offset taken
+    // from the lowercased text lands past the match in the original.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let id = SpecId::new("lower-len").unwrap();
+    let spec_md = format!("{} needle {}\n", "\u{130}".repeat(300), "x".repeat(1000));
+    SpecIo::create_spec_dir(root, &id, &spec_md, "# Plan\n")
+        .await
+        .unwrap();
+
+    let mgr = SpecManager::new(root);
+    let results = mgr.search_specs("needle").await.unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(
+        results[0].snippets.iter().any(|s| s.contains("needle")),
+        "snippets missed the match: {:?}",
+        results[0].snippets
+    );
+}
+
 #[test]
 fn test_spec_filter_builder() {
     let f = SpecFilter::new()

@@ -11,6 +11,9 @@ pub fn global_env_lock() -> std::sync::MutexGuard<'static, ()> {
     global_env_mutex().lock().unwrap_or_else(|e| e.into_inner())
 }
 
+#[path = "test_cli_usage.rs"]
+mod test_cli_usage;
+
 #[path = "test_note_roundtrip.rs"]
 mod test_note_roundtrip;
 
