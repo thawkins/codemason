@@ -468,7 +468,7 @@ impl LlmClient for OllamaClient {
                           Err(e) => {
                               // SEC: the raw SSE frame carries streamed model output;
                               // redact before logging.
-                              tracing::warn!(provider = "ollama", line = %codemason_types::sanitize::redact_secrets(data), error = %e, "failed to parse SSE line");
+                              tracing::warn!(provider = "ollama", line = %crate::provider::http_client::redact_frame(data), error = %e, "failed to parse SSE line");
                               continue;
                           }
                       };

@@ -571,7 +571,7 @@ impl LlmClient for OllamaCloudClient {
                         Err(e) => {
                             // SEC: the raw NDJSON frame carries streamed model
                             // output; redact before logging (see ollama.rs).
-                            tracing::warn!(provider = "ollama_cloud", model=%model_name, line=%codemason_types::sanitize::redact_secrets(data), error=%e, "failed to parse stream line");
+                            tracing::warn!(provider = "ollama_cloud", model=%model_name, line=%crate::provider::http_client::redact_frame(data), error=%e, "failed to parse stream line");
                             continue;
                         }
                     };                      // Log key stream lines for diagnostics (first 3 + any with tool_calls or done)
