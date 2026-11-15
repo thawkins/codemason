@@ -1,10 +1,9 @@
 name: CI Benchmarks
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  # Manual only: run it from the Actions tab ("Run workflow"). It no longer
+  # runs on every push and pull request.
+  workflow_dispatch:
 
 jobs:
   benchmarks:

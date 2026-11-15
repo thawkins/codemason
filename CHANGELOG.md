@@ -13,6 +13,7 @@
 - Changed: `TUI-QUICKSTART.md` is now `GUI-QUICKSTART.md`, rewritten for the window (Linux/Windows and macOS shortcuts, dockable panes, attaching files, window and layout reset); README, QUICKSTART, SPEC, STATS and the how-to manuals describe the GUI; the `codemason-app-core` and `codemason-gui` crates replace `codemason-tui` in the crate tables.
 - Changed: the GUI bundles the Hack Bold font (`crates/codemason-gui/assets/fonts/Hack-Bold.ttf`, Hack v3.003, Source Foundry), used under the MIT licence and the Bitstream Vera licence; the notices are in `crates/codemason-gui/assets/fonts/Hack-LICENSE.txt` and are credited in README.
 - Changed: CI runs a `macOS build (aarch64)` job on `macos-latest` that checks every workspace target and builds and links `cdmn`, so the GUI's macOS-only code and the C dependencies are compiled on Apple's toolchain before a release.
+- Changed: the `CI Benchmarks` workflow no longer runs on every push and pull request; start it by hand from the Actions tab (`workflow_dispatch`).
 
 ### Removed
 
