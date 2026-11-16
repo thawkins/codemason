@@ -1,4 +1,4 @@
-//! Swarm decomposition handling for the TUI.
+//! Swarm decomposition handling for the TUI and GUI.
 
 use codemason_agent::team::{self, MemberStatus};
 

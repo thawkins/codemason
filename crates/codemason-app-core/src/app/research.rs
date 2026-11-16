@@ -1,4 +1,4 @@
-//! Research/skill command handling for the TUI.
+//! Research/skill command handling for the TUI and GUI.
 //!
 //! Extracted from `app.rs` in REMPLAN.md M5 / T5.3.
 

@@ -1,4 +1,4 @@
-//! Keyboard input handling for the TUI.
+//! Keyboard input handling for the TUI and GUI.
 //!
 //! Maps frontend-neutral key presses ([`KeyInput`]) to high-level [`InputAction`]s, handling both
 //! normal editing mode and the permission dialog intercept.

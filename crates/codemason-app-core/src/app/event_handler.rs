@@ -1,4 +1,4 @@
-//! Event bus event handling for the TUI.
+//! Event bus event handling for the TUI and GUI.
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 

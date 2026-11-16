@@ -7,10 +7,10 @@
 
 use std::process::Output;
 
-/// Maximum combined output length before truncation is applied.
+/// Maximum combined output length, in bytes, before truncation is applied.
 ///
-/// Matches the `Bash` tool's limit: keep the first 15k chars + last 15k chars
-/// with a separator.  This prevents a single command with huge output from
+/// Matches the `Bash` tool's limit: keep the first 15k bytes + last 15k bytes
+/// (each snapped to a UTF-8 boundary) with a separator.  This prevents a single command with huge output from
 /// blowing the model's context window.
 const MAX_OUTPUT: usize = 30_000 + 1_000; // first + last + separator allowance
 const FIRST_CHARS: usize = 15_000;
@@ -40,9 +40,11 @@ pub fn combine_command_output(stdout: &[u8], stderr: &[u8]) -> String {
 
 /// Truncate very long command output to fit within the context window.
 ///
-/// Keeps the first [`FIRST_CHARS`] and last [`LAST_CHARS`] characters, joining
-/// them with an omission marker that reports how many characters were dropped.
-/// Output at or below [`MAX_OUTPUT`] is returned unchanged.
+/// Keeps the first [`FIRST_CHARS`] and last [`LAST_CHARS`] bytes (each snapped
+/// to a UTF-8 char boundary), joining them with an omission marker. The marker
+/// says "characters omitted" but the number it reports is the omitted byte
+/// count; the wording is kept for compatibility. Output at or below
+/// [`MAX_OUTPUT`] bytes is returned unchanged.
 fn truncate_command_output(content: &str) -> String {
     if content.len() <= MAX_OUTPUT {
         return content.to_string();
