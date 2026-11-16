@@ -20,6 +20,7 @@
 
 ### Fixed
 
+- Fixed: Ollama (and Ollama-compatible) streams that omit the tool-call `index` no longer merge parallel tool calls into one; each call is kept apart by its id.
 - Fixed: a model-router tier modifier (`/simple ...`, `[complex] ...`, `deep mode: ...`) is now stripped from the prompt before it is sent to the selected model, on every request including tool-loop follow-ups (FR-020).
 - Fixed: telemetry no longer exports Ollama-style model names such as `llama3:latest` or `gpt-oss:120b` as `redacted`; API keys and other secrets passed as a model name are still redacted.
 - Fixed: the `/plugins` and `/connectors` store ledgers (`_state.json`) are written atomically, so a crash mid-write can no longer truncate them, and a symlink at the ledger path is replaced instead of written through.

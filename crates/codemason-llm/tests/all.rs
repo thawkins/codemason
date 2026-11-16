@@ -82,6 +82,9 @@ mod test_ollama_cloud_real;
 #[path = "test_ollama_shared.rs"]
 mod test_ollama_shared;
 
+#[path = "test_ollama_tool_index.rs"]
+mod test_ollama_tool_index;
+
 #[path = "test_ollama_tool_handling.rs"]
 mod test_ollama_tool_handling;
 
