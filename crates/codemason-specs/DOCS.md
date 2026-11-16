@@ -74,7 +74,7 @@ Dev-dependencies: tokio (full), tempfile, serde_json.
 ## Module: impl_runner
 
 - **ImplOptions** / **ImplResult** / **MilestoneGroup** / **SpecImplRunner** (structs).
-- `SpecImplRunner` methods: `new`, `spec_name`, `tasks`, `execution_order`, `total_to_execute`, `milestone_groups`, `task_id_at`, `task_prompt`, `run`, `resolve_requirements`, `build_file_order_warning`.
+- `SpecImplRunner` methods: `new`, `spec_name`, `tasks`, `execution_order`, `total_to_execute`, `milestone_groups`, `task_prompt`, `run`, `build_file_order_warning`.
 - Helpers: `build_progress_update`, `build_completion_summary`, `build_cancellation_summary`, `build_blocked_summary`, `find_dependents`, `parse_impl_args`.
 
 ## Module: io
@@ -83,7 +83,7 @@ Dev-dependencies: tokio (full), tempfile, serde_json.
 
 ## Module: manager
 
-- **SpecManager** (struct) — methods: `new`, `root`, `discover_specs`, `read_spec`, `write_spec`, `create_spec`, `delete_spec`, `transition`, `transition_with_flags`, `update_task_status`, `list_specs`, `search_specs`, `search_specs_with_archived`.
+- **SpecManager** (struct) — methods: `new`, `root`, `discover_specs`, `read_spec`, `write_spec`, `delete_spec`, `transition`, `transition_with_flags`, `update_task_status`, `list_specs`, `search_specs`.
 - **SpecFilter** (struct) — methods: `new`, `with_status`, `with_id_prefix`, `with_modified_since`, `with_archived`, `with_sort`.
 - **SortBy** (enum) — `ModifiedAt`, `Status`, `Id`, `Title`.
 - **SpecSearchResult** (struct) — Search result with relevance score and context snippets.

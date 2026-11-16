@@ -5,6 +5,7 @@
 //! and body snippets.
 
 use anyhow::{Context, Result};
+use codemason_types::strutil::floor_char_boundary;
 use std::path::Path;
 use std::sync::Mutex;
 use tantivy::collector::TopDocs;
@@ -153,13 +154,7 @@ impl FtsIndex {
         let snippet = sym.body_snippet.unwrap_or("");
         // Truncate on a UTF-8 char boundary so a multi-byte sequence at the
         // cut point cannot panic with "byte index is not a char boundary".
-        let end = {
-            let mut i = snippet.len().min(BODY_SNIPPET_LEN);
-            while i > 0 && !snippet.is_char_boundary(i) {
-                i -= 1;
-            }
-            i
-        };
+        let end = floor_char_boundary(snippet, BODY_SNIPPET_LEN);
         doc.add_text(self.fields.body_snippet, &snippet[..end]);
         doc.add_i64(self.fields.start_line, i64::from(sym.start_line));
         doc.add_i64(self.fields.end_line, i64::from(sym.end_line));

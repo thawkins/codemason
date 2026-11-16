@@ -655,3 +655,91 @@ fn test_required_gate_names_constant() {
     assert!(REQUIRED_GATE_NAMES.contains(&"Anti-Abstraction"));
     assert!(REQUIRED_GATE_NAMES.contains(&"Integration-First"));
 }
+
+// -- Milestone tests -----------------------------------------------------
+
+#[test]
+fn test_milestone_normalise_item() {
+    assert_eq!(
+        Milestone::normalise_item("- [ ] Define types"),
+        "define types"
+    );
+    assert_eq!(
+        Milestone::normalise_item("- [x] Build parser"),
+        "build parser"
+    );
+    assert_eq!(Milestone::normalise_item("- Add tests"), "add tests");
+    assert_eq!(Milestone::normalise_item("* Finalise API"), "finalise api");
+    assert_eq!(Milestone::normalise_item(""), "");
+}
+
+#[test]
+fn test_parse_milestones_extracts_names_deliverables_and_items() {
+    let md = r"# Plan
+
+## Milestones
+
+### Milestone 1: Core Types
+**Deliverable:** Typed plan-task structures.
+
+- [ ] Define types
+- [ ] Build parser
+
+### Milestone 2: Tests
+**Deliverable:** Verified behaviour.
+
+- Add tests
+
+## Tasks
+
+| ID | Title | Requirement | Effort | Priority | Dependencies |
+|----|-------|-------------|--------|----------|--------------|
+| T-001 | Define types | FR-001 | S | Critical | - |
+| T-002 | Build parser | FR-002 | M | High | T-001 |
+| T-003 | Add tests | FR-003 | M | High | T-002 |
+";
+    let tasks = PlanParser::parse(md).unwrap();
+    assert_eq!(
+        tasks[0].milestone.as_deref(),
+        Some("Milestone 1: Core Types")
+    );
+    assert_eq!(
+        tasks[1].milestone.as_deref(),
+        Some("Milestone 1: Core Types")
+    );
+    assert_eq!(tasks[2].milestone.as_deref(), Some("Milestone 2: Tests"));
+}
+
+#[test]
+fn test_parse_milestones_unmapped_tasks_are_none() {
+    let md = r"## Milestones
+
+### Milestone 1: Core
+- [ ] Unrelated task
+
+## Tasks
+
+| ID | Title | Requirement | Effort | Priority | Dependencies |
+|----|-------|-------------|--------|----------|--------------|
+| T-001 | Real task | FR-001 | S | Critical | - |
+";
+    let tasks = PlanParser::parse(md).unwrap();
+    assert_eq!(tasks[0].milestone, None);
+}
+
+#[test]
+fn test_parse_milestones_case_insensitive_match() {
+    let md = r"## Milestones
+
+### M1
+- define TYPES
+
+## Tasks
+
+| ID | Title | Requirement | Effort | Priority | Dependencies |
+|----|-------|-------------|--------|----------|--------------|
+| T-001 | Define Types | FR-001 | S | Critical | - |
+";
+    let tasks = PlanParser::parse(md).unwrap();
+    assert_eq!(tasks[0].milestone.as_deref(), Some("M1"));
+}
