@@ -3936,12 +3936,22 @@ impl App {
         self.assert_input_cursor_invariant();
     }
 
-    pub(crate) fn cursor_on_first_logical_line(&self) -> bool {
+    /// Whether the input cursor sits on the first logical line of the prompt,
+    /// i.e. no `\n` precedes it.
+    ///
+    /// # Returns
+    /// `true` when the input before the cursor contains no newline.
+    pub fn cursor_on_first_logical_line(&self) -> bool {
         let byte = self.cursor_byte_pos();
         !self.session.input[..byte].contains('\n')
     }
 
-    pub(crate) fn cursor_on_last_logical_line(&self) -> bool {
+    /// Whether the input cursor sits on the last logical line of the prompt,
+    /// i.e. no `\n` follows it.
+    ///
+    /// # Returns
+    /// `true` when the input from the cursor onward contains no newline.
+    pub fn cursor_on_last_logical_line(&self) -> bool {
         let byte = self.cursor_byte_pos();
         !self.session.input[byte..].contains('\n')
     }
