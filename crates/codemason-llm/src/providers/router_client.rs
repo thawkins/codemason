@@ -356,13 +356,17 @@ impl LlmClient for RouterClient {
 
 impl RouterClient {
     /// Delegate the chat request to the downstream provider/model identified by
-    /// `entry`, rewriting `request.model` and creating a fresh downstream
-    /// client for each call.
+    /// `entry`, stripping tier modifiers from the user messages (FR-020),
+    /// rewriting `request.model` and creating a fresh downstream client for
+    /// each call.
     async fn delegate_downstream(
         &self,
         entry: TierEntry,
         mut request: ChatRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>> {
+        // FR-020: the tier modifier routed this request; the model must not
+        // see it. Done here so cached continuations are stripped too.
+        router_modifiers::strip_modifiers_from_messages(&mut request.messages);
         let selected_model = format!("{}:{}", entry.provider_id, entry.model);
 
         let registry = match &self.registry {

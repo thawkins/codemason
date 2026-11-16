@@ -100,6 +100,9 @@ mod test_provider_offline_coverage;
 #[path = "test_rate_limit_retry.rs"]
 mod test_rate_limit_retry;
 
+#[path = "test_router_modifier_strip.rs"]
+mod test_router_modifier_strip;
+
 #[path = "test_router_client.rs"]
 mod test_router_client;
 
