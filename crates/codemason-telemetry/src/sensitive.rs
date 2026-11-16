@@ -32,9 +32,10 @@
 //! - It contains an `=` followed by a long base64-like run (a common
 //!   shape for inline tokens / credentials).
 //!
-//! Model-name attributes skip the `key:secret` rule (see
-//! [`looks_sensitive_model_name`]), because Ollama `name:tag` ids share that
-//! shape.
+//! Under a model-name attribute key, a value with the shape of an Ollama
+//! `name:tag` id skips the `key:secret` rule (see
+//! [`looks_sensitive_model_name`] and [`is_ollama_model_id`]); every other
+//! value, including `admin:password1234`, is still checked in full.
 //!
 //! The guard is intentionally over-cautious: false positives (redacting a
 //! genuinely long model name) only collapse the value into a single
@@ -110,11 +111,13 @@ pub fn looks_sensitive(value: &str) -> bool {
 /// Returns `true` when a model-name attribute value matches a sensitive
 /// pattern (FR-034; deep-refactor D-11).
 ///
-/// Identical to [`looks_sensitive`] except that the `key:secret` colon shape is
-/// not applied: Ollama-style `name:tag` ids (`llama3:latest`, `gpt-oss:120b`)
-/// have that exact shape and were being exported as `redacted`. Every other
-/// rule (key prefixes, length, control characters, `=token` runs) still
-/// applies, so a key accidentally passed as a model name is still caught.
+/// Identical to [`looks_sensitive`] except for a value that
+/// [`is_ollama_model_id`] recognises: Ollama `name:tag` ids (`llama3:latest`,
+/// `gpt-oss:120b`) have the `key:secret` colon shape and were being exported
+/// as `redacted`, so for them the colon rule is skipped. Any other value under
+/// a model key, including `admin:password1234`, gets the full check, and the
+/// remaining rules (key prefixes, length, control characters, `=token` runs)
+/// apply to every value.
 ///
 /// # Examples
 ///
@@ -123,11 +126,76 @@ pub fn looks_sensitive(value: &str) -> bool {
 ///
 /// assert!(!looks_sensitive_model_name("llama3:latest"));
 /// assert!(!looks_sensitive_model_name("gpt-oss:120b"));
+/// assert!(looks_sensitive_model_name("admin:password1234"));
 /// assert!(looks_sensitive_model_name("sk-proj-abc123"));
 /// ```
 #[must_use]
 pub fn looks_sensitive_model_name(value: &str) -> bool {
-    looks_sensitive_inner(value, ColonRule::Skip)
+    if is_ollama_model_id(value) {
+        looks_sensitive_inner(value, ColonRule::Skip)
+    } else {
+        looks_sensitive(value)
+    }
+}
+
+/// Tag words Ollama uses as the first part of a model tag, besides `latest`
+/// and a parameter size such as `8b`.
+const OLLAMA_TAG_WORDS: &[&str] = &[
+    "instruct", "chat", "code", "coder", "text", "base", "vision", "mini", "small", "medium",
+    "large", "fp16", "q4", "q5", "q8",
+];
+
+/// Returns `true` when `value` has the shape of an Ollama `name:tag` model id.
+///
+/// The name is a run of ASCII alphanumerics, `.`, `_`, `-` or `/`. The tag's
+/// first `-`/`_`-separated word must be `latest`, a parameter size (`8b`,
+/// `1.5b`, `120b`, `270m`), or one of a few known variant words (`instruct`,
+/// `coder`, `fp16`, ...). A credential such as `admin:password1234` has no
+/// such tag, so it is not treated as a model id.
+///
+/// # Examples
+///
+/// ```
+/// use codemason_telemetry::sensitive::is_ollama_model_id;
+///
+/// assert!(is_ollama_model_id("qwen2.5-coder:32b-instruct"));
+/// assert!(!is_ollama_model_id("admin:password1234"));
+/// ```
+#[must_use]
+pub fn is_ollama_model_id(value: &str) -> bool {
+    let Some((name, tag)) = value.split_once(':') else {
+        return false;
+    };
+    let name_ok = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'));
+    let tag_ok = !tag.is_empty()
+        && tag
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    if !name_ok || !tag_ok {
+        return false;
+    }
+    let first = tag
+        .split(['-', '_'])
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    first == "latest" || is_parameter_size(&first) || OLLAMA_TAG_WORDS.contains(&first.as_str())
+}
+
+/// Whether `word` is a parameter size such as `8b`, `1.5b`, `120b` or `270m`.
+fn is_parameter_size(word: &str) -> bool {
+    let Some(number) = word.strip_suffix(['b', 'm', 'k']) else {
+        return false;
+    };
+    let mut parts = number.splitn(2, '.');
+    let whole = parts.next().unwrap_or_default();
+    let fraction = parts.next();
+    !whole.is_empty()
+        && whole.chars().all(|c| c.is_ascii_digit())
+        && fraction.is_none_or(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// Whether [`looks_sensitive_inner`] applies the `key:secret` colon rule.
