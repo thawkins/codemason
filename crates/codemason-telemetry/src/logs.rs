@@ -190,8 +190,9 @@ pub fn truncate_body(text: &str) -> String {
 /// guard (FR-034, FR-039).
 ///
 /// The body is passed through [`codemason_types::sanitize::redact_secrets`] and
-/// then truncated with [`truncate_body`]; each attribute value is passed
-/// through [`crate::sensitive::sanitize_attr_value`].
+/// then truncated with [`truncate_body`]; each attribute name is passed
+/// through [`crate::sensitive::sanitize_attr_value`] and each value through
+/// [`crate::sensitive::sanitize_attr_for_key`].
 #[must_use]
 pub fn convert_event(event: &Event<'_>) -> LogEvent {
     use crate::sensitive::sanitize_attr_value;
@@ -210,7 +211,10 @@ pub fn convert_event(event: &Event<'_>) -> LogEvent {
             // interpolated secret, so both halves go through the guard: the
             // shared `sanitize_attr_value` rejects a name that is too long or
             // contains whitespace, which keeps the attribute map bounded.
-            (sanitize_attr_value(&name), sanitize_attr_value(&value))
+            // The value check follows the field name, so a `model` field keeps
+            // an Ollama `name:tag` id (D-11).
+            let value = crate::sensitive::sanitize_attr_for_key(&name, &value);
+            (sanitize_attr_value(&name), value)
         })
         .filter(|(name, _)| !name.is_empty())
         .collect();

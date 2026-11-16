@@ -678,10 +678,14 @@ impl InstrumentRegistry {
 
     /// Returns the [`KeyValue`] attribute for a model name.
     ///
-    /// Sanitised via [`Self::sanitized_attr`] (FR-034).
+    /// Sanitised via [`crate::sensitive::sanitize_attr_for_key`] (FR-034), so
+    /// an Ollama `name:tag` id is kept while key prefixes are still redacted.
     #[must_use]
     pub fn attr_model(name: &str) -> KeyValue {
-        Self::sanitized_attr("model", name)
+        KeyValue::new(
+            "model",
+            crate::sensitive::sanitize_attr_for_key("model", name),
+        )
     }
 
     /// Returns the [`KeyValue`] attribute for a provider name.

@@ -67,6 +67,8 @@ mod test_scaffold;
 mod test_sensitive;
 #[path = "test_sensitive_data_guard.rs"]
 mod test_sensitive_data_guard;
+#[path = "test_sensitive_model_names.rs"]
+mod test_sensitive_model_names;
 #[path = "test_shutdown.rs"]
 mod test_shutdown;
 #[path = "test_shutdown_signal.rs"]

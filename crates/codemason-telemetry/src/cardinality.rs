@@ -96,7 +96,7 @@ impl CardinalityCache {
                     kv.key.clone(),
                     match &kv.value {
                         opentelemetry::Value::String(s) => {
-                            crate::sensitive::sanitize_attr_value(s.as_str())
+                            crate::sensitive::sanitize_attr_for_key(kv.key.as_str(), s.as_str())
                         }
                         _ => NON_STRING_ATTR.to_string(),
                     },
