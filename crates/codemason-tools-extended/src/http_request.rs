@@ -98,15 +98,12 @@ impl Tool for HttpRequestTool {
         let method = reqwest::Method::from_str(&method_str)
             .with_context(|| format!("Invalid HTTP method: {method_str}"))?;
 
-        // M-014: reuse the shared reqwest client singleton (connection pool +
-        // TLS session cache) instead of building a fresh client per call. The
-        // per-request timeout is applied via `RequestBuilder`. Note this also
-        // means requests inherit the shared client's behaviour: a 5-redirect
-        // limit, transparent gzip/deflate decompression, and the versioned
-        // masterfetch `User-Agent` header.
-        // SEC-035: use a no-redirect client so a caller-supplied header (or the
-        // request body on a 307/308) cannot be replayed against a second host the
-        // URL redirects to.
+        // A fresh client is built for every call; the shared client singleton
+        // (M-014) is not reused here because it follows redirects.
+        // SEC-035: this client follows no redirects, so a caller-supplied
+        // header (or the request body on a 307/308) cannot be replayed against
+        // a second host the URL redirects to. It sends the versioned
+        // masterfetch `User-Agent` and applies the per-call timeout.
         let client = reqwest::Client::builder()
             .user_agent(crate::masterfetch::http::USER_AGENT)
             .timeout(Duration::from_secs(timeout_secs))

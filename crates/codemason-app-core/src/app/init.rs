@@ -1,4 +1,4 @@
-//! `App::new` and provider-setup helpers for the TUI.
+//! `App::new` and provider-setup helpers for the TUI and GUI.
 use std::collections::{HashMap, VecDeque};
 use std::num::NonZeroUsize;
 use std::sync::Arc;

@@ -1,4 +1,4 @@
-//! Core shared state for the TUI application.
+//! Core shared state for the TUI and GUI.
 //!
 //! This module contains the primary `App` state struct, related UI state enums,
 //! and small helpers used by the TUI renderer and input handler.
@@ -4920,17 +4920,16 @@ impl App {
         self.jobs_last_poll + HOUSEKEEPING_INTERVAL
     }
 
-    /// PERF-044: whether the periodic safety redraw must actually paint.
+    /// PERF-044: whether a periodic safety redraw must actually paint.
     ///
-    /// The main loop wakes every `IDLE_REDRAW_INTERVAL_MS` even when nothing
-    /// set `needs_redraw`, as a stale-frame guard.  Painting an unchanged
-    /// frame is pure waste, so the safety redraw becomes a no-op unless one of
-    /// the self-advancing displays below is live: a permission countdown, a
-    /// web-phase countdown, a visible Agents/Teams panel with a ticking
-    /// elapsed column, or an active spinner/progress latch.  Every one of
-    /// these advances with wall-clock time rather than an event, and the main
-    /// loop schedules a 250 ms wake while any is active, so none of them can
-    /// freeze.
+    /// Painting an unchanged frame is pure waste, so a periodic stale-frame
+    /// redraw should be a no-op unless one of the self-advancing displays below
+    /// is live: a permission countdown, a web-phase countdown, a visible
+    /// Agents/Teams panel with a ticking elapsed column, or an active
+    /// spinner/progress latch. Each of these advances with wall-clock time
+    /// rather than an event.
+    ///
+    /// No front-end main loop calls this today; only tests do.
     pub fn needs_periodic_redraw(&self) -> bool {
         !self.session.permission_queue.is_empty()
             || self

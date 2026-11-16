@@ -38,6 +38,7 @@
 
 ### Changed
 
+- Changed: `/about` describes codemason as an interactive AI coding agent for the terminal and desktop instead of "TUI-based".
 - Changed: every streaming provider uses one stall guard (`http_client::next_chunk_or_stall`); the "stream stalled - no data received for 120s" error is unchanged.
 - Changed: the unwrap and poisoned-lock guards (`scripts/check-security-unwraps.sh`, `scripts/check-poison-locks.sh`) scan the root binary's `src/` as well as `crates/`.
 - Changed: `deny.toml` drops the stale `ring` licence clarification (ring 0.17 declares its own licence) and names `webpki-root-certs` correctly.

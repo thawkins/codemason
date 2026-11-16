@@ -1,4 +1,4 @@
-//! Slash-command dispatch for the TUI.
+//! Slash-command dispatch for the TUI and GUI.
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -4147,7 +4147,7 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                 let about = format!(
                     "  codemason - AI Coding Agent\n\
                                  \n\
-                                 \x20 An interactive TUI-based AI coding agent\n\
+                                 \x20 An interactive AI coding agent (terminal and desktop)\n\
                                  \x20 supporting multiple LLM providers.\n\
                                  \n\
                                  \x20 Version:     {}\n\

@@ -586,10 +586,11 @@ fn parse_mf_search_metadata(metadata: &serde_json::Value, tool_name: &str) -> Ve
 struct AgentWebFetchTool {
     tool: Arc<dyn AgentTool>,
     ctx: AgentToolContext,
-    /// Verifier hook used to enforce the mandatory readability guarantee on
-    /// the legacy `webfetch` path (which does not report which extraction
-    /// stage produced its output). `None` disables verification (used in
-    /// tests to exercise the bail branch deterministically).
+    /// Test-only override for the readability check on the legacy `webfetch`
+    /// path (which does not report which extraction stage produced its
+    /// output). `Some(f)` replaces the check with `f()`, so a test can drive
+    /// the bail branch deterministically; `None` runs the real
+    /// `verify_readability_on_raw_html` check.
     #[cfg(test)]
     legacy_verifier: Option<Box<dyn Fn() -> bool + Send + Sync>>,
 }

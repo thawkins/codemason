@@ -143,8 +143,11 @@ pub struct ChatRequest {
     /// Unique request ID for this specific API call (for provider-side request tracking).
     #[serde(skip)]
     pub request_id: Option<String>,
-    /// Stream timeout in seconds - how long to wait for data before considering
-    /// the stream stalled.  Set from `StreamConfig.timeout_secs`.
+    /// First-byte budget in seconds: how long a provider waits for the initial
+    /// response before giving up. The agent loop sets it from
+    /// `StreamConfig.initial_response_timeout_secs`; `None` uses the provider's
+    /// `DEFAULT_STREAM_TIMEOUT_SECS`. The per-chunk stall guard is separate
+    /// (`STREAM_CHUNK_IDLE_TIMEOUT_SECS`).
     #[serde(skip)]
     pub stream_timeout_secs: Option<u64>,
     /// Thinking/reasoning configuration for this request.

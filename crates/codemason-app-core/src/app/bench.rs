@@ -1,4 +1,4 @@
-//! Benchmark command handling for the TUI.
+//! Benchmark command handling for the TUI and GUI.
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
