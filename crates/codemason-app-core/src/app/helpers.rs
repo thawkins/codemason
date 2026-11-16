@@ -1,4 +1,4 @@
-//! Free-standing helper functions for the TUI app module.
+//! Free-standing helper functions for the app module (TUI and GUI).
 // Clippy complains about `pub(crate)` inside this private module, but CI's
 // dead-code lint runs with `-D unreachable_pub`, so `pub` items here fail CI.
 // Keep `pub(crate)` and suppress the clippy nursery lint.

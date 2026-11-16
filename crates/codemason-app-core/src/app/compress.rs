@@ -1,4 +1,4 @@
-//! Compaction command handling for the TUI.
+//! Compaction command handling for the TUI and GUI.
 //!
 //! `/compact` runs the dedicated compaction runner
 //! ([`codemason_agent::session::processor::SessionProcessor::compact_session`])

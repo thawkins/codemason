@@ -1,4 +1,4 @@
-//! Model selection, thinking-level, and provider management for the TUI.
+//! Model selection, thinking-level, and provider management for the TUI and GUI.
 use std::sync::atomic::Ordering;
 
 use codemason_agent::team::TeamManager;

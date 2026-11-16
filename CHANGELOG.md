@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Removed
+
+- Removed: the unfinished `codemason-hyperresearch` draft crate and its `hyperresearch` binary (no dependents). The research features it described live in `codemason-research` and `/research`, which are unchanged.
+
 ### Performance
 
 - Performance: research locus snippets are found in linear time; a keyword near the end of a 256 KiB source took seconds before.
@@ -17,6 +21,8 @@
 ### Fixed
 
 - Fixed: Ollama (and Ollama-compatible) streams that omit the tool-call `index` no longer merge parallel tool calls into one; each call is kept apart by its id.
+- Fixed: a model-router tier modifier (`/simple ...`, `[complex] ...`, `deep mode: ...`) is now stripped from the prompt before it is sent to the selected model, on every request including tool-loop follow-ups (FR-020).
+- Fixed: telemetry no longer exports Ollama-style model names such as `llama3:latest` or `gpt-oss:120b` as `redacted`; API keys and other secrets passed as a model name are still redacted.
 - Fixed: the `/plugins` and `/connectors` store ledgers (`_state.json`) are written atomically, so a crash mid-write can no longer truncate them, and a symlink at the ledger path is replaced instead of written through.
 - Fixed: the local git tools (`git_diff`, `git_show`, `git_log`, ...) no longer hang for 60 s and fail when git prints more than about 64 KiB; output is read while git runs.
 - Fixed: `bash` output larger than 2 MiB shows its real last lines and an exact "lines omitted" count; before, the tail shown was from the start of the output.
@@ -39,6 +45,7 @@
 
 ### Changed
 
+- Changed: `/about` describes codemason as an interactive AI coding agent for the terminal and desktop instead of "TUI-based".
 - Changed: dead code removed (20 never-read `App` fields, the unused tips module, five zero-caller specs/codeindex functions, the `TodoRow` alias) and duplicated helpers now call the shared ones (`strutil` truncation, logical-line cursor checks, search context, team error checks); no behaviour change.
 - Changed: every streaming provider uses one stall guard (`http_client::next_chunk_or_stall`); the "stream stalled - no data received for 120s" error is unchanged.
 - Changed: the unwrap and poisoned-lock guards (`scripts/check-security-unwraps.sh`, `scripts/check-poison-locks.sh`) scan the root binary's `src/` as well as `crates/`.

@@ -32,6 +32,11 @@
 //! - It contains an `=` followed by a long base64-like run (a common
 //!   shape for inline tokens / credentials).
 //!
+//! Under a model-name attribute key, a value with the shape of an Ollama
+//! `name:tag` id skips the `key:secret` rule (see
+//! [`looks_sensitive_model_name`] and [`is_ollama_model_id`]); every other
+//! value, including `admin:password1234`, is still checked in full.
+//!
 //! The guard is intentionally over-cautious: false positives (redacting a
 //! genuinely long model name) only collapse the value into a single
 //! `redacted` bucket, which is the same behaviour already used by the
@@ -100,6 +105,109 @@ pub const UNKNOWN_TOOL_NAME: &str = "unknown";
 /// ```
 #[must_use]
 pub fn looks_sensitive(value: &str) -> bool {
+    looks_sensitive_inner(value, ColonRule::Apply)
+}
+
+/// Returns `true` when a model-name attribute value matches a sensitive
+/// pattern (FR-034; deep-refactor D-11).
+///
+/// Identical to [`looks_sensitive`] except for a value that
+/// [`is_ollama_model_id`] recognises: Ollama `name:tag` ids (`llama3:latest`,
+/// `gpt-oss:120b`) have the `key:secret` colon shape and were being exported
+/// as `redacted`, so for them the colon rule is skipped. Any other value under
+/// a model key, including `admin:password1234`, gets the full check, and the
+/// remaining rules (key prefixes, length, control characters, `=token` runs)
+/// apply to every value.
+///
+/// # Examples
+///
+/// ```
+/// use codemason_telemetry::sensitive::looks_sensitive_model_name;
+///
+/// assert!(!looks_sensitive_model_name("llama3:latest"));
+/// assert!(!looks_sensitive_model_name("gpt-oss:120b"));
+/// assert!(looks_sensitive_model_name("admin:password1234"));
+/// assert!(looks_sensitive_model_name("sk-proj-abc123"));
+/// ```
+#[must_use]
+pub fn looks_sensitive_model_name(value: &str) -> bool {
+    if is_ollama_model_id(value) {
+        looks_sensitive_inner(value, ColonRule::Skip)
+    } else {
+        looks_sensitive(value)
+    }
+}
+
+/// Tag words Ollama uses as the first part of a model tag, besides `latest`
+/// and a parameter size such as `8b`.
+const OLLAMA_TAG_WORDS: &[&str] = &[
+    "instruct", "chat", "code", "coder", "text", "base", "vision", "mini", "small", "medium",
+    "large", "fp16", "q4", "q5", "q8",
+];
+
+/// Returns `true` when `value` has the shape of an Ollama `name:tag` model id.
+///
+/// The name is a run of ASCII alphanumerics, `.`, `_`, `-` or `/`. The tag's
+/// first `-`/`_`-separated word must be `latest`, a parameter size (`8b`,
+/// `1.5b`, `120b`, `270m`), or one of a few known variant words (`instruct`,
+/// `coder`, `fp16`, ...). A credential such as `admin:password1234` has no
+/// such tag, so it is not treated as a model id.
+///
+/// # Examples
+///
+/// ```
+/// use codemason_telemetry::sensitive::is_ollama_model_id;
+///
+/// assert!(is_ollama_model_id("qwen2.5-coder:32b-instruct"));
+/// assert!(!is_ollama_model_id("admin:password1234"));
+/// ```
+#[must_use]
+pub fn is_ollama_model_id(value: &str) -> bool {
+    let Some((name, tag)) = value.split_once(':') else {
+        return false;
+    };
+    let name_ok = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'));
+    let tag_ok = !tag.is_empty()
+        && tag
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    if !name_ok || !tag_ok {
+        return false;
+    }
+    let first = tag
+        .split(['-', '_'])
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    first == "latest" || is_parameter_size(&first) || OLLAMA_TAG_WORDS.contains(&first.as_str())
+}
+
+/// Whether `word` is a parameter size such as `8b`, `1.5b`, `120b` or `270m`.
+fn is_parameter_size(word: &str) -> bool {
+    let Some(number) = word.strip_suffix(['b', 'm', 'k']) else {
+        return false;
+    };
+    let mut parts = number.splitn(2, '.');
+    let whole = parts.next().unwrap_or_default();
+    let fraction = parts.next();
+    !whole.is_empty()
+        && whole.chars().all(|c| c.is_ascii_digit())
+        && fraction.is_none_or(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// Whether [`looks_sensitive_inner`] applies the `key:secret` colon rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ColonRule {
+    Apply,
+    Skip,
+}
+
+/// The shared sensitive-value predicate behind [`looks_sensitive`] and
+/// [`looks_sensitive_model_name`].
+fn looks_sensitive_inner(value: &str, colon_rule: ColonRule) -> bool {
     // -- Length guard ------------------------------------------------------
     // Legitimate identifiers are short; a very long value is almost
     // certainly a pasted blob (file content, prompt, long token).
@@ -151,7 +259,9 @@ pub fn looks_sensitive(value: &str) -> bool {
     // flag it when there are exactly two colon-separated parts and both
     // parts are "dense" (no spaces, no dots, at least 4 chars). This avoids
     // false positives on Ollama model identifiers.
-    if let Some(idx) = value.find(':') {
+    if colon_rule == ColonRule::Apply
+        && let Some(idx) = value.find(':')
+    {
         let rest = &value[idx + 1..];
         // Only flag if there is no further colon (two parts total).
         if !rest.contains(':') {
@@ -225,6 +335,49 @@ pub fn looks_sensitive(value: &str) -> bool {
 #[must_use]
 pub fn sanitize_attr_value(value: &str) -> String {
     if looks_sensitive(value) {
+        REDACTED.to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+/// Returns `true` for attribute keys that carry a model name: `model`, and any
+/// key ending in `_model` or `.model` (e.g. `selected_model`).
+#[must_use]
+pub fn is_model_attr_key(key: &str) -> bool {
+    key.strip_suffix("model")
+        .is_some_and(|head| head.is_empty() || head.ends_with(['_', '.']))
+}
+
+/// Sanitize an attribute value with the check its key calls for: model-name
+/// keys ([`is_model_attr_key`]) use [`looks_sensitive_model_name`], every other
+/// key uses [`looks_sensitive`].
+///
+/// # Arguments
+///
+/// * `key` - The attribute key.
+/// * `value` - The candidate attribute value.
+///
+/// # Returns
+///
+/// `value` as an owned `String` if it is safe, or [`REDACTED`].
+///
+/// # Examples
+///
+/// ```
+/// use codemason_telemetry::sensitive::{sanitize_attr_for_key, REDACTED};
+///
+/// assert_eq!(sanitize_attr_for_key("model", "llama3:latest"), "llama3:latest");
+/// assert_eq!(sanitize_attr_for_key("component", "user:secretpassword"), REDACTED);
+/// ```
+#[must_use]
+pub fn sanitize_attr_for_key(key: &str, value: &str) -> String {
+    let sensitive = if is_model_attr_key(key) {
+        looks_sensitive_model_name(value)
+    } else {
+        looks_sensitive(value)
+    };
+    if sensitive {
         REDACTED.to_string()
     } else {
         value.to_string()

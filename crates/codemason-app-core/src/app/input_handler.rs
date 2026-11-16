@@ -1,4 +1,4 @@
-//! Keyboard and mouse event handling for the TUI.
+//! Keyboard and mouse event handling for the TUI and GUI.
 use std::sync::atomic::Ordering;
 
 use crate::input_event::{Key, KeyInput, Modifiers, MouseButton, MouseInput, MouseKind};

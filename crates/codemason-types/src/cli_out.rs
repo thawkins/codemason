@@ -18,9 +18,8 @@
 //! when stdout is not the caller's deliverable.
 //!
 //! These helpers exist only for CLI presentation surfaces. Application code
-//! keeps using `tracing`; a library crate's binary entry point (for example
-//! `codemason-hyperresearch`) may use them instead of `println!` so its output is
-//! broken-pipe safe too.
+//! keeps using `tracing`; a library crate's binary entry point may use them
+//! instead of `println!` so its output is broken-pipe safe too.
 
 use std::io::Write;
 

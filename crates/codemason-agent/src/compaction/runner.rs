@@ -93,7 +93,12 @@ pub fn resolve_compaction_model<'a>(
     override_model.map_or(session_model, |m| m.model_id.as_str())
 }
 
-/// Return the prompt-size budget (in characters) for a given context window.
+/// Return the prompt-size budget for a given context window.
+///
+/// The budget is measured in bytes: `cap_head_transcript` compares it with
+/// `str::len`. The `chars` naming (here, in `CHARS_PER_TOKEN` and in
+/// `MAX_COMPACTION_PROMPT_CHARS`) reflects the chars-per-token estimate it is
+/// derived from; for ASCII transcripts bytes and characters coincide.
 ///
 /// Adaptive: `min(60k chars, context_window * CHARS_PER_TOKEN / 2)`. A small
 /// local model with a 16k-token window gets a 32k-char prompt cap; a 128k cloud
@@ -729,7 +734,8 @@ pub async fn emergency_compact(
 /// [`compaction_prompt_cap`]).
 ///
 /// Keeps the most recent conversation content (the end of the string) and
-/// prepends a truncation marker when content is dropped.
+/// prepends a truncation marker when content is dropped. `cap_chars` is a byte
+/// budget; cut points are snapped to UTF-8 char boundaries.
 #[must_use]
 fn cap_head_transcript(head_transcript: &str, context_window: usize) -> String {
     let cap_chars = compaction_prompt_cap(context_window);

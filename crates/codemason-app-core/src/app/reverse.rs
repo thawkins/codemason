@@ -1,4 +1,4 @@
-//! `/reverse` slash command handling for the TUI.
+//! `/reverse` slash command handling for the TUI and GUI.
 //!
 //! Takes a public repository URL (or `owner/repo` shorthand), fetches
 //! the repo metadata, root file tree, and README via the GitHub or GitLab API,

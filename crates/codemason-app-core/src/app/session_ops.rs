@@ -1,4 +1,4 @@
-//! Session, team, and miscellaneous operations for the TUI.
+//! Session, team, and miscellaneous operations for the TUI and GUI.
 use std::collections::BTreeSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, LockResult, MutexGuard};
