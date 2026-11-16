@@ -200,33 +200,9 @@ impl std::fmt::Display for CatalogueKind {
     }
 }
 
-/// Where a catalogue's effective endpoint came from (FR-036).
-///
-/// Produced by [`CatalogueKind::effective_endpoint_with_source`] so the
-/// `/connectors stores` report can tag each row from the same value the fetch
-/// uses, and the two can never disagree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EndpointSource {
-    /// A non-empty `connectors.stores.<name>.url` override (FR-035).
-    Config,
-    /// The compiled default endpoint (FR-034).
-    Default,
-    /// An additional named marketplace added through
-    /// `/connectors marketplace <store> add` (FR-043).
-    Added,
-}
-
-impl EndpointSource {
-    /// The lowercase tag used by the `/connectors stores` report (FR-036).
-    #[must_use]
-    pub const fn tag(self) -> &'static str {
-        match self {
-            Self::Config => "config",
-            Self::Default => "default",
-            Self::Added => "added",
-        }
-    }
-}
+/// Where a store's effective endpoint came from; shared with the other
+/// store family in [`codemason_surface::store`].
+pub use codemason_surface::store::EndpointSource;
 
 /// The display name of the marketplace named by `endpoint` for `kind`
 /// (FR-043).
