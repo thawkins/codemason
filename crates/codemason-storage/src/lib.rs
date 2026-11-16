@@ -28,16 +28,6 @@ pub use storage::{
     encrypt_key, obfuscate_key,
 };
 
-// Backward-compatible aliases for code that has not yet migrated (e.g.
-// `crates/codemason-tui`).  These are intentionally narrow and do NOT
-// represent the canonical API - new code should use `TaskRow` and the
-// `*_simple` / full task methods.
-#[doc(hidden)]
-pub use storage::TaskRow as TodoRow;
-
-// `Storage::get_todos` is kept as an inherent method alias in
-// `storage.rs`; see there for the deprecated shim.
-
 // Automation run-history types (spec `openhands` T-016; FR-018). Re-exported
 // so callers of the run-history storage methods need not depend on
 // `codemason-types` directly.
