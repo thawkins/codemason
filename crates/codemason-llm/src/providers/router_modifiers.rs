@@ -2,10 +2,8 @@
 //!
 //! Detects three modifier formats (slash, bracket, word) that allow users to
 //! explicitly override the classifier's tier decision. When a modifier is
-//! detected, the stripped prompt ([`ModifierResult::remaining_prompt`]) feeds
-//! only the router's dimension scoring; the request forwarded to the LLM still
-//! carries the modifier. FR-020's "strip before forwarding" is not implemented
-//! (deep-refactor D-15, owner decision O-06: keep the behaviour, fix this doc).
+//! detected, it is stripped from the prompt before forwarding to the LLM
+//! (FR-020).
 //!
 //! Modifier aliases map to tiers per FR-019:
 //! - `simple`, `basic`, `cheap` -> SIMPLE
