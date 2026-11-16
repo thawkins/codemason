@@ -128,3 +128,49 @@ async fn test_ollama_call_without_index_or_id_on_deltas_streams_as_one() {
     assert_eq!(args_for(&events, "call_x"), "{\"location\":\"London\"}");
     assert_eq!(ends(&events), ["call_x"]);
 }
+
+#[tokio::test]
+async fn test_ollama_indexed_start_then_id_only_delta_stays_one_call() {
+    let events = events_for(concat!(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_x\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"loc\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"call_x\",\"function\":{\"arguments\":\"ation\\\":\\\"London\\\"}\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n"
+    ))
+    .await;
+
+    assert_eq!(starts(&events).len(), 1);
+    assert_eq!(args_for(&events, "call_x"), "{\"location\":\"London\"}");
+}
+
+#[tokio::test]
+async fn test_ollama_id_only_start_then_index_only_delta_stays_one_call() {
+    let events = events_for(concat!(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"call_x\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"loc\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"ation\\\":\\\"London\\\"}\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n"
+    ))
+    .await;
+
+    assert_eq!(starts(&events).len(), 1);
+    assert_eq!(args_for(&events, "call_x"), "{\"location\":\"London\"}");
+}
+
+#[tokio::test]
+async fn test_ollama_anonymous_fragment_with_two_open_calls_is_skipped() {
+    let events = events_for(concat!(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[",
+        "{\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"location\\\":\\\"London\\\"}\"}},",
+        "{\"id\":\"call_b\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"location\\\":\\\"Paris\\\"}\"}}",
+        "]}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"garbage\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n"
+    ))
+    .await;
+
+    assert_eq!(starts(&events).len(), 2);
+    assert_eq!(args_for(&events, "call_a"), "{\"location\":\"London\"}");
+    assert_eq!(args_for(&events, "call_b"), "{\"location\":\"Paris\"}");
+}

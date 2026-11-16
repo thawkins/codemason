@@ -379,9 +379,8 @@ impl LlmClient for OllamaClient {
             // FR-004: the `/v1/chat/completions` shape keys tool calls by
             // `tool_calls[].index`; the shared accumulator owns the open calls.
             let mut acc = ToolCallAccumulator::new(OPENAI_CHAT, "ollama");
-            // #19: the key of the last tool-call frame, for a continuation delta
-            // that names neither an index nor an id.
-            let mut last_tool_key: Option<StreamKey> = None;
+            // #19: which accumulator key each tool-call index / id belongs to.
+            let mut tool_keys = ToolKeyResolver::default();
             let mut stream_done = false;
             let mut yielded_event = false;
 
@@ -530,12 +529,23 @@ impl LlmClient for OllamaClient {
                                 // #19: key by `index`, else by the call `id`, so
                                 // parallel calls from a server that omits the
                                 // index stay separate (an `unwrap_or(0)` merged
-                                // them). A frame naming neither continues the
-                                // call before it.
-                                let key = StreamKey::from_frame(tc["index"].as_u64(), tc["id"].as_str())
-                                    .or_else(|| last_tool_key.clone())
-                                    .unwrap_or(StreamKey::Index(0));
-                                last_tool_key = Some(key.clone());
+                                // them); see `ToolKeyResolver` for continuations.
+                                let starts_call = tc
+                                    .get("function")
+                                    .and_then(|f| f["name"].as_str())
+                                    .is_some_and(|name| !name.is_empty());
+                                let Some(key) = tool_keys.resolve(
+                                    tc["index"].as_u64(),
+                                    tc["id"].as_str(),
+                                    starts_call,
+                                ) else {
+                                    tracing::warn!(
+                                        provider = "ollama",
+                                        frame = %crate::provider::http_client::redact_frame(&tc.to_string()),
+                                        "tool_call delta names no call while several are open; skipping it"
+                                    );
+                                    continue;
+                                };
 
                                 if let Some(id) = tc["id"].as_str() {
                                     acc.set_id(&key, id);
@@ -571,6 +581,7 @@ impl LlmClient for OllamaClient {
                             for event in acc.end_all() {
                                 yield event;
                             }
+                            tool_keys = ToolKeyResolver::default();
 
                             let reason = match finish_reason {
                                 "tool_calls" => FinishReason::ToolUse,
@@ -586,6 +597,65 @@ impl LlmClient for OllamaClient {
         };
 
         Ok(Box::pin(event_stream))
+    }
+}
+
+/// Maps the `index` / `id` labels of Ollama tool-call frames to accumulator
+/// keys (#19).
+///
+/// A frame is keyed by its index, else by its call id. Once a call is open,
+/// both labels it has carried point at the same key, so a server that sends an
+/// index on the first frame and only the id on a later one (or the reverse)
+/// keeps one call. A continuation frame (no tool name) with a label not seen
+/// before, or with no label at all, is attributed to the open call only when
+/// exactly one is open; with several open it cannot be attributed safely.
+#[derive(Debug, Default)]
+struct ToolKeyResolver {
+    by_index: HashMap<u64, StreamKey>,
+    by_id: HashMap<String, StreamKey>,
+    open: Vec<StreamKey>,
+}
+
+impl ToolKeyResolver {
+    /// The key for a frame with this `index` and `id`, or `None` when the frame
+    /// cannot be attributed to one call.
+    ///
+    /// `starts_call` is true for a frame that names a tool, which opens a call
+    /// rather than continuing one.
+    fn resolve(
+        &mut self,
+        index: Option<u64>,
+        id: Option<&str>,
+        starts_call: bool,
+    ) -> Option<StreamKey> {
+        let id = id.filter(|id| !id.is_empty());
+        let known = id
+            .and_then(|id| self.by_id.get(id))
+            .or_else(|| index.and_then(|index| self.by_index.get(&index)))
+            .cloned();
+        let key = match known {
+            Some(key) => key,
+            None if !starts_call && self.open.len() == 1 => self.open[0].clone(),
+            None if index.is_none() && id.is_none() => {
+                // No label and nothing (or several things) to continue: the
+                // first call of a label-less stream, or an ambiguous fragment.
+                if !self.open.is_empty() {
+                    return None;
+                }
+                StreamKey::Index(0)
+            }
+            None => StreamKey::from_frame(index, id)?,
+        };
+        if let Some(index) = index {
+            self.by_index.insert(index, key.clone());
+        }
+        if let Some(id) = id {
+            self.by_id.insert(id.to_string(), key.clone());
+        }
+        if !self.open.contains(&key) {
+            self.open.push(key.clone());
+        }
+        Some(key)
     }
 }
 
