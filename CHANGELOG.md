@@ -38,6 +38,7 @@
 
 ### Changed
 
+- Changed: dead code removed (20 never-read `App` fields, the unused tips module, five zero-caller specs/codeindex functions, the `TodoRow` alias) and duplicated helpers now call the shared ones (`strutil` truncation, logical-line cursor checks, search context, team error checks); no behaviour change.
 - Changed: every streaming provider uses one stall guard (`http_client::next_chunk_or_stall`); the "stream stalled - no data received for 120s" error is unchanged.
 - Changed: the unwrap and poisoned-lock guards (`scripts/check-security-unwraps.sh`, `scripts/check-poison-locks.sh`) scan the root binary's `src/` as well as `crates/`.
 - Changed: `deny.toml` drops the stale `ring` licence clarification (ring 0.17 declares its own licence) and names `webpki-root-certs` correctly.

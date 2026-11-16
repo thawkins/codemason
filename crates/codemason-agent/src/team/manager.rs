@@ -63,30 +63,6 @@ fn fs_mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
 }
 
-/// Check if an error message indicates a context-window / token-count overflow.
-///
-/// These errors come from Anthropic, `OpenAI`, and GitHub Copilot when the prompt
-/// is too long for the model's context window. They are *not* permanent failures -
-/// the session processor's compression pipeline will reduce context on retry.
-///
-/// [`crate::session::history::is_token_overflow_error_message`] so the team
-/// manager stays in sync with the same patterns used by the session loop.
-fn is_token_overflow_error(error_msg: &str) -> bool {
-    crate::session::history::is_token_overflow_error_message(error_msg)
-}
-
-/// Check if an error message indicates a permanent (non-retryable) API error.
-///
-/// Matches HTTP 4xx errors, excluding 429 (Too Many Requests), 408 (Timeout),
-/// and token-overflow errors (handled by the compression pipeline on retry).
-///
-/// This is a thin wrapper around the canonical implementation in
-/// [`crate::session::history::is_permanent_llm_api_error`] so the team
-/// manager stays in sync with the same patterns used by the session loop.
-fn is_permanent_api_error(error_msg: &str) -> bool {
-    crate::session::history::is_permanent_llm_api_error(error_msg)
-}
-
 /// Compute the retry backoff for a teammate agent loop that has just failed.
 ///
 /// Uses **exponential backoff with jitter** so that multiple teammates that
@@ -2507,7 +2483,8 @@ impl TeamManager {
 
                             // Token overflow is handled by the session processor's compression
                             // pipeline on the next turn, so no special recovery is needed here.
-                            if is_token_overflow_error(&last_error) {
+                            if crate::session::history::is_token_overflow_error_message(&last_error)
+                            {
                                 tracing::warn!(
                                     team = %team_name_clone,
                                     agent_id = %agent_id_clone,
@@ -2516,7 +2493,7 @@ impl TeamManager {
                             }
 
                             // Don't retry permanent errors (4xx except 429 / 408 / token overflow).
-                            if is_permanent_api_error(&last_error) {
+                            if crate::session::history::is_permanent_llm_api_error(&last_error) {
                                 tracing::error!(
                                     team = %team_name_clone,
                                     agent_id = %agent_id_clone,

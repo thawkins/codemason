@@ -219,7 +219,16 @@ fn format_session_results(
 }
 
 /// Append surrounding turns for a result.
-fn append_context(
+///
+/// Shared with `conversation_search`. Writes nothing when `target_id` is not
+/// in `messages` or the context window collapses to the target turn alone.
+///
+/// # Arguments
+/// * `output` - buffer the context block is appended to
+/// * `messages` - the full message list of the session
+/// * `target_id` - id of the matched message
+/// * `context_turns` - number of turns to show on each side of the match
+pub(crate) fn append_context(
     output: &mut String,
     messages: &[codemason_types::message::Message],
     target_id: &str,

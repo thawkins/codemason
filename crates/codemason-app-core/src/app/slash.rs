@@ -11751,7 +11751,6 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                         }
                         self.code_index_watch_session = None;
                         self.code_index = None;
-                        self.code_index_stats_cache = None;
                         if was_active {
                             self.append_assistant_text(
                                 "[no] **Code index:** disabled and deactivated. Codeindex tools will no longer be available.\n\n\

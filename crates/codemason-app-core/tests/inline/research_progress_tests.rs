@@ -295,3 +295,159 @@ fn test_progress_render_indents_multiline_detail() {
         lines[first_idx + 1]
     );
 }
+
+#[test]
+fn test_failed_urls_rolled_into_totals_line() {
+    let mut p = ResearchProgress::new("rust-async", "async rust");
+    p.apply(SessionPhase::Web, StepStatus::Started, "searching the web");
+    p.apply(
+        SessionPhase::Web,
+        StepStatus::Done,
+        "[ENGLISH] captured https://a.com - A",
+    );
+    p.apply(
+        SessionPhase::Web,
+        StepStatus::Error,
+        "fetch failed for https://b.com: 403",
+    );
+    p.apply(
+        SessionPhase::Web,
+        StepStatus::Done,
+        "[FRENCH] captured https://c.com - C",
+    );
+    p.apply(
+        SessionPhase::Web,
+        StepStatus::Error,
+        "fetch failed for https://d.com: timeout",
+    );
+
+    let rendered = p.render();
+    assert!(
+        !rendered.contains("fetch failed for"),
+        "rendered output should not contain per-URL failure lines:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("[totals] Web fetch totals: 2 fetched, 2 failed"),
+        "rendered output should show the totals line:\n{rendered}"
+    );
+    assert_eq!(
+        p.steps.len(),
+        1,
+        "captured lines are aggregated into the summary table; only the phase-start step is logged"
+    );
+}
+
+#[test]
+fn test_complete_message_replaces_totals_line() {
+    let mut p = ResearchProgress::new("rust-async", "async rust");
+    p.apply(SessionPhase::Web, StepStatus::Started, "searching the web");
+    p.apply(
+        SessionPhase::Web,
+        StepStatus::Done,
+        "[ENGLISH] captured https://a.com - A",
+    );
+    p.apply(
+        SessionPhase::Web,
+        StepStatus::Error,
+        "fetch failed for https://b.com: 403",
+    );
+    p.finish(1, 0, 0, 0);
+
+    let rendered = p.render();
+    assert!(
+        !rendered.contains("fetch failed for"),
+        "rendered output should not contain per-URL failure lines:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("Web fetch totals"),
+        "totals line should be replaced by the complete line:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("[ok] Complete - 1 source(s)"),
+        "rendered output should show the final complete line:\n{rendered}"
+    );
+}
+
+#[test]
+fn test_failed_url_status_decoded_as_error() {
+    let encoded = encode_progress_event(
+        "foo",
+        "bar",
+        &SessionEvent::WebFetchFailed {
+            url: "https://x.com".into(),
+            error: "403".into(),
+        },
+    );
+    let decoded = decode_progress_event(&encoded).expect("decode");
+    assert_eq!(decoded.phase, SessionPhase::Web);
+    assert_eq!(decoded.status, StepStatus::Error);
+    assert!(decoded.detail.contains("fetch failed for https://x.com"));
+}
+
+#[test]
+fn test_web_phase_deadline_set_from_start_event() {
+    let mut p = ResearchProgress::new("n", "t");
+    assert!(p.web_phase_deadline.is_none());
+    let before = std::time::Instant::now();
+    p.apply(
+        SessionPhase::Web,
+        StepStatus::Started,
+        "pipeline step: web_phase_start (web phase deadline: 45s)",
+    );
+    let after = std::time::Instant::now();
+    let deadline = p.web_phase_deadline.expect("deadline set");
+    assert!(
+        deadline >= before + std::time::Duration::from_secs(44),
+        "deadline should be ~45s from start"
+    );
+    assert!(
+        deadline <= after + std::time::Duration::from_secs(46),
+        "deadline should be ~45s from start"
+    );
+}
+
+#[test]
+fn test_web_phase_deadline_cleared_on_timeout_event() {
+    let mut p = ResearchProgress::new("n", "t");
+    p.apply(
+        SessionPhase::Web,
+        StepStatus::Started,
+        "pipeline step: web_phase_start (web phase deadline: 45s)",
+    );
+    assert!(p.web_phase_deadline.is_some());
+    p.apply(
+            SessionPhase::Web,
+            StepStatus::Skipped,
+            "pipeline step: web_deadline (web phase deadline of 45s reached; proceeding with 2 captured source(s))",
+        );
+    assert!(
+        p.web_phase_deadline.is_none(),
+        "deadline should clear on web_deadline event"
+    );
+}
+
+#[test]
+fn test_web_phase_deadline_cleared_on_finish() {
+    let mut p = ResearchProgress::new("n", "t");
+    p.apply(
+        SessionPhase::Web,
+        StepStatus::Started,
+        "pipeline step: web_phase_start (web phase deadline: 45s)",
+    );
+    p.finish(3, 0, 0, 0);
+    assert!(
+        p.web_phase_deadline.is_none(),
+        "deadline should clear when run finishes"
+    );
+}
+
+#[test]
+fn test_web_phase_start_without_deadline_detail_does_not_set_deadline() {
+    let mut p = ResearchProgress::new("n", "t");
+    p.apply(
+        SessionPhase::Web,
+        StepStatus::Started,
+        "pipeline step: web_phase_start",
+    );
+    assert!(p.web_phase_deadline.is_none());
+}
