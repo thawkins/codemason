@@ -366,7 +366,7 @@ impl LlmClient for OllamaClient {
             .to_string();
         let stream = response.bytes_stream();
         let event_stream = async_stream::stream! {
-              // PERF-063: pre-size the SSE accumulation buffer so a long stream does
+            // PERF-063: pre-size the SSE accumulation buffer so a long stream does
             // not repeatedly realloc/copy as it grows.
             let mut buffer = String::with_capacity(8 * 1024);
             // FUNC-033: hold an incomplete trailing multibyte character from the
@@ -413,31 +413,18 @@ impl LlmClient for OllamaClient {
                 };
 
                 // SEC-codemason-llm-004 (SECTASKS T-028): fail the stream when a
-
                 // peer dribbles bytes without ever emitting a newline instead
-
                 // of letting the accumulation buffer grow without bound.
-
                 if let Err(e) = super::http_client::append_chunk_guarded(
-
                     &mut buffer,
-
                     &mut pending_utf8,
-
                     &chunk,
-
                     "Ollama",
-
                 ) {
-
                     yield StreamEvent::Error {
-
                         message: e.to_string(),
-
                     };
-
                     return;
-
                 }
 
                 while let Some(line) = super::http_client::take_sse_line(&mut buffer) {
@@ -454,17 +441,24 @@ impl LlmClient for OllamaClient {
                     if data == "[DONE]" {
                         stream_done = true;
                         break;
-                    }                      let parsed: Value = match serde_json::from_str(data) {
-                          Ok(v) => v,
-                          Err(e) => {
-                              // SEC: the raw SSE frame carries streamed model output;
-                              // redact before logging.
-                              tracing::warn!(provider = "ollama", line = %crate::provider::http_client::redact_frame(data), error = %e, "failed to parse SSE line");
-                              continue;
-                          }
-                      };
+                    }
 
-                      // Usage info
+                    let parsed: Value = match serde_json::from_str(data) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            // SEC: the raw SSE frame carries streamed model output;
+                            // redact before logging.
+                            tracing::warn!(
+                                provider = "ollama",
+                                line = %crate::provider::http_client::redact_frame(data),
+                                error = %e,
+                                "failed to parse SSE line"
+                            );
+                            continue;
+                        }
+                    };
+
+                    // Usage info
                     if let Some(usage) = parsed.get("usage")
                         && !usage.is_null()
                     {
@@ -560,15 +554,15 @@ impl LlmClient for OllamaClient {
                             }
                         }
 
-                          // Finish reason
-                          if let Some(finish_reason) = choice["finish_reason"].as_str() {
-                              // End the open calls in index order (see the shared
-                              // accumulator for the rationale).
-                              for event in acc.end_all() {
-                                  yield event;
-                              }
+                        // Finish reason
+                        if let Some(finish_reason) = choice["finish_reason"].as_str() {
+                            // End the open calls in index order (see the shared
+                            // accumulator for the rationale).
+                            for event in acc.end_all() {
+                                yield event;
+                            }
 
-                              let reason = match finish_reason {
+                            let reason = match finish_reason {
                                 "tool_calls" => FinishReason::ToolUse,
                                 "length" => FinishReason::Length,
                                 "content_filter" => FinishReason::ContentFilter,
