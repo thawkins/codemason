@@ -4125,8 +4125,7 @@ impl App {
             // set means the graph build holds the lock - not indexing.
             let graph_busy = idx.graph_busy();
 
-            if let Some(stats) = idx.try_status() {
-                self.code_index_stats_cache = Some(stats);
+            if idx.try_status().is_some() {
                 self.code_index_stats_last_refresh = std::time::Instant::now();
                 if self.code_index_busy && !reindex_active {
                     self.code_index_busy = false;
@@ -4159,7 +4158,6 @@ impl App {
                 self.needs_redraw = true;
             }
         } else {
-            self.code_index_stats_cache = None;
             self.code_index_stats_last_refresh = std::time::Instant::now();
             self.code_index_busy = false;
             if self.code_index_graph_busy {
