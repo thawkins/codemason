@@ -16,7 +16,6 @@
 //! - Tracks `cache_write_tokens` separately in usage
 
 use anyhow::{Context, Result, bail};
-use futures::stream::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -410,12 +409,7 @@ impl ResponsesApiClient {
             futures::pin_mut!(stream);
 
             loop {
-                let chunk = match tokio::time::timeout(
-                    std::time::Duration::from_secs(super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS),
-                    stream.next(),
-                )
-                .await
-                {
+                let chunk = match super::http_client::next_chunk_or_stall(&mut stream, "OpenAI Responses").await {
                     Ok(Some(r)) => match r {
                         Ok(c) => c,
                         Err(e) => {
@@ -424,13 +418,8 @@ impl ResponsesApiClient {
                         }
                     },
                     Ok(None) => break,
-                    Err(_) => {
-                        yield StreamEvent::Error {
-                            message: format!(
-                                "OpenAI Responses: stream stalled - no data received for {}s",
-                                super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS
-                            ),
-                        };
+                    Err(message) => {
+                        yield StreamEvent::Error { message };
                         break;
                     }
                 };

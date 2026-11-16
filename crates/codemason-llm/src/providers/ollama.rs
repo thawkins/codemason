@@ -10,6 +10,9 @@
 //! (`http://localhost:11434`). No API key is required for local servers.
 
 use anyhow::{Context, Result, bail};
+// The inline tests reach `StreamExt` through `use super::*`; production code
+// polls the stream via `http_client::next_chunk_or_stall`.
+#[cfg(test)]
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -382,23 +385,11 @@ impl LlmClient for OllamaClient {
             futures::pin_mut!(stream);
 
             while !stream_done {
-                let chunk_result = match tokio::time::timeout(
-                    std::time::Duration::from_secs(
-                        super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS,
-                    ),
-                    stream.next(),
-                )
-                .await
-                {
+                let chunk_result = match super::http_client::next_chunk_or_stall(&mut stream, "Ollama").await {
                     Ok(Some(r)) => r,
                     Ok(None) => break,
-                    Err(_) => {
-                        yield StreamEvent::Error {
-                            message: format!(
-                                "Ollama: stream stalled - no data received for {}s",
-                                super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS
-                            ),
-                        };
+                    Err(message) => {
+                        yield StreamEvent::Error { message };
                         break;
                     }
                 };

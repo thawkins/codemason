@@ -444,7 +444,6 @@ impl LlmClient for AzureAnthropicClient {
         // AnthropicClient::chat after the HTTP response is received.
         use crate::llm::StreamEvent;
         use codemason_types::event::FinishReason;
-        use futures::StreamExt;
         use serde_json::Value;
 
         let rate_limit_event =
@@ -472,12 +471,7 @@ impl LlmClient for AzureAnthropicClient {
             futures::pin_mut!(stream);
 
             loop {
-                let chunk = match tokio::time::timeout(
-                    std::time::Duration::from_secs(super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS),
-                    stream.next(),
-                )
-                .await
-                {
+                let chunk = match super::http_client::next_chunk_or_stall(&mut stream, "Azure Resource").await {
                     Ok(Some(r)) => match r {
                         Ok(c) => c,
                         Err(e) => {
@@ -486,13 +480,8 @@ impl LlmClient for AzureAnthropicClient {
                         }
                     },
                     Ok(None) => break,
-                    Err(_) => {
-                        yield StreamEvent::Error {
-                            message: format!(
-                                "Azure Resource: stream stalled - no data received for {}s",
-                                super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS
-                            ),
-                        };
+                    Err(message) => {
+                        yield StreamEvent::Error { message };
                         break;
                     }
                 };

@@ -9,7 +9,6 @@
 //! **Auth:** `Authorization: Bearer <HF_TOKEN>`
 
 use anyhow::{Context, Result, bail};
-use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -515,12 +514,7 @@ impl LlmClient for HuggingFaceClient {
             futures::pin_mut!(stream);
 
             loop {
-                let chunk = match tokio::time::timeout(
-                    std::time::Duration::from_secs(super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS),
-                    stream.next(),
-                )
-                .await
-                {
+                let chunk = match super::http_client::next_chunk_or_stall(&mut stream, "HuggingFace").await {
                     Ok(Some(r)) => match r {
                         Ok(c) => c,
                         Err(e) => {
@@ -529,13 +523,8 @@ impl LlmClient for HuggingFaceClient {
                         }
                     },
                     Ok(None) => break,
-                    Err(_) => {
-                        yield StreamEvent::Error {
-                            message: format!(
-                                "HuggingFace: stream stalled - no data received for {}s",
-                                super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS
-                            ),
-                        };
+                    Err(message) => {
+                        yield StreamEvent::Error { message };
                         break;
                     }
                 };

@@ -4,6 +4,9 @@
 //! streaming chat completions, tool use, and extended thinking.
 
 use anyhow::{Context, Result, bail};
+// The inline tests reach `StreamExt` through `use super::*`; production code
+// polls the stream via `http_client::next_chunk_or_stall`.
+#[cfg(test)]
 use futures::StreamExt;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -404,12 +407,7 @@ impl LlmClient for AnthropicClient {
             futures::pin_mut!(stream);
 
             loop {
-                let chunk = match tokio::time::timeout(
-                    std::time::Duration::from_secs(super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS),
-                    stream.next(),
-                )
-                .await
-                {
+                let chunk = match super::http_client::next_chunk_or_stall(&mut stream, "Anthropic").await {
                     Ok(Some(r)) => match r {
                         Ok(c) => c,
                         Err(e) => {
@@ -418,13 +416,8 @@ impl LlmClient for AnthropicClient {
                         }
                     },
                     Ok(None) => break,
-                    Err(_) => {
-                        yield StreamEvent::Error {
-                            message: format!(
-                                "Anthropic: stream stalled - no data received for {}s",
-                                super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS
-                            ),
-                        };
+                    Err(message) => {
+                        yield StreamEvent::Error { message };
                         break;
                     }
                 };
