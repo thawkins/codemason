@@ -174,3 +174,75 @@ async fn test_ollama_anonymous_fragment_with_two_open_calls_is_skipped() {
     assert_eq!(args_for(&events, "call_a"), "{\"location\":\"London\"}");
     assert_eq!(args_for(&events, "call_b"), "{\"location\":\"Paris\"}");
 }
+
+/// The `(id, args)` of every started call, in start order.
+fn calls(events: &[StreamEvent]) -> Vec<(String, String)> {
+    starts(events)
+        .into_iter()
+        .map(|(id, _)| {
+            let args = args_for(events, &id);
+            (id, args)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn test_ollama_distinct_indexes_with_a_duplicate_id_stay_separate() {
+    let events = events_for(concat!(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[",
+        "{\"index\":0,\"id\":\"dup\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"location\\\":\\\"London\\\"}\"}},",
+        "{\"index\":1,\"id\":\"dup\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"location\\\":\\\"Paris\\\"}\"}}",
+        "]}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n"
+    ))
+    .await;
+
+    let calls = calls(&events);
+    assert_eq!(calls.len(), 2, "two starts expected: {calls:?}");
+    assert_ne!(calls[0].0, calls[1].0, "each call needs its own output id");
+    assert_eq!(calls[0].1, "{\"location\":\"London\"}");
+    assert_eq!(calls[1].1, "{\"location\":\"Paris\"}");
+}
+
+#[tokio::test]
+async fn test_ollama_second_call_header_before_its_name_stays_separate() {
+    let events = events_for(concat!(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"location\\\":\\\"London\\\"}\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_b\",\"type\":\"function\"}]}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"location\\\":\\\"Paris\\\"}\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n"
+    ))
+    .await;
+
+    assert_eq!(
+        calls(&events),
+        [
+            (
+                "call_a".to_string(),
+                "{\"location\":\"London\"}".to_string()
+            ),
+            ("call_b".to_string(), "{\"location\":\"Paris\"}".to_string()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn test_ollama_continuation_repeating_the_name_stays_one_call() {
+    let events = events_for(concat!(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"call_x\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"loc\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"function\":{\"name\":\"get_weather\",\"arguments\":\"ation\\\":\\\"London\\\"}\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n"
+    ))
+    .await;
+
+    assert_eq!(
+        calls(&events),
+        [(
+            "call_x".to_string(),
+            "{\"location\":\"London\"}".to_string()
+        )]
+    );
+}
