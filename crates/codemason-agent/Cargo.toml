@@ -35,7 +35,6 @@ reqwest = { workspace = true }
 globset = { workspace = true }
 html2text = { workspace = true }
 similar = { workspace = true }
-tokio-stream = { workspace = true }
 futures = { workspace = true }
 dirs = { workspace = true }
 regex = { workspace = true }
@@ -93,6 +92,8 @@ version = "3.5"
 chrono = { workspace = true }
 
 [dev-dependencies]
+# Only the `#[cfg(test)]` compaction-runner tests and `tests/` use it.
+tokio-stream = { workspace = true }
 anyhow = { workspace = true }
 tempfile = "3.5"
 # SERIALISES process-global-state tests (perf profiling atomics); the inline

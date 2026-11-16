@@ -1855,7 +1855,6 @@ dependencies = [
  "anyhow",
  "chrono",
  "libc",
- "memchr",
  "regex",
  "serde",
  "serde_json",
@@ -8862,7 +8861,6 @@ dependencies = [
  "tower",
  "tower-layer",
  "tower-service",
- "tracing",
  "url",
 ]
 

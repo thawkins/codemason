@@ -7,7 +7,7 @@ lock is poisoned. The required pattern is:
 
     .lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 
-This scanner walks every ``crates/*/src/**/*.rs`` file, blanks out
+This scanner walks every ``crates/*/src/**/*.rs`` and root ``src/**/*.rs`` file, blanks out
 ``#[cfg(test)]`` module bodies, and reports any remaining poisoning-panic lock
 access. Test and bench directories are skipped entirely.
 
@@ -67,7 +67,7 @@ def blank_cfg_test_blocks(src: str) -> str:
 
 def scan() -> list[str]:
     offenders: list[str] = []
-    for path in pathlib.Path("crates").rglob("*.rs"):
+    for path in [*pathlib.Path("crates").rglob("*.rs"), *pathlib.Path("src").rglob("*.rs")]:
         parts = path.parts
         if "tests" in parts or "benches" in parts:
             continue

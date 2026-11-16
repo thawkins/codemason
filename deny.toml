@@ -64,15 +64,9 @@ allow = [
     "BSL-1.0",
     "CC0-1.0",
     "MPL-2.0",
-    # webpki-roots uses CDLA-Permissive-2.0 (Community Data License Agreement — permissive).
+    # webpki-root-certs uses CDLA-Permissive-2.0 (Community Data License Agreement — permissive).
     "CDLA-Permissive-2.0",
 ]
-
-# ring uses a custom ISC-style license.
-[[licenses.clarify]]
-name = "ring"
-expression = "ISC AND MIT AND OpenSSL"
-license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 
 # epaint_default_fonts (egui) bundles font files under OFL-1.1 and the Ubuntu Font Licence;
 # those licences apply to the font files only.

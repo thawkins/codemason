@@ -14,9 +14,9 @@ model runners, suite adapters, and workbook output.
 ## External Dependencies
 
 - anyhow, serde, serde_json, chrono, uuid, sha2, hex, tokio
-- futures, reqwest, async-trait, rustc-hash, calamine, tempfile
+- futures, reqwest, async-trait
 
-Dev-dependencies: criterion.
+Dev-dependencies: criterion, calamine, rustc-hash, tempfile.
 
 ## Public API (crate root re-exports)
 

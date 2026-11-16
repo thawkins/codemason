@@ -32,7 +32,6 @@ codemason-types = { path = "../codemason-types" }
 # SEC-053/SEC-055: parse the OTLP endpoint once so the loopback decision is made
 # on the validated host (not a string split) and report userinfo safely.
 url = { workspace = true }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 # The logs signal is delivered as a `tracing_subscriber::Layer`, so the trait
@@ -88,6 +87,7 @@ opentelemetry-otlp = { version = "0.33", optional = true, default-features = fal
 ] }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 tokio = { workspace = true }
 opentelemetry = { version = "0.33" }
 # NOTE: do not enable opentelemetry_sdk's `testing` feature. It drags in
