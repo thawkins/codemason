@@ -151,13 +151,14 @@ impl StoreLedger {
     ///
     /// # Errors
     ///
-    /// Returns [`ConnectorError::Io`] when the directory cannot be created or the
-    /// file cannot be written, and [`ConnectorError::ManifestParse`] when the
-    /// ledger cannot be serialised.
+    /// Returns [`ConnectorError::Io`] when the directory cannot be created, the
+    /// ledger cannot be serialised, or the file cannot be written.
     pub fn save(&self, store_dir: &Path) -> Result<(), ConnectorError> {
         std::fs::create_dir_all(store_dir).map_err(ConnectorError::io)?;
         let bytes = serde_json::to_vec_pretty(self).map_err(ConnectorError::io)?;
-        std::fs::write(store_dir.join(STATE_FILE), bytes).map_err(ConnectorError::io)
+        // Temp file plus rename, so a crash mid-write cannot truncate the ledger.
+        codemason_types::guard::write_atomic(&store_dir.join(STATE_FILE), &bytes)
+            .map_err(ConnectorError::io)
     }
 
     /// Mutable access to one connector's state, inserting the default when

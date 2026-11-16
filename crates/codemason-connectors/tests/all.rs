@@ -90,3 +90,6 @@ mod test_marketplace_ops;
 
 #[path = "test_marketplace_show.rs"]
 mod test_marketplace_show;
+
+#[path = "test_store_ledger_atomic.rs"]
+mod test_store_ledger_atomic;

@@ -8,6 +8,10 @@
 //! symlink guard were byte-identical apart from the store leaf name
 //! (`plugins`/`connectors`); they now have one implementation here and each
 //! crate delegates.
+//!
+//! [`EndpointSource`], the tag each family's `stores` report prints for where a
+//! store index endpoint came from, was likewise identical in both crates and
+//! lives here; both re-export it from their `store_index` modules.
 
 use std::path::{Path, PathBuf};
 
@@ -193,5 +197,37 @@ pub fn quarantine_corrupt_ledger(path: &Path, label: &str, error: &str) {
             error = %e,
             "failed to rename corrupt store ledger aside; leaving it in place"
         );
+    }
+}
+
+/// Where a store's effective index endpoint came from (plugins FR-031,
+/// connectors FR-036).
+///
+/// Produced by each family's `effective_endpoint_with_source` so its `stores`
+/// report tags each row from the same value the fetch uses. Re-exported as
+/// `codemason_plugins::store_index::EndpointSource` and
+/// `codemason_connectors::store_index::EndpointSource`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndpointSource {
+    /// A non-empty `<family>.stores.<name>.url` override (plugins FR-028,
+    /// connectors FR-035).
+    Config,
+    /// The compiled default endpoint (plugins FR-027, connectors FR-034).
+    Default,
+    /// An additional named marketplace added through
+    /// `/<family> marketplace <store> add` (plugins FR-048, connectors FR-043).
+    Added,
+}
+
+impl EndpointSource {
+    /// The lowercase tag used by the `/plugins stores` and `/connectors stores`
+    /// reports (plugins FR-031, connectors FR-036).
+    #[must_use]
+    pub const fn tag(self) -> &'static str {
+        match self {
+            Self::Config => "config",
+            Self::Default => "default",
+            Self::Added => "added",
+        }
     }
 }
