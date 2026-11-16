@@ -31,7 +31,6 @@
 //! ```
 
 use anyhow::{Context, Result, bail};
-use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -576,12 +575,7 @@ impl LlmClient for BedrockAnthropicClient {
             futures::pin_mut!(stream);
 
             loop {
-                let chunk = match tokio::time::timeout(
-                    std::time::Duration::from_secs(super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS),
-                    stream.next(),
-                )
-                .await
-                {
+                let chunk = match super::http_client::next_chunk_or_stall(&mut stream, "Bedrock").await {
                     Ok(Some(r)) => match r {
                         Ok(c) => c,
                         Err(e) => {
@@ -590,13 +584,8 @@ impl LlmClient for BedrockAnthropicClient {
                         }
                     },
                     Ok(None) => break,
-                    Err(_) => {
-                        yield StreamEvent::Error {
-                            message: format!(
-                                "Bedrock: stream stalled - no data received for {}s",
-                                super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS
-                            ),
-                        };
+                    Err(message) => {
+                        yield StreamEvent::Error { message };
                         break;
                     }
                 };
@@ -936,12 +925,7 @@ impl LlmClient for BedrockConverseClient {
             futures::pin_mut!(stream);
 
             loop {
-                let chunk = match tokio::time::timeout(
-                    std::time::Duration::from_secs(super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS),
-                    stream.next(),
-                )
-                .await
-                {
+                let chunk = match super::http_client::next_chunk_or_stall(&mut stream, "Bedrock").await {
                     Ok(Some(r)) => match r {
                         Ok(c) => c,
                         Err(e) => {
@@ -950,13 +934,8 @@ impl LlmClient for BedrockConverseClient {
                         }
                     },
                     Ok(None) => break,
-                    Err(_) => {
-                        yield StreamEvent::Error {
-                            message: format!(
-                                "Bedrock: stream stalled - no data received for {}s",
-                                super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS
-                            ),
-                        };
+                    Err(message) => {
+                        yield StreamEvent::Error { message };
                         break;
                     }
                 };
