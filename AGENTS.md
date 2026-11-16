@@ -196,7 +196,7 @@ filters, the binary-wide `global_env_lock`, nextest test groups) live in
   - when a write location is not already a parameter, add a `#[doc(hidden)]`
     setter over a process-wide `OnceLock` (e.g.
     `codemason_agent::session::history::set_subagent_log_root`,
-    `codemason_tui::app::set_log_root_override`) and call it from the test;
+    `codemason_app_core::app::set_log_root_override`) and call it from the test;
   - resolve `target/temp` from `env!("CARGO_MANIFEST_DIR")` so the path is
     correct regardless of the test's working directory.
     Never "fix" this by restoring files with `git restore` after a run — that hides

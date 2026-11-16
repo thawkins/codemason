@@ -5621,7 +5621,7 @@ Three consequences are part of the contract:
   vault root is explicit `AppState::research_root` state (production passes
   `<working dir>/research`, tests pass `target/temp/codemason-server-research/`),
   `session::history::set_subagent_log_root` redirects diverted `wait_agents`
-  batches, and `codemason_tui::app::set_log_root_override` /
+  batches, and `codemason_app_core::app::set_log_root_override` /
   `use_scratch_log_root_for_tests` redirect the GUI log-window spools. All three
   are `#[doc(hidden)]` `OnceLock` setters — production never calls them, so the
   shipped defaults (`<working dir>/log`, `<working dir>/research`) are unchanged.
