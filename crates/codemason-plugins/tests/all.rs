@@ -145,3 +145,6 @@ mod test_stores_report;
 
 #[path = "test_tool_adapter.rs"]
 mod test_tool_adapter;
+
+#[path = "test_store_ledger_atomic.rs"]
+mod test_store_ledger_atomic;
