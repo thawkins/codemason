@@ -148,9 +148,10 @@ pub fn append_stream_chunk(out: &mut String, pending: &mut Vec<u8>, chunk: &[u8]
 ///
 /// Unlike `buffer = buffer[pos + 1..].to_string()` (which re-allocates and
 /// copies the entire unconsumed remainder on every line - quadratic for long
-/// streams), this drains the consumed prefix in place so the unconsumed
-/// remainder keeps its buffer and is never re-copied (C-003). The returned line
-/// itself is a new `String`, so there is one small allocation per line.
+/// streams), this drains the consumed prefix in place, so the buffer's
+/// allocation is reused (C-003). `drain` still shifts the unconsumed suffix to
+/// the front, so pulling many lines out of one large buffered chunk copies the
+/// remainder once per line. The returned line itself is a new `String`.
 ///
 /// Returns `None` when no complete line is present yet.
 pub fn take_sse_line(buffer: &mut String) -> Option<String> {
