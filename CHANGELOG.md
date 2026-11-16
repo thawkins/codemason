@@ -45,6 +45,7 @@
 
 ### Changed
 
+- Changed: `create_builtin_agents` (agent `agent/mod.rs`) builds each built-in through one `builtin_agent` constructor that holds the nine fields every built-in shares; agents that differ override `hidden`, `temperature` or `thinking` with struct-update syntax. 545 -> 324 lines; the `{:#?}` dump of all 17 agents is byte-identical before and after (deep-refactor S-09, #9).
 - Changed: `call_llm_step` (agent `loop_steps.rs`) is split in place into named helpers - chat-failure and stream-error handling, the shared emergency overflow compaction (previously duplicated), finish-reason settling, the wait notice, stream flushing, argument accumulation and narrated tool-call recovery - cutting it from 845 to 428 lines with behaviour and every notice string unchanged (deep-refactor S-09, #9).
 - Changed: `tool_result_summary` (app-core `message_text.rs`) is split in place: the git, GitLab, GitHub, team, LSP, code-index, spec and cron arms move into per-family helpers in the same file, cutting the function from 1,314 to 673 lines with output unchanged (deep-refactor S-09, #9).
 - Changed: `/about` describes codemason as an interactive AI coding agent for the terminal and desktop instead of "TUI-based".
