@@ -379,6 +379,9 @@ impl LlmClient for OllamaClient {
             // FR-004: the `/v1/chat/completions` shape keys tool calls by
             // `tool_calls[].index`; the shared accumulator owns the open calls.
             let mut acc = ToolCallAccumulator::new(OPENAI_CHAT, "ollama");
+            // #19: the key of the last tool-call frame, for a continuation delta
+            // that names neither an index nor an id.
+            let mut last_tool_key: Option<StreamKey> = None;
             let mut stream_done = false;
             let mut yielded_event = false;
 
@@ -524,8 +527,15 @@ impl LlmClient for OllamaClient {
                             && let Some(tool_calls) = delta["tool_calls"].as_array()
                         {
                             for tc in tool_calls {
-                                let index = tc["index"].as_u64().unwrap_or(0);
-                                let key = StreamKey::Index(index);
+                                // #19: key by `index`, else by the call `id`, so
+                                // parallel calls from a server that omits the
+                                // index stay separate (an `unwrap_or(0)` merged
+                                // them). A frame naming neither continues the
+                                // call before it.
+                                let key = StreamKey::from_frame(tc["index"].as_u64(), tc["id"].as_str())
+                                    .or_else(|| last_tool_key.clone())
+                                    .unwrap_or(StreamKey::Index(0));
+                                last_tool_key = Some(key.clone());
 
                                 if let Some(id) = tc["id"].as_str() {
                                     acc.set_id(&key, id);
