@@ -984,32 +984,8 @@ impl SessionProcessor {
             // P-6: share the history by refcount bump instead of cloning
             // the entire `Vec<ChatMessage>` (including all tool-result
             // `ContentPart`s) on every retry attempt.
-            let attempt_messages: Arc<Vec<ChatMessage>> = if is_truncation_continuation {
-                // Append an out-of-band user-side message to the request for
-                // this attempt, asking the model (invisible to the caller)
-                // to continue exactly from where it stopped. The shared
-                // history itself is only mutated inside the request copy,
-                // so the main loop's `chat_messages` stay unchanged.
-                let mut msgs = (*loop_state.chat_messages).clone();
-                msgs.push(ChatMessage {
-                    role: "assistant".to_string(),
-                    content: ChatContent::Text(text_buffer.clone()),
-                });
-                msgs.push(ChatMessage {
-                    role: "user".to_string(),
-                    content: ChatContent::Text(
-                        "Your previous response was cut off mid-message. \
-                         Continue EXACTLY from where you stopped, outputting only the remaining \
-                         continuation text (no preamble, no recap, no repeating what you already \
-                         wrote, no formatting restarts). If your previous output cannot be \
-                         continued faithfully, restart the full answer from the beginning."
-                            .to_string(),
-                    ),
-                });
-                Arc::new(msgs)
-            } else {
-                Arc::clone(&loop_state.chat_messages)
-            };
+            let attempt_messages =
+                build_attempt_messages(loop_state, &text_buffer, is_truncation_continuation);
             let attempt_request = ChatRequest {
                 model: turn.model_ref.model_id.clone(),
                 messages: attempt_messages,
@@ -1039,34 +1015,11 @@ impl SessionProcessor {
             // R-1: Wrap the notice task in an `AbortOnDrop` guard so it is
             // aborted on every scope exit - including the `continue 'retry`
             // and `bail!` error paths below - not just the success path.
-            use crate::session::AbortOnDrop;
-            let notice_handle = {
-                let event_bus = Arc::clone(&self.event_bus);
-                let session_id = session_id.to_string();
-                let first_event_arrived = Arc::clone(&first_event_arrived);
-                let provider_id = turn.model_ref.provider_id.clone();
-                AbortOnDrop(tokio::spawn(async move {
-                    let interval = std::time::Duration::from_secs(30);
-                    let mut elapsed = 0u64;
-                    loop {
-                        tokio::time::sleep(interval).await;
-                        elapsed += 30;
-                        if first_event_arrived.load(Ordering::Relaxed) {
-                            break;
-                        }
-                        let message = if elapsed == 30 && provider_id == "ollama" {
-                            "Waiting for model response (Ollama may be loading the model)..."
-                                .to_string()
-                        } else {
-                            format!("Waiting for model response... ({elapsed}s)")
-                        };
-                        event_bus.publish(Event::AgentNotice {
-                            session_id: session_id.clone(),
-                            message,
-                        });
-                    }
-                }))
-            };
+            let notice_handle = self.spawn_first_event_notice(
+                session_id,
+                &turn.model_ref.provider_id,
+                &first_event_arrived,
+            );
             // First-byte guard: bound the initial `chat()` await so a provider
             // that accepts the connection then goes silent cannot hang the loop
             // forever (the H4 progress notices would tick indefinitely). Only
@@ -1092,115 +1045,17 @@ impl SessionProcessor {
                 match chat_result {
                     Ok(s) => s,
                     Err(e) => {
-                        let error_message = e.to_string();
-                        debug!(
-                            "LLM call failed (attempt {}): {}",
-                            attempt + 1,
-                            crate::sanitize::redact_secrets(&error_message)
-                        );
-                        if attempt < max_retries && !is_permanent_llm_api_error(&error_message) {
-                            // FR-004 / FR-008: emergency overflow compaction is
-                            // always eligible regardless of `compaction.auto`.
-                            // When `auto` is false the pre-send path is skipped
-                            // (FR-008) and the runner relies solely on this
-                            // emergency path; when `auto` is true and pre-send
-                            // already compacted this turn, the
-                            // `compressed_this_turn` guard prevents a second
-                            // compaction.
-                            if is_token_overflow_error_message(&error_message)
-                                && !loop_state.compaction_attempted_this_turn
-                            {
-                                // FR-004: emergency overflow compaction. The
-                                // `chat()` call failed before any assistant
-                                // tokens were produced, so run the summarisation
-                                // runner with reason "overflow" and retry the
-                                // turn once with the compacted history.
-                                loop_state.compaction_attempted_this_turn = true;
-                                let compact_result = crate::compaction::emergency_compact(
-                                    session_id,
-                                    Arc::make_mut(&mut loop_state.chat_messages),
-                                    &turn.model_ref.model_id,
-                                    context_window,
-                                    0,
-                                    &turn.session_config.compaction,
-                                    &turn.client,
-                                    &self.event_bus,
-                                    &self.stream_config,
-                                    // Emergency compaction runs after the LLM call
-                                    // already failed with a context-overflow; the
-                                    // loop-level cancel flag is unrelated to this
-                                    // sub-call.
-                                    &std::sync::atomic::AtomicBool::new(false),
-                                )
-                                .await;
-                                match compact_result {
-                                    Ok(outcome) => {
-                                        loop_state.compressed_this_turn = true;
-                                        loop_state.last_reported_input_tokens =
-                                            outcome.compressed_tokens as u64;
-                                        {
-                                            let session_state_lock = self
-                                                .session_manager
-                                                .as_ref()
-                                                .session_state_cache(session_id);
-                                            if let Ok(mut guard) = session_state_lock.lock() {
-                                                guard.set_last_reported_input_tokens(
-                                                    outcome.compressed_tokens as u64,
-                                                );
-                                            }
-                                        }
-                                        tracing::info!(
-                                            original_tokens = outcome.original_tokens,
-                                            compressed_tokens = outcome.compressed_tokens,
-                                            kept_messages = outcome.kept_message_count,
-                                            "emergency overflow compaction applied"
-                                        );
-                                        self.event_bus.publish(Event::AgentNotice {
-                                            session_id: session_id.to_string(),
-                                            message: format!(
-                                                "{error_message} - emergency-compacted, will retry"
-                                            ),
-                                        });
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            error = %e,
-                                            "emergency overflow compaction failed; surfacing original error"
-                                        );
-                                        self.event_bus.publish(Event::AgentError {
-                                            session_id: session_id.to_string(),
-                                            error: error_message.clone(),
-                                        });
-                                        bail!(
-                                            "LLM call failed after {} attempts: {}",
-                                            max_retries + 1,
-                                            error_message
-                                        );
-                                    }
-                                }
-                            } else {
-                                self.event_bus.publish(Event::AgentNotice {
-                                    session_id: session_id.to_string(),
-                                    message: format!("{error_message} - will retry"),
-                                });
-                            }
-                            continue 'retry;
-                        }
-                        self.event_bus.publish(Event::AgentError {
-                            session_id: session_id.to_string(),
-                            error: error_message.clone(),
-                        });
-                        crate::hooks::fire_hooks(
-                            &turn.parsed_hook_configs,
-                            crate::hooks::HookTrigger::OnError,
-                            &turn.working_dir,
-                            &[("CODEMASON_ERROR", &error_message)],
-                        );
-                        bail!(
-                            "LLM call failed after {} attempts: {}",
-                            max_retries + 1,
-                            error_message
-                        );
+                        // Returns only to retry; every other path bails.
+                        self.handle_chat_failure(
+                            session_id,
+                            turn,
+                            loop_state,
+                            context_window,
+                            attempt,
+                            e.to_string(),
+                        )
+                        .await?;
+                        continue 'retry;
                     }
                 }
             };
@@ -1262,20 +1117,7 @@ impl SessionProcessor {
                         first_stream_event_pending = false;
                     }
                     let Some(event) = next_event else {
-                        let text = stream_buffer.drain_text();
-                        if !text.is_empty() {
-                            self.event_bus.publish(Event::TextDelta {
-                                session_id: session_id.to_string(),
-                                text,
-                            });
-                        }
-                        let reasoning = stream_buffer.drain_reasoning();
-                        if !reasoning.is_empty() {
-                            self.event_bus.publish(Event::ReasoningDelta {
-                                session_id: session_id.to_string(),
-                                text: reasoning,
-                            });
-                        }
+                        self.flush_stream_buffer(session_id, &mut stream_buffer);
                         break;
                     };
                     match event {
@@ -1309,20 +1151,7 @@ impl SessionProcessor {
                             reasoning_signature = Some(signature);
                         }
                         StreamEvent::ToolCallStart { id, name } => {
-                            let text = stream_buffer.drain_text();
-                            if !text.is_empty() {
-                                self.event_bus.publish(Event::TextDelta {
-                                    session_id: session_id.to_string(),
-                                    text,
-                                });
-                            }
-                            let reasoning = stream_buffer.drain_reasoning();
-                            if !reasoning.is_empty() {
-                                self.event_bus.publish(Event::ReasoningDelta {
-                                    session_id: session_id.to_string(),
-                                    text: reasoning,
-                                });
-                            }
+                            self.flush_stream_buffer(session_id, &mut stream_buffer);
                             stream_buffer.reset_timer();
                             tool_calls_ever_started = true;
                             tool_calls.push(PendingToolCall {
@@ -1333,31 +1162,7 @@ impl SessionProcessor {
                         }
                         StreamEvent::ToolCallDelta { id, args_json } => {
                             if let Some(tc) = tool_calls.iter_mut().find(|t| t.id == id) {
-                                // B4: bound the accumulation buffer. A
-                                // provider that streams endless argument
-                                // deltas could otherwise grow the buffer
-                                // without limit; past the cap the remaining
-                                // deltas are dropped so dispatch fails the
-                                // args-JSON parse and the model receives a
-                                // corrective error. The drop is logged (once
-                                // per call) so legitimate large-args calls
-                                // are visible instead of failing silently.
-                                if tc.args_json.len() + args_json.len() > MAX_TOOL_CALL_ARGS_BYTES
-                                    && !tc.args_json.ends_with(TRUNCATED_ARGS_SENTINEL)
-                                {
-                                    tracing::warn!(
-                                        tool = %tc.name,
-                                        id = %tc.id,
-                                        cap = MAX_TOOL_CALL_ARGS_BYTES,
-                                        "tool-call arguments exceeded the accumulation cap; \
-                                         further deltas dropped"
-                                    );
-                                    tc.args_json.push_str(TRUNCATED_ARGS_SENTINEL);
-                                } else if tc.args_json.len() + args_json.len()
-                                    <= MAX_TOOL_CALL_ARGS_BYTES
-                                {
-                                    tc.args_json.push_str(&args_json);
-                                }
+                                append_tool_call_args(tc, &args_json);
                             }
                         }
                         StreamEvent::ToolCallEnd { id } => {
@@ -1413,112 +1218,23 @@ impl SessionProcessor {
                                     &reasoning_buffer,
                                     saw_completed_tool_call,
                                 );
-                            let is_emergency_overflow: bool = {
-                                attempt < max_retries
-                                    && !loop_state.compaction_attempted_this_turn
-                                    && !has_meaningful_partial_output
-                                    && is_token_overflow_error_message(&message)
-                            };
-                            if is_emergency_overflow {
-                                // FR-004 / FR-008: emergency overflow compaction.
-                                // The stream failed with a context-overflow error
-                                // before any assistant tokens were produced, so
-                                // run the OpenCode-derived summarisation runner
-                                // with reason "overflow" and retry the turn once
-                                // with the compacted history. This path is
-                                // eligible regardless of `compaction.auto` (when
-                                // `auto` is false the runner relies solely on
-                                // emergency summarisation - FR-008). The
-                                // `compaction_attempted_this_turn` guard ensures
-                                // only a single compaction attempt per turn, so a
-                                // skipped emergency compaction is not retried.
-                                loop_state.compaction_attempted_this_turn = true;
-                                let compact_result = crate::compaction::emergency_compact(
+                            match self
+                                .handle_stream_error(
                                     session_id,
-                                    Arc::make_mut(&mut loop_state.chat_messages),
-                                    &turn.model_ref.model_id,
+                                    turn,
+                                    loop_state,
                                     context_window,
-                                    0,
-                                    &turn.session_config.compaction,
-                                    &turn.client,
-                                    &self.event_bus,
-                                    &self.stream_config,
-                                    // Emergency compaction runs after the LLM call
-                                    // already failed with a context-overflow; the
-                                    // loop-level cancel flag is unrelated to this
-                                    // sub-call.
-                                    &std::sync::atomic::AtomicBool::new(false),
+                                    attempt,
+                                    message,
+                                    has_meaningful_partial_output,
                                 )
-                                .await;
-                                match compact_result {
-                                    Ok(outcome) => {
-                                        loop_state.compressed_this_turn = true;
-                                        loop_state.last_reported_input_tokens =
-                                            outcome.compressed_tokens as u64;
-                                        {
-                                            let session_state_lock = self
-                                                .session_manager
-                                                .as_ref()
-                                                .session_state_cache(session_id);
-                                            if let Ok(mut guard) = session_state_lock.lock() {
-                                                guard.set_last_reported_input_tokens(
-                                                    outcome.compressed_tokens as u64,
-                                                );
-                                            }
-                                        }
-                                        tracing::info!(
-                                            original_tokens = outcome.original_tokens,
-                                            compressed_tokens = outcome.compressed_tokens,
-                                            kept_messages = outcome.kept_message_count,
-                                            "emergency overflow compaction applied (stream error)"
-                                        );
-                                        self.event_bus.publish(Event::AgentNotice {
-                                            session_id: session_id.to_string(),
-                                            message: format!(
-                                                "{message} - emergency-compacted, will retry"
-                                            ),
-                                        });
-                                        had_retryable_error = true;
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            error = %e,
-                                            "emergency overflow compaction failed; surfacing original error"
-                                        );
-                                        self.event_bus.publish(Event::AgentError {
-                                            session_id: session_id.to_string(),
-                                            error: message.clone(),
-                                        });
-                                        fatal_stream_error = Some(message);
-                                    }
-                                }
-                            } else if should_retry_stream_error(
-                                &message,
-                                attempt,
-                                max_retries,
-                                has_meaningful_partial_output,
-                            ) {
-                                self.event_bus.publish(Event::AgentNotice {
-                                    session_id: session_id.to_string(),
-                                    message: format!("{} - will retry", message),
-                                });
-                                had_retryable_error = true;
-                            } else if crate::session::history::is_retryable_stream_error(&message)
-                                && has_meaningful_partial_output
+                                .await
                             {
-                                self.event_bus.publish(Event::AgentNotice {
-                                    session_id: session_id.to_string(),
-                                    message: format!(
-                                        "{} - keeping partial output from this attempt",
-                                        message
-                                    ),
-                                });
-                            } else {
-                                self.event_bus.publish(Event::AgentError {
-                                    session_id: session_id.to_string(),
-                                    error: message.clone(),
-                                });
-                                fatal_stream_error = Some(message);
+                                StreamErrorAction::Retry => had_retryable_error = true,
+                                StreamErrorAction::KeepPartial => {}
+                                StreamErrorAction::Fatal(message) => {
+                                    fatal_stream_error = Some(message);
+                                }
                             }
                         }
                         StreamEvent::RateLimit {
@@ -1561,96 +1277,18 @@ impl SessionProcessor {
                 continue 'retry;
             }
 
-            // Propagate the finish reason observed for this attempt into the
-            // shared loop state so the caller (processor / sub-agent runner)
-            // can flag truncated results.
-            if let Some(reason) = saw_finish_reason.clone() {
-                loop_state.last_finish_reason = Some(reason.clone());
-            } else if tool_calls.is_empty() {
-                // Stream ended silently - the provider never emitted an
-                // explicit `Finish` signal. This is the signature of an
-                // output-truncating provider: the response simply stops.
-                // Mark it so the task-layer can retry / flag the result.
-                loop_state.last_finish_reason = Some(FinishReason::Truncation);
-            } else {
-                loop_state.last_finish_reason = None;
-            }
-
-            // FR-022: a provider that reports a tool-use finish while the
-            // accumulator produced zero COMPLETE tool calls has lost a tool
-            // call. No tool phase will advance the conversation, so the step
-            // would otherwise end the turn as if the model had answered. Treat
-            // it as truncation instead, which (a) records the provider-side cut
-            // so the final message is not presented as a clean reply, and (b)
-            // arms the text-recovery path below: several providers report a
-            // tool-use finish while narrating the invocation as text, and the
-            // recovery scan is the only thing that can still salvage the call.
-            if Self::finish_was_tool_use_without_a_call(
-                loop_state.last_finish_reason.as_ref(),
+            if self.settle_finish_reason(
+                session_id,
+                turn,
+                agent,
+                loop_state,
+                saw_finish_reason,
                 tool_calls_ever_started,
-                tool_calls.len(),
+                &tool_calls,
+                &text_buffer,
+                &mut attempted_truncation_continuation,
             ) {
-                tracing::warn!(
-                    session_id = %session_id,
-                    provider = %turn.model_ref.provider_id,
-                    "tool-use finish with zero parsed tool calls; treating the \
-                     step as truncated and entering text recovery"
-                );
-                self.event_bus.publish(Event::AgentNotice {
-                    session_id: session_id.to_string(),
-                    message: "The provider reported a tool call but none could be \
-                              parsed - checking the reply text for a recoverable \
-                              call."
-                        .to_string(),
-                });
-                loop_state.last_finish_reason = Some(FinishReason::Truncation);
-            }
-
-            // Truncation-continuation kick: for background sub-agents, the
-            // only way to recover from a provider-side silent cut is to ask
-            // the model to continue. We do it once per step (bounded by the
-            // existing retry budget) and only when there is something
-            // non-empty to continue from. This path only makes sense when
-            // the reply was text-only (no pending tool calls).
-            if matches!(
-                loop_state.last_finish_reason,
-                Some(FinishReason::Truncation)
-            ) && agent.mode == crate::agent::AgentMode::Subagent
-                && tool_calls.is_empty()
-                && !text_buffer.trim().is_empty()
-                && !attempted_truncation_continuation
-            {
-                attempted_truncation_continuation = true;
-                self.event_bus.publish(Event::AgentNotice {
-                    session_id: session_id.to_string(),
-                    message: "Provider truncated the reply without an explicit \
-                               finish signal - asking the model to continue from \
-                               where it stopped..."
-                        .to_string(),
-                });
-                tracing::warn!(
-                    session_id = %session_id,
-                    "silent end-of-stream detected for sub-agent; retrying with truncation continuation"
-                );
                 continue 'retry;
-            }
-
-            if matches!(
-                loop_state.last_finish_reason,
-                Some(FinishReason::Truncation)
-            ) && !tool_calls.is_empty()
-            {
-                // A truncation observed on a step that produced tool calls is
-                // most likely a pre-tool preamble cut - the tool phase will
-                // advance the conversation anyway, so no continuation is
-                // required. Log it for diagnostics, then normalise the
-                // recorded reason back to `ToolUse` so the final message is
-                // not mislabelled as truncated when the run ends.
-                tracing::info!(
-                    session_id = %session_id,
-                    "silent end-of-stream before tool calls; continuing via tool phase"
-                );
-                loop_state.last_finish_reason = Some(FinishReason::ToolUse);
             }
 
             if let Some(error) = fatal_stream_error {
@@ -1677,25 +1315,454 @@ impl SessionProcessor {
             loop_state.last_reported_input_tokens = last_input_tokens;
         }
 
-        // F9: text-format tool-call recovery. Some providers and models
-        // cannot emit native tool-call fields and narrate the invocation
-        // as text (markup dialects or bare tool-call JSON). When the step
-        // produced NO native tool calls, attempt a conservative extraction
-        // from the TEXT buffer first, then the REASONING buffer - several
-        // reasoning-capable models narrate their invocations inside the
-        // reasoning channel instead of the visible text. Ordinary prose
-        // never matches (markup tags must be literally present, or the
-        // whole response must be the JSON). Recovered spans are blanked
-        // from the buffer so the model does not see its own narration
-        // duplicated alongside the ToolUse part on the next round-trip.
-        // Performing this here keeps every caller's saved text/reasoning
-        // parts blanked without each caller reordering its own code.
+        self.recover_narrated_tool_calls(
+            session_id,
+            &mut tool_calls,
+            &mut text_buffer,
+            &mut reasoning_buffer,
+        );
+
+        Ok(LlmStepResult {
+            text_buffer,
+            reasoning_buffer,
+            reasoning_signature,
+            tool_calls,
+            last_input_tokens,
+            last_output_tokens,
+            llm_request_start,
+            should_break: false,
+        })
+    }
+
+    /// H4: publish an `AgentNotice` every 30s, after the first 30s, until the
+    /// first stream event arrives, so a long `create_stream` wait does not look
+    /// like a hang. R-1: the returned guard aborts the task on every scope exit.
+    fn spawn_first_event_notice(
+        &self,
+        session_id: &str,
+        provider_id: &str,
+        first_event_arrived: &Arc<AtomicBool>,
+    ) -> crate::session::AbortOnDrop {
+        use crate::session::AbortOnDrop;
+        let event_bus = Arc::clone(&self.event_bus);
+        let session_id = session_id.to_string();
+        let first_event_arrived = Arc::clone(first_event_arrived);
+        let provider_id = provider_id.to_string();
+        AbortOnDrop(tokio::spawn(async move {
+            let interval = std::time::Duration::from_secs(30);
+            let mut elapsed = 0u64;
+            loop {
+                tokio::time::sleep(interval).await;
+                elapsed += 30;
+                if first_event_arrived.load(Ordering::Relaxed) {
+                    break;
+                }
+                let message = if elapsed == 30 && provider_id == "ollama" {
+                    "Waiting for model response (Ollama may be loading the model)...".to_string()
+                } else {
+                    format!("Waiting for model response... ({elapsed}s)")
+                };
+                event_bus.publish(Event::AgentNotice {
+                    session_id: session_id.clone(),
+                    message,
+                });
+            }
+        }))
+    }
+
+    /// Handle a failed `chat()` call (no stream was opened).
+    ///
+    /// Returns `Ok(())` when the attempt should be retried - after an emergency
+    /// overflow compaction (FR-004) or a plain "will retry" notice - and an
+    /// error once the failure is permanent or the retry budget is spent.
+    async fn handle_chat_failure(
+        &self,
+        session_id: &str,
+        turn: &TurnClient,
+        loop_state: &mut LoopState,
+        context_window: usize,
+        attempt: u32,
+        error_message: String,
+    ) -> Result<()> {
+        let max_retries = self.stream_config.max_retries;
+        debug!(
+            "LLM call failed (attempt {}): {}",
+            attempt + 1,
+            crate::sanitize::redact_secrets(&error_message)
+        );
+        if attempt < max_retries && !is_permanent_llm_api_error(&error_message) {
+            // FR-004 / FR-008: emergency overflow compaction is
+            // always eligible regardless of `compaction.auto`.
+            // When `auto` is false the pre-send path is skipped
+            // (FR-008) and the runner relies solely on this
+            // emergency path; when `auto` is true and pre-send
+            // already compacted this turn, the
+            // `compressed_this_turn` guard prevents a second
+            // compaction.
+            if is_token_overflow_error_message(&error_message)
+                && !loop_state.compaction_attempted_this_turn
+            {
+                // FR-004: emergency overflow compaction. The
+                // `chat()` call failed before any assistant
+                // tokens were produced, so run the summarisation
+                // runner with reason "overflow" and retry the
+                // turn once with the compacted history.
+                if !self
+                    .emergency_overflow_compact(
+                        session_id,
+                        turn,
+                        loop_state,
+                        context_window,
+                        &error_message,
+                        false,
+                    )
+                    .await
+                {
+                    bail!(
+                        "LLM call failed after {} attempts: {}",
+                        max_retries + 1,
+                        error_message
+                    );
+                }
+            } else {
+                self.event_bus.publish(Event::AgentNotice {
+                    session_id: session_id.to_string(),
+                    message: format!("{error_message} - will retry"),
+                });
+            }
+            return Ok(());
+        }
+        self.event_bus.publish(Event::AgentError {
+            session_id: session_id.to_string(),
+            error: error_message.clone(),
+        });
+        crate::hooks::fire_hooks(
+            &turn.parsed_hook_configs,
+            crate::hooks::HookTrigger::OnError,
+            &turn.working_dir,
+            &[("CODEMASON_ERROR", &error_message)],
+        );
+        bail!(
+            "LLM call failed after {} attempts: {}",
+            max_retries + 1,
+            error_message
+        );
+    }
+
+    /// Record this attempt's finish reason in `loop_state` and normalise it.
+    ///
+    /// A silent end of stream with no tool calls is a truncation; a tool-use
+    /// finish with no parsed call is too (FR-022); a truncation before tool
+    /// calls is relabelled `ToolUse`. Returns `true` when a background
+    /// sub-agent's truncated text reply should be retried once as a
+    /// truncation continuation.
+    fn settle_finish_reason(
+        &self,
+        session_id: &str,
+        turn: &TurnClient,
+        agent: &AgentInfo,
+        loop_state: &mut LoopState,
+        saw_finish_reason: Option<FinishReason>,
+        tool_calls_ever_started: bool,
+        tool_calls: &[PendingToolCall],
+        text_buffer: &str,
+        attempted_truncation_continuation: &mut bool,
+    ) -> bool {
+        // Propagate the finish reason observed for this attempt into the
+        // shared loop state so the caller (processor / sub-agent runner)
+        // can flag truncated results.
+        if let Some(reason) = saw_finish_reason {
+            loop_state.last_finish_reason = Some(reason);
+        } else if tool_calls.is_empty() {
+            // Stream ended silently - the provider never emitted an
+            // explicit `Finish` signal. This is the signature of an
+            // output-truncating provider: the response simply stops.
+            // Mark it so the task-layer can retry / flag the result.
+            loop_state.last_finish_reason = Some(FinishReason::Truncation);
+        } else {
+            loop_state.last_finish_reason = None;
+        }
+
+        // FR-022: a provider that reports a tool-use finish while the
+        // accumulator produced zero COMPLETE tool calls has lost a tool
+        // call. No tool phase will advance the conversation, so the step
+        // would otherwise end the turn as if the model had answered. Treat
+        // it as truncation instead, which (a) records the provider-side cut
+        // so the final message is not presented as a clean reply, and (b)
+        // arms the text-recovery path below: several providers report a
+        // tool-use finish while narrating the invocation as text, and the
+        // recovery scan is the only thing that can still salvage the call.
+        if Self::finish_was_tool_use_without_a_call(
+            loop_state.last_finish_reason.as_ref(),
+            tool_calls_ever_started,
+            tool_calls.len(),
+        ) {
+            tracing::warn!(
+                session_id = %session_id,
+                provider = %turn.model_ref.provider_id,
+                "tool-use finish with zero parsed tool calls; treating the \
+                 step as truncated and entering text recovery"
+            );
+            self.event_bus.publish(Event::AgentNotice {
+                session_id: session_id.to_string(),
+                message: "The provider reported a tool call but none could be \
+                          parsed - checking the reply text for a recoverable \
+                          call."
+                    .to_string(),
+            });
+            loop_state.last_finish_reason = Some(FinishReason::Truncation);
+        }
+
+        // Truncation-continuation kick: for background sub-agents, the
+        // only way to recover from a provider-side silent cut is to ask
+        // the model to continue. We do it once per step (bounded by the
+        // existing retry budget) and only when there is something
+        // non-empty to continue from. This path only makes sense when
+        // the reply was text-only (no pending tool calls).
+        if matches!(
+            loop_state.last_finish_reason,
+            Some(FinishReason::Truncation)
+        ) && agent.mode == crate::agent::AgentMode::Subagent
+            && tool_calls.is_empty()
+            && !text_buffer.trim().is_empty()
+            && !*attempted_truncation_continuation
+        {
+            *attempted_truncation_continuation = true;
+            self.event_bus.publish(Event::AgentNotice {
+                session_id: session_id.to_string(),
+                message: "Provider truncated the reply without an explicit \
+                           finish signal - asking the model to continue from \
+                           where it stopped..."
+                    .to_string(),
+            });
+            tracing::warn!(
+                session_id = %session_id,
+                "silent end-of-stream detected for sub-agent; retrying with truncation continuation"
+            );
+            return true;
+        }
+
+        if matches!(
+            loop_state.last_finish_reason,
+            Some(FinishReason::Truncation)
+        ) && !tool_calls.is_empty()
+        {
+            // A truncation observed on a step that produced tool calls is
+            // most likely a pre-tool preamble cut - the tool phase will
+            // advance the conversation anyway, so no continuation is
+            // required. Log it for diagnostics, then normalise the
+            // recorded reason back to `ToolUse` so the final message is
+            // not mislabelled as truncated when the run ends.
+            tracing::info!(
+                session_id = %session_id,
+                "silent end-of-stream before tool calls; continuing via tool phase"
+            );
+            loop_state.last_finish_reason = Some(FinishReason::ToolUse);
+        }
+        false
+    }
+
+    /// Decide what one `StreamEvent::Error` does to the current attempt:
+    /// emergency-compact and retry on an early context overflow (FR-004),
+    /// retry a transient error, keep the partial output of an attempt that
+    /// already produced some, or fail. Publishes the matching notice or error.
+    async fn handle_stream_error(
+        &self,
+        session_id: &str,
+        turn: &TurnClient,
+        loop_state: &mut LoopState,
+        context_window: usize,
+        attempt: u32,
+        message: String,
+        has_meaningful_partial_output: bool,
+    ) -> StreamErrorAction {
+        let max_retries = self.stream_config.max_retries;
+        let is_emergency_overflow: bool = {
+            attempt < max_retries
+                && !loop_state.compaction_attempted_this_turn
+                && !has_meaningful_partial_output
+                && is_token_overflow_error_message(&message)
+        };
+        if is_emergency_overflow {
+            // FR-004 / FR-008: emergency overflow compaction.
+            // The stream failed with a context-overflow error
+            // before any assistant tokens were produced, so
+            // run the OpenCode-derived summarisation runner
+            // with reason "overflow" and retry the turn once
+            // with the compacted history. This path is
+            // eligible regardless of `compaction.auto` (when
+            // `auto` is false the runner relies solely on
+            // emergency summarisation - FR-008). The
+            // `compaction_attempted_this_turn` guard ensures
+            // only a single compaction attempt per turn, so a
+            // skipped emergency compaction is not retried.
+            if self
+                .emergency_overflow_compact(
+                    session_id,
+                    turn,
+                    loop_state,
+                    context_window,
+                    &message,
+                    true,
+                )
+                .await
+            {
+                StreamErrorAction::Retry
+            } else {
+                StreamErrorAction::Fatal(message)
+            }
+        } else if should_retry_stream_error(
+            &message,
+            attempt,
+            max_retries,
+            has_meaningful_partial_output,
+        ) {
+            self.event_bus.publish(Event::AgentNotice {
+                session_id: session_id.to_string(),
+                message: format!("{} - will retry", message),
+            });
+            StreamErrorAction::Retry
+        } else if crate::session::history::is_retryable_stream_error(&message)
+            && has_meaningful_partial_output
+        {
+            self.event_bus.publish(Event::AgentNotice {
+                session_id: session_id.to_string(),
+                message: format!("{} - keeping partial output from this attempt", message),
+            });
+            StreamErrorAction::KeepPartial
+        } else {
+            self.event_bus.publish(Event::AgentError {
+                session_id: session_id.to_string(),
+                error: message.clone(),
+            });
+            StreamErrorAction::Fatal(message)
+        }
+    }
+
+    /// FR-004 / FR-008: emergency overflow compaction after a context-overflow
+    /// error, eligible regardless of `compaction.auto`. Marks the turn as
+    /// having attempted compaction so it runs at most once.
+    ///
+    /// Returns `true` when the history was compacted (the caller retries) and
+    /// `false` after publishing the original error as an `AgentError`.
+    /// `from_stream` only selects the log line.
+    async fn emergency_overflow_compact(
+        &self,
+        session_id: &str,
+        turn: &TurnClient,
+        loop_state: &mut LoopState,
+        context_window: usize,
+        message: &str,
+        from_stream: bool,
+    ) -> bool {
+        loop_state.compaction_attempted_this_turn = true;
+        let compact_result = crate::compaction::emergency_compact(
+            session_id,
+            Arc::make_mut(&mut loop_state.chat_messages),
+            &turn.model_ref.model_id,
+            context_window,
+            0,
+            &turn.session_config.compaction,
+            &turn.client,
+            &self.event_bus,
+            &self.stream_config,
+            // Emergency compaction runs after the LLM call
+            // already failed with a context-overflow; the
+            // loop-level cancel flag is unrelated to this
+            // sub-call.
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .await;
+        match compact_result {
+            Ok(outcome) => {
+                loop_state.compressed_this_turn = true;
+                loop_state.last_reported_input_tokens = outcome.compressed_tokens as u64;
+                {
+                    let session_state_lock = self
+                        .session_manager
+                        .as_ref()
+                        .session_state_cache(session_id);
+                    if let Ok(mut guard) = session_state_lock.lock() {
+                        guard.set_last_reported_input_tokens(outcome.compressed_tokens as u64);
+                    }
+                }
+                if from_stream {
+                    tracing::info!(
+                        original_tokens = outcome.original_tokens,
+                        compressed_tokens = outcome.compressed_tokens,
+                        kept_messages = outcome.kept_message_count,
+                        "emergency overflow compaction applied (stream error)"
+                    );
+                } else {
+                    tracing::info!(
+                        original_tokens = outcome.original_tokens,
+                        compressed_tokens = outcome.compressed_tokens,
+                        kept_messages = outcome.kept_message_count,
+                        "emergency overflow compaction applied"
+                    );
+                }
+                self.event_bus.publish(Event::AgentNotice {
+                    session_id: session_id.to_string(),
+                    message: format!("{message} - emergency-compacted, will retry"),
+                });
+                true
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "emergency overflow compaction failed; surfacing original error"
+                );
+                self.event_bus.publish(Event::AgentError {
+                    session_id: session_id.to_string(),
+                    error: message.to_string(),
+                });
+                false
+            }
+        }
+    }
+
+    /// Publish whatever text and reasoning the stream buffer still holds.
+    fn flush_stream_buffer(&self, session_id: &str, stream_buffer: &mut StreamBuffer) {
+        let text = stream_buffer.drain_text();
+        if !text.is_empty() {
+            self.event_bus.publish(Event::TextDelta {
+                session_id: session_id.to_string(),
+                text,
+            });
+        }
+        let reasoning = stream_buffer.drain_reasoning();
+        if !reasoning.is_empty() {
+            self.event_bus.publish(Event::ReasoningDelta {
+                session_id: session_id.to_string(),
+                text: reasoning,
+            });
+        }
+    }
+
+    /// F9: text-format tool-call recovery. Some providers and models
+    /// cannot emit native tool-call fields and narrate the invocation
+    /// as text (markup dialects or bare tool-call JSON). When the step
+    /// produced NO native tool calls, attempt a conservative extraction
+    /// from the TEXT buffer first, then the REASONING buffer - several
+    /// reasoning-capable models narrate their invocations inside the
+    /// reasoning channel instead of the visible text. Ordinary prose
+    /// never matches (markup tags must be literally present, or the
+    /// whole response must be the JSON). Recovered spans are blanked
+    /// from the buffer so the model does not see its own narration
+    /// duplicated alongside the ToolUse part on the next round-trip.
+    /// Performing this here keeps every caller's saved text/reasoning
+    /// parts blanked without each caller reordering its own code.
+    fn recover_narrated_tool_calls(
+        &self,
+        session_id: &str,
+        tool_calls: &mut Vec<PendingToolCall>,
+        text_buffer: &mut String,
+        reasoning_buffer: &mut String,
+    ) {
         if tool_calls.is_empty() {
             if !text_buffer.is_empty() {
                 let (recovered, spans) =
-                    crate::session::text_toolcalls::extract_text_tool_calls_with_spans(
-                        &text_buffer,
-                    );
+                    crate::session::text_toolcalls::extract_text_tool_calls_with_spans(text_buffer);
                 if !recovered.is_empty() {
                     tracing::info!(
                         session_id = %session_id,
@@ -1710,14 +1777,14 @@ impl SessionProcessor {
                             recovered.len()
                         ),
                     });
-                    tool_calls = recovered;
-                    crate::session::text_toolcalls::blank_spans(&mut text_buffer, &spans);
+                    *tool_calls = recovered;
+                    crate::session::text_toolcalls::blank_spans(text_buffer, &spans);
                 }
             }
             if tool_calls.is_empty() && !reasoning_buffer.is_empty() {
                 let (recovered, spans) =
                     crate::session::text_toolcalls::extract_text_tool_calls_with_spans(
-                        &reasoning_buffer,
+                        reasoning_buffer,
                     );
                 if !recovered.is_empty() {
                     tracing::info!(
@@ -1733,22 +1800,11 @@ impl SessionProcessor {
                             recovered.len()
                         ),
                     });
-                    tool_calls = recovered;
-                    crate::session::text_toolcalls::blank_spans(&mut reasoning_buffer, &spans);
+                    *tool_calls = recovered;
+                    crate::session::text_toolcalls::blank_spans(reasoning_buffer, &spans);
                 }
             }
         }
-
-        Ok(LlmStepResult {
-            text_buffer,
-            reasoning_buffer,
-            reasoning_signature,
-            tool_calls,
-            last_input_tokens,
-            last_output_tokens,
-            llm_request_start,
-            should_break: false,
-        })
     }
 
     /// FR-022: a tool-use finish with no complete tool call is a truncation.
@@ -1849,6 +1905,82 @@ impl SessionProcessor {
                     .filter(|s| !s.trim().is_empty())
             })
             .or_else(|| codemason_config::credential_env::read_credential_env(env_var))
+    }
+}
+
+/// What a stream error does to the current LLM attempt.
+enum StreamErrorAction {
+    /// Retry the attempt (transient error, or the history was compacted).
+    Retry,
+    /// Keep this attempt's partial output; the stream is still read to its end.
+    KeepPartial,
+    /// Fail the step with this error message.
+    Fatal(String),
+}
+
+/// The history sent on one LLM attempt.
+///
+/// An ordinary attempt shares the loop's history by refcount (P-6). A
+/// truncation-continuation attempt sends a copy with the partial reply and a
+/// continue-from-here request appended; the loop's own history is unchanged.
+fn build_attempt_messages(
+    loop_state: &LoopState,
+    text_buffer: &str,
+    is_truncation_continuation: bool,
+) -> Arc<Vec<ChatMessage>> {
+    if is_truncation_continuation {
+        // Append an out-of-band user-side message to the request for
+        // this attempt, asking the model (invisible to the caller)
+        // to continue exactly from where it stopped. The shared
+        // history itself is only mutated inside the request copy,
+        // so the main loop's `chat_messages` stay unchanged.
+        let mut msgs = (*loop_state.chat_messages).clone();
+        msgs.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: ChatContent::Text(text_buffer.to_string()),
+        });
+        msgs.push(ChatMessage {
+            role: "user".to_string(),
+            content: ChatContent::Text(
+                "Your previous response was cut off mid-message. \
+                 Continue EXACTLY from where you stopped, outputting only the remaining \
+                 continuation text (no preamble, no recap, no repeating what you already \
+                 wrote, no formatting restarts). If your previous output cannot be \
+                 continued faithfully, restart the full answer from the beginning."
+                    .to_string(),
+            ),
+        });
+        Arc::new(msgs)
+    } else {
+        Arc::clone(&loop_state.chat_messages)
+    }
+}
+
+/// B4: append one argument delta to a tool call, bounded by
+/// [`MAX_TOOL_CALL_ARGS_BYTES`].
+fn append_tool_call_args(tc: &mut PendingToolCall, args_json: &str) {
+    // B4: bound the accumulation buffer. A
+    // provider that streams endless argument
+    // deltas could otherwise grow the buffer
+    // without limit; past the cap the remaining
+    // deltas are dropped so dispatch fails the
+    // args-JSON parse and the model receives a
+    // corrective error. The drop is logged (once
+    // per call) so legitimate large-args calls
+    // are visible instead of failing silently.
+    if tc.args_json.len() + args_json.len() > MAX_TOOL_CALL_ARGS_BYTES
+        && !tc.args_json.ends_with(TRUNCATED_ARGS_SENTINEL)
+    {
+        tracing::warn!(
+            tool = %tc.name,
+            id = %tc.id,
+            cap = MAX_TOOL_CALL_ARGS_BYTES,
+            "tool-call arguments exceeded the accumulation cap; \
+             further deltas dropped"
+        );
+        tc.args_json.push_str(TRUNCATED_ARGS_SENTINEL);
+    } else if tc.args_json.len() + args_json.len() <= MAX_TOOL_CALL_ARGS_BYTES {
+        tc.args_json.push_str(args_json);
     }
 }
 
