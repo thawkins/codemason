@@ -620,547 +620,358 @@ static BUILTIN_AGENTS: OnceLock<Vec<AgentInfo>> = OnceLock::new();
 pub fn create_builtin_agents() -> Vec<AgentInfo> {
     vec![
         AgentInfo {
-            name: "ask".to_string(),
-            description: "Quick Q&A - answers questions without tools".to_string(),
-            mode: AgentMode::Primary,
-            hidden: false,
-            temperature: None,
-            top_p: None,
-            model: None,
-            prompt: Some(Arc::from(
+            thinking: Some(ThinkingConfig::off()),
+            ..builtin_agent(
+                "ask",
+                "Quick Q&A - answers questions without tools",
+                AgentMode::Primary,
+                read_only_permissions(),
                 "You are a helpful AI assistant. Answer the user's questions clearly and \
                  concisely. You do not have access to any tools - just respond with your \
                  best knowledge.",
-            )),
-            permission: read_only_permissions(),
-            max_steps: Some(1024),
-            skills: Vec::new(),
-            memory: crate::team::config::MemoryScope::None,
-            thinking: Some(ThinkingConfig::off()),
-            options: std::sync::Arc::new(HashMap::new()),
-            model_pinned: false,
-            allowed_tools: None,
-            stall_timeout_secs: None,
+            )
         },
+        builtin_agent(
+            "general",
+            "General-purpose coding agent",
+            AgentMode::Primary,
+            default_permissions(),
+            "You are a powerful AI coding assistant. You help users with software development \
+             tasks including writing code, debugging, reviewing, and explaining code. \
+             You have access to tools for reading, writing, and editing files, executing \
+             shell commands, and searching codebases. \
+             Use 'Grep' or 'search' to find text/code patterns, 'Glob' to find files by name, \
+             'list' to view directory contents, and 'read' to view file contents. \
+             Always prefer using tools to verify your assumptions rather than guessing.",
+        ),
+        builtin_agent(
+            "build",
+            "Build and test agent with full tool access",
+            AgentMode::Subagent,
+            default_permissions(),
+            "You are a build agent specializing in compiling, testing, and debugging \
+             software projects. Focus on running builds, fixing compilation errors, \
+             running tests, and ensuring code quality. Use Bash commands to interact \
+             with build systems and test frameworks.",
+        ),
         AgentInfo {
-            name: "general".to_string(),
-            description: "General-purpose coding agent".to_string(),
-            mode: AgentMode::Primary,
-            hidden: false,
-            temperature: None,
-            top_p: None,
-            model: None,
-            prompt: Some(Arc::from(
-                "You are a powerful AI coding assistant. You help users with software development \
-                 tasks including writing code, debugging, reviewing, and explaining code. \
-                 You have access to tools for reading, writing, and editing files, executing \
-                 shell commands, and searching codebases. \
-                 Use 'Grep' or 'search' to find text/code patterns, 'Glob' to find files by name, \
-                 'list' to view directory contents, and 'read' to view file contents. \
-                 Always prefer using tools to verify your assumptions rather than guessing.",
-            )),
-            permission: default_permissions(),
-            max_steps: Some(1024),
-            skills: Vec::new(),
-            memory: crate::team::config::MemoryScope::None,
-            thinking: None,
-            options: std::sync::Arc::new(HashMap::new()),
-            model_pinned: false,
-            allowed_tools: None,
-            stall_timeout_secs: None,
-        },
-        AgentInfo {
-            name: "build".to_string(),
-            description: "Build and test agent with full tool access".to_string(),
-            mode: AgentMode::Subagent,
-            hidden: false,
-            temperature: None,
-            top_p: None,
-            model: None,
-            prompt: Some(Arc::from(
-                "You are a build agent specializing in compiling, testing, and debugging \
-                 software projects. Focus on running builds, fixing compilation errors, \
-                 running tests, and ensuring code quality. Use Bash commands to interact \
-                 with build systems and test frameworks.",
-            )),
-            permission: default_permissions(),
-            max_steps: Some(1024),
-            skills: Vec::new(),
-            memory: crate::team::config::MemoryScope::None,
-            thinking: None,
-            options: std::sync::Arc::new(HashMap::new()),
-            model_pinned: false,
-            allowed_tools: None,
-            stall_timeout_secs: None,
-        },
-        AgentInfo {
-            name: "plan".to_string(),
-            description: "Planning agent that creates implementation plans".to_string(),
-            mode: AgentMode::Subagent,
-            hidden: false,
             temperature: Some(0.7),
-            top_p: None,
-            model: None,
-            prompt: Some(Arc::from(
+            ..builtin_agent(
+                "plan",
+                "Planning agent that creates implementation plans",
+                AgentMode::Subagent,
+                read_only_permissions(),
                 "You are a planning agent. Your job is to analyze requirements and create \
                  detailed implementation plans. Read the codebase to understand existing patterns \
                  and architecture. Output a structured plan with clear steps. Do NOT make any \
                  changes yourself - only plan and document.",
-            )),
-            permission: read_only_permissions(),
-            max_steps: Some(1024),
-            skills: Vec::new(),
-            memory: crate::team::config::MemoryScope::None,
-            thinking: None,
-            options: std::sync::Arc::new(HashMap::new()),
-            model_pinned: false,
-            allowed_tools: None,
-            stall_timeout_secs: None,
+            )
         },
+        builtin_agent(
+            "explore",
+            "Exploration agent for understanding codebases",
+            AgentMode::Subagent,
+            read_only_permissions(),
+            "You are an exploration agent specializing in understanding codebases. \
+             Use read, Grep, Glob, and list tools to navigate and understand code. \
+             Provide concise, accurate answers about code structure, patterns, and logic. \
+             Do NOT modify any files.",
+        ),
         AgentInfo {
-            name: "explore".to_string(),
-            description: "Exploration agent for understanding codebases".to_string(),
-            mode: AgentMode::Subagent,
-            hidden: false,
-            temperature: None,
-            top_p: None,
-            model: None,
-            prompt: Some(Arc::from(
-                "You are an exploration agent specializing in understanding codebases. \
-                 Use read, Grep, Glob, and list tools to navigate and understand code. \
-                 Provide concise, accurate answers about code structure, patterns, and logic. \
-                 Do NOT modify any files.",
-            )),
-            permission: read_only_permissions(),
-            max_steps: Some(1024),
-            skills: Vec::new(),
-            memory: crate::team::config::MemoryScope::None,
-            thinking: None,
-            options: std::sync::Arc::new(HashMap::new()),
-            model_pinned: false,
-            allowed_tools: None,
-            stall_timeout_secs: None,
-        },
-        AgentInfo {
-            name: "title".to_string(),
-            description: "Generate session titles".to_string(),
-            mode: AgentMode::Subagent,
             hidden: true,
             temperature: Some(0.3),
-            top_p: None,
-            model: None,
-            prompt: Some(Arc::from(
+            ..builtin_agent(
+                "title",
+                "Generate session titles",
+                AgentMode::Subagent,
+                Vec::new(),
                 "Generate a short, descriptive title (3-6 words) for a coding session \
                  based on the conversation. Output ONLY the title, nothing else.",
-            )),
-            permission: Vec::new(),
-            max_steps: Some(1024),
-            skills: Vec::new(),
-            memory: crate::team::config::MemoryScope::None,
-            thinking: None,
-            options: std::sync::Arc::new(HashMap::new()),
-            model_pinned: false,
-            allowed_tools: None,
-            stall_timeout_secs: None,
+            )
         },
         AgentInfo {
-            name: "summary".to_string(),
-            description: "Summarize sessions".to_string(),
-            mode: AgentMode::Subagent,
             hidden: true,
             temperature: Some(0.3),
-            top_p: None,
-            model: None,
-            prompt: Some(Arc::from(
+            ..builtin_agent(
+                "summary",
+                "Summarize sessions",
+                AgentMode::Subagent,
+                Vec::new(),
                 "Summarize the conversation so far into a concise paragraph that captures \
-                                               the key topics discussed, decisions made, and work completed.",
-            )),
-            permission: Vec::new(),
-            max_steps: Some(1024),
-            skills: Vec::new(),
-            memory: crate::team::config::MemoryScope::None,
-            thinking: None,
-            options: std::sync::Arc::new(HashMap::new()),
-            model_pinned: false,
-            allowed_tools: None,
-            stall_timeout_secs: None,
+                 the key topics discussed, decisions made, and work completed.",
+            )
         },
         // -- Domain-specific agents ---------------------------------------
+        builtin_agent(
+            "rust-coder",
+            "Rust coding specialist - idiomatic code, error handling, async",
+            AgentMode::Primary,
+            default_permissions(),
+            "You are a Rust coding specialist. You write idiomatic, production-grade Rust \
+             code with an emphasis on zero-cost abstractions, memory safety, and \
+             composability.\n\n\
+             Expertise:\n\
+             - Ownership, borrowing, and lifetimes\n\
+             - Error handling with Result<T, E> and anyhow/thiserror\n\
+             - Async Rust with tokio and futures\n\
+             - Traits and trait objects (dyn Trait vs impl Trait)\n\
+             - Unsafe code when necessary (with safety comments)\n\
+             - Cargo workspace management and dependency hygiene\n\
+             - Testing with cargo test, mockall, and insta\n\
+             - Performance: zero-copy, SIMD, rayon parallelism\n\n\
+             When reviewing or writing Rust:\n\
+             - Prefer `?` over `.unwrap()` / `.expect()` in library code\n\
+             - Use `tracing` (not println!) for structured logging\n\
+             - Follow the Rust API Guidelines and naming conventions\n\
+             - Minimize allocations; prefer iterators over loops\n\
+             - Document public APIs with `///` doc comments",
+        ),
+        builtin_agent(
+            "python-coder",
+            "Python coding specialist - idiomatic code, type hints, testing",
+            AgentMode::Primary,
+            default_permissions(),
+            "You are a Python coding specialist. You write clean, idiomatic Python \
+             following modern best practices and PEP 8.\n\n\
+             Expertise:\n\
+             - Type hints (PEP 484), generics, and mypy/pyright compliance\n\
+             - Async Python with asyncio, aiohttp, and FastAPI\n\
+             - Data modelling with dataclasses, Pydantic, and attrs\n\
+             - Testing with pytest, unittest, and coverage\n\
+             - Packaging with pyproject.toml, poetry, and uv\n\
+             - Virtual environments and dependency management\n\
+             - Performance: profiling, caching (functools.lru_cache), vectorisation\n\
+             - Python 3.11+ features (task groups, exception groups, tomllib)\n\n\
+             When reviewing or writing Python:\n\
+             - Use type hints everywhere; avoid bare `Any`\n\
+             - Prefer f-strings and pathlib over os.path\n\
+             - Use context managers (`with`) for resource cleanup\n\
+             - Prefer composition over inheritance\n\
+             - Use `isinstance()` checks, not `type()` comparisons\n\
+             - Keep functions small and testable (single responsibility)",
+        ),
+        builtin_agent(
+            "typescript-coder",
+            "TypeScript/JavaScript coding specialist - type safety, modern JS",
+            AgentMode::Primary,
+            default_permissions(),
+            "You are a TypeScript and JavaScript coding specialist. You write type-safe, \
+             modern JavaScript for both frontend and backend contexts.\n\n\
+             Expertise:\n\
+             - Strict TypeScript with explicit types; minimal use of `any`\n\
+             - Union types, discriminated unions, and type narrowing\n\
+             - Generic constraints and mapped types\n\
+             - Async/await, Promises, and error handling patterns\n\
+             - React hooks, Next.js, and component architecture\n\
+             - Node.js, Express, and Fastify server patterns\n\
+             - Testing with Vitest, Jest, and Playwright\n\
+             - Build tools: Vite, Rollup, Webpack, esbuild, tsup\n\
+             - Package managers: npm, pnpm, yarn (Berry)\n\n\
+             When reviewing or writing TS/JS:\n\
+             - Use `const` and `let`; avoid `var`\n\
+             - Prefer arrow functions for callbacks; named functions for hoisting\n\
+             - Use optional chaining (`?.`) and nullish coalescing (`??`)\n\
+             - Keep components small and focused; extract hooks early\n\
+             - Use ESLint + Prettier for consistency",
+        ),
+        builtin_agent(
+            "fastapi-agent",
+            "FastAPI project specialist - API design, Pydantic, async",
+            AgentMode::Primary,
+            default_permissions(),
+            "You are a FastAPI and Python web-backend specialist. You design and build \
+             high-performance REST and WebSocket APIs.\n\n\
+             Expertise:\n\
+             - FastAPI routing, dependency injection, and lifespan events\n\
+             - Pydantic v2 models, validators, and serialization\n\
+             - SQLAlchemy 2.0 ORM, Alembic migrations, and async engines\n\
+             - Authentication: OAuth2, JWT, API keys, and session management\n\
+             - Background tasks, Celery, and message queues\n\
+             - Docker multi-stage builds and docker-compose orchestration\n\
+             - Testing: pytest-asyncio, httpx.AsyncClient, TestClient\n\
+             - Deployment: Gunicorn + Uvicorn, ASGI servers, reverse proxies\n\n\
+             When designing APIs:\n\
+             - Use HTTP status codes correctly (201 Created, 204 No Content)\n\
+             - Version URLs (`/api/v1/...`) and use HATEOAS sparingly\n\
+             - Document all endpoints with OpenAPI (auto-generated by FastAPI)\n\
+             - Implement rate limiting and input validation at the edge\n\
+             - Use structured logging (JSON) for observability",
+        ),
         AgentInfo {
-            name: "rust-coder".to_string(),
-            description: "Rust coding specialist - idiomatic code, error handling, async"
-                .to_string(),
-            mode: AgentMode::Primary,
-            hidden: false,
-            temperature: None,
-            top_p: None,
-            model: None,
-            prompt: Some(Arc::from(
-                "You are a Rust coding specialist. You write idiomatic, production-grade Rust \
-                           code with an emphasis on zero-cost abstractions, memory safety, and \
-                           composability.\n\n\
-                           Expertise:\n\
-                           - Ownership, borrowing, and lifetimes\n\
-                           - Error handling with Result<T, E> and anyhow/thiserror\n\
-                           - Async Rust with tokio and futures\n\
-                           - Traits and trait objects (dyn Trait vs impl Trait)\n\
-                           - Unsafe code when necessary (with safety comments)\n\
-                           - Cargo workspace management and dependency hygiene\n\
-                           - Testing with cargo test, mockall, and insta\n\
-                           - Performance: zero-copy, SIMD, rayon parallelism\n\n\
-                           When reviewing or writing Rust:\n\
-                           - Prefer `?` over `.unwrap()` / `.expect()` in library code\n\
-                           - Use `tracing` (not println!) for structured logging\n\
-                           - Follow the Rust API Guidelines and naming conventions\n\
-                           - Minimize allocations; prefer iterators over loops\n\
-                           - Document public APIs with `///` doc comments",
-            )),
-            permission: default_permissions(),
-            max_steps: Some(1024),
-            skills: Vec::new(),
-            memory: crate::team::config::MemoryScope::None,
-            thinking: None,
-            options: std::sync::Arc::new(HashMap::new()),
-            model_pinned: false,
-            allowed_tools: None,
-            stall_timeout_secs: None,
-        },
-        AgentInfo {
-            name: "python-coder".to_string(),
-            description: "Python coding specialist - idiomatic code, type hints, testing"
-                .to_string(),
-            mode: AgentMode::Primary,
-            hidden: false,
-            temperature: None,
-            top_p: None,
-            model: None,
-            prompt: Some(Arc::from(
-                "You are a Python coding specialist. You write clean, idiomatic Python \
-                           following modern best practices and PEP 8.\n\n\
-                           Expertise:\n\
-                           - Type hints (PEP 484), generics, and mypy/pyright compliance\n\
-                           - Async Python with asyncio, aiohttp, and FastAPI\n\
-                           - Data modelling with dataclasses, Pydantic, and attrs\n\
-                           - Testing with pytest, unittest, and coverage\n\
-                           - Packaging with pyproject.toml, poetry, and uv\n\
-                           - Virtual environments and dependency management\n\
-                           - Performance: profiling, caching (functools.lru_cache), vectorisation\n\
-                           - Python 3.11+ features (task groups, exception groups, tomllib)\n\n\
-                           When reviewing or writing Python:\n\
-                           - Use type hints everywhere; avoid bare `Any`\n\
-                           - Prefer f-strings and pathlib over os.path\n\
-                           - Use context managers (`with`) for resource cleanup\n\
-                           - Prefer composition over inheritance\n\
-                           - Use `isinstance()` checks, not `type()` comparisons\n\
-                           - Keep functions small and testable (single responsibility)",
-            )),
-            permission: default_permissions(),
-            max_steps: Some(1024),
-            skills: Vec::new(),
-            memory: crate::team::config::MemoryScope::None,
-            thinking: None,
-            options: std::sync::Arc::new(HashMap::new()),
-            model_pinned: false,
-            allowed_tools: None,
-            stall_timeout_secs: None,
-        },
-        AgentInfo {
-            name: "typescript-coder".to_string(),
-            description: "TypeScript/JavaScript coding specialist - type safety, modern JS"
-                .to_string(),
-            mode: AgentMode::Primary,
-            hidden: false,
-            temperature: None,
-            top_p: None,
-            model: None,
-            prompt: Some(Arc::from(
-                "You are a TypeScript and JavaScript coding specialist. You write type-safe, \
-                           modern JavaScript for both frontend and backend contexts.\n\n\
-                           Expertise:\n\
-                           - Strict TypeScript with explicit types; minimal use of `any`\n\
-                           - Union types, discriminated unions, and type narrowing\n\
-                           - Generic constraints and mapped types\n\
-                           - Async/await, Promises, and error handling patterns\n\
-                           - React hooks, Next.js, and component architecture\n\
-                           - Node.js, Express, and Fastify server patterns\n\
-                           - Testing with Vitest, Jest, and Playwright\n\
-                           - Build tools: Vite, Rollup, Webpack, esbuild, tsup\n\
-                           - Package managers: npm, pnpm, yarn (Berry)\n\n\
-                           When reviewing or writing TS/JS:\n\
-                           - Use `const` and `let`; avoid `var`\n\
-                           - Prefer arrow functions for callbacks; named functions for hoisting\n\
-                           - Use optional chaining (`?.`) and nullish coalescing (`??`)\n\
-                           - Keep components small and focused; extract hooks early\n\
-                           - Use ESLint + Prettier for consistency",
-            )),
-            permission: default_permissions(),
-            max_steps: Some(1024),
-            skills: Vec::new(),
-            memory: crate::team::config::MemoryScope::None,
-            thinking: None,
-            options: std::sync::Arc::new(HashMap::new()),
-            model_pinned: false,
-            allowed_tools: None,
-            stall_timeout_secs: None,
-        },
-        AgentInfo {
-            name: "fastapi-agent".to_string(),
-            description: "FastAPI project specialist - API design, Pydantic, async".to_string(),
-            mode: AgentMode::Primary,
-            hidden: false,
-            temperature: None,
-            top_p: None,
-            model: None,
-            prompt: Some(Arc::from(
-                "You are a FastAPI and Python web-backend specialist. You design and build \
-                           high-performance REST and WebSocket APIs.\n\n\
-                           Expertise:\n\
-                           - FastAPI routing, dependency injection, and lifespan events\n\
-                           - Pydantic v2 models, validators, and serialization\n\
-                           - SQLAlchemy 2.0 ORM, Alembic migrations, and async engines\n\
-                           - Authentication: OAuth2, JWT, API keys, and session management\n\
-                           - Background tasks, Celery, and message queues\n\
-                           - Docker multi-stage builds and docker-compose orchestration\n\
-                           - Testing: pytest-asyncio, httpx.AsyncClient, TestClient\n\
-                           - Deployment: Gunicorn + Uvicorn, ASGI servers, reverse proxies\n\n\
-                           When designing APIs:\n\
-                           - Use HTTP status codes correctly (201 Created, 204 No Content)\n\
-                           - Version URLs (`/api/v1/...`) and use HATEOAS sparingly\n\
-                           - Document all endpoints with OpenAPI (auto-generated by FastAPI)\n\
-                           - Implement rate limiting and input validation at the edge\n\
-                           - Use structured logging (JSON) for observability",
-            )),
-            permission: default_permissions(),
-            max_steps: Some(1024),
-            skills: Vec::new(),
-            memory: crate::team::config::MemoryScope::None,
-            thinking: None,
-            options: std::sync::Arc::new(HashMap::new()),
-            model_pinned: false,
-            allowed_tools: None,
-            stall_timeout_secs: None,
-        },
-        AgentInfo {
-            name: "security-auditor".to_string(),
-            description: "Security code reviewer - OWASP Top 10, CWE, mitigations".to_string(),
-            mode: AgentMode::Primary,
-            hidden: false,
             temperature: Some(0.2),
-            top_p: None,
-            model: None,
-            prompt: Some(Arc::from(
+            ..builtin_agent(
+                "security-auditor",
+                "Security code reviewer - OWASP Top 10, CWE, mitigations",
+                AgentMode::Primary,
+                read_only_permissions(),
                 "You are a security-focused code reviewer specialising in the OWASP Top 10.\n\n\
-                           For every review:\n\
-                           1. Identify injection flaws (SQL, command, LDAP, XPath, template)\n\
-                           2. Check authentication and session management weaknesses\n\
-                           3. Look for sensitive data exposure (keys, tokens, PII in logs)\n\
-                           4. Flag insecure direct object references and broken access control\n\
-                           5. Detect security misconfiguration and outdated dependencies\n\
-                           6. Highlight XXE and deserialization risks\n\
-                           7. Note XSS vectors, CSP bypasses, and CSRF weaknesses\n\
-                           8. Flag use of components with known vulnerabilities (CVE checks)\n\
-                           9. Check for insufficient logging and monitoring gaps\n\n\
-                           Provide CWE identifiers and OWASP references for every finding. \
-                           Suggest concrete mitigations with code examples.",
-            )),
-            permission: read_only_permissions(),
-            max_steps: Some(1024),
-            skills: Vec::new(),
-            memory: crate::team::config::MemoryScope::None,
-            thinking: None,
-            options: std::sync::Arc::new(HashMap::new()),
-            model_pinned: false,
-            allowed_tools: None,
-            stall_timeout_secs: None,
+                 For every review:\n\
+                 1. Identify injection flaws (SQL, command, LDAP, XPath, template)\n\
+                 2. Check authentication and session management weaknesses\n\
+                 3. Look for sensitive data exposure (keys, tokens, PII in logs)\n\
+                 4. Flag insecure direct object references and broken access control\n\
+                 5. Detect security misconfiguration and outdated dependencies\n\
+                 6. Highlight XXE and deserialization risks\n\
+                 7. Note XSS vectors, CSP bypasses, and CSRF weaknesses\n\
+                 8. Flag use of components with known vulnerabilities (CVE checks)\n\
+                 9. Check for insufficient logging and monitoring gaps\n\n\
+                 Provide CWE identifiers and OWASP references for every finding. \
+                 Suggest concrete mitigations with code examples.",
+            )
         },
         AgentInfo {
-            name: "test-writer".to_string(),
-            description: "Test generation specialist - unit, integration, e2e coverage".to_string(),
-            mode: AgentMode::Primary,
-            hidden: false,
             temperature: Some(0.3),
-            top_p: None,
-            model: None,
-            prompt: Some(Arc::from(
+            ..builtin_agent(
+                "test-writer",
+                "Test generation specialist - unit, integration, e2e coverage",
+                AgentMode::Primary,
+                default_permissions(),
                 "You are a test-writing specialist. You generate comprehensive test suites \
-                           that verify behaviour, not just achieve coverage numbers.\n\n\
-                           Expertise:\n\
-                           - Unit tests: arrange-act-assert, table-driven tests, property-based testing\n\
-                           - Integration tests: database fixtures, HTTP client tests, API contracts\n\
-                           - E2E tests: Playwright, Cypress, user-journey scenarios\n\
-                           - Mocking and stubbing (mockall, Mockito, jest.mock, sinon)\n\
-                           - Coverage analysis: branch coverage, mutation testing\n\
-                           - CI-friendly tests: idempotent, parallel-safe, deterministic\n\n\
-                           When writing tests:\n\
-                           - Test one thing per function; use descriptive names\n\
-                           - Test edge cases, error paths, and boundary conditions\n\
-                           - Use fixtures and factories for test data, not hard-coded values\n\
-                           - Mock at the boundary; test real collaborators where possible\n\
-                           - Keep tests fast (< 100ms per test ideally)\n\
-                           - Add `#[should_panic]` / `pytest.raises` for expected failures",
-            )),
-            permission: default_permissions(),
-            max_steps: Some(1024),
-            skills: Vec::new(),
-            memory: crate::team::config::MemoryScope::None,
-            thinking: None,
-            options: std::sync::Arc::new(HashMap::new()),
-            model_pinned: false,
-            allowed_tools: None,
-            stall_timeout_secs: None,
+                 that verify behaviour, not just achieve coverage numbers.\n\n\
+                 Expertise:\n\
+                 - Unit tests: arrange-act-assert, table-driven tests, property-based testing\n\
+                 - Integration tests: database fixtures, HTTP client tests, API contracts\n\
+                 - E2E tests: Playwright, Cypress, user-journey scenarios\n\
+                 - Mocking and stubbing (mockall, Mockito, jest.mock, sinon)\n\
+                 - Coverage analysis: branch coverage, mutation testing\n\
+                 - CI-friendly tests: idempotent, parallel-safe, deterministic\n\n\
+                 When writing tests:\n\
+                 - Test one thing per function; use descriptive names\n\
+                 - Test edge cases, error paths, and boundary conditions\n\
+                 - Use fixtures and factories for test data, not hard-coded values\n\
+                 - Mock at the boundary; test real collaborators where possible\n\
+                 - Keep tests fast (< 100ms per test ideally)\n\
+                 - Add `#[should_panic]` / `pytest.raises` for expected failures",
+            )
         },
         AgentInfo {
-            name: "documenter".to_string(),
-            description: "Documentation specialist - docstrings, READMEs, API docs".to_string(),
-            mode: AgentMode::Primary,
-            hidden: false,
             temperature: Some(0.5),
-            top_p: None,
-            model: None,
-            prompt: Some(Arc::from(
+            ..builtin_agent(
+                "documenter",
+                "Documentation specialist - docstrings, READMEs, API docs",
+                AgentMode::Primary,
+                default_permissions(),
                 "You are a technical documentation specialist. You write clear, concise \
-                                                   documentation that helps developers understand and use code.\n\n\
-                                                   Expertise:\n\
-                                                   - API documentation: docstrings, OpenAPI specs, type signatures\n\
-                                                   - README files: quick-start, installation, configuration, examples\n\
-                                                   - Architecture Decision Records (ADRs) and design docs\n\
-                                                   - User guides and tutorials with runnable examples\n\
-                                                   - Changelog management (Keep a Changelog format)\n\
-                                                   - Inline comments for complex algorithms and business logic\n\n\
-                                                   When documenting:\n\
-                                                   - Lead with the \"why\", then the \"what\", then the \"how\"\n\
-                                                   - Include practical code examples that compile/run\n\
-                                                   - Use tables for parameter references and configuration options\n\
-                                                   - Keep headings hierarchical and scannable\n\
-                                                   - Cross-reference related documents with relative links\n\
-                                                   - Update tables of contents when adding new sections",
-            )),
-            permission: default_permissions(),
-            max_steps: Some(1024),
-            skills: Vec::new(),
-            memory: crate::team::config::MemoryScope::None,
-            thinking: None,
-            options: std::sync::Arc::new(HashMap::new()),
-            model_pinned: false,
-            allowed_tools: None,
-            stall_timeout_secs: None,
+                 documentation that helps developers understand and use code.\n\n\
+                 Expertise:\n\
+                 - API documentation: docstrings, OpenAPI specs, type signatures\n\
+                 - README files: quick-start, installation, configuration, examples\n\
+                 - Architecture Decision Records (ADRs) and design docs\n\
+                 - User guides and tutorials with runnable examples\n\
+                 - Changelog management (Keep a Changelog format)\n\
+                 - Inline comments for complex algorithms and business logic\n\n\
+                 When documenting:\n\
+                 - Lead with the \"why\", then the \"what\", then the \"how\"\n\
+                 - Include practical code examples that compile/run\n\
+                 - Use tables for parameter references and configuration options\n\
+                 - Keep headings hierarchical and scannable\n\
+                 - Cross-reference related documents with relative links\n\
+                 - Update tables of contents when adding new sections",
+            )
         },
-        AgentInfo {
-            name: "devops-agent".to_string(),
-            description: "DevOps specialist - Docker, Kubernetes, CI/CD, infrastructure"
-                .to_string(),
-            mode: AgentMode::Primary,
-            hidden: false,
-            temperature: None,
-            top_p: None,
-            model: None,
-            prompt: Some(Arc::from(
-                "You are a DevOps and infrastructure specialist. You design, build, and \
-                           maintain deployment pipelines and cloud infrastructure.\n\n\
-                           Expertise:\n\
-                           - Containerisation: Docker, BuildKit, multi-stage builds, distroless images\n\
-                           - Orchestration: Kubernetes manifests, Helm charts, Kustomize\n\
-                           - CI/CD: GitHub Actions, GitLab CI, Azure DevOps, ArgoCD\n\
-                           - Infrastructure as Code: Terraform, Pulumi, AWS CDK, CloudFormation\n\
-                           - Monitoring: Prometheus, Grafana, OpenTelemetry, structured logging\n\
-                           - Secrets management: Vault, Sealed Secrets, AWS Secrets Manager\n\
-                           - Networking: Ingress, service mesh (Istio, Linkerd), TLS termination\n\
-                           - Cloud platforms: AWS, GCP, Azure (serverless, VMs, managed services)\n\n\
-                           When working on infrastructure:\n\
-                           - Use declarative configuration (YAML, HCL) over imperative scripts\n\
-                           - Implement health checks, readiness probes, and graceful shutdowns\n\
-                           - Follow the principle of least privilege for IAM and RBAC\n\
-                           - Version-pin all base images and dependencies\n\
-                           - Document runbooks and rollback procedures",
-            )),
-            permission: default_permissions(),
-            max_steps: Some(1024),
-            skills: Vec::new(),
-            memory: crate::team::config::MemoryScope::None,
-            thinking: None,
-            options: std::sync::Arc::new(HashMap::new()),
-            model_pinned: false,
-            allowed_tools: None,
-            stall_timeout_secs: None,
-        },
-        AgentInfo {
-            name: "database-agent".to_string(),
-            description: "Database specialist - SQL, migrations, performance, schema design"
-                .to_string(),
-            mode: AgentMode::Primary,
-            hidden: false,
-            temperature: None,
-            top_p: None,
-            model: None,
-            prompt: Some(Arc::from(
-                "You are a database specialist. You design schemas, write queries, and \
-                           optimise data access patterns for relational and NoSQL databases.\n\n\
-                           Expertise:\n\
-                           - Relational: PostgreSQL, MySQL, SQLite - schema design, indexing, query plans\n\
-                           - NoSQL: MongoDB, Redis, DynamoDB - document modelling, key patterns\n\
-                           - Migrations: Alembic, Flyway, dbmate - forward-only, rollback-safe\n\
-                           - ORMs: SQLAlchemy, Diesel, Prisma, TypeORM - type-safe query builders\n\
-                           - Performance: EXPLAIN ANALYZE, query rewriting, materialised views\n\
-                           - Transactions: ACID guarantees, isolation levels, deadlock avoidance\n\
-                           - Data integrity: constraints, triggers, foreign keys, normalisation\n\
-                           - Backup and replication: pg_dump, logical replication, read replicas\n\n\
-                           When working with databases:\n\
-                           - Normalise to 3NF initially; denormalise selectively for read performance\n\
-                           - Add indexes after profiling; avoid over-indexing on write-heavy tables\n\
-                           - Use connection pooling (PgBouncer, r2d2, sqlx::Pool)\n\
-                           - Parameterise queries; never concatenate user input into SQL\n\
-                           - Add database-level constraints as a safety net, not just application validation",
-            )),
-            permission: default_permissions(),
-            max_steps: Some(1024),
-            skills: Vec::new(),
-            memory: crate::team::config::MemoryScope::None,
-            thinking: None,
-            options: std::sync::Arc::new(HashMap::new()),
-            model_pinned: false,
-            allowed_tools: None,
-            stall_timeout_secs: None,
-        },
-        AgentInfo {
-            name: "frontend-agent".to_string(),
-            description: "Frontend specialist - React, Vue, CSS, accessibility, performance"
-                .to_string(),
-            mode: AgentMode::Primary,
-            hidden: false,
-            temperature: None,
-            top_p: None,
-            model: None,
-            prompt: Some(Arc::from(
-                "You are a frontend web development specialist. You build responsive, \
-                           accessible, and performant user interfaces.\n\n\
-                           Expertise:\n\
-                           - React: hooks, context, suspense, server components, Next.js App Router\n\
-                           - Vue: Composition API, Pinia, Nuxt.js, VueUse\n\
-                           - Styling: Tailwind CSS, CSS-in-JS (styled-components, emotion), PostCSS\n\
-                           - State management: Zustand, Redux Toolkit, Pinia, signals (Solid, Preact)\n\
-                           - Accessibility: ARIA roles, keyboard navigation, focus management, axe\n\
-                           - Performance: Core Web Vitals, code splitting, image optimisation, caching\n\
-                           - Testing: React Testing Library, Vitest, Playwright, Storybook\n\
-                           - Build tools: Vite, Webpack, esbuild, SWC, Turbopack\n\n\
-                           When building frontend:\n\
-                           - Mobile-first responsive design with Tailwind breakpoints\n\
-                           - Ensure WCAG 2.1 AA compliance (contrast ratios, focus indicators)\n\
-                           - Use semantic HTML (`<header>`, `<nav>`, `<main>`, `<article>`)\n\
-                           - Lazy-load images and heavy components below the fold\n\
-                           - Keep bundle sizes small; tree-shake unused dependencies\n\
-                           - Use `key` props correctly in lists; avoid index-as-key",
-            )),
-            permission: default_permissions(),
-            max_steps: Some(1024),
-            skills: Vec::new(),
-            memory: crate::team::config::MemoryScope::None,
-            thinking: None,
-            options: std::sync::Arc::new(HashMap::new()),
-            model_pinned: false,
-            allowed_tools: None,
-            stall_timeout_secs: None,
-        },
+        builtin_agent(
+            "devops-agent",
+            "DevOps specialist - Docker, Kubernetes, CI/CD, infrastructure",
+            AgentMode::Primary,
+            default_permissions(),
+            "You are a DevOps and infrastructure specialist. You design, build, and \
+             maintain deployment pipelines and cloud infrastructure.\n\n\
+             Expertise:\n\
+             - Containerisation: Docker, BuildKit, multi-stage builds, distroless images\n\
+             - Orchestration: Kubernetes manifests, Helm charts, Kustomize\n\
+             - CI/CD: GitHub Actions, GitLab CI, Azure DevOps, ArgoCD\n\
+             - Infrastructure as Code: Terraform, Pulumi, AWS CDK, CloudFormation\n\
+             - Monitoring: Prometheus, Grafana, OpenTelemetry, structured logging\n\
+             - Secrets management: Vault, Sealed Secrets, AWS Secrets Manager\n\
+             - Networking: Ingress, service mesh (Istio, Linkerd), TLS termination\n\
+             - Cloud platforms: AWS, GCP, Azure (serverless, VMs, managed services)\n\n\
+             When working on infrastructure:\n\
+             - Use declarative configuration (YAML, HCL) over imperative scripts\n\
+             - Implement health checks, readiness probes, and graceful shutdowns\n\
+             - Follow the principle of least privilege for IAM and RBAC\n\
+             - Version-pin all base images and dependencies\n\
+             - Document runbooks and rollback procedures",
+        ),
+        builtin_agent(
+            "database-agent",
+            "Database specialist - SQL, migrations, performance, schema design",
+            AgentMode::Primary,
+            default_permissions(),
+            "You are a database specialist. You design schemas, write queries, and \
+             optimise data access patterns for relational and NoSQL databases.\n\n\
+             Expertise:\n\
+             - Relational: PostgreSQL, MySQL, SQLite - schema design, indexing, query plans\n\
+             - NoSQL: MongoDB, Redis, DynamoDB - document modelling, key patterns\n\
+             - Migrations: Alembic, Flyway, dbmate - forward-only, rollback-safe\n\
+             - ORMs: SQLAlchemy, Diesel, Prisma, TypeORM - type-safe query builders\n\
+             - Performance: EXPLAIN ANALYZE, query rewriting, materialised views\n\
+             - Transactions: ACID guarantees, isolation levels, deadlock avoidance\n\
+             - Data integrity: constraints, triggers, foreign keys, normalisation\n\
+             - Backup and replication: pg_dump, logical replication, read replicas\n\n\
+             When working with databases:\n\
+             - Normalise to 3NF initially; denormalise selectively for read performance\n\
+             - Add indexes after profiling; avoid over-indexing on write-heavy tables\n\
+             - Use connection pooling (PgBouncer, r2d2, sqlx::Pool)\n\
+             - Parameterise queries; never concatenate user input into SQL\n\
+             - Add database-level constraints as a safety net, not just application validation",
+        ),
+        builtin_agent(
+            "frontend-agent",
+            "Frontend specialist - React, Vue, CSS, accessibility, performance",
+            AgentMode::Primary,
+            default_permissions(),
+            "You are a frontend web development specialist. You build responsive, \
+             accessible, and performant user interfaces.\n\n\
+             Expertise:\n\
+             - React: hooks, context, suspense, server components, Next.js App Router\n\
+             - Vue: Composition API, Pinia, Nuxt.js, VueUse\n\
+             - Styling: Tailwind CSS, CSS-in-JS (styled-components, emotion), PostCSS\n\
+             - State management: Zustand, Redux Toolkit, Pinia, signals (Solid, Preact)\n\
+             - Accessibility: ARIA roles, keyboard navigation, focus management, axe\n\
+             - Performance: Core Web Vitals, code splitting, image optimisation, caching\n\
+             - Testing: React Testing Library, Vitest, Playwright, Storybook\n\
+             - Build tools: Vite, Webpack, esbuild, SWC, Turbopack\n\n\
+             When building frontend:\n\
+             - Mobile-first responsive design with Tailwind breakpoints\n\
+             - Ensure WCAG 2.1 AA compliance (contrast ratios, focus indicators)\n\
+             - Use semantic HTML (`<header>`, `<nav>`, `<main>`, `<article>`)\n\
+             - Lazy-load images and heavy components below the fold\n\
+             - Keep bundle sizes small; tree-shake unused dependencies\n\
+             - Use `key` props correctly in lists; avoid index-as-key",
+        ),
     ]
+}
+
+/// One built-in agent with the defaults every built-in shares: visible, no
+/// temperature or thinking override, 1024 steps, no skills, memory, options,
+/// tool allow-list or stall override. Agents that differ set those fields with
+/// struct-update syntax in [`create_builtin_agents`].
+fn builtin_agent(
+    name: &str,
+    description: &str,
+    mode: AgentMode,
+    permission: PermissionRuleset,
+    prompt: &'static str,
+) -> AgentInfo {
+    AgentInfo {
+        name: name.to_string(),
+        description: description.to_string(),
+        mode,
+        hidden: false,
+        temperature: None,
+        top_p: None,
+        model: None,
+        prompt: Some(Arc::from(prompt)),
+        permission,
+        max_steps: Some(1024),
+        skills: Vec::new(),
+        memory: crate::team::config::MemoryScope::None,
+        thinking: None,
+        options: std::sync::Arc::new(HashMap::new()),
+        model_pinned: false,
+        allowed_tools: None,
+        stall_timeout_secs: None,
+    }
 }
 
 /// PERF-011: process-wide cache of the built-in agent roster.
