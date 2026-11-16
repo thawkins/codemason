@@ -45,6 +45,7 @@
 
 ### Changed
 
+- Changed: `tool_result_summary` (app-core `message_text.rs`) is split in place: the git, GitLab, GitHub, team, LSP, code-index, spec and cron arms move into per-family helpers in the same file, cutting the function from 1,314 to 673 lines with output unchanged (deep-refactor S-09, #9).
 - Changed: `/about` describes codemason as an interactive AI coding agent for the terminal and desktop instead of "TUI-based".
 - Changed: dead code removed (20 never-read `App` fields, the unused tips module, five zero-caller specs/codeindex functions, the `TodoRow` alias) and duplicated helpers now call the shared ones (`strutil` truncation, logical-line cursor checks, search context, team error checks); no behaviour change.
 - Changed: every streaming provider uses one stall guard (`http_client::next_chunk_or_stall`); the "stream stalled - no data received for 120s" error is unchanged.
