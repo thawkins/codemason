@@ -186,482 +186,35 @@ impl Tool for TeamCreateTool {
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
 
-        let mut store = if seed_only {
-            TeamStore::load_by_name(&name, &ctx.working_dir)?
-        } else {
-            match TeamStore::create(&name, &ctx.session_id, &ctx.working_dir, project_local) {
-                Ok(store) => store,
-                Err(e) if e.to_string().contains("already exists") => {
-                    // Team already exists; try to load it and continue so that blueprint
-                    // seeding can run against an existing team when requested.
-                    match TeamStore::load_by_name(&name, &ctx.working_dir) {
-                        Ok(existing_store) => existing_store,
-                        Err(load_err)
-                            if load_err.to_string().contains("read")
-                                && load_err.to_string().contains("config.json") =>
-                        {
-                            TeamStore::initialize_existing_without_config(
-                                &name,
-                                &ctx.session_id,
-                                &ctx.working_dir,
-                            )?
-                        }
-                        Err(load_err) => return Err(load_err),
-                    }
-                }
-                Err(e) => return Err(e),
-            }
-        };
+        let mut store = open_team_store(&name, ctx, project_local, seed_only)?;
 
         // M8-T2: collect per-prompt blueprint spawn failures so the lead is
         // told which teammates failed to spawn instead of only seeing them
-        // silently logged. Declared at function-body scope so it survives
-        // past the blueprint `if` block and is available when building the
-        // tool output below.
+        // silently logged.
         let mut failed_spawns: Vec<serde_json::Value> = Vec::new();
 
-        // If the caller provided a blueprint, apply it now.
-        if let Some(bp) = input
-            .get("blueprint")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            // Locate blueprint directory, closest wins:
-            // 1. project-local [ancestor]/.codemason/blueprints/teams/<bp>
-            // 2. XDG ~/.config/codemason/blueprints/teams/<bp>
-            // 3. legacy global ~/.codemason/blueprints/teams/<bp>
-            let mut blueprint_dir: Option<std::path::PathBuf> = None;
-            // Walk up to find project .codemason (check the current dir, then parent, etc.)
-            let mut cur_opt = Some(ctx.working_dir.as_path());
-            while let Some(cur) = cur_opt {
-                let candidate = cur
-                    .join(".codemason")
-                    .join("blueprints")
-                    .join("teams")
-                    .join(bp);
-                if candidate.is_dir() {
-                    blueprint_dir = Some(candidate);
-                    break;
-                }
-                cur_opt = cur.parent();
-            }
-            // XDG user-config middle layer.
-            if blueprint_dir.is_none()
-                && let Some(bp_root) = codemason_config::user_dirs::global_blueprints_dir()
-            {
-                let candidate = bp_root.join("teams").join(bp);
-                if candidate.is_dir() {
-                    blueprint_dir = Some(candidate);
-                }
-            }
-            // Fallback to the legacy global ~/.codemason/blueprints/teams/<bp>.
-            if blueprint_dir.is_none()
-                && let Some(bp_root) =
-                    codemason_config::user_dirs::legacy_home_dir().map(|h| h.join("blueprints"))
-            {
-                let candidate = bp_root.join("teams").join(bp);
-                if candidate.is_dir() {
-                    blueprint_dir = Some(candidate);
-                }
+        // Apply the blueprint, when one is found on disk.
+        if let Some(bdir) = find_blueprint_dir(&ctx.working_dir, &bp) {
+            // If README.md exists in blueprint, copy it to team dir
+            let readme = bdir.join("README.md");
+            if readme.exists() {
+                // INTENTIONAL: best-effort team-directory + readme scaffolding
+                let _ = std::fs::create_dir_all(&store.dir);
+                let dest = store.dir.join("README.md");
+                // INTENTIONAL: best-effort readme copy
+                let _ = std::fs::copy(&readme, &dest);
             }
 
-            if let Some(bdir) = blueprint_dir {
-                // If README.md exists in blueprint, copy it to team dir
-                let readme = bdir.join("README.md");
-                if readme.exists() {
-                    // INTENTIONAL: best-effort team-directory + readme scaffolding
-                    let _ = std::fs::create_dir_all(&store.dir);
-                    let dest = store.dir.join("README.md");
-                    // INTENTIONAL: best-effort readme copy
-                    let _ = std::fs::copy(&readme, &dest);
-                }
-
-                // If task-seed.json exists, parse and execute each seed
-                let seed = bdir.join("task-seed.json");
-                if seed.exists()
-                    && let Ok(raw) = std::fs::read_to_string(&seed)
-                    && let Ok(arr) = serde_json::from_str::<serde_json::Value>(&raw)
-                    && let Some(items) = arr.as_array()
-                {
-                    let registry = crate::tool::create_default_registry();
-                    for item in items {
-                        if let Some(obj) = item.as_object() {
-                            if let Some(tool_name) = obj.get("tool").and_then(|v| v.as_str()) {
-                                let args = obj
-                                    .get("args")
-                                    .or_else(|| obj.get("input"))
-                                    .cloned()
-                                    .unwrap_or(serde_json::json!({}));
-                                // Always override team_name to the actual team name
-                                // (seed files may contain placeholder/template names)
-                                let mut args_obj = if args.is_object() {
-                                    args
-                                } else {
-                                    serde_json::json!({})
-                                };
-                                args_obj.as_object_mut().map(|m| {
-                                    m.insert(
-                                        "team_name".to_string(),
-                                        serde_json::Value::String(name.clone()),
-                                    )
-                                });
-                                if let Some(tool) = registry.get(tool_name) {
-                                    // SEC: tool args are attacker-supplied and may carry
-                                    // secrets - log the argument keys only, never values.
-                                    let arg_keys = args_obj
-                                        .as_object()
-                                        .map(|m| m.keys().cloned().collect::<Vec<_>>().join(","))
-                                        .unwrap_or_default();
-                                    tracing::info!(tool = %tool_name, team = %name, session = %ctx.session_id, team_manager_present = %ctx.team_manager.is_some(), "Invoking seed tool");
-                                    // SEC-codemason-team-001: a blueprint is untrusted
-                                    // project content, so a seeded tool is dispatched
-                                    // through the session's permission gate rather than
-                                    // executed directly.
-                                    match dispatch_seed_tool(&tool, args_obj, ctx, tool_name).await
-                                    {
-                                        Ok(_out) => {
-                                            tracing::debug!(tool = %tool_name, "Seed tool executed successfully");
-                                        }
-                                        Err(e) => {
-                                            tracing::error!(tool = %tool_name, error = %e, arg_keys = %arg_keys, "Seed tool execution failed");
-                                        }
-                                    }
-                                }
-                            } else {
-                                // If no tool specified but task fields present, create a task directly
-                                if obj.get("title").is_some() {
-                                    let title = obj
-                                        .get("title")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("untitled")
-                                        .to_string();
-                                    let description = obj
-                                        .get("description")
-                                        .and_then(|v| v.as_str())
-                                        .map(str::to_string);
-                                    // FR-017: the add fires the `TaskCreated`
-                                    // hook from the mutation, so a seeded task
-                                    // runs the same gate a `team_task_create`
-                                    // call does. A rejection removes the seed.
-                                    // AA-04: the id is allocated under the
-                                    // task-store lock, so a concurrent creator
-                                    // cannot take it first.
-                                    let task_outcome = store
-                                        .add_task_with_next_id(|id| {
-                                            let mut task =
-                                                crate::team::task::Task::new(&id, &title);
-                                            if let Some(desc) = description {
-                                                task.description = desc;
-                                            }
-                                            task
-                                        })
-                                        .await;
-                                    match task_outcome {
-                                        Ok((task, HookOutcome::Feedback(feedback))) => {
-                                            if let Ok(ts) = TaskStore::open(&store.dir) {
-                                                // INTENTIONAL: best-effort store cleanup
-                                                let _ = ts.remove_task(&task.id);
-                                            }
-                                            // The feedback is the hook's own stdout: redact
-                                            // it before it reaches the log (audit finding).
-                                            tracing::warn!(
-                                                task_id = %task.id,
-                                                feedback = %codemason_types::sanitize::redact_secrets(&feedback),
-                                                "TaskCreated hook rejected seeded task"
-                                            );
-                                        }
-                                        Ok((_, HookOutcome::Allow)) => {}
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                team = %name,
-                                                title = %title,
-                                                error = %e,
-                                                "could not add seeded task"
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // If spawn-prompts.json exists, parse entries and execute listed tools with args
-                let prompts_json = bdir.join("spawn-prompts.json");
-                if prompts_json.exists()
-                    && let Ok(raw) = std::fs::read_to_string(&prompts_json)
-                    && let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw)
-                    && let Some(items) = val.as_array()
-                {
-                    let registry = crate::tool::create_default_registry();
-                    for (i, item) in items.iter().enumerate() {
-                        if let Some(obj) = item.as_object() {
-                            // Support either {"tool": "name", "args": {...}} or
-                            // flattened formats using keys like tool_name/team_name/teammate_name
-                            let tool_name_opt = obj
-                                .get("tool")
-                                .and_then(|v| v.as_str())
-                                .or_else(|| obj.get("tool_name").and_then(|v| v.as_str()));
-
-                            if let Some(tool_name) = tool_name_opt {
-                                // Extract args if present, else build from flattened fields
-                                let mut args =
-                                    obj.get("args").cloned().unwrap_or(serde_json::json!({}));
-                                if !args.is_object() {
-                                    args = serde_json::json!({});
-                                }
-
-                                // If spawn-prompts.json uses flattened keys, copy them into args
-                                // common flattened keys: team_name, teammate_name, prompt, agent_type, model, memory
-                                for key in &[
-                                    "team_name",
-                                    "teammate_name",
-                                    "prompt",
-                                    "agent_type",
-                                    "model",
-                                    "memory",
-                                ] {
-                                    if args.get(*key).is_none()
-                                        && let Some(v) = obj.get(*key)
-                                    {
-                                        args.as_object_mut()
-                                            .map(|m| m.insert((*key).to_string(), v.clone()));
-                                    }
-                                }
-
-                                // Allow "profile" as an alias for "agent_type" so
-                                // blueprints can reference declarative agent profiles.
-                                if args.get("agent_type").is_none()
-                                    && let Some(v) = obj.get("profile")
-                                {
-                                    args.as_object_mut()
-                                        .map(|m| m.insert("agent_type".to_string(), v.clone()));
-                                }
-
-                                // Ensure team_name is present
-                                if args.get("team_name").is_none() {
-                                    args.as_object_mut().map(|m| {
-                                        m.insert(
-                                            "team_name".to_string(),
-                                            serde_json::Value::String(name.clone()),
-                                        )
-                                    });
-                                }
-                                // Ensure teammate_name is present, otherwise auto-generate
-                                if args.get("teammate_name").is_none() {
-                                    let teammate_name = format!("auto-{}", i + 1);
-                                    args.as_object_mut().map(|m| {
-                                        m.insert(
-                                            "teammate_name".to_string(),
-                                            serde_json::Value::String(teammate_name),
-                                        )
-                                    });
-                                }
-
-                                // Prepend work context to the spawn prompt so
-                                // teammates know which code to target.
-                                if let Some(ref ctx_text) = work_context {
-                                    let original_prompt = args
-                                        .get("prompt")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-                                    let combined = format!(
-                                        "## Work Context\n{ctx_text}\n\n## Your Role\n{original_prompt}"
-                                    );
-                                    args.as_object_mut().map(|m| {
-                                        m.insert(
-                                            "prompt".to_string(),
-                                            serde_json::Value::String(combined),
-                                        )
-                                    });
-                                }
-
-                                if let Some(tool) = registry.get(tool_name) {
-                                    tracing::info!(tool = %tool_name, team = %name, session = %ctx.session_id, team_manager_present = %ctx.team_manager.is_some(), "Invoking spawn tool from blueprint (spawn-prompts.json)");
-                                    // SEC-codemason-team-001: a seeded spawn is
-                                    // dispatched through the session's permission
-                                    // gate, like the task-seed path above.
-                                    match dispatch_seed_tool(&tool, args.clone(), ctx, tool_name)
-                                        .await
-                                    {
-                                        Ok(out) => {
-                                            tracing::debug!(tool = %tool_name, "Spawn tool executed");
-                                            if let Some(meta) = out.metadata
-                                                && let Some(status) =
-                                                    meta.get("status").and_then(|v| v.as_str())
-                                            {
-                                                if status == "pending_manager" {
-                                                    tracing::warn!(tool = %tool_name, team = %name, "Spawn returned pending_manager; recording spawning member in team config");
-                                                    // Record a Spawning member so the team config reflects the queued teammate.
-                                                    // Reload the store fresh before mutating so we don't clobber state
-                                                    // written by previous tool calls.
-                                                    let teammate_name = args
-                                                        .get("teammate_name")
-                                                        .and_then(|v| v.as_str())
-                                                        .unwrap_or("auto")
-                                                        .to_string();
-                                                    let agent_type_str = args
-                                                        .get("agent_type")
-                                                        .and_then(|v| v.as_str())
-                                                        .unwrap_or("general")
-                                                        .to_string();
-                                                    let prompt_str = args
-                                                        .get("prompt")
-                                                        .and_then(|v| v.as_str())
-                                                        .unwrap_or("")
-                                                        .to_string();
-                                                    let model_override = args
-                                                        .get("model")
-                                                        .and_then(|v| v.as_str())
-                                                        .and_then(|s| {
-                                                            s.split_once('/')
-                                                                .or_else(|| s.split_once(':'))
-                                                                .map(|(p, m)| {
-                                                                    crate::agent::ModelRef {
-                                                                        provider_id: p.to_string(),
-                                                                        model_id: m.to_string(),
-                                                                    }
-                                                                })
-                                                        });
-                                                    let memory_scope = match args
-                                                        .get("memory")
-                                                        .and_then(|v| v.as_str())
-                                                    {
-                                                        Some("user") => {
-                                                            crate::team::MemoryScope::User
-                                                        }
-                                                        Some("project") => {
-                                                            crate::team::MemoryScope::Project
-                                                        }
-                                                        _ => crate::team::MemoryScope::None,
-                                                    };
-                                                    if let Ok(mut fresh_store) =
-                                                        TeamStore::load_by_name(
-                                                            &name,
-                                                            &ctx.working_dir,
-                                                        )
-                                                    {
-                                                        // Only add if not already present (idempotency).
-                                                        if fresh_store
-                                                            .config
-                                                            .member_by_name(&teammate_name)
-                                                            .is_none()
-                                                        {
-                                                            let agent_id =
-                                                                fresh_store.next_agent_id();
-                                                            let mut member = crate::team::config::TeamMember::new(&teammate_name, &agent_id, &agent_type_str);
-                                                            if !prompt_str.is_empty() {
-                                                                member.spawn_prompt =
-                                                                    Some(prompt_str);
-                                                            }
-                                                            member.model_override = model_override;
-                                                            member.memory_scope = memory_scope;
-                                                            // INTENTIONAL: best-effort store rebuild
-                                                            let _ = fresh_store.add_member(member);
-                                                        }
-                                                    }
-                                                    // Keep local store in sync for next_agent_id() calculations.
-                                                    store = TeamStore::load_by_name(
-                                                        &name,
-                                                        &ctx.working_dir,
-                                                    )
-                                                    .unwrap_or(store);
-                                                } else if status == "spawned" {
-                                                    // spawn_teammate_internal already persisted the member with the
-                                                    // correct session_id and Working status.  Adding a new TeamMember
-                                                    // record here (with default Spawning status and no session_id)
-                                                    // would overwrite that correct state and leave the member stuck in
-                                                    // "spawning" forever.  Just refresh the local store reference so
-                                                    // next_agent_id() stays accurate.
-                                                    store = TeamStore::load_by_name(
-                                                        &name,
-                                                        &ctx.working_dir,
-                                                    )
-                                                    .unwrap_or(store);
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            tracing::error!(tool = %tool_name, error = %e, "Spawn tool execution failed");
-                                            // M8-T2: record the failure so it can be
-                                            // surfaced to the lead in the tool output.
-                                            let teammate_name = args
-                                                .get("teammate_name")
-                                                .and_then(|v| v.as_str())
-                                                .unwrap_or("auto")
-                                                .to_string();
-                                            failed_spawns.push(serde_json::json!({
-                                                "index": i,
-                                                "teammate_name": teammate_name,
-                                                "tool": tool_name,
-                                                "error": e.to_string(),
-                                            }));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            run_task_seed(&bdir, &store, &name, ctx).await;
+            failed_spawns =
+                run_spawn_prompts(&bdir, &mut store, &name, ctx, work_context.as_deref()).await;
         }
 
         // Reload store to get the final member list after blueprint seeding.
         let final_store = TeamStore::load_by_name(&name, &ctx.working_dir).unwrap_or(store);
-        let member_list: Vec<String> = final_store
-            .config
-            .members
-            .iter()
-            // FR-033: the roster this report hands back spells each state the
-            // way the Teams panel does, not with the wire token.
-            .map(|m| {
-                format!(
-                    "  - {} ({}, {})",
-                    m.name,
-                    m.agent_id,
-                    crate::team::status_word(m.status)
-                )
-            })
-            .collect();
-        let member_summary = if member_list.is_empty() {
-            "No teammates spawned yet. Use team_spawn to add teammates.".to_string()
-        } else {
-            format!(
-                "Blueprint spawned {} teammate(s) - do NOT spawn these again:\n{}",
-                member_list.len(),
-                member_list.join("\n")
-            )
-        };
-
-        // M8-T2: surface any per-prompt blueprint spawn failures to the lead.
-        // Failed spawns are still logged via `tracing::error!`, but without
-        // this summary the lead only sees a success response and silently
-        // missing teammates.
+        let member_summary = member_summary(&final_store);
         let failed_spawn_count = failed_spawns.len();
-        let failed_summary = if failed_spawns.is_empty() {
-            String::new()
-        } else {
-            let lines: Vec<String> = failed_spawns
-                .iter()
-                .map(|f| {
-                    let name = f
-                        .get("teammate_name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("?");
-                    let tool = f.get("tool").and_then(|v| v.as_str()).unwrap_or("?");
-                    let err = f.get("error").and_then(|v| v.as_str()).unwrap_or("");
-                    format!("  - {name} ({tool}): {err}")
-                })
-                .collect();
-            format!(
-                "\n\n[!] {} blueprint spawn(s) failed:\n{}\n\
-                         These teammates were not created. Re-spawn them manually with `team_spawn` if needed.",
-                failed_spawn_count,
-                lines.join("\n")
-            )
-        };
+        let failed_summary = failed_spawn_summary(&failed_spawns);
 
         Ok(ToolOutput {
             content: format!(
@@ -695,4 +248,487 @@ impl Tool for TeamCreateTool {
                 .build(),
         })
     }
+}
+
+/// Open the team store `team_create` seeds: the existing team for `seed_only`,
+/// otherwise a newly created one, falling back to the existing team (or a
+/// config-less team directory) when the name is already taken.
+///
+/// # Errors
+///
+/// Returns an error when the team cannot be created or loaded.
+fn open_team_store(
+    name: &str,
+    ctx: &ToolContext,
+    project_local: bool,
+    seed_only: bool,
+) -> Result<TeamStore> {
+    if seed_only {
+        return TeamStore::load_by_name(name, &ctx.working_dir);
+    }
+    match TeamStore::create(name, &ctx.session_id, &ctx.working_dir, project_local) {
+        Ok(store) => Ok(store),
+        Err(e) if e.to_string().contains("already exists") => {
+            // Team already exists; try to load it and continue so that blueprint
+            // seeding can run against an existing team when requested.
+            match TeamStore::load_by_name(name, &ctx.working_dir) {
+                Ok(existing_store) => Ok(existing_store),
+                Err(load_err)
+                    if load_err.to_string().contains("read")
+                        && load_err.to_string().contains("config.json") =>
+                {
+                    TeamStore::initialize_existing_without_config(
+                        name,
+                        &ctx.session_id,
+                        &ctx.working_dir,
+                    )
+                }
+                Err(load_err) => Err(load_err),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Locate the blueprint directory for `bp`, closest wins:
+/// 1. project-local [ancestor]/.codemason/blueprints/teams/<bp>
+/// 2. XDG ~/.config/codemason/blueprints/teams/<bp>
+/// 3. legacy global ~/.codemason/blueprints/teams/<bp>
+fn find_blueprint_dir(working_dir: &std::path::Path, bp: &str) -> Option<std::path::PathBuf> {
+    // Walk up to find project .codemason (check the current dir, then parent, etc.)
+    let mut cur_opt = Some(working_dir);
+    while let Some(cur) = cur_opt {
+        let candidate = cur
+            .join(".codemason")
+            .join("blueprints")
+            .join("teams")
+            .join(bp);
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+        cur_opt = cur.parent();
+    }
+    // XDG user-config middle layer.
+    if let Some(bp_root) = codemason_config::user_dirs::global_blueprints_dir() {
+        let candidate = bp_root.join("teams").join(bp);
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+    }
+    // Fallback to the legacy global ~/.codemason/blueprints/teams/<bp>.
+    if let Some(bp_root) =
+        codemason_config::user_dirs::legacy_home_dir().map(|h| h.join("blueprints"))
+    {
+        let candidate = bp_root.join("teams").join(bp);
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Run the blueprint's `task-seed.json`, if present: each entry naming a
+/// `tool` is dispatched through the permission gate with `team_name` forced to
+/// `name`; an entry with a `title` and no tool becomes a task directly.
+/// Failures are logged and never abort team creation.
+async fn run_task_seed(bdir: &std::path::Path, store: &TeamStore, name: &str, ctx: &ToolContext) {
+    // If task-seed.json exists, parse and execute each seed
+    let seed = bdir.join("task-seed.json");
+    let Some(items) = read_json_array(&seed) else {
+        return;
+    };
+    let registry = crate::tool::create_default_registry();
+    for item in &items {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        if let Some(tool_name) = obj.get("tool").and_then(|v| v.as_str()) {
+            let args = obj
+                .get("args")
+                .or_else(|| obj.get("input"))
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            // Always override team_name to the actual team name
+            // (seed files may contain placeholder/template names)
+            let mut args_obj = if args.is_object() {
+                args
+            } else {
+                serde_json::json!({})
+            };
+            args_obj.as_object_mut().map(|m| {
+                m.insert(
+                    "team_name".to_string(),
+                    serde_json::Value::String(name.to_string()),
+                )
+            });
+            if let Some(tool) = registry.get(tool_name) {
+                // SEC: tool args are attacker-supplied and may carry
+                // secrets - log the argument keys only, never values.
+                let arg_keys = args_obj
+                    .as_object()
+                    .map(|m| m.keys().cloned().collect::<Vec<_>>().join(","))
+                    .unwrap_or_default();
+                tracing::info!(tool = %tool_name, team = %name, session = %ctx.session_id, team_manager_present = %ctx.team_manager.is_some(), "Invoking seed tool");
+                // SEC-codemason-team-001: a blueprint is untrusted
+                // project content, so a seeded tool is dispatched
+                // through the session's permission gate rather than
+                // executed directly.
+                match dispatch_seed_tool(&tool, args_obj, ctx, tool_name).await {
+                    Ok(_out) => {
+                        tracing::debug!(tool = %tool_name, "Seed tool executed successfully");
+                    }
+                    Err(e) => {
+                        tracing::error!(tool = %tool_name, error = %e, arg_keys = %arg_keys, "Seed tool execution failed");
+                    }
+                }
+            }
+        } else if obj.get("title").is_some() {
+            // If no tool specified but task fields present, create a task directly
+            seed_task(obj, store, name).await;
+        }
+    }
+}
+
+/// Parse `path` as a JSON array, or `None` when it is missing, unreadable or
+/// not an array.
+fn read_json_array(path: &std::path::Path) -> Option<Vec<serde_json::Value>> {
+    if !path.exists() {
+        return None;
+    }
+    let raw = std::fs::read_to_string(path).ok()?;
+    match serde_json::from_str::<serde_json::Value>(&raw).ok()? {
+        serde_json::Value::Array(items) => Some(items),
+        _ => None,
+    }
+}
+
+/// Add one task-seed entry (a `title` with an optional `description`) to the
+/// team's task list, removing it again when the `TaskCreated` hook rejects it.
+async fn seed_task(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    store: &TeamStore,
+    name: &str,
+) {
+    let title = obj
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("untitled")
+        .to_string();
+    let description = obj
+        .get("description")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    // FR-017: the add fires the `TaskCreated`
+    // hook from the mutation, so a seeded task
+    // runs the same gate a `team_task_create`
+    // call does. A rejection removes the seed.
+    // AA-04: the id is allocated under the
+    // task-store lock, so a concurrent creator
+    // cannot take it first.
+    let task_outcome = store
+        .add_task_with_next_id(|id| {
+            let mut task = crate::team::task::Task::new(&id, &title);
+            if let Some(desc) = description {
+                task.description = desc;
+            }
+            task
+        })
+        .await;
+    match task_outcome {
+        Ok((task, HookOutcome::Feedback(feedback))) => {
+            if let Ok(ts) = TaskStore::open(&store.dir) {
+                // INTENTIONAL: best-effort store cleanup
+                let _ = ts.remove_task(&task.id);
+            }
+            // The feedback is the hook's own stdout: redact
+            // it before it reaches the log (audit finding).
+            tracing::warn!(
+                task_id = %task.id,
+                feedback = %codemason_types::sanitize::redact_secrets(&feedback),
+                "TaskCreated hook rejected seeded task"
+            );
+        }
+        Ok((_, HookOutcome::Allow)) => {}
+        Err(e) => {
+            tracing::warn!(
+                team = %name,
+                title = %title,
+                error = %e,
+                "could not add seeded task"
+            );
+        }
+    }
+}
+
+/// Run the blueprint's `spawn-prompts.json`, if present: each entry is turned
+/// into spawn-tool arguments and dispatched through the permission gate.
+/// `store` is refreshed after each spawn so `next_agent_id()` stays accurate.
+///
+/// Returns one record per spawn that failed (M8-T2), so the lead is told which
+/// teammates are missing.
+async fn run_spawn_prompts(
+    bdir: &std::path::Path,
+    store: &mut TeamStore,
+    name: &str,
+    ctx: &ToolContext,
+    work_context: Option<&str>,
+) -> Vec<serde_json::Value> {
+    let mut failed_spawns: Vec<serde_json::Value> = Vec::new();
+    // If spawn-prompts.json exists, parse entries and execute listed tools with args
+    let prompts_json = bdir.join("spawn-prompts.json");
+    let Some(items) = read_json_array(&prompts_json) else {
+        return failed_spawns;
+    };
+    let registry = crate::tool::create_default_registry();
+    for (i, item) in items.iter().enumerate() {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        // Support either {"tool": "name", "args": {...}} or
+        // flattened formats using keys like tool_name/team_name/teammate_name
+        let Some(tool_name) = obj
+            .get("tool")
+            .and_then(|v| v.as_str())
+            .or_else(|| obj.get("tool_name").and_then(|v| v.as_str()))
+        else {
+            continue;
+        };
+        let args = spawn_prompt_args(obj, i, name, work_context);
+        let Some(tool) = registry.get(tool_name) else {
+            continue;
+        };
+        tracing::info!(tool = %tool_name, team = %name, session = %ctx.session_id, team_manager_present = %ctx.team_manager.is_some(), "Invoking spawn tool from blueprint (spawn-prompts.json)");
+        // SEC-codemason-team-001: a seeded spawn is
+        // dispatched through the session's permission
+        // gate, like the task-seed path above.
+        match dispatch_seed_tool(&tool, args.clone(), ctx, tool_name).await {
+            Ok(out) => {
+                tracing::debug!(tool = %tool_name, "Spawn tool executed");
+                if let Some(meta) = out.metadata
+                    && let Some(status) = meta.get("status").and_then(|v| v.as_str())
+                {
+                    if status == "pending_manager" {
+                        tracing::warn!(tool = %tool_name, team = %name, "Spawn returned pending_manager; recording spawning member in team config");
+                        record_spawning_member(&args, name, ctx);
+                        // Keep local store in sync for next_agent_id() calculations.
+                        if let Ok(fresh) = TeamStore::load_by_name(name, &ctx.working_dir) {
+                            *store = fresh;
+                        }
+                    } else if status == "spawned" {
+                        // spawn_teammate_internal already persisted the member with the
+                        // correct session_id and Working status.  Adding a new TeamMember
+                        // record here (with default Spawning status and no session_id)
+                        // would overwrite that correct state and leave the member stuck in
+                        // "spawning" forever.  Just refresh the local store reference so
+                        // next_agent_id() stays accurate.
+                        if let Ok(fresh) = TeamStore::load_by_name(name, &ctx.working_dir) {
+                            *store = fresh;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!(tool = %tool_name, error = %e, "Spawn tool execution failed");
+                // M8-T2: record the failure so it can be
+                // surfaced to the lead in the tool output.
+                let teammate_name = args
+                    .get("teammate_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("auto")
+                    .to_string();
+                failed_spawns.push(serde_json::json!({
+                    "index": i,
+                    "teammate_name": teammate_name,
+                    "tool": tool_name,
+                    "error": e.to_string(),
+                }));
+            }
+        }
+    }
+    failed_spawns
+}
+
+/// Build the spawn-tool arguments for spawn-prompts entry `i`: the entry's
+/// `args` object plus any flattened keys, `profile` as an `agent_type` alias,
+/// a default `team_name` and `teammate_name`, and the work context prepended
+/// to the prompt.
+fn spawn_prompt_args(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    i: usize,
+    name: &str,
+    work_context: Option<&str>,
+) -> serde_json::Value {
+    // Extract args if present, else build from flattened fields
+    let mut args = obj.get("args").cloned().unwrap_or(serde_json::json!({}));
+    if !args.is_object() {
+        args = serde_json::json!({});
+    }
+
+    // If spawn-prompts.json uses flattened keys, copy them into args
+    // common flattened keys: team_name, teammate_name, prompt, agent_type, model, memory
+    for key in &[
+        "team_name",
+        "teammate_name",
+        "prompt",
+        "agent_type",
+        "model",
+        "memory",
+    ] {
+        if args.get(*key).is_none()
+            && let Some(v) = obj.get(*key)
+        {
+            args.as_object_mut()
+                .map(|m| m.insert((*key).to_string(), v.clone()));
+        }
+    }
+
+    // Allow "profile" as an alias for "agent_type" so
+    // blueprints can reference declarative agent profiles.
+    if args.get("agent_type").is_none()
+        && let Some(v) = obj.get("profile")
+    {
+        args.as_object_mut()
+            .map(|m| m.insert("agent_type".to_string(), v.clone()));
+    }
+
+    // Ensure team_name is present
+    if args.get("team_name").is_none() {
+        args.as_object_mut().map(|m| {
+            m.insert(
+                "team_name".to_string(),
+                serde_json::Value::String(name.to_string()),
+            )
+        });
+    }
+    // Ensure teammate_name is present, otherwise auto-generate
+    if args.get("teammate_name").is_none() {
+        let teammate_name = format!("auto-{}", i + 1);
+        args.as_object_mut().map(|m| {
+            m.insert(
+                "teammate_name".to_string(),
+                serde_json::Value::String(teammate_name),
+            )
+        });
+    }
+
+    // Prepend work context to the spawn prompt so
+    // teammates know which code to target.
+    if let Some(ctx_text) = work_context {
+        let original_prompt = args
+            .get("prompt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let combined = format!("## Work Context\n{ctx_text}\n\n## Your Role\n{original_prompt}");
+        args.as_object_mut()
+            .map(|m| m.insert("prompt".to_string(), serde_json::Value::String(combined)));
+    }
+    args
+}
+
+/// Record a `Spawning` member for a spawn that returned `pending_manager`, so
+/// the team config reflects the queued teammate. The store is reloaded fresh
+/// before mutating so state written by previous tool calls is not clobbered,
+/// and an existing member of the same name is left alone (idempotency).
+fn record_spawning_member(args: &serde_json::Value, name: &str, ctx: &ToolContext) {
+    let teammate_name = args
+        .get("teammate_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("auto")
+        .to_string();
+    let agent_type_str = args
+        .get("agent_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("general")
+        .to_string();
+    let prompt_str = args
+        .get("prompt")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let model_override = args.get("model").and_then(|v| v.as_str()).and_then(|s| {
+        s.split_once('/')
+            .or_else(|| s.split_once(':'))
+            .map(|(p, m)| crate::agent::ModelRef {
+                provider_id: p.to_string(),
+                model_id: m.to_string(),
+            })
+    });
+    let memory_scope = match args.get("memory").and_then(|v| v.as_str()) {
+        Some("user") => crate::team::MemoryScope::User,
+        Some("project") => crate::team::MemoryScope::Project,
+        _ => crate::team::MemoryScope::None,
+    };
+    if let Ok(mut fresh_store) = TeamStore::load_by_name(name, &ctx.working_dir) {
+        // Only add if not already present (idempotency).
+        if fresh_store.config.member_by_name(&teammate_name).is_none() {
+            let agent_id = fresh_store.next_agent_id();
+            let mut member =
+                crate::team::config::TeamMember::new(&teammate_name, &agent_id, &agent_type_str);
+            if !prompt_str.is_empty() {
+                member.spawn_prompt = Some(prompt_str);
+            }
+            member.model_override = model_override;
+            member.memory_scope = memory_scope;
+            // INTENTIONAL: best-effort store rebuild
+            let _ = fresh_store.add_member(member);
+        }
+    }
+}
+
+/// The roster line `team_create` reports: every member with its agent id and
+/// status word, or a hint to use `team_spawn` when there are none.
+fn member_summary(store: &TeamStore) -> String {
+    let member_list: Vec<String> = store
+        .config
+        .members
+        .iter()
+        // FR-033: the roster this report hands back spells each state the
+        // way the Teams panel does, not with the wire token.
+        .map(|m| {
+            format!(
+                "  - {} ({}, {})",
+                m.name,
+                m.agent_id,
+                crate::team::status_word(m.status)
+            )
+        })
+        .collect();
+    if member_list.is_empty() {
+        "No teammates spawned yet. Use team_spawn to add teammates.".to_string()
+    } else {
+        format!(
+            "Blueprint spawned {} teammate(s) - do NOT spawn these again:\n{}",
+            member_list.len(),
+            member_list.join("\n")
+        )
+    }
+}
+
+/// M8-T2: surface any per-prompt blueprint spawn failures to the lead.
+/// Failed spawns are still logged via `tracing::error!`, but without
+/// this summary the lead only sees a success response and silently
+/// missing teammates. Empty when nothing failed.
+fn failed_spawn_summary(failed_spawns: &[serde_json::Value]) -> String {
+    if failed_spawns.is_empty() {
+        return String::new();
+    }
+    let lines: Vec<String> = failed_spawns
+        .iter()
+        .map(|f| {
+            let name = f
+                .get("teammate_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let tool = f.get("tool").and_then(|v| v.as_str()).unwrap_or("?");
+            let err = f.get("error").and_then(|v| v.as_str()).unwrap_or("");
+            format!("  - {name} ({tool}): {err}")
+        })
+        .collect();
+    format!(
+        "\n\n[!] {} blueprint spawn(s) failed:\n{}\n\
+                         These teammates were not created. Re-spawn them manually with `team_spawn` if needed.",
+        failed_spawns.len(),
+        lines.join("\n")
+    )
 }
