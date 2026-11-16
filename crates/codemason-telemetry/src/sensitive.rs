@@ -277,7 +277,8 @@ pub fn sanitize_attr_value(value: &str) -> String {
 /// key ending in `_model` or `.model` (e.g. `selected_model`).
 #[must_use]
 pub fn is_model_attr_key(key: &str) -> bool {
-    key == "model" || key.ends_with("_model") || key.ends_with(".model")
+    key.strip_suffix("model")
+        .is_some_and(|head| head.is_empty() || head.ends_with(['_', '.']))
 }
 
 /// Sanitize an attribute value with the check its key calls for: model-name
