@@ -317,7 +317,6 @@ graph TB
 | `codemason-plugins` | Plugin discovery, dialect manifests, sandboxed JS runtime, lifecycle, skills/MCP/commands/agents/hooks bridges, `/plugins` surface | ~11,400 |
 | `codemason-surface` | Shared surface helpers for the plugin/connector families: attribution, subcommand tokeniser, store-dir resolution, harness step model, schema samples | ~1,200 |
 | `codemason-telemetry` | OpenTelemetry metrics export subsystem | ~6,400 |
-| `codemason-hyperresearch` | Deep-research engine: persistent vault, fetch/scholarly providers, claims, graph, MCP and HTTP surfaces | ~1,200 |
 
 ### 2.2 Crate Dependency Graph
 

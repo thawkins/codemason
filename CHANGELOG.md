@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Removed
+
+- Removed: the unfinished `codemason-hyperresearch` draft crate and its `hyperresearch` binary (no dependents). The research features it described live in `codemason-research` and `/research`, which are unchanged.
+
 ### Performance
 
 - Performance: research locus snippets are found in linear time; a keyword near the end of a 256 KiB source took seconds before.
