@@ -3151,8 +3151,6 @@ pub struct App {
     pub model_download_state: Option<ModelDownloadState>,
     /// Which screen is currently displayed.
     pub current_screen: ScreenMode,
-    /// Randomly selected tip shown on the home screen.
-    pub tip: &'static str,
     /// Current working directory displayed on the home screen.
     ///
     /// This value may be `~`-collapsed for display (e.g. `~/Projects/codemason`).
@@ -3228,9 +3226,6 @@ pub struct App {
     /// `1` = `Stop`/`Resume`, `2` = `Clear`, `3` = `Show` (spec `inputqueue`
     /// FR-021; see [`QUEUE_MENU_ROW_NEXT`] and friends).
     pub queue_menu_selected: usize,
-    /// Cached area of the queue-control menu overlay (set during render). Kept
-    /// in [`Area::default`] while the menu is closed.
-    pub queue_menu_area: Area,
     /// Whether the scrollable queue-entry panel (opened by the queue-control
     /// menu's `Show` row) is displayed. While open it lists every queued entry
     /// oldest-first so the user can reorder or delete entries without leaving
@@ -3240,9 +3235,6 @@ pub struct App {
     /// current queue length when displayed; reset to `0` every time the panel
     /// opens and when entries are removed.
     pub queue_show_selected: usize,
-    /// Cached area of the queue-entry panel (set during render). Kept in
-    /// [`Area::default`] while the panel is closed.
-    pub queue_show_area: Area,
     /// Whether the `Clear the input queue?` confirmation dialog (opened by the
     /// queue-control menu's `Clear` row) is displayed (spec `inputqueue` FR-033).
     /// The queue is left untouched while it is open; it is emptied only after the
@@ -3270,9 +3262,6 @@ pub struct App {
     pub notice_message: String,
     /// A secondary line, usually the value involved (a path, a branch).
     pub notice_detail: Option<String>,
-    /// Cached area of the notice dialog (set during render). Kept in
-    /// [`Area::default`] while the dialog is closed.
-    pub notice_area: Area,
     /// Whether the `Clear this project's memory?` confirmation dialog (opened by
     /// `/memory clear`) is displayed. No memory is removed while it is open; the
     /// store is emptied only after the user confirms with `Yes`.
@@ -3401,19 +3390,10 @@ pub struct App {
     /// Recomputed from the panel body every frame alongside the navigator;
     /// [`Area::default`] while no plugin-store panel is open.
     pub plugin_store_result_area: Area,
-    /// Cached area of the plugin-store panel's bottom search box (set during
-    /// render; spec `pluginstores` FR-004).
-    ///
-    /// The search box spans the panel's inner width on the row below the footer;
-    /// the panel's own search filter is typed into it while any pane holds focus.
-    /// Recomputed from the current frame every draw so a terminal resize re-derives
-    /// it (FR-018); [`Area::default`] while no plugin-store panel is open. The
-    /// clear button occupies its rightmost columns (see [`Self::plugin_store_clear_area`]).
-    pub plugin_store_search_area: Area,
     /// Cached area of the plugin-store panel's search-box clear button (set during
     /// render; spec `pluginstores` FR-004).
     ///
-    /// Recomputed from [`Self::plugin_store_search_area`] every frame and painted at
+    /// Recomputed from the search box's area every frame and painted at
     /// the search box's right edge; a left-click inside it clears the search filter.
     /// [`Area::default`] while no plugin-store panel is open.
     pub plugin_store_clear_area: Area,
@@ -3467,9 +3447,6 @@ pub struct App {
     /// panel was reopened or re-fetched) has its updates dropped rather than applied
     /// to the wrong entries.
     pub connector_enrich_generation: Arc<std::sync::atomic::AtomicU64>,
-    /// Cached area of the connector-catalogue browse panel (set during render).
-    /// Kept in [`Area::default`] while no panel is open.
-    pub connector_store_area: Area,
     /// Cached area of the connector-catalogue panel's left category-navigator
     /// column (set during render).
     ///
@@ -3494,17 +3471,10 @@ pub struct App {
     /// list *below* the pinned column-heading row, so mouse hit-testing treats a
     /// click or wheel on the heading as inert.
     pub connector_store_result_area: Area,
-    /// Cached area of the connector-catalogue panel's bottom search box (set
-    /// during render).
-    ///
-    /// The panel's own search filter is typed into it while any pane holds focus,
-    /// and the live query is painted there rather than in the title alone. Kept in
-    /// [`Area::default`] while no panel is open.
-    pub connector_store_search_area: Area,
     /// Cached area of the connector-catalogue panel's search-box clear button (set
     /// during render).
     ///
-    /// Recomputed from [`Self::connector_store_search_area`] every frame and
+    /// Recomputed from the search box's area every frame and
     /// painted at the search box's right edge; a left-click inside it clears the
     /// search filter. [`Area::default`] while no panel is open.
     pub connector_store_clear_area: Area,
@@ -3512,9 +3482,6 @@ pub struct App {
     /// (spec `openhands` FR-008). `None` when no panel is showing; while it is
     /// `Some` the panel swallows every keystroke and locks the input field.
     pub backend_panel: Option<BackendPanelState>,
-    /// Cached area of the `/backend` panel (set during render). Kept in
-    /// [`Area::default`] while the panel is closed.
-    pub backend_panel_area: Area,
     /// Whether the log panel is visible.
     pub show_log: bool,
     /// Whether the realtime profiling panel is visible.
@@ -3534,10 +3501,6 @@ pub struct App {
     /// for one log entry so the render path avoids rebuilding all lines
     /// from scratch every frame.
     pub log_line_cache: Vec<LogLineGroup>,
-    /// Terminal inner width when the log panel's `content_lines` and
-    /// `wrapped_count` fields were last computed.  When the width changes
-    /// all log entries need re-wrapping.
-    pub log_cache_width: u16,
     /// Monotonically increasing counter incremented whenever a log entry is
     /// pushed. Each entry's `LogLineGroup.version` records the counter value
     /// when it was last rendered, so a new entry only invalidates the newly
@@ -3613,17 +3576,6 @@ pub struct App {
     /// Recorded by the renderer every frame; kept for diagnostics and for the
     /// cursor's painted-row -> scroll sync.
     pub agents_row_task_ids: Vec<String>,
-    // -- Active-agents panel caches (FR-003, FR-008) ------------------------
-    /// Cached set of custom-agent names for the active-agents panel.
-    /// Rebuilt only when `custom_agent_defs.len()` changes (FR-003).
-    pub active_agents_custom_names: std::collections::HashSet<String>,
-    /// `custom_agent_defs.len()` when `active_agents_custom_names` was last built.
-    pub active_agents_custom_names_version: usize,
-    /// Cached set of teammate session IDs for the active-agents panel.
-    /// Rebuilt only when `team_members.len()` changes (FR-003).
-    pub active_agents_teammate_ids: std::collections::HashSet<String>,
-    /// `team_members.len()` when `active_agents_teammate_ids` was last built.
-    pub active_agents_teammate_ids_version: usize,
     /// Active scrollbar drag, if any.
     pub scrollbar_drag: Option<ScrollbarDragPane>,
     /// Active text selection, if any.
@@ -3682,8 +3634,6 @@ pub struct App {
     pub output_view_area: Area,
     /// Cached area of the research markdown viewer overlay.
     pub research_view_area: Area,
-    /// Cached area of the full-memory overlay.
-    pub memory_view_area: Area,
     /// Cached area of the Agents button beside chat input.
     pub agents_button_area: Area,
     /// Cached area of the Teams button beside chat input.
@@ -3729,8 +3679,6 @@ pub struct App {
     pub code_index: Option<Arc<codemason_codeindex::CodeIndex>>,
     /// Whether code indexing is enabled in configuration.
     pub code_index_enabled: bool,
-    /// Cached code index stats for the status bar (refreshed every few seconds).
-    pub code_index_stats_cache: Option<codemason_codeindex::types::IndexStats>,
     /// When the cached stats were last refreshed.
     pub code_index_stats_last_refresh: std::time::Instant,
     /// True when the background indexer holds the store/FTS locks.
@@ -3789,8 +3737,6 @@ pub struct App {
     /// Maps short session IDs (`short_sid`) to display agent names.
     /// Display names are "ag[nnn]" (auto-allocated) or the actual agent name if available.
     pub sid_to_display_name: HashMap<String, String>,
-    /// Counter for auto-allocating "ag[nnn]" display names.
-    pub next_agent_index: u32,
     /// Active background sub-agent tasks (F14).
     pub active_tasks: Vec<codemason_agent::task::TaskEntry>,
     /// Bounded history of recently finished sub-agent tasks, newest first
@@ -4023,8 +3969,6 @@ pub struct App {
     /// Atomic cache updated by the off-thread refresh query.
     /// The TUI main loop copies this into `memory_entry_count` once per tick.
     pub memory_entry_count_pending: std::sync::Arc<std::sync::atomic::AtomicU64>,
-    /// Timestamp of the last memory update event (for relative time display).
-    pub memory_last_updated: Option<std::time::Instant>,
     /// When the cached memory stats were last refreshed.
     pub memory_stats_last_refresh: std::time::Instant,
     /// Current theme mode (default or high-contrast for accessibility)
@@ -4064,16 +4008,6 @@ pub struct App {
     /// `agentui` NFR-010). Set during render so the mouse router can answer
     /// the dialog with a click; kept in [`Area::default`] while closed.
     pub row_action_confirm_area: Area,
-    /// Cached rectangle of the dialog's painted `[ Yes ]` button span (spec
-    /// `agentui` T-009, NFR-010). A left-click inside it is the `Yes` answer;
-    /// `Area::default` while the dialog is closed, which can never match a
-    /// click.
-    pub row_action_confirm_yes_area: Area,
-    /// Cached rectangle of the dialog's painted `[ No ]` button span (spec
-    /// `agentui` T-009, NFR-010). A left-click inside it is the `No` answer;
-    /// `Area::default` while the dialog is closed, which can never match a
-    /// click.
-    pub row_action_confirm_no_area: Area,
 
     // -- Research progress (`/research create`) -------------------------------
     /// Live progress trackers for all running/completed `/research create`
@@ -4094,8 +4028,6 @@ pub struct App {
     pub skill_registry_cache: Option<codemason_agent::skill::SkillRegistry>,
     /// `skill_dirs` from the last config load, paired with the cache above.
     pub skill_dirs_cache: Vec<String>,
-    /// When the skill-registry cache was last refreshed from disk.
-    pub skill_registry_last_refresh: std::time::Instant,
 
     // -- Run-cost summary banner (FR-012) ------------------------------------
 

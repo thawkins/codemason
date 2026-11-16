@@ -420,3 +420,92 @@ fn render_session_event_json_adds_prefix() {
     let rendered = render_session_event_json(&event);
     assert!(rendered.starts_with("codemason-research: "));
 }
+
+#[test]
+fn parse_create_evaluate_flag() {
+    let cmd = ResearchCliCommand::parse("create eval-topic topic --evaluate");
+    match cmd {
+        ResearchCliCommand::Create {
+            name,
+            topic,
+            evaluate,
+            ..
+        } => {
+            assert_eq!(name, "eval-topic");
+            assert_eq!(topic, "topic");
+            assert!(evaluate);
+        }
+        other => panic!("unexpected variant: {other:?}"),
+    }
+}
+
+#[test]
+fn parse_create_age_flag() {
+    let cmd = ResearchCliCommand::parse("create fresh-topic topic --age 6m");
+    match cmd {
+        ResearchCliCommand::Create {
+            name,
+            topic,
+            max_age,
+            ..
+        } => {
+            assert_eq!(name, "fresh-topic");
+            assert_eq!(topic, "topic");
+            assert_eq!(max_age.map(|s| s.to_string()), Some("6m".to_string()));
+        }
+        other => panic!("unexpected variant: {other:?}"),
+    }
+}
+
+#[test]
+fn parse_create_without_age_leaves_the_filter_off() {
+    let cmd = ResearchCliCommand::parse("create default-age topic");
+    match cmd {
+        ResearchCliCommand::Create { max_age, .. } => assert!(max_age.is_none()),
+        other => panic!("unexpected variant: {other:?}"),
+    }
+}
+
+#[test]
+fn parse_create_rejects_an_invalid_age_span() {
+    let cmd = ResearchCliCommand::parse("create bad-age topic --age 30w");
+    match cmd {
+        ResearchCliCommand::Invalid(msg) => {
+            assert!(msg.contains("--age 30w"), "got: {msg}");
+            assert!(msg.contains("unknown unit `w`"), "got: {msg}");
+        }
+        other => panic!("unexpected variant: {other:?}"),
+    }
+}
+
+#[test]
+fn help_message_lists_the_age_flag() {
+    let help = ResearchCliCommand::build_help_message();
+    assert!(help.contains("--age <SPAN>"), "got: {help}");
+}
+
+#[test]
+fn parse_create_url_cloak_flag() {
+    let cmd = ResearchCliCommand::parse("create cloak-topic topic --url-cloak");
+    match cmd {
+        ResearchCliCommand::Create {
+            name,
+            topic,
+            url_cloak,
+            ..
+        } => {
+            assert_eq!(name, "cloak-topic");
+            assert_eq!(topic, "topic");
+            assert!(url_cloak);
+        }
+        other => panic!("unexpected variant: {other:?}"),
+    }
+}
+
+#[test]
+fn parse_create_defaults_url_cloak_off() {
+    match ResearchCliCommand::parse("create plain topic") {
+        ResearchCliCommand::Create { url_cloak, .. } => assert!(!url_cloak),
+        other => panic!("unexpected variant: {other:?}"),
+    }
+}

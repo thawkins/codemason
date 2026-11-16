@@ -18,6 +18,7 @@ use crate::source_vault::SourceVault;
 use crate::state::{ResearchState, SubQuestionStatus};
 use crate::web_gatherer::WebGatherer;
 use async_trait::async_trait;
+use codemason_types::strutil::truncate_bytes;
 use std::sync::Arc;
 
 /// Default maximum number of parallel researcher agents (FR-012).
@@ -503,14 +504,7 @@ impl ResearcherNode for IterativeResearcherNode {
 /// Extract a short relevance note from a source for the researcher's note log.
 fn source_relevance_snippet(src: &Source) -> String {
     src.relevance()
-        .map(|r| {
-            let r = r.trim();
-            if r.len() > 120 {
-                format!("{}...", &r[..r.floor_char_boundary(120)])
-            } else {
-                r.to_string()
-            }
-        })
+        .map(|r| truncate_bytes(r.trim(), 120))
         .unwrap_or_else(|| "captured".to_string())
 }
 
@@ -614,11 +608,7 @@ fn build_summary(
     if !bodies.is_empty() {
         lines.push("\n## Findings".to_string());
         for body in bodies.iter().take(5) {
-            let snippet = if body.body.len() > 200 {
-                format!("{}...", &body.body[..body.body.floor_char_boundary(200)])
-            } else {
-                body.body.clone()
-            };
+            let snippet = truncate_bytes(&body.body, 200);
             lines.push(format!("- {}: {}", body.title, snippet));
         }
     }

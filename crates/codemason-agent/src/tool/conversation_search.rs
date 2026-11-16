@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use codemason_types::strutil::truncate_bytes_no_ellipsis;
 use serde_json::{Value, json};
 
+use super::session_search::append_context;
 use super::{Tool, ToolContext, ToolOutput};
 use crate::event::Event;
 
@@ -297,34 +298,4 @@ fn format_message_result(rank: usize, result: &codemason_storage::MessageSearchR
         "{}. [{}] {}: {preview}{suffix}\n   (rank: {:.4})",
         rank, result.created_at, result.role, result.rank
     )
-}
-
-/// Append surrounding turns for a keyword match.
-fn append_context(
-    output: &mut String,
-    messages: &[codemason_types::message::Message],
-    target_id: &str,
-    context_turns: usize,
-) {
-    let Some(pos) = messages.iter().position(|m| m.id == target_id) else {
-        return;
-    };
-    let start = pos.saturating_sub(context_turns);
-    let end = (pos + context_turns).min(messages.len() - 1);
-    if start == end {
-        return;
-    }
-    output.push_str("   Context:\n");
-    for (offset, msg) in messages[start..=end].iter().enumerate() {
-        let idx = start + offset;
-        let marker = if idx == pos { ">" } else { " " };
-        let text = msg.text_content();
-        let preview = truncate_bytes_no_ellipsis(&text, 200);
-        let suffix = if text.len() > 200 { "..." } else { "" };
-        output.push_str(&format!(
-            "   {marker} turn {} [{}]: {preview}{suffix}\n",
-            idx + 1,
-            msg.role
-        ));
-    }
 }

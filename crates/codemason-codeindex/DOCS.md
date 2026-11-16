@@ -66,7 +66,7 @@ Dev-dependencies: tempfile, tokio (full+test-util), criterion.
 ### Module: scanner
 
 - **scan_directory(root, config)** (fn) — Gitignore-aware directory scan with parallel hashing.
-- **hash_content(content)** / **hash_file(path)** (fns) — blake3 content hashing.
+- **hash_content(content)** (fn) — blake3 content hashing.
 - **detect_language(path)** (fn) — Language detection from file extension.
 - **is_binary(content)** (fn) / **count_lines(content)** (fn) — Content inspection.
 - **SUPPORTED_LANGUAGES** (const) — All supported language identifiers.
