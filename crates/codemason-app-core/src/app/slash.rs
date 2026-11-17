@@ -4143,1054 +4143,40 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
             "db" => self.handle_db_command(args),
             "backend" => self.handle_backend_command(args),
             "automation" => self.handle_automation_command(args).await,
-            "about" => {
-                let about = format!(
-                    "  codemason - AI Coding Agent\n\
-                                 \n\
-                                 \x20 An interactive AI coding agent (terminal and desktop)\n\
-                                 \x20 supporting multiple LLM providers.\n\
-                                 \n\
-                                 \x20 Version:     {}\n\
-                                 \x20 Built:       {}\n\
-                                 \x20 Repository:  https://github.com/thawkins/codemason\n\
-                                 \x20 License:     MIT\n\
-                                 \n\
-                                 \x20 Authors:\n\
-                                 \x20   Tim Hawkins <tim.thawkins@gmail.com>\n",
-                    env!("CARGO_PKG_VERSION"),
-                    codemason_agent::tool::codemason_info::BUILD_TIME,
-                );
-                self.append_assistant_text(&format!("From: /about\n{about}"));
-                self.status = "about".to_string();
-            }
+            "about" => self.slash_about(),
             "agent" => {
-                if is_help_args(args) {
-                    self.append_assistant_text(
-                        "From: /agent help\n\n## /agent \u{2014} Agent selection\n\n| Subcommand | Description |\n|---|---|\n| `/agent` | Open the interactive agent picker |\n| `/agent <name>` | Switch directly to a named agent (e.g. `coder`, `general`, `architect`) |\n| `/agent help` | Show this help |\n\nUse `/agents` to list every available agent with descriptions.",
-                    );
-                    self.status = "agent: help".to_string();
+                if self.slash_agent(args).is_break() {
                     return;
                 }
-                if args.is_empty() {
-                    // Open the agent picker dialog
-                    let custom_names: std::collections::HashSet<String> = self
-                        .custom_agent_defs
-                        .iter()
-                        .map(|d| d.agent_info.name.clone())
-                        .collect();
-                    let agents: Vec<(String, String, bool)> = self
-                        .cycleable_agents
-                        .iter()
-                        .map(|a| {
-                            let is_custom =
-                                custom_names.contains(&a.name) || a.name.starts_with("custom:");
-                            (a.name.clone(), a.description.clone(), is_custom)
-                        })
-                        .collect();
-                    let selected = self.session.current_agent_index;
-                    self.provider_setup = Some(ProviderSetupStep::SelectAgent { agents, selected });
-                } else {
-                    // Direct switch: /agent <name>
-                    if let Some(idx) = self.cycleable_agents.iter().position(|a| a.name == args) {
-                        let prev = self.session.agent_name.clone();
-                        self.session.current_agent_index = idx;
-                        self.session.agent_info = self.cycleable_agents[idx].clone();
-                        self.session.agent_name = self.session.agent_info.name.clone();
-                        self.status = format!("agent: {}", self.session.agent_name);
-                        self.push_log_no_agent(
-                            LogLevel::Info,
-                            format!(
-                                "Switched to: {} ({})",
-                                self.session.agent_name, self.session.agent_info.description
-                            ),
-                        );
-                        if let Some(ref sid) = self.session.session_id {
-                            self.event_bus.publish(Event::AgentSwitched {
-                                session_id: sid.clone(),
-                                from: prev,
-                                to: self.session.agent_name.clone(),
-                            });
-                        }
-                    } else {
-                        let available: Vec<&str> = self
-                            .cycleable_agents
-                            .iter()
-                            .map(|a| a.name.as_str())
-                            .collect();
-                        self.status = format!(
-                            "Unknown agent '{}'. Available: {}",
-                            args,
-                            available.join(", ")
-                        );
-                        self.push_log_no_agent(LogLevel::Warn, format!("Unknown agent: {}", args));
-                    }
-                }
             }
-            "agents" => {
-                let mut output = String::from("From: /agents\n\n**Built-in Agents**\n\n");
-
-                let custom_names: std::collections::HashSet<String> = self
-                    .custom_agent_defs
-                    .iter()
-                    .map(|d| d.agent_info.name.clone())
-                    .collect();
-
-                for agent in &self.cycleable_agents {
-                    let is_custom =
-                        custom_names.contains(&agent.name) || agent.name.starts_with("custom:");
-                    if !is_custom {
-                        let active = if agent.name == self.session.agent_name {
-                            " *"
-                        } else {
-                            ""
-                        };
-                        output.push_str(&format!(
-                            "- `{}` - {}{}\n",
-                            agent.name, agent.description, active
-                        ));
-                    }
-                }
-
-                if self.custom_agent_defs.is_empty() {
-                    output.push_str(
-                                      "\n**Custom Agents**\n\n*(none - place .json or .md files in .codemason/agents/, ~/.config/codemason/agents/, or ~/.codemason/agents/)*\n",
-                                  );
-                } else {
-                    output.push_str("\n**Custom Agents**\n\n");
-                    for def in &self.custom_agent_defs {
-                        let scope = if def.is_project_local {
-                            "project"
-                        } else {
-                            "global"
-                        };
-                        let name = &def.agent_info.name;
-                        let desc = &def.agent_info.description;
-                        let active = if *name == self.session.agent_name {
-                            " *"
-                        } else {
-                            ""
-                        };
-                        let fmt =
-                            if def.source_path.extension().and_then(|e| e.to_str()) == Some("md") {
-                                "profile"
-                            } else {
-                                "oasf"
-                            };
-                        output.push_str(&format!(
-                            "- `{}` - {} [{}/{}]{}\n",
-                            name, desc, scope, fmt, active
-                        ));
-                    }
-                }
-
-                if !self.custom_agent_diagnostics.is_empty() {
-                    output.push_str("\n**Diagnostics**\n\n");
-                    for diag in &self.custom_agent_diagnostics {
-                        output.push_str(&format!("- [warn] {}\n", diag));
-                    }
-                }
-
-                self.append_assistant_text(&output);
-
-                self.status = "agents".to_string();
-            }
-            "context" => match args.trim() {
-                "refresh" => {
-                    codemason_agent::agent::clear_prompt_context_cache();
-                    self.append_assistant_text(
-                                                        "From: /context\n[sync] Context cache cleared - next message will recompute file tree, git status, and README."
-                                                    );
-                    self.push_log_no_agent(LogLevel::Info, "context cache cleared".to_string());
-                    self.status = "context refreshed".to_string();
-                }
-                "help" | "" => {
-                    self.append_assistant_text(
-                                                        "From: /context help\n\n## /context - Prompt context cache\n\n| Subcommand | Description |\n|---|---|\n| `/context refresh` | Clear the cached file tree, git status, and README so the next message recomputes them |\n| `/context help` | Show this help |"
-                                                    );
-                    self.status = "context: help".to_string();
-                }
-                _ => {
-                    self.append_assistant_text(
-                        "From: /context\nUsage: `/context refresh` | `/context help`",
-                    );
-                }
-            },
+            "agents" => self.slash_agents(),
+            "context" => self.slash_context(args),
 
             // -- /config ------------------------------------------------------
-            "config" => match args.trim() {
-                "help" | "" => {
-                    self.append_assistant_text(
-                        "From: /config help\n\n## /config - Configuration inspection and backup\n\n| Subcommand | Description |\n|---|---|\n| `/config show` | Display application paths and resolved config values (with source: global/project/env) |\n| `/config save` | Back up the global `codemason.json` into the config `saves/` directory |\n| `/config list` | Browse saved backups and restore one (interactive picker) |\n| `/config help` | Show this help |",
-                    );
-                    self.status = "config: help".to_string();
+            "config" => {
+                if self.slash_config(args).is_break() {
+                    return;
                 }
-                "show" => {
-                    let cwd = self.cwd_path.clone();
-                    let data_dir =
-                        codemason_config::user_dirs::global_state_dir().unwrap_or_default();
-                    let config_dir =
-                        codemason_config::user_dirs::global_state_dir().unwrap_or_default();
-
-                    // Determine active config file paths
-                    let project_config = cwd.join(".codemason").join("codemason.json");
-                    let global_config = config_dir.join("codemason.json");
-                    let env_config = std::env::var("CODEMASON_CONFIG").ok();
-
-                    let mut output =
-                        String::from("From: /config show\n\n[dir] **Application Paths**\n\n");
-
-                    output.push_str(&format!(
-                        "| {:<24} | {}\n",
-                        "Working directory",
-                        cwd.display()
-                    ));
-                    output.push_str(&format!(
-                        "| {:<24} | {}\n",
-                        "Data directory",
-                        data_dir.display()
-                    ));
-                    output.push_str(&format!(
-                        "| {:<24} | {}\n",
-                        "Config directory",
-                        config_dir.display()
-                    ));
-
-                    output.push_str("\n[file] **Config Files**\n\n");
-
-                    let project_exists = project_config.exists();
-                    let global_exists = global_config.exists();
-
-                    output.push_str(&format!(
-                        "| {:<24} | {} {}\n",
-                        "Project config",
-                        project_config.display(),
-                        if project_exists { "[ok]" } else { "[x]" }
-                    ));
-                    output.push_str(&format!(
-                        "| {:<24} | {} {}\n",
-                        "Global config",
-                        global_config.display(),
-                        if global_exists { "[ok]" } else { "[x]" }
-                    ));
-                    if let Some(ref env_path) = env_config {
-                        let env_exists = std::path::PathBuf::from(env_path).exists();
-                        output.push_str(&format!(
-                            "| {:<24} | {} {}\n",
-                            "Env (CODEMASON_CONFIG)",
-                            env_path,
-                            if env_exists { "[ok]" } else { "[x]" }
-                        ));
-                    } else {
-                        output.push_str(&format!(
-                            "| {:<24} | {}\n",
-                            "Env (CODEMASON_CONFIG)", "(not set)"
-                        ));
-                    }
-
-                    // -- Resolved configuration values with provenance -----------
-                    // Reload the merged config and, for each top-level key, report
-                    // the highest-precedence file that explicitly sets it. Source
-                    // detection mirrors Config::load_for(&self.cwd_path) precedence: defaults <
-                    // global < project < env file < CODEMASON_CONFIG_CONTENT. Fields
-                    // with union/append/OR semantics are annotated "(union)".
-                    output.push_str("\n[spin]  **Resolved Values**\n\n");
-
-                    match codemason_agent::Config::load_for(&self.cwd_path) {
-                        Ok(cfg) => {
-                            let global_label = if global_config.exists() {
-                                "global".to_string()
-                            } else {
-                                "defaults".to_string()
-                            };
-                            let project_label = "project";
-
-                            // Highest-precedence source per top-level key.
-                            let mut key_source: std::collections::HashMap<String, String> =
-                                std::collections::HashMap::new();
-
-                            // 1. Defaults (lowest precedence).
-                            let defaults_json =
-                                serde_json::to_value(codemason_config::Config::default())
-                                    .unwrap_or(serde_json::Value::Null);
-                            if let serde_json::Value::Object(map) = &defaults_json {
-                                for k in map.keys() {
-                                    key_source.insert(k.clone(), "defaults".to_string());
-                                }
-                            }
-
-                            // 2. Global file.
-                            if global_config.exists() {
-                                if let Ok(raw) = std::fs::read_to_string(&global_config) {
-                                    if let Ok(serde_json::Value::Object(map)) =
-                                        serde_json::from_str::<serde_json::Value>(&raw)
-                                    {
-                                        for (k, v) in map {
-                                            if !v.is_null() {
-                                                key_source.insert(k, global_label.clone());
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // 3. Project file.
-                            if project_config.exists() {
-                                if let Ok(raw) = std::fs::read_to_string(&project_config) {
-                                    if let Ok(serde_json::Value::Object(map)) =
-                                        serde_json::from_str::<serde_json::Value>(&raw)
-                                    {
-                                        for (k, v) in map {
-                                            if !v.is_null() {
-                                                key_source.insert(k, project_label.to_string());
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // 4. CODEMASON_CONFIG env file (higher precedence).
-                            if let Some(ref env_path) = env_config {
-                                if let Ok(raw) = std::fs::read_to_string(env_path) {
-                                    if let Ok(serde_json::Value::Object(map)) =
-                                        serde_json::from_str::<serde_json::Value>(&raw)
-                                    {
-                                        for (k, v) in map {
-                                            if !v.is_null() {
-                                                key_source.insert(k, format!("env ({env_path})"));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // 5. CODEMASON_CONFIG_CONTENT inline JSON (highest).
-                            if let Ok(content) = std::env::var("CODEMASON_CONFIG_CONTENT") {
-                                if let Ok(serde_json::Value::Object(map)) =
-                                    serde_json::from_str::<serde_json::Value>(&content)
-                                {
-                                    for (k, v) in map {
-                                        if !v.is_null() {
-                                            key_source.insert(
-                                                k,
-                                                "env (CODEMASON_CONFIG_CONTENT)".to_string(),
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Fields with union/append/OR semantics across layers.
-                            let union_fields = [
-                                "permission",
-                                "instructions",
-                                "skill_dirs",
-                                "hooks",
-                                "bash",
-                                "yolo",
-                                "edit_log",
-                                "sdd",
-                                "piegap",
-                                "experimental",
-                            ];
-
-                            let merged_json =
-                                serde_json::to_value(&cfg).unwrap_or(serde_json::Value::Null);
-                            if let serde_json::Value::Object(map) = &merged_json {
-                                let mut keys: Vec<&String> = map.keys().collect();
-                                keys.sort();
-                                output.push_str(&format!(
-                                    "| {:<30} | {:<30} | value |\n",
-                                    "key", "source"
-                                ));
-                                output.push_str("|---|---|---|\n");
-                                for key in keys {
-                                    let mut value = map.get(key).cloned().unwrap_or_default();
-                                    // SEC: value-scan the whole subtree so a
-                                    // credential under an innocuous key (nested
-                                    // `mcp.*.env`/`headers`, `provider.*.api.headers`,
-                                    // URL-userinfo secrets) is masked too, then fully
-                                    // mask a top-level key whose *name* is credential-like.
-                                    codemason_types::sanitize::redact_json_value(&mut value, 8);
-                                    let is_secret_key =
-                                        codemason_types::sanitize::is_secret_json_key(key);
-                                    let rendered = if is_secret_key {
-                                        codemason_types::sanitize::REDACTION_PLACEHOLDER.to_string()
-                                    } else {
-                                        codemason_types::sanitize::redact_secrets(
-                                            &value.to_string(),
-                                        )
-                                    };
-                                    let source = key_source.get(key).map(String::as_str).unwrap_or(
-                                        if key == "config_paths" {
-                                            "runtime"
-                                        } else {
-                                            "defaults"
-                                        },
-                                    );
-                                    let both_files =
-                                        global_config.exists() && project_config.exists();
-                                    let source_label = if union_fields.contains(&key.as_str())
-                                        && both_files
-                                        && matches!(source, "global" | "project")
-                                    {
-                                        "global + project (union)"
-                                    } else {
-                                        source
-                                    };
-                                    output.push_str(&format!(
-                                        "| {key:<30} | {source_label:<30} | `{rendered}`\n"
-                                    ));
-                                }
-                            } else {
-                                output.push_str("(could not serialise merged config)\n");
-                            }
-                        }
-                        Err(e) => {
-                            output.push_str(&format!("[err] Failed to load config: {e}\n"));
-                        }
-                    }
-
-                    // Storage database
-                    output.push_str(&format!(
-                        "\n[disk] **Storage**\n\n| {:<24} | {}\n",
-                        "Database",
-                        self.db_path.display()
-                    ));
-
-                    // Code index
-                    let codeindex_dir = cwd.join(".codemason").join("codeindex");
-                    output.push_str("\n[search] **Code Index**\n\n");
-                    output.push_str(&format!(
-                        "| {:<24} | {} {}\n",
-                        "Index directory",
-                        codeindex_dir.display(),
-                        if codeindex_dir.exists() {
-                            "[ok]"
-                        } else {
-                            "[x]"
-                        }
-                    ));
-
-                    // Memory
-                    let memory_dir = cwd.join(".codemason").join("memory");
-                    let global_memory = codemason_config::user_dirs::global_memory_dir();
-                    output.push_str("\n[brain] **Memory**\n\n");
-                    output.push_str(&format!(
-                        "| {:<24} | {} {}\n",
-                        "Project memory",
-                        memory_dir.display(),
-                        if memory_dir.exists() { "[ok]" } else { "[x]" }
-                    ));
-                    match &global_memory {
-                        Some(dir) => {
-                            output.push_str(&format!(
-                                "| {:<24} | {} {}\n",
-                                "Global memory",
-                                dir.display(),
-                                if dir.exists() { "[ok]" } else { "[x]" }
-                            ));
-                        }
-                        None => {
-                            output.push_str("| Global memory            | (unavailable) [x]\n");
-                        }
-                    }
-
-                    // Agents
-                    let project_agents = cwd.join(".codemason").join("agents");
-                    let global_agents = codemason_config::user_dirs::global_agents_dir();
-                    output.push_str("\n[agent] **Custom Agents**\n\n");
-                    output.push_str(&format!(
-                        "| {:<24} | {} {}\n",
-                        "Project agents",
-                        project_agents.display(),
-                        if project_agents.exists() {
-                            "[ok]"
-                        } else {
-                            "[x]"
-                        }
-                    ));
-                    match &global_agents {
-                        Some(dir) => {
-                            output.push_str(&format!(
-                                "| {:<24} | {} {}\n",
-                                "Global agents",
-                                dir.display(),
-                                if dir.exists() { "[ok]" } else { "[x]" }
-                            ));
-                        }
-                        None => {
-                            output.push_str("| Global agents            | (unavailable) [x]\n");
-                        }
-                    }
-
-                    self.append_assistant_text(&output);
-                    self.status = "config: show".to_string();
-                }
-                // -- /config save --------------------------------------------
-                // FR-003: snapshot the current global codemason.json into a
-                // timestamped backup inside `saves/`. The helper creates the
-                // `saves/` directory if needed and writes atomically.
-                "save" => match codemason_config::Config::backup_global_config(None) {
-                    Ok(path) => {
-                        self.append_assistant_text(&format!(
-                            "From: /config save\n[ok] **Saved backup to:**\n  `{}`",
-                            path.display()
-                        ));
-                        self.push_log_no_agent(
-                            LogLevel::Info,
-                            format!("config save: wrote backup to {}", path.display()),
-                        );
-                        self.status = "config: saved".to_string();
-                    }
-                    Err(e) => {
-                        self.append_assistant_text(&format!(
-                            "From: /config save\n[err] **Failed to back up global config:**\n  \
-                                 {e}\n\nNo changes were made."
-                        ));
-                        self.push_log_no_agent(LogLevel::Error, format!("config save: error: {e}"));
-                        self.status = "config: save error".to_string();
-                    }
-                },
-                // -- /config list --------------------------------------------
-                // FR-004 / FR-006: scan the `saves/` directory for backups. If
-                // none exist, show a user-facing message instead of an empty
-                // picker. Otherwise open the interactive picker (key handling
-                // and rendering are wired up in T-006/T-007).
-                "list" => {
-                    let config_dir = match codemason_config::Config::global_config_dir() {
-                        Some(d) => d,
-                        None => {
-                            self.append_assistant_text(
-                                "From: /config list\n[err] **Cannot determine the global config \
-                                 directory for this platform.**",
-                            );
-                            self.push_log_no_agent(
-                                LogLevel::Error,
-                                "config list: no global config directory".to_string(),
-                            );
-                            self.status = "config: list error".to_string();
-                            return;
-                        }
-                    };
-                    let saves_dir = config_dir.join("saves");
-
-                    // Collect files matching the `codemason.json.*` backup pattern,
-                    // excluding the transient `.tmp` temp files written during
-                    // atomic backup.
-                    let mut entries: Vec<std::path::PathBuf> = match std::fs::read_dir(&saves_dir) {
-                        Ok(rd) => rd
-                            .filter_map(Result::ok)
-                            .filter_map(|e| {
-                                let name = e.file_name().to_string_lossy().to_string();
-                                let path = e.path();
-                                let is_tmp = std::path::Path::new(&name)
-                                    .extension()
-                                    .is_some_and(|ext| ext.eq_ignore_ascii_case("tmp"));
-                                if name.starts_with("codemason.json.") && !is_tmp && path.is_file()
-                                {
-                                    Some(path)
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect(),
-                        Err(_) => Vec::new(),
-                    };
-
-                    if entries.is_empty() {
-                        // FR-006: no saved configurations available.
-                        self.append_assistant_text(&format!(
-                            "From: /config list\n[i]  **No saved configurations found.**\n\n\
-                             Backups are stored in:\n  `{}`\n\nUse `/config save` to create one.",
-                            saves_dir.display()
-                        ));
-                        self.push_log_no_agent(
-                            LogLevel::Info,
-                            format!("config list: no saves in {}", saves_dir.display()),
-                        );
-                        self.status = "config: list empty".to_string();
-                    } else {
-                        // Sort newest-first by modification time (FR-010).
-                        entries.sort_by(|a, b| {
-                            b.metadata()
-                                .and_then(|m| m.modified())
-                                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-                                .cmp(
-                                    &a.metadata()
-                                        .and_then(|m| m.modified())
-                                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
-                                )
-                        });
-                        let count = entries.len();
-                        self.config_save_picker = Some(ConfigSavePickerState {
-                            entries,
-                            selected: 0,
-                            scroll_offset: 0,
-                            config_dir: config_dir.clone(),
-                        });
-                        self.append_assistant_text(&format!(
-                            "From: /config list\n[notice] **{} saved configuration(s) found.**\n\n\
-                             Use ^/v (or k/j) to select a backup, Enter to restore, Esc to \
-                             cancel.",
-                            count
-                        ));
-                        self.push_log_no_agent(
-                            LogLevel::Info,
-                            format!(
-                                "config list: opened picker ({} backup(s) in {})",
-                                count,
-                                saves_dir.display()
-                            ),
-                        );
-                        self.status = "config: list".to_string();
-                    }
-                }
-                _ => {
-                    self.append_assistant_text(
-                        "From: /config\nUsage: `/config show` | `/config save` | `/config list` | `/config help`",
-                    );
-                    self.status = "config: usage".to_string();
-                }
-            },
+            }
 
             // -- /init --------------------------------------------------------
-            "init" => match args.trim() {
-                // /init help - show usage without starting the analysis run.
-                "help" => {
-                    self.append_assistant_text(
-                        "From: /init help\n\n## /init - Project analysis and default config\n\n| Subcommand | Description |\n|---|---|\n| `/init` | Analyse the project and write a summary to `.codemason/memory/PROJECT_ANALYSIS.md` for future sessions |\n| `/init config` | Write a default `codemason.json` to the global config directory (skipped if one exists) |\n| `/init help` | Show this help |",
-                    );
-                    self.status = "init: help".to_string();
+            "init" => {
+                if self.slash_init(args).await.is_break() {
+                    return;
                 }
-                // /init config - write a default codemason.json to the global
-                // config directory (~/.config/codemason/codemason.json on Linux,
-                // ~/Library/Application Support/codemason/codemason.json on macOS,
-                // %APPDATA%\codemason\codemason.json on Windows).
-                "config" => {
-                    let config_dir = match dirs::config_dir() {
-                        Some(d) => d.join("codemason"),
-                        None => {
-                            self.append_assistant_text(
-                                "From: /init config\n[err] **Cannot determine the global config \
-                                 directory for this platform.**\n\nPlease set the \
-                                 `XDG_CONFIG_HOME` environment variable (Linux) or ensure \
-                                 the platform config directory is available.",
-                            );
-                            self.push_log_no_agent(
-                                LogLevel::Error,
-                                "init config: no config dir".to_string(),
-                            );
-                            self.status = "init config: error".to_string();
-                            return;
-                        }
-                    };
-                    let config_path = config_dir.join("codemason.json");
-
-                    if config_path.exists() {
-                        self.append_assistant_text(&format!(
-                            "From: /init config\n[warn]  **A global config already exists at:**\n\
-                             \x20  `{}`\n\n\
-                             No changes were made. Edit the file directly to modify your \
-                             configuration.",
-                            config_path.display()
-                        ));
-                        self.push_log_no_agent(
-                            LogLevel::Info,
-                            format!(
-                                "init config: skipped (file exists at {})",
-                                config_path.display()
-                            ),
-                        );
-                        self.status = "init config: already exists".to_string();
-                        return;
-                    }
-
-                    // Create the config directory and write a default config.
-                    let default_config = codemason_config::Config::default();
-                    let json = match serde_json::to_string_pretty(&default_config) {
-                        Ok(j) => j,
-                        Err(e) => {
-                            self.append_assistant_text(&format!(
-                                "From: /init config\n[err] **Failed to serialise default config: \
-                                 {}**",
-                                e
-                            ));
-                            self.push_log_no_agent(
-                                LogLevel::Error,
-                                format!("init config: serialise error: {e}"),
-                            );
-                            self.status = "init config: error".to_string();
-                            return;
-                        }
-                    };
-
-                    if let Err(e) = std::fs::create_dir_all(&config_dir) {
-                        self.append_assistant_text(&format!(
-                            "From: /init config\n[err] **Failed to create config directory `{}`: \
-                             {}**",
-                            config_dir.display(),
-                            e
-                        ));
-                        self.push_log_no_agent(
-                            LogLevel::Error,
-                            format!("init config: create dir error: {}", e),
-                        );
-                        self.status = "init config: error".to_string();
-                        return;
-                    }
-
-                    if let Err(e) = std::fs::write(&config_path, &json) {
-                        self.append_assistant_text(&format!(
-                            "From: /init config\n[err] **Failed to write config file `{}`: {}**",
-                            config_path.display(),
-                            e
-                        ));
-                        self.push_log_no_agent(
-                            LogLevel::Error,
-                            format!("init config: write error: {}", e),
-                        );
-                        self.status = "init config: error".to_string();
-                        return;
-                    }
-
-                    self.append_assistant_text(&format!(
-                        "From: /init config\n[ok] **Default config created at:**\n\
-                         \x20  `{}`\n\n\
-                         This file contains all default settings. Edit it to configure \
-                         providers, agents, permissions, memory, and more.",
-                        config_path.display()
-                    ));
-                    self.push_log_no_agent(
-                        LogLevel::Info,
-                        format!(
-                            "init config: wrote default config to {}",
-                            config_path.display()
-                        ),
-                    );
-                    self.status = "init config: created".to_string();
-                }
-                _ => {
-                    let sid = self.session.session_id.clone().unwrap_or_default();
-                    self.append_assistant_text(
-                        "From: /init\n[search] **Analysing project...**\n\n\
-                         The analysis agent will examine the project structure, README, build \
-                         files, and test layout, then write a summary to \
-                         `.codemason/memory/PROJECT_ANALYSIS.md`. Future sessions will \
-                         automatically load this context.",
-                    );
-                    self.push_log_no_agent(
-                        LogLevel::Info,
-                        "init: starting project analysis".to_string(),
-                    );
-
-                    // Find the general agent and dispatch the analysis task directly
-                    // (no agent-stack push - init runs as a one-shot subagent that writes
-                    // memory).
-                    let agent = self.select_general_agent();
-
-                    let task = "\
-You are performing a one-time project analysis to build persistent memory for this codebase.\n\n\
-Analyse the following aspects of the project:\n\
-1. Programming language(s), frameworks, and key dependencies\n\
-2. Overall architecture and module structure\n\
-3. Entry points and main execution flow\n\
-4. Build system and how to build/test the project\n\
-5. Key conventions: naming, error handling, testing patterns\n\
-6. Important files a developer should know about\n\n\
-After your analysis, call the `memory_store` tool with:\n\
-- category: \"fact\"\n\
-- content: a well-structured markdown summary of your findings\n\
-- confidence: 0.8\n\
-- tags: [\"project-analysis\"]\n\n\
-Be concise but comprehensive. This will be injected into future agent sessions automatically.\
-"
-                    .to_string();
-
-                    let msg = Message::user_text(&sid, &task);
-                    self.session.messages.push(msg);
-
-                    let processor = self.session_processor.clone();
-                    let flag = Arc::new(AtomicBool::new(false));
-                    self.session.cancel_flag = Some(flag.clone());
-                    self.session.is_processing = true;
-                    self.status = "init: analysing project...".to_string();
-
-                    let event_bus = self.event_bus.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = processor.process_message(&sid, &task, &agent, flag).await {
-                            tracing::warn!(error = %e, "init: analysis failed");
-                            event_bus.publish(codemason_agent::event::Event::AgentError {
-                                session_id: sid,
-                                error: format!("init analysis failed: {e}"),
-                            });
-                        }
-                    });
-                }
-            },
-            "clear" => {
-                self.session.messages.clear();
-                self.reset_message_cache();
-                self.session.scroll_offset = 0;
-                self.tool_step_map.clear();
-                self.last_step_per_session.clear();
-                self.substep_counter_per_session.clear();
-                codemason_agent::agent::clear_prompt_context_cache();
-                self.status = "messages cleared".to_string();
-                self.push_log_no_agent(LogLevel::Info, "Message history cleared".to_string());
             }
-            "browse_refresh" => {
-                self.refresh_project_files_cache();
-                self.status = format!(
-                    "browse index refreshed ({})",
-                    self.project_files_cache_count
-                );
-                self.push_log_no_agent(
-                    LogLevel::Info,
-                    format!(
-                        "@ picker index refreshed ({} entries)",
-                        self.project_files_cache_count
-                    ),
-                );
-            }
+            "clear" => self.slash_clear(),
+            "browse_refresh" => self.slash_browse_refresh(),
             "cancel" => {
-                if args.trim() == "help" {
-                    self.append_assistant_text(
-                        "From: /cancel help\n\n## /cancel \u{2014} Request cancellation of a task\n\n| Subcommand | Description |\n|---|---|\n| `/cancel <task_id_prefix>` | Ask the task registry to cancel a sub-agent task, or stop an active benchmark, by ID prefix. The task keeps running until its next step boundary; an ambiguous prefix is refused and every match listed, and an unmatched prefix lists the live task ids |\n| `/cancel help` | Show this help |",
-                    );
-                    self.status = "cancel: help".to_string();
+                if self.slash_cancel(args).is_break() {
                     return;
-                }
-                if args.is_empty() {
-                    self.status =
-                        "[warn] Please provide a task ID prefix: /cancel <id>".to_string();
-                    self.push_log_no_agent(LogLevel::Warn, "No task ID provided".to_string());
-                    return;
-                }
-
-                if self
-                    .active_bench_task_id
-                    .as_deref()
-                    .is_some_and(|task_id| task_id.starts_with(args))
-                    && let Some(flag) = &self.active_bench_cancel
-                {
-                    flag.store(true, Ordering::Relaxed);
-                    self.status = "[wait] bench: cancellation requested".to_string();
-                    self.push_log_no_agent(
-                        LogLevel::Info,
-                        format!("Benchmark cancellation requested for {}", args),
-                    );
-                    return;
-                }
-
-                // FR-023 / FR-024 / FR-041: the request goes to the task
-                // registry, never to the local `active_tasks` mirror. The
-                // mirror is a projection of `AgentManager::tasks` that the
-                // periodic reconciliation rebuilds, so removing a row here
-                // would be a UI-local lie - the registry would still be
-                // `Running` and the row would come back on the next sweep.
-                let matches: Vec<codemason_agent::task::TaskEntry> = self
-                    .active_tasks
-                    .iter()
-                    .filter(|t| t.id.starts_with(args))
-                    .cloned()
-                    .collect();
-                match matches.len() {
-                    0 => {
-                        // FR-041: name the live ids instead of only echoing
-                        // the prefix, so the user can pick one immediately.
-                        let live: Vec<String> = self
-                            .active_tasks
-                            .iter()
-                            .filter(|t| is_cancellable(&t.status))
-                            .map(|t| format!("{} ({})", short_id(&t.id), t.agent_name))
-                            .collect();
-                        let listing = if live.is_empty() {
-                            "no live sub-agent tasks".to_string()
-                        } else {
-                            live.join(", ")
-                        };
-                        self.status = format!("No task matching '{}'", args);
-                        self.push_log_no_agent(
-                            LogLevel::Warn,
-                            format!("Task not found: {} - live tasks: {}", args, listing),
-                        );
-                        self.append_assistant_text(&format!(
-                            "From: /cancel {args}\n[err] **No live task matches `{args}`.**\n\n\
-                             Live tasks: {listing}\n\n\
-                             Use `/agents` to see the full panel, or `/cancel <id>` with one of \
-                             the ids above."
-                        ));
-                    }
-                    1 => {
-                        let task = &matches[0];
-                        let task_id = task.id.clone();
-                        let agent = task.agent_name.clone();
-                        let child_session = task.child_session_id.clone();
-                        let status = task.status.clone();
-                        if !is_cancellable(&status) {
-                            // FR-023: report the registry's state rather than
-                            // pretending a finished task was cancelled.
-                            self.status =
-                                format!("Task {} is already {}", short_id(&task_id), status);
-                            self.push_log_no_agent(
-                                LogLevel::Warn,
-                                format!(
-                                    "Cancel ignored: {} ({}) is already {}",
-                                    short_id(&task_id),
-                                    agent,
-                                    status
-                                ),
-                            );
-                            self.append_assistant_text(&format!(
-                                "From: /cancel {args}\n[warn] **Task `{}` ({}) is already \
-                                 `{status}`** - there is nothing to cancel.",
-                                short_id(&task_id),
-                                agent
-                            ));
-                        } else {
-                            self.request_agent_cancel(&task_id, &agent, child_session);
-                        }
-                    }
-                    _ => {
-                        // FR-024: refuse an ambiguous prefix and list the
-                        // candidates so the user can disambiguate.
-                        let candidates = matches
-                            .iter()
-                            .map(|t| {
-                                format!("{} ({}, {})", short_id(&t.id), t.agent_name, t.status)
-                            })
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        self.status = format!("Ambiguous task prefix '{}'", args);
-                        self.push_log_no_agent(
-                            LogLevel::Warn,
-                            format!(
-                                "Ambiguous prefix '{}': {} tasks match - {}",
-                                args,
-                                matches.len(),
-                                candidates
-                            ),
-                        );
-                        self.append_assistant_text(&format!(
-                            "From: /cancel {args}\n[err] **Ambiguous task prefix `{args}` - {} \
-                             tasks match.**\n\n{}\n\n\
-                             Re-run `/cancel` with a longer prefix.",
-                            matches.len(),
-                            candidates
-                        ));
-                    }
                 }
             }
-            "bench" => match codemason_bench::parse_bench_command(args) {
-                Ok(codemason_bench::BenchCommand::Help) => {
-                    self.append_assistant_text(&self.render_bench_help());
-                    self.status = "bench help".to_string();
+            "bench" => {
+                if self.slash_bench(args, raw).is_break() {
+                    return;
                 }
-                Ok(codemason_bench::BenchCommand::List) => {
-                    self.append_assistant_text(&self.render_bench_list());
-                    self.status = "bench list".to_string();
-                }
-                Ok(codemason_bench::BenchCommand::Show) => {
-                    self.append_assistant_text(&self.render_bench_show());
-                    self.status = "bench show".to_string();
-                }
-                Ok(codemason_bench::BenchCommand::Status) => {
-                    self.append_assistant_text(&self.render_bench_status());
-                    self.status = "bench status".to_string();
-                }
-                Ok(codemason_bench::BenchCommand::OpenLast) => {
-                    self.append_assistant_text(&self.render_bench_open_last());
-                    self.status = "bench open last".to_string();
-                }
-                Ok(codemason_bench::BenchCommand::Cancel) => {
-                    if let Some(flag) = &self.active_bench_cancel {
-                        flag.store(true, Ordering::Relaxed);
-                        self.status = "[wait] bench: cancellation requested".to_string();
-                        self.append_assistant_text(
-                            "From: /bench cancel\nCancellation requested for the active benchmark run.\n\nUse `/bench status` to watch it shut down.",
-                        );
-                    } else {
-                        self.status = "No active benchmark run".to_string();
-                        self.append_assistant_text("From: /bench cancel\nNo active benchmark run.");
-                    }
-                }
-                Ok(codemason_bench::BenchCommand::Init {
-                    target,
-                    mode,
-                    language,
-                    force_download,
-                    verify_only,
-                }) => {
-                    let project_root = match std::env::current_dir() {
-                        Ok(path) => path,
-                        Err(e) => {
-                            self.status =
-                                format!("[warn] Could not resolve current directory: {e}");
-                            return;
-                        }
-                    };
-                    match codemason_bench::init_target_with_progress(
-                        &project_root,
-                        &target,
-                        mode,
-                        language.as_deref(),
-                        force_download,
-                        verify_only,
-                        |event| {
-                            self.session.force_new_message = true;
-                            self.append_assistant_text(&self.render_bench_init_event(&event));
-                        },
-                    ) {
-                        Ok(outcomes) => {
-                            let heading = if verify_only {
-                                "verified benchmark target."
-                            } else {
-                                "initialized benchmark target."
-                            };
-                            let mut message = format!("From: /bench init\n[ok] {heading}\n\n");
-                            for init in &outcomes {
-                                let init_action = if init.verified_only {
-                                    "verified"
-                                } else if matches!(init.mode, codemason_bench::BenchInitMode::Full)
-                                {
-                                    "initialized full dataset for"
-                                } else {
-                                    "initialized"
-                                };
-                                message.push_str(&format!(
-                                    "- **`{}`** [{}] {} at `{}` (`{}`, {} case(s))\n",
-                                    init.suite.id,
-                                    init.language,
-                                    init_action,
-                                    init.data_root.display(),
-                                    init.manifest.revision,
-                                    init.manifest.case_count
-                                ));
-                            }
-                            self.session.force_new_message = true;
-                            self.append_assistant_text(&message);
-                            let status_target = match &target {
-                                codemason_bench::BenchInitTarget::All => "all".to_string(),
-                                codemason_bench::BenchInitTarget::Full => "full".to_string(),
-                                codemason_bench::BenchInitTarget::Suite(id) => id.clone(),
-                            };
-                            self.status = format!("bench init: {status_target}");
-                        }
-                        Err(e) => {
-                            self.status = format!("[warn] bench init failed: {e}");
-                            self.session.force_new_message = true;
-                            self.append_assistant_text(&format!("From: /bench init\n[err] {e}"));
-                        }
-                    }
-                }
-                Ok(codemason_bench::BenchCommand::Run { target, options }) => {
-                    self.start_bench_run(raw, target, options);
-                }
-                Err(e) => {
-                    self.status = format!("[warn] {e}");
-                    self.append_assistant_text(&format!("From: /bench\n[err] {e}"));
-                }
-            },
+            }
             "compact" => {
                 self.start_compaction_or_warn();
             }
@@ -5206,181 +4192,1539 @@ Be concise but comprehensive. This will be injected into future agent sessions a
                 self.start_compaction_or_warn();
             }
             "cost" => {
-                let Some(output) = self.cost_summary() else {
-                    self.append_assistant_text(
-                        "From: /cost\nNo completed LLM responses yet for this session.\n",
-                    );
-
-                    self.status = "cost unavailable".to_string();
+                if self.slash_cost().is_break() {
                     return;
-                };
-                self.append_assistant_text(&output);
-
-                self.status = "cost summary".to_string();
+                }
             }
             "status" => self.handle_status_history_command(args),
-            "startup" => match &self.startup_timings {
-                Some(timings) => {
-                    self.append_assistant_text(&timings.format_report());
-                    self.status = "startup: timings shown".to_string();
+            "startup" => self.slash_startup(),
+            "actionloop" => {
+                if self.slash_actionloop(args).is_break() {
+                    return;
                 }
-                None => {
-                    self.append_assistant_text(
-                        "From: /startup\n[warn] No startup timings recorded for this session.",
+            }
+            "clip" => self.slash_clip(),
+            "editlog" => self.handle_editlog_command(args),
+            "help" => self.slash_help(),
+            "log" => self.slash_log(args),
+            "task" => self.slash_task(args),
+            "telemetry_panel" => self.slash_telemetry_panel(),
+            "profile" => self.slash_profile(args),
+            // PERFPLAN F-4: `/perf` is an alias for `/profile` that toggles
+            // the agent-loop profiler panel reading
+            // `AgentLoopProfiler::snapshot()`. The panel itself already
+            // existed as `/profile`; the alias matches the PERFPLAN wording.
+            "perf" => self.slash_perf(args),
+            "llmstats" => {
+                if self.slash_llmstats().is_break() {
+                    return;
+                }
+            }
+            "history" => {
+                if self.slash_history(args).is_break() {
+                    return;
+                }
+            }
+            "model" => {
+                if self.slash_model(args).is_break() {
+                    return;
+                }
+            }
+            "thinking" => {
+                if self.slash_thinking(args).is_break() {
+                    return;
+                }
+            }
+            "provider" => self.slash_provider(args),
+            "provider_reset" => {
+                self.provider_setup = Some(ProviderSetupStep::ResetProvider { selected: 0 });
+            }
+            "quit" | "exit" => {
+                self.quit();
+            }
+            "reload" => {
+                if self.slash_reload(args).is_break() {
+                    return;
+                }
+            }
+            "project" => {
+                if self.slash_project(args).is_break() {
+                    return;
+                }
+            }
+            "autofix" => {
+                if self.slash_autofix(args).is_break() {
+                    return;
+                }
+            }
+            "session" => {
+                if self.slash_session(args).is_break() {
+                    return;
+                }
+            }
+            "resume" => {
+                if self.slash_resume(args).is_break() {
+                    return;
+                }
+            }
+            "system" => {
+                if self.slash_system(args).is_break() {
+                    return;
+                }
+            }
+            "tools" => self.slash_tools(args),
+
+            "skills" => {
+                if self.slash_skills(args).is_break() {
+                    return;
+                }
+            }
+            "skill" => handle_skill_command(self, args),
+            "blueprints" => {
+                handle_blueprints_command(self, args);
+            }
+            "mcp" => {
+                if self.slash_mcp(args).await.is_break() {
+                    return;
+                }
+            }
+            "team" | "teams" => {
+                if self.slash_team(args).await.is_break() {
+                    return;
+                }
+            }
+            // -- /bash --------------------------------------------------------
+            "bash" => {
+                if self.slash_bash(args).is_break() {
+                    return;
+                }
+            }
+            // -- /dirs --------------------------------------------------------
+            "dirs" => {
+                if self.slash_dirs(args).is_break() {
+                    return;
+                }
+            }
+            "yolo" => self.slash_yolo(args),
+            // -- /undo ------------------------------------------------------
+            // FR-014: Remove the last user/assistant turn pair from the conversation.
+            // This allows users to correct mistakes or backtrack from unhelpful responses.
+            "undo" => {
+                if self.slash_undo(args).is_break() {
+                    return;
+                }
+            }
+            // -- /name ------------------------------------------------------
+            // FR-015: Set a human-readable display name on the active session.
+            // The name is persisted in session metadata and appears in session lists.
+            "name" => {
+                if self.slash_name(args).is_break() {
+                    return;
+                }
+            }
+            "alog" => self.handle_alog_command(args),
+            // -- /gcf ------------------------------------------------------
+            "gcf" => self.handle_gcf_command(args),
+            // -- /i18n ------------------------------------------------------
+            "i18n" => self.handle_i18n_command(args),
+            // -- /security --------------------------------------------------
+            // `security-analyzer` is accepted as an alias (spec `openhands`
+            // TC-012 spells the command both ways).
+            "security" | "security-analyzer" => self.handle_security_command(args),
+            // -- /prompt ----------------------------------------------------
+            "prompt" => self.handle_prompt_command(args),
+            // /toolchain: language toolchain presence report (FR-002)
+            "toolchain" => self.handle_toolchain_command(args),
+            // -- /swarm ------------------------------------------------------
+            "swarm" => {
+                if self.slash_swarm(args).await.is_break() {
+                    return;
+                }
+            }
+
+            "spawn" => {
+                self.handle_spawn_command(args);
+            }
+
+            // -- /autopilot --------------------------------------------------
+            "autopilot" => {
+                if self.slash_autopilot(args).is_break() {
+                    return;
+                }
+            }
+
+            // -- /plan --------------------------------------------------------
+            "plan" => self.slash_plan(args), // -- /research ------------------------------------------------
+            "research" => {
+                self.handle_research_command(args);
+            }
+
+            // -- /plugins ------------------------------------------------
+            // A bare `/plugins`, `/plugins help`, and an unrecognised
+            // subcommand all render the usage block (FR-006, FR-014). The
+            // call drives an ephemeral plugin session synchronously; sandbox
+            // contexts are `!Send` and never cross an `.await`. `/plugins codex`
+            // and `/plugins claude` open the browse panel instead and print no
+            // report (FR-002, FR-007).
+            "plugins" => {
+                if let Some(report) = crate::app::plugin::handle_plugins_command(self, args) {
+                    self.append_assistant_text(&report);
+                }
+                self.status = "plugins".to_string();
+            }
+
+            // -- /connectors ----------------------------------------------
+            // Spec `connectors` FR-004, FR-006, FR-017: a bare `/connectors`,
+            // `/connectors help`, and an unrecognised subcommand all render the
+            // usage block. The shared dispatcher honours the master switch
+            // `connectors.enabled` (FR-021) and forwards the store subcommands.
+            "connectors" => {
+                let report = crate::app::connector::handle_connectors_command(self, args).await;
+                self.append_assistant_text(&report);
+                self.status = "connectors".to_string();
+            }
+
+            // -- /new ----------------------------------------------------
+            "new" => {
+                self.handle_new_command(args);
+            }
+
+            // -- /spec --------------------------------------------------------
+            "spec" => {
+                if self.slash_spec(args).await.is_break() {
+                    return;
+                }
+            }
+            // -- /mode --------------------------------------------------------
+            "mode" => self.slash_mode(args),
+            "memory" => self.slash_memory(args),
+
+            "github" => {
+                if self.slash_github(args).await.is_break() {
+                    return;
+                }
+            }
+            "gitlab" => self.slash_gitlab(args),
+
+            "update" => self.slash_update(args).await,
+
+            "doctor" => {
+                if self.slash_doctor(args).await.is_break() {
+                    return;
+                }
+            }
+
+            "webapi" => self.slash_webapi(args).await,
+
+            "websearch" => {
+                if self.slash_websearch(args).await.is_break() {
+                    return;
+                }
+            }
+
+            "mouse" => self.slash_mouse(args),
+
+            "codeindex" => self.slash_codeindex(args),
+
+            "router" => self.slash_router(args),
+            // -- /cron ----------------------------------------------------
+            "cron" => self.handle_cron_command(args),
+            // -- /triggers ------------------------------------------------
+            "triggers" => self.handle_triggers_command(args),
+            // -- /inbox ------------------------------------
+            "inbox" => self.handle_inbox_command(args),
+            // -- /queue ---------------------------------------------------
+            "queue" => self.handle_queue_command(args).await,
+            // -- /loop ----------------------------------------------------
+            "loop" => handle_loop_command(self, args),
+            _ => {
+                if !self.invoke_skill_command(cmd, args) {
+                    // Unknown command: the status line alone is easily missed
+                    // (it auto-expires back to "ready"), which made a typo'd
+                    // slash command look like a silently swallowed prompt.
+                    // Surface the rejection in the message window too.
+                    self.status = format!("Unknown command: /{}", cmd);
+                    self.append_assistant_text(&format!(
+                        "From: /{cmd}\n\n\u{26a0} Unknown command: `/{cmd}`. \
+                         Type `/help` for the command list.",
+                    ));
+                    self.push_log_no_agent(LogLevel::Warn, format!("Unknown command: /{}", cmd));
+                }
+            }
+        }
+        self.assert_ui_invariants();
+    }
+
+    /// Run the `/about` slash command.
+    fn slash_about(&mut self) {
+        let about = format!(
+            "  codemason - AI Coding Agent\n\
+                                 \n\
+                                 \x20 An interactive AI coding agent (terminal and desktop)\n\
+                                 \x20 supporting multiple LLM providers.\n\
+                                 \n\
+                                 \x20 Version:     {}\n\
+                                 \x20 Built:       {}\n\
+                                 \x20 Repository:  https://github.com/thawkins/codemason\n\
+                                 \x20 License:     MIT\n\
+                                 \n\
+                                 \x20 Authors:\n\
+                                 \x20   Tim Hawkins <tim.thawkins@gmail.com>\n",
+            env!("CARGO_PKG_VERSION"),
+            codemason_agent::tool::codemason_info::BUILD_TIME,
+        );
+        self.append_assistant_text(&format!("From: /about\n{about}"));
+        self.status = "about".to_string();
+    }
+
+    /// Run the `/agent` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_agent(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        if is_help_args(args) {
+            self.append_assistant_text(
+                        "From: /agent help\n\n## /agent \u{2014} Agent selection\n\n| Subcommand | Description |\n|---|---|\n| `/agent` | Open the interactive agent picker |\n| `/agent <name>` | Switch directly to a named agent (e.g. `coder`, `general`, `architect`) |\n| `/agent help` | Show this help |\n\nUse `/agents` to list every available agent with descriptions.",
                     );
-                    self.status = "startup: unavailable".to_string();
+            self.status = "agent: help".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+        if args.is_empty() {
+            // Open the agent picker dialog
+            let custom_names: std::collections::HashSet<String> = self
+                .custom_agent_defs
+                .iter()
+                .map(|d| d.agent_info.name.clone())
+                .collect();
+            let agents: Vec<(String, String, bool)> = self
+                .cycleable_agents
+                .iter()
+                .map(|a| {
+                    let is_custom = custom_names.contains(&a.name) || a.name.starts_with("custom:");
+                    (a.name.clone(), a.description.clone(), is_custom)
+                })
+                .collect();
+            let selected = self.session.current_agent_index;
+            self.provider_setup = Some(ProviderSetupStep::SelectAgent { agents, selected });
+        } else {
+            // Direct switch: /agent <name>
+            if let Some(idx) = self.cycleable_agents.iter().position(|a| a.name == args) {
+                let prev = self.session.agent_name.clone();
+                self.session.current_agent_index = idx;
+                self.session.agent_info = self.cycleable_agents[idx].clone();
+                self.session.agent_name = self.session.agent_info.name.clone();
+                self.status = format!("agent: {}", self.session.agent_name);
+                self.push_log_no_agent(
+                    LogLevel::Info,
+                    format!(
+                        "Switched to: {} ({})",
+                        self.session.agent_name, self.session.agent_info.description
+                    ),
+                );
+                if let Some(ref sid) = self.session.session_id {
+                    self.event_bus.publish(Event::AgentSwitched {
+                        session_id: sid.clone(),
+                        from: prev,
+                        to: self.session.agent_name.clone(),
+                    });
+                }
+            } else {
+                let available: Vec<&str> = self
+                    .cycleable_agents
+                    .iter()
+                    .map(|a| a.name.as_str())
+                    .collect();
+                self.status = format!(
+                    "Unknown agent '{}'. Available: {}",
+                    args,
+                    available.join(", ")
+                );
+                self.push_log_no_agent(LogLevel::Warn, format!("Unknown agent: {}", args));
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/agents` slash command.
+    fn slash_agents(&mut self) {
+        let mut output = String::from("From: /agents\n\n**Built-in Agents**\n\n");
+
+        let custom_names: std::collections::HashSet<String> = self
+            .custom_agent_defs
+            .iter()
+            .map(|d| d.agent_info.name.clone())
+            .collect();
+
+        for agent in &self.cycleable_agents {
+            let is_custom = custom_names.contains(&agent.name) || agent.name.starts_with("custom:");
+            if !is_custom {
+                let active = if agent.name == self.session.agent_name {
+                    " *"
+                } else {
+                    ""
+                };
+                output.push_str(&format!(
+                    "- `{}` - {}{}\n",
+                    agent.name, agent.description, active
+                ));
+            }
+        }
+
+        if self.custom_agent_defs.is_empty() {
+            output.push_str(
+                                      "\n**Custom Agents**\n\n*(none - place .json or .md files in .codemason/agents/, ~/.config/codemason/agents/, or ~/.codemason/agents/)*\n",
+                                  );
+        } else {
+            output.push_str("\n**Custom Agents**\n\n");
+            for def in &self.custom_agent_defs {
+                let scope = if def.is_project_local {
+                    "project"
+                } else {
+                    "global"
+                };
+                let name = &def.agent_info.name;
+                let desc = &def.agent_info.description;
+                let active = if *name == self.session.agent_name {
+                    " *"
+                } else {
+                    ""
+                };
+                let fmt = if def.source_path.extension().and_then(|e| e.to_str()) == Some("md") {
+                    "profile"
+                } else {
+                    "oasf"
+                };
+                output.push_str(&format!(
+                    "- `{}` - {} [{}/{}]{}\n",
+                    name, desc, scope, fmt, active
+                ));
+            }
+        }
+
+        if !self.custom_agent_diagnostics.is_empty() {
+            output.push_str("\n**Diagnostics**\n\n");
+            for diag in &self.custom_agent_diagnostics {
+                output.push_str(&format!("- [warn] {}\n", diag));
+            }
+        }
+
+        self.append_assistant_text(&output);
+
+        self.status = "agents".to_string();
+    }
+
+    /// Run the `/context` slash command.
+    fn slash_context(&mut self, args: &str) {
+        match args.trim() {
+            "refresh" => {
+                codemason_agent::agent::clear_prompt_context_cache();
+                self.append_assistant_text(
+                                                        "From: /context\n[sync] Context cache cleared - next message will recompute file tree, git status, and README."
+                                                    );
+                self.push_log_no_agent(LogLevel::Info, "context cache cleared".to_string());
+                self.status = "context refreshed".to_string();
+            }
+            "help" | "" => {
+                self.append_assistant_text(
+                                                        "From: /context help\n\n## /context - Prompt context cache\n\n| Subcommand | Description |\n|---|---|\n| `/context refresh` | Clear the cached file tree, git status, and README so the next message recomputes them |\n| `/context help` | Show this help |"
+                                                    );
+                self.status = "context: help".to_string();
+            }
+            _ => {
+                self.append_assistant_text(
+                    "From: /context\nUsage: `/context refresh` | `/context help`",
+                );
+            }
+        }
+    }
+
+    /// Run the `/config` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_config(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        match args.trim() {
+            "help" | "" => {
+                self.append_assistant_text(
+                        "From: /config help\n\n## /config - Configuration inspection and backup\n\n| Subcommand | Description |\n|---|---|\n| `/config show` | Display application paths and resolved config values (with source: global/project/env) |\n| `/config save` | Back up the global `codemason.json` into the config `saves/` directory |\n| `/config list` | Browse saved backups and restore one (interactive picker) |\n| `/config help` | Show this help |",
+                    );
+                self.status = "config: help".to_string();
+            }
+            "show" => {
+                let cwd = self.cwd_path.clone();
+                let data_dir = codemason_config::user_dirs::global_state_dir().unwrap_or_default();
+                let config_dir =
+                    codemason_config::user_dirs::global_state_dir().unwrap_or_default();
+
+                // Determine active config file paths
+                let project_config = cwd.join(".codemason").join("codemason.json");
+                let global_config = config_dir.join("codemason.json");
+                let env_config = std::env::var("CODEMASON_CONFIG").ok();
+
+                let mut output =
+                    String::from("From: /config show\n\n[dir] **Application Paths**\n\n");
+
+                output.push_str(&format!(
+                    "| {:<24} | {}\n",
+                    "Working directory",
+                    cwd.display()
+                ));
+                output.push_str(&format!(
+                    "| {:<24} | {}\n",
+                    "Data directory",
+                    data_dir.display()
+                ));
+                output.push_str(&format!(
+                    "| {:<24} | {}\n",
+                    "Config directory",
+                    config_dir.display()
+                ));
+
+                output.push_str("\n[file] **Config Files**\n\n");
+
+                let project_exists = project_config.exists();
+                let global_exists = global_config.exists();
+
+                output.push_str(&format!(
+                    "| {:<24} | {} {}\n",
+                    "Project config",
+                    project_config.display(),
+                    if project_exists { "[ok]" } else { "[x]" }
+                ));
+                output.push_str(&format!(
+                    "| {:<24} | {} {}\n",
+                    "Global config",
+                    global_config.display(),
+                    if global_exists { "[ok]" } else { "[x]" }
+                ));
+                if let Some(ref env_path) = env_config {
+                    let env_exists = std::path::PathBuf::from(env_path).exists();
+                    output.push_str(&format!(
+                        "| {:<24} | {} {}\n",
+                        "Env (CODEMASON_CONFIG)",
+                        env_path,
+                        if env_exists { "[ok]" } else { "[x]" }
+                    ));
+                } else {
+                    output.push_str(&format!(
+                        "| {:<24} | {}\n",
+                        "Env (CODEMASON_CONFIG)", "(not set)"
+                    ));
+                }
+
+                // -- Resolved configuration values with provenance -----------
+                // Reload the merged config and, for each top-level key, report
+                // the highest-precedence file that explicitly sets it. Source
+                // detection mirrors Config::load_for(&self.cwd_path) precedence: defaults <
+                // global < project < env file < CODEMASON_CONFIG_CONTENT. Fields
+                // with union/append/OR semantics are annotated "(union)".
+                output.push_str("\n[spin]  **Resolved Values**\n\n");
+
+                match codemason_agent::Config::load_for(&self.cwd_path) {
+                    Ok(cfg) => {
+                        let global_label = if global_config.exists() {
+                            "global".to_string()
+                        } else {
+                            "defaults".to_string()
+                        };
+                        let project_label = "project";
+
+                        // Highest-precedence source per top-level key.
+                        let mut key_source: std::collections::HashMap<String, String> =
+                            std::collections::HashMap::new();
+
+                        // 1. Defaults (lowest precedence).
+                        let defaults_json =
+                            serde_json::to_value(codemason_config::Config::default())
+                                .unwrap_or(serde_json::Value::Null);
+                        if let serde_json::Value::Object(map) = &defaults_json {
+                            for k in map.keys() {
+                                key_source.insert(k.clone(), "defaults".to_string());
+                            }
+                        }
+
+                        // 2. Global file.
+                        if global_config.exists() {
+                            if let Ok(raw) = std::fs::read_to_string(&global_config) {
+                                if let Ok(serde_json::Value::Object(map)) =
+                                    serde_json::from_str::<serde_json::Value>(&raw)
+                                {
+                                    for (k, v) in map {
+                                        if !v.is_null() {
+                                            key_source.insert(k, global_label.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 3. Project file.
+                        if project_config.exists() {
+                            if let Ok(raw) = std::fs::read_to_string(&project_config) {
+                                if let Ok(serde_json::Value::Object(map)) =
+                                    serde_json::from_str::<serde_json::Value>(&raw)
+                                {
+                                    for (k, v) in map {
+                                        if !v.is_null() {
+                                            key_source.insert(k, project_label.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 4. CODEMASON_CONFIG env file (higher precedence).
+                        if let Some(ref env_path) = env_config {
+                            if let Ok(raw) = std::fs::read_to_string(env_path) {
+                                if let Ok(serde_json::Value::Object(map)) =
+                                    serde_json::from_str::<serde_json::Value>(&raw)
+                                {
+                                    for (k, v) in map {
+                                        if !v.is_null() {
+                                            key_source.insert(k, format!("env ({env_path})"));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 5. CODEMASON_CONFIG_CONTENT inline JSON (highest).
+                        if let Ok(content) = std::env::var("CODEMASON_CONFIG_CONTENT") {
+                            if let Ok(serde_json::Value::Object(map)) =
+                                serde_json::from_str::<serde_json::Value>(&content)
+                            {
+                                for (k, v) in map {
+                                    if !v.is_null() {
+                                        key_source.insert(
+                                            k,
+                                            "env (CODEMASON_CONFIG_CONTENT)".to_string(),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
+                        // Fields with union/append/OR semantics across layers.
+                        let union_fields = [
+                            "permission",
+                            "instructions",
+                            "skill_dirs",
+                            "hooks",
+                            "bash",
+                            "yolo",
+                            "edit_log",
+                            "sdd",
+                            "piegap",
+                            "experimental",
+                        ];
+
+                        let merged_json =
+                            serde_json::to_value(&cfg).unwrap_or(serde_json::Value::Null);
+                        if let serde_json::Value::Object(map) = &merged_json {
+                            let mut keys: Vec<&String> = map.keys().collect();
+                            keys.sort();
+                            output.push_str(&format!(
+                                "| {:<30} | {:<30} | value |\n",
+                                "key", "source"
+                            ));
+                            output.push_str("|---|---|---|\n");
+                            for key in keys {
+                                let mut value = map.get(key).cloned().unwrap_or_default();
+                                // SEC: value-scan the whole subtree so a
+                                // credential under an innocuous key (nested
+                                // `mcp.*.env`/`headers`, `provider.*.api.headers`,
+                                // URL-userinfo secrets) is masked too, then fully
+                                // mask a top-level key whose *name* is credential-like.
+                                codemason_types::sanitize::redact_json_value(&mut value, 8);
+                                let is_secret_key =
+                                    codemason_types::sanitize::is_secret_json_key(key);
+                                let rendered = if is_secret_key {
+                                    codemason_types::sanitize::REDACTION_PLACEHOLDER.to_string()
+                                } else {
+                                    codemason_types::sanitize::redact_secrets(&value.to_string())
+                                };
+                                let source = key_source.get(key).map(String::as_str).unwrap_or(
+                                    if key == "config_paths" {
+                                        "runtime"
+                                    } else {
+                                        "defaults"
+                                    },
+                                );
+                                let both_files = global_config.exists() && project_config.exists();
+                                let source_label = if union_fields.contains(&key.as_str())
+                                    && both_files
+                                    && matches!(source, "global" | "project")
+                                {
+                                    "global + project (union)"
+                                } else {
+                                    source
+                                };
+                                output.push_str(&format!(
+                                    "| {key:<30} | {source_label:<30} | `{rendered}`\n"
+                                ));
+                            }
+                        } else {
+                            output.push_str("(could not serialise merged config)\n");
+                        }
+                    }
+                    Err(e) => {
+                        output.push_str(&format!("[err] Failed to load config: {e}\n"));
+                    }
+                }
+
+                // Storage database
+                output.push_str(&format!(
+                    "\n[disk] **Storage**\n\n| {:<24} | {}\n",
+                    "Database",
+                    self.db_path.display()
+                ));
+
+                // Code index
+                let codeindex_dir = cwd.join(".codemason").join("codeindex");
+                output.push_str("\n[search] **Code Index**\n\n");
+                output.push_str(&format!(
+                    "| {:<24} | {} {}\n",
+                    "Index directory",
+                    codeindex_dir.display(),
+                    if codeindex_dir.exists() {
+                        "[ok]"
+                    } else {
+                        "[x]"
+                    }
+                ));
+
+                // Memory
+                let memory_dir = cwd.join(".codemason").join("memory");
+                let global_memory = codemason_config::user_dirs::global_memory_dir();
+                output.push_str("\n[brain] **Memory**\n\n");
+                output.push_str(&format!(
+                    "| {:<24} | {} {}\n",
+                    "Project memory",
+                    memory_dir.display(),
+                    if memory_dir.exists() { "[ok]" } else { "[x]" }
+                ));
+                match &global_memory {
+                    Some(dir) => {
+                        output.push_str(&format!(
+                            "| {:<24} | {} {}\n",
+                            "Global memory",
+                            dir.display(),
+                            if dir.exists() { "[ok]" } else { "[x]" }
+                        ));
+                    }
+                    None => {
+                        output.push_str("| Global memory            | (unavailable) [x]\n");
+                    }
+                }
+
+                // Agents
+                let project_agents = cwd.join(".codemason").join("agents");
+                let global_agents = codemason_config::user_dirs::global_agents_dir();
+                output.push_str("\n[agent] **Custom Agents**\n\n");
+                output.push_str(&format!(
+                    "| {:<24} | {} {}\n",
+                    "Project agents",
+                    project_agents.display(),
+                    if project_agents.exists() {
+                        "[ok]"
+                    } else {
+                        "[x]"
+                    }
+                ));
+                match &global_agents {
+                    Some(dir) => {
+                        output.push_str(&format!(
+                            "| {:<24} | {} {}\n",
+                            "Global agents",
+                            dir.display(),
+                            if dir.exists() { "[ok]" } else { "[x]" }
+                        ));
+                    }
+                    None => {
+                        output.push_str("| Global agents            | (unavailable) [x]\n");
+                    }
+                }
+
+                self.append_assistant_text(&output);
+                self.status = "config: show".to_string();
+            }
+            // -- /config save --------------------------------------------
+            // FR-003: snapshot the current global codemason.json into a
+            // timestamped backup inside `saves/`. The helper creates the
+            // `saves/` directory if needed and writes atomically.
+            "save" => match codemason_config::Config::backup_global_config(None) {
+                Ok(path) => {
+                    self.append_assistant_text(&format!(
+                        "From: /config save\n[ok] **Saved backup to:**\n  `{}`",
+                        path.display()
+                    ));
+                    self.push_log_no_agent(
+                        LogLevel::Info,
+                        format!("config save: wrote backup to {}", path.display()),
+                    );
+                    self.status = "config: saved".to_string();
+                }
+                Err(e) => {
+                    self.append_assistant_text(&format!(
+                        "From: /config save\n[err] **Failed to back up global config:**\n  \
+                                 {e}\n\nNo changes were made."
+                    ));
+                    self.push_log_no_agent(LogLevel::Error, format!("config save: error: {e}"));
+                    self.status = "config: save error".to_string();
                 }
             },
-            "actionloop" => {
-                let sub = args.split_whitespace().next().unwrap_or("").to_lowercase();
-                match sub.as_str() {
-                    "help" | "--help" | "-h" => {
-                        self.append_assistant_text(&crate::app::helpers::from_cmd(
+            // -- /config list --------------------------------------------
+            // FR-004 / FR-006: scan the `saves/` directory for backups. If
+            // none exist, show a user-facing message instead of an empty
+            // picker. Otherwise open the interactive picker (key handling
+            // and rendering are wired up in T-006/T-007).
+            "list" => {
+                let config_dir = match codemason_config::Config::global_config_dir() {
+                    Some(d) => d,
+                    None => {
+                        self.append_assistant_text(
+                            "From: /config list\n[err] **Cannot determine the global config \
+                                 directory for this platform.**",
+                        );
+                        self.push_log_no_agent(
+                            LogLevel::Error,
+                            "config list: no global config directory".to_string(),
+                        );
+                        self.status = "config: list error".to_string();
+                        return std::ops::ControlFlow::Break(());
+                    }
+                };
+                let saves_dir = config_dir.join("saves");
+
+                // Collect files matching the `codemason.json.*` backup pattern,
+                // excluding the transient `.tmp` temp files written during
+                // atomic backup.
+                let mut entries: Vec<std::path::PathBuf> = match std::fs::read_dir(&saves_dir) {
+                    Ok(rd) => rd
+                        .filter_map(Result::ok)
+                        .filter_map(|e| {
+                            let name = e.file_name().to_string_lossy().to_string();
+                            let path = e.path();
+                            let is_tmp = std::path::Path::new(&name)
+                                .extension()
+                                .is_some_and(|ext| ext.eq_ignore_ascii_case("tmp"));
+                            if name.starts_with("codemason.json.") && !is_tmp && path.is_file() {
+                                Some(path)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect(),
+                    Err(_) => Vec::new(),
+                };
+
+                if entries.is_empty() {
+                    // FR-006: no saved configurations available.
+                    self.append_assistant_text(&format!(
+                        "From: /config list\n[i]  **No saved configurations found.**\n\n\
+                             Backups are stored in:\n  `{}`\n\nUse `/config save` to create one.",
+                        saves_dir.display()
+                    ));
+                    self.push_log_no_agent(
+                        LogLevel::Info,
+                        format!("config list: no saves in {}", saves_dir.display()),
+                    );
+                    self.status = "config: list empty".to_string();
+                } else {
+                    // Sort newest-first by modification time (FR-010).
+                    entries.sort_by(|a, b| {
+                        b.metadata()
+                            .and_then(|m| m.modified())
+                            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                            .cmp(
+                                &a.metadata()
+                                    .and_then(|m| m.modified())
+                                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+                            )
+                    });
+                    let count = entries.len();
+                    self.config_save_picker = Some(ConfigSavePickerState {
+                        entries,
+                        selected: 0,
+                        scroll_offset: 0,
+                        config_dir: config_dir.clone(),
+                    });
+                    self.append_assistant_text(&format!(
+                        "From: /config list\n[notice] **{} saved configuration(s) found.**\n\n\
+                             Use ^/v (or k/j) to select a backup, Enter to restore, Esc to \
+                             cancel.",
+                        count
+                    ));
+                    self.push_log_no_agent(
+                        LogLevel::Info,
+                        format!(
+                            "config list: opened picker ({} backup(s) in {})",
+                            count,
+                            saves_dir.display()
+                        ),
+                    );
+                    self.status = "config: list".to_string();
+                }
+            }
+            _ => {
+                self.append_assistant_text(
+                        "From: /config\nUsage: `/config show` | `/config save` | `/config list` | `/config help`",
+                    );
+                self.status = "config: usage".to_string();
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/init` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    async fn slash_init(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        match args.trim() {
+            // /init help - show usage without starting the analysis run.
+            "help" => {
+                self.append_assistant_text(
+                        "From: /init help\n\n## /init - Project analysis and default config\n\n| Subcommand | Description |\n|---|---|\n| `/init` | Analyse the project and write a summary to `.codemason/memory/PROJECT_ANALYSIS.md` for future sessions |\n| `/init config` | Write a default `codemason.json` to the global config directory (skipped if one exists) |\n| `/init help` | Show this help |",
+                    );
+                self.status = "init: help".to_string();
+            }
+            // /init config - write a default codemason.json to the global
+            // config directory (~/.config/codemason/codemason.json on Linux,
+            // ~/Library/Application Support/codemason/codemason.json on macOS,
+            // %APPDATA%\codemason\codemason.json on Windows).
+            "config" => {
+                let config_dir = match dirs::config_dir() {
+                    Some(d) => d.join("codemason"),
+                    None => {
+                        self.append_assistant_text(
+                            "From: /init config\n[err] **Cannot determine the global config \
+                                 directory for this platform.**\n\nPlease set the \
+                                 `XDG_CONFIG_HOME` environment variable (Linux) or ensure \
+                                 the platform config directory is available.",
+                        );
+                        self.push_log_no_agent(
+                            LogLevel::Error,
+                            "init config: no config dir".to_string(),
+                        );
+                        self.status = "init config: error".to_string();
+                        return std::ops::ControlFlow::Break(());
+                    }
+                };
+                let config_path = config_dir.join("codemason.json");
+
+                if config_path.exists() {
+                    self.append_assistant_text(&format!(
+                        "From: /init config\n[warn]  **A global config already exists at:**\n\
+                             \x20  `{}`\n\n\
+                             No changes were made. Edit the file directly to modify your \
+                             configuration.",
+                        config_path.display()
+                    ));
+                    self.push_log_no_agent(
+                        LogLevel::Info,
+                        format!(
+                            "init config: skipped (file exists at {})",
+                            config_path.display()
+                        ),
+                    );
+                    self.status = "init config: already exists".to_string();
+                    return std::ops::ControlFlow::Break(());
+                }
+
+                // Create the config directory and write a default config.
+                let default_config = codemason_config::Config::default();
+                let json = match serde_json::to_string_pretty(&default_config) {
+                    Ok(j) => j,
+                    Err(e) => {
+                        self.append_assistant_text(&format!(
+                            "From: /init config\n[err] **Failed to serialise default config: \
+                                 {}**",
+                            e
+                        ));
+                        self.push_log_no_agent(
+                            LogLevel::Error,
+                            format!("init config: serialise error: {e}"),
+                        );
+                        self.status = "init config: error".to_string();
+                        return std::ops::ControlFlow::Break(());
+                    }
+                };
+
+                if let Err(e) = std::fs::create_dir_all(&config_dir) {
+                    self.append_assistant_text(&format!(
+                        "From: /init config\n[err] **Failed to create config directory `{}`: \
+                             {}**",
+                        config_dir.display(),
+                        e
+                    ));
+                    self.push_log_no_agent(
+                        LogLevel::Error,
+                        format!("init config: create dir error: {}", e),
+                    );
+                    self.status = "init config: error".to_string();
+                    return std::ops::ControlFlow::Break(());
+                }
+
+                if let Err(e) = std::fs::write(&config_path, &json) {
+                    self.append_assistant_text(&format!(
+                        "From: /init config\n[err] **Failed to write config file `{}`: {}**",
+                        config_path.display(),
+                        e
+                    ));
+                    self.push_log_no_agent(
+                        LogLevel::Error,
+                        format!("init config: write error: {}", e),
+                    );
+                    self.status = "init config: error".to_string();
+                    return std::ops::ControlFlow::Break(());
+                }
+
+                self.append_assistant_text(&format!(
+                    "From: /init config\n[ok] **Default config created at:**\n\
+                         \x20  `{}`\n\n\
+                         This file contains all default settings. Edit it to configure \
+                         providers, agents, permissions, memory, and more.",
+                    config_path.display()
+                ));
+                self.push_log_no_agent(
+                    LogLevel::Info,
+                    format!(
+                        "init config: wrote default config to {}",
+                        config_path.display()
+                    ),
+                );
+                self.status = "init config: created".to_string();
+            }
+            _ => {
+                let sid = self.session.session_id.clone().unwrap_or_default();
+                self.append_assistant_text(
+                    "From: /init\n[search] **Analysing project...**\n\n\
+                         The analysis agent will examine the project structure, README, build \
+                         files, and test layout, then write a summary to \
+                         `.codemason/memory/PROJECT_ANALYSIS.md`. Future sessions will \
+                         automatically load this context.",
+                );
+                self.push_log_no_agent(
+                    LogLevel::Info,
+                    "init: starting project analysis".to_string(),
+                );
+
+                // Find the general agent and dispatch the analysis task directly
+                // (no agent-stack push - init runs as a one-shot subagent that writes
+                // memory).
+                let agent = self.select_general_agent();
+
+                let task = "\
+You are performing a one-time project analysis to build persistent memory for this codebase.\n\n\
+Analyse the following aspects of the project:\n\
+1. Programming language(s), frameworks, and key dependencies\n\
+2. Overall architecture and module structure\n\
+3. Entry points and main execution flow\n\
+4. Build system and how to build/test the project\n\
+5. Key conventions: naming, error handling, testing patterns\n\
+6. Important files a developer should know about\n\n\
+After your analysis, call the `memory_store` tool with:\n\
+- category: \"fact\"\n\
+- content: a well-structured markdown summary of your findings\n\
+- confidence: 0.8\n\
+- tags: [\"project-analysis\"]\n\n\
+Be concise but comprehensive. This will be injected into future agent sessions automatically.\
+"
+                .to_string();
+
+                let msg = Message::user_text(&sid, &task);
+                self.session.messages.push(msg);
+
+                let processor = self.session_processor.clone();
+                let flag = Arc::new(AtomicBool::new(false));
+                self.session.cancel_flag = Some(flag.clone());
+                self.session.is_processing = true;
+                self.status = "init: analysing project...".to_string();
+
+                let event_bus = self.event_bus.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = processor.process_message(&sid, &task, &agent, flag).await {
+                        tracing::warn!(error = %e, "init: analysis failed");
+                        event_bus.publish(codemason_agent::event::Event::AgentError {
+                            session_id: sid,
+                            error: format!("init analysis failed: {e}"),
+                        });
+                    }
+                });
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/clear` slash command.
+    fn slash_clear(&mut self) {
+        self.session.messages.clear();
+        self.reset_message_cache();
+        self.session.scroll_offset = 0;
+        self.tool_step_map.clear();
+        self.last_step_per_session.clear();
+        self.substep_counter_per_session.clear();
+        codemason_agent::agent::clear_prompt_context_cache();
+        self.status = "messages cleared".to_string();
+        self.push_log_no_agent(LogLevel::Info, "Message history cleared".to_string());
+    }
+
+    /// Run the `/browse_refresh` slash command.
+    fn slash_browse_refresh(&mut self) {
+        self.refresh_project_files_cache();
+        self.status = format!(
+            "browse index refreshed ({})",
+            self.project_files_cache_count
+        );
+        self.push_log_no_agent(
+            LogLevel::Info,
+            format!(
+                "@ picker index refreshed ({} entries)",
+                self.project_files_cache_count
+            ),
+        );
+    }
+
+    /// Run the `/cancel` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_cancel(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        if args.trim() == "help" {
+            self.append_assistant_text(
+                        "From: /cancel help\n\n## /cancel \u{2014} Request cancellation of a task\n\n| Subcommand | Description |\n|---|---|\n| `/cancel <task_id_prefix>` | Ask the task registry to cancel a sub-agent task, or stop an active benchmark, by ID prefix. The task keeps running until its next step boundary; an ambiguous prefix is refused and every match listed, and an unmatched prefix lists the live task ids |\n| `/cancel help` | Show this help |",
+                    );
+            self.status = "cancel: help".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+        if args.is_empty() {
+            self.status = "[warn] Please provide a task ID prefix: /cancel <id>".to_string();
+            self.push_log_no_agent(LogLevel::Warn, "No task ID provided".to_string());
+            return std::ops::ControlFlow::Break(());
+        }
+
+        if self
+            .active_bench_task_id
+            .as_deref()
+            .is_some_and(|task_id| task_id.starts_with(args))
+            && let Some(flag) = &self.active_bench_cancel
+        {
+            flag.store(true, Ordering::Relaxed);
+            self.status = "[wait] bench: cancellation requested".to_string();
+            self.push_log_no_agent(
+                LogLevel::Info,
+                format!("Benchmark cancellation requested for {}", args),
+            );
+            return std::ops::ControlFlow::Break(());
+        }
+
+        // FR-023 / FR-024 / FR-041: the request goes to the task
+        // registry, never to the local `active_tasks` mirror. The
+        // mirror is a projection of `AgentManager::tasks` that the
+        // periodic reconciliation rebuilds, so removing a row here
+        // would be a UI-local lie - the registry would still be
+        // `Running` and the row would come back on the next sweep.
+        let matches: Vec<codemason_agent::task::TaskEntry> = self
+            .active_tasks
+            .iter()
+            .filter(|t| t.id.starts_with(args))
+            .cloned()
+            .collect();
+        match matches.len() {
+            0 => {
+                // FR-041: name the live ids instead of only echoing
+                // the prefix, so the user can pick one immediately.
+                let live: Vec<String> = self
+                    .active_tasks
+                    .iter()
+                    .filter(|t| is_cancellable(&t.status))
+                    .map(|t| format!("{} ({})", short_id(&t.id), t.agent_name))
+                    .collect();
+                let listing = if live.is_empty() {
+                    "no live sub-agent tasks".to_string()
+                } else {
+                    live.join(", ")
+                };
+                self.status = format!("No task matching '{}'", args);
+                self.push_log_no_agent(
+                    LogLevel::Warn,
+                    format!("Task not found: {} - live tasks: {}", args, listing),
+                );
+                self.append_assistant_text(&format!(
+                    "From: /cancel {args}\n[err] **No live task matches `{args}`.**\n\n\
+                             Live tasks: {listing}\n\n\
+                             Use `/agents` to see the full panel, or `/cancel <id>` with one of \
+                             the ids above."
+                ));
+            }
+            1 => {
+                let task = &matches[0];
+                let task_id = task.id.clone();
+                let agent = task.agent_name.clone();
+                let child_session = task.child_session_id.clone();
+                let status = task.status.clone();
+                if !is_cancellable(&status) {
+                    // FR-023: report the registry's state rather than
+                    // pretending a finished task was cancelled.
+                    self.status = format!("Task {} is already {}", short_id(&task_id), status);
+                    self.push_log_no_agent(
+                        LogLevel::Warn,
+                        format!(
+                            "Cancel ignored: {} ({}) is already {}",
+                            short_id(&task_id),
+                            agent,
+                            status
+                        ),
+                    );
+                    self.append_assistant_text(&format!(
+                        "From: /cancel {args}\n[warn] **Task `{}` ({}) is already \
+                                 `{status}`** - there is nothing to cancel.",
+                        short_id(&task_id),
+                        agent
+                    ));
+                } else {
+                    self.request_agent_cancel(&task_id, &agent, child_session);
+                }
+            }
+            _ => {
+                // FR-024: refuse an ambiguous prefix and list the
+                // candidates so the user can disambiguate.
+                let candidates = matches
+                    .iter()
+                    .map(|t| format!("{} ({}, {})", short_id(&t.id), t.agent_name, t.status))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.status = format!("Ambiguous task prefix '{}'", args);
+                self.push_log_no_agent(
+                    LogLevel::Warn,
+                    format!(
+                        "Ambiguous prefix '{}': {} tasks match - {}",
+                        args,
+                        matches.len(),
+                        candidates
+                    ),
+                );
+                self.append_assistant_text(&format!(
+                    "From: /cancel {args}\n[err] **Ambiguous task prefix `{args}` - {} \
+                             tasks match.**\n\n{}\n\n\
+                             Re-run `/cancel` with a longer prefix.",
+                    matches.len(),
+                    candidates
+                ));
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/bench` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_bench(&mut self, args: &str, raw: &str) -> std::ops::ControlFlow<()> {
+        match codemason_bench::parse_bench_command(args) {
+            Ok(codemason_bench::BenchCommand::Help) => {
+                self.append_assistant_text(&self.render_bench_help());
+                self.status = "bench help".to_string();
+            }
+            Ok(codemason_bench::BenchCommand::List) => {
+                self.append_assistant_text(&self.render_bench_list());
+                self.status = "bench list".to_string();
+            }
+            Ok(codemason_bench::BenchCommand::Show) => {
+                self.append_assistant_text(&self.render_bench_show());
+                self.status = "bench show".to_string();
+            }
+            Ok(codemason_bench::BenchCommand::Status) => {
+                self.append_assistant_text(&self.render_bench_status());
+                self.status = "bench status".to_string();
+            }
+            Ok(codemason_bench::BenchCommand::OpenLast) => {
+                self.append_assistant_text(&self.render_bench_open_last());
+                self.status = "bench open last".to_string();
+            }
+            Ok(codemason_bench::BenchCommand::Cancel) => {
+                if let Some(flag) = &self.active_bench_cancel {
+                    flag.store(true, Ordering::Relaxed);
+                    self.status = "[wait] bench: cancellation requested".to_string();
+                    self.append_assistant_text(
+                            "From: /bench cancel\nCancellation requested for the active benchmark run.\n\nUse `/bench status` to watch it shut down.",
+                        );
+                } else {
+                    self.status = "No active benchmark run".to_string();
+                    self.append_assistant_text("From: /bench cancel\nNo active benchmark run.");
+                }
+            }
+            Ok(codemason_bench::BenchCommand::Init {
+                target,
+                mode,
+                language,
+                force_download,
+                verify_only,
+            }) => {
+                let project_root = match std::env::current_dir() {
+                    Ok(path) => path,
+                    Err(e) => {
+                        self.status = format!("[warn] Could not resolve current directory: {e}");
+                        return std::ops::ControlFlow::Break(());
+                    }
+                };
+                match codemason_bench::init_target_with_progress(
+                    &project_root,
+                    &target,
+                    mode,
+                    language.as_deref(),
+                    force_download,
+                    verify_only,
+                    |event| {
+                        self.session.force_new_message = true;
+                        self.append_assistant_text(&self.render_bench_init_event(&event));
+                    },
+                ) {
+                    Ok(outcomes) => {
+                        let heading = if verify_only {
+                            "verified benchmark target."
+                        } else {
+                            "initialized benchmark target."
+                        };
+                        let mut message = format!("From: /bench init\n[ok] {heading}\n\n");
+                        for init in &outcomes {
+                            let init_action = if init.verified_only {
+                                "verified"
+                            } else if matches!(init.mode, codemason_bench::BenchInitMode::Full) {
+                                "initialized full dataset for"
+                            } else {
+                                "initialized"
+                            };
+                            message.push_str(&format!(
+                                "- **`{}`** [{}] {} at `{}` (`{}`, {} case(s))\n",
+                                init.suite.id,
+                                init.language,
+                                init_action,
+                                init.data_root.display(),
+                                init.manifest.revision,
+                                init.manifest.case_count
+                            ));
+                        }
+                        self.session.force_new_message = true;
+                        self.append_assistant_text(&message);
+                        let status_target = match &target {
+                            codemason_bench::BenchInitTarget::All => "all".to_string(),
+                            codemason_bench::BenchInitTarget::Full => "full".to_string(),
+                            codemason_bench::BenchInitTarget::Suite(id) => id.clone(),
+                        };
+                        self.status = format!("bench init: {status_target}");
+                    }
+                    Err(e) => {
+                        self.status = format!("[warn] bench init failed: {e}");
+                        self.session.force_new_message = true;
+                        self.append_assistant_text(&format!("From: /bench init\n[err] {e}"));
+                    }
+                }
+            }
+            Ok(codemason_bench::BenchCommand::Run { target, options }) => {
+                self.start_bench_run(raw, target, options);
+            }
+            Err(e) => {
+                self.status = format!("[warn] {e}");
+                self.append_assistant_text(&format!("From: /bench\n[err] {e}"));
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/cost` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_cost(&mut self) -> std::ops::ControlFlow<()> {
+        let Some(output) = self.cost_summary() else {
+            self.append_assistant_text(
+                "From: /cost\nNo completed LLM responses yet for this session.\n",
+            );
+
+            self.status = "cost unavailable".to_string();
+            return std::ops::ControlFlow::Break(());
+        };
+        self.append_assistant_text(&output);
+
+        self.status = "cost summary".to_string();
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/startup` slash command.
+    fn slash_startup(&mut self) {
+        match &self.startup_timings {
+            Some(timings) => {
+                self.append_assistant_text(&timings.format_report());
+                self.status = "startup: timings shown".to_string();
+            }
+            None => {
+                self.append_assistant_text(
+                    "From: /startup\n[warn] No startup timings recorded for this session.",
+                );
+                self.status = "startup: unavailable".to_string();
+            }
+        }
+    }
+
+    /// Run the `/actionloop` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_actionloop(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        let sub = args.split_whitespace().next().unwrap_or("").to_lowercase();
+        match sub.as_str() {
+            "help" | "--help" | "-h" => {
+                self.append_assistant_text(&crate::app::helpers::from_cmd(
                             "actionloop help",
                             "## /actionloop - agent action-loop timing\n\n| Subcommand | Description |\n|---|---|\n| `/actionloop help` | Show this help |\n| `/actionloop` | Show average timing of the agent action-loop buckets |\n| `/actionloop clip` | Copy the timing data to the system clipboard |",
                         ));
-                        self.status = "actionloop: help".to_string();
-                        return;
-                    }
-                    "clip" => {
-                        match self.actionloop_report() {
-                            Some(report) => {
-                                Self::set_clipboard(&report);
-                                self.append_assistant_text(
-                                      "From: /actionloop clip\n\n[notice] Action-loop timing data copied to the clipboard.",
-                                  );
-                                self.status = "actionloop: clipped".to_string();
-                            }
-                            None => {
-                                self.append_assistant_text(
-                                      "From: /actionloop clip\nNo action-loop timing samples recorded yet.\nEnable `/profile on` and run the agent to collect bucket timings.",
-                                  );
-                                self.status = "actionloop: no samples".to_string();
-                            }
-                        }
-                        return;
-                    }
-                    _ => {}
-                }
+                self.status = "actionloop: help".to_string();
+                return std::ops::ControlFlow::Break(());
+            }
+            "clip" => {
                 match self.actionloop_report() {
                     Some(report) => {
-                        self.append_assistant_text(&format!("From: /actionloop\n{report}"));
-                        self.status = "actionloop: timings shown".to_string();
+                        Self::set_clipboard(&report);
+                        self.append_assistant_text(
+                                      "From: /actionloop clip\n\n[notice] Action-loop timing data copied to the clipboard.",
+                                  );
+                        self.status = "actionloop: clipped".to_string();
                     }
                     None => {
                         self.append_assistant_text(
-                              "From: /actionloop\nNo action-loop timing samples recorded yet.\nEnable `/profile on` and run the agent to collect bucket timings.",
-                          );
+                                      "From: /actionloop clip\nNo action-loop timing samples recorded yet.\nEnable `/profile on` and run the agent to collect bucket timings.",
+                                  );
                         self.status = "actionloop: no samples".to_string();
                     }
                 }
+                return std::ops::ControlFlow::Break(());
             }
-            "clip" => {
-                // /clip - copy the rendered contents of the message window to
-                // the system clipboard. Uses the plain-text rows the Messages
-                // pane last rendered (the same buffer text-selection copy
-                // reads), so what lands on the clipboard is exactly what the
-                // user sees.  PERF-041: refresh that buffer on demand rather
-                // than rebuilding it on every idle frame.
-                self.ensure_copy_content_lines();
-                if self.session.message_content_lines.is_empty() {
-                    self.append_assistant_text(
-                        "From: /clip\nNo rendered message content to copy yet.",
-                    );
-                    self.status = "clip: nothing to copy".to_string();
-                } else {
-                    let text = self.session.message_content_lines.join("\n");
-                    Self::set_clipboard(&text);
-                    let chars = text.len();
-                    self.append_assistant_text(&format!(
+            _ => {}
+        }
+        match self.actionloop_report() {
+            Some(report) => {
+                self.append_assistant_text(&format!("From: /actionloop\n{report}"));
+                self.status = "actionloop: timings shown".to_string();
+            }
+            None => {
+                self.append_assistant_text(
+                              "From: /actionloop\nNo action-loop timing samples recorded yet.\nEnable `/profile on` and run the agent to collect bucket timings.",
+                          );
+                self.status = "actionloop: no samples".to_string();
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/clip` slash command.
+    fn slash_clip(&mut self) {
+        // /clip - copy the rendered contents of the message window to
+        // the system clipboard. Uses the plain-text rows the Messages
+        // pane last rendered (the same buffer text-selection copy
+        // reads), so what lands on the clipboard is exactly what the
+        // user sees.  PERF-041: refresh that buffer on demand rather
+        // than rebuilding it on every idle frame.
+        self.ensure_copy_content_lines();
+        if self.session.message_content_lines.is_empty() {
+            self.append_assistant_text("From: /clip\nNo rendered message content to copy yet.");
+            self.status = "clip: nothing to copy".to_string();
+        } else {
+            let text = self.session.message_content_lines.join("\n");
+            Self::set_clipboard(&text);
+            let chars = text.len();
+            self.append_assistant_text(&format!(
                         "From: /clip\n[notice] Copied {chars} characters ({n} rendered lines) to the clipboard.",
                         n = self.session.message_content_lines.len()
                     ));
-                    self.status = format!("clip: copied {chars} chars");
-                }
-            }
-            "editlog" => self.handle_editlog_command(args),
-            "help" => {
-                let mut help_lines = String::new();
-                help_lines.push_str(&codemason_config::i18n::t(
-                    codemason_config::i18n::MessageKey::HelpHeader,
-                ));
-                help_lines.push_str("\n\n```\n");
-                for cmd_def in SLASH_COMMANDS {
-                    help_lines.push_str(&format!(
-                        "  /{:<18} {}\n",
-                        cmd_def.trigger, cmd_def.description
-                    ));
-                }
+            self.status = format!("clip: copied {chars} chars");
+        }
+    }
 
-                // Append user-invocable skills
-                let working_dir = self.cwd_path.clone();
-                let skill_dirs = codemason_agent::Config::load_for(&self.cwd_path)
-                    .map(|c| c.skill_dirs)
+    /// Run the `/help` slash command.
+    fn slash_help(&mut self) {
+        let mut help_lines = String::new();
+        help_lines.push_str(&codemason_config::i18n::t(
+            codemason_config::i18n::MessageKey::HelpHeader,
+        ));
+        help_lines.push_str("\n\n```\n");
+        for cmd_def in SLASH_COMMANDS {
+            help_lines.push_str(&format!(
+                "  /{:<18} {}\n",
+                cmd_def.trigger, cmd_def.description
+            ));
+        }
+
+        // Append user-invocable skills
+        let working_dir = self.cwd_path.clone();
+        let skill_dirs = codemason_agent::Config::load_for(&self.cwd_path)
+            .map(|c| c.skill_dirs)
+            .unwrap_or_default();
+        let registry = codemason_agent::skill::SkillRegistry::load(&working_dir, &skill_dirs);
+        let skills = registry.list_user_invocable();
+        if !skills.is_empty() {
+            help_lines.push_str("\nSkills:\n");
+            for skill in &skills {
+                let desc = skill.description.as_deref().unwrap_or("(no description)");
+                let hint = skill
+                    .argument_hint
+                    .as_deref()
+                    .map(|h| format!(" {h}"))
                     .unwrap_or_default();
-                let registry =
-                    codemason_agent::skill::SkillRegistry::load(&working_dir, &skill_dirs);
-                let skills = registry.list_user_invocable();
-                if !skills.is_empty() {
-                    help_lines.push_str("\nSkills:\n");
-                    for skill in &skills {
-                        let desc = skill.description.as_deref().unwrap_or("(no description)");
-                        let hint = skill
-                            .argument_hint
-                            .as_deref()
-                            .map(|h| format!(" {h}"))
-                            .unwrap_or_default();
-                        help_lines.push_str(&format!(
-                            "  /{:<18} {}\n",
-                            format!("{}{}", skill.name, hint),
-                            desc
-                        ));
-                    }
-                }
-                // Append plugin-contributed commands (spec `plugins` FR-031).
-                if !self.plugin_commands.is_empty() {
-                    help_lines.push_str("\nPlugin commands:\n");
-                    for plugin_cmd in &self.plugin_commands {
-                        let desc = if plugin_cmd.description.is_empty() {
-                            format!("(plugin {})", plugin_cmd.plugin_id)
-                        } else {
-                            format!(
-                                "{} (plugin {})",
-                                plugin_cmd.description, plugin_cmd.plugin_id
-                            )
-                        };
-                        help_lines.push_str(&format!("  /{:<18} {}\n", plugin_cmd.trigger, desc));
-                    }
-                }
-                help_lines.push_str("```\n");
-                self.append_assistant_text(&help_lines);
-
-                self.status = "help".to_string();
+                help_lines.push_str(&format!(
+                    "  /{:<18} {}\n",
+                    format!("{}{}", skill.name, hint),
+                    desc
+                ));
             }
-            "log" => {
-                let sub = args.split_whitespace().next().unwrap_or("").to_lowercase();
-                match sub.as_str() {
-                    "" => {
-                        // `/log` (no args) toggles the log panel (backwards compat).
-                        self.show_log = !self.show_log;
-                        if self.show_log {
-                            // Entering log mode: dismiss the other side panels so only
-                            // one occupies the side column (FR-012).
-                            self.show_profile = false;
-                            self.show_tasks_panel = false;
-                            self.show_memory = false;
-                            self.show_telemetry = false;
-                            self.spool_log_window_history();
-                        }
-                        self.status = if self.show_log {
-                            "log panel visible".to_string()
-                        } else {
-                            "log panel hidden".to_string()
-                        };
-                    }
-                    "help" => {
-                        self.append_assistant_text(
-                            r"From: /log help
+        }
+        // Append plugin-contributed commands (spec `plugins` FR-031).
+        if !self.plugin_commands.is_empty() {
+            help_lines.push_str("\nPlugin commands:\n");
+            for plugin_cmd in &self.plugin_commands {
+                let desc = if plugin_cmd.description.is_empty() {
+                    format!("(plugin {})", plugin_cmd.plugin_id)
+                } else {
+                    format!(
+                        "{} (plugin {})",
+                        plugin_cmd.description, plugin_cmd.plugin_id
+                    )
+                };
+                help_lines.push_str(&format!("  /{:<18} {}\n", plugin_cmd.trigger, desc));
+            }
+        }
+        help_lines.push_str("```\n");
+        self.append_assistant_text(&help_lines);
+
+        self.status = "help".to_string();
+    }
+
+    /// Run the `/log` slash command.
+    fn slash_log(&mut self, args: &str) {
+        let sub = args.split_whitespace().next().unwrap_or("").to_lowercase();
+        match sub.as_str() {
+            "" => {
+                // `/log` (no args) toggles the log panel (backwards compat).
+                self.show_log = !self.show_log;
+                if self.show_log {
+                    // Entering log mode: dismiss the other side panels so only
+                    // one occupies the side column (FR-012).
+                    self.show_profile = false;
+                    self.show_tasks_panel = false;
+                    self.show_memory = false;
+                    self.show_telemetry = false;
+                    self.spool_log_window_history();
+                }
+                self.status = if self.show_log {
+                    "log panel visible".to_string()
+                } else {
+                    "log panel hidden".to_string()
+                };
+            }
+            "help" => {
+                self.append_assistant_text(
+                    r"From: /log help
 
 ## /log - Log panel and log-file management
 
@@ -5394,90 +5738,82 @@ Be concise but comprehensive. This will be injected into future agent sessions a
 | `/log clear logwindow` | Delete all files in `log/logwindow/` |
 | `/log help` | Show this help |
 ",
-                        );
-                        self.status = "log: help".to_string();
+                );
+                self.status = "log: help".to_string();
+            }
+            "clear" => {
+                let target = args.split_whitespace().nth(1).unwrap_or("").to_lowercase();
+                match target.as_str() {
+                    "subagents" => {
+                        clear_log_subdir(self, "log", "subagents", "log: subagents cleared");
                     }
-                    "clear" => {
-                        let target = args.split_whitespace().nth(1).unwrap_or("").to_lowercase();
-                        match target.as_str() {
-                            "subagents" => {
-                                clear_log_subdir(
-                                    self,
-                                    "log",
-                                    "subagents",
-                                    "log: subagents cleared",
-                                );
-                            }
-                            "panics" => {
-                                clear_log_subdir(self, "log", "panics", "log: panics cleared");
-                            }
-                            "research" => {
-                                clear_log_subdir(self, "log", "research", "log: research cleared");
-                            }
-                            "editlog" => {
-                                clear_log_subdir(self, "log", "editlog", "log: editlog cleared");
-                            }
-                            "logwindow" => {
-                                clear_log_subdir(
-                                    self,
-                                    "log",
-                                    "logwindow",
-                                    "log: logwindow cleared",
-                                );
-                            }
-                            _ => {
-                                self.append_assistant_text(
-                                    r"From: /log clear
-
-Usage: `/log clear subagents|panics|research|editlog|logwindow`",
-                                );
-                                self.status = "log: clear usage".to_string();
-                            }
-                        }
+                    "panics" => {
+                        clear_log_subdir(self, "log", "panics", "log: panics cleared");
+                    }
+                    "research" => {
+                        clear_log_subdir(self, "log", "research", "log: research cleared");
+                    }
+                    "editlog" => {
+                        clear_log_subdir(self, "log", "editlog", "log: editlog cleared");
+                    }
+                    "logwindow" => {
+                        clear_log_subdir(self, "log", "logwindow", "log: logwindow cleared");
                     }
                     _ => {
                         self.append_assistant_text(
-                            r"From: /log
+                            r"From: /log clear
+
+Usage: `/log clear subagents|panics|research|editlog|logwindow`",
+                        );
+                        self.status = "log: clear usage".to_string();
+                    }
+                }
+            }
+            _ => {
+                self.append_assistant_text(
+                    r"From: /log
 
 Usage: `/log [clear subagents|panics|research|editlog|logwindow|help]`",
-                        );
-                        self.status = "log: usage".to_string();
-                    }
-                }
+                );
+                self.status = "log: usage".to_string();
             }
-            "task" => {
-                if args.is_empty() {
-                    // `/task` (no args) toggles the Tasks side panel.
-                    self.show_tasks_panel = !self.show_tasks_panel;
-                    if self.show_tasks_panel {
-                        // Force a cache refresh on the next render so the
-                        // panel shows current data when first shown.
-                        self.session.tasks_cache_dirty = true;
-                        self.show_log = false;
-                        self.show_profile = false;
-                        self.show_memory = false;
-                        self.show_telemetry = false;
-                    }
-                    self.status = if self.show_tasks_panel {
-                        "tasks panel visible".to_string()
-                    } else {
-                        "tasks panel hidden".to_string()
-                    };
-                    self.needs_redraw = true;
-                } else {
-                    let sub = args.split_whitespace().next().unwrap_or("");
-                    let rest = args
-                        .split_whitespace()
-                        .skip(1)
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    match sub {
-                        "list" => self.render_task_list(
-                            if rest.is_empty() { None } else { Some(&rest) },
-                            "task list",
-                        ),
-                        "help" | "--help" | "-h" | "" => {
-                            let help = "\
+        }
+    }
+
+    /// Run the `/task` slash command.
+    fn slash_task(&mut self, args: &str) {
+        if args.is_empty() {
+            // `/task` (no args) toggles the Tasks side panel.
+            self.show_tasks_panel = !self.show_tasks_panel;
+            if self.show_tasks_panel {
+                // Force a cache refresh on the next render so the
+                // panel shows current data when first shown.
+                self.session.tasks_cache_dirty = true;
+                self.show_log = false;
+                self.show_profile = false;
+                self.show_memory = false;
+                self.show_telemetry = false;
+            }
+            self.status = if self.show_tasks_panel {
+                "tasks panel visible".to_string()
+            } else {
+                "tasks panel hidden".to_string()
+            };
+            self.needs_redraw = true;
+        } else {
+            let sub = args.split_whitespace().next().unwrap_or("");
+            let rest = args
+                .split_whitespace()
+                .skip(1)
+                .collect::<Vec<_>>()
+                .join(" ");
+            match sub {
+                "list" => self.render_task_list(
+                    if rest.is_empty() { None } else { Some(&rest) },
+                    "task list",
+                ),
+                "help" | "--help" | "-h" | "" => {
+                    let help = "\
 From: /task help
 
 ## /task - Task management
@@ -5495,607 +5831,660 @@ Manage the session task list (stored in codemason's task service).
 | `/task help` | Show this help text |
 
 Tools: `TaskCreate`, `TaskUpdate`, `TaskGet`, `TaskList`.\n";
-                            self.append_assistant_text(help);
-                            self.status = "task help".to_string();
-                        }
-                        "add" | "create" => {
-                            self.append_assistant_text(
-                                "From: /task add\nUse the `TaskCreate` tool to add a task. \
-                                 Example: TaskCreate with `subject` and `description`.\n",
-                            );
-                            self.status = "Use agent tool: TaskCreate".to_string();
-                        }
-                        "update" => {
-                            self.append_assistant_text(
-                                "From: /task update\nUse the `TaskUpdate` tool to update a task. \
-                                 Example: TaskUpdate with `task_id` and `status`.\n",
-                            );
-                            self.status = "Use agent tool: TaskUpdate".to_string();
-                        }
-                        "get" => {
-                            self.append_assistant_text(
-                                "From: /task get\nUse the `TaskGet` tool to inspect a task. \
-                                 Example: TaskGet with `task_id`.\n",
-                            );
-                            self.status = "Use agent tool: TaskGet".to_string();
-                        }
-                        _ => {
-                            let help = "\
-From: /task help
-
-## /task - Task management
-
-Manage the session task list (stored in codemason's task service).
-
-| Subcommand | Description |
-|------------|-------------|
-| `/task` | Toggle the Tasks side panel |
-| `/task list` | List all tasks for the current session |
-| `/task add <subject>` | Use `TaskCreate` to add a task |
-| `/task create <subject>` | Alias for `add` |
-| `/task update <id> <status>` | Use `TaskUpdate` to update a task |
-| `/task get <id>` | Use `TaskGet` to inspect a task |
-| `/task help` | Show this help text |
-
-Tools: `TaskCreate`, `TaskUpdate`, `TaskGet`, `TaskList`.\n";
-                            self.append_assistant_text(help);
-                            self.status = "task help".to_string();
-                        }
-                    }
+                    self.append_assistant_text(help);
+                    self.status = "task help".to_string();
                 }
-            }
-            "telemetry_panel" => {
-                // `/telemetry_panel` slash alias - toggles the Telemetry side
-                // panel. Mirrors the `/task` alias and the Alt+O
-                // InputAction::ToggleTelemetry handler. This is purely a UI
-                // toggle; the `/telemetry counters` command still prints the
-                // same values into the chat transcript.
-                self.show_telemetry = !self.show_telemetry;
-                if self.show_telemetry {
-                    self.show_log = false;
-                    self.show_profile = false;
-                    self.show_tasks_panel = false;
-                    self.show_memory = false;
-                }
-                self.status = if self.show_telemetry {
-                    "telemetry panel visible".to_string()
-                } else {
-                    "telemetry panel hidden".to_string()
-                };
-            }
-            "profile" => match args {
-                "help" | "" => {
+                "add" | "create" => {
                     self.append_assistant_text(
+                        "From: /task add\nUse the `TaskCreate` tool to add a task. \
+                                 Example: TaskCreate with `subject` and `description`.\n",
+                    );
+                    self.status = "Use agent tool: TaskCreate".to_string();
+                }
+                "update" => {
+                    self.append_assistant_text(
+                        "From: /task update\nUse the `TaskUpdate` tool to update a task. \
+                                 Example: TaskUpdate with `task_id` and `status`.\n",
+                    );
+                    self.status = "Use agent tool: TaskUpdate".to_string();
+                }
+                "get" => {
+                    self.append_assistant_text(
+                        "From: /task get\nUse the `TaskGet` tool to inspect a task. \
+                                 Example: TaskGet with `task_id`.\n",
+                    );
+                    self.status = "Use agent tool: TaskGet".to_string();
+                }
+                _ => {
+                    let help = "\
+From: /task help
+
+## /task - Task management
+
+Manage the session task list (stored in codemason's task service).
+
+| Subcommand | Description |
+|------------|-------------|
+| `/task` | Toggle the Tasks side panel |
+| `/task list` | List all tasks for the current session |
+| `/task add <subject>` | Use `TaskCreate` to add a task |
+| `/task create <subject>` | Alias for `add` |
+| `/task update <id> <status>` | Use `TaskUpdate` to update a task |
+| `/task get <id>` | Use `TaskGet` to inspect a task |
+| `/task help` | Show this help text |
+
+Tools: `TaskCreate`, `TaskUpdate`, `TaskGet`, `TaskList`.\n";
+                    self.append_assistant_text(help);
+                    self.status = "task help".to_string();
+                }
+            }
+        }
+    }
+
+    /// Run the `/telemetry_panel` slash command.
+    fn slash_telemetry_panel(&mut self) {
+        // `/telemetry_panel` slash alias - toggles the Telemetry side
+        // panel. Mirrors the `/task` alias and the Alt+O
+        // InputAction::ToggleTelemetry handler. This is purely a UI
+        // toggle; the `/telemetry counters` command still prints the
+        // same values into the chat transcript.
+        self.show_telemetry = !self.show_telemetry;
+        if self.show_telemetry {
+            self.show_log = false;
+            self.show_profile = false;
+            self.show_tasks_panel = false;
+            self.show_memory = false;
+        }
+        self.status = if self.show_telemetry {
+            "telemetry panel visible".to_string()
+        } else {
+            "telemetry panel hidden".to_string()
+        };
+    }
+
+    /// Run the `/profile` slash command.
+    fn slash_profile(&mut self, args: &str) {
+        match args {
+            "help" | "" => {
+                self.append_assistant_text(
                         "From: /profile help\n\n## /profile \u{2014} Agent-loop profiler panel\n\n| Subcommand | Description |\n|---|---|\n| `/profile on` | Enable the agent-loop profiler side panel (reads `AgentLoopProfiler::snapshot()`) |\n| `/profile off` | Disable the profiler panel |\n| `/profile help` | Show this help |\n\nAlias: `/perf` behaves identically.",
                     );
-                    self.status = "profile: help".to_string();
-                }
-                "on" => {
-                    self.set_profile_panel_enabled(true);
-                }
-                "off" => {
-                    self.set_profile_panel_enabled(false);
-                }
-                _ => {
-                    self.append_assistant_text(
-                        "From: /profile\nUsage: `/profile on` | `/profile off` | `/profile help`\n",
-                    );
-                    self.status = "profile usage".to_string();
-                }
-            },
-            // PERFPLAN F-4: `/perf` is an alias for `/profile` that toggles
-            // the agent-loop profiler panel reading
-            // `AgentLoopProfiler::snapshot()`. The panel itself already
-            // existed as `/profile`; the alias matches the PERFPLAN wording.
-            "perf" => match args {
-                "help" | "" => {
-                    self.append_assistant_text(
+                self.status = "profile: help".to_string();
+            }
+            "on" => {
+                self.set_profile_panel_enabled(true);
+            }
+            "off" => {
+                self.set_profile_panel_enabled(false);
+            }
+            _ => {
+                self.append_assistant_text(
+                    "From: /profile\nUsage: `/profile on` | `/profile off` | `/profile help`\n",
+                );
+                self.status = "profile usage".to_string();
+            }
+        }
+    }
+
+    /// Run the `/perf` slash command.
+    fn slash_perf(&mut self, args: &str) {
+        match args {
+            "help" | "" => {
+                self.append_assistant_text(
                         "From: /perf help\n\n## /perf \u{2014} Agent-loop profiler panel (alias of /profile)\n\n| Subcommand | Description |\n|---|---|\n| `/perf on` | Enable the agent-loop profiler side panel |\n| `/perf off` | Disable the profiler panel |\n| `/perf help` | Show this help |",
                     );
-                    self.status = "perf: help".to_string();
-                }
-                "on" => {
-                    self.set_profile_panel_enabled(true);
-                }
-                "off" => {
-                    self.set_profile_panel_enabled(false);
-                }
-                _ => {
-                    self.append_assistant_text(
+                self.status = "perf: help".to_string();
+            }
+            "on" => {
+                self.set_profile_panel_enabled(true);
+            }
+            "off" => {
+                self.set_profile_panel_enabled(false);
+            }
+            _ => {
+                self.append_assistant_text(
                         "From: /perf\nUsage: `/perf on` | `/perf off` | `/perf help` (alias for /profile)\n",
                     );
-                    self.status = "perf usage".to_string();
-                }
-            },
-            "llmstats" => {
-                let Some(model_ref) = self.active_model_ref_string() else {
-                    self.status = "[warn] No active model selected".to_string();
-                    self.push_log_no_agent(LogLevel::Warn, "llmstats: no active model".to_string());
-                    return;
-                };
+                self.status = "perf usage".to_string();
+            }
+        }
+    }
 
-                let Some(summary) = self.llm_stats_summary() else {
-                    self.append_assistant_text(&format!(
-                        "From: /llmstats\nNo completed LLM responses yet for {}.\n",
-                        model_ref
-                    ));
+    /// Run the `/llmstats` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_llmstats(&mut self) -> std::ops::ControlFlow<()> {
+        let Some(model_ref) = self.active_model_ref_string() else {
+            self.status = "[warn] No active model selected".to_string();
+            self.push_log_no_agent(LogLevel::Warn, "llmstats: no active model".to_string());
+            return std::ops::ControlFlow::Break(());
+        };
 
-                    self.status = "llm stats unavailable".to_string();
-                    return;
-                };
+        let Some(summary) = self.llm_stats_summary() else {
+            self.append_assistant_text(&format!(
+                "From: /llmstats\nNo completed LLM responses yet for {}.\n",
+                model_ref
+            ));
 
-                let output = format!(
-                    "From: /llmstats\n\
+            self.status = "llm stats unavailable".to_string();
+            return std::ops::ControlFlow::Break(());
+        };
+
+        let output = format!(
+            "From: /llmstats\n\
                      Model: {}\n\
                      Samples: {}\n\
                      Average round-trip: {:.1} ms\n\
                      Average prompt parsing tokens/sec: {:.2}\n\
                      Average output tokens/sec: {:.2}\n",
-                    model_ref,
-                    summary.samples,
-                    summary.avg_elapsed_ms,
-                    summary.avg_prompt_tps,
-                    summary.avg_output_tps
-                );
-                self.append_assistant_text(&output);
+            model_ref,
+            summary.samples,
+            summary.avg_elapsed_ms,
+            summary.avg_prompt_tps,
+            summary.avg_output_tps
+        );
+        self.append_assistant_text(&output);
 
-                self.status = "llm stats".to_string();
-            }
-            "history" => {
-                if is_help_args(args) {
-                    self.append_assistant_text(
+        self.status = "llm stats".to_string();
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/history` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_history(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        if is_help_args(args) {
+            self.append_assistant_text(
                         "From: /history help\n\n## /history - Input history\n\n| Subcommand | Description |\n|---|---|\n| `/history` | Open the history picker (newest first; ^/v to select, Enter to insert, c to copy to clipboard) |\n| `/history <filter>` | Restrict the picker to entries containing `<filter>` |\n| `/history help` | Show this help |",
                     );
-                    self.status = "history: help".to_string();
-                    return;
-                }
-                let filter = args.trim().to_lowercase();
-                if self.input_history.is_empty() {
-                    self.status = "No input history yet".to_string();
-                } else {
-                    // Show newest entries first, optionally filtered by substring match.
-                    let mut entries: Vec<String> =
-                        self.input_history.iter().rev().cloned().collect();
-                    if !filter.is_empty() {
-                        entries.retain(|e| e.to_lowercase().contains(&filter));
-                    }
-                    if entries.is_empty() {
-                        self.status = format!("No history entries contain {:?}", args.trim());
-                    } else {
-                        self.history_picker = Some(crate::app::state::HistoryPickerState {
-                            entries,
-                            selected: 0,
-                            scroll_offset: 0,
-                        });
-                        self.session.input.clear();
-                        self.session.input_cursor = 0;
-                    }
-                }
+            self.status = "history: help".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+        let filter = args.trim().to_lowercase();
+        if self.input_history.is_empty() {
+            self.status = "No input history yet".to_string();
+        } else {
+            // Show newest entries first, optionally filtered by substring match.
+            let mut entries: Vec<String> = self.input_history.iter().rev().cloned().collect();
+            if !filter.is_empty() {
+                entries.retain(|e| e.to_lowercase().contains(&filter));
             }
-            "model" => match args.trim() {
-                "" => {
-                    // If a provider is already configured, jump straight to
-                    // its model list; otherwise show the provider picker.
-                    if let Some(cp) = self.configured_provider.clone() {
-                        if cp.id == "azure_resource" {
-                            self.refresh_provider();
-                            let provider =
-                                codemason_agent::provider::azure_resource::AzureResourceProvider::new(
-                                );
-                            let entries = provider.entries();
-                            if entries.is_empty() {
-                                self.provider_setup = Some(ProviderSetupStep::SelectProvider {
-                                    selected: 0,
-                                    force_key_entry: false,
-                                });
-                                return;
-                            }
-                            let mut selected = 0usize;
-                            if let Ok(Some(last)) =
-                                self.storage.get_setting("azure_resource_last_selection")
-                            {
-                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&last)
-                                {
-                                    if let Some(last_id) = parsed.get("id").and_then(|v| v.as_str())
+            if entries.is_empty() {
+                self.status = format!("No history entries contain {:?}", args.trim());
+            } else {
+                self.history_picker = Some(crate::app::state::HistoryPickerState {
+                    entries,
+                    selected: 0,
+                    scroll_offset: 0,
+                });
+                self.session.input.clear();
+                self.session.input_cursor = 0;
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/model` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_model(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        match args.trim() {
+            "" => {
+                // If a provider is already configured, jump straight to
+                // its model list; otherwise show the provider picker.
+                if let Some(cp) = self.configured_provider.clone() {
+                    if cp.id == "azure_resource" {
+                        self.refresh_provider();
+                        let provider =
+                            codemason_agent::provider::azure_resource::AzureResourceProvider::new();
+                        let entries = provider.entries();
+                        if entries.is_empty() {
+                            self.provider_setup = Some(ProviderSetupStep::SelectProvider {
+                                selected: 0,
+                                force_key_entry: false,
+                            });
+                            return std::ops::ControlFlow::Break(());
+                        }
+                        let mut selected = 0usize;
+                        if let Ok(Some(last)) =
+                            self.storage.get_setting("azure_resource_last_selection")
+                        {
+                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&last) {
+                                if let Some(last_id) = parsed.get("id").and_then(|v| v.as_str()) {
+                                    if let Some(idx) = entries.iter().position(|e| e.id == last_id)
                                     {
-                                        if let Some(idx) =
-                                            entries.iter().position(|e| e.id == last_id)
-                                        {
-                                            selected = idx;
-                                        }
+                                        selected = idx;
                                     }
                                 }
                             }
-                            self.provider_setup = Some(ProviderSetupStep::SelectAzureResource {
-                                entries,
-                                selected,
-                                error: None,
+                        }
+                        self.provider_setup = Some(ProviderSetupStep::SelectAzureResource {
+                            entries,
+                            selected,
+                            error: None,
+                        });
+                        return std::ops::ControlFlow::Break(());
+                    }
+                    if cp.id == "router" {
+                        let providers = Self::get_configured_providers_for_router(&self.storage);
+                        if providers.is_empty() {
+                            self.provider_setup = Some(ProviderSetupStep::SelectProvider {
+                                selected: 0,
+                                force_key_entry: false,
                             });
-                            return;
+                        } else {
+                            self.provider_setup = Some(self.seeded_router_setup_step(providers));
                         }
-                        if cp.id == "router" {
-                            let providers =
-                                Self::get_configured_providers_for_router(&self.storage);
-                            if providers.is_empty() {
-                                self.provider_setup = Some(ProviderSetupStep::SelectProvider {
-                                    selected: 0,
-                                    force_key_entry: false,
-                                });
-                            } else {
-                                self.provider_setup =
-                                    Some(self.seeded_router_setup_step(providers));
-                            }
-                            return;
-                        }
-                        self.refresh_provider();
-                        self.provider_setup = Some(ProviderSetupStep::LoadingModels {
-                            provider_id: cp.id.clone(),
-                            provider_name: cp.name.clone(),
-                        });
-                        self.start_model_discovery(cp.id, cp.name);
-                    } else {
-                        self.provider_setup = Some(ProviderSetupStep::SelectProvider {
-                            selected: 0,
-                            force_key_entry: false,
-                        });
+                        return std::ops::ControlFlow::Break(());
                     }
-                }
-                "show" => {
-                    if !self.ensure_session() {
-                        self.status = "[warn] Failed to create session".to_string();
-                    } else if let Some(report) = self.active_model_metadata_report() {
-                        self.append_assistant_text(&report);
-                        self.status = "active model metadata".to_string();
-                    } else {
-                        self.status = "[warn] No active model selected".to_string();
-                    }
-                }
-                "help" => {
-                    self.append_assistant_text(
-                        "From: /model help\n\n## /model \u{2014} Model selection and metadata\n\n| Subcommand | Description |\n|---|---|\n| `/model` | Open the model picker for the configured provider (or the provider picker when none is configured) |\n| `/model show` | Print the active model's metadata report into the chat |\n| `/model help` | Show this help |",
-                    );
-                    self.status = "model: help".to_string();
-                }
-                _ => {
-                    self.status = "Usage: /model [show]".to_string();
-                }
-            },
-            "thinking" => {
-                if self.session.selected_model.is_none() {
-                    self.status = "[warn] No model selected - use /model to choose".to_string();
-                    return;
-                }
-
-                let supported = self.active_thinking_levels();
-                let requested = args.trim();
-                if requested.is_empty() {
-                    let current = self
-                        .effective_thinking_level_for_agent(&self.session.agent_info)
-                        .map(Self::thinking_level_display)
-                        .unwrap_or("unknown");
-                    self.append_assistant_text(&format!(
-                        "From: /thinking\nCurrent: `{}`\nSupported: `{}`\n",
-                        current,
-                        Self::format_thinking_levels(&supported)
-                    ));
-                    self.status = "thinking".to_string();
-                    return;
-                }
-
-                let Some(level) = Self::parse_thinking_level_setting(requested) else {
-                    self.status = "Usage: /thinking [auto|off|low|medium|high]".to_string();
-                    return;
-                };
-
-                if supported.is_empty() && level != ThinkingLevel::Off {
-                    self.status =
-                        "[warn] Active model does not support configurable thinking".to_string();
-                    return;
-                }
-                if !supported.is_empty() && !supported.contains(&level) {
-                    self.status = format!(
-                        "[warn] Thinking level '{}' is not supported by the active model",
-                        Self::thinking_level_display(level)
-                    );
-                    return;
-                }
-
-                self.persist_selected_thinking_level(level);
-                self.status = format!("thinking: {}", Self::thinking_level_display(level));
-            }
-            "provider" => match args.trim() {
-                "show" => {
-                    let mut providers = Self::get_configured_providers(&self.storage);
-                    if providers.is_empty() {
-                        self.status = "[warn] No configured providers".to_string();
-                        self.push_log_no_agent(
-                            LogLevel::Warn,
-                            "provider show: no configured providers".to_string(),
-                        );
-                    } else {
-                        // Include the router virtual provider if it has a saved
-                        // configuration so the cluster can be viewed inline.
-                        if self.load_raw_router_config().is_some() {
-                            providers.push(ConfiguredProvider {
-                                id: "router".to_string(),
-                                name: "Model Router".to_string(),
-                                source: ProviderSource::Database,
-                            });
-                        }
-                        self.provider_setup = Some(ProviderSetupStep::ShowProviderConfig {
-                            providers,
-                            selected: 0,
-                        });
-                    }
-                }
-                "router" => {
-                    let providers = Self::get_configured_providers_for_router(&self.storage);
-                    if providers.is_empty() {
-                        self.status =
-                            "[warn] No concrete providers - configure one first".to_string();
-                        self.push_log_no_agent(
-                            LogLevel::Warn,
-                            "provider router: no concrete providers configured".to_string(),
-                        );
-                    } else {
-                        self.provider_setup = Some(self.seeded_router_setup_step(providers));
-                    }
-                }
-                "" => {
+                    self.refresh_provider();
+                    self.provider_setup = Some(ProviderSetupStep::LoadingModels {
+                        provider_id: cp.id.clone(),
+                        provider_name: cp.name.clone(),
+                    });
+                    self.start_model_discovery(cp.id, cp.name);
+                } else {
                     self.provider_setup = Some(ProviderSetupStep::SelectProvider {
                         selected: 0,
-                        force_key_entry: true,
+                        force_key_entry: false,
                     });
                 }
-                "help" => {
-                    self.append_assistant_text(
+            }
+            "show" => {
+                if !self.ensure_session() {
+                    self.status = "[warn] Failed to create session".to_string();
+                } else if let Some(report) = self.active_model_metadata_report() {
+                    self.append_assistant_text(&report);
+                    self.status = "active model metadata".to_string();
+                } else {
+                    self.status = "[warn] No active model selected".to_string();
+                }
+            }
+            "help" => {
+                self.append_assistant_text(
+                        "From: /model help\n\n## /model \u{2014} Model selection and metadata\n\n| Subcommand | Description |\n|---|---|\n| `/model` | Open the model picker for the configured provider (or the provider picker when none is configured) |\n| `/model show` | Print the active model's metadata report into the chat |\n| `/model help` | Show this help |",
+                    );
+                self.status = "model: help".to_string();
+            }
+            _ => {
+                self.status = "Usage: /model [show]".to_string();
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/thinking` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_thinking(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        if self.session.selected_model.is_none() {
+            self.status = "[warn] No model selected - use /model to choose".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+
+        let supported = self.active_thinking_levels();
+        let requested = args.trim();
+        if requested.is_empty() {
+            let current = self
+                .effective_thinking_level_for_agent(&self.session.agent_info)
+                .map(Self::thinking_level_display)
+                .unwrap_or("unknown");
+            self.append_assistant_text(&format!(
+                "From: /thinking\nCurrent: `{}`\nSupported: `{}`\n",
+                current,
+                Self::format_thinking_levels(&supported)
+            ));
+            self.status = "thinking".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+
+        let Some(level) = Self::parse_thinking_level_setting(requested) else {
+            self.status = "Usage: /thinking [auto|off|low|medium|high]".to_string();
+            return std::ops::ControlFlow::Break(());
+        };
+
+        if supported.is_empty() && level != ThinkingLevel::Off {
+            self.status = "[warn] Active model does not support configurable thinking".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+        if !supported.is_empty() && !supported.contains(&level) {
+            self.status = format!(
+                "[warn] Thinking level '{}' is not supported by the active model",
+                Self::thinking_level_display(level)
+            );
+            return std::ops::ControlFlow::Break(());
+        }
+
+        self.persist_selected_thinking_level(level);
+        self.status = format!("thinking: {}", Self::thinking_level_display(level));
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/provider` slash command.
+    fn slash_provider(&mut self, args: &str) {
+        match args.trim() {
+            "show" => {
+                let mut providers = Self::get_configured_providers(&self.storage);
+                if providers.is_empty() {
+                    self.status = "[warn] No configured providers".to_string();
+                    self.push_log_no_agent(
+                        LogLevel::Warn,
+                        "provider show: no configured providers".to_string(),
+                    );
+                } else {
+                    // Include the router virtual provider if it has a saved
+                    // configuration so the cluster can be viewed inline.
+                    if self.load_raw_router_config().is_some() {
+                        providers.push(ConfiguredProvider {
+                            id: "router".to_string(),
+                            name: "Model Router".to_string(),
+                            source: ProviderSource::Database,
+                        });
+                    }
+                    self.provider_setup = Some(ProviderSetupStep::ShowProviderConfig {
+                        providers,
+                        selected: 0,
+                    });
+                }
+            }
+            "router" => {
+                let providers = Self::get_configured_providers_for_router(&self.storage);
+                if providers.is_empty() {
+                    self.status = "[warn] No concrete providers - configure one first".to_string();
+                    self.push_log_no_agent(
+                        LogLevel::Warn,
+                        "provider router: no concrete providers configured".to_string(),
+                    );
+                } else {
+                    self.provider_setup = Some(self.seeded_router_setup_step(providers));
+                }
+            }
+            "" => {
+                self.provider_setup = Some(ProviderSetupStep::SelectProvider {
+                    selected: 0,
+                    force_key_entry: true,
+                });
+            }
+            "help" => {
+                self.append_assistant_text(
                         "From: /provider help\n\n## /provider \u{2014} Provider configuration\n\n| Subcommand | Description |\n|---|---|\n| `/provider` | Open the interactive provider setup dialog |\n| `/provider show` | Show configured providers (and the router virtual provider when configured) |\n| `/provider router` | Open the model-router setup dialog seeded from configured providers |\n| `/provider help` | Show this help |",
                     );
-                    self.status = "provider: help".to_string();
-                }
-                _ => {
-                    self.append_assistant_text(
+                self.status = "provider: help".to_string();
+            }
+            _ => {
+                self.append_assistant_text(
                         "From: /provider\nUsage: `/provider` | `/provider show` | `/provider router` | `/provider help`",
                     );
-                    self.status = "provider: usage".to_string();
-                }
-            },
-            "provider_reset" => {
-                self.provider_setup = Some(ProviderSetupStep::ResetProvider { selected: 0 });
+                self.status = "provider: usage".to_string();
             }
-            "quit" | "exit" => {
-                self.quit();
-            }
-            "reload" => {
-                if is_help_args(args) {
-                    self.append_assistant_text(
+        }
+    }
+
+    /// Run the `/reload` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_reload(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        if is_help_args(args) {
+            self.append_assistant_text(
                         "From: /reload help\n\n## /reload \u{2014} Reload customizations\n\n| Subcommand | Description |\n|---|---|\n| `/reload` or `/reload all` | Reload agents, config, MCP servers, and skills |\n| `/reload agents` | Re-scan custom agent definitions (`.codemason/agents/`, `~/.config/codemason/agents/`, `~/.codemason/agents/`) |\n| `/reload config` | Re-read `codemason.json` from disk |\n| `/reload mcp` | Re-read the `mcp` section of the config |\n| `/reload skills` | Re-scan skill directories |\n| `/reload help` | Show this help |",
                     );
-                    self.status = "reload: help".to_string();
-                    return;
+            self.status = "reload: help".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+        let sub = args.split_whitespace().next().unwrap_or("all");
+        let do_agents = matches!(sub, "all" | "agents");
+        let do_config = matches!(sub, "all" | "config");
+        let do_mcp = matches!(sub, "all" | "mcp");
+        let do_skills = matches!(sub, "all" | "skills");
+
+        let mut report = String::from("From: /reload\n\n");
+
+        // -- reload agents --------------------------------------------------
+        if do_agents {
+            let prev_count = self.custom_agent_defs.len();
+            let diags = self.reload_custom_agents();
+
+            for d in &diags {
+                self.push_log_no_agent(LogLevel::Warn, format!("[reload agents] {}", d));
+            }
+            report.push_str(&format!(
+                "[ok] Agents reloaded - {} custom agent(s) (was {})\n",
+                self.custom_agent_defs.len(),
+                prev_count,
+            ));
+            self.push_log_no_agent(
+                LogLevel::Info,
+                format!(
+                    "reload agents: {} custom agent(s) loaded",
+                    self.custom_agent_defs.len()
+                ),
+            );
+        }
+
+        // -- reload config --------------------------------------------------
+        if do_config {
+            match codemason_agent::Config::load_for(&self.cwd_path) {
+                Ok(cfg) => {
+                    // Refresh cached provider and model selections
+                    self.configured_provider = Self::detect_provider(&self.storage);
+                    self.session.selected_model =
+                        self.storage.get_setting("selected_model").ok().flatten();
+                    self.session.selected_model_ctx_window = self
+                        .storage
+                        .get_setting("selected_model_ctx_window")
+                        .ok()
+                        .flatten()
+                        .and_then(|s| s.parse::<usize>().ok());
+                    self.session.selected_thinking_level =
+                        Self::load_persisted_thinking_level(self.storage.as_ref());
+                    self.code_index_enabled = cfg.code_index.enabled;
+                    report.push_str("[ok] Config reloaded (codemason.json)\n");
+                    self.push_log_no_agent(
+                        LogLevel::Info,
+                        "reload config: codemason.json reloaded".to_string(),
+                    );
                 }
-                let sub = args.split_whitespace().next().unwrap_or("all");
-                let do_agents = matches!(sub, "all" | "agents");
-                let do_config = matches!(sub, "all" | "config");
-                let do_mcp = matches!(sub, "all" | "mcp");
-                let do_skills = matches!(sub, "all" | "skills");
+                Err(e) => {
+                    report.push_str(&format!("[x] Config reload failed: {}\n", e));
+                    self.push_log_no_agent(LogLevel::Warn, format!("reload config failed: {}", e));
+                }
+            }
+        }
 
-                let mut report = String::from("From: /reload\n\n");
-
-                // -- reload agents --------------------------------------------------
-                if do_agents {
-                    let prev_count = self.custom_agent_defs.len();
-                    let diags = self.reload_custom_agents();
-
-                    for d in &diags {
-                        self.push_log_no_agent(LogLevel::Warn, format!("[reload agents] {}", d));
-                    }
+        // -- reload mcp -----------------------------------------------------
+        if do_mcp {
+            match codemason_agent::Config::load_for(&self.cwd_path) {
+                Ok(cfg) => {
+                    // Rebuild the display list from the merged server set
+                    // (`codemason.json` + plugin-contributed), preserving the
+                    // connected status/tools the startup connect loop already
+                    // established so a `/reload mcp` does not forget them.
+                    let merged = mcp_display_servers(
+                        &self.mcp_servers,
+                        &cfg.mcp,
+                        &self.cwd_path,
+                        &self.mcp_status_map,
+                    );
+                    let prev = self.mcp_servers.len();
+                    self.mcp_servers = merged;
                     report.push_str(&format!(
-                        "[ok] Agents reloaded - {} custom agent(s) (was {})\n",
-                        self.custom_agent_defs.len(),
-                        prev_count,
+                        "[ok] MCP reloaded - {} server(s) (was {})\n",
+                        self.mcp_servers.len(),
+                        prev,
                     ));
                     self.push_log_no_agent(
                         LogLevel::Info,
-                        format!(
-                            "reload agents: {} custom agent(s) loaded",
-                            self.custom_agent_defs.len()
-                        ),
+                        format!("reload mcp: {} server(s)", self.mcp_servers.len()),
                     );
                 }
-
-                // -- reload config --------------------------------------------------
-                if do_config {
-                    match codemason_agent::Config::load_for(&self.cwd_path) {
-                        Ok(cfg) => {
-                            // Refresh cached provider and model selections
-                            self.configured_provider = Self::detect_provider(&self.storage);
-                            self.session.selected_model =
-                                self.storage.get_setting("selected_model").ok().flatten();
-                            self.session.selected_model_ctx_window = self
-                                .storage
-                                .get_setting("selected_model_ctx_window")
-                                .ok()
-                                .flatten()
-                                .and_then(|s| s.parse::<usize>().ok());
-                            self.session.selected_thinking_level =
-                                Self::load_persisted_thinking_level(self.storage.as_ref());
-                            self.code_index_enabled = cfg.code_index.enabled;
-                            report.push_str("[ok] Config reloaded (codemason.json)\n");
-                            self.push_log_no_agent(
-                                LogLevel::Info,
-                                "reload config: codemason.json reloaded".to_string(),
-                            );
-                        }
-                        Err(e) => {
-                            report.push_str(&format!("[x] Config reload failed: {}\n", e));
-                            self.push_log_no_agent(
-                                LogLevel::Warn,
-                                format!("reload config failed: {}", e),
-                            );
-                        }
-                    }
+                Err(e) => {
+                    report.push_str(&format!("[x] MCP reload failed: {}\n", e));
+                    self.push_log_no_agent(LogLevel::Warn, format!("reload mcp failed: {}", e));
                 }
-
-                // -- reload mcp -----------------------------------------------------
-                if do_mcp {
-                    match codemason_agent::Config::load_for(&self.cwd_path) {
-                        Ok(cfg) => {
-                            // Rebuild the display list from the merged server set
-                            // (`codemason.json` + plugin-contributed), preserving the
-                            // connected status/tools the startup connect loop already
-                            // established so a `/reload mcp` does not forget them.
-                            let merged = mcp_display_servers(
-                                &self.mcp_servers,
-                                &cfg.mcp,
-                                &self.cwd_path,
-                                &self.mcp_status_map,
-                            );
-                            let prev = self.mcp_servers.len();
-                            self.mcp_servers = merged;
-                            report.push_str(&format!(
-                                "[ok] MCP reloaded - {} server(s) (was {})\n",
-                                self.mcp_servers.len(),
-                                prev,
-                            ));
-                            self.push_log_no_agent(
-                                LogLevel::Info,
-                                format!("reload mcp: {} server(s)", self.mcp_servers.len()),
-                            );
-                        }
-                        Err(e) => {
-                            report.push_str(&format!("[x] MCP reload failed: {}\n", e));
-                            self.push_log_no_agent(
-                                LogLevel::Warn,
-                                format!("reload mcp failed: {}", e),
-                            );
-                        }
-                    }
-                }
-
-                // -- reload skills --------------------------------------------------
-                if do_skills {
-                    // Skills are loaded on-demand from disk each time they are needed;
-                    // there is no persistent cache to clear.  Just confirm to the user.
-                    report.push_str(
-                        "[ok] Skills will be reloaded from disk on next use (no cache to clear)\n",
-                    );
-                    self.push_log_no_agent(
-                        LogLevel::Info,
-                        "reload skills: confirmed (on-demand)".to_string(),
-                    );
-                }
-
-                if !matches!(sub, "all" | "agents" | "config" | "mcp" | "skills") {
-                    report.push_str(&format!(
-                        "Unknown subcommand '{}'. Usage: /reload [all|config|mcp|skills|agents]\n",
-                        sub
-                    ));
-                }
-
-                self.append_assistant_text(&report);
-
-                self.status = "reload".to_string();
-                // Reload bash lists alongside other config
-                codemason_agent::bash_lists::load_from_config();
-                // Reload directory lists alongside other config
-                codemason_agent::dir_lists::load_from_config();
             }
-            "project" => {
-                if is_help_args(args) {
-                    self.append_assistant_text(&crate::app::helpers::from_cmd(
-                        "project help",
-                        crate::app::projects::PROJECT_HELP,
-                    ));
-                    self.status = "project: help".to_string();
-                    return;
-                }
-                self.handle_project_command(args);
-            }
-            "autofix" => {
-                if is_help_args(args) {
-                    self.append_assistant_text(&crate::app::helpers::from_cmd(
-                        "autofix help",
-                        crate::app::autofix::AUTOFIX_HELP,
-                    ));
-                    self.status = "autofix: help".to_string();
-                    return;
-                }
-                self.handle_autofix_command(args);
-            }
-            "session" => {
-                if is_help_args(args) {
-                    self.append_assistant_text(&crate::app::helpers::from_cmd(
-                        "session help",
-                        crate::app::sessions::SESSION_HELP,
-                    ));
-                    self.status = "session: help".to_string();
-                    return;
-                }
-                self.handle_session_command(args);
-            }
-            "resume" => {
-                if is_help_args(args) {
-                    self.append_assistant_text(&crate::app::helpers::from_cmd(
+        }
+
+        // -- reload skills --------------------------------------------------
+        if do_skills {
+            // Skills are loaded on-demand from disk each time they are needed;
+            // there is no persistent cache to clear.  Just confirm to the user.
+            report.push_str(
+                "[ok] Skills will be reloaded from disk on next use (no cache to clear)\n",
+            );
+            self.push_log_no_agent(
+                LogLevel::Info,
+                "reload skills: confirmed (on-demand)".to_string(),
+            );
+        }
+
+        if !matches!(sub, "all" | "agents" | "config" | "mcp" | "skills") {
+            report.push_str(&format!(
+                "Unknown subcommand '{}'. Usage: /reload [all|config|mcp|skills|agents]\n",
+                sub
+            ));
+        }
+
+        self.append_assistant_text(&report);
+
+        self.status = "reload".to_string();
+        // Reload bash lists alongside other config
+        codemason_agent::bash_lists::load_from_config();
+        // Reload directory lists alongside other config
+        codemason_agent::dir_lists::load_from_config();
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/project` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_project(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        if is_help_args(args) {
+            self.append_assistant_text(&crate::app::helpers::from_cmd(
+                "project help",
+                crate::app::projects::PROJECT_HELP,
+            ));
+            self.status = "project: help".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+        self.handle_project_command(args);
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/autofix` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_autofix(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        if is_help_args(args) {
+            self.append_assistant_text(&crate::app::helpers::from_cmd(
+                "autofix help",
+                crate::app::autofix::AUTOFIX_HELP,
+            ));
+            self.status = "autofix: help".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+        self.handle_autofix_command(args);
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/session` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_session(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        if is_help_args(args) {
+            self.append_assistant_text(&crate::app::helpers::from_cmd(
+                "session help",
+                crate::app::sessions::SESSION_HELP,
+            ));
+            self.status = "session: help".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+        self.handle_session_command(args);
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/resume` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_resume(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        if is_help_args(args) {
+            self.append_assistant_text(&crate::app::helpers::from_cmd(
                         "resume help",
                         "## /resume - Resume a halted agent\n\n| Subcommand | Description |\n|---|---|\n| `/resume` | Continue a halted agent from where it was interrupted by the user |\n| `/resume help` | Show this help |",
                     ));
-                    self.status = "resume: help".to_string();
-                    return;
-                }
-                if !self.session.agent_halted {
-                    self.status = "Nothing to resume - agent was not halted".to_string();
-                    self.push_log_no_agent(LogLevel::Warn, "Nothing to resume".to_string());
-                    return;
-                }
-                if !self.dispatch_resume_continuation() {
-                    self.status = "No active session".to_string();
-                }
-            }
-            "system" => {
-                if is_help_args(args) {
-                    self.append_assistant_text(
+            self.status = "resume: help".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+        if !self.session.agent_halted {
+            self.status = "Nothing to resume - agent was not halted".to_string();
+            self.push_log_no_agent(LogLevel::Warn, "Nothing to resume".to_string());
+            return std::ops::ControlFlow::Break(());
+        }
+        if !self.dispatch_resume_continuation() {
+            self.status = "No active session".to_string();
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/system` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_system(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        if is_help_args(args) {
+            self.append_assistant_text(
                         "From: /system help\n\n## /system \u{2014} System prompt override\n\n| Subcommand | Description |\n|---|---|\n| `/system` | Show the current agent system prompt |\n| `/system <prompt>` | Override the active agent's system prompt for this session |\n| `/system help` | Show this help |",
                     );
-                    self.status = "system: help".to_string();
-                    return;
-                }
-                if args.is_empty() {
-                    // Show current system prompt
-                    if let Some(ref prompt) = self.session.agent_info.prompt {
-                        self.append_assistant_text(&format!(
-                            "From: /system\nCurrent system prompt:\n{prompt}"
-                        ));
-                    } else {
-                        self.status = "No system prompt set".to_string();
-                    }
-                } else {
-                    self.session.agent_info.prompt = Some(Arc::from(args.to_string()));
-                    self.status = "system prompt updated".to_string();
-                    self.push_log_no_agent(
-                        LogLevel::Info,
-                        format!("System prompt set ({} chars)", args.len()),
-                    );
-                }
+            self.status = "system: help".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+        if args.is_empty() {
+            // Show current system prompt
+            if let Some(ref prompt) = self.session.agent_info.prompt {
+                self.append_assistant_text(&format!(
+                    "From: /system\nCurrent system prompt:\n{prompt}"
+                ));
+            } else {
+                self.status = "No system prompt set".to_string();
             }
-            "tools" => {
-                // FR-033: one table is the catalogue. `TOOLS_SUBS` is what the
-                // autocomplete menu offers and its parameter hint renders, what
-                // this arm's help page and every usage warning print, and what
-                // `commands_info` publishes.
-                let subs = codemason_agent::tool::command_catalog::TOOLS_SUBS;
-                let forms = subs
-                    .iter()
-                    .map(|sub| format!("`/tools {sub}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+        } else {
+            self.session.agent_info.prompt = Some(Arc::from(args.to_string()));
+            self.status = "system prompt updated".to_string();
+            self.push_log_no_agent(
+                LogLevel::Info,
+                format!("System prompt set ({} chars)", args.len()),
+            );
+        }
+        std::ops::ControlFlow::Continue(())
+    }
 
-                let parts: Vec<&str> = args.split_whitespace().collect();
-                match parts.as_slice() {
-                    // `--help`, `-h` and `usage` are retained flag aliases; the
-                    // table lists subcommands, so they are not in it.
-                    [] | ["help"] | ["--help"] | ["-h"] | ["usage"] => {
-                        self.append_assistant_text(&format!(
+    /// Run the `/tools` slash command.
+    fn slash_tools(&mut self, args: &str) {
+        // FR-033: one table is the catalogue. `TOOLS_SUBS` is what the
+        // autocomplete menu offers and its parameter hint renders, what
+        // this arm's help page and every usage warning print, and what
+        // `commands_info` publishes.
+        let subs = codemason_agent::tool::command_catalog::TOOLS_SUBS;
+        let forms = subs
+            .iter()
+            .map(|sub| format!("`/tools {sub}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        match parts.as_slice() {
+            // `--help`, `-h` and `usage` are retained flag aliases; the
+            // table lists subcommands, so they are not in it.
+            [] | ["help"] | ["--help"] | ["-h"] | ["usage"] => {
+                self.append_assistant_text(&format!(
                             "/tools\n\n## /tools - Tool list\n\n\
                              | Subcommand | Description |\n|---|---|\n\
                              | `/tools` | Show this help |\n\
@@ -6104,89 +6493,89 @@ Tools: `TaskCreate`, `TaskUpdate`, `TaskGet`, `TaskList`.\n";
                              | `/tools help` | Show this help |\n\n\
                              Accepted forms: {forms}."
                         ));
-                        self.status = "tools help".to_string();
-                    }
-                    ["list"] | ["show"] => {
-                        self.append_assistant_text(&self.render_tool_list());
-                        self.status = "tools".to_string();
-                    }
-                    _ => {
-                        self.append_assistant_text(&format!(
-                            "From: /tools\n[warn] Usage: {forms}."
-                        ));
-                        self.status = "tools error".to_string();
-                    }
-                }
+                self.status = "tools help".to_string();
             }
+            ["list"] | ["show"] => {
+                self.append_assistant_text(&self.render_tool_list());
+                self.status = "tools".to_string();
+            }
+            _ => {
+                self.append_assistant_text(&format!("From: /tools\n[warn] Usage: {forms}."));
+                self.status = "tools error".to_string();
+            }
+        }
+    }
 
-            "skills" => {
-                if is_help_args(args) {
-                    self.append_assistant_text(
+    /// Run the `/skills` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_skills(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        if is_help_args(args) {
+            self.append_assistant_text(
                         "From: /skills help\n\n## /skills \u{2014} Registered skill packs\n\n| Subcommand | Description |\n|---|---|\n| `/skills` | List every registered skill with scope, access, and description |\n| `/skills help` | Show this help |\n\nSkills are discovered from `~/.codemason/skills/<name>/SKILL.md` (personal), `.codemason/skills/<name>/SKILL.md` (project), and the AgentSkills convention `~/.agents/skills/<name>/SKILL.md` (user) and `.agents/skills/<name>/SKILL.md` (project). Reload with `/reload skills`.",
                     );
-                    self.status = "skills: help".to_string();
-                    return;
-                }
-                self.render_skill_list("skills");
-            }
-            "skill" => handle_skill_command(self, args),
-            "blueprints" => {
-                handle_blueprints_command(self, args);
-            }
-            "mcp" => {
-                let mcp_args: Vec<&str> = args.split_whitespace().collect();
-                let sub = mcp_args.first().copied().unwrap_or("");
-                match sub {
-                    "help" => {
-                        self.append_assistant_text(
+            self.status = "skills: help".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+        self.render_skill_list("skills");
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/mcp` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    async fn slash_mcp(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        let mcp_args: Vec<&str> = args.split_whitespace().collect();
+        let sub = mcp_args.first().copied().unwrap_or("");
+        match sub {
+            "help" => {
+                self.append_assistant_text(
                             "From: /mcp help\n\n## /mcp \u{2014} Model Context Protocol servers\n\n| Subcommand | Description |\n|---|---|\n| `/mcp` | Show all registered servers, their enabled state and their tools |\n| `/mcp config` | Show where codemason looks for MCP definitions, counts per location, and servers found |\n| `/mcp discover` | Scan the environment for known MCP servers and open the discover dialog |\n| `/mcp connect <id>` | Enable a server and connect it now (no restart needed) |\n| `/mcp disconnect <id>` | Disable a server and disconnect it now; the choice persists globally |\n| `/mcp remove <id>` | Disconnect a configured server and delete its `codemason.json` entry |\n| `/mcp help` | Show this help |\n\nEnabled state is stored globally in `<state dir>/mcp_state.json`, so a server\ndisabled here stays disabled in every project. A newly added server is enabled\nby default.\n\nBridged servers are refused by `/mcp remove`: a server whose definition lives in\nthe `mcpServers` section of an installed plugin, or in a connector's manifest,\nis removed with `/plugins remove <id>` or `/connectors remove <id>` instead.",
                         );
-                        self.status = "mcp: help".to_string();
-                        return;
-                    }
-                    "config" => {
-                        let locations = McpClient::discover_locations().await;
-                        self.append_assistant_text(&render_mcp_config(&locations));
-                        self.status = "mcp: config".to_string();
-                        return;
-                    }
-                    "discover" => {
-                        let found = McpClient::discover().await;
-                        // Snapshot each server's enabled state once so the
-                        // dialog's render pass reads no config or ledger.
-                        let configured = codemason_agent::Config::load_for(&self.cwd_path)
-                            .map(|c| c.mcp)
-                            .unwrap_or_default();
-                        let ledger = codemason_agent::mcp::McpEnableLedger::load();
-                        let enabled = found
-                            .iter()
-                            .map(|srv| {
-                                crate::app::state::discovered_mcp_enabled(
-                                    &srv.id,
-                                    &configured,
-                                    &ledger,
-                                )
-                            })
-                            .collect();
-                        // Show interactive discover dialog.
-                        self.mcp_discover = Some(McpDiscoverState {
-                            servers: found,
-                            enabled,
-                            selected: 0,
-                            scroll_offset: 0,
-                            feedback: None,
-                        });
+                self.status = "mcp: help".to_string();
+                return std::ops::ControlFlow::Break(());
+            }
+            "config" => {
+                let locations = McpClient::discover_locations().await;
+                self.append_assistant_text(&render_mcp_config(&locations));
+                self.status = "mcp: config".to_string();
+                return std::ops::ControlFlow::Break(());
+            }
+            "discover" => {
+                let found = McpClient::discover().await;
+                // Snapshot each server's enabled state once so the
+                // dialog's render pass reads no config or ledger.
+                let configured = codemason_agent::Config::load_for(&self.cwd_path)
+                    .map(|c| c.mcp)
+                    .unwrap_or_default();
+                let ledger = codemason_agent::mcp::McpEnableLedger::load();
+                let enabled = found
+                    .iter()
+                    .map(|srv| {
+                        crate::app::state::discovered_mcp_enabled(&srv.id, &configured, &ledger)
+                    })
+                    .collect();
+                // Show interactive discover dialog.
+                self.mcp_discover = Some(McpDiscoverState {
+                    servers: found,
+                    enabled,
+                    selected: 0,
+                    scroll_offset: 0,
+                    feedback: None,
+                });
 
-                        return;
+                return std::ops::ControlFlow::Break(());
+            }
+            "remove" => {
+                match mcp_args.get(1).copied() {
+                    None => {
+                        self.status = "Usage: /mcp remove <id>".to_string();
                     }
-                    "remove" => {
-                        match mcp_args.get(1).copied() {
-                            None => {
-                                self.status = "Usage: /mcp remove <id>".to_string();
-                            }
-                            Some("help") => {
-                                self.append_assistant_text(
-                                    "From: /mcp remove help\n\n## /mcp remove <id>\n\n\
+                    Some("help") => {
+                        self.append_assistant_text(
+                            "From: /mcp remove help\n\n## /mcp remove <id>\n\n\
                                      Disconnects the server and deletes its definition from the\n\
                                      file that declares it. A configured server's entry lives in\n\
                                      the `mcp` section of the user-global `codemason.json`; every\n\
@@ -6196,183 +6585,181 @@ Tools: `TaskCreate`, `TaskUpdate`, `TaskGet`, `TaskList`.\n";
                                      and one declared by a connector with\n\
                                      `/connectors remove <id>`. `/mcp disconnect <id>` still\n\
                                      stops a bridged server without uninstalling its owner.\n",
-                                );
-                                self.status = "mcp: remove help".to_string();
-                            }
-                            Some(id) => {
-                                let report = self.remove_mcp_server(id).await;
-                                self.append_assistant_text(&report);
-                                self.status = "mcp: remove".to_string();
-                            }
-                        }
-                        return;
-                    }
-                    "connect" | "disconnect" => {
-                        if let Some(&id) = mcp_args.get(1) {
-                            let report = self.set_mcp_server_enabled(id, sub == "connect").await;
-                            self.append_assistant_text(&report);
-                        } else {
-                            self.status = format!("Usage: /mcp {sub} <id>");
-                        }
-
-                        return;
-                    }
-                    _ => {
-                        // Adopt the shared client first so the tool inventory is
-                        // the live one, then refresh the display list from the
-                        // merged server set so plugin-contributed servers appear
-                        // here too (they are connected at startup but were
-                        // previously invisible).
-                        // A session in a project with its own MCP servers
-                        // lists that project's client (MULTISESSION M8); the
-                        // launch project's list is the tracked one below.
-                        let project_root = crate::app::project_services::root_of(&self.cwd_path);
-                        let project_client =
-                            self.session_processor.project_mcp_client(&project_root);
-                        let configured = codemason_agent::Config::load_for(&self.cwd_path)
-                            .map(|cfg| cfg.mcp)
-                            .unwrap_or_default();
-                        let listed: Vec<codemason_agent::mcp::McpServer> =
-                            if let Some(client) = project_client {
-                                client.read().await.servers().to_vec()
-                            } else {
-                                self.mcp_client_adopted = false;
-                                {
-                                    let processor = std::sync::Arc::clone(&self.session_processor);
-                                    self.adopt_mcp_client_state(&processor).await;
-                                }
-                                self.mcp_servers = mcp_display_servers(
-                                    &self.mcp_servers,
-                                    &configured,
-                                    &self.cwd_path,
-                                    &self.mcp_status_map,
-                                );
-                                self.mcp_servers.clone()
-                            };
-                        // Emit a markdown table so every server lands on its own
-                        // rendered row (TUI-019): pulldown-cmark joins plain
-                        // source newlines into one paragraph, but a table is
-                        // laid out row by row by html2text.
-                        let mut out = String::from("From: /mcp\nMCP Servers:\n\n");
-                        if listed.is_empty() {
-                            out.push_str("  (no MCP servers configured)\n\n");
-                            out.push_str("Run /mcp discover to scan for available servers.\n");
-                            out.push_str("Then add them to 'mcp' in codemason.json to activate.\n");
-                            out.push_str(
-                                "Enabled plugins that declare an 'mcpServers' section are \
-                                 bridged automatically.\n",
-                            );
-                        } else {
-                            out.push_str(
-                                "| Server | Enabled | Status | Transport | Endpoint | Tools |\n",
-                            );
-                            out.push_str("|---|---|---|---|---|---|\n");
-                            for s in &listed {
-                                let status_icon = match &s.status {
-                                    codemason_agent::mcp::McpStatus::Connected => {
-                                        "[green] connected"
-                                    }
-                                    codemason_agent::mcp::McpStatus::Disabled => "o disabled",
-                                    codemason_agent::mcp::McpStatus::NeedsAuth => {
-                                        "[yellow] needs auth"
-                                    }
-                                    codemason_agent::mcp::McpStatus::Failed { error } => {
-                                        &format!("[red] failed: {}", error)
-                                    }
-                                };
-                                let endpoint = match s.config.type_ {
-                                    codemason_agent::McpTransport::Stdio => {
-                                        // Show the full launch invocation (command plus
-                                        // its arguments) so a stdio server's endpoint is
-                                        // reproducible without opening `codemason.json`.
-                                        let mut invocation =
-                                            s.config.command.clone().unwrap_or_default();
-                                        for arg in &s.config.args {
-                                            if !arg.is_empty() {
-                                                invocation.push(' ');
-                                                invocation.push_str(arg);
-                                            }
-                                        }
-                                        invocation
-                                    }
-                                    codemason_agent::McpTransport::Sse
-                                    | codemason_agent::McpTransport::Http => {
-                                        s.config.url.clone().unwrap_or_default()
-                                    }
-                                };
-                                let cell = |value: &str| value.replace('|', "\\|");
-                                out.push_str(&format!(
-                                    "| {} | {} | {} | {} | {} | {} |\n",
-                                    cell(&s.id),
-                                    if server_is_enabled(s, &self.mcp_enabled_map) {
-                                        "yes"
-                                    } else {
-                                        "no"
-                                    },
-                                    cell(status_icon),
-                                    s.config.type_,
-                                    cell(&endpoint),
-                                    s.tools.len()
-                                ));
-                            }
-                            let connected = self
-                                .mcp_servers
-                                .iter()
-                                .filter(|s| s.status == codemason_agent::mcp::McpStatus::Connected)
-                                .count();
-                            out.push_str(&format!(
-                                "\n{}/{} server(s) connected\n",
-                                connected,
-                                listed.len()
-                            ));
-                        }
-                        // The defining file of each server, as a separate block:
-                        // adding it as a seventh column wrapped every header cell
-                        // past the message width, so it is keyed by id instead.
-                        if !listed.is_empty() {
-                            let declared = mcp_declaration_files(&configured, &self.cwd_path);
-                            out.push_str("\nDefined in:\n\n");
-                            for server in &listed {
-                                let source = declared
-                                    .get(&server.id)
-                                    .cloned()
-                                    .unwrap_or_else(|| "-".to_string());
-                                out.push_str(&format!("- `{}`: {}\n", server.id, source));
-                            }
-                        }
-                        // Who owns each server: a bridged server's definition
-                        // lives in its plugin or connector manifest, so `/mcp
-                        // remove` is not the right command for it and the list
-                        // must say whose it is.
-                        let owners = mcp_bridged_owners(&configured, &self.cwd_path);
-                        if !owners.is_empty() {
-                            out.push_str("\nManaged by:\n\n");
-                            for server in &listed {
-                                let Some((origin, owner)) = owners.get(&server.id) else {
-                                    continue;
-                                };
-                                out.push_str(&format!("- `{}`: {origin} `{owner}`\n", server.id));
-                            }
-                        }
-                        out.push_str(
-                            "\nSubcommands: /mcp discover  /mcp connect <id>  \
-                             /mcp disconnect <id>  /mcp remove <id>\n",
                         );
-                        self.append_assistant_text(&out);
+                        self.status = "mcp: remove help".to_string();
+                    }
+                    Some(id) => {
+                        let report = self.remove_mcp_server(id).await;
+                        self.append_assistant_text(&report);
+                        self.status = "mcp: remove".to_string();
                     }
                 }
-
-                self.status = "mcp".to_string();
+                return std::ops::ControlFlow::Break(());
             }
-            "team" | "teams" => {
-                // Split "subcommand rest-of-args"
-                let (sub, rest) = args
-                    .split_once(char::is_whitespace)
-                    .map_or((args, ""), |(s, r)| (s.trim(), r.trim()));
-                let sub = if sub.is_empty() { "status" } else { sub };
-                match sub {
-                    "help" | "--help" | "-h" => {
-                        let output = "From: /team help
+            "connect" | "disconnect" => {
+                if let Some(&id) = mcp_args.get(1) {
+                    let report = self.set_mcp_server_enabled(id, sub == "connect").await;
+                    self.append_assistant_text(&report);
+                } else {
+                    self.status = format!("Usage: /mcp {sub} <id>");
+                }
+
+                return std::ops::ControlFlow::Break(());
+            }
+            _ => {
+                // Adopt the shared client first so the tool inventory is
+                // the live one, then refresh the display list from the
+                // merged server set so plugin-contributed servers appear
+                // here too (they are connected at startup but were
+                // previously invisible).
+                // A session in a project with its own MCP servers
+                // lists that project's client (MULTISESSION M8); the
+                // launch project's list is the tracked one below.
+                let project_root = crate::app::project_services::root_of(&self.cwd_path);
+                let project_client = self.session_processor.project_mcp_client(&project_root);
+                let configured = codemason_agent::Config::load_for(&self.cwd_path)
+                    .map(|cfg| cfg.mcp)
+                    .unwrap_or_default();
+                let listed: Vec<codemason_agent::mcp::McpServer> =
+                    if let Some(client) = project_client {
+                        client.read().await.servers().to_vec()
+                    } else {
+                        self.mcp_client_adopted = false;
+                        {
+                            let processor = std::sync::Arc::clone(&self.session_processor);
+                            self.adopt_mcp_client_state(&processor).await;
+                        }
+                        self.mcp_servers = mcp_display_servers(
+                            &self.mcp_servers,
+                            &configured,
+                            &self.cwd_path,
+                            &self.mcp_status_map,
+                        );
+                        self.mcp_servers.clone()
+                    };
+                // Emit a markdown table so every server lands on its own
+                // rendered row (TUI-019): pulldown-cmark joins plain
+                // source newlines into one paragraph, but a table is
+                // laid out row by row by html2text.
+                let mut out = String::from("From: /mcp\nMCP Servers:\n\n");
+                if listed.is_empty() {
+                    out.push_str("  (no MCP servers configured)\n\n");
+                    out.push_str("Run /mcp discover to scan for available servers.\n");
+                    out.push_str("Then add them to 'mcp' in codemason.json to activate.\n");
+                    out.push_str(
+                        "Enabled plugins that declare an 'mcpServers' section are \
+                                 bridged automatically.\n",
+                    );
+                } else {
+                    out.push_str("| Server | Enabled | Status | Transport | Endpoint | Tools |\n");
+                    out.push_str("|---|---|---|---|---|---|\n");
+                    for s in &listed {
+                        let status_icon = match &s.status {
+                            codemason_agent::mcp::McpStatus::Connected => "[green] connected",
+                            codemason_agent::mcp::McpStatus::Disabled => "o disabled",
+                            codemason_agent::mcp::McpStatus::NeedsAuth => "[yellow] needs auth",
+                            codemason_agent::mcp::McpStatus::Failed { error } => {
+                                &format!("[red] failed: {}", error)
+                            }
+                        };
+                        let endpoint = match s.config.type_ {
+                            codemason_agent::McpTransport::Stdio => {
+                                // Show the full launch invocation (command plus
+                                // its arguments) so a stdio server's endpoint is
+                                // reproducible without opening `codemason.json`.
+                                let mut invocation = s.config.command.clone().unwrap_or_default();
+                                for arg in &s.config.args {
+                                    if !arg.is_empty() {
+                                        invocation.push(' ');
+                                        invocation.push_str(arg);
+                                    }
+                                }
+                                invocation
+                            }
+                            codemason_agent::McpTransport::Sse
+                            | codemason_agent::McpTransport::Http => {
+                                s.config.url.clone().unwrap_or_default()
+                            }
+                        };
+                        let cell = |value: &str| value.replace('|', "\\|");
+                        out.push_str(&format!(
+                            "| {} | {} | {} | {} | {} | {} |\n",
+                            cell(&s.id),
+                            if server_is_enabled(s, &self.mcp_enabled_map) {
+                                "yes"
+                            } else {
+                                "no"
+                            },
+                            cell(status_icon),
+                            s.config.type_,
+                            cell(&endpoint),
+                            s.tools.len()
+                        ));
+                    }
+                    let connected = self
+                        .mcp_servers
+                        .iter()
+                        .filter(|s| s.status == codemason_agent::mcp::McpStatus::Connected)
+                        .count();
+                    out.push_str(&format!(
+                        "\n{}/{} server(s) connected\n",
+                        connected,
+                        listed.len()
+                    ));
+                }
+                // The defining file of each server, as a separate block:
+                // adding it as a seventh column wrapped every header cell
+                // past the message width, so it is keyed by id instead.
+                if !listed.is_empty() {
+                    let declared = mcp_declaration_files(&configured, &self.cwd_path);
+                    out.push_str("\nDefined in:\n\n");
+                    for server in &listed {
+                        let source = declared
+                            .get(&server.id)
+                            .cloned()
+                            .unwrap_or_else(|| "-".to_string());
+                        out.push_str(&format!("- `{}`: {}\n", server.id, source));
+                    }
+                }
+                // Who owns each server: a bridged server's definition
+                // lives in its plugin or connector manifest, so `/mcp
+                // remove` is not the right command for it and the list
+                // must say whose it is.
+                let owners = mcp_bridged_owners(&configured, &self.cwd_path);
+                if !owners.is_empty() {
+                    out.push_str("\nManaged by:\n\n");
+                    for server in &listed {
+                        let Some((origin, owner)) = owners.get(&server.id) else {
+                            continue;
+                        };
+                        out.push_str(&format!("- `{}`: {origin} `{owner}`\n", server.id));
+                    }
+                }
+                out.push_str(
+                    "\nSubcommands: /mcp discover  /mcp connect <id>  \
+                             /mcp disconnect <id>  /mcp remove <id>\n",
+                );
+                self.append_assistant_text(&out);
+            }
+        }
+
+        self.status = "mcp".to_string();
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/team`, `/teams` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    async fn slash_team(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        // Split "subcommand rest-of-args"
+        let (sub, rest) = args
+            .split_once(char::is_whitespace)
+            .map_or((args, ""), |(s, r)| (s.trim(), r.trim()));
+        let sub = if sub.is_empty() { "status" } else { sub };
+        match sub {
+            "help" | "--help" | "-h" => {
+                let output = "From: /team help
 ## /team command reference
 
 | Command | Arguments | Description |
@@ -6440,199 +6827,197 @@ than assumed.
 | `auto_claim_tasks` | `true` | Idle teammates claim the next available task. |
 | `watchdog_timeout_secs` | `300` | Seconds a live teammate may go without progress before the watchdog fails it. Widen it for a long build; `0` means the default. |
 | `hooks` | none | Quality-gate hooks; a hook that cannot run is recorded in `hook-failures.jsonl` and reported by `/team show` and `team_status`. |";
-                        self.append_assistant_text(output);
-                        self.status = "team: help".to_string();
+                self.append_assistant_text(output);
+                self.status = "team: help".to_string();
+            }
+            "status" | "" => {
+                let mut output = String::from("From: /team status\n");
+                if let Some(team) = self.session.active_team.clone() {
+                    self.ensure_team_manager_for_team(&team.name, None);
+                    output.push_str(&format!(
+                        "## Team: {} ({})\n\n",
+                        team.name,
+                        format!("{:?}", team.status).to_lowercase()
+                    ));
+                    output.push_str(&format!(
+                        "  * lead (you)  session: {}\n",
+                        team.lead_session_id
+                    ));
+                    if self.session.team_members.is_empty() {
+                        output.push_str(
+                            "  (no teammates yet - use team_spawn tool or /team create)\n",
+                        );
+                    } else {
+                        for m in &self.session.team_members {
+                            // FR-033: the status word comes from the
+                            // canonical mapping, never from a Debug
+                            // spelling of the variant name.
+                            let status = status_label(m.status);
+                            let task = m.current_task_id.as_deref().unwrap_or("-").to_string();
+                            let model_str = m
+                                .model_override
+                                .as_ref()
+                                .map(|mr| format!("{}/{}", mr.provider_id, mr.model_id))
+                                .unwrap_or_else(|| "(inherited)".to_string());
+                            output.push_str(&format!(
+                                "  └ {:<18} {:<10} model:{:<30} task:{}\n",
+                                m.name, status, model_str, task
+                            ));
+                        }
                     }
-                    "status" | "" => {
-                        let mut output = String::from("From: /team status\n");
-                        if let Some(team) = self.session.active_team.clone() {
-                            self.ensure_team_manager_for_team(&team.name, None);
-                            output.push_str(&format!(
-                                "## Team: {} ({})\n\n",
-                                team.name,
-                                format!("{:?}", team.status).to_lowercase()
-                            ));
-                            output.push_str(&format!(
-                                "  * lead (you)  session: {}\n",
-                                team.lead_session_id
-                            ));
-                            if self.session.team_members.is_empty() {
-                                output.push_str(
-                                    "  (no teammates yet - use team_spawn tool or /team create)\n",
-                                );
-                            } else {
-                                for m in &self.session.team_members {
-                                    // FR-033: the status word comes from the
-                                    // canonical mapping, never from a Debug
-                                    // spelling of the variant name.
-                                    let status = status_label(m.status);
-                                    let task =
-                                        m.current_task_id.as_deref().unwrap_or("-").to_string();
-                                    let model_str = m
-                                        .model_override
-                                        .as_ref()
-                                        .map(|mr| format!("{}/{}", mr.provider_id, mr.model_id))
-                                        .unwrap_or_else(|| "(inherited)".to_string());
-                                    output.push_str(&format!(
-                                        "  └ {:<18} {:<10} model:{:<30} task:{}\n",
-                                        m.name, status, model_str, task
-                                    ));
-                                }
-                            }
-                            output.push_str(&format!(
-                                "\n{} teammate(s)\n",
-                                self.session.team_members.len()
-                            ));
-                            // FR-020: report messages stranded with a terminated
-                            // teammate rather than leaving them silently unread.
-                            let working_dir = self.cwd_path.clone();
-                            if let Some(store) = TeamStore::load_by_name(&team.name, &working_dir)
-                                .ok()
-                                .or_else(|| {
-                                    codemason_agent::team::find_team_dir(&working_dir, &team.name)
-                                        .and_then(|dir| TeamStore::load(&dir).ok())
-                                })
-                            {
-                                let undelivered = undelivered_messages(&store);
-                                let block = render_undelivered(&team.name, &undelivered, 2);
-                                if !block.is_empty() {
-                                    output.push('\n');
-                                    output.push_str(&block);
-                                }
-                                // FR-034: name the plan a parked teammate is
-                                // waiting on, and the action that unblocks it.
-                                let parked = pending_plans(&store);
-                                let plans = render_pending_plans(&team.name, &parked, 2);
-                                if !plans.is_empty() {
-                                    output.push('\n');
-                                    output.push_str(&plans);
-                                }
-                                // FR-019: a hook that could not be executed is
-                                // an inert gate, not a passing one.
-                                let hook_failures = read_hook_failures(&store.dir);
-                                let hooks = render_hook_failures(&team.name, &hook_failures, 2);
-                                if !hooks.is_empty() {
-                                    output.push('\n');
-                                    output.push_str(&hooks);
-                                }
-                            }
-                        } else {
-                            output.push_str("No active team.\n\nUse `/team create <blueprint> [name]` to start a team (blueprint required).");
+                    output.push_str(&format!(
+                        "\n{} teammate(s)\n",
+                        self.session.team_members.len()
+                    ));
+                    // FR-020: report messages stranded with a terminated
+                    // teammate rather than leaving them silently unread.
+                    let working_dir = self.cwd_path.clone();
+                    if let Some(store) = TeamStore::load_by_name(&team.name, &working_dir)
+                        .ok()
+                        .or_else(|| {
+                            codemason_agent::team::find_team_dir(&working_dir, &team.name)
+                                .and_then(|dir| TeamStore::load(&dir).ok())
+                        })
+                    {
+                        let undelivered = undelivered_messages(&store);
+                        let block = render_undelivered(&team.name, &undelivered, 2);
+                        if !block.is_empty() {
+                            output.push('\n');
+                            output.push_str(&block);
                         }
-                        self.append_assistant_text(&output);
-                        self.status = "team: status".to_string();
+                        // FR-034: name the plan a parked teammate is
+                        // waiting on, and the action that unblocks it.
+                        let parked = pending_plans(&store);
+                        let plans = render_pending_plans(&team.name, &parked, 2);
+                        if !plans.is_empty() {
+                            output.push('\n');
+                            output.push_str(&plans);
+                        }
+                        // FR-019: a hook that could not be executed is
+                        // an inert gate, not a passing one.
+                        let hook_failures = read_hook_failures(&store.dir);
+                        let hooks = render_hook_failures(&team.name, &hook_failures, 2);
+                        if !hooks.is_empty() {
+                            output.push('\n');
+                            output.push_str(&hooks);
+                        }
                     }
-                    "create" => {
-                        if rest.is_empty() {
-                            self.status = "Usage: /team create <blueprint> [name]".to_string();
-                            return;
-                        }
+                } else {
+                    output.push_str("No active team.\n\nUse `/team create <blueprint> [name]` to start a team (blueprint required).");
+                }
+                self.append_assistant_text(&output);
+                self.status = "team: status".to_string();
+            }
+            "create" => {
+                if rest.is_empty() {
+                    self.status = "Usage: /team create <blueprint> [name]".to_string();
+                    return std::ops::ControlFlow::Break(());
+                }
 
-                        // Parse blueprint (mandatory) then optional name
-                        let mut parts = rest.split_whitespace();
-                        let blueprint = parts.next().unwrap_or("").to_string();
-                        let name = parts.next().map(|s| s.to_string());
+                // Parse blueprint (mandatory) then optional name
+                let mut parts = rest.split_whitespace();
+                let blueprint = parts.next().unwrap_or("").to_string();
+                let name = parts.next().map(|s| s.to_string());
 
-                        if blueprint.is_empty() {
-                            self.status = "Usage: /team create <blueprint> [name]".to_string();
-                            return;
-                        }
+                if blueprint.is_empty() {
+                    self.status = "Usage: /team create <blueprint> [name]".to_string();
+                    return std::ops::ControlFlow::Break(());
+                }
 
-                        // Use the supplied name, or generate one from the
-                        // blueprint and a timestamp when none was given.
-                        // SEC-codemason-tui-004: slugify the blueprint segment so
-                        // the generated name is always a valid team name.
-                        let name = name.unwrap_or_else(|| {
-                            format!(
-                                "{}-{}",
-                                codemason_agent::team::slugify_team_name(&blueprint),
-                                chrono::Utc::now().format("%Y%m%d-%H-%M-%S")
-                            )
-                        });
+                // Use the supplied name, or generate one from the
+                // blueprint and a timestamp when none was given.
+                // SEC-codemason-tui-004: slugify the blueprint segment so
+                // the generated name is always a valid team name.
+                let name = name.unwrap_or_else(|| {
+                    format!(
+                        "{}-{}",
+                        codemason_agent::team::slugify_team_name(&blueprint),
+                        chrono::Utc::now().format("%Y%m%d-%H-%M-%S")
+                    )
+                });
 
-                        // SEC-codemason-tui-004: reject a name that is not a single
-                        // safe path component before it reaches the store.
-                        if let Err(e) = codemason_agent::team::validate_team_name(&name) {
-                            self.status = format!("{e}");
-                            return;
-                        }
+                // SEC-codemason-tui-004: reject a name that is not a single
+                // safe path component before it reaches the store.
+                if let Err(e) = codemason_agent::team::validate_team_name(&name) {
+                    self.status = format!("{e}");
+                    return std::ops::ControlFlow::Break(());
+                }
 
-                        let working_dir = self.cwd_path.clone();
-                        let sid = self.session.session_id.clone().unwrap_or_default();
-                        match TeamStore::create(&name, &sid, &working_dir, true) {
-                            Ok(store) => {
-                                let name = store.config.name.clone();
-                                let team_dir = store.dir.clone();
-                                self.session.active_team = Some(store.config);
-                                self.session.team_members.clear();
-                                self.session.team_message_counts.clear();
-                                self.session.team_task_counts.clear();
-                                self.session.team_task_counts_dirty = true;
-                                self.show_teams = true;
-                                self.ensure_team_manager_for_team(&name, Some(team_dir));
-                                self.push_log_no_agent(
-                                    LogLevel::Info,
-                                    format!("[team] Team '{}' created", name),
-                                );
-                                self.append_assistant_text(&format!(
+                let working_dir = self.cwd_path.clone();
+                let sid = self.session.session_id.clone().unwrap_or_default();
+                match TeamStore::create(&name, &sid, &working_dir, true) {
+                    Ok(store) => {
+                        let name = store.config.name.clone();
+                        let team_dir = store.dir.clone();
+                        self.session.active_team = Some(store.config);
+                        self.session.team_members.clear();
+                        self.session.team_message_counts.clear();
+                        self.session.team_task_counts.clear();
+                        self.session.team_task_counts_dirty = true;
+                        self.show_teams = true;
+                        self.ensure_team_manager_for_team(&name, Some(team_dir));
+                        self.push_log_no_agent(
+                            LogLevel::Info,
+                            format!("[team] Team '{}' created", name),
+                        );
+                        self.append_assistant_text(&format!(
                                     "From: /team create\nTeam '{}' created.\n\nUse the `team_spawn` tool to add teammates.",
                                     name
                                 ));
-                                self.status = format!("team: {}", name);
+                        self.status = format!("team: {}", name);
 
-                                // If the blueprint is installed, invoke the
-                                // `team_create` tool to apply its seeding.
-                                //
-                                // `/team create` has already created the team
-                                // above, so the seeding call is issued with
-                                // `seed_only`: it applies the blueprint to the
-                                // existing team instead of re-creating it. A
-                                // re-creating call that ran after the team
-                                // directory was removed (a `/team clear` or
-                                // `/team forcecleanup` racing this detached
-                                // thread) resurrected the tree, so the removal
-                                // failed with ENOTEMPTY or the directory came
-                                // back (CI flake in
-                                // `test_slash_arms_deep::team_clear_removes_ta`
-                                // and
-                                // `test_slash_teams_deep::forcecleanup_confirm_removes_team`).
-                                // A blueprint that is not installed has nothing
-                                // to seed, so the thread is not started at all.
-                                let bp = blueprint.clone();
-                                let blueprint_installed =
-                                    blueprints::list_installed_blueprints(&working_dir)
-                                        .iter()
-                                        .any(|installed| installed.name == bp);
-                                if !bp.is_empty() && blueprint_installed {
-                                    let session_processor = self.session_processor.clone();
-                                    let event_bus = self.event_bus.clone();
-                                    let storage = self.storage.clone();
-                                    let working_dir_clone = working_dir.clone();
-                                    let sid_clone = sid.clone();
-                                    let name_clone = name.clone();
-                                    // Capture the currently selected model so teammates inherit it.
-                                    let active_model_clone: Option<
-                                        codemason_agent::agent::ModelRef,
-                                    > = self.session.selected_model.as_deref().and_then(|s| {
-                                        s.split_once('/').map(|(pid, mid)| {
-                                            codemason_agent::agent::ModelRef {
-                                                provider_id: pid.to_string(),
-                                                model_id: mid.to_string(),
-                                            }
-                                        })
-                                    });
-                                    std::thread::spawn(move || {
-                                        // Create a small runtime for seeding if there is no existing Tokio runtime
-                                        let rt = match tokio::runtime::Runtime::new() {
-                                            Ok(rt) => rt,
-                                            Err(e) => {
-                                                tracing::error!(
-                                                    "Failed to create tokio runtime for team seed: {e}"
-                                                );
-                                                return;
-                                            }
-                                        };
-                                        rt.block_on(async move {                                                    let registry = codemason_agent::tool::create_default_registry();
+                        // If the blueprint is installed, invoke the
+                        // `team_create` tool to apply its seeding.
+                        //
+                        // `/team create` has already created the team
+                        // above, so the seeding call is issued with
+                        // `seed_only`: it applies the blueprint to the
+                        // existing team instead of re-creating it. A
+                        // re-creating call that ran after the team
+                        // directory was removed (a `/team clear` or
+                        // `/team forcecleanup` racing this detached
+                        // thread) resurrected the tree, so the removal
+                        // failed with ENOTEMPTY or the directory came
+                        // back (CI flake in
+                        // `test_slash_arms_deep::team_clear_removes_ta`
+                        // and
+                        // `test_slash_teams_deep::forcecleanup_confirm_removes_team`).
+                        // A blueprint that is not installed has nothing
+                        // to seed, so the thread is not started at all.
+                        let bp = blueprint.clone();
+                        let blueprint_installed =
+                            blueprints::list_installed_blueprints(&working_dir)
+                                .iter()
+                                .any(|installed| installed.name == bp);
+                        if !bp.is_empty() && blueprint_installed {
+                            let session_processor = self.session_processor.clone();
+                            let event_bus = self.event_bus.clone();
+                            let storage = self.storage.clone();
+                            let working_dir_clone = working_dir.clone();
+                            let sid_clone = sid.clone();
+                            let name_clone = name.clone();
+                            // Capture the currently selected model so teammates inherit it.
+                            let active_model_clone: Option<codemason_agent::agent::ModelRef> =
+                                self.session.selected_model.as_deref().and_then(|s| {
+                                    s.split_once('/').map(|(pid, mid)| {
+                                        codemason_agent::agent::ModelRef {
+                                            provider_id: pid.to_string(),
+                                            model_id: mid.to_string(),
+                                        }
+                                    })
+                                });
+                            std::thread::spawn(move || {
+                                // Create a small runtime for seeding if there is no existing Tokio runtime
+                                let rt = match tokio::runtime::Runtime::new() {
+                                    Ok(rt) => rt,
+                                    Err(e) => {
+                                        tracing::error!(
+                                            "Failed to create tokio runtime for team seed: {e}"
+                                        );
+                                        return;
+                                    }
+                                };
+                                rt.block_on(async move {                                                    let registry = codemason_agent::tool::create_default_registry();
                                                     if let Some(tool) = registry.get("team_create") {
                                                         let input = serde_json::json!({
                                                             "name": name_clone,
@@ -6677,562 +7062,687 @@ than assumed.
                                                         }
                                                     }
                                                 });
-                                    });
-                                }
-                            }
-                            Err(e) => {
-                                self.status = format!("Failed to create team: {}", e);
-                                self.push_log_no_agent(
-                                    LogLevel::Error,
-                                    format!("team create failed: {}", e),
-                                );
-                            }
+                            });
                         }
                     }
-
-                    "show" => {
-                        let working_dir = self.cwd_path.clone();
-                        if rest.is_empty() {
-                            let teams = TeamStore::list_teams(&working_dir);
-                            let mut output = String::from("From: /team show\n");
-                            if teams.is_empty() {
-                                output.push_str("No registered teams found.");
-                                self.status = "team: show all (0)".to_string();
-                            } else {
-                                output.push_str("## Registered teams\n\n");
-                                for (name, dir, is_project_local) in teams {
-                                    match TeamStore::load(&dir) {
-                                        Ok(store) => {
-                                            let team = store.config;
-                                            let scope = if is_project_local {
-                                                "project"
-                                            } else {
-                                                "global"
-                                            };
-                                            output.push_str(&format!(
-                                                "  * {:<18} {:<10} lead:{} teammates:{}\n",
-                                                team.name,
-                                                format!("{:?}", team.status).to_lowercase(),
-                                                team.lead_session_id,
-                                                team.members.len()
-                                            ));
-                                            output.push_str(&format!(
-                                                "    scope:{} path:{}\n",
-                                                scope,
-                                                dir.display()
-                                            ));
-                                        }
-                                        Err(e) => {
-                                            output.push_str(&format!(
-                                                "  * {} (failed to load: {})\n",
-                                                name, e
-                                            ));
-                                        }
-                                    }
-                                }
-                                self.status = "team: show all".to_string();
-                            }
-                            self.append_assistant_text(&output);
-                            return;
-                        }
-                        match TeamStore::load_by_name(rest, &working_dir) {
-                            Ok(store) => {
-                                let team = store.config.clone();
-                                self.ensure_team_manager_for_team(
-                                    &team.name,
-                                    Some(store.dir.clone()),
-                                );
-
-                                let mut output = String::from("From: /team show\n");
-                                output.push_str(&format!(
-                                    "## Team: {} ({})\n\n",
-                                    team.name,
-                                    format!("{:?}", team.status).to_lowercase()
-                                ));
-                                output.push_str(&format!(
-                                    "  * lead-session: {}\n",
-                                    team.lead_session_id
-                                ));
-                                if team.members.is_empty() {
-                                    output.push_str("  (no teammates yet)\n");
-                                } else {
-                                    for m in &team.members {
-                                        // FR-033: one status-word mapping.
-                                        let status = status_label(m.status);
-                                        let task =
-                                            m.current_task_id.as_deref().unwrap_or("-").to_string();
-                                        let sid = m.session_id.as_deref().unwrap_or("-");
-                                        output.push_str(&format!(
-                                            "  └ {:<18} {:<10} agent:{} session:{} task:{}\n",
-                                            m.name, status, m.agent_id, sid, task
-                                        ));
-                                    }
-                                }
-                                output.push_str(&format!("\n{} teammate(s)\n", team.members.len()));
-                                // FR-020: a message whose recipient terminated before
-                                // reading it is reported here rather than dropped -
-                                // nothing else will ever drain that mailbox.
-                                let undelivered = undelivered_messages(&store);
-                                let block = render_undelivered(&team.name, &undelivered, 2);
-                                if !block.is_empty() {
-                                    output.push('\n');
-                                    output.push_str(&block);
-                                }
-                                // FR-034: a `plan_pending` row is reported with
-                                // its plan and the verdict that resolves it.
-                                let parked = pending_plans(&store);
-                                let plans = render_pending_plans(&team.name, &parked, 2);
-                                if !plans.is_empty() {
-                                    output.push('\n');
-                                    output.push_str(&plans);
-                                }
-                                // FR-019: an inert hook is reported, with the
-                                // ledger it was recorded in, so it is never
-                                // mistaken for a gate that passed.
-                                let hook_failures = read_hook_failures(&store.dir);
-                                let hooks = render_hook_failures(&team.name, &hook_failures, 2);
-                                if !hooks.is_empty() {
-                                    output.push('\n');
-                                    output.push_str(&hooks);
-                                }
-                                self.append_assistant_text(&output);
-                                self.status = format!("team: show {}", team.name);
-                            }
-                            Err(e) => {
-                                self.status = format!("Failed to load team: {e}");
-                                self.push_log_no_agent(
-                                    LogLevel::Error,
-                                    format!("team show failed for '{}': {}", rest, e),
-                                );
-                            }
-                        }
+                    Err(e) => {
+                        self.status = format!("Failed to create team: {}", e);
+                        self.push_log_no_agent(
+                            LogLevel::Error,
+                            format!("team create failed: {}", e),
+                        );
                     }
-                    "close" => {
-                        if let Some(team) = self.session.active_team.as_ref() {
-                            let team_name = team.name.clone();
-                            // Closing cancels the team's swarm: stop its
-                            // finalising job first.
-                            self.stop_swarm_autocomplete(&team_name).await;
-                            self.session.active_team = None;
-                            self.session.team_members.clear();
-                            self.session.team_message_counts.clear();
-                            self.session.team_task_counts.clear();
-                            self.session.team_task_counts_dirty = true;
-                            self.show_teams = false;
-                            self.session.focused_teammate = None;
-                            if self
-                                .session
-                                .swarm_state
-                                .as_ref()
-                                .is_some_and(|s| s.team_name == team_name)
-                            {
-                                self.session.swarm_state = None;
+                }
+            }
+
+            "show" => {
+                let working_dir = self.cwd_path.clone();
+                if rest.is_empty() {
+                    let teams = TeamStore::list_teams(&working_dir);
+                    let mut output = String::from("From: /team show\n");
+                    if teams.is_empty() {
+                        output.push_str("No registered teams found.");
+                        self.status = "team: show all (0)".to_string();
+                    } else {
+                        output.push_str("## Registered teams\n\n");
+                        for (name, dir, is_project_local) in teams {
+                            match TeamStore::load(&dir) {
+                                Ok(store) => {
+                                    let team = store.config;
+                                    let scope = if is_project_local {
+                                        "project"
+                                    } else {
+                                        "global"
+                                    };
+                                    output.push_str(&format!(
+                                        "  * {:<18} {:<10} lead:{} teammates:{}\n",
+                                        team.name,
+                                        format!("{:?}", team.status).to_lowercase(),
+                                        team.lead_session_id,
+                                        team.members.len()
+                                    ));
+                                    output.push_str(&format!(
+                                        "    scope:{} path:{}\n",
+                                        scope,
+                                        dir.display()
+                                    ));
+                                }
+                                Err(e) => {
+                                    output.push_str(&format!(
+                                        "  * {} (failed to load: {})\n",
+                                        name, e
+                                    ));
+                                }
+                            }
+                        }
+                        self.status = "team: show all".to_string();
+                    }
+                    self.append_assistant_text(&output);
+                    return std::ops::ControlFlow::Break(());
+                }
+                match TeamStore::load_by_name(rest, &working_dir) {
+                    Ok(store) => {
+                        let team = store.config.clone();
+                        self.ensure_team_manager_for_team(&team.name, Some(store.dir.clone()));
+
+                        let mut output = String::from("From: /team show\n");
+                        output.push_str(&format!(
+                            "## Team: {} ({})\n\n",
+                            team.name,
+                            format!("{:?}", team.status).to_lowercase()
+                        ));
+                        output.push_str(&format!("  * lead-session: {}\n", team.lead_session_id));
+                        if team.members.is_empty() {
+                            output.push_str("  (no teammates yet)\n");
+                        } else {
+                            for m in &team.members {
+                                // FR-033: one status-word mapping.
+                                let status = status_label(m.status);
+                                let task = m.current_task_id.as_deref().unwrap_or("-").to_string();
+                                let sid = m.session_id.as_deref().unwrap_or("-");
+                                output.push_str(&format!(
+                                    "  └ {:<18} {:<10} agent:{} session:{} task:{}\n",
+                                    m.name, status, m.agent_id, sid, task
+                                ));
+                            }
+                        }
+                        output.push_str(&format!("\n{} teammate(s)\n", team.members.len()));
+                        // FR-020: a message whose recipient terminated before
+                        // reading it is reported here rather than dropped -
+                        // nothing else will ever drain that mailbox.
+                        let undelivered = undelivered_messages(&store);
+                        let block = render_undelivered(&team.name, &undelivered, 2);
+                        if !block.is_empty() {
+                            output.push('\n');
+                            output.push_str(&block);
+                        }
+                        // FR-034: a `plan_pending` row is reported with
+                        // its plan and the verdict that resolves it.
+                        let parked = pending_plans(&store);
+                        let plans = render_pending_plans(&team.name, &parked, 2);
+                        if !plans.is_empty() {
+                            output.push('\n');
+                            output.push_str(&plans);
+                        }
+                        // FR-019: an inert hook is reported, with the
+                        // ledger it was recorded in, so it is never
+                        // mistaken for a gate that passed.
+                        let hook_failures = read_hook_failures(&store.dir);
+                        let hooks = render_hook_failures(&team.name, &hook_failures, 2);
+                        if !hooks.is_empty() {
+                            output.push('\n');
+                            output.push_str(&hooks);
+                        }
+                        self.append_assistant_text(&output);
+                        self.status = format!("team: show {}", team.name);
+                    }
+                    Err(e) => {
+                        self.status = format!("Failed to load team: {e}");
+                        self.push_log_no_agent(
+                            LogLevel::Error,
+                            format!("team show failed for '{}': {}", rest, e),
+                        );
+                    }
+                }
+            }
+            "close" => {
+                if let Some(team) = self.session.active_team.as_ref() {
+                    let team_name = team.name.clone();
+                    // Closing cancels the team's swarm: stop its
+                    // finalising job first.
+                    self.stop_swarm_autocomplete(&team_name).await;
+                    self.session.active_team = None;
+                    self.session.team_members.clear();
+                    self.session.team_message_counts.clear();
+                    self.session.team_task_counts.clear();
+                    self.session.team_task_counts_dirty = true;
+                    self.show_teams = false;
+                    self.session.focused_teammate = None;
+                    if self
+                        .session
+                        .swarm_state
+                        .as_ref()
+                        .is_some_and(|s| s.team_name == team_name)
+                    {
+                        self.session.swarm_state = None;
+                    }
+                    self.push_log_no_agent(
+                        LogLevel::Info,
+                        format!("[team] Team '{}' closed for this session", team_name),
+                    );
+                    self.append_assistant_text(&format!(
+                        "From: /team close\nTeam '{}' closed for this session.",
+                        team_name
+                    ));
+                    self.status = "team closed".to_string();
+                } else {
+                    self.status = "No active team to close".to_string();
+                }
+            }
+            "delete" => {
+                // T-043/FR-045: the explicit `--force` is the
+                // confirmation for EVERY named team, not only the
+                // session's active one. The flag is split off the name
+                // first, so a confirmed delete never reaches the store
+                // with `--force` glued onto it.
+                let (team_name, force) = split_delete_args(rest);
+                if team_name.is_empty() {
+                    self.status = "Usage: /team delete <name> [--force]".to_string();
+                    return std::ops::ControlFlow::Break(());
+                }
+                // SEC-codemason-tui-004: the name reaches `remove_dir_all`
+                // via the resolved store directory, so it is validated
+                // first.
+                if let Err(e) = codemason_agent::team::validate_team_name(team_name) {
+                    self.status = format!("{e}");
+                    return std::ops::ControlFlow::Break(());
+                }
+                let name_owned = team_name.to_string();
+                let deleting_active = self
+                    .session
+                    .active_team
+                    .as_ref()
+                    .is_some_and(|team| team.name == name_owned);
+                let working_dir = self.cwd_path.clone();
+                // FR-022/FR-045: the live-roster guard is the shared
+                // `cleanup_refusal` the `team_cleanup` tool uses, so the
+                // two surfaces cannot disagree. An unforced delete of a
+                // team whose roster has a live member is refused with the
+                // next actions named; `--force` is the deliberate override
+                // and removes it in this one step.
+                let roster: Vec<(String, codemason_agent::team::MemberStatus)> = if deleting_active
+                {
+                    self.session
+                        .team_members
+                        .iter()
+                        .map(|m| (m.name.clone(), m.status))
+                        .collect()
+                } else {
+                    TeamStore::load_by_name(team_name, &working_dir)
+                        .map(|store| {
+                            store
+                                .config
+                                .members
+                                .iter()
+                                .map(|m| (m.name.clone(), m.status))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                };
+                let forced_live_count =
+                    roster.iter().filter(|(_, status)| status.is_live()).count();
+                if let Some(refusal) = codemason_agent::team::cleanup_refusal(
+                    team_name,
+                    roster.iter().map(|(name, status)| (name.as_str(), *status)),
+                )
+                .filter(|_| !force)
+                {
+                    // FR-032: the refusal names the team, the live
+                    // members with their status words, and the commands
+                    // that clear them.
+                    self.status = format!("team delete {team_name}: {refusal}");
+                    self.push_log_no_agent(LogLevel::Warn, refusal);
+                    return std::ops::ControlFlow::Break(());
+                }
+                let rest = team_name;
+                // Nothing of a finalising job may write into the
+                // directory while it is removed (ENOTEMPTY).
+                self.stop_swarm_autocomplete(&name_owned).await;
+                match TeamStore::load_by_name(rest, &working_dir) {
+                    Ok(store) => match std::fs::remove_dir_all(&store.dir) {
+                        Ok(_) => {
+                            if deleting_active {
+                                self.session.active_team = None;
+                                self.session.team_members.clear();
+                                self.session.team_message_counts.clear();
+                                self.session.team_task_counts.clear();
+                                self.session.team_task_counts_dirty = true;
+                                self.show_teams = false;
+                                self.session.focused_teammate = None;
+                                if self
+                                    .session
+                                    .swarm_state
+                                    .as_ref()
+                                    .is_some_and(|s| s.team_name == rest)
+                                {
+                                    self.session.swarm_state = None;
+                                }
                             }
                             self.push_log_no_agent(
                                 LogLevel::Info,
-                                format!("[team] Team '{}' closed for this session", team_name),
+                                format!("[clr]  Team '{}' deleted", rest),
                             );
-                            self.append_assistant_text(&format!(
-                                "From: /team close\nTeam '{}' closed for this session.",
-                                team_name
-                            ));
-                            self.status = "team closed".to_string();
-                        } else {
-                            self.status = "No active team to close".to_string();
-                        }
-                    }
-                    "delete" => {
-                        // T-043/FR-045: the explicit `--force` is the
-                        // confirmation for EVERY named team, not only the
-                        // session's active one. The flag is split off the name
-                        // first, so a confirmed delete never reaches the store
-                        // with `--force` glued onto it.
-                        let (team_name, force) = split_delete_args(rest);
-                        if team_name.is_empty() {
-                            self.status = "Usage: /team delete <name> [--force]".to_string();
-                            return;
-                        }
-                        // SEC-codemason-tui-004: the name reaches `remove_dir_all`
-                        // via the resolved store directory, so it is validated
-                        // first.
-                        if let Err(e) = codemason_agent::team::validate_team_name(team_name) {
-                            self.status = format!("{e}");
-                            return;
-                        }
-                        let name_owned = team_name.to_string();
-                        let deleting_active = self
-                            .session
-                            .active_team
-                            .as_ref()
-                            .is_some_and(|team| team.name == name_owned);
-                        let working_dir = self.cwd_path.clone();
-                        // FR-022/FR-045: the live-roster guard is the shared
-                        // `cleanup_refusal` the `team_cleanup` tool uses, so the
-                        // two surfaces cannot disagree. An unforced delete of a
-                        // team whose roster has a live member is refused with the
-                        // next actions named; `--force` is the deliberate override
-                        // and removes it in this one step.
-                        let roster: Vec<(String, codemason_agent::team::MemberStatus)> =
-                            if deleting_active {
-                                self.session
-                                    .team_members
-                                    .iter()
-                                    .map(|m| (m.name.clone(), m.status))
-                                    .collect()
+                            // FR-032: say what the confirmed delete
+                            // removed, and whether it overrode a live
+                            // roster, so "nothing was forced" is never
+                            // guessed from silence.
+                            let forced = if force { forced_live_count } else { 0 };
+                            let detail = if forced == 0 {
+                                "Nothing was forced.".to_string()
                             } else {
-                                TeamStore::load_by_name(team_name, &working_dir)
-                                    .map(|store| {
-                                        store
-                                            .config
-                                            .members
-                                            .iter()
-                                            .map(|m| (m.name.clone(), m.status))
-                                            .collect()
-                                    })
-                                    .unwrap_or_default()
+                                format!("{forced} live teammate(s) forced.")
                             };
-                        let forced_live_count =
-                            roster.iter().filter(|(_, status)| status.is_live()).count();
-                        if let Some(refusal) = codemason_agent::team::cleanup_refusal(
-                            team_name,
-                            roster.iter().map(|(name, status)| (name.as_str(), *status)),
-                        )
-                        .filter(|_| !force)
-                        {
-                            // FR-032: the refusal names the team, the live
-                            // members with their status words, and the commands
-                            // that clear them.
-                            self.status = format!("team delete {team_name}: {refusal}");
-                            self.push_log_no_agent(LogLevel::Warn, refusal);
-                            return;
+                            self.append_assistant_text(&format!(
+                                "From: /team delete\nTeam '{}' deleted.\n{detail}",
+                                rest
+                            ));
+                            self.status = "team deleted".to_string();
                         }
-                        let rest = team_name;
-                        // Nothing of a finalising job may write into the
-                        // directory while it is removed (ENOTEMPTY).
-                        self.stop_swarm_autocomplete(&name_owned).await;
-                        match TeamStore::load_by_name(rest, &working_dir) {
-                            Ok(store) => match std::fs::remove_dir_all(&store.dir) {
-                                Ok(_) => {
-                                    if deleting_active {
-                                        self.session.active_team = None;
-                                        self.session.team_members.clear();
-                                        self.session.team_message_counts.clear();
-                                        self.session.team_task_counts.clear();
-                                        self.session.team_task_counts_dirty = true;
-                                        self.show_teams = false;
-                                        self.session.focused_teammate = None;
-                                        if self
-                                            .session
-                                            .swarm_state
-                                            .as_ref()
-                                            .is_some_and(|s| s.team_name == rest)
-                                        {
-                                            self.session.swarm_state = None;
-                                        }
-                                    }
-                                    self.push_log_no_agent(
-                                        LogLevel::Info,
-                                        format!("[clr]  Team '{}' deleted", rest),
-                                    );
-                                    // FR-032: say what the confirmed delete
-                                    // removed, and whether it overrode a live
-                                    // roster, so "nothing was forced" is never
-                                    // guessed from silence.
-                                    let forced = if force { forced_live_count } else { 0 };
-                                    let detail = if forced == 0 {
-                                        "Nothing was forced.".to_string()
-                                    } else {
-                                        format!("{forced} live teammate(s) forced.")
-                                    };
-                                    self.append_assistant_text(&format!(
-                                        "From: /team delete\nTeam '{}' deleted.\n{detail}",
-                                        rest
-                                    ));
-                                    self.status = "team deleted".to_string();
-                                }
-                                Err(e) => {
-                                    self.status = format!("Failed to delete team: {e}");
-                                    self.push_log_no_agent(
-                                        LogLevel::Error,
-                                        format!("team delete failed for '{}': {}", rest, e),
-                                    );
-                                }
-                            },
-                            Err(e) => {
-                                self.status = format!("Failed to load team: {e}");
-                                self.push_log_no_agent(
-                                    LogLevel::Error,
-                                    format!("team delete failed for '{}': {}", rest, e),
-                                );
-                            }
-                        }
-                    }
-                    "blueprint" | "blueprints" => {
-                        let working_dir = self.cwd_path.clone();
-                        let blueprint_dirs = blueprints::list_installed_blueprints(&working_dir);
-
-                        if rest.is_empty() {
-                            let output = blueprints::render_blueprint_list(
-                                &blueprint_dirs,
-                                "/team blueprint",
+                        Err(e) => {
+                            self.status = format!("Failed to delete team: {e}");
+                            self.push_log_no_agent(
+                                LogLevel::Error,
+                                format!("team delete failed for '{}': {}", rest, e),
                             );
-                            self.append_assistant_text(&output);
-                            self.status = "team: blueprints".to_string();
-                        } else if let Some(output) = blueprints::render_blueprint_detail(
-                            &blueprint_dirs,
-                            rest.trim(),
-                            "/team blueprint",
-                        ) {
-                            self.append_assistant_text(&output);
-                            self.status = format!("team: blueprint {}", rest.trim());
-                        } else {
-                            self.status = format!("Blueprint '{}' not found", rest.trim());
                         }
+                    },
+                    Err(e) => {
+                        self.status = format!("Failed to load team: {e}");
+                        self.push_log_no_agent(
+                            LogLevel::Error,
+                            format!("team delete failed for '{}': {}", rest, e),
+                        );
                     }
-                    "message" => {
-                        let (name, text) = rest
-                            .split_once(char::is_whitespace)
-                            .map_or((rest, ""), |(n, t)| (n.trim(), t.trim()));
-                        if name.is_empty() || text.is_empty() {
-                            self.status = "Usage: /team message <teammate-name> <text>".to_string();
-                            return;
-                        }
-                        let member = self
-                            .session
-                            .team_members
-                            .iter()
-                            .find(|m| m.name == name)
-                            .cloned();
-                        match (self.session.active_team.clone(), member) {
-                            (Some(team), Some(member)) => {
-                                let working_dir = self.cwd_path.clone();
-                                match TeamStore::load_by_name(&team.name, &working_dir) {
-                                    Ok(store) => {
-                                        match Mailbox::open(&store.dir, &member.agent_id) {
-                                            Ok(mb) => {
-                                                let msg = MailboxMessage::new(
-                                                    "lead",
-                                                    &member.agent_id,
-                                                    MessageType::Message,
-                                                    text,
-                                                )
-                                                // SEC-codemason-team-003: see
-                                                // send_teammate_message.
-                                                .with_sender_session(
-                                                    &self
-                                                        .session
-                                                        .session_id
-                                                        .clone()
-                                                        .unwrap_or_default(),
+                }
+            }
+            "blueprint" | "blueprints" => {
+                let working_dir = self.cwd_path.clone();
+                let blueprint_dirs = blueprints::list_installed_blueprints(&working_dir);
+
+                if rest.is_empty() {
+                    let output =
+                        blueprints::render_blueprint_list(&blueprint_dirs, "/team blueprint");
+                    self.append_assistant_text(&output);
+                    self.status = "team: blueprints".to_string();
+                } else if let Some(output) = blueprints::render_blueprint_detail(
+                    &blueprint_dirs,
+                    rest.trim(),
+                    "/team blueprint",
+                ) {
+                    self.append_assistant_text(&output);
+                    self.status = format!("team: blueprint {}", rest.trim());
+                } else {
+                    self.status = format!("Blueprint '{}' not found", rest.trim());
+                }
+            }
+            "message" => {
+                let (name, text) = rest
+                    .split_once(char::is_whitespace)
+                    .map_or((rest, ""), |(n, t)| (n.trim(), t.trim()));
+                if name.is_empty() || text.is_empty() {
+                    self.status = "Usage: /team message <teammate-name> <text>".to_string();
+                    return std::ops::ControlFlow::Break(());
+                }
+                let member = self
+                    .session
+                    .team_members
+                    .iter()
+                    .find(|m| m.name == name)
+                    .cloned();
+                match (self.session.active_team.clone(), member) {
+                    (Some(team), Some(member)) => {
+                        let working_dir = self.cwd_path.clone();
+                        match TeamStore::load_by_name(&team.name, &working_dir) {
+                            Ok(store) => {
+                                match Mailbox::open(&store.dir, &member.agent_id) {
+                                    Ok(mb) => {
+                                        let msg = MailboxMessage::new(
+                                            "lead",
+                                            &member.agent_id,
+                                            MessageType::Message,
+                                            text,
+                                        )
+                                        // SEC-codemason-team-003: see
+                                        // send_teammate_message.
+                                        .with_sender_session(
+                                            &self.session.session_id.clone().unwrap_or_default(),
+                                        );
+                                        match mb.push(msg) {
+                                            Ok(_) => {
+                                                self.push_log_no_agent(
+                                                    LogLevel::Info,
+                                                    format!("[msg] lead -> {name}: {text}"),
                                                 );
-                                                match mb.push(msg) {
-                                                    Ok(_) => {
-                                                        self.push_log_no_agent(
-                                                            LogLevel::Info,
-                                                            format!("[msg] lead -> {name}: {text}"),
-                                                        );
-                                                        self.status =
-                                                            format!("message sent to {name}");
-                                                    }
-                                                    Err(e) => {
-                                                        self.status =
-                                                            format!("Failed to send message: {e}");
-                                                    }
-                                                }
+                                                self.status = format!("message sent to {name}");
                                             }
                                             Err(e) => {
                                                 self.status =
-                                                    format!("Failed to open mailbox: {e}");
+                                                    format!("Failed to send message: {e}");
                                             }
                                         }
                                     }
                                     Err(e) => {
-                                        self.status = format!("Failed to load team: {e}");
+                                        self.status = format!("Failed to open mailbox: {e}");
                                     }
                                 }
                             }
-                            (None, _) => {
-                                self.status = "No active team".to_string();
-                            }
-                            (Some(_), None) => {
-                                self.status = format!("Teammate '{name}' not found");
+                            Err(e) => {
+                                self.status = format!("Failed to load team: {e}");
                             }
                         }
                     }
-                    "tasks" => {
-                        let team_opt = self.session.active_team.clone();
-                        if let Some(team) = team_opt {
-                            let working_dir = self.cwd_path.clone();
-                            match TeamStore::load_by_name(&team.name, &working_dir) {
-                                Ok(store) => match store.task_store() {
-                                    Ok(task_store) => match task_store.read() {
-                                        Ok(task_list) => {
-                                            let mut output = format!(
-                                                "From: /team tasks\n## Tasks - team '{}'\n\n",
-                                                team.name
-                                            );
-                                            if task_list.tasks.is_empty() {
-                                                output.push_str("  (no tasks)\n");
-                                            } else {
-                                                output.push_str(&format!(
-                                                    "  {:<12}  {:<34}  {:<12}  {}\n",
-                                                    "ID", "Title", "Status", "Assignee"
-                                                ));
-                                                output.push_str(&format!(
-                                                    "  {:-<12}  {:-<34}  {:-<12}  {:-<16}\n",
-                                                    "", "", "", ""
-                                                ));
-                                                for task in &task_list.tasks {
-                                                    let status = match task.status {
-                                                        TaskStatus::Pending => "pending",
-                                                        TaskStatus::InProgress => "in-progress",
-                                                        TaskStatus::Completed => "completed",
-                                                        TaskStatus::Cancelled => "cancelled",
-                                                    };
-                                                    let assignee =
-                                                        task.assigned_to.as_deref().unwrap_or("-");
-                                                    output.push_str(&format!(
-                                                        "  {:<12}  {:<34}  {:<12}  {}\n",
-                                                        task.id, task.title, status, assignee
-                                                    ));
-                                                }
-                                            }
-                                            self.append_assistant_text(&output);
-                                            self.status =
-                                                format!("{} task(s)", task_list.tasks.len());
-                                        }
-                                        Err(e) => {
-                                            self.status = format!("Failed to read tasks: {e}");
-                                        }
-                                    },
-                                    Err(e) => {
-                                        self.status = format!("Failed to open task store: {e}");
-                                    }
-                                },
-                                Err(e) => {
-                                    self.status = format!("Failed to load team: {e}");
-                                }
-                            }
-                        } else {
-                            self.append_assistant_text("From: /team tasks\nNo active team.");
-                            self.status = "no active team".to_string();
-                        }
+                    (None, _) => {
+                        self.status = "No active team".to_string();
                     }
-                    "clear" => {
-                        let team_opt = self.session.active_team.clone();
-                        if let Some(team) = team_opt {
-                            // A finalising job must not write tasks.json while
-                            // it is removed.
-                            self.stop_swarm_autocomplete(&team.name).await;
-                            let working_dir = self.cwd_path.clone();
-                            match TeamStore::load_by_name(&team.name, &working_dir) {
-                                Ok(store) => {
-                                    let tasks_path = store.dir.join("tasks.json");
-                                    let cleared_count = store
-                                        .task_store()
-                                        .ok()
-                                        .and_then(|s| s.read().ok())
-                                        .map(|l| l.tasks.len())
-                                        .unwrap_or(0);
-                                    let clear_result = if tasks_path.exists() {
-                                        std::fs::remove_file(&tasks_path)
+                    (Some(_), None) => {
+                        self.status = format!("Teammate '{name}' not found");
+                    }
+                }
+            }
+            "tasks" => {
+                let team_opt = self.session.active_team.clone();
+                if let Some(team) = team_opt {
+                    let working_dir = self.cwd_path.clone();
+                    match TeamStore::load_by_name(&team.name, &working_dir) {
+                        Ok(store) => match store.task_store() {
+                            Ok(task_store) => match task_store.read() {
+                                Ok(task_list) => {
+                                    let mut output = format!(
+                                        "From: /team tasks\n## Tasks - team '{}'\n\n",
+                                        team.name
+                                    );
+                                    if task_list.tasks.is_empty() {
+                                        output.push_str("  (no tasks)\n");
                                     } else {
-                                        Ok(())
-                                    };
-                                    match clear_result {
-                                        Ok(_) => {
-                                            self.append_assistant_text(&format!(
-                                                "From: /team clear\nCleared {} task(s) for team '{}'.",
-                                                cleared_count, team.name
+                                        output.push_str(&format!(
+                                            "  {:<12}  {:<34}  {:<12}  {}\n",
+                                            "ID", "Title", "Status", "Assignee"
+                                        ));
+                                        output.push_str(&format!(
+                                            "  {:-<12}  {:-<34}  {:-<12}  {:-<16}\n",
+                                            "", "", "", ""
+                                        ));
+                                        for task in &task_list.tasks {
+                                            let status = match task.status {
+                                                TaskStatus::Pending => "pending",
+                                                TaskStatus::InProgress => "in-progress",
+                                                TaskStatus::Completed => "completed",
+                                                TaskStatus::Cancelled => "cancelled",
+                                            };
+                                            let assignee =
+                                                task.assigned_to.as_deref().unwrap_or("-");
+                                            output.push_str(&format!(
+                                                "  {:<12}  {:<34}  {:<12}  {}\n",
+                                                task.id, task.title, status, assignee
                                             ));
-                                            self.push_log_no_agent(
-                                                LogLevel::Info,
-                                                format!(
-                                                    "[broom] Cleared {} task(s) from team '{}'",
-                                                    cleared_count, team.name
-                                                ),
-                                            );
-                                            self.status = "team tasks cleared".to_string();
-                                        }
-                                        Err(e) => {
-                                            self.status = format!("Failed to clear tasks: {e}");
-                                            self.push_log_no_agent(
-                                                LogLevel::Error,
-                                                format!(
-                                                    "team clear failed for '{}': {}",
-                                                    team.name, e
-                                                ),
-                                            );
                                         }
                                     }
+                                    self.append_assistant_text(&output);
+                                    self.status = format!("{} task(s)", task_list.tasks.len());
                                 }
                                 Err(e) => {
-                                    self.status = format!("Failed to load team: {e}");
+                                    self.status = format!("Failed to read tasks: {e}");
                                 }
+                            },
+                            Err(e) => {
+                                self.status = format!("Failed to open task store: {e}");
                             }
-                        } else {
-                            self.append_assistant_text("From: /team clear\nNo active team.");
-                            self.status = "no active team".to_string();
+                        },
+                        Err(e) => {
+                            self.status = format!("Failed to load team: {e}");
                         }
                     }
-                    "cleanup" => {
-                        let team_opt = self.session.active_team.clone();
-                        if let Some(team) = team_opt {
-                            // Guard: ensure no teammates are still working.
-                            let active_count = self
-                                .session
-                                .team_members
-                                .iter()
-                                .filter(|m| matches!(m.status, MemberStatus::Working))
-                                .count();
-                            if active_count > 0 {
-                                // Build list of active teammate names
-                                let active_names: Vec<String> = self
-                                    .session
-                                    .team_members
-                                    .iter()
-                                    .filter(|m| m.status != MemberStatus::Stopped)
-                                    .map(|m| format!("{} ({})", m.name, m.agent_id))
-                                    .collect();
-
-                                // Log a warning with the list of active teammates
-                                self.push_log_no_agent(
-                                    LogLevel::Warn,
-                                    format!(
-                                        "Cannot clean up team '{}': {} teammate(s) still active: {}",
-                                        team.name,
-                                        active_names.len(),
-                                        active_names.join(", ")
-                                    ),
-                                );
-
-                                // Also show a message in the chat window listing active teammates
-                                let mut msg = format!(
-                                    "From: /team cleanup\nCannot clean up team '{}' because the following teammate(s) are still active:\n\n",
-                                    team.name
-                                );
-                                for name in &active_names {
-                                    msg.push_str(&format!("  - {}\n", name));
+                } else {
+                    self.append_assistant_text("From: /team tasks\nNo active team.");
+                    self.status = "no active team".to_string();
+                }
+            }
+            "clear" => {
+                let team_opt = self.session.active_team.clone();
+                if let Some(team) = team_opt {
+                    // A finalising job must not write tasks.json while
+                    // it is removed.
+                    self.stop_swarm_autocomplete(&team.name).await;
+                    let working_dir = self.cwd_path.clone();
+                    match TeamStore::load_by_name(&team.name, &working_dir) {
+                        Ok(store) => {
+                            let tasks_path = store.dir.join("tasks.json");
+                            let cleared_count = store
+                                .task_store()
+                                .ok()
+                                .and_then(|s| s.read().ok())
+                                .map(|l| l.tasks.len())
+                                .unwrap_or(0);
+                            let clear_result = if tasks_path.exists() {
+                                std::fs::remove_file(&tasks_path)
+                            } else {
+                                Ok(())
+                            };
+                            match clear_result {
+                                Ok(_) => {
+                                    self.append_assistant_text(&format!(
+                                        "From: /team clear\nCleared {} task(s) for team '{}'.",
+                                        cleared_count, team.name
+                                    ));
+                                    self.push_log_no_agent(
+                                        LogLevel::Info,
+                                        format!(
+                                            "[broom] Cleared {} task(s) from team '{}'",
+                                            cleared_count, team.name
+                                        ),
+                                    );
+                                    self.status = "team tasks cleared".to_string();
                                 }
-                                msg.push_str("\nYou can shut them down individually with team_shutdown_teammate, or run `/team forcecleanup` to deactivate and remove them.");
-                                self.append_assistant_text(&msg);
+                                Err(e) => {
+                                    self.status = format!("Failed to clear tasks: {e}");
+                                    self.push_log_no_agent(
+                                        LogLevel::Error,
+                                        format!("team clear failed for '{}': {}", team.name, e),
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            self.status = format!("Failed to load team: {e}");
+                        }
+                    }
+                } else {
+                    self.append_assistant_text("From: /team clear\nNo active team.");
+                    self.status = "no active team".to_string();
+                }
+            }
+            "cleanup" => {
+                let team_opt = self.session.active_team.clone();
+                if let Some(team) = team_opt {
+                    // Guard: ensure no teammates are still working.
+                    let active_count = self
+                        .session
+                        .team_members
+                        .iter()
+                        .filter(|m| matches!(m.status, MemberStatus::Working))
+                        .count();
+                    if active_count > 0 {
+                        // Build list of active teammate names
+                        let active_names: Vec<String> = self
+                            .session
+                            .team_members
+                            .iter()
+                            .filter(|m| m.status != MemberStatus::Stopped)
+                            .map(|m| format!("{} ({})", m.name, m.agent_id))
+                            .collect();
 
-                                self.status = format!(
-                                    "{} teammate(s) still active - shut them down first",
-                                    active_count
-                                );
-                                return;
+                        // Log a warning with the list of active teammates
+                        self.push_log_no_agent(
+                            LogLevel::Warn,
+                            format!(
+                                "Cannot clean up team '{}': {} teammate(s) still active: {}",
+                                team.name,
+                                active_names.len(),
+                                active_names.join(", ")
+                            ),
+                        );
+
+                        // Also show a message in the chat window listing active teammates
+                        let mut msg = format!(
+                            "From: /team cleanup\nCannot clean up team '{}' because the following teammate(s) are still active:\n\n",
+                            team.name
+                        );
+                        for name in &active_names {
+                            msg.push_str(&format!("  - {}\n", name));
+                        }
+                        msg.push_str("\nYou can shut them down individually with team_shutdown_teammate, or run `/team forcecleanup` to deactivate and remove them.");
+                        self.append_assistant_text(&msg);
+
+                        self.status = format!(
+                            "{} teammate(s) still active - shut them down first",
+                            active_count
+                        );
+                        return std::ops::ControlFlow::Break(());
+                    }
+
+                    let working_dir = self.cwd_path.clone();
+                    let team_name = team.name.clone();
+                    // Nothing of a finalising job may write into the
+                    // directory while it is removed (ENOTEMPTY).
+                    self.stop_swarm_autocomplete(&team_name).await;
+                    let removed = match TeamStore::load_by_name(&team_name, &working_dir) {
+                        Ok(store) => std::fs::remove_dir_all(&store.dir).is_ok(),
+                        Err(_) => false,
+                    };
+                    self.session.active_team = None;
+                    self.session.team_members.clear();
+                    self.session.team_message_counts.clear();
+                    self.session.team_task_counts.clear();
+                    self.session.team_task_counts_dirty = true;
+                    self.show_teams = false;
+                    self.session.focused_teammate = None;
+                    if self
+                        .session
+                        .swarm_state
+                        .as_ref()
+                        .is_some_and(|s| s.team_name == team_name)
+                    {
+                        self.session.swarm_state = None;
+                    }
+                    if removed {
+                        self.push_log_no_agent(
+                            LogLevel::Info,
+                            format!("[clr]  Team '{team_name}' cleaned up"),
+                        );
+                        self.append_assistant_text(&format!(
+                            "From: /team cleanup\nTeam '{team_name}' cleaned up."
+                        ));
+                    } else {
+                        self.push_log_no_agent(
+                            LogLevel::Warn,
+                            format!("Team '{team_name}' state cleared (dir not found)"),
+                        );
+                        self.append_assistant_text(&format!(
+                            "From: /team cleanup\nTeam '{team_name}' state cleared."
+                        ));
+                    }
+                    self.status = "team cleaned up".to_string();
+                } else {
+                    self.status = "No active team to clean up".to_string();
+                }
+            }
+            "forcecleanup" | "force-cleanup" => {
+                // Confirm with the user before destructive operation.
+                let confirm_msg = "Are you sure you want to force-cleanup the active team (deactivate teammates and remove on-disk resources)? Press Enter to confirm or Esc to cancel.";
+                let args_lower = args.to_lowercase();
+                let confirmed = args_lower.split_whitespace().any(|s| s == "confirm");
+                if !confirmed {
+                    // Show interactive confirmation modal state with active members listed.
+                    // Build list of active teammate names for display in modal.
+                    let active_names: Vec<String> = self
+                        .session
+                        .team_members
+                        .iter()
+                        .filter(|m| m.status != MemberStatus::Stopped)
+                        .map(|m| format!("{} ({})", m.name, m.agent_id))
+                        .collect();
+
+                    let team_name = self
+                        .session
+                        .active_team
+                        .as_ref()
+                        .map(|t| t.name.clone())
+                        .unwrap_or_else(|| "<unknown>".to_string());
+
+                    self.session.pending_forcecleanup = Some(PendingForceCleanup {
+                        team_name: team_name.clone(),
+                        active_members: active_names.clone(),
+                    });
+
+                    // Append assistant text instructing user to press Enter/Esc
+                    let mut msg = format!("From: /team forcecleanup\n{}\n\n", confirm_msg);
+                    if !active_names.is_empty() {
+                        msg.push_str("Active teammates:\n\n");
+                        for n in &active_names {
+                            msg.push_str(&format!("  - {}\n", n));
+                        }
+                        msg.push_str("\n");
+                    }
+                    msg.push_str("Press Enter to confirm or Esc to cancel.");
+
+                    self.append_assistant_text(&msg);
+                    self.push_log_no_agent(
+                        LogLevel::Info,
+                        "forcecleanup confirmation required (modal)".to_string(),
+                    );
+                    self.status = "forcecleanup confirmation required".to_string();
+                    return std::ops::ControlFlow::Break(());
+                }
+
+                // If confirmed, perform the force cleanup
+                let team_opt = self.session.active_team.clone();
+                if let Some(team) = team_opt {
+                    let working_dir = self.cwd_path.clone();
+                    let team_name = team.name.clone();
+                    // Nothing of a finalising job may write into the
+                    // directory while it is removed (ENOTEMPTY).
+                    self.stop_swarm_autocomplete(&team_name).await;
+                    match TeamStore::load_by_name(&team_name, &working_dir) {
+                        Ok(mut store) => {
+                            // Attempt shutdown of active teammate sessions first.
+                            //
+                            // This used to fire-and-forget a `tokio::spawn`
+                            // of `spawn_teammate(.., "shutdown", ..)`, which
+                            // does not shut a teammate down at all: it
+                            // starts a NEW agent loop with the prompt
+                            // "shutdown" (one wasted LLM turn), reloads and
+                            // re-saves `config.json`, and re-creates the
+                            // companion lock file inside the team directory
+                            // while `remove_dir_all` below was deleting that
+                            // same tree. The racing writes made the removal
+                            // fail with ENOTEMPTY and left the team
+                            // directory behind (CI flake in
+                            // `team_forcecleanup_deactivates_persisted_members`).
+                            // The unified immediate-shutdown path is awaited
+                            // here instead: every write into the directory is
+                            // serialised before it is removed, any live
+                            // agent/poll loop is aborted so it cannot recreate
+                            // the tree after removal, and the member is marked
+                            // Stopped on disk.
+                            let manager = self.session_processor.team_manager.get();
+                            let mut deactivated: Vec<String> = Vec::new();
+                            for m in &mut store.config.members {
+                                if m.status != MemberStatus::Stopped {
+                                    if let Some(tm) = manager.as_ref() {
+                                        let agent_id = m.agent_id.clone();
+                                        // The directory removal below is the authoritative
+                                        // teardown, and a member with no live handle is
+                                        // still marked Stopped on disk by the call.
+                                        // INTENTIONAL: fallible best-effort shutdown
+                                        let _ = tm.shutdown_teammate(&agent_id, false).await;
+                                    }
+                                    let desc = format!("{} ({})", m.name, m.agent_id);
+                                    m.status = MemberStatus::Stopped;
+                                    deactivated.push(desc);
+                                }
+                            }
+                            // Persist best-effort
+                            if let Err(e) = store.save() {
+                                self.push_log_no_agent(
+                                            LogLevel::Warn,
+                                            format!("Failed to persist team member status before force cleanup: {}", e),
+                                        );
                             }
 
-                            let working_dir = self.cwd_path.clone();
-                            let team_name = team.name.clone();
-                            // Nothing of a finalising job may write into the
-                            // directory while it is removed (ENOTEMPTY).
-                            self.stop_swarm_autocomplete(&team_name).await;
-                            let removed = match TeamStore::load_by_name(&team_name, &working_dir) {
-                                Ok(store) => std::fs::remove_dir_all(&store.dir).is_ok(),
-                                Err(_) => false,
-                            };
+                            // Remove directory
+                            let removed = std::fs::remove_dir_all(&store.dir).is_ok();
+
+                            // Update TUI state
                             self.session.active_team = None;
                             self.session.team_members.clear();
                             self.session.team_message_counts.clear();
@@ -7248,260 +7758,109 @@ than assumed.
                             {
                                 self.session.swarm_state = None;
                             }
+
+                            if !deactivated.is_empty() {
+                                self.push_log_no_agent(
+                                    LogLevel::Info,
+                                    format!("Deactivated teammates: {}", deactivated.join(", ")),
+                                );
+                            }
+
                             if removed {
                                 self.push_log_no_agent(
                                     LogLevel::Info,
-                                    format!("[clr]  Team '{team_name}' cleaned up"),
+                                    format!("[clr]  Team '{team_name}' force cleaned up"),
                                 );
-                                self.append_assistant_text(&format!(
-                                    "From: /team cleanup\nTeam '{team_name}' cleaned up."
-                                ));
+                                let mut msg = format!(
+                                    "From: /team forcecleanup\nTeam '{team_name}' force cleaned up. The following teammate(s) were deactivated and removed:\n\n"
+                                );
+                                for d in &deactivated {
+                                    msg.push_str(&format!("  - {}\n", d));
+                                }
+                                self.append_assistant_text(&msg);
                             } else {
                                 self.push_log_no_agent(
                                     LogLevel::Warn,
                                     format!("Team '{team_name}' state cleared (dir not found)"),
                                 );
-                                self.append_assistant_text(&format!(
-                                    "From: /team cleanup\nTeam '{team_name}' state cleared."
-                                ));
-                            }
-                            self.status = "team cleaned up".to_string();
-                        } else {
-                            self.status = "No active team to clean up".to_string();
-                        }
-                    }
-                    "forcecleanup" | "force-cleanup" => {
-                        // Confirm with the user before destructive operation.
-                        let confirm_msg = "Are you sure you want to force-cleanup the active team (deactivate teammates and remove on-disk resources)? Press Enter to confirm or Esc to cancel.";
-                        let args_lower = args.to_lowercase();
-                        let confirmed = args_lower.split_whitespace().any(|s| s == "confirm");
-                        if !confirmed {
-                            // Show interactive confirmation modal state with active members listed.
-                            // Build list of active teammate names for display in modal.
-                            let active_names: Vec<String> = self
-                                .session
-                                .team_members
-                                .iter()
-                                .filter(|m| m.status != MemberStatus::Stopped)
-                                .map(|m| format!("{} ({})", m.name, m.agent_id))
-                                .collect();
-
-                            let team_name = self
-                                .session
-                                .active_team
-                                .as_ref()
-                                .map(|t| t.name.clone())
-                                .unwrap_or_else(|| "<unknown>".to_string());
-
-                            self.session.pending_forcecleanup = Some(PendingForceCleanup {
-                                team_name: team_name.clone(),
-                                active_members: active_names.clone(),
-                            });
-
-                            // Append assistant text instructing user to press Enter/Esc
-                            let mut msg = format!("From: /team forcecleanup\n{}\n\n", confirm_msg);
-                            if !active_names.is_empty() {
-                                msg.push_str("Active teammates:\n\n");
-                                for n in &active_names {
-                                    msg.push_str(&format!("  - {}\n", n));
+                                let mut msg = format!(
+                                    "From: /team forcecleanup\nTeam '{team_name}' state cleared. The following teammate(s) were deactivated:\n\n"
+                                );
+                                for d in &deactivated {
+                                    msg.push_str(&format!("  - {}\n", d));
                                 }
-                                msg.push_str("\n");
+                                self.append_assistant_text(&msg);
                             }
-                            msg.push_str("Press Enter to confirm or Esc to cancel.");
 
-                            self.append_assistant_text(&msg);
+                            self.status = "team force cleaned up".to_string();
+                        }
+                        Err(e) => {
+                            self.status = format!("Failed to force cleanup team: {}", e);
                             self.push_log_no_agent(
-                                LogLevel::Info,
-                                "forcecleanup confirmation required (modal)".to_string(),
+                                LogLevel::Error,
+                                format!("forcecleanup failed for '{}': {}", team_name, e),
                             );
-                            self.status = "forcecleanup confirmation required".to_string();
-                            return;
-                        }
-
-                        // If confirmed, perform the force cleanup
-                        let team_opt = self.session.active_team.clone();
-                        if let Some(team) = team_opt {
-                            let working_dir = self.cwd_path.clone();
-                            let team_name = team.name.clone();
-                            // Nothing of a finalising job may write into the
-                            // directory while it is removed (ENOTEMPTY).
-                            self.stop_swarm_autocomplete(&team_name).await;
-                            match TeamStore::load_by_name(&team_name, &working_dir) {
-                                Ok(mut store) => {
-                                    // Attempt shutdown of active teammate sessions first.
-                                    //
-                                    // This used to fire-and-forget a `tokio::spawn`
-                                    // of `spawn_teammate(.., "shutdown", ..)`, which
-                                    // does not shut a teammate down at all: it
-                                    // starts a NEW agent loop with the prompt
-                                    // "shutdown" (one wasted LLM turn), reloads and
-                                    // re-saves `config.json`, and re-creates the
-                                    // companion lock file inside the team directory
-                                    // while `remove_dir_all` below was deleting that
-                                    // same tree. The racing writes made the removal
-                                    // fail with ENOTEMPTY and left the team
-                                    // directory behind (CI flake in
-                                    // `team_forcecleanup_deactivates_persisted_members`).
-                                    // The unified immediate-shutdown path is awaited
-                                    // here instead: every write into the directory is
-                                    // serialised before it is removed, any live
-                                    // agent/poll loop is aborted so it cannot recreate
-                                    // the tree after removal, and the member is marked
-                                    // Stopped on disk.
-                                    let manager = self.session_processor.team_manager.get();
-                                    let mut deactivated: Vec<String> = Vec::new();
-                                    for m in &mut store.config.members {
-                                        if m.status != MemberStatus::Stopped {
-                                            if let Some(tm) = manager.as_ref() {
-                                                let agent_id = m.agent_id.clone();
-                                                // The directory removal below is the authoritative
-                                                // teardown, and a member with no live handle is
-                                                // still marked Stopped on disk by the call.
-                                                // INTENTIONAL: fallible best-effort shutdown
-                                                let _ =
-                                                    tm.shutdown_teammate(&agent_id, false).await;
-                                            }
-                                            let desc = format!("{} ({})", m.name, m.agent_id);
-                                            m.status = MemberStatus::Stopped;
-                                            deactivated.push(desc);
-                                        }
-                                    }
-                                    // Persist best-effort
-                                    if let Err(e) = store.save() {
-                                        self.push_log_no_agent(
-                                            LogLevel::Warn,
-                                            format!("Failed to persist team member status before force cleanup: {}", e),
-                                        );
-                                    }
-
-                                    // Remove directory
-                                    let removed = std::fs::remove_dir_all(&store.dir).is_ok();
-
-                                    // Update TUI state
-                                    self.session.active_team = None;
-                                    self.session.team_members.clear();
-                                    self.session.team_message_counts.clear();
-                                    self.session.team_task_counts.clear();
-                                    self.session.team_task_counts_dirty = true;
-                                    self.show_teams = false;
-                                    self.session.focused_teammate = None;
-                                    if self
-                                        .session
-                                        .swarm_state
-                                        .as_ref()
-                                        .is_some_and(|s| s.team_name == team_name)
-                                    {
-                                        self.session.swarm_state = None;
-                                    }
-
-                                    if !deactivated.is_empty() {
-                                        self.push_log_no_agent(
-                                            LogLevel::Info,
-                                            format!(
-                                                "Deactivated teammates: {}",
-                                                deactivated.join(", ")
-                                            ),
-                                        );
-                                    }
-
-                                    if removed {
-                                        self.push_log_no_agent(
-                                            LogLevel::Info,
-                                            format!("[clr]  Team '{team_name}' force cleaned up"),
-                                        );
-                                        let mut msg = format!(
-                                            "From: /team forcecleanup\nTeam '{team_name}' force cleaned up. The following teammate(s) were deactivated and removed:\n\n"
-                                        );
-                                        for d in &deactivated {
-                                            msg.push_str(&format!("  - {}\n", d));
-                                        }
-                                        self.append_assistant_text(&msg);
-                                    } else {
-                                        self.push_log_no_agent(
-                                            LogLevel::Warn,
-                                            format!(
-                                                "Team '{team_name}' state cleared (dir not found)"
-                                            ),
-                                        );
-                                        let mut msg = format!(
-                                            "From: /team forcecleanup\nTeam '{team_name}' state cleared. The following teammate(s) were deactivated:\n\n"
-                                        );
-                                        for d in &deactivated {
-                                            msg.push_str(&format!("  - {}\n", d));
-                                        }
-                                        self.append_assistant_text(&msg);
-                                    }
-
-                                    self.status = "team force cleaned up".to_string();
-                                }
-                                Err(e) => {
-                                    self.status = format!("Failed to force cleanup team: {}", e);
-                                    self.push_log_no_agent(
-                                        LogLevel::Error,
-                                        format!("forcecleanup failed for '{}': {}", team_name, e),
-                                    );
-                                }
-                            }
-                        } else {
-                            self.status = "No active team to clean up".to_string();
                         }
                     }
-                    // FR-034: the approve/reject action a `plan_pending` row
-                    // names must be runnable from the same surface that names
-                    // it. `approve` takes the teammate; `reject` takes the
-                    // teammate and the feedback the tool requires.
-                    "approve" | "reject" => {
-                        let approve = sub == "approve";
-                        let (who, feedback) = rest
-                            .split_once(char::is_whitespace)
-                            .map_or((rest.trim(), ""), |(n, f)| (n.trim(), f.trim()));
-                        if who.is_empty() {
-                            self.status = format!(
-                                "Usage: /team {sub} <teammate-name>{}{}",
-                                if approve { "" } else { " <feedback>" },
-                                ""
-                            );
-                            return;
-                        }
-                        if !approve && feedback.is_empty() {
-                            // The tool refuses a rejection without feedback, so
-                            // the surface refuses it before the round trip.
-                            self.status =
-                                "Usage: /team reject <teammate-name> <feedback>".to_string();
-                            return;
-                        }
-                        let Some(_team) = self.session.active_team.clone() else {
-                            self.status = "No active team".to_string();
-                            return;
-                        };
-                        let member = self
-                            .session
-                            .team_members
-                            .iter()
-                            .find(|m| m.name == who || m.agent_id == who)
-                            .cloned();
-                        let Some(member) = member else {
-                            self.status = format!("team {sub}: no teammate named '{who}'");
-                            return;
-                        };
-                        if member.status != MemberStatus::PlanPending {
-                            self.status = format!(
-                                "team {sub}: {} ({}) is {} - a plan verdict needs a teammate in plan_pending",
-                                member.name,
-                                member.agent_id,
-                                member.status.display_label()
-                            );
-                            return;
-                        }
-                        let verdict = if approve { "approved" } else { "rejected" };
-                        let summary = if feedback.is_empty() {
-                            format!("Plan {verdict}.")
-                        } else {
-                            feedback.to_string()
-                        };
-                        match self.submit_plan_verdict(&member.agent_id, approve, &summary) {
-                            Ok(()) => {
-                                self.append_assistant_text(&format!(
+                } else {
+                    self.status = "No active team to clean up".to_string();
+                }
+            }
+            // FR-034: the approve/reject action a `plan_pending` row
+            // names must be runnable from the same surface that names
+            // it. `approve` takes the teammate; `reject` takes the
+            // teammate and the feedback the tool requires.
+            "approve" | "reject" => {
+                let approve = sub == "approve";
+                let (who, feedback) = rest
+                    .split_once(char::is_whitespace)
+                    .map_or((rest.trim(), ""), |(n, f)| (n.trim(), f.trim()));
+                if who.is_empty() {
+                    self.status = format!(
+                        "Usage: /team {sub} <teammate-name>{}{}",
+                        if approve { "" } else { " <feedback>" },
+                        ""
+                    );
+                    return std::ops::ControlFlow::Break(());
+                }
+                if !approve && feedback.is_empty() {
+                    // The tool refuses a rejection without feedback, so
+                    // the surface refuses it before the round trip.
+                    self.status = "Usage: /team reject <teammate-name> <feedback>".to_string();
+                    return std::ops::ControlFlow::Break(());
+                }
+                let Some(_team) = self.session.active_team.clone() else {
+                    self.status = "No active team".to_string();
+                    return std::ops::ControlFlow::Break(());
+                };
+                let member = self
+                    .session
+                    .team_members
+                    .iter()
+                    .find(|m| m.name == who || m.agent_id == who)
+                    .cloned();
+                let Some(member) = member else {
+                    self.status = format!("team {sub}: no teammate named '{who}'");
+                    return std::ops::ControlFlow::Break(());
+                };
+                if member.status != MemberStatus::PlanPending {
+                    self.status = format!(
+                        "team {sub}: {} ({}) is {} - a plan verdict needs a teammate in plan_pending",
+                        member.name,
+                        member.agent_id,
+                        member.status.display_label()
+                    );
+                    return std::ops::ControlFlow::Break(());
+                }
+                let verdict = if approve { "approved" } else { "rejected" };
+                let summary = if feedback.is_empty() {
+                    format!("Plan {verdict}.")
+                } else {
+                    feedback.to_string()
+                };
+                match self.submit_plan_verdict(&member.agent_id, approve, &summary) {
+                    Ok(()) => {
+                        self.append_assistant_text(&format!(
                                     "From: /team {sub}\nPlan for **{}** ({}) {verdict}.\n\n{}",
                                     member.name,
                                     member.agent_id,
@@ -7512,84 +7871,88 @@ than assumed.
                                         format!("Feedback sent: {summary}\n\nThe teammate stays in plan_pending and must resubmit with `team_submit_plan`.")
                                     }
                                 ));
-                                self.status = format!("team: {sub} {}", member.name);
-                            }
-                            Err(e) => {
-                                self.append_assistant_text(&format!(
-                                    "From: /team {sub}\nFailed to record the verdict for **{}**: {e}",
-                                    member.name
-                                ));
-                                self.status = format!("team {sub} failed: {e}");
-                            }
-                        }
+                        self.status = format!("team: {sub} {}", member.name);
                     }
-                    "focus" => {
-                        if self.session.active_team.is_none() {
-                            self.status = "No active team".to_string();
-                            return;
-                        }
-                        if rest.is_empty() {
-                            // No arg -> clear focus
-                            self.session.focused_teammate = None;
-                            self.output_view = None;
-                            self.append_assistant_text("From: /team focus\nTeammate focus cleared. Input returns to lead session.");
-                            self.status = "team: focus cleared".to_string();
-                        } else {
-                            match self.focus_teammate_by_name(rest) {
-                                Ok(()) => {
-                                    let name = self
-                                        .session
-                                        .focused_teammate
-                                        .as_ref()
-                                        .and_then(|id| {
-                                            self.session
-                                                .team_members
-                                                .iter()
-                                                .find(|m| m.agent_id == *id)
-                                        })
-                                        .map(|m| m.name.clone())
-                                        .unwrap_or_default();
-                                    self.append_assistant_text(&format!(
-                                        "From: /team focus\nFocused on **{}**. Messages will be routed to this teammate.\n\nUse `/team focus` (no args) or Alt+Up/Down to change focus.\nPress Esc to close the output view.",
-                                        name
-                                    ));
-                                }
-                                Err(e) => {
-                                    self.append_assistant_text(&format!(
-                                        "From: /team focus\n{e}\n\nAvailable teammates: {}",
-                                        self.session
-                                            .team_members
-                                            .iter()
-                                            .map(|m| m.name.as_str())
-                                            .collect::<Vec<_>>()
-                                            .join(", ")
-                                    ));
-                                    self.status = format!("team focus: {e}");
-                                }
-                            }
-                        }
-                    }
-                    _ => {
-                        self.status = format!(
-                            "Unknown /team subcommand '{}'. Usage: /team [help|status|show|create|close|delete|message|tasks|clear|cleanup|focus|approve|reject]",
-                            sub
-                        );
-                        self.push_log_no_agent(
-                            LogLevel::Warn,
-                            format!("unknown /team subcommand: {}", sub),
-                        );
+                    Err(e) => {
+                        self.append_assistant_text(&format!(
+                            "From: /team {sub}\nFailed to record the verdict for **{}**: {e}",
+                            member.name
+                        ));
+                        self.status = format!("team {sub} failed: {e}");
                     }
                 }
             }
-            // -- /bash --------------------------------------------------------
-            "bash" => {
-                let (sub, rest) = args
-                    .split_once(char::is_whitespace)
-                    .map_or((args, ""), |(s, r)| (s.trim(), r.trim()));
+            "focus" => {
+                if self.session.active_team.is_none() {
+                    self.status = "No active team".to_string();
+                    return std::ops::ControlFlow::Break(());
+                }
+                if rest.is_empty() {
+                    // No arg -> clear focus
+                    self.session.focused_teammate = None;
+                    self.output_view = None;
+                    self.append_assistant_text(
+                        "From: /team focus\nTeammate focus cleared. Input returns to lead session.",
+                    );
+                    self.status = "team: focus cleared".to_string();
+                } else {
+                    match self.focus_teammate_by_name(rest) {
+                        Ok(()) => {
+                            let name = self
+                                .session
+                                .focused_teammate
+                                .as_ref()
+                                .and_then(|id| {
+                                    self.session.team_members.iter().find(|m| m.agent_id == *id)
+                                })
+                                .map(|m| m.name.clone())
+                                .unwrap_or_default();
+                            self.append_assistant_text(&format!(
+                                        "From: /team focus\nFocused on **{}**. Messages will be routed to this teammate.\n\nUse `/team focus` (no args) or Alt+Up/Down to change focus.\nPress Esc to close the output view.",
+                                        name
+                                    ));
+                        }
+                        Err(e) => {
+                            self.append_assistant_text(&format!(
+                                "From: /team focus\n{e}\n\nAvailable teammates: {}",
+                                self.session
+                                    .team_members
+                                    .iter()
+                                    .map(|m| m.name.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ));
+                            self.status = format!("team focus: {e}");
+                        }
+                    }
+                }
+            }
+            _ => {
+                self.status = format!(
+                    "Unknown /team subcommand '{}'. Usage: /team [help|status|show|create|close|delete|message|tasks|clear|cleanup|focus|approve|reject]",
+                    sub
+                );
+                self.push_log_no_agent(
+                    LogLevel::Warn,
+                    format!("unknown /team subcommand: {}", sub),
+                );
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
 
-                match sub {
-                    "help" | "--help" | "-h" | "" => {
-                        let help = "\
+    /// Run the `/bash` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_bash(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        let (sub, rest) = args
+            .split_once(char::is_whitespace)
+            .map_or((args, ""), |(s, r)| (s.trim(), r.trim()));
+
+        match sub {
+            "help" | "--help" | "-h" | "" => {
+                let help = "\
 From: /bash help
 
 ## /bash - Bash command list management
@@ -7620,227 +7983,228 @@ supplementing the built-in denied-patterns list.
 
 Changes are persisted immediately to `.codemason/codemason.json` and take effect at once.
 ";
-                        self.append_assistant_text(help);
+                self.append_assistant_text(help);
+            }
+            "show" => {
+                let allowlist = codemason_agent::bash_lists::get_allowlist();
+                let denylist = codemason_agent::bash_lists::get_denylist();
+                let safe_commands = codemason_tools_core::bash::get_safe_commands();
+                let (
+                    builtin_banned,
+                    builtin_denied_commands,
+                    builtin_denied_cmd_patterns,
+                    builtin_patterns,
+                ) = codemason_tools_core::bash::get_builtin_lists();
+
+                let mut out = String::from("From: /bash show\n\n## Bash command lists\n\n");
+
+                // Built-in safe commands (Layer 1)
+                out.push_str("### Built-in Safe Commands (Layer 1 - Auto-approved)\n");
+                out.push_str("*These commands are auto-approved without user prompting*\n\n");
+                for cmd in safe_commands {
+                    out.push_str(&format!("  - `{cmd}`\n"));
+                }
+
+                // User-defined allowlist
+                out.push_str("\n### Allowlist (user-defined - Layer 2 exemptions)\n");
+                if allowlist.is_empty() {
+                    out.push_str("  *(empty)*\n");
+                } else {
+                    for entry in &allowlist {
+                        out.push_str(&format!("  - `{entry}`\n"));
                     }
-                    "show" => {
-                        let allowlist = codemason_agent::bash_lists::get_allowlist();
-                        let denylist = codemason_agent::bash_lists::get_denylist();
-                        let safe_commands = codemason_tools_core::bash::get_safe_commands();
-                        let (
-                            builtin_banned,
-                            builtin_denied_commands,
-                            builtin_denied_cmd_patterns,
-                            builtin_patterns,
-                        ) = codemason_tools_core::bash::get_builtin_lists();
+                }
 
-                        let mut out = String::from("From: /bash show\n\n## Bash command lists\n\n");
-
-                        // Built-in safe commands (Layer 1)
-                        out.push_str("### Built-in Safe Commands (Layer 1 - Auto-approved)\n");
-                        out.push_str(
-                            "*These commands are auto-approved without user prompting*\n\n",
-                        );
-                        for cmd in safe_commands {
-                            out.push_str(&format!("  - `{cmd}`\n"));
-                        }
-
-                        // User-defined allowlist
-                        out.push_str("\n### Allowlist (user-defined - Layer 2 exemptions)\n");
-                        if allowlist.is_empty() {
-                            out.push_str("  *(empty)*\n");
-                        } else {
-                            for entry in &allowlist {
-                                out.push_str(&format!("  - `{entry}`\n"));
-                            }
-                        }
-
-                        // User-defined denylist
-                        out.push_str("\n### Denylist (user-defined - Layer 3 custom blocks)\n");
-                        if denylist.is_empty() {
-                            out.push_str("  *(empty)*\n");
-                        } else {
-                            for entry in &denylist {
-                                out.push_str(&format!("  - `{entry}`\n"));
-                            }
-                        }
-
-                        // Built-in banned commands
-                        out.push_str(
-                            "\n### Built-in Banned Commands (Layer 2 - Word-boundary matched)\n",
-                        );
-                        out.push_str("*These commands are blocked unless allowlisted or YOLO mode is enabled*\n\n");
-                        for cmd in builtin_banned {
-                            out.push_str(&format!("  - `{cmd}`\n"));
-                        }
-
-                        // Built-in denied commands
-                        out.push_str(
-                            "\n### Built-in Denied Commands (Layer 3 - Word-boundary matched)\n",
-                        );
-                        out.push_str("*These command names are unconditionally blocked (e.g., mkfs, insmod, useradd)*\n\n");
-                        for cmd in builtin_denied_commands {
-                            out.push_str(&format!("  - `{cmd}`\n"));
-                        }
-
-                        // Built-in denied command patterns
-                        out.push_str("\n### Built-in Denied Command Patterns (Layer 3 - Command+args matched)\n");
-                        out.push_str("*Commands with specific arguments are blocked (e.g., sudo , su -, passwd )*\n\n");
-                        for pattern in builtin_denied_cmd_patterns {
-                            out.push_str(&format!("  - `{pattern}`\n"));
-                        }
-
-                        // Built-in denied patterns
-                        out.push_str(
-                            "\n### Built-in Denied Patterns (Layer 3 - Substring matched)\n",
-                        );
-                        out.push_str(
-                            "*Commands containing these patterns are unconditionally blocked*\n\n",
-                        );
-                        for pattern in builtin_patterns {
-                            out.push_str(&format!("  - `{pattern}`\n"));
-                        }
-
-                        self.append_assistant_text(&out);
+                // User-defined denylist
+                out.push_str("\n### Denylist (user-defined - Layer 3 custom blocks)\n");
+                if denylist.is_empty() {
+                    out.push_str("  *(empty)*\n");
+                } else {
+                    for entry in &denylist {
+                        out.push_str(&format!("  - `{entry}`\n"));
                     }
-                    "add" | "remove" => {
-                        // Parse: [allow|deny] <entry> [--global]
-                        let (list_type, entry_with_flag) = rest
-                            .split_once(char::is_whitespace)
-                            .map_or((rest, ""), |(l, e)| (l.trim(), e.trim()));
+                }
 
-                        let is_global = entry_with_flag.ends_with("--global");
-                        let entry = if is_global {
-                            entry_with_flag.trim_end_matches("--global").trim()
-                        } else {
-                            entry_with_flag
-                        };
+                // Built-in banned commands
+                out.push_str("\n### Built-in Banned Commands (Layer 2 - Word-boundary matched)\n");
+                out.push_str(
+                    "*These commands are blocked unless allowlisted or YOLO mode is enabled*\n\n",
+                );
+                for cmd in builtin_banned {
+                    out.push_str(&format!("  - `{cmd}`\n"));
+                }
 
-                        if entry.is_empty() {
-                            self.append_assistant_text(&format!(
-                                "From: /bash {sub}\n\nUsage: `/bash {sub} allow|deny <entry> [--global]`"
-                            ));
+                // Built-in denied commands
+                out.push_str("\n### Built-in Denied Commands (Layer 3 - Word-boundary matched)\n");
+                out.push_str("*These command names are unconditionally blocked (e.g., mkfs, insmod, useradd)*\n\n");
+                for cmd in builtin_denied_commands {
+                    out.push_str(&format!("  - `{cmd}`\n"));
+                }
 
-                            return;
-                        }
+                // Built-in denied command patterns
+                out.push_str(
+                    "\n### Built-in Denied Command Patterns (Layer 3 - Command+args matched)\n",
+                );
+                out.push_str("*Commands with specific arguments are blocked (e.g., sudo , su -, passwd )*\n\n");
+                for pattern in builtin_denied_cmd_patterns {
+                    out.push_str(&format!("  - `{pattern}`\n"));
+                }
 
-                        let scope = if is_global {
-                            codemason_agent::bash_lists::Scope::Global
-                        } else {
-                            codemason_agent::bash_lists::Scope::Project
-                        };
-                        let scope_label = if is_global { "global" } else { "project" };
-                        let config_file = if is_global {
-                            "~/.config/codemason/codemason.json"
-                        } else {
-                            ".codemason/codemason.json"
-                        };
+                // Built-in denied patterns
+                out.push_str("\n### Built-in Denied Patterns (Layer 3 - Substring matched)\n");
+                out.push_str(
+                    "*Commands containing these patterns are unconditionally blocked*\n\n",
+                );
+                for pattern in builtin_patterns {
+                    out.push_str(&format!("  - `{pattern}`\n"));
+                }
 
-                        match (sub, list_type) {
-                            ("add", "allow") => {
-                                match codemason_agent::bash_lists::add_allowlist(entry, scope) {
-                                    Ok(()) => {
-                                        self.append_assistant_text(&format!(
-                                            "From: /bash add allow\n\n\
+                self.append_assistant_text(&out);
+            }
+            "add" | "remove" => {
+                // Parse: [allow|deny] <entry> [--global]
+                let (list_type, entry_with_flag) = rest
+                    .split_once(char::is_whitespace)
+                    .map_or((rest, ""), |(l, e)| (l.trim(), e.trim()));
+
+                let is_global = entry_with_flag.ends_with("--global");
+                let entry = if is_global {
+                    entry_with_flag.trim_end_matches("--global").trim()
+                } else {
+                    entry_with_flag
+                };
+
+                if entry.is_empty() {
+                    self.append_assistant_text(&format!(
+                        "From: /bash {sub}\n\nUsage: `/bash {sub} allow|deny <entry> [--global]`"
+                    ));
+
+                    return std::ops::ControlFlow::Break(());
+                }
+
+                let scope = if is_global {
+                    codemason_agent::bash_lists::Scope::Global
+                } else {
+                    codemason_agent::bash_lists::Scope::Project
+                };
+                let scope_label = if is_global { "global" } else { "project" };
+                let config_file = if is_global {
+                    "~/.config/codemason/codemason.json"
+                } else {
+                    ".codemason/codemason.json"
+                };
+
+                match (sub, list_type) {
+                    ("add", "allow") => {
+                        match codemason_agent::bash_lists::add_allowlist(entry, scope) {
+                            Ok(()) => {
+                                self.append_assistant_text(&format!(
+                                    "From: /bash add allow\n\n\
                                             [ok] Added `{entry}` to the **allowlist** \
                                             ({scope_label}: `{config_file}`).\n\n\
                                             Commands starting with `{entry}` will no longer \
                                             be blocked by the banned-command check."
-                                        ));
-                                    }
-                                    Err(e) => {
-                                        self.append_assistant_text(&format!(
-                                            "From: /bash add allow\n\n[err] Error: {e}"
-                                        ));
-                                    }
-                                }
+                                ));
                             }
-                            ("add", "deny") => {
-                                match codemason_agent::bash_lists::add_denylist(entry, scope) {
-                                    Ok(()) => {
-                                        self.append_assistant_text(&format!(
-                                            "From: /bash add deny\n\n\
+                            Err(e) => {
+                                self.append_assistant_text(&format!(
+                                    "From: /bash add allow\n\n[err] Error: {e}"
+                                ));
+                            }
+                        }
+                    }
+                    ("add", "deny") => {
+                        match codemason_agent::bash_lists::add_denylist(entry, scope) {
+                            Ok(()) => {
+                                self.append_assistant_text(&format!(
+                                    "From: /bash add deny\n\n\
                                             [ok] Added `{entry}` to the **denylist** \
                                             ({scope_label}: `{config_file}`).\n\n\
                                             Any command containing `{entry}` will be rejected."
-                                        ));
-                                    }
-                                    Err(e) => {
-                                        self.append_assistant_text(&format!(
-                                            "From: /bash add deny\n\n[err] Error: {e}"
-                                        ));
-                                    }
-                                }
+                                ));
                             }
-                            ("remove", "allow") => {
-                                match codemason_agent::bash_lists::remove_allowlist(entry, scope) {
-                                    Ok(true) => {
-                                        self.append_assistant_text(&format!(
-                                            "From: /bash remove allow\n\n\
+                            Err(e) => {
+                                self.append_assistant_text(&format!(
+                                    "From: /bash add deny\n\n[err] Error: {e}"
+                                ));
+                            }
+                        }
+                    }
+                    ("remove", "allow") => {
+                        match codemason_agent::bash_lists::remove_allowlist(entry, scope) {
+                            Ok(true) => {
+                                self.append_assistant_text(&format!(
+                                    "From: /bash remove allow\n\n\
                                             [ok] Removed `{entry}` from the **allowlist** \
                                             ({scope_label}: `{config_file}`)."
-                                        ));
-                                    }
-                                    Ok(false) => {
-                                        self.append_assistant_text(&format!(
+                                ));
+                            }
+                            Ok(false) => {
+                                self.append_assistant_text(&format!(
                                             "From: /bash remove allow\n\n\
                                             [warn] `{entry}` was not in the {scope_label} allowlist."
                                         ));
-                                    }
-                                    Err(e) => {
-                                        self.append_assistant_text(&format!(
-                                            "From: /bash remove allow\n\n[err] Error: {e}"
-                                        ));
-                                    }
-                                }
                             }
-                            ("remove", "deny") => {
-                                match codemason_agent::bash_lists::remove_denylist(entry, scope) {
-                                    Ok(true) => {
-                                        self.append_assistant_text(&format!(
-                                            "From: /bash remove deny\n\n\
+                            Err(e) => {
+                                self.append_assistant_text(&format!(
+                                    "From: /bash remove allow\n\n[err] Error: {e}"
+                                ));
+                            }
+                        }
+                    }
+                    ("remove", "deny") => {
+                        match codemason_agent::bash_lists::remove_denylist(entry, scope) {
+                            Ok(true) => {
+                                self.append_assistant_text(&format!(
+                                    "From: /bash remove deny\n\n\
                                             [ok] Removed `{entry}` from the **denylist** \
                                             ({scope_label}: `{config_file}`)."
-                                        ));
-                                    }
-                                    Ok(false) => {
-                                        self.append_assistant_text(&format!(
-                                            "From: /bash remove deny\n\n\
-                                            [warn] `{entry}` was not in the {scope_label} denylist."
-                                        ));
-                                    }
-                                    Err(e) => {
-                                        self.append_assistant_text(&format!(
-                                            "From: /bash remove deny\n\n[err] Error: {e}"
-                                        ));
-                                    }
-                                }
+                                ));
                             }
-                            _ => {
+                            Ok(false) => {
                                 self.append_assistant_text(&format!(
-                                    "From: /bash {sub}\n\n\
-                                    Unknown list type `{list_type}`. Use `allow` or `deny`.\n\n\
-                                    Usage: `/bash {sub} allow|deny <entry> [--global]`"
+                                    "From: /bash remove deny\n\n\
+                                            [warn] `{entry}` was not in the {scope_label} denylist."
+                                ));
+                            }
+                            Err(e) => {
+                                self.append_assistant_text(&format!(
+                                    "From: /bash remove deny\n\n[err] Error: {e}"
                                 ));
                             }
                         }
                     }
                     _ => {
                         self.append_assistant_text(&format!(
-                            "From: /bash\n\nUnknown subcommand `{sub}`. \
-                            Run `/bash help` for usage."
+                            "From: /bash {sub}\n\n\
+                                    Unknown list type `{list_type}`. Use `allow` or `deny`.\n\n\
+                                    Usage: `/bash {sub} allow|deny <entry> [--global]`"
                         ));
                     }
                 }
             }
-            // -- /dirs --------------------------------------------------------
-            "dirs" => {
-                let (sub, rest) = args
-                    .split_once(char::is_whitespace)
-                    .map_or((args, ""), |(s, r)| (s.trim(), r.trim()));
+            _ => {
+                self.append_assistant_text(&format!(
+                    "From: /bash\n\nUnknown subcommand `{sub}`. \
+                            Run `/bash help` for usage."
+                ));
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
 
-                match sub {
-                    "help" | "--help" | "-h" | "" => {
-                        let help = "\
+    /// Run the `/dirs` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_dirs(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        let (sub, rest) = args
+            .split_once(char::is_whitespace)
+            .map_or((args, ""), |(s, r)| (s.trim(), r.trim()));
+
+        match sub {
+            "help" | "--help" | "-h" | "" => {
+                let help = "\
             From: /dirs help
             
             ## /dirs - Directory/file permission management
@@ -7895,279 +8259,284 @@ Changes are persisted immediately to `.codemason/codemason.json` and take effect
             - Denylist patterns override allowlist patterns
             - Use `/dirs show` to see active patterns
             ";
-                        self.append_assistant_text(help);
+                self.append_assistant_text(help);
+            }
+            "show" => {
+                let (builtin_allow, builtin_deny) = codemason_agent::dir_lists::get_builtin_lists();
+                let user_allow = codemason_agent::dir_lists::get_allowlist();
+                let user_deny = codemason_agent::dir_lists::get_denylist();
+                let allowed_roots = codemason_agent::dir_lists::get_allowed_roots();
+
+                let mut out = String::from("From: /dirs show\n\n");
+                out.push_str("## Directory/File Permission Lists\n\n");
+
+                // Built-in allowlist
+                out.push_str("### Built-in Allowlist (auto-approve)\n");
+                if builtin_allow.is_empty() {
+                    out.push_str("*(empty)*\n\n");
+                } else {
+                    out.push_str(
+                        "*File operations matching these patterns are automatically allowed*\n\n",
+                    );
+                    for pattern in &builtin_allow {
+                        out.push_str(&format!("  - `{pattern}`\n"));
                     }
-                    "show" => {
-                        let (builtin_allow, builtin_deny) =
-                            codemason_agent::dir_lists::get_builtin_lists();
-                        let user_allow = codemason_agent::dir_lists::get_allowlist();
-                        let user_deny = codemason_agent::dir_lists::get_denylist();
-                        let allowed_roots = codemason_agent::dir_lists::get_allowed_roots();
+                    out.push('\n');
+                }
 
-                        let mut out = String::from("From: /dirs show\n\n");
-                        out.push_str("## Directory/File Permission Lists\n\n");
-
-                        // Built-in allowlist
-                        out.push_str("### Built-in Allowlist (auto-approve)\n");
-                        if builtin_allow.is_empty() {
-                            out.push_str("*(empty)*\n\n");
-                        } else {
-                            out.push_str("*File operations matching these patterns are automatically allowed*\n\n");
-                            for pattern in &builtin_allow {
-                                out.push_str(&format!("  - `{pattern}`\n"));
-                            }
-                            out.push('\n');
-                        }
-
-                        // User allowlist
-                        out.push_str("### User Allowlist (auto-approve)\n");
-                        if user_allow.is_empty() {
-                            out.push_str("*(empty)*\n\n");
-                        } else {
-                            out.push_str("*File operations matching these patterns are automatically allowed*\n\n");
-                            for pattern in &user_allow {
-                                out.push_str(&format!("  - `{pattern}`\n"));
-                            }
-                            out.push('\n');
-                        }
-
-                        // Built-in denylist
-                        out.push_str("### Built-in Denylist (auto-deny)\n");
-                        if builtin_deny.is_empty() {
-                            out.push_str("*(empty)*\n\n");
-                        } else {
-                            out.push_str("*File operations matching these patterns are automatically denied*\n\n");
-                            for pattern in &builtin_deny {
-                                out.push_str(&format!("  - `{pattern}`\n"));
-                            }
-                            out.push('\n');
-                        }
-
-                        // User denylist
-                        out.push_str("### User Denylist (auto-deny)\n");
-                        if user_deny.is_empty() {
-                            out.push_str("*(empty)*\n\n");
-                        } else {
-                            out.push_str("*File operations matching these patterns are automatically denied*\n\n");
-                            for pattern in &user_deny {
-                                out.push_str(&format!("  - `{pattern}`\n"));
-                            }
-                            out.push('\n');
-                        }
-
-                        // Allowed roots
-                        out.push_str("### Allowed Roots (path escape checking)\n");
-                        if allowed_roots.is_empty() {
-                            out.push_str(
-                                "*(empty)* - only the session's working directory is allowed\n\n",
-                            );
-                        } else {
-                            out.push_str("*Additional directory paths treated as valid roots for path escape checking*\n\n");
-                            for path in &allowed_roots {
-                                out.push_str(&format!("  - `{path}`\n"));
-                            }
-                            out.push('\n');
-                        }
-
-                        self.append_assistant_text(&out);
+                // User allowlist
+                out.push_str("### User Allowlist (auto-approve)\n");
+                if user_allow.is_empty() {
+                    out.push_str("*(empty)*\n\n");
+                } else {
+                    out.push_str(
+                        "*File operations matching these patterns are automatically allowed*\n\n",
+                    );
+                    for pattern in &user_allow {
+                        out.push_str(&format!("  - `{pattern}`\n"));
                     }
-                    "add" | "remove" => {
-                        // Parse: [allow|deny] <pattern> [--global]
-                        let (list_type, pattern_with_flag) = rest
-                            .split_once(char::is_whitespace)
-                            .map_or((rest, ""), |(l, p)| (l.trim(), p.trim()));
+                    out.push('\n');
+                }
 
-                        let is_global = pattern_with_flag.ends_with("--global");
-                        let pattern = if is_global {
-                            pattern_with_flag.trim_end_matches("--global").trim()
-                        } else {
-                            pattern_with_flag
-                        };
+                // Built-in denylist
+                out.push_str("### Built-in Denylist (auto-deny)\n");
+                if builtin_deny.is_empty() {
+                    out.push_str("*(empty)*\n\n");
+                } else {
+                    out.push_str(
+                        "*File operations matching these patterns are automatically denied*\n\n",
+                    );
+                    for pattern in &builtin_deny {
+                        out.push_str(&format!("  - `{pattern}`\n"));
+                    }
+                    out.push('\n');
+                }
 
-                        if pattern.is_empty() {
-                            self.append_assistant_text(&format!(
-                                              "From: /dirs {sub}\n\nUsage: `/dirs {sub} allow|deny <pattern> [--global]`"
-                                          ));
-                            return;
-                        }
+                // User denylist
+                out.push_str("### User Denylist (auto-deny)\n");
+                if user_deny.is_empty() {
+                    out.push_str("*(empty)*\n\n");
+                } else {
+                    out.push_str(
+                        "*File operations matching these patterns are automatically denied*\n\n",
+                    );
+                    for pattern in &user_deny {
+                        out.push_str(&format!("  - `{pattern}`\n"));
+                    }
+                    out.push('\n');
+                }
 
-                        let scope = if is_global {
-                            codemason_agent::dir_lists::Scope::Global
-                        } else {
-                            codemason_agent::dir_lists::Scope::Project
-                        };
-                        let scope_label = if is_global { "global" } else { "project" };
-                        let config_file = if is_global {
-                            "~/.config/codemason/codemason.json"
-                        } else {
-                            ".codemason/codemason.json"
-                        };
+                // Allowed roots
+                out.push_str("### Allowed Roots (path escape checking)\n");
+                if allowed_roots.is_empty() {
+                    out.push_str("*(empty)* - only the session's working directory is allowed\n\n");
+                } else {
+                    out.push_str("*Additional directory paths treated as valid roots for path escape checking*\n\n");
+                    for path in &allowed_roots {
+                        out.push_str(&format!("  - `{path}`\n"));
+                    }
+                    out.push('\n');
+                }
 
-                        match (sub, list_type) {
-                            ("add", "allow") => {
-                                match codemason_agent::dir_lists::add_allowlist(pattern, scope) {
-                                    Ok(()) => {
-                                        self.append_assistant_text(&format!(
+                self.append_assistant_text(&out);
+            }
+            "add" | "remove" => {
+                // Parse: [allow|deny] <pattern> [--global]
+                let (list_type, pattern_with_flag) = rest
+                    .split_once(char::is_whitespace)
+                    .map_or((rest, ""), |(l, p)| (l.trim(), p.trim()));
+
+                let is_global = pattern_with_flag.ends_with("--global");
+                let pattern = if is_global {
+                    pattern_with_flag.trim_end_matches("--global").trim()
+                } else {
+                    pattern_with_flag
+                };
+
+                if pattern.is_empty() {
+                    self.append_assistant_text(&format!(
+                        "From: /dirs {sub}\n\nUsage: `/dirs {sub} allow|deny <pattern> [--global]`"
+                    ));
+                    return std::ops::ControlFlow::Break(());
+                }
+
+                let scope = if is_global {
+                    codemason_agent::dir_lists::Scope::Global
+                } else {
+                    codemason_agent::dir_lists::Scope::Project
+                };
+                let scope_label = if is_global { "global" } else { "project" };
+                let config_file = if is_global {
+                    "~/.config/codemason/codemason.json"
+                } else {
+                    ".codemason/codemason.json"
+                };
+
+                match (sub, list_type) {
+                    ("add", "allow") => {
+                        match codemason_agent::dir_lists::add_allowlist(pattern, scope) {
+                            Ok(()) => {
+                                self.append_assistant_text(&format!(
                                                           "From: /dirs add allow\n\n\
                                                           [ok] Added `{pattern}` to the **allowlist** \
                                                           ({scope_label}: `{config_file}`).\n\n\
                                                           File operations matching `{pattern}` will be automatically allowed."
                                                       ));
-                                    }
-                                    Err(e) => {
-                                        self.append_assistant_text(&format!(
-                                            "From: /dirs add allow\n\n[err] Error: {e}"
-                                        ));
-                                    }
-                                }
                             }
-                            ("add", "deny") => {
-                                match codemason_agent::dir_lists::add_denylist(pattern, scope) {
-                                    Ok(()) => {
-                                        self.append_assistant_text(&format!(
+                            Err(e) => {
+                                self.append_assistant_text(&format!(
+                                    "From: /dirs add allow\n\n[err] Error: {e}"
+                                ));
+                            }
+                        }
+                    }
+                    ("add", "deny") => {
+                        match codemason_agent::dir_lists::add_denylist(pattern, scope) {
+                            Ok(()) => {
+                                self.append_assistant_text(&format!(
                                                           "From: /dirs add deny\n\n\
                                                           [ok] Added `{pattern}` to the **denylist** \
                                                           ({scope_label}: `{config_file}`).\n\n\
                                                           File operations matching `{pattern}` will be automatically denied."
                                                       ));
-                                    }
-                                    Err(e) => {
-                                        self.append_assistant_text(&format!(
-                                            "From: /dirs add deny\n\n[err] Error: {e}"
-                                        ));
-                                    }
-                                }
                             }
-                            ("remove", "allow") => {
-                                match codemason_agent::dir_lists::remove_allowlist(pattern, scope) {
-                                    Ok(true) => {
-                                        self.append_assistant_text(&format!(
+                            Err(e) => {
+                                self.append_assistant_text(&format!(
+                                    "From: /dirs add deny\n\n[err] Error: {e}"
+                                ));
+                            }
+                        }
+                    }
+                    ("remove", "allow") => {
+                        match codemason_agent::dir_lists::remove_allowlist(pattern, scope) {
+                            Ok(true) => {
+                                self.append_assistant_text(&format!(
                                                           "From: /dirs remove allow\n\n\
                                                           [ok] Removed `{pattern}` from the **allowlist** \
                                                           ({scope_label}: `{config_file}`)."
                                                       ));
-                                    }
-                                    Ok(false) => {
-                                        self.append_assistant_text(&format!(
+                            }
+                            Ok(false) => {
+                                self.append_assistant_text(&format!(
                                                           "From: /dirs remove allow\n\n\
                                                           [warn] `{pattern}` was not in the {scope_label} allowlist."
                                                       ));
-                                    }
-                                    Err(e) => {
-                                        self.append_assistant_text(&format!(
-                                            "From: /dirs remove allow\n\n[err] Error: {e}"
-                                        ));
-                                    }
-                                }
                             }
-                            ("remove", "deny") => {
-                                match codemason_agent::dir_lists::remove_denylist(pattern, scope) {
-                                    Ok(true) => {
-                                        self.append_assistant_text(&format!(
+                            Err(e) => {
+                                self.append_assistant_text(&format!(
+                                    "From: /dirs remove allow\n\n[err] Error: {e}"
+                                ));
+                            }
+                        }
+                    }
+                    ("remove", "deny") => {
+                        match codemason_agent::dir_lists::remove_denylist(pattern, scope) {
+                            Ok(true) => {
+                                self.append_assistant_text(&format!(
                                                           "From: /dirs remove deny\n\n\
                                                           [ok] Removed `{pattern}` from the **denylist** \
                                                           ({scope_label}: `{config_file}`)."
                                                       ));
-                                    }
-                                    Ok(false) => {
-                                        self.append_assistant_text(&format!(
+                            }
+                            Ok(false) => {
+                                self.append_assistant_text(&format!(
                                                           "From: /dirs remove deny\n\n\
                                                           [warn] `{pattern}` was not in the {scope_label} denylist."
                                                       ));
-                                    }
-                                    Err(e) => {
-                                        self.append_assistant_text(&format!(
-                                            "From: /dirs remove deny\n\n[err] Error: {e}"
-                                        ));
-                                    }
-                                }
                             }
-                            ("add", "roots") => {
-                                match codemason_agent::dir_lists::add_allowed_roots(pattern, scope)
-                                {
-                                    Ok(()) => {
-                                        self.append_assistant_text(&format!(
+                            Err(e) => {
+                                self.append_assistant_text(&format!(
+                                    "From: /dirs remove deny\n\n[err] Error: {e}"
+                                ));
+                            }
+                        }
+                    }
+                    ("add", "roots") => {
+                        match codemason_agent::dir_lists::add_allowed_roots(pattern, scope) {
+                            Ok(()) => {
+                                self.append_assistant_text(&format!(
                                                       "From: /dirs add roots\n\n\
                                                       [ok] Added `{pattern}` to **allowed_roots** \
                                                       ({scope_label}: `{config_file}`).\n\n\
                                                       Path escape checking will treat `{pattern}` as a valid root directory."
                                                   ));
-                                    }
-                                    Err(e) => {
-                                        self.append_assistant_text(&format!(
-                                            "From: /dirs add roots\n\n[err] Error: {e}"
-                                        ));
-                                    }
-                                }
                             }
-                            ("remove", "roots") => {
-                                match codemason_agent::dir_lists::remove_allowed_roots(
-                                    pattern, scope,
-                                ) {
-                                    Ok(true) => {
-                                        self.append_assistant_text(&format!(
+                            Err(e) => {
+                                self.append_assistant_text(&format!(
+                                    "From: /dirs add roots\n\n[err] Error: {e}"
+                                ));
+                            }
+                        }
+                    }
+                    ("remove", "roots") => {
+                        match codemason_agent::dir_lists::remove_allowed_roots(pattern, scope) {
+                            Ok(true) => {
+                                self.append_assistant_text(&format!(
                                                       "From: /dirs remove roots\n\n\
                                                       [ok] Removed `{pattern}` from **allowed_roots** \
                                                       ({scope_label}: `{config_file}`).\n\n\
                                                       Path escape checking will no longer treat `{pattern}` as a valid root."
                                                   ));
-                                    }
-                                    Ok(false) => {
-                                        self.append_assistant_text(&format!(
+                            }
+                            Ok(false) => {
+                                self.append_assistant_text(&format!(
                                                       "From: /dirs remove roots\n\n\
                                                       [warn] `{pattern}` was not in the {scope_label} allowed_roots."
                                                   ));
-                                    }
-                                    Err(e) => {
-                                        self.append_assistant_text(&format!(
-                                            "From: /dirs remove roots\n\n[err] Error: {e}"
-                                        ));
-                                    }
-                                }
                             }
-                            _ => {
+                            Err(e) => {
                                 self.append_assistant_text(&format!(
-                                                  "From: /dirs {sub}\n\n\
-                                                  Unknown list type `{list_type}`. Use `allow`, `deny`, or `roots`.\n\n\
-                                                  Usage: `/dirs {sub} allow|deny|roots <pattern> [--global]`"
-                                              ));
+                                    "From: /dirs remove roots\n\n[err] Error: {e}"
+                                ));
                             }
                         }
                     }
                     _ => {
                         self.append_assistant_text(&format!(
-                            "From: /dirs\n\nUnknown subcommand `{sub}`. \
-                                          Run `/dirs help` for usage."
-                        ));
+                                                  "From: /dirs {sub}\n\n\
+                                                  Unknown list type `{list_type}`. Use `allow`, `deny`, or `roots`.\n\n\
+                                                  Usage: `/dirs {sub} allow|deny|roots <pattern> [--global]`"
+                                              ));
                     }
                 }
             }
-            "yolo" => {
-                // `/yolo <sub>`; a bare `/yolo` toggles (spec: `/yolo on|off|status`).
-                let sub = args.split_whitespace().next().unwrap_or("").to_lowercase();
-                match sub.as_str() {
-                    "" | "on" | "off" => {
-                        let requested = match sub.as_str() {
-                            "on" => Some(true),
-                            "off" => Some(false),
-                            _ => None,
+            _ => {
+                self.append_assistant_text(&format!(
+                    "From: /dirs\n\nUnknown subcommand `{sub}`. \
+                                          Run `/dirs help` for usage."
+                ));
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/yolo` slash command.
+    fn slash_yolo(&mut self, args: &str) {
+        // `/yolo <sub>`; a bare `/yolo` toggles (spec: `/yolo on|off|status`).
+        let sub = args.split_whitespace().next().unwrap_or("").to_lowercase();
+        match sub.as_str() {
+            "" | "on" | "off" => {
+                let requested = match sub.as_str() {
+                    "on" => Some(true),
+                    "off" => Some(false),
+                    _ => None,
+                };
+                let result = match requested {
+                    Some(enabled) => {
+                        codemason_config::yolo::persist_yolo(enabled).map(|()| enabled)
+                    }
+                    None => codemason_config::yolo::toggle_persist(),
+                };
+                match result {
+                    Ok(new_state) => {
+                        let label = if new_state {
+                            "ENABLED [warn]"
+                        } else {
+                            "disabled"
                         };
-                        let result = match requested {
-                            Some(enabled) => {
-                                codemason_config::yolo::persist_yolo(enabled).map(|()| enabled)
-                            }
-                            None => codemason_config::yolo::toggle_persist(),
-                        };
-                        match result {
-                            Ok(new_state) => {
-                                let label = if new_state {
-                                    "ENABLED [warn]"
-                                } else {
-                                    "disabled"
-                                };
-                                let mut output = format!("From: /yolo\n## YOLO mode {label}\n\n");
-                                if new_state {
-                                    output.push_str(
+                        let mut output = format!("From: /yolo\n## YOLO mode {label}\n\n");
+                        if new_state {
+                            output.push_str(
                                         "All command validation is now **bypassed**:\n\
                                          - Bash denied-pattern checks - **off**\n\
                                          - Dynamic context allowlist - **off**\n\
@@ -8176,51 +8545,50 @@ Changes are persisted immediately to `.codemason/codemason.json` and take effect
                                          [warn]  The agent can now execute **any** command without restriction.\n\
                                          Use `/yolo` again to re-enable safety checks.\n",
                                     );
-                                } else {
-                                    output
-                                        .push_str("All safety checks have been **re-enabled**.\n");
-                                }
-                                self.append_assistant_text(&output);
-
-                                self.status = format!("YOLO mode {label}");
-                                self.push_log_no_agent(
-                                    if new_state {
-                                        LogLevel::Warn
-                                    } else {
-                                        LogLevel::Info
-                                    },
-                                    format!("YOLO mode {label}"),
-                                );
-                            }
-                            Err(e) => {
-                                self.status = format!("[warn] failed to persist YOLO mode: {e}");
-                                self.append_assistant_text(&format!(
-                                    "From: /yolo\n[warn] Failed to persist YOLO mode: {e}\n"
-                                ));
-                                self.push_log_no_agent(
-                                    LogLevel::Error,
-                                    format!("YOLO persist failed: {e}"),
-                                );
-                            }
+                        } else {
+                            output.push_str("All safety checks have been **re-enabled**.\n");
                         }
-                    }
-                    "status" | "show" => {
-                        let enabled = codemason_config::yolo::is_enabled();
-                        self.append_assistant_text(&format!(
-                            "From: /yolo status\n\nYOLO mode: **{}**",
-                            if enabled { "enabled" } else { "disabled" }
-                        ));
-                        self.status = format!(
-                            "YOLO mode {}",
-                            if enabled {
-                                "ENABLED [warn]"
+                        self.append_assistant_text(&output);
+
+                        self.status = format!("YOLO mode {label}");
+                        self.push_log_no_agent(
+                            if new_state {
+                                LogLevel::Warn
                             } else {
-                                "disabled"
-                            }
+                                LogLevel::Info
+                            },
+                            format!("YOLO mode {label}"),
                         );
                     }
-                    _ => {
-                        let help = "From: /yolo help\n\n## /yolo \u{2014} YOLO mode toggle\n\n\
+                    Err(e) => {
+                        self.status = format!("[warn] failed to persist YOLO mode: {e}");
+                        self.append_assistant_text(&format!(
+                            "From: /yolo\n[warn] Failed to persist YOLO mode: {e}\n"
+                        ));
+                        self.push_log_no_agent(
+                            LogLevel::Error,
+                            format!("YOLO persist failed: {e}"),
+                        );
+                    }
+                }
+            }
+            "status" | "show" => {
+                let enabled = codemason_config::yolo::is_enabled();
+                self.append_assistant_text(&format!(
+                    "From: /yolo status\n\nYOLO mode: **{}**",
+                    if enabled { "enabled" } else { "disabled" }
+                ));
+                self.status = format!(
+                    "YOLO mode {}",
+                    if enabled {
+                        "ENABLED [warn]"
+                    } else {
+                        "disabled"
+                    }
+                );
+            }
+            _ => {
+                let help = "From: /yolo help\n\n## /yolo \u{2014} YOLO mode toggle\n\n\
                                     | Subcommand | Description |\n|---|---|\n\
                                     | `/yolo` | Toggle YOLO mode \u{2014} bypasses bash denied-pattern checks, the dynamic context allowlist, MCP config validation, and obfuscation detection |\n\
                                     | `/yolo on` | Enable YOLO mode |\n\
@@ -8228,167 +8596,160 @@ Changes are persisted immediately to `.codemason/codemason.json` and take effect
                                     | `/yolo status` | Show whether YOLO mode is enabled |\n\
                                     | `/yolo help` | Show this help |\n\n\
                                     [warn] YOLO mode lets the agent execute any command without restriction. The state persists in the config across restarts.";
-                        if sub == "help" || sub == "--help" || sub == "-h" {
-                            self.append_assistant_text(help);
-                            self.status = "yolo: help".to_string();
-                        } else {
-                            self.append_assistant_text(&format!(
-                                "From: /yolo\n\nUnknown subcommand `{sub}`. \
+                if sub == "help" || sub == "--help" || sub == "-h" {
+                    self.append_assistant_text(help);
+                    self.status = "yolo: help".to_string();
+                } else {
+                    self.append_assistant_text(&format!(
+                        "From: /yolo\n\nUnknown subcommand `{sub}`. \
                                  Usage: `/yolo [on|off|status|help]`"
-                            ));
-                            self.status = "yolo: usage".to_string();
-                        }
-                    }
+                    ));
+                    self.status = "yolo: usage".to_string();
                 }
-                self.needs_redraw = true;
             }
-            // -- /undo ------------------------------------------------------
-            // FR-014: Remove the last user/assistant turn pair from the conversation.
-            // This allows users to correct mistakes or backtrack from unhelpful responses.
-            "undo" => {
-                if args.trim() == "help" {
-                    // reason: LOW-2 - the ~44 `/X help` blocks are near-identical
-                    // inline `format!` tables. This is the first routed through the
-                    // shared `helpers::from_cmd` builder; the rest are left inline to
-                    // keep the M6 change surgical and are the migration target.
-                    self.append_assistant_text(&crate::app::helpers::from_cmd(
+        }
+        self.needs_redraw = true;
+    }
+
+    /// Run the `/undo` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_undo(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        if args.trim() == "help" {
+            // reason: LOW-2 - the ~44 `/X help` blocks are near-identical
+            // inline `format!` tables. This is the first routed through the
+            // shared `helpers::from_cmd` builder; the rest are left inline to
+            // keep the M6 change surgical and are the migration target.
+            self.append_assistant_text(&crate::app::helpers::from_cmd(
                         "undo help",
                         "## /undo - Remove the last turn\n\n| Subcommand | Description |\n|---|---|\n| `/undo` | Remove the last user message and everything after it (typically one assistant response) from the conversation |\n| `/undo help` | Show this help |",
                     ));
-                    self.status = "undo: help".to_string();
-                    return;
-                }
-                if self.session.session_id.is_none() {
-                    self.status = "[warn] No active session to undo".to_string();
-                    return;
-                }
-                if self.session.messages.is_empty() {
-                    self.status = "[warn] No messages to undo".to_string();
-                    return;
-                }
+            self.status = "undo: help".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+        if self.session.session_id.is_none() {
+            self.status = "[warn] No active session to undo".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+        if self.session.messages.is_empty() {
+            self.status = "[warn] No messages to undo".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
 
-                // Find the last user message and remove it along with any
-                // following assistant/compaction messages.
-                let mut last_user_idx = None;
-                for (idx, msg) in self.session.messages.iter().enumerate().rev() {
-                    if msg.role == codemason_types::Role::User {
-                        last_user_idx = Some(idx);
-                        break;
-                    }
-                }
-
-                match last_user_idx {
-                    Some(user_idx) => {
-                        // Remove the user message and all following messages
-                        // (typically one assistant response, but could be more)
-                        let removed_count = self.session.messages.len() - user_idx;
-                        self.session.messages.truncate(user_idx);
-
-                        // Reset scroll to show the new end of conversation
-                        self.session.scroll_offset = 0;
-
-                        self.status =
-                            format!("Undid last turn (removed {} message(s))", removed_count);
-                        self.push_log_no_agent(
-                            LogLevel::Info,
-                            format!(
-                                "Undo: removed {} message(s) from end of conversation",
-                                removed_count
-                            ),
-                        );
-                    }
-                    None => {
-                        self.status = "[warn] No user message found to undo".to_string();
-                        self.push_log_no_agent(
-                            LogLevel::Warn,
-                            "Undo: no user message found in conversation".to_string(),
-                        );
-                    }
-                }
+        // Find the last user message and remove it along with any
+        // following assistant/compaction messages.
+        let mut last_user_idx = None;
+        for (idx, msg) in self.session.messages.iter().enumerate().rev() {
+            if msg.role == codemason_types::Role::User {
+                last_user_idx = Some(idx);
+                break;
             }
-            // -- /name ------------------------------------------------------
-            // FR-015: Set a human-readable display name on the active session.
-            // The name is persisted in session metadata and appears in session lists.
-            "name" => {
-                if args.trim() == "help" {
-                    self.append_assistant_text(
+        }
+
+        match last_user_idx {
+            Some(user_idx) => {
+                // Remove the user message and all following messages
+                // (typically one assistant response, but could be more)
+                let removed_count = self.session.messages.len() - user_idx;
+                self.session.messages.truncate(user_idx);
+
+                // Reset scroll to show the new end of conversation
+                self.session.scroll_offset = 0;
+
+                self.status = format!("Undid last turn (removed {} message(s))", removed_count);
+                self.push_log_no_agent(
+                    LogLevel::Info,
+                    format!(
+                        "Undo: removed {} message(s) from end of conversation",
+                        removed_count
+                    ),
+                );
+            }
+            None => {
+                self.status = "[warn] No user message found to undo".to_string();
+                self.push_log_no_agent(
+                    LogLevel::Warn,
+                    "Undo: no user message found in conversation".to_string(),
+                );
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/name` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_name(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        if args.trim() == "help" {
+            self.append_assistant_text(
                         "From: /name help\n\n## /name \u{2014} Session display name\n\n| Subcommand | Description |\n|---|---|\n| `/name <display-name>` | Set a human-readable name for the active session (persists in session metadata) |\n| `/name` | Clear the session name |\n| `/name help` | Show this help |",
                     );
-                    self.status = "name: help".to_string();
-                    return;
-                }
-                if self.session.session_id.is_none() {
-                    self.status = "[warn] No active session to name".to_string();
-                    return;
-                }
+            self.status = "name: help".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+        if self.session.session_id.is_none() {
+            self.status = "[warn] No active session to name".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
 
-                let name = args.trim();
-                let Some(session_id) = self.session.session_id.clone() else {
-                    self.status = "[warn] No active session to name".to_string();
-                    return;
-                };
+        let name = args.trim();
+        let Some(session_id) = self.session.session_id.clone() else {
+            self.status = "[warn] No active session to name".to_string();
+            return std::ops::ControlFlow::Break(());
+        };
 
-                if name.is_empty() {
-                    // Clear the session name
-                    let storage = self.session_processor.session_manager.storage();
-                    match storage.update_session(&session_id, "") {
-                        Ok(()) => {
-                            self.status = "Session name cleared".to_string();
-                            self.push_log_no_agent(
-                                LogLevel::Info,
-                                "Session name cleared".to_string(),
-                            );
-                        }
-                        Err(e) => {
-                            self.status = format!("[warn] Failed to clear session name: {}", e);
-                            self.push_log_no_agent(
-                                LogLevel::Error,
-                                format!("Failed to clear session name: {}", e),
-                            );
-                        }
-                    }
-                } else {
-                    // Set the session name
-                    let storage = self.session_processor.session_manager.storage();
-                    match storage.update_session(&session_id, name) {
-                        Ok(()) => {
-                            self.status = format!("Session name set to '{}'", name);
-                            self.push_log_no_agent(
-                                LogLevel::Info,
-                                format!("Session name set to '{}'", name),
-                            );
-                        }
-                        Err(e) => {
-                            self.status = format!("[warn] Failed to set session name: {}", e);
-                            self.push_log_no_agent(
-                                LogLevel::Error,
-                                format!("Failed to set session name: {}", e),
-                            );
-                        }
-                    }
+        if name.is_empty() {
+            // Clear the session name
+            let storage = self.session_processor.session_manager.storage();
+            match storage.update_session(&session_id, "") {
+                Ok(()) => {
+                    self.status = "Session name cleared".to_string();
+                    self.push_log_no_agent(LogLevel::Info, "Session name cleared".to_string());
+                }
+                Err(e) => {
+                    self.status = format!("[warn] Failed to clear session name: {}", e);
+                    self.push_log_no_agent(
+                        LogLevel::Error,
+                        format!("Failed to clear session name: {}", e),
+                    );
                 }
             }
-            "alog" => self.handle_alog_command(args),
-            // -- /gcf ------------------------------------------------------
-            "gcf" => self.handle_gcf_command(args),
-            // -- /i18n ------------------------------------------------------
-            "i18n" => self.handle_i18n_command(args),
-            // -- /security --------------------------------------------------
-            // `security-analyzer` is accepted as an alias (spec `openhands`
-            // TC-012 spells the command both ways).
-            "security" | "security-analyzer" => self.handle_security_command(args),
-            // -- /prompt ----------------------------------------------------
-            "prompt" => self.handle_prompt_command(args),
-            // /toolchain: language toolchain presence report (FR-002)
-            "toolchain" => self.handle_toolchain_command(args),
-            // -- /swarm ------------------------------------------------------
-            "swarm" => {
-                let (sub, _rest) = args
-                    .split_once(char::is_whitespace)
-                    .map_or((args, ""), |(s, r)| (s.trim(), r.trim()));
-                match sub {
-                    "help" | "--help" | "-h" => {
-                        let help = "\
+        } else {
+            // Set the session name
+            let storage = self.session_processor.session_manager.storage();
+            match storage.update_session(&session_id, name) {
+                Ok(()) => {
+                    self.status = format!("Session name set to '{}'", name);
+                    self.push_log_no_agent(
+                        LogLevel::Info,
+                        format!("Session name set to '{}'", name),
+                    );
+                }
+                Err(e) => {
+                    self.status = format!("[warn] Failed to set session name: {}", e);
+                    self.push_log_no_agent(
+                        LogLevel::Error,
+                        format!("Failed to set session name: {}", e),
+                    );
+                }
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/swarm` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    async fn slash_swarm(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        let (sub, _rest) = args
+            .split_once(char::is_whitespace)
+            .map_or((args, ""), |(s, r)| (s.trim(), r.trim()));
+        match sub {
+            "help" | "--help" | "-h" => {
+                let help = "\
 From: /swarm help\n\
 ## Swarm - Fleet-Style Auto-Decomposition\n\n\
 | Command | Description |\n\
@@ -8399,662 +8760,613 @@ From: /swarm help\n\
 | `/swarm help` | Show this help |\n\n\
 The swarm analyses your prompt, breaks it into independent subtasks with dependency \
 edges, creates an ephemeral team, and orchestrates parallel execution.\n";
-                        self.append_assistant_text(help);
+                self.append_assistant_text(help);
+            }
+            "status" => {
+                self.handle_swarm_status();
+            }
+            "cancel" => {
+                self.handle_swarm_cancel().await;
+            }
+            _ => {
+                // /swarm <prompt> - decompose and execute
+                // Parse optional flags: --agent <type>
+                let (full_prompt, default_agent_type) = parse_swarm_args(args);
+
+                if full_prompt.is_empty() {
+                    let help = "From: /swarm\n\nUsage: `/swarm <prompt>` - describe what you want the swarm to accomplish.\nUse `/swarm --agent <type> <prompt>` to set a default agent type for all subtasks.\nType `/swarm help` for more info.\n";
+                    self.append_assistant_text(help);
+
+                    return std::ops::ControlFlow::Break(());
+                }
+
+                if self.session.swarm_state.is_some() {
+                    self.status =
+                        "[warn] A swarm is already active - use /swarm cancel first".to_string();
+                    return std::ops::ControlFlow::Break(());
+                }
+
+                // Store prompt and default agent type for later use when decomposition returns.
+                self.session.swarm_state = Some(team::SwarmState {
+                    team_name: String::new(),
+                    prompt: full_prompt.clone(),
+                    decomposition: team::SwarmDecomposition { tasks: vec![] },
+                    spawned: false,
+                    completed: false,
+                    default_agent_type,
+                });
+
+                // Require provider + model
+                let (provider_id, model_id) = match self
+                    .session
+                    .selected_model
+                    .as_deref()
+                    .and_then(|s| s.split_once('/'))
+                    .map(|(p, m)| (p.to_string(), m.to_string()))
+                {
+                    Some(pair) => pair,
+                    None => {
+                        self.status =
+                            "[warn] /swarm requires a configured model - use /model".to_string();
+                        return std::ops::ControlFlow::Break(());
                     }
-                    "status" => {
-                        self.handle_swarm_status();
-                    }
-                    "cancel" => {
-                        self.handle_swarm_cancel().await;
-                    }
-                    _ => {
-                        // /swarm <prompt> - decompose and execute
-                        // Parse optional flags: --agent <type>
-                        let (full_prompt, default_agent_type) = parse_swarm_args(args);
+                };
 
-                        if full_prompt.is_empty() {
-                            let help = "From: /swarm\n\nUsage: `/swarm <prompt>` - describe what you want the swarm to accomplish.\nUse `/swarm --agent <type> <prompt>` to set a default agent type for all subtasks.\nType `/swarm help` for more info.\n";
-                            self.append_assistant_text(help);
+                self.status = "[wait] swarm: decomposing goal...".to_string();
+                self.push_log_no_agent(
+                    LogLevel::Info,
+                    format!(
+                        "Swarm: decomposing - {}",
+                        codemason_types::strutil::truncate_bytes_no_ellipsis(&full_prompt, 80)
+                    ),
+                );
 
-                            return;
-                        }
-
-                        if self.session.swarm_state.is_some() {
-                            self.status =
-                                "[warn] A swarm is already active - use /swarm cancel first"
-                                    .to_string();
-                            return;
-                        }
-
-                        // Store prompt and default agent type for later use when decomposition returns.
-                        self.session.swarm_state = Some(team::SwarmState {
-                            team_name: String::new(),
-                            prompt: full_prompt.clone(),
-                            decomposition: team::SwarmDecomposition { tasks: vec![] },
-                            spawned: false,
-                            completed: false,
-                            default_agent_type,
-                        });
-
-                        // Require provider + model
-                        let (provider_id, model_id) = match self
-                            .session
-                            .selected_model
-                            .as_deref()
-                            .and_then(|s| s.split_once('/'))
-                            .map(|(p, m)| (p.to_string(), m.to_string()))
-                        {
-                            Some(pair) => pair,
-                            None => {
-                                self.status =
-                                    "[warn] /swarm requires a configured model - use /model"
-                                        .to_string();
-                                return;
-                            }
-                        };
-
-                        self.status = "[wait] swarm: decomposing goal...".to_string();
-                        self.push_log_no_agent(
-                            LogLevel::Info,
-                            format!(
-                                "Swarm: decomposing - {}",
-                                codemason_types::strutil::truncate_bytes_no_ellipsis(
-                                    &full_prompt,
-                                    80
-                                )
-                            ),
-                        );
-
-                        // Show user message in chat
-                        self.append_assistant_text(&format!(
+                // Show user message in chat
+                self.append_assistant_text(&format!(
                                                                                                   "From: /swarm\n## [bee] Swarm Decomposition\n\n\
                                                                                                   Analysing your goal and breaking it into parallel subtasks...\n\n\
                                                                                                   > {}\n",
                                                                                                   full_prompt
                                                                                               ));
 
-                        // Spawn async LLM call for decomposition
-                        let registry = Arc::clone(&self.provider_registry);
-                        let storage_clone = Arc::clone(&self.storage);
-                        let swarm_result = Arc::clone(&self.session.swarm_result);
+                // Spawn async LLM call for decomposition
+                let registry = Arc::clone(&self.provider_registry);
+                let storage_clone = Arc::clone(&self.storage);
+                let swarm_result = Arc::clone(&self.session.swarm_result);
 
-                        tokio::spawn(async move {
-                            let completer = CodemasonCompleter {
-                                registry,
-                                storage: storage_clone,
-                                provider_id,
-                                model_id,
-                            };
-                            let system = team::DECOMPOSITION_SYSTEM_PROMPT;
-                            let user = team::build_decomposition_user_prompt(&full_prompt);
+                tokio::spawn(async move {
+                    let completer = CodemasonCompleter {
+                        registry,
+                        storage: storage_clone,
+                        provider_id,
+                        model_id,
+                    };
+                    let system = team::DECOMPOSITION_SYSTEM_PROMPT;
+                    let user = team::build_decomposition_user_prompt(&full_prompt);
 
-                            let outcome = match completer.complete(system, &user).await {
-                                Ok(text) => Ok(text),
-                                Err(e) => Err(e.to_string()),
-                            };
+                    let outcome = match completer.complete(system, &user).await {
+                        Ok(text) => Ok(text),
+                        Err(e) => Err(e.to_string()),
+                    };
 
-                            if let Ok(mut guard) = swarm_result.lock() {
-                                *guard = Some(outcome);
-                            }
-                        });
+                    if let Ok(mut guard) = swarm_result.lock() {
+                        *guard = Some(outcome);
                     }
-                }
+                });
             }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
 
-            "spawn" => {
-                self.handle_spawn_command(args);
-            }
-
-            // -- /autopilot --------------------------------------------------
-            "autopilot" => {
-                let sub = args.split_whitespace().next().unwrap_or("").to_lowercase();
-                match sub.as_str() {
-                    "help" | "" => {
-                        self.append_assistant_text(
+    /// Run the `/autopilot` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    fn slash_autopilot(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        let sub = args.split_whitespace().next().unwrap_or("").to_lowercase();
+        match sub.as_str() {
+            "help" | "" => {
+                self.append_assistant_text(
                             "From: /autopilot help\n\n## /autopilot \u{2014} Autonomous operation\n\n| Subcommand | Description |\n|---|---|\n| `/autopilot on` | Enable autonomous operation (the agent keeps working without user prompts) |\n| `/autopilot on --max-tokens N` | Cap the total tokens an autopilot run may consume |\n| `/autopilot on --max-time N` | Cap the autopilot wall-clock time in seconds |\n| `/autopilot off` | Return to interactive mode |\n| `/autopilot status` | Show whether autopilot is running and for how long |\n| `/autopilot help` | Show this help |\n\nWhile autopilot is active the agent calls `task_complete` to signal completion, or you can run `/autopilot off`.",
                         );
-                        self.status = "autopilot: help".to_string();
-                    }
-                    "on" => {
-                        // Parse optional flags: --max-tokens N  --max-time N
-                        let mut token_budget: Option<u64> = None;
-                        let mut time_secs: Option<u64> = None;
-                        let parts: Vec<&str> = args.split_whitespace().collect();
-                        let mut i = 1; // skip "on"
-                        let mut parse_error: Option<String> = None;
-                        while i < parts.len() {
-                            match parts[i] {
-                                "--max-tokens" if i + 1 < parts.len() => {
-                                    match parts[i + 1].parse() {
-                                        Ok(v) => token_budget = Some(v),
-                                        Err(_) => {
-                                            parse_error =
-                                                Some(format!("--max-tokens {}", parts[i + 1]));
-                                            break;
-                                        }
-                                    }
-                                    i += 2;
-                                }
-                                "--max-time" if i + 1 < parts.len() => {
-                                    match parts[i + 1].parse() {
-                                        Ok(v) => time_secs = Some(v),
-                                        Err(_) => {
-                                            parse_error =
-                                                Some(format!("--max-time {}", parts[i + 1]));
-                                            break;
-                                        }
-                                    }
-                                    i += 2;
-                                }
-                                _ => {
-                                    i += 1;
+                self.status = "autopilot: help".to_string();
+            }
+            "on" => {
+                // Parse optional flags: --max-tokens N  --max-time N
+                let mut token_budget: Option<u64> = None;
+                let mut time_secs: Option<u64> = None;
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                let mut i = 1; // skip "on"
+                let mut parse_error: Option<String> = None;
+                while i < parts.len() {
+                    match parts[i] {
+                        "--max-tokens" if i + 1 < parts.len() => {
+                            match parts[i + 1].parse() {
+                                Ok(v) => token_budget = Some(v),
+                                Err(_) => {
+                                    parse_error = Some(format!("--max-tokens {}", parts[i + 1]));
+                                    break;
                                 }
                             }
+                            i += 2;
                         }
-                        if let Some(bad) = parse_error {
-                            self.append_assistant_text(&format!(
-                                "From: /autopilot\n[err] invalid value for `{bad}` - \
+                        "--max-time" if i + 1 < parts.len() => {
+                            match parts[i + 1].parse() {
+                                Ok(v) => time_secs = Some(v),
+                                Err(_) => {
+                                    parse_error = Some(format!("--max-time {}", parts[i + 1]));
+                                    break;
+                                }
+                            }
+                            i += 2;
+                        }
+                        _ => {
+                            i += 1;
+                        }
+                    }
+                }
+                if let Some(bad) = parse_error {
+                    self.append_assistant_text(&format!(
+                        "From: /autopilot\n[err] invalid value for `{bad}` - \
                                  expected a positive integer."
-                            ));
-                            self.status = "autopilot: invalid argument".to_string();
-                            return;
-                        }
-                        self.start_autopilot(token_budget, time_secs);
-                        let mut msg =
-                            " **Autopilot ON** - agent will run autonomously.".to_string();
-                        if let Some(t) = token_budget {
-                            msg.push_str(&format!(" Token budget: {t}."));
-                        }
-                        if let Some(s) = time_secs {
-                            msg.push_str(&format!(" Time limit: {s}s."));
-                        }
-                        msg.push_str("\nCall `task_complete` to signal completion, or `/autopilot off` to stop.");
-                        self.append_assistant_text(&format!("From: /autopilot\n{msg}"));
-                        self.status = " autopilot".to_string();
-                        self.push_log_no_agent(LogLevel::Info, "autopilot enabled".to_string());
-                    }
-                    "off" => {
-                        self.stop_autopilot();
-                        self.append_assistant_text(
-                            "From: /autopilot\n **Autopilot OFF** - returning to interactive mode.",
-                        );
-                        self.status = "ready".to_string();
-                        self.status_set_at = None;
-                        self.push_log_no_agent(LogLevel::Info, "autopilot disabled".to_string());
-                    }
-                    "status" => {
-                        let state = if self.session.autopilot_enabled {
-                            let elapsed = self
-                                .session
-                                .autopilot_started_at
-                                .map(|s| s.elapsed().as_secs())
-                                .unwrap_or(0);
-                            format!(" Autopilot: **ON** (running for {}s)", elapsed)
-                        } else {
-                            " Autopilot: **OFF**".to_string()
-                        };
-                        self.append_assistant_text(&format!("From: /autopilot status\n{state}"));
-                    }
-                    _ => {
-                        self.append_assistant_text(
+                    ));
+                    self.status = "autopilot: invalid argument".to_string();
+                    return std::ops::ControlFlow::Break(());
+                }
+                self.start_autopilot(token_budget, time_secs);
+                let mut msg = " **Autopilot ON** - agent will run autonomously.".to_string();
+                if let Some(t) = token_budget {
+                    msg.push_str(&format!(" Token budget: {t}."));
+                }
+                if let Some(s) = time_secs {
+                    msg.push_str(&format!(" Time limit: {s}s."));
+                }
+                msg.push_str(
+                    "\nCall `task_complete` to signal completion, or `/autopilot off` to stop.",
+                );
+                self.append_assistant_text(&format!("From: /autopilot\n{msg}"));
+                self.status = " autopilot".to_string();
+                self.push_log_no_agent(LogLevel::Info, "autopilot enabled".to_string());
+            }
+            "off" => {
+                self.stop_autopilot();
+                self.append_assistant_text(
+                    "From: /autopilot\n **Autopilot OFF** - returning to interactive mode.",
+                );
+                self.status = "ready".to_string();
+                self.status_set_at = None;
+                self.push_log_no_agent(LogLevel::Info, "autopilot disabled".to_string());
+            }
+            "status" => {
+                let state = if self.session.autopilot_enabled {
+                    let elapsed = self
+                        .session
+                        .autopilot_started_at
+                        .map(|s| s.elapsed().as_secs())
+                        .unwrap_or(0);
+                    format!(" Autopilot: **ON** (running for {}s)", elapsed)
+                } else {
+                    " Autopilot: **OFF**".to_string()
+                };
+                self.append_assistant_text(&format!("From: /autopilot status\n{state}"));
+            }
+            _ => {
+                self.append_assistant_text(
                             "From: /autopilot\n\
                              Usage: `/autopilot on [--max-tokens N] [--max-time N]` | `off` | `status` | `help`"
                         );
-                    }
-                }
             }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
 
-            // -- /plan --------------------------------------------------------
-            "plan" => {
-                if args.trim() == "help" {
-                    self.append_assistant_text(
+    /// Run the `/plan` slash command.
+    fn slash_plan(&mut self, args: &str) {
+        if args.trim() == "help" {
+            self.append_assistant_text(
                                       "From: /plan help\n\
                                        ## /plan \u{2014} Delegate planning to the plan agent\n\
                                        Usage: `/plan <task description>`\n\n\
                                        The plan agent will analyse the codebase and produce a plan for your task. \
                                        You will be asked to approve or reject the plan before implementation begins."
                                   );
-                    self.status = "plan: help".to_string();
-                } else if args.is_empty() {
-                    self.append_assistant_text(
+            self.status = "plan: help".to_string();
+        } else if args.is_empty() {
+            self.append_assistant_text(
                                       "From: /plan\n\
                                        Usage: `/plan <task description>`\n\n\
                                        The plan agent will analyse the codebase and produce a plan for your task. \
                                        You will be asked to approve or reject the plan before implementation begins."
                                   );
-                    self.status = "plan: usage".to_string();
-                } else {
-                    let sid = self.session.session_id.clone().unwrap_or_default();
-                    self.execute_plan_delegation(&sid, args.to_string(), String::new());
-                }
-            } // -- /research ------------------------------------------------
-            "research" => {
-                self.handle_research_command(args);
+            self.status = "plan: usage".to_string();
+        } else {
+            let sid = self.session.session_id.clone().unwrap_or_default();
+            self.execute_plan_delegation(&sid, args.to_string(), String::new());
+        }
+    }
+
+    /// Run the `/spec` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    async fn slash_spec(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        use codemason_specs::spec::SpecStatus;
+        use codemason_specs::{SddFlags, SpecCommand, SpecFilter, validate_with_flags};
+
+        // Build the canonical `SpecManager` for the focused session's
+        // directory. Single construction point for the `/spec` arms so
+        // the specs root is derived in one place instead of 15
+        // duplicated `current_working_dir().join("specs")` sites.
+        let specs_root = self.cwd_path.join("specs");
+        let spec_manager = || SpecManager::new(&specs_root);
+
+        /// Parse a spec ID from a command argument.
+        fn parse_spec_id(spec_id: &str) -> Option<codemason_specs::spec::SpecId> {
+            codemason_specs::spec::SpecId::new(spec_id)
+        }
+        let cmd = SpecCommand::parse(args);
+        match cmd {
+            SpecCommand::Help => {
+                self.append_assistant_text(SpecCommand::build_help_message());
+                self.status = "spec: help".to_string();
             }
+            SpecCommand::Create {
+                specname,
+                feature,
+                from_research,
+                folder,
+            } => {
+                let sid = self.session.session_id.clone().unwrap_or_default();
+                self.append_assistant_text(&SpecCommand::build_create_message(&specname));
+                self.push_log_no_agent(
+                    LogLevel::Info,
+                    SpecCommand::build_create_log(&specname, &feature),
+                );
 
-            // -- /plugins ------------------------------------------------
-            // A bare `/plugins`, `/plugins help`, and an unrecognised
-            // subcommand all render the usage block (FR-006, FR-014). The
-            // call drives an ephemeral plugin session synchronously; sandbox
-            // contexts are `!Send` and never cross an `.await`. `/plugins codex`
-            // and `/plugins claude` open the browse panel instead and print no
-            // report (FR-002, FR-007).
-            "plugins" => {
-                if let Some(report) = crate::app::plugin::handle_plugins_command(self, args) {
-                    self.append_assistant_text(&report);
-                }
-                self.status = "plugins".to_string();
-            }
+                let agent = self.select_general_agent();
 
-            // -- /connectors ----------------------------------------------
-            // Spec `connectors` FR-004, FR-006, FR-017: a bare `/connectors`,
-            // `/connectors help`, and an unrecognised subcommand all render the
-            // usage block. The shared dispatcher honours the master switch
-            // `connectors.enabled` (FR-021) and forwards the store subcommands.
-            "connectors" => {
-                let report = crate::app::connector::handle_connectors_command(self, args).await;
-                self.append_assistant_text(&report);
-                self.status = "connectors".to_string();
-            }
-
-            // -- /new ----------------------------------------------------
-            "new" => {
-                self.handle_new_command(args);
-            }
-
-            // -- /spec --------------------------------------------------------
-            "spec" => {
-                use codemason_specs::spec::SpecStatus;
-                use codemason_specs::{SddFlags, SpecCommand, SpecFilter, validate_with_flags};
-
-                // Build the canonical `SpecManager` for the focused session's
-                // directory. Single construction point for the `/spec` arms so
-                // the specs root is derived in one place instead of 15
-                // duplicated `current_working_dir().join("specs")` sites.
-                let specs_root = self.cwd_path.join("specs");
-                let spec_manager = || SpecManager::new(&specs_root);
-
-                /// Parse a spec ID from a command argument.
-                fn parse_spec_id(spec_id: &str) -> Option<codemason_specs::spec::SpecId> {
-                    codemason_specs::spec::SpecId::new(spec_id)
-                }
-                let cmd = SpecCommand::parse(args);
-                match cmd {
-                    SpecCommand::Help => {
-                        self.append_assistant_text(SpecCommand::build_help_message());
-                        self.status = "spec: help".to_string();
-                    }
-                    SpecCommand::Create {
-                        specname,
-                        feature,
-                        from_research,
-                        folder,
-                    } => {
-                        let sid = self.session.session_id.clone().unwrap_or_default();
-                        self.append_assistant_text(&SpecCommand::build_create_message(&specname));
-                        self.push_log_no_agent(
-                            LogLevel::Info,
-                            SpecCommand::build_create_log(&specname, &feature),
-                        );
-
-                        let agent = self.select_general_agent();
-
-                        // FR-027: an explicit `--folder <path>` targets that
-                        // project's `specs/` root (used by `/spec reverse
-                        // --folder` chaining); otherwise the invoking directory
-                        // is used, as before.
-                        let task = match folder {
-                            Some(target) => format!(
-                                "{}\n\nWrite the spec directory under `{target}/specs/` \
+                // FR-027: an explicit `--folder <path>` targets that
+                // project's `specs/` root (used by `/spec reverse
+                // --folder` chaining); otherwise the invoking directory
+                // is used, as before.
+                let task = match folder {
+                    Some(target) => format!(
+                        "{}\n\nWrite the spec directory under `{target}/specs/` \
                                  (absolute path), not the current directory.",
-                                SpecCommand::build_create_prompt(
-                                    &specname,
-                                    &feature,
-                                    from_research.as_deref(),
-                                )
-                            ),
-                            None => SpecCommand::build_create_prompt(
-                                &specname,
-                                &feature,
-                                from_research.as_deref(),
-                            ),
-                        };
-                        let msg = Message::user_text(&sid, &task);
-                        self.session.messages.push(msg);
+                        SpecCommand::build_create_prompt(
+                            &specname,
+                            &feature,
+                            from_research.as_deref(),
+                        )
+                    ),
+                    None => SpecCommand::build_create_prompt(
+                        &specname,
+                        &feature,
+                        from_research.as_deref(),
+                    ),
+                };
+                let msg = Message::user_text(&sid, &task);
+                self.session.messages.push(msg);
 
-                        let processor = self.session_processor.clone();
-                        let flag = Arc::new(AtomicBool::new(false));
-                        self.session.cancel_flag = Some(flag.clone());
-                        self.session.is_processing = true;
-                        self.status = SpecCommand::build_create_status(&specname);
+                let processor = self.session_processor.clone();
+                let flag = Arc::new(AtomicBool::new(false));
+                self.session.cancel_flag = Some(flag.clone());
+                self.session.is_processing = true;
+                self.status = SpecCommand::build_create_status(&specname);
 
-                        let event_bus = self.event_bus.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) =
-                                processor.process_message(&sid, &task, &agent, flag).await
-                            {
-                                tracing::warn!(error = %e, "spec: generation failed");
-                                event_bus.publish(codemason_agent::event::Event::AgentError {
-                                    session_id: sid,
-                                    error: format!("spec generation failed: {e}"),
-                                });
-                            }
+                let event_bus = self.event_bus.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = processor.process_message(&sid, &task, &agent, flag).await {
+                        tracing::warn!(error = %e, "spec: generation failed");
+                        event_bus.publish(codemason_agent::event::Event::AgentError {
+                            session_id: sid,
+                            error: format!("spec generation failed: {e}"),
                         });
                     }
-                    SpecCommand::Jtbd {
-                        spec_id,
-                        force,
-                        agent,
-                    } => {
-                        let working_dir = self.cwd_path.clone();
-                        let specs_root = working_dir.join("specs");
+                });
+            }
+            SpecCommand::Jtbd {
+                spec_id,
+                force,
+                agent,
+            } => {
+                let working_dir = self.cwd_path.clone();
+                let specs_root = working_dir.join("specs");
 
-                        // FR-008: validate spec ID format
-                        let id = match codemason_specs::spec::SpecId::new(&spec_id) {
-                            Some(id) => id,
-                            None => {
-                                self.status = format!("spec: invalid spec ID: {}", spec_id);
-                                self.append_assistant_text(&format!(
-                                    "From: /spec jtbd\n\n**Error:** Invalid spec ID \
+                // FR-008: validate spec ID format
+                let id = match codemason_specs::spec::SpecId::new(&spec_id) {
+                    Some(id) => id,
+                    None => {
+                        self.status = format!("spec: invalid spec ID: {}", spec_id);
+                        self.append_assistant_text(&format!(
+                            "From: /spec jtbd\n\n**Error:** Invalid spec ID \
                                      `{}`. Spec IDs must be alphanumeric with hyphens or \
                                      underscores only.",
-                                    spec_id
+                            spec_id
+                        ));
+                        return std::ops::ControlFlow::Break(());
+                    }
+                };
+
+                let spec_dir = specs_root.join(id.as_str());
+                let spec_md_path = spec_dir.join("SPEC.md");
+                let jtbd_path = spec_dir.join("JTBD.md");
+
+                let rt = tokio::runtime::Handle::current();
+                let spec_id_owned = spec_id.clone();
+                // Validation returns Ok(jtbd_exists) so the caller can
+                // enforce the overwrite guard (FR-003 / FR-004).
+                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                let validation: Result<bool, String> = tokio::task::block_in_place(|| {
+                    rt.block_on(async {
+                        // FR-008: confirm spec directory exists
+                        if !spec_dir.is_dir() {
+                            return Err(format!(
+                                "spec `{}` not found at {}",
+                                spec_id_owned,
+                                spec_dir.display()
+                            ));
+                        }
+                        // FR-009: confirm SPEC.md exists and is readable
+                        match tokio::fs::read_to_string(&spec_md_path).await {
+                            Ok(content) if content.trim().is_empty() => {
+                                return Err(format!(
+                                    "SPEC.md is empty: {}",
+                                    spec_md_path.display()
                                 ));
-                                return;
                             }
-                        };
-
-                        let spec_dir = specs_root.join(id.as_str());
-                        let spec_md_path = spec_dir.join("SPEC.md");
-                        let jtbd_path = spec_dir.join("JTBD.md");
-
-                        let rt = tokio::runtime::Handle::current();
-                        let spec_id_owned = spec_id.clone();
-                        // Validation returns Ok(jtbd_exists) so the caller can
-                        // enforce the overwrite guard (FR-003 / FR-004).
-                        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                        let validation: Result<bool, String> = tokio::task::block_in_place(|| {
-                            rt.block_on(async {
-                                // FR-008: confirm spec directory exists
-                                if !spec_dir.is_dir() {
-                                    return Err(format!(
-                                        "spec `{}` not found at {}",
-                                        spec_id_owned,
-                                        spec_dir.display()
-                                    ));
-                                }
-                                // FR-009: confirm SPEC.md exists and is readable
-                                match tokio::fs::read_to_string(&spec_md_path).await {
-                                    Ok(content) if content.trim().is_empty() => {
-                                        return Err(format!(
-                                            "SPEC.md is empty: {}",
-                                            spec_md_path.display()
-                                        ));
-                                    }
-                                    Ok(_) => {}
-                                    Err(e) => {
-                                        return Err(format!(
-                                            "SPEC.md not readable at {}: {}",
-                                            spec_md_path.display(),
-                                            e
-                                        ));
-                                    }
-                                }
-                                // FR-003/FR-004: check whether JTBD.md already exists
-                                let jtbd_exists = tokio::fs::metadata(&jtbd_path).await.is_ok();
-                                Ok(jtbd_exists)
-                            })
-                        });
-                        let jtbd_exists = match validation {
-                            Ok(exists) => exists,
+                            Ok(_) => {}
                             Err(e) => {
-                                self.status = format!("spec: {}", e);
-                                self.append_assistant_text(&format!(
-                                    "From: /spec jtbd\n\n**Error:** {}",
+                                return Err(format!(
+                                    "SPEC.md not readable at {}: {}",
+                                    spec_md_path.display(),
                                     e
                                 ));
-                                return;
                             }
-                        };
+                        }
+                        // FR-003/FR-004: check whether JTBD.md already exists
+                        let jtbd_exists = tokio::fs::metadata(&jtbd_path).await.is_ok();
+                        Ok(jtbd_exists)
+                    })
+                });
+                let jtbd_exists = match validation {
+                    Ok(exists) => exists,
+                    Err(e) => {
+                        self.status = format!("spec: {}", e);
+                        self.append_assistant_text(&format!(
+                            "From: /spec jtbd\n\n**Error:** {}",
+                            e
+                        ));
+                        return std::ops::ControlFlow::Break(());
+                    }
+                };
 
-                        // FR-003: refuse if JTBD.md exists and --force not given
-                        if jtbd_exists && !force {
-                            self.status = format!("spec jtbd: {} already has JTBD.md", spec_id);
-                            self.append_assistant_text(&format!(
-                                "From: /spec jtbd\n\n\
+                // FR-003: refuse if JTBD.md exists and --force not given
+                if jtbd_exists && !force {
+                    self.status = format!("spec jtbd: {} already has JTBD.md", spec_id);
+                    self.append_assistant_text(&format!(
+                        "From: /spec jtbd\n\n\
                                  **JTBD.md already exists** at `specs/{}/JTBD.md`.\n\
                                  Re-run with `--force` to overwrite:\n\n\
                                  `/spec jtbd {} --force`",
-                                spec_id, spec_id
-                            ));
-                            return;
-                        }
-                        // FR-004: when --force is present the guard is bypassed
-                        // and the agent task below will overwrite JTBD.md.
+                        spec_id, spec_id
+                    ));
+                    return std::ops::ControlFlow::Break(());
+                }
+                // FR-004: when --force is present the guard is bypassed
+                // and the agent task below will overwrite JTBD.md.
 
-                        // FR-011: status, message, and log parity with /spec create
-                        let sid = self.session.session_id.clone().unwrap_or_default();
-                        self.append_assistant_text(&SpecCommand::build_jtbd_message(&spec_id));
-                        self.push_log_no_agent(
-                            LogLevel::Info,
-                            SpecCommand::build_jtbd_log(&spec_id, force, agent.as_deref()),
-                        );
+                // FR-011: status, message, and log parity with /spec create
+                let sid = self.session.session_id.clone().unwrap_or_default();
+                self.append_assistant_text(&SpecCommand::build_jtbd_message(&spec_id));
+                self.push_log_no_agent(
+                    LogLevel::Info,
+                    SpecCommand::build_jtbd_log(&spec_id, force, agent.as_deref()),
+                );
 
-                        // FR-005: optional --agent <name> override
-                        let mut selected_agent = if let Some(ref agent_name) = agent {
-                            match self
-                                .cycleable_agents
-                                .iter()
-                                .find(|a| a.name == *agent_name)
-                                .cloned()
-                            {
-                                Some(a) => a,
-                                None => {
-                                    self.status = format!("spec: agent '{}' not found", agent_name);
-                                    self.append_assistant_text(&format!(
-                                        "From: /spec jtbd\n\n**Error:** Agent \
+                // FR-005: optional --agent <name> override
+                let mut selected_agent = if let Some(ref agent_name) = agent {
+                    match self
+                        .cycleable_agents
+                        .iter()
+                        .find(|a| a.name == *agent_name)
+                        .cloned()
+                    {
+                        Some(a) => a,
+                        None => {
+                            self.status = format!("spec: agent '{}' not found", agent_name);
+                            self.append_assistant_text(&format!(
+                                "From: /spec jtbd\n\n**Error:** Agent \
                                          `{}` not found. No task was spawned.",
-                                        agent_name
-                                    ));
-                                    return;
+                                agent_name
+                            ));
+                            return std::ops::ControlFlow::Break(());
+                        }
+                    }
+                } else {
+                    // FR-002: default to general agent, fallback to current agent
+                    self.select_general_agent()
+                };
+                self.apply_selected_model_and_thinking(&mut selected_agent);
+
+                // FR-002, FR-006, FR-007: build the JTBD analysis prompt
+                let task = SpecCommand::build_jtbd_prompt(&spec_id);
+                let msg = Message::user_text(&sid, &task);
+                self.session.messages.push(msg);
+
+                let processor = self.session_processor.clone();
+                let flag = Arc::new(AtomicBool::new(false));
+                self.session.cancel_flag = Some(flag.clone());
+                self.session.is_processing = true;
+                self.status = SpecCommand::build_jtbd_status(&spec_id);
+
+                let event_bus = self.event_bus.clone();
+                // FR-014: clone path + spec_id for cancellation cleanup
+                let jtbd_path_for_cleanup = jtbd_path.clone();
+                let spec_id_for_cleanup = spec_id.clone();
+                let cancel_flag_for_check = flag.clone();
+                tokio::spawn(async move {
+                    let result = processor
+                        .process_message(&sid, &task, &selected_agent, flag)
+                        .await;
+
+                    // FR-014: if cancelled, remove partial JTBD.md and notify
+                    if cancel_flag_for_check.load(Ordering::Acquire) {
+                        // FR-013: remove any partially-written file so a
+                        // subsequent --force re-run starts clean.
+                        if jtbd_path_for_cleanup.exists() {
+                            if let Err(e) = tokio::fs::remove_file(&jtbd_path_for_cleanup).await {
+                                tracing::warn!(
+                                    error = %e,
+                                    "spec jtbd: failed to remove partial JTBD.md"
+                                );
+                            }
+                        }
+                        event_bus.publish(codemason_agent::event::Event::AgentNotice {
+                            session_id: sid.clone(),
+                            message: format!(
+                                "spec jtbd: cancelled - partial JTBD.md for `{}` removed",
+                                spec_id_for_cleanup
+                            ),
+                        });
+                        return;
+                    }
+
+                    if let Err(e) = result {
+                        tracing::warn!(error = %e, "spec jtbd: analysis failed");
+                        event_bus.publish(codemason_agent::event::Event::AgentError {
+                            session_id: sid,
+                            error: format!("spec jtbd analysis failed: {e}"),
+                        });
+                    }
+                });
+            }
+            SpecCommand::Validate { spec_id } => {
+                // FR-019: Build SDD flags from loaded config so
+                // SDD-specific checks are opt-in.
+                let sdd_cfg = codemason_agent::Config::load_for(&self.cwd_path)
+                    .unwrap_or_default()
+                    .sdd;
+                let flags = SddFlags::from_bools(
+                    sdd_cfg.clarification_markers,
+                    sdd_cfg.quality_checklists,
+                    sdd_cfg.consistency_checks,
+                    sdd_cfg.phase_minus_one_gates,
+                    sdd_cfg.constitution,
+                    sdd_cfg.feedback_loop,
+                );
+                let mgr = spec_manager();
+                let rt = tokio::runtime::Handle::current();
+                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                let result: Result<String, String> = tokio::task::block_in_place(|| {
+                    rt.block_on(async {
+                        let specs = if let Some(id_str) = spec_id {
+                            match codemason_specs::spec::SpecId::new(&id_str) {
+                                Some(id) => match mgr.read_spec(&id).await {
+                                    Ok(spec) => vec![spec],
+                                    Err(e) => {
+                                        return Err(format!("failed to read {}: {}", id_str, e));
+                                    }
+                                },
+                                None => {
+                                    return Err(format!("spec: invalid spec ID: {}", id_str));
                                 }
                             }
                         } else {
-                            // FR-002: default to general agent, fallback to current agent
-                            self.select_general_agent()
+                            match mgr.discover_specs().await {
+                                Ok(specs) => specs,
+                                Err(e) => {
+                                    return Err(format!("discovery failed: {}", e));
+                                }
+                            }
                         };
-                        self.apply_selected_model_and_thinking(&mut selected_agent);
-
-                        // FR-002, FR-006, FR-007: build the JTBD analysis prompt
-                        let task = SpecCommand::build_jtbd_prompt(&spec_id);
-                        let msg = Message::user_text(&sid, &task);
-                        self.session.messages.push(msg);
-
-                        let processor = self.session_processor.clone();
-                        let flag = Arc::new(AtomicBool::new(false));
-                        self.session.cancel_flag = Some(flag.clone());
-                        self.session.is_processing = true;
-                        self.status = SpecCommand::build_jtbd_status(&spec_id);
-
-                        let event_bus = self.event_bus.clone();
-                        // FR-014: clone path + spec_id for cancellation cleanup
-                        let jtbd_path_for_cleanup = jtbd_path.clone();
-                        let spec_id_for_cleanup = spec_id.clone();
-                        let cancel_flag_for_check = flag.clone();
-                        tokio::spawn(async move {
-                            let result = processor
-                                .process_message(&sid, &task, &selected_agent, flag)
-                                .await;
-
-                            // FR-014: if cancelled, remove partial JTBD.md and notify
-                            if cancel_flag_for_check.load(Ordering::Acquire) {
-                                // FR-013: remove any partially-written file so a
-                                // subsequent --force re-run starts clean.
-                                if jtbd_path_for_cleanup.exists() {
-                                    if let Err(e) =
-                                        tokio::fs::remove_file(&jtbd_path_for_cleanup).await
-                                    {
-                                        tracing::warn!(
-                                            error = %e,
-                                            "spec jtbd: failed to remove partial JTBD.md"
-                                        );
-                                    }
-                                }
-                                event_bus.publish(codemason_agent::event::Event::AgentNotice {
-                                    session_id: sid.clone(),
-                                    message: format!(
-                                        "spec jtbd: cancelled - partial JTBD.md for `{}` removed",
-                                        spec_id_for_cleanup
-                                    ),
-                                });
-                                return;
-                            }
-
-                            if let Err(e) = result {
-                                tracing::warn!(error = %e, "spec jtbd: analysis failed");
-                                event_bus.publish(codemason_agent::event::Event::AgentError {
-                                    session_id: sid,
-                                    error: format!("spec jtbd analysis failed: {e}"),
-                                });
-                            }
-                        });
-                    }
-                    SpecCommand::Validate { spec_id } => {
-                        // FR-019: Build SDD flags from loaded config so
-                        // SDD-specific checks are opt-in.
-                        let sdd_cfg = codemason_agent::Config::load_for(&self.cwd_path)
-                            .unwrap_or_default()
-                            .sdd;
-                        let flags = SddFlags::from_bools(
-                            sdd_cfg.clarification_markers,
-                            sdd_cfg.quality_checklists,
-                            sdd_cfg.consistency_checks,
-                            sdd_cfg.phase_minus_one_gates,
-                            sdd_cfg.constitution,
-                            sdd_cfg.feedback_loop,
-                        );
-                        let mgr = spec_manager();
-                        let rt = tokio::runtime::Handle::current();
-                        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                        let result: Result<String, String> = tokio::task::block_in_place(|| {
-                            rt.block_on(async {
-                                let specs = if let Some(id_str) = spec_id {
-                                    match codemason_specs::spec::SpecId::new(&id_str) {
-                                        Some(id) => match mgr.read_spec(&id).await {
-                                            Ok(spec) => vec![spec],
-                                            Err(e) => {
-                                                return Err(format!(
-                                                    "failed to read {}: {}",
-                                                    id_str, e
-                                                ));
-                                            }
-                                        },
-                                        None => {
-                                            return Err(format!(
-                                                "spec: invalid spec ID: {}",
-                                                id_str
-                                            ));
-                                        }
-                                    }
-                                } else {
-                                    match mgr.discover_specs().await {
-                                        Ok(specs) => specs,
-                                        Err(e) => {
-                                            return Err(format!("discovery failed: {}", e));
-                                        }
-                                    }
-                                };
-                                if specs.is_empty() {
-                                    return Ok("No specs found.".to_string());
-                                }
-                                let mut lines = vec!["From: /spec validate".to_string()];
-                                for spec in &specs {
-                                    let report = validate_with_flags(spec, &flags);
-                                    lines.push(format!("\n## Validation: `{}`", spec.id));
-                                    lines.push(report.format(spec.id.as_str()));
-                                }
-                                Ok(lines.join("\n"))
-                            })
-                        });
-                        match result {
-                            Ok(output) => {
-                                self.append_assistant_text(&output);
-                                self.status = "spec: validation complete".to_string();
-                            }
-                            Err(e) => {
-                                self.status = format!("spec: {}", e);
-                                self.append_assistant_text(&format!(
-                                    "From: /spec validate\n\n**Error:** {}",
-                                    e
-                                ));
-                            }
+                        if specs.is_empty() {
+                            return Ok("No specs found.".to_string());
                         }
+                        let mut lines = vec!["From: /spec validate".to_string()];
+                        for spec in &specs {
+                            let report = validate_with_flags(spec, &flags);
+                            lines.push(format!("\n## Validation: `{}`", spec.id));
+                            lines.push(report.format(spec.id.as_str()));
+                        }
+                        Ok(lines.join("\n"))
+                    })
+                });
+                match result {
+                    Ok(output) => {
+                        self.append_assistant_text(&output);
+                        self.status = "spec: validation complete".to_string();
                     }
-                    SpecCommand::List { args } => {
-                        let mgr = spec_manager();
-                        let mut filter = SpecFilter::new();
-                        // Accept both the documented `--status <s>` form and
-                        // `--status=<s>`; reject anything unrecognised rather
-                        // than silently listing every spec.
-                        const USAGE: &str = "Usage: /spec list [--status <status>] \
+                    Err(e) => {
+                        self.status = format!("spec: {}", e);
+                        self.append_assistant_text(&format!(
+                            "From: /spec validate\n\n**Error:** {}",
+                            e
+                        ));
+                    }
+                }
+            }
+            SpecCommand::List { args } => {
+                let mgr = spec_manager();
+                let mut filter = SpecFilter::new();
+                // Accept both the documented `--status <s>` form and
+                // `--status=<s>`; reject anything unrecognised rather
+                // than silently listing every spec.
+                const USAGE: &str = "Usage: /spec list [--status <status>] \
                                              [--prefix <prefix>] [--archived]";
-                        let mut arg_error: Option<String> = None;
-                        let mut tokens = args.split_whitespace().peekable();
-                        while let Some(token) = tokens.next() {
-                            let (flag, inline) = match token.split_once('=') {
-                                Some((f, v)) => (f, Some(v)),
-                                None => (token, None),
+                let mut arg_error: Option<String> = None;
+                let mut tokens = args.split_whitespace().peekable();
+                while let Some(token) = tokens.next() {
+                    let (flag, inline) = match token.split_once('=') {
+                        Some((f, v)) => (f, Some(v)),
+                        None => (token, None),
+                    };
+                    match flag {
+                        "--archived" if inline.is_none() => {
+                            filter = filter.with_archived();
+                        }
+                        "--status" | "--prefix" => {
+                            // A following option (`--archived`) is not a value:
+                            // leave it to be parsed as its own flag.
+                            let Some(val) = inline
+                                .or_else(|| tokens.next_if(|t| !t.starts_with("--")))
+                                .filter(|v| !v.is_empty())
+                            else {
+                                arg_error = Some(format!("{flag} needs a value. {USAGE}"));
+                                break;
                             };
-                            match flag {
-                                "--archived" if inline.is_none() => {
+                            if flag == "--prefix" {
+                                filter = filter.with_id_prefix(val);
+                            } else if let Some(status) = SpecStatus::parse(val) {
+                                filter = filter.with_status(status);
+                                // Listing archived specs by status must
+                                // not be hidden by the default filter.
+                                if status == SpecStatus::Archived {
                                     filter = filter.with_archived();
                                 }
-                                "--status" | "--prefix" => {
-                                    // A following option (`--archived`) is not a value:
-                                    // leave it to be parsed as its own flag.
-                                    let Some(val) = inline
-                                        .or_else(|| tokens.next_if(|t| !t.starts_with("--")))
-                                        .filter(|v| !v.is_empty())
-                                    else {
-                                        arg_error = Some(format!("{flag} needs a value. {USAGE}"));
-                                        break;
-                                    };
-                                    if flag == "--prefix" {
-                                        filter = filter.with_id_prefix(val);
-                                    } else if let Some(status) = SpecStatus::parse(val) {
-                                        filter = filter.with_status(status);
-                                        // Listing archived specs by status must
-                                        // not be hidden by the default filter.
-                                        if status == SpecStatus::Archived {
-                                            filter = filter.with_archived();
-                                        }
-                                    } else {
-                                        let valid = SpecStatus::ALL
-                                            .iter()
-                                            .map(|s| s.as_str())
-                                            .collect::<Vec<_>>()
-                                            .join(", ");
-                                        arg_error =
-                                            Some(format!("unknown status '{val}'. Valid: {valid}"));
-                                        break;
-                                    }
-                                }
-                                _ => {
-                                    arg_error =
-                                        Some(format!("unknown argument '{token}'. {USAGE}"));
-                                    break;
-                                }
+                            } else {
+                                let valid = SpecStatus::ALL
+                                    .iter()
+                                    .map(|s| s.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                arg_error = Some(format!("unknown status '{val}'. Valid: {valid}"));
+                                break;
                             }
                         }
-                        if let Some(e) = arg_error {
-                            self.append_assistant_text(&format!(
-                                "From: /spec list\n\n**Error:** {e}"
-                            ));
-                            self.status = format!("spec: {e}");
-                            return;
+                        _ => {
+                            arg_error = Some(format!("unknown argument '{token}'. {USAGE}"));
+                            break;
                         }
-                        let rt = tokio::runtime::Handle::current();
-                        let result: Result<(usize, String), String> =
+                    }
+                }
+                if let Some(e) = arg_error {
+                    self.append_assistant_text(&format!("From: /spec list\n\n**Error:** {e}"));
+                    self.status = format!("spec: {e}");
+                    return std::ops::ControlFlow::Break(());
+                }
+                let rt = tokio::runtime::Handle::current();
+                let result: Result<(usize, String), String> =
                             // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
                             tokio::task::block_in_place(|| {
                                 rt.block_on(async {
@@ -9095,312 +9407,305 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                                     Ok((count, lines.join("\n")))
                                 })
                             });
-                        match result {
-                            Ok((count, output)) => {
-                                self.append_assistant_text(&output);
-                                self.status = format!("spec: {count} spec(s) listed");
-                            }
-                            Err(e) => {
-                                self.status = format!("spec: {}", e);
-                            }
-                        }
+                match result {
+                    Ok((count, output)) => {
+                        self.append_assistant_text(&output);
+                        self.status = format!("spec: {count} spec(s) listed");
                     }
-                    SpecCommand::Search { query } => {
-                        let mgr = spec_manager();
-                        let rt = tokio::runtime::Handle::current();
-                        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                        let result: Result<String, String> = tokio::task::block_in_place(|| {
-                            rt.block_on(async {
-                                let results = match mgr.search_specs(&query).await {
-                                    Ok(r) => r,
-                                    Err(e) => return Err(format!("search failed: {}", e)),
-                                };
-                                if results.is_empty() {
-                                    return Ok(format!("No specs found matching '{}'.", query));
-                                }
-                                let mut lines =
-                                    vec![format!("From: /spec search '{}'", query), String::new()];
-                                for r in &results {
-                                    lines.push(format!(
-                                        "## {} (score: {}, status: {})",
-                                        r.spec.id, r.score, r.spec.status
-                                    ));
-                                    lines.push(format!("**{}**", r.spec.title));
-                                    for snippet in &r.snippets {
-                                        lines.push(format!("- {}", snippet));
-                                    }
-                                    lines.push(String::new());
-                                }
-                                Ok(lines.join("\n"))
-                            })
-                        });
-                        match result {
-                            Ok(output) => {
-                                self.append_assistant_text(&output);
-                                self.status = format!("spec: search complete");
-                            }
-                            Err(e) => {
-                                self.status = format!("spec: {}", e);
-                            }
-                        }
+                    Err(e) => {
+                        self.status = format!("spec: {}", e);
                     }
-                    SpecCommand::Status {
-                        spec_id,
-                        new_status,
-                    } => {
-                        let mgr = spec_manager();
-                        let Some(id) = parse_spec_id(&spec_id) else {
-                            self.report_invalid_spec_id(&spec_id);
-                            return;
+                }
+            }
+            SpecCommand::Search { query } => {
+                let mgr = spec_manager();
+                let rt = tokio::runtime::Handle::current();
+                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                let result: Result<String, String> = tokio::task::block_in_place(|| {
+                    rt.block_on(async {
+                        let results = match mgr.search_specs(&query).await {
+                            Ok(r) => r,
+                            Err(e) => return Err(format!("search failed: {}", e)),
                         };
-                        let rt = tokio::runtime::Handle::current();
-                        // FR-019: gate the SDD checks via config flags.
-                        let sdd_cfg = codemason_agent::Config::load_for(&self.cwd_path)
-                            .unwrap_or_default()
-                            .sdd;
-                        let flags = SddFlags::from_bools(
-                            sdd_cfg.clarification_markers,
-                            sdd_cfg.quality_checklists,
-                            sdd_cfg.consistency_checks,
-                            sdd_cfg.phase_minus_one_gates,
-                            sdd_cfg.constitution,
-                            sdd_cfg.feedback_loop,
-                        );
-                        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                        let result: Result<String, String> = tokio::task::block_in_place(|| {
-                            rt.block_on(mgr.status_command(
-                                id.as_str(),
-                                new_status.as_deref(),
-                                "user",
-                                &flags,
-                            ))
-                        })
-                        .map(|outcome| match outcome {
-                            codemason_specs::StatusOutcome::Transitioned { id, from, to } => {
-                                format!(
-                                    "From: /spec status\n\n**{}** transitioned from `{}` to `{}`.",
-                                    id,
-                                    from.as_str(),
-                                    to.as_str()
-                                )
+                        if results.is_empty() {
+                            return Ok(format!("No specs found matching '{}'.", query));
+                        }
+                        let mut lines =
+                            vec![format!("From: /spec search '{}'", query), String::new()];
+                        for r in &results {
+                            lines.push(format!(
+                                "## {} (score: {}, status: {})",
+                                r.spec.id, r.score, r.spec.status
+                            ));
+                            lines.push(format!("**{}**", r.spec.title));
+                            for snippet in &r.snippets {
+                                lines.push(format!("- {}", snippet));
                             }
-                            codemason_specs::StatusOutcome::Current {
-                                id,
-                                status,
-                                allowed,
-                            } => format!(
-                                "From: /spec status\n\n**{}** - current status: `{}`\n\
+                            lines.push(String::new());
+                        }
+                        Ok(lines.join("\n"))
+                    })
+                });
+                match result {
+                    Ok(output) => {
+                        self.append_assistant_text(&output);
+                        self.status = format!("spec: search complete");
+                    }
+                    Err(e) => {
+                        self.status = format!("spec: {}", e);
+                    }
+                }
+            }
+            SpecCommand::Status {
+                spec_id,
+                new_status,
+            } => {
+                let mgr = spec_manager();
+                let Some(id) = parse_spec_id(&spec_id) else {
+                    self.report_invalid_spec_id(&spec_id);
+                    return std::ops::ControlFlow::Break(());
+                };
+                let rt = tokio::runtime::Handle::current();
+                // FR-019: gate the SDD checks via config flags.
+                let sdd_cfg = codemason_agent::Config::load_for(&self.cwd_path)
+                    .unwrap_or_default()
+                    .sdd;
+                let flags = SddFlags::from_bools(
+                    sdd_cfg.clarification_markers,
+                    sdd_cfg.quality_checklists,
+                    sdd_cfg.consistency_checks,
+                    sdd_cfg.phase_minus_one_gates,
+                    sdd_cfg.constitution,
+                    sdd_cfg.feedback_loop,
+                );
+                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                let result: Result<String, String> = tokio::task::block_in_place(|| {
+                    rt.block_on(mgr.status_command(
+                        id.as_str(),
+                        new_status.as_deref(),
+                        "user",
+                        &flags,
+                    ))
+                })
+                .map(|outcome| match outcome {
+                    codemason_specs::StatusOutcome::Transitioned { id, from, to } => {
+                        format!(
+                            "From: /spec status\n\n**{}** transitioned from `{}` to `{}`.",
+                            id,
+                            from.as_str(),
+                            to.as_str()
+                        )
+                    }
+                    codemason_specs::StatusOutcome::Current {
+                        id,
+                        status,
+                        allowed,
+                    } => format!(
+                        "From: /spec status\n\n**{}** - current status: `{}`\n\
                                  Allowed transitions: {}",
-                                id,
-                                status.as_str(),
-                                allowed
-                                    .iter()
-                                    .map(|s| s.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            ),
-                        });
-                        match result {
-                            Ok(output) => {
-                                self.append_assistant_text(&output);
-                                self.status = "spec: status updated".to_string();
-                            }
-                            Err(e) => {
-                                self.status = format!("spec: {}", e);
-                                self.append_assistant_text(&format!(
-                                    "From: /spec status\n\n**Error:** {}",
-                                    e
-                                ));
-                            }
-                        }
+                        id,
+                        status.as_str(),
+                        allowed
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                });
+                match result {
+                    Ok(output) => {
+                        self.append_assistant_text(&output);
+                        self.status = "spec: status updated".to_string();
                     }
-                    SpecCommand::Task {
-                        spec_id,
-                        task_id,
-                        new_status,
-                    } => {
-                        let mgr = spec_manager();
-                        let Some(id) = parse_spec_id(&spec_id) else {
-                            self.report_invalid_spec_id(&spec_id);
-                            return;
+                    Err(e) => {
+                        self.status = format!("spec: {}", e);
+                        self.append_assistant_text(&format!(
+                            "From: /spec status\n\n**Error:** {}",
+                            e
+                        ));
+                    }
+                }
+            }
+            SpecCommand::Task {
+                spec_id,
+                task_id,
+                new_status,
+            } => {
+                let mgr = spec_manager();
+                let Some(id) = parse_spec_id(&spec_id) else {
+                    self.report_invalid_spec_id(&spec_id);
+                    return std::ops::ControlFlow::Break(());
+                };
+                let rt = tokio::runtime::Handle::current();
+                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                let result: Result<String, String> = tokio::task::block_in_place(|| {
+                    rt.block_on(async {
+                        let mut spec = match mgr.read_spec(&id).await {
+                            Ok(s) => s,
+                            Err(e) => {
+                                return Err(format!("failed to read {}: {}", spec_id, e));
+                            }
                         };
-                        let rt = tokio::runtime::Handle::current();
-                        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                        let result: Result<String, String> = tokio::task::block_in_place(|| {
-                            rt.block_on(async {
-                                let mut spec = match mgr.read_spec(&id).await {
-                                    Ok(s) => s,
-                                    Err(e) => {
-                                        return Err(format!("failed to read {}: {}", spec_id, e));
-                                    }
+                        if let Some(task_id_str) = task_id {
+                            if let Some(new_status_str) = new_status {
+                                use codemason_specs::spec::TaskStatus;
+                                let Some(new_status) = TaskStatus::parse(&new_status_str) else {
+                                    return Err(format!("unknown task status '{new_status_str}'"));
                                 };
-                                if let Some(task_id_str) = task_id {
-                                    if let Some(new_status_str) = new_status {
-                                        use codemason_specs::spec::TaskStatus;
-                                        let Some(new_status) = TaskStatus::parse(&new_status_str)
-                                        else {
-                                            return Err(format!(
-                                                "unknown task status '{new_status_str}'"
-                                            ));
-                                        };
-                                        mgr.update_task_status(&mut spec, &task_id_str, new_status)
-                                            .await
-                                            .map_err(|e| format!("task update failed: {e}"))?;
-                                        Ok(format!(
-                                            "From: /spec task\n\n\
+                                mgr.update_task_status(&mut spec, &task_id_str, new_status)
+                                    .await
+                                    .map_err(|e| format!("task update failed: {e}"))?;
+                                Ok(format!(
+                                    "From: /spec task\n\n\
                                 **{}** task `{}` updated to `{}`.",
-                                            spec.id,
-                                            task_id_str,
-                                            new_status.as_str()
-                                        ))
-                                    } else {
-                                        // Show specific task
-                                        let task = spec.tasks.iter().find(|t| t.id == task_id_str);
-                                        match task {
-                                            Some(t) => {
-                                                let mut lines = vec![
-                                                    format!(
-                                                        "From: /spec task\n\n## Task {} - {}",
-                                                        t.id, t.title
-                                                    ),
-                                                    format!("- **Status:** {}", t.status.as_str()),
-                                                    format!("- **Effort:** {}", t.effort),
-                                                    format!("- **Priority:** {}", t.priority),
-                                                ];
-                                                if !t.linked_requirements.is_empty() {
-                                                    lines.push(format!(
-                                                        "- **Requirements:** {}",
-                                                        t.linked_requirements.join(", ")
-                                                    ));
-                                                }
-                                                if !t.dependencies.is_empty() {
-                                                    lines.push(format!(
-                                                        "- **Dependencies:** {}",
-                                                        t.dependencies.join(", ")
-                                                    ));
-                                                }
-                                                // Stored as UTC epoch seconds; shown
-                                                // in the user's local time zone.
-                                                let completed = t
-                                                    .completed_at
-                                                    .and_then(|s| i64::try_from(s).ok())
-                                                    .and_then(|s| {
-                                                        chrono::DateTime::from_timestamp(s, 0)
-                                                    })
-                                                    .map(|dt| {
-                                                        dt.with_timezone(&chrono::Local)
-                                                            .format("%Y-%m-%d %H:%M %Z")
-                                                            .to_string()
-                                                    });
-                                                if let Some(when) = completed {
-                                                    lines.push(format!("- **Completed:** {when}"));
-                                                }
-                                                Ok(lines.join("\n"))
-                                            }
-                                            None => Err(format!(
-                                                "task {} not found in {}",
-                                                task_id_str, spec.id
-                                            )),
-                                        }
-                                    }
-                                } else {
-                                    // List all tasks
-                                    let mut lines = vec![format!(
-                                        "From: /spec task\n\n## Tasks for **{}**",
-                                        spec.id
-                                    )];
-                                    if spec.tasks.is_empty() {
-                                        lines.push("No tasks found.".to_string());
-                                    } else {
-                                        lines.extend(
-                                            [
-                                                "| ID | Title | Status | Effort | Priority |",
-                                                "|----|-------|--------|--------|----------|",
-                                            ]
-                                            .map(String::from),
-                                        );
-                                        for t in &spec.tasks {
+                                    spec.id,
+                                    task_id_str,
+                                    new_status.as_str()
+                                ))
+                            } else {
+                                // Show specific task
+                                let task = spec.tasks.iter().find(|t| t.id == task_id_str);
+                                match task {
+                                    Some(t) => {
+                                        let mut lines = vec![
+                                            format!(
+                                                "From: /spec task\n\n## Task {} - {}",
+                                                t.id, t.title
+                                            ),
+                                            format!("- **Status:** {}", t.status.as_str()),
+                                            format!("- **Effort:** {}", t.effort),
+                                            format!("- **Priority:** {}", t.priority),
+                                        ];
+                                        if !t.linked_requirements.is_empty() {
                                             lines.push(format!(
-                                                "| {} | {} | {} | {} | {} |",
-                                                t.id,
-                                                t.title,
-                                                t.status.as_str(),
-                                                t.effort,
-                                                t.priority
+                                                "- **Requirements:** {}",
+                                                t.linked_requirements.join(", ")
                                             ));
                                         }
+                                        if !t.dependencies.is_empty() {
+                                            lines.push(format!(
+                                                "- **Dependencies:** {}",
+                                                t.dependencies.join(", ")
+                                            ));
+                                        }
+                                        // Stored as UTC epoch seconds; shown
+                                        // in the user's local time zone.
+                                        let completed = t
+                                            .completed_at
+                                            .and_then(|s| i64::try_from(s).ok())
+                                            .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
+                                            .map(|dt| {
+                                                dt.with_timezone(&chrono::Local)
+                                                    .format("%Y-%m-%d %H:%M %Z")
+                                                    .to_string()
+                                            });
+                                        if let Some(when) = completed {
+                                            lines.push(format!("- **Completed:** {when}"));
+                                        }
+                                        Ok(lines.join("\n"))
                                     }
-                                    Ok(lines.join("\n"))
+                                    None => Err(format!(
+                                        "task {} not found in {}",
+                                        task_id_str, spec.id
+                                    )),
                                 }
-                            })
-                        });
-                        match result {
-                            Ok(output) => {
-                                self.append_assistant_text(&output);
-                                self.status = "spec: task complete".to_string();
                             }
-                            Err(e) => {
-                                self.status = format!("spec: {}", e);
-                                self.append_assistant_text(&format!(
-                                    "From: /spec task\n\n**Error:** {}",
-                                    e
-                                ));
+                        } else {
+                            // List all tasks
+                            let mut lines =
+                                vec![format!("From: /spec task\n\n## Tasks for **{}**", spec.id)];
+                            if spec.tasks.is_empty() {
+                                lines.push("No tasks found.".to_string());
+                            } else {
+                                lines.extend(
+                                    [
+                                        "| ID | Title | Status | Effort | Priority |",
+                                        "|----|-------|--------|--------|----------|",
+                                    ]
+                                    .map(String::from),
+                                );
+                                for t in &spec.tasks {
+                                    lines.push(format!(
+                                        "| {} | {} | {} | {} | {} |",
+                                        t.id,
+                                        t.title,
+                                        t.status.as_str(),
+                                        t.effort,
+                                        t.priority
+                                    ));
+                                }
                             }
+                            Ok(lines.join("\n"))
                         }
+                    })
+                });
+                match result {
+                    Ok(output) => {
+                        self.append_assistant_text(&output);
+                        self.status = "spec: task complete".to_string();
                     }
-                    SpecCommand::Activate { spec_id } => {
-                        let mgr = spec_manager();
-                        let Some(id) = parse_spec_id(&spec_id) else {
-                            self.report_invalid_spec_id(&spec_id);
-                            return;
-                        };
-                        let rt = tokio::runtime::Handle::current();
+                    Err(e) => {
+                        self.status = format!("spec: {}", e);
+                        self.append_assistant_text(&format!(
+                            "From: /spec task\n\n**Error:** {}",
+                            e
+                        ));
+                    }
+                }
+            }
+            SpecCommand::Activate { spec_id } => {
+                let mgr = spec_manager();
+                let Some(id) = parse_spec_id(&spec_id) else {
+                    self.report_invalid_spec_id(&spec_id);
+                    return std::ops::ControlFlow::Break(());
+                };
+                let rt = tokio::runtime::Handle::current();
+                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                let result: Result<_, String> = tokio::task::block_in_place(|| {
+                    rt.block_on(async {
+                        match mgr.read_spec(&id).await {
+                            Ok(spec) => Ok(spec),
+                            Err(e) => Err(format!("failed to read {}: {}", spec_id, e)),
+                        }
+                    })
+                });
+                match result {
+                    Ok(spec) => {
+                        self.session.active_spec = Some(spec_id.clone());
+                        self.spec_manager = Some(Arc::new(mgr));
+                        // Also set on the session processor so auto-updates work.
+                        // Wrap the nested `block_on` in `block_in_place` so it
+                        // releases the current worker instead of deadlocking on
+                        // the UI runtime (FUNC-015).
                         // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                        let result: Result<_, String> = tokio::task::block_in_place(|| {
+                        let _ = tokio::task::block_in_place(|| {
+                            // INTENTIONAL: bridge to the async spec manager; the value is the spec id, not an error
                             rt.block_on(async {
-                                match mgr.read_spec(&id).await {
-                                    Ok(spec) => Ok(spec),
-                                    Err(e) => Err(format!("failed to read {}: {}", spec_id, e)),
-                                }
+                                self.session_processor
+                                    .active_spec
+                                    .write()
+                                    .await
+                                    .replace(spec_id.clone())
                             })
                         });
-                        match result {
-                            Ok(spec) => {
-                                self.session.active_spec = Some(spec_id.clone());
-                                self.spec_manager = Some(Arc::new(mgr));
-                                // Also set on the session processor so auto-updates work.
-                                // Wrap the nested `block_on` in `block_in_place` so it
-                                // releases the current worker instead of deadlocking on
-                                // the UI runtime (FUNC-015).
-                                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                                let _ = tokio::task::block_in_place(|| {
-                                    // INTENTIONAL: bridge to the async spec manager; the value is the spec id, not an error
-                                    rt.block_on(async {
-                                        self.session_processor
-                                            .active_spec
-                                            .write()
-                                            .await
-                                            .replace(spec_id.clone())
-                                    })
-                                });
-                                // P-24: invalidate the cached spec section so the
-                                // next turn re-reads the newly-activated spec.
-                                self.session_processor
-                                    .system_prompt_cache()
-                                    .invalidate_spec_cache();
-                                let _ = self // INTENTIONAL: in-memory state is authoritative
-                                    .session_processor
-                                    .spec_manager
-                                    // Reuse the manager Arc built above instead of
-                                    // constructing a second SpecManager for the same
-                                    // specs_root.
-                                    .set(
-                                        self.spec_manager
-                                            .clone()
-                                            .unwrap_or_else(|| Arc::new(spec_manager())),
-                                    );
-                                self.append_assistant_text(&format!(
-                                    "From: /spec activate\n\n\
+                        // P-24: invalidate the cached spec section so the
+                        // next turn re-reads the newly-activated spec.
+                        self.session_processor
+                            .system_prompt_cache()
+                            .invalidate_spec_cache();
+                        let _ = self // INTENTIONAL: in-memory state is authoritative
+                            .session_processor
+                            .spec_manager
+                            // Reuse the manager Arc built above instead of
+                            // constructing a second SpecManager for the same
+                            // specs_root.
+                            .set(
+                                self.spec_manager
+                                    .clone()
+                                    .unwrap_or_else(|| Arc::new(spec_manager())),
+                            );
+                        self.append_assistant_text(&format!(
+                            "From: /spec activate\n\n\
                                      [ok] **{}** is now the active spec.\n\n\
                                      Status: {}\n\
                                      Title: {}\n\
@@ -9408,239 +9713,235 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                                      Tasks: {}\n\n\
                                      This spec's requirements and tasks will be injected into the \
                                      agent's system prompt.",
-                                    spec.id,
-                                    spec.status.as_str(),
-                                    spec.title,
-                                    spec.requirements.len(),
-                                    spec.tasks.len()
-                                ));
-                                self.status = format!("spec: {} activated", spec_id);
-                            }
-                            Err(e) => {
-                                self.status = format!("spec: {}", e);
-                                self.append_assistant_text(&format!(
-                                    "From: /spec activate\n\n**Error:** {}",
-                                    e
-                                ));
-                            }
-                        }
-                    }
-                    SpecCommand::Deactivate => {
-                        if let Some(prev) = self.clear_active_spec() {
-                            self.append_assistant_text(&format!(
-                                "From: /spec deactivate\n\n[ok] Spec **{prev}** deactivated. \
-                                 Agent prompts will no longer include spec context."
-                            ));
-                            self.status = "spec: deactivated".to_string();
-                        } else {
-                            self.append_assistant_text(
-                                "From: /spec deactivate\n\nNo active spec to deactivate.",
-                            );
-                            self.status = "spec: no active spec".to_string();
-                        }
-                    }
-                    SpecCommand::Delete { spec_id, yes } => {
-                        let mgr = spec_manager();
-                        let Some(id) = parse_spec_id(&spec_id) else {
-                            self.report_invalid_spec_id(&spec_id);
-                            return;
-                        };
-                        if !yes {
-                            self.append_assistant_text(&format!(
-                                "From: /spec delete\n\nRefusing to delete specs/{spec_id} without \
-                                 confirmation. Run `/spec delete {spec_id} --yes` to confirm."
-                            ));
-                            return;
-                        }
-                        let rt = tokio::runtime::Handle::current();
-                        // Run inline (not spawned) so the active spec can be
-                        // cleared only after the directory is really gone.
-                        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                        let result = tokio::task::block_in_place(|| {
-                            rt.block_on(async { mgr.delete_spec(&id).await })
-                        });
-                        match result {
-                            Ok(()) => {
-                                // A deleted spec must not stay injected into
-                                // the agent's system prompt.
-                                let was_active =
-                                    self.session.active_spec.as_deref() == Some(&spec_id);
-                                if was_active {
-                                    self.clear_active_spec();
-                                }
-                                let note = if was_active {
-                                    " It was the active spec and has been deactivated."
-                                } else {
-                                    ""
-                                };
-                                self.append_assistant_text(&format!(
-                                    "From: /spec delete\n\n[ok] Deleted specs/{spec_id}.{note}"
-                                ));
-                                self.status = format!("spec: deleted specs/{spec_id}");
-                            }
-                            Err(e) => {
-                                self.append_assistant_text(&format!(
-                                    "From: /spec delete\n\n**Error:** {e}"
-                                ));
-                                self.status = format!("spec: delete failed: {e}");
-                            }
-                        }
-                    }
-                    SpecCommand::Coverage { spec_id } => {
-                        let mgr = spec_manager();
-                        let Some(id) = parse_spec_id(&spec_id) else {
-                            self.report_invalid_spec_id(&spec_id);
-                            return;
-                        };
-                        let rt = tokio::runtime::Handle::current();
-                        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                        let result: Result<String, String> = tokio::task::block_in_place(|| {
-                            rt.block_on(async {
-                                let spec = match mgr.read_spec(&id).await {
-                                    Ok(s) => s,
-                                    Err(e) => {
-                                        return Err(format!("failed to read {}: {}", spec_id, e));
-                                    }
-                                };
-                                // Rendering lives in `Spec::coverage_report`
-                                // (codemason-specs) so this arm and the
-                                // `spec_coverage` agent tool always agree on
-                                // format and status symbols.
-                                Ok(format!(
-                                    "From: /spec coverage\n\n{}",
-                                    spec.coverage_report()
-                                ))
-                            })
-                        });
-                        match result {
-                            Ok(output) => {
-                                self.append_assistant_text(&output);
-                                self.status = "spec: coverage complete".to_string();
-                            }
-                            Err(e) => {
-                                self.status = format!("spec: {}", e);
-                                self.append_assistant_text(&format!(
-                                    "From: /spec coverage\n\n**Error:** {}",
-                                    e
-                                ));
-                            }
-                        }
-                    }
-                    SpecCommand::Impl {
-                        spec_id,
-                        task_id,
-                        dry_run,
-                    } => {
-                        use codemason_specs::{ImplOptions, SpecImplRunner};
-                        let working_dir = self.cwd_path.clone();
-                        let specs_root = working_dir.join("specs");
-
-                        // Validate spec exists
-                        let Some(sid) = codemason_specs::spec::SpecId::new(&spec_id) else {
-                            self.status = format!("spec: invalid spec ID: {}", spec_id);
-                            return;
-                        };
-
-                        // Check spec exists on disk and read its status
-                        let mgr = spec_manager();
-                        let rt = tokio::runtime::Handle::current();
-                        let (spec_exists, spec_status): (
-                            bool,
-                            Option<codemason_specs::spec::SpecStatus>,
-                            // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                        ) = tokio::task::block_in_place(|| {
-                            rt.block_on(async {
-                                let spec = mgr.read_spec(&sid).await;
-                                match spec {
-                                    Ok(s) => (true, Some(s.status)),
-                                    Err(_) => (false, None),
-                                }
-                            })
-                        });
-                        if !spec_exists {
-                            // List available specs with plans
-                            // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                            let available: Vec<String> = tokio::task::block_in_place(|| {
-                                rt.block_on(async {
-                                    match mgr.discover_specs().await {
-                                        Ok(specs) => specs
-                                            .iter()
-                                            .map(|s| {
-                                                format!("  - {} ({})", s.id, s.status.as_str())
-                                            })
-                                            .collect(),
-                                        Err(_) => vec![],
-                                    }
-                                })
-                            });
-                            let avail_str = if available.is_empty() {
-                                "  (none found)".to_string()
-                            } else {
-                                available.join("\n")
-                            };
-                            self.append_assistant_text(&format!(
-                                "From: /spec impl\n\n**Error:** Spec `{}` not found.\n\n\
-                                 Available specs:\n{}",
-                                spec_id, avail_str
-                            ));
-                            self.status = format!("spec: spec {} not found", spec_id);
-                            return;
-                        }
-
-                        // Check if already implemented (FR-026)
-                        if let Some(status) = spec_status {
-                            if matches!(
-                                status,
-                                codemason_specs::spec::SpecStatus::Implemented
-                                    | codemason_specs::spec::SpecStatus::Verified
-                            ) {
-                                // Only `implemented` can reopen; a verified spec
-                                // is closed and must be archived and re-drafted.
-                                let hint =
-                                    if status == codemason_specs::spec::SpecStatus::Implemented {
-                                        format!(
-                                            "To re-implement, reopen it first: \
-                                         `/spec status {spec_id} in_progress`"
-                                        )
-                                    } else {
-                                        "A verified spec cannot be reopened; archive it and start \
-                                     again from `draft`."
-                                            .to_string()
-                                    };
-                                self.append_assistant_text(&format!(
-                                    "From: /spec impl\n\n[warn] Spec **{spec_id}** is already \
-                                     marked as **{}**.\n\n{hint}",
-                                    status.as_str()
-                                ));
-                                self.status = format!("spec: {} is {}", spec_id, status.as_str());
-                                return;
-                            }
-                        }
-
-                        // Build options
-                        let mut opts = ImplOptions::new();
-                        if let Some(ref tid) = task_id {
-                            opts = opts.with_task(tid);
-                        }
-                        if dry_run {
-                            opts = opts.with_dry_run();
-                        }
-                        // FR-019: gate the in_progress transition checks with
-                        // the configured SDD flags, as `/spec status` does.
-                        let sdd_cfg = codemason_agent::Config::load_for(&self.cwd_path)
-                            .unwrap_or_default()
-                            .sdd;
-                        opts = opts.with_sdd_flags(SddFlags::from_bools(
-                            sdd_cfg.clarification_markers,
-                            sdd_cfg.quality_checklists,
-                            sdd_cfg.consistency_checks,
-                            sdd_cfg.phase_minus_one_gates,
-                            sdd_cfg.constitution,
-                            sdd_cfg.feedback_loop,
+                            spec.id,
+                            spec.status.as_str(),
+                            spec.title,
+                            spec.requirements.len(),
+                            spec.tasks.len()
                         ));
+                        self.status = format!("spec: {} activated", spec_id);
+                    }
+                    Err(e) => {
+                        self.status = format!("spec: {}", e);
+                        self.append_assistant_text(&format!(
+                            "From: /spec activate\n\n**Error:** {}",
+                            e
+                        ));
+                    }
+                }
+            }
+            SpecCommand::Deactivate => {
+                if let Some(prev) = self.clear_active_spec() {
+                    self.append_assistant_text(&format!(
+                        "From: /spec deactivate\n\n[ok] Spec **{prev}** deactivated. \
+                                 Agent prompts will no longer include spec context."
+                    ));
+                    self.status = "spec: deactivated".to_string();
+                } else {
+                    self.append_assistant_text(
+                        "From: /spec deactivate\n\nNo active spec to deactivate.",
+                    );
+                    self.status = "spec: no active spec".to_string();
+                }
+            }
+            SpecCommand::Delete { spec_id, yes } => {
+                let mgr = spec_manager();
+                let Some(id) = parse_spec_id(&spec_id) else {
+                    self.report_invalid_spec_id(&spec_id);
+                    return std::ops::ControlFlow::Break(());
+                };
+                if !yes {
+                    self.append_assistant_text(&format!(
+                        "From: /spec delete\n\nRefusing to delete specs/{spec_id} without \
+                                 confirmation. Run `/spec delete {spec_id} --yes` to confirm."
+                    ));
+                    return std::ops::ControlFlow::Break(());
+                }
+                let rt = tokio::runtime::Handle::current();
+                // Run inline (not spawned) so the active spec can be
+                // cleared only after the directory is really gone.
+                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                let result = tokio::task::block_in_place(|| {
+                    rt.block_on(async { mgr.delete_spec(&id).await })
+                });
+                match result {
+                    Ok(()) => {
+                        // A deleted spec must not stay injected into
+                        // the agent's system prompt.
+                        let was_active = self.session.active_spec.as_deref() == Some(&spec_id);
+                        if was_active {
+                            self.clear_active_spec();
+                        }
+                        let note = if was_active {
+                            " It was the active spec and has been deactivated."
+                        } else {
+                            ""
+                        };
+                        self.append_assistant_text(&format!(
+                            "From: /spec delete\n\n[ok] Deleted specs/{spec_id}.{note}"
+                        ));
+                        self.status = format!("spec: deleted specs/{spec_id}");
+                    }
+                    Err(e) => {
+                        self.append_assistant_text(&format!(
+                            "From: /spec delete\n\n**Error:** {e}"
+                        ));
+                        self.status = format!("spec: delete failed: {e}");
+                    }
+                }
+            }
+            SpecCommand::Coverage { spec_id } => {
+                let mgr = spec_manager();
+                let Some(id) = parse_spec_id(&spec_id) else {
+                    self.report_invalid_spec_id(&spec_id);
+                    return std::ops::ControlFlow::Break(());
+                };
+                let rt = tokio::runtime::Handle::current();
+                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                let result: Result<String, String> = tokio::task::block_in_place(|| {
+                    rt.block_on(async {
+                        let spec = match mgr.read_spec(&id).await {
+                            Ok(s) => s,
+                            Err(e) => {
+                                return Err(format!("failed to read {}: {}", spec_id, e));
+                            }
+                        };
+                        // Rendering lives in `Spec::coverage_report`
+                        // (codemason-specs) so this arm and the
+                        // `spec_coverage` agent tool always agree on
+                        // format and status symbols.
+                        Ok(format!(
+                            "From: /spec coverage\n\n{}",
+                            spec.coverage_report()
+                        ))
+                    })
+                });
+                match result {
+                    Ok(output) => {
+                        self.append_assistant_text(&output);
+                        self.status = "spec: coverage complete".to_string();
+                    }
+                    Err(e) => {
+                        self.status = format!("spec: {}", e);
+                        self.append_assistant_text(&format!(
+                            "From: /spec coverage\n\n**Error:** {}",
+                            e
+                        ));
+                    }
+                }
+            }
+            SpecCommand::Impl {
+                spec_id,
+                task_id,
+                dry_run,
+            } => {
+                use codemason_specs::{ImplOptions, SpecImplRunner};
+                let working_dir = self.cwd_path.clone();
+                let specs_root = working_dir.join("specs");
 
-                        // Create runner
-                        let runner_result: Result<SpecImplRunner, String> =
+                // Validate spec exists
+                let Some(sid) = codemason_specs::spec::SpecId::new(&spec_id) else {
+                    self.status = format!("spec: invalid spec ID: {}", spec_id);
+                    return std::ops::ControlFlow::Break(());
+                };
+
+                // Check spec exists on disk and read its status
+                let mgr = spec_manager();
+                let rt = tokio::runtime::Handle::current();
+                let (spec_exists, spec_status): (
+                    bool,
+                    Option<codemason_specs::spec::SpecStatus>,
+                    // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                ) = tokio::task::block_in_place(|| {
+                    rt.block_on(async {
+                        let spec = mgr.read_spec(&sid).await;
+                        match spec {
+                            Ok(s) => (true, Some(s.status)),
+                            Err(_) => (false, None),
+                        }
+                    })
+                });
+                if !spec_exists {
+                    // List available specs with plans
+                    // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                    let available: Vec<String> = tokio::task::block_in_place(|| {
+                        rt.block_on(async {
+                            match mgr.discover_specs().await {
+                                Ok(specs) => specs
+                                    .iter()
+                                    .map(|s| format!("  - {} ({})", s.id, s.status.as_str()))
+                                    .collect(),
+                                Err(_) => vec![],
+                            }
+                        })
+                    });
+                    let avail_str = if available.is_empty() {
+                        "  (none found)".to_string()
+                    } else {
+                        available.join("\n")
+                    };
+                    self.append_assistant_text(&format!(
+                        "From: /spec impl\n\n**Error:** Spec `{}` not found.\n\n\
+                                 Available specs:\n{}",
+                        spec_id, avail_str
+                    ));
+                    self.status = format!("spec: spec {} not found", spec_id);
+                    return std::ops::ControlFlow::Break(());
+                }
+
+                // Check if already implemented (FR-026)
+                if let Some(status) = spec_status {
+                    if matches!(
+                        status,
+                        codemason_specs::spec::SpecStatus::Implemented
+                            | codemason_specs::spec::SpecStatus::Verified
+                    ) {
+                        // Only `implemented` can reopen; a verified spec
+                        // is closed and must be archived and re-drafted.
+                        let hint = if status == codemason_specs::spec::SpecStatus::Implemented {
+                            format!(
+                                "To re-implement, reopen it first: \
+                                         `/spec status {spec_id} in_progress`"
+                            )
+                        } else {
+                            "A verified spec cannot be reopened; archive it and start \
+                                     again from `draft`."
+                                .to_string()
+                        };
+                        self.append_assistant_text(&format!(
+                            "From: /spec impl\n\n[warn] Spec **{spec_id}** is already \
+                                     marked as **{}**.\n\n{hint}",
+                            status.as_str()
+                        ));
+                        self.status = format!("spec: {} is {}", spec_id, status.as_str());
+                        return std::ops::ControlFlow::Break(());
+                    }
+                }
+
+                // Build options
+                let mut opts = ImplOptions::new();
+                if let Some(ref tid) = task_id {
+                    opts = opts.with_task(tid);
+                }
+                if dry_run {
+                    opts = opts.with_dry_run();
+                }
+                // FR-019: gate the in_progress transition checks with
+                // the configured SDD flags, as `/spec status` does.
+                let sdd_cfg = codemason_agent::Config::load_for(&self.cwd_path)
+                    .unwrap_or_default()
+                    .sdd;
+                opts = opts.with_sdd_flags(SddFlags::from_bools(
+                    sdd_cfg.clarification_markers,
+                    sdd_cfg.quality_checklists,
+                    sdd_cfg.consistency_checks,
+                    sdd_cfg.phase_minus_one_gates,
+                    sdd_cfg.constitution,
+                    sdd_cfg.feedback_loop,
+                ));
+
+                // Create runner
+                let runner_result: Result<SpecImplRunner, String> =
                             // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
                             tokio::task::block_in_place(|| {
                                 rt.block_on(async {
@@ -9653,73 +9954,61 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                                 })
                             });
 
-                        match runner_result {
-                            Ok(runner) => {
-                                let is_dry_run = dry_run;
-                                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                                let result: Result<_, String> = tokio::task::block_in_place(|| {
-                                    rt.block_on(async {
-                                        match runner.run().await {
-                                            Ok(r) => Ok(r),
-                                            Err(e) => Err(format!("spec impl failed: {e}")),
-                                        }
-                                    })
-                                });
-                                match result {
-                                    Ok(impl_result) => {
-                                        // Display summary
-                                        self.append_assistant_text(&impl_result.summary);
+                match runner_result {
+                    Ok(runner) => {
+                        let is_dry_run = dry_run;
+                        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                        let result: Result<_, String> = tokio::task::block_in_place(|| {
+                            rt.block_on(async {
+                                match runner.run().await {
+                                    Ok(r) => Ok(r),
+                                    Err(e) => Err(format!("spec impl failed: {e}")),
+                                }
+                            })
+                        });
+                        match result {
+                            Ok(impl_result) => {
+                                // Display summary
+                                self.append_assistant_text(&impl_result.summary);
 
-                                        if is_dry_run || impl_result.total_tasks == 0 {
-                                            self.status =
-                                                format!("spec: {} dry-run complete", spec_id);
-                                        } else {
-                                            // Drive tasks ONE AT A TIME. The previous
-                                            // implementation injected the entire compound
-                                            // prompt in a single `process_message` call,
-                                            // which meant the agent would often stop after
-                                            // the first task (considering its immediate goal
-                                            // satisfied) and never reach the remaining
-                                            // tasks. Instead, we store the execution order
-                                            // and dispatch the first task's prompt now; the
-                                            // `Event::MessageEnd` handler advances to the
-                                            // next task once the agent marks the current
-                                            // one `completed`.
-                                            let task_ids: Vec<String> = runner
-                                                .execution_order()
-                                                .iter()
-                                                .map(|&i| runner.tasks()[i].id.clone())
-                                                .collect();
-                                            let total = task_ids.len();
+                                if is_dry_run || impl_result.total_tasks == 0 {
+                                    self.status = format!("spec: {} dry-run complete", spec_id);
+                                } else {
+                                    // Drive tasks ONE AT A TIME. The previous
+                                    // implementation injected the entire compound
+                                    // prompt in a single `process_message` call,
+                                    // which meant the agent would often stop after
+                                    // the first task (considering its immediate goal
+                                    // satisfied) and never reach the remaining
+                                    // tasks. Instead, we store the execution order
+                                    // and dispatch the first task's prompt now; the
+                                    // `Event::MessageEnd` handler advances to the
+                                    // next task once the agent marks the current
+                                    // one `completed`.
+                                    let task_ids: Vec<String> = runner
+                                        .execution_order()
+                                        .iter()
+                                        .map(|&i| runner.tasks()[i].id.clone())
+                                        .collect();
+                                    let total = task_ids.len();
 
-                                            // The session task tracker is populated
-                                            // lazily by `spec_task_update` calls from
-                                            // the agent (creates-or-updates), not by
-                                            // pre-created milestone rows here.
-                                            self.session.spec_impl_state =
-                                                Some(crate::app::state::SpecImplState {
-                                                    spec_id: spec_id.clone(),
-                                                    specs_root: specs_root.clone(),
-                                                    task_ids,
-                                                    current_rank: 1,
-                                                    total,
-                                                    runner: runner.clone(),
-                                                });
+                                    // The session task tracker is populated
+                                    // lazily by `spec_task_update` calls from
+                                    // the agent (creates-or-updates), not by
+                                    // pre-created milestone rows here.
+                                    self.session.spec_impl_state =
+                                        Some(crate::app::state::SpecImplState {
+                                            spec_id: spec_id.clone(),
+                                            specs_root: specs_root.clone(),
+                                            task_ids,
+                                            current_rank: 1,
+                                            total,
+                                            runner: runner.clone(),
+                                        });
 
-                                            // Dispatch the first task's prompt.
-                                            if let Some(prompt) = runner.task_prompt(1) {
-                                                self.dispatch_spec_impl_task(
-                                                    prompt, &spec_id, 1, total,
-                                                );
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        self.append_assistant_text(&format!(
-                                            "From: /spec impl\n\n**Error:** {}",
-                                            e
-                                        ));
-                                        self.status = format!("spec: {}", e);
+                                    // Dispatch the first task's prompt.
+                                    if let Some(prompt) = runner.task_prompt(1) {
+                                        self.dispatch_spec_impl_task(prompt, &spec_id, 1, total);
                                     }
                                 }
                             }
@@ -9732,71 +10021,78 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                             }
                         }
                     }
-                    SpecCommand::Unknown(sub)
-                        if sub == "create"
-                            || sub == "validate"
-                            || sub == "status"
-                            || sub == "task"
-                            || sub == "activate"
-                            || sub == "coverage"
-                            || sub == "impl"
-                            || sub == "add"
-                            || sub == "delete"
-                            || sub == "jtbd"
-                            || sub == "update"
-                            || sub == "specify"
-                            || sub == "plan"
-                            || sub == "tasks"
-                            || sub == "feedback"
-                            || sub == "govcreate"
-                            || sub == "reverse" =>
-                    {
-                        // NFR-005: a missing or invalid flag must never be
-                        // reported by a status line alone. Each usage-error
-                        // subcommand states the specific cause (and its usage
-                        // block) in the message window, then leaves a short
-                        // pointer in the status line.
-                        match sub.as_str() {
-                            "reverse" => {
-                                self.append_assistant_text(&format!(
+                    Err(e) => {
+                        self.append_assistant_text(&format!(
+                            "From: /spec impl\n\n**Error:** {}",
+                            e
+                        ));
+                        self.status = format!("spec: {}", e);
+                    }
+                }
+            }
+            SpecCommand::Unknown(sub)
+                if sub == "create"
+                    || sub == "validate"
+                    || sub == "status"
+                    || sub == "task"
+                    || sub == "activate"
+                    || sub == "coverage"
+                    || sub == "impl"
+                    || sub == "add"
+                    || sub == "delete"
+                    || sub == "jtbd"
+                    || sub == "update"
+                    || sub == "specify"
+                    || sub == "plan"
+                    || sub == "tasks"
+                    || sub == "feedback"
+                    || sub == "govcreate"
+                    || sub == "reverse" =>
+            {
+                // NFR-005: a missing or invalid flag must never be
+                // reported by a status line alone. Each usage-error
+                // subcommand states the specific cause (and its usage
+                // block) in the message window, then leaves a short
+                // pointer in the status line.
+                match sub.as_str() {
+                    "reverse" => {
+                        self.append_assistant_text(&format!(
                                     "[err] **missing required argument** - no repository given \
                                      (the first argument after `/spec reverse` must be `<repo>`)\n\n{}",
                                     crate::app::reverse::reverse_help_message()
                                 ));
-                            }
-                            "govcreate" => {
-                                self.append_assistant_text(&format!(
-                                    "[err] **missing required argument** - `/spec govcreate` \
-                                     requires `<specid> <content-ref> <target-folder>`\n\n{}",
-                                    SpecCommand::build_govcreate_help_message()
-                                ));
-                            }
-                            other => {
-                                self.append_assistant_text(&format!(
-                                    "[err] **missing required argument** - `/spec {other}` was \
-                                     given incomplete arguments\n\n{}",
-                                    SpecCommand::build_help_message()
-                                ));
-                            }
-                        }
-                        self.status = format!("Usage: /spec {sub} - try /spec help");
                     }
-                    SpecCommand::Add { spec_id, feature } => {
-                        self.append_assistant_text(&SpecCommand::build_add_message(
-                            &spec_id, &feature,
+                    "govcreate" => {
+                        self.append_assistant_text(&format!(
+                            "[err] **missing required argument** - `/spec govcreate` \
+                                     requires `<specid> <content-ref> <target-folder>`\n\n{}",
+                            SpecCommand::build_govcreate_help_message()
                         ));
-                        self.push_log_no_agent(
-                            crate::app::LogLevel::Info,
-                            SpecCommand::build_add_log(&spec_id, &feature),
-                        );
+                    }
+                    other => {
+                        self.append_assistant_text(&format!(
+                            "[err] **missing required argument** - `/spec {other}` was \
+                                     given incomplete arguments\n\n{}",
+                            SpecCommand::build_help_message()
+                        ));
+                    }
+                }
+                self.status = format!("Usage: /spec {sub} - try /spec help");
+            }
+            SpecCommand::Add { spec_id, feature } => {
+                self.append_assistant_text(&SpecCommand::build_add_message(&spec_id, &feature));
+                self.push_log_no_agent(
+                    crate::app::LogLevel::Info,
+                    SpecCommand::build_add_log(&spec_id, &feature),
+                );
 
-                        let mgr = spec_manager();
-                        let rt = tokio::runtime::Handle::current();
+                let mgr = spec_manager();
+                let rt = tokio::runtime::Handle::current();
 
-                        // Load existing spec to get content and next IDs
-                        let spec_id_owned = spec_id.clone();
-                        let feature_owned = feature.clone();
-                        let result: Result<(String, u32, u32, u32), String> =
+                // Load existing spec to get content and next IDs
+                let spec_id_owned = spec_id.clone();
+                let feature_owned = feature.clone();
+                let result: Result<(String, u32, u32, u32), String> =
                             // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
                             tokio::task::block_in_place(|| {
                                 rt.block_on(async {
@@ -9842,192 +10138,14 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                                 })
                             });
 
-                        match result {
-                            Ok((prompt, _next_fr, _next_nfr, _next_task)) => {
-                                let sid = self.session.session_id.clone().unwrap_or_default();
-                                // Select general agent (not explore - add requires
-                                // editing SPEC.md and PLAN.md, and explore's prompt
-                                // says "Do NOT modify any files").
-                                let agent = self.select_general_agent();
-
-                                let msg = Message::user_text(&sid, &prompt);
-                                self.session.messages.push(msg);
-
-                                let processor = self.session_processor.clone();
-                                let flag = Arc::new(AtomicBool::new(false));
-                                self.session.cancel_flag = Some(flag.clone());
-                                self.session.is_processing = true;
-                                self.status = SpecCommand::build_add_status(&spec_id);
-
-                                let event_bus = self.event_bus.clone();
-                                let specs_root_phase2 = self.cwd_path.clone().join("specs");
-                                let spec_id_phase2 = spec_id.clone();
-                                tokio::spawn(async move {
-                                    // Phase 1: incremental add - the LLM uses the
-                                    // `read` and `Edit` tools directly to insert new
-                                    // requirements into SPEC.md and new task rows
-                                    // into PLAN.md. No post-processing needed.
-                                    let phase1_result = processor
-                                        .process_message(&sid, &prompt, &agent, flag)
-                                        .await;
-                                    if let Err(e) = phase1_result {
-                                        tracing::warn!(error = %e, "spec: add generation failed");
-                                        event_bus.publish(
-                                            codemason_agent::event::Event::AgentError {
-                                                session_id: sid,
-                                                error: format!("spec add generation failed: {e}"),
-                                            },
-                                        );
-                                        return;
-                                    }
-
-                                    // Phase 2: regenerate PLAN.md + TESTPLAN.md
-                                    // (same as /spec update - re-read the updated
-                                    // SPEC.md and fully regenerate both files)
-                                    let sid2 =
-                                        match codemason_specs::spec::SpecId::new(&spec_id_phase2) {
-                                            Some(id) => id,
-                                            None => {
-                                                tracing::warn!(
-                                                    "spec: invalid spec ID after add phase: {}",
-                                                    spec_id_phase2
-                                                );
-                                                return;
-                                            }
-                                        };
-                                    let mgr2 = SpecManager::new(&specs_root_phase2);
-                                    let plan_md = match mgr2.read_spec(&sid2).await {
-                                        Ok(spec) => spec.plan_md,
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                error = %e,
-                                                "spec: failed to read spec after add phase"
-                                            );
-                                            return;
-                                        }
-                                    };
-
-                                    let update_prompt =
-                                        SpecCommand::build_update_prompt(&spec_id_phase2, &plan_md);
-                                    let flag2 = Arc::new(AtomicBool::new(false));
-                                    if let Err(e) = processor
-                                        .process_message(&sid, &update_prompt, &agent, flag2)
-                                        .await
-                                    {
-                                        tracing::warn!(
-                                            error = %e,
-                                            "spec: update generation failed after add"
-                                        );
-                                        event_bus.publish(
-                                            codemason_agent::event::Event::AgentError {
-                                                session_id: sid,
-                                                error: format!(
-                                                    "spec update generation failed after add: {e}"
-                                                ),
-                                            },
-                                        );
-                                    }
-                                });
-                            }
-                            Err(e) => {
-                                self.status = format!("spec: {}", e);
-                                self.append_assistant_text(&format!(
-                                    "From: /spec add\n\n**Error:** {}",
-                                    e
-                                ));
-                            }
-                        }
-                    }
-                    SpecCommand::Update { spec_id } => {
-                        // FR-006: validate spec ID format
-                        let sid = match codemason_specs::spec::SpecId::new(&spec_id) {
-                            Some(id) => id,
-                            None => {
-                                self.status = format!("spec: invalid spec ID: {}", spec_id);
-                                self.append_assistant_text(&format!(
-                                    "From: /spec update\n\n**Error:** Invalid spec ID \
-                                     `{}`. Spec IDs must be alphanumeric with hyphens or \
-                                     underscores only.",
-                                    spec_id
-                                ));
-                                return;
-                            }
-                        };
-
-                        let mgr = spec_manager();
-                        let rt = tokio::runtime::Handle::current();
-
-                        // FR-005/FR-010: read spec, guard archived, read PLAN.md
-                        let spec_id_owned = spec_id.clone();
-                        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                        let result: Result<String, String> = tokio::task::block_in_place(|| {
-                            rt.block_on(async {
-                                let spec = match mgr.read_spec(&sid).await {
-                                    Ok(s) => s,
-                                    Err(_e) => {
-                                        // List available specs on not-found
-                                        let available: Vec<String> = match mgr
-                                            .discover_specs()
-                                            .await
-                                        {
-                                            Ok(specs) => specs
-                                                .iter()
-                                                .map(|s| {
-                                                    format!("  - {} ({})", s.id, s.status.as_str())
-                                                })
-                                                .collect(),
-                                            Err(_) => vec![],
-                                        };
-                                        let avail_str = if available.is_empty() {
-                                            "  (none found)".to_string()
-                                        } else {
-                                            available.join("\n")
-                                        };
-                                        return Err(format!(
-                                            "Spec `{}` not found.\n\nAvailable specs:\n{}",
-                                            spec_id_owned, avail_str
-                                        ));
-                                    }
-                                };
-                                // FR-013: guard archived specs
-                                if spec.status == codemason_specs::spec::SpecStatus::Archived {
-                                    return Err(format!(
-                                        "spec: '{}' is archived and cannot be updated",
-                                        spec_id_owned
-                                    ));
-                                }
-                                // FR-011: read existing PLAN.md for status preservation
-                                Ok(spec.plan_md)
-                            })
-                        });
-
-                        let plan_md = match result {
-                            Ok(p) => p,
-                            Err(e) => {
-                                self.status = format!("spec: {}", e);
-                                self.append_assistant_text(&format!(
-                                    "From: /spec update\n\n**Error:** {}",
-                                    e
-                                ));
-                                return;
-                            }
-                        };
-
-                        // FR-009: status, message, and log
-                        self.append_assistant_text(&SpecCommand::build_update_message(&spec_id));
-                        self.push_log_no_agent(
-                            crate::app::LogLevel::Info,
-                            SpecCommand::build_update_log(&spec_id),
-                        );
-
-                        // Select general agent (not explore - update requires
-                        // writing files, and explore's prompt says "Do NOT
-                        // modify any files").
+                match result {
+                    Ok((prompt, _next_fr, _next_nfr, _next_task)) => {
+                        let sid = self.session.session_id.clone().unwrap_or_default();
+                        // Select general agent (not explore - add requires
+                        // editing SPEC.md and PLAN.md, and explore's prompt
+                        // says "Do NOT modify any files").
                         let agent = self.select_general_agent();
 
-                        // FR-008/FR-011: build prompt with plan_md for status preservation
-                        let prompt = SpecCommand::build_update_prompt(&spec_id, &plan_md);
-                        let sid = self.session.session_id.clone().unwrap_or_default();
                         let msg = Message::user_text(&sid, &prompt);
                         self.session.messages.push(msg);
 
@@ -10035,120 +10153,275 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                         let flag = Arc::new(AtomicBool::new(false));
                         self.session.cancel_flag = Some(flag.clone());
                         self.session.is_processing = true;
-                        self.status = SpecCommand::build_update_status(&spec_id);
+                        self.status = SpecCommand::build_add_status(&spec_id);
 
                         let event_bus = self.event_bus.clone();
+                        let specs_root_phase2 = self.cwd_path.clone().join("specs");
+                        let spec_id_phase2 = spec_id.clone();
                         tokio::spawn(async move {
-                            if let Err(e) =
-                                processor.process_message(&sid, &prompt, &agent, flag).await
-                            {
-                                tracing::warn!(error = %e, "spec: update generation failed");
+                            // Phase 1: incremental add - the LLM uses the
+                            // `read` and `Edit` tools directly to insert new
+                            // requirements into SPEC.md and new task rows
+                            // into PLAN.md. No post-processing needed.
+                            let phase1_result =
+                                processor.process_message(&sid, &prompt, &agent, flag).await;
+                            if let Err(e) = phase1_result {
+                                tracing::warn!(error = %e, "spec: add generation failed");
                                 event_bus.publish(codemason_agent::event::Event::AgentError {
                                     session_id: sid,
-                                    error: format!("spec update generation failed: {e}"),
+                                    error: format!("spec add generation failed: {e}"),
                                 });
-                            }
-                        });
-                    }
-                    SpecCommand::Unknown(sub) => {
-                        if let Some(reason) = sub.strip_prefix("reverse-usage: ") {
-                            // `/spec reverse` parsed but the invocation was
-                            // invalid (unknown or duplicate flag, or a `/new`
-                            // scaffold-flag validation failure). `SpecCommand::
-                            // parse` puts the specific cause after the prefix.
-                            self.append_assistant_text(&format!(
-                                "From: /spec reverse\n\n[err] **{reason}**\n\n{}",
-                                crate::app::reverse::reverse_help_message()
-                            ));
-                            self.status = "spec: reverse usage".to_string();
-                        } else {
-                            self.status =
-                                format!("Unknown /spec subcommand: {sub}. Try /spec help");
-                        }
-                    }
-                    SpecCommand::Specify {
-                        specname,
-                        feature,
-                        from_research,
-                    } => {
-                        let sid = self.session.session_id.clone().unwrap_or_default();
-                        self.append_assistant_text(&SpecCommand::build_specify_message(&specname));
-                        self.push_log_no_agent(
-                            LogLevel::Info,
-                            SpecCommand::build_specify_log(&specname, &feature),
-                        );
-
-                        // FR-009: optionally create a git branch for the spec.
-                        let sdd_cfg = codemason_agent::Config::load_for(&self.cwd_path)
-                            .unwrap_or_default()
-                            .sdd;
-                        if sdd_cfg.branch_per_spec {
-                            let working_dir = self.cwd_path.clone();
-                            let branch_result =
-                                codemason_specs::create_spec_branch(&specname, &working_dir);
-                            self.append_assistant_text(&SpecCommand::build_branch_message(
-                                &branch_result,
-                            ));
-                            self.push_log_no_agent(
-                                LogLevel::Info,
-                                SpecCommand::build_branch_log(&specname, &branch_result),
-                            );
-                        }
-
-                        let agent = self.select_general_agent();
-
-                        let task = SpecCommand::build_specify_prompt(
-                            &specname,
-                            &feature,
-                            from_research.as_deref(),
-                        );
-                        let msg = Message::user_text(&sid, &task);
-                        self.session.messages.push(msg);
-
-                        let processor = self.session_processor.clone();
-                        let flag = Arc::new(AtomicBool::new(false));
-                        self.session.cancel_flag = Some(flag.clone());
-                        self.session.is_processing = true;
-                        self.status = SpecCommand::build_specify_status(&specname);
-
-                        let event_bus = self.event_bus.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) =
-                                processor.process_message(&sid, &task, &agent, flag).await
-                            {
-                                tracing::warn!(error = %e, "spec: specify generation failed");
-                                event_bus.publish(codemason_agent::event::Event::AgentError {
-                                    session_id: sid,
-                                    error: format!("spec specify generation failed: {e}"),
-                                });
-                            }
-                        });
-                    }
-                    SpecCommand::Plan {
-                        spec_id,
-                        tech_context,
-                    } => {
-                        // FR-006: validate spec ID format
-                        let sid = match codemason_specs::spec::SpecId::new(&spec_id) {
-                            Some(id) => id,
-                            None => {
-                                self.status = format!("spec: invalid spec ID: {}", spec_id);
-                                self.append_assistant_text(&format!(
-                                    "From: /spec plan\n\n**Error:** Invalid spec ID \
-                                     `{}`. Spec IDs must be alphanumeric with hyphens or \
-                                     underscores only.",
-                                    spec_id
-                                ));
                                 return;
                             }
+
+                            // Phase 2: regenerate PLAN.md + TESTPLAN.md
+                            // (same as /spec update - re-read the updated
+                            // SPEC.md and fully regenerate both files)
+                            let sid2 = match codemason_specs::spec::SpecId::new(&spec_id_phase2) {
+                                Some(id) => id,
+                                None => {
+                                    tracing::warn!(
+                                        "spec: invalid spec ID after add phase: {}",
+                                        spec_id_phase2
+                                    );
+                                    return;
+                                }
+                            };
+                            let mgr2 = SpecManager::new(&specs_root_phase2);
+                            let plan_md = match mgr2.read_spec(&sid2).await {
+                                Ok(spec) => spec.plan_md,
+                                Err(e) => {
+                                    tracing::warn!(
+                                        error = %e,
+                                        "spec: failed to read spec after add phase"
+                                    );
+                                    return;
+                                }
+                            };
+
+                            let update_prompt =
+                                SpecCommand::build_update_prompt(&spec_id_phase2, &plan_md);
+                            let flag2 = Arc::new(AtomicBool::new(false));
+                            if let Err(e) = processor
+                                .process_message(&sid, &update_prompt, &agent, flag2)
+                                .await
+                            {
+                                tracing::warn!(
+                                    error = %e,
+                                    "spec: update generation failed after add"
+                                );
+                                event_bus.publish(codemason_agent::event::Event::AgentError {
+                                    session_id: sid,
+                                    error: format!("spec update generation failed after add: {e}"),
+                                });
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        self.status = format!("spec: {}", e);
+                        self.append_assistant_text(&format!("From: /spec add\n\n**Error:** {}", e));
+                    }
+                }
+            }
+            SpecCommand::Update { spec_id } => {
+                // FR-006: validate spec ID format
+                let sid = match codemason_specs::spec::SpecId::new(&spec_id) {
+                    Some(id) => id,
+                    None => {
+                        self.status = format!("spec: invalid spec ID: {}", spec_id);
+                        self.append_assistant_text(&format!(
+                            "From: /spec update\n\n**Error:** Invalid spec ID \
+                                     `{}`. Spec IDs must be alphanumeric with hyphens or \
+                                     underscores only.",
+                            spec_id
+                        ));
+                        return std::ops::ControlFlow::Break(());
+                    }
+                };
+
+                let mgr = spec_manager();
+                let rt = tokio::runtime::Handle::current();
+
+                // FR-005/FR-010: read spec, guard archived, read PLAN.md
+                let spec_id_owned = spec_id.clone();
+                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                let result: Result<String, String> = tokio::task::block_in_place(|| {
+                    rt.block_on(async {
+                        let spec = match mgr.read_spec(&sid).await {
+                            Ok(s) => s,
+                            Err(_e) => {
+                                // List available specs on not-found
+                                let available: Vec<String> = match mgr.discover_specs().await {
+                                    Ok(specs) => specs
+                                        .iter()
+                                        .map(|s| format!("  - {} ({})", s.id, s.status.as_str()))
+                                        .collect(),
+                                    Err(_) => vec![],
+                                };
+                                let avail_str = if available.is_empty() {
+                                    "  (none found)".to_string()
+                                } else {
+                                    available.join("\n")
+                                };
+                                return Err(format!(
+                                    "Spec `{}` not found.\n\nAvailable specs:\n{}",
+                                    spec_id_owned, avail_str
+                                ));
+                            }
                         };
+                        // FR-013: guard archived specs
+                        if spec.status == codemason_specs::spec::SpecStatus::Archived {
+                            return Err(format!(
+                                "spec: '{}' is archived and cannot be updated",
+                                spec_id_owned
+                            ));
+                        }
+                        // FR-011: read existing PLAN.md for status preservation
+                        Ok(spec.plan_md)
+                    })
+                });
 
-                        let mgr = spec_manager();
-                        let rt = tokio::runtime::Handle::current();
+                let plan_md = match result {
+                    Ok(p) => p,
+                    Err(e) => {
+                        self.status = format!("spec: {}", e);
+                        self.append_assistant_text(&format!(
+                            "From: /spec update\n\n**Error:** {}",
+                            e
+                        ));
+                        return std::ops::ControlFlow::Break(());
+                    }
+                };
 
-                        // Read SPEC.md (and existing PLAN.md for status preservation)
-                        let spec_id_owned = spec_id.clone();
-                        let result: Result<(String, String, String), String> =
+                // FR-009: status, message, and log
+                self.append_assistant_text(&SpecCommand::build_update_message(&spec_id));
+                self.push_log_no_agent(
+                    crate::app::LogLevel::Info,
+                    SpecCommand::build_update_log(&spec_id),
+                );
+
+                // Select general agent (not explore - update requires
+                // writing files, and explore's prompt says "Do NOT
+                // modify any files").
+                let agent = self.select_general_agent();
+
+                // FR-008/FR-011: build prompt with plan_md for status preservation
+                let prompt = SpecCommand::build_update_prompt(&spec_id, &plan_md);
+                let sid = self.session.session_id.clone().unwrap_or_default();
+                let msg = Message::user_text(&sid, &prompt);
+                self.session.messages.push(msg);
+
+                let processor = self.session_processor.clone();
+                let flag = Arc::new(AtomicBool::new(false));
+                self.session.cancel_flag = Some(flag.clone());
+                self.session.is_processing = true;
+                self.status = SpecCommand::build_update_status(&spec_id);
+
+                let event_bus = self.event_bus.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = processor.process_message(&sid, &prompt, &agent, flag).await {
+                        tracing::warn!(error = %e, "spec: update generation failed");
+                        event_bus.publish(codemason_agent::event::Event::AgentError {
+                            session_id: sid,
+                            error: format!("spec update generation failed: {e}"),
+                        });
+                    }
+                });
+            }
+            SpecCommand::Unknown(sub) => {
+                if let Some(reason) = sub.strip_prefix("reverse-usage: ") {
+                    // `/spec reverse` parsed but the invocation was
+                    // invalid (unknown or duplicate flag, or a `/new`
+                    // scaffold-flag validation failure). `SpecCommand::
+                    // parse` puts the specific cause after the prefix.
+                    self.append_assistant_text(&format!(
+                        "From: /spec reverse\n\n[err] **{reason}**\n\n{}",
+                        crate::app::reverse::reverse_help_message()
+                    ));
+                    self.status = "spec: reverse usage".to_string();
+                } else {
+                    self.status = format!("Unknown /spec subcommand: {sub}. Try /spec help");
+                }
+            }
+            SpecCommand::Specify {
+                specname,
+                feature,
+                from_research,
+            } => {
+                let sid = self.session.session_id.clone().unwrap_or_default();
+                self.append_assistant_text(&SpecCommand::build_specify_message(&specname));
+                self.push_log_no_agent(
+                    LogLevel::Info,
+                    SpecCommand::build_specify_log(&specname, &feature),
+                );
+
+                // FR-009: optionally create a git branch for the spec.
+                let sdd_cfg = codemason_agent::Config::load_for(&self.cwd_path)
+                    .unwrap_or_default()
+                    .sdd;
+                if sdd_cfg.branch_per_spec {
+                    let working_dir = self.cwd_path.clone();
+                    let branch_result =
+                        codemason_specs::create_spec_branch(&specname, &working_dir);
+                    self.append_assistant_text(&SpecCommand::build_branch_message(&branch_result));
+                    self.push_log_no_agent(
+                        LogLevel::Info,
+                        SpecCommand::build_branch_log(&specname, &branch_result),
+                    );
+                }
+
+                let agent = self.select_general_agent();
+
+                let task = SpecCommand::build_specify_prompt(
+                    &specname,
+                    &feature,
+                    from_research.as_deref(),
+                );
+                let msg = Message::user_text(&sid, &task);
+                self.session.messages.push(msg);
+
+                let processor = self.session_processor.clone();
+                let flag = Arc::new(AtomicBool::new(false));
+                self.session.cancel_flag = Some(flag.clone());
+                self.session.is_processing = true;
+                self.status = SpecCommand::build_specify_status(&specname);
+
+                let event_bus = self.event_bus.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = processor.process_message(&sid, &task, &agent, flag).await {
+                        tracing::warn!(error = %e, "spec: specify generation failed");
+                        event_bus.publish(codemason_agent::event::Event::AgentError {
+                            session_id: sid,
+                            error: format!("spec specify generation failed: {e}"),
+                        });
+                    }
+                });
+            }
+            SpecCommand::Plan {
+                spec_id,
+                tech_context,
+            } => {
+                // FR-006: validate spec ID format
+                let sid = match codemason_specs::spec::SpecId::new(&spec_id) {
+                    Some(id) => id,
+                    None => {
+                        self.status = format!("spec: invalid spec ID: {}", spec_id);
+                        self.append_assistant_text(&format!(
+                            "From: /spec plan\n\n**Error:** Invalid spec ID \
+                                     `{}`. Spec IDs must be alphanumeric with hyphens or \
+                                     underscores only.",
+                            spec_id
+                        ));
+                        return std::ops::ControlFlow::Break(());
+                    }
+                };
+
+                let mgr = spec_manager();
+                let rt = tokio::runtime::Handle::current();
+
+                // Read SPEC.md (and existing PLAN.md for status preservation)
+                let spec_id_owned = spec_id.clone();
+                let result: Result<(String, String, String), String> =
                             // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
                             tokio::task::block_in_place(|| {
                                 rt.block_on(async {
@@ -10190,291 +10463,278 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                                 })
                             });
 
-                        let (spec_md, plan_md, feedback_md) = match result {
-                            Ok(v) => v,
-                            Err(e) => {
-                                self.status = format!("spec: {}", e);
-                                self.append_assistant_text(&format!(
-                                    "From: /spec plan\n\n**Error:** {}",
-                                    e
-                                ));
-                                return;
-                            }
-                        };
-
-                        // FR-011/FR-012/FR-017: check whether data-model,
-                        // contracts, and feedback surfacing are enabled
-                        let sdd_cfg = codemason_agent::Config::load_for(&self.cwd_path)
-                            .unwrap_or_default()
-                            .sdd;
-                        let data_model_enabled = sdd_cfg.data_model;
-                        let contracts_enabled = sdd_cfg.contracts;
-                        let feedback_enabled = sdd_cfg.feedback_loop;
-                        // FR-017: load FEEDBACK.md content when feedback loop is
-                        // enabled, so it can be surfaced during plan regeneration
-                        let feedback_md = if feedback_enabled {
-                            feedback_md.as_str()
-                        } else {
-                            ""
-                        };
-
-                        self.append_assistant_text(&SpecCommand::build_plan_message(
-                            &spec_id,
-                            &tech_context,
-                            data_model_enabled,
-                            contracts_enabled,
-                            feedback_enabled,
+                let (spec_md, plan_md, feedback_md) = match result {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.status = format!("spec: {}", e);
+                        self.append_assistant_text(&format!(
+                            "From: /spec plan\n\n**Error:** {}",
+                            e
                         ));
-                        self.push_log_no_agent(
-                            crate::app::LogLevel::Info,
-                            SpecCommand::build_plan_log(&spec_id, &tech_context),
-                        );
+                        return std::ops::ControlFlow::Break(());
+                    }
+                };
 
-                        let agent = self.select_general_agent();
+                // FR-011/FR-012/FR-017: check whether data-model,
+                // contracts, and feedback surfacing are enabled
+                let sdd_cfg = codemason_agent::Config::load_for(&self.cwd_path)
+                    .unwrap_or_default()
+                    .sdd;
+                let data_model_enabled = sdd_cfg.data_model;
+                let contracts_enabled = sdd_cfg.contracts;
+                let feedback_enabled = sdd_cfg.feedback_loop;
+                // FR-017: load FEEDBACK.md content when feedback loop is
+                // enabled, so it can be surfaced during plan regeneration
+                let feedback_md = if feedback_enabled {
+                    feedback_md.as_str()
+                } else {
+                    ""
+                };
 
-                        let prompt = SpecCommand::build_plan_prompt(
-                            &spec_id,
-                            &tech_context,
-                            &spec_md,
-                            &plan_md,
-                            data_model_enabled,
-                            contracts_enabled,
-                            feedback_md,
-                        );
-                        let sid_msg = self.session.session_id.clone().unwrap_or_default();
-                        let msg = Message::user_text(&sid_msg, &prompt);
-                        self.session.messages.push(msg);
+                self.append_assistant_text(&SpecCommand::build_plan_message(
+                    &spec_id,
+                    &tech_context,
+                    data_model_enabled,
+                    contracts_enabled,
+                    feedback_enabled,
+                ));
+                self.push_log_no_agent(
+                    crate::app::LogLevel::Info,
+                    SpecCommand::build_plan_log(&spec_id, &tech_context),
+                );
 
-                        let processor = self.session_processor.clone();
-                        let flag = Arc::new(AtomicBool::new(false));
-                        self.session.cancel_flag = Some(flag.clone());
-                        self.session.is_processing = true;
-                        self.status = SpecCommand::build_plan_status(&spec_id);
+                let agent = self.select_general_agent();
 
-                        let event_bus = self.event_bus.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = processor
-                                .process_message(&sid_msg, &prompt, &agent, flag)
-                                .await
-                            {
-                                tracing::warn!(error = %e, "spec: plan generation failed");
-                                event_bus.publish(codemason_agent::event::Event::AgentError {
-                                    session_id: sid_msg,
-                                    error: format!("spec plan generation failed: {e}"),
-                                });
-                            }
+                let prompt = SpecCommand::build_plan_prompt(
+                    &spec_id,
+                    &tech_context,
+                    &spec_md,
+                    &plan_md,
+                    data_model_enabled,
+                    contracts_enabled,
+                    feedback_md,
+                );
+                let sid_msg = self.session.session_id.clone().unwrap_or_default();
+                let msg = Message::user_text(&sid_msg, &prompt);
+                self.session.messages.push(msg);
+
+                let processor = self.session_processor.clone();
+                let flag = Arc::new(AtomicBool::new(false));
+                self.session.cancel_flag = Some(flag.clone());
+                self.session.is_processing = true;
+                self.status = SpecCommand::build_plan_status(&spec_id);
+
+                let event_bus = self.event_bus.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = processor
+                        .process_message(&sid_msg, &prompt, &agent, flag)
+                        .await
+                    {
+                        tracing::warn!(error = %e, "spec: plan generation failed");
+                        event_bus.publish(codemason_agent::event::Event::AgentError {
+                            session_id: sid_msg,
+                            error: format!("spec plan generation failed: {e}"),
                         });
                     }
-                    SpecCommand::Tasks { spec_id } => {
-                        let working_dir = self.cwd_path.clone();
-                        let specs_root = working_dir.join("specs");
+                });
+            }
+            SpecCommand::Tasks { spec_id } => {
+                let working_dir = self.cwd_path.clone();
+                let specs_root = working_dir.join("specs");
 
-                        // FR-006: validate spec ID format
-                        let sid = match codemason_specs::spec::SpecId::new(&spec_id) {
-                            Some(id) => id,
-                            None => {
-                                self.status = format!("spec: invalid spec ID: {}", spec_id);
-                                self.append_assistant_text(&format!(
-                                    "From: /spec tasks\n\n**Error:** Invalid \
+                // FR-006: validate spec ID format
+                let sid = match codemason_specs::spec::SpecId::new(&spec_id) {
+                    Some(id) => id,
+                    None => {
+                        self.status = format!("spec: invalid spec ID: {}", spec_id);
+                        self.append_assistant_text(&format!(
+                            "From: /spec tasks\n\n**Error:** Invalid \
                                      spec ID `{}`. Spec IDs must be \
                                      alphanumeric with hyphens or \
                                      underscores only.",
-                                    spec_id
-                                ));
-                                return;
-                            }
-                        };
+                            spec_id
+                        ));
+                        return std::ops::ControlFlow::Break(());
+                    }
+                };
 
-                        let mgr = spec_manager();
-                        let rt = tokio::runtime::Handle::current();
+                let mgr = spec_manager();
+                let rt = tokio::runtime::Handle::current();
 
-                        // Read spec to get plan_md and title
-                        let spec_id_owned = spec_id.clone();
-                        let result: Result<
-                            (String, String, String, codemason_specs::spec::SpecStatus),
-                            String,
-                            // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                        > = tokio::task::block_in_place(|| {
-                            rt.block_on(async {
-                                let spec = match mgr.read_spec(&sid).await {
-                                    Ok(s) => s,
-                                    Err(_e) => {
-                                        let available: Vec<String> = match mgr
-                                            .discover_specs()
-                                            .await
-                                        {
-                                            Ok(specs) => specs
-                                                .iter()
-                                                .map(|s| {
-                                                    format!("  - {} ({})", s.id, s.status.as_str())
-                                                })
-                                                .collect(),
-                                            Err(_) => vec![],
-                                        };
-                                        let avail_str = if available.is_empty() {
-                                            "  (none found)".to_string()
-                                        } else {
-                                            available.join("\n")
-                                        };
-                                        return Err(format!(
-                                            "Spec `{}` not found.\n\nAvailable specs:\n{}",
-                                            spec_id_owned, avail_str
-                                        ));
-                                    }
+                // Read spec to get plan_md and title
+                let spec_id_owned = spec_id.clone();
+                let result: Result<
+                    (String, String, String, codemason_specs::spec::SpecStatus),
+                    String,
+                    // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                > = tokio::task::block_in_place(|| {
+                    rt.block_on(async {
+                        let spec = match mgr.read_spec(&sid).await {
+                            Ok(s) => s,
+                            Err(_e) => {
+                                let available: Vec<String> = match mgr.discover_specs().await {
+                                    Ok(specs) => specs
+                                        .iter()
+                                        .map(|s| format!("  - {} ({})", s.id, s.status.as_str()))
+                                        .collect(),
+                                    Err(_) => vec![],
                                 };
-                                if spec.status == codemason_specs::spec::SpecStatus::Archived {
-                                    return Err(format!(
-                                        "spec: '{}' is archived and cannot be updated",
-                                        spec_id_owned
-                                    ));
-                                }
-                                Ok((spec.spec_md, spec.plan_md, spec.title, spec.status))
-                            })
-                        });
-
-                        let (spec_md, plan_md, title, _status) = match result {
-                            Ok(v) => v,
-                            Err(e) => {
-                                self.status = format!("spec: {}", e);
-                                self.append_assistant_text(&format!(
-                                    "From: /spec tasks\n\n**Error:** {}",
-                                    e
-                                ));
-                                return;
-                            }
-                        };
-
-                        // Check PLAN.md is not empty
-                        if plan_md.trim().is_empty() {
-                            self.status = format!("spec: PLAN.md is empty for {}", spec_id);
-                            self.append_assistant_text(&SpecCommand::build_tasks_no_plan_error(
-                                &spec_id,
-                            ));
-                            return;
-                        }
-
-                        // Generate TASKS.md content from the task table. A
-                        // malformed table is reported as a parse error rather
-                        // than silently treated as "no tasks" (FUNC-024).
-                        let tasks_md = match SpecCommand::build_tasks_md(&spec_id, &title, &plan_md)
-                        {
-                            Ok(Some(md)) => md,
-                            Ok(None) => {
-                                self.status =
-                                    format!("spec: no tasks found in PLAN.md for {}", spec_id);
-                                self.append_assistant_text(
-                                    &SpecCommand::build_tasks_no_tasks_error(&spec_id),
-                                );
-                                return;
-                            }
-                            Err(e) => {
-                                self.status = format!("spec: PLAN.md parse error for {}", spec_id);
-                                self.append_assistant_text(&format!(
-                                    "From: /spec tasks\n\n**Error:** failed to parse \
-                                     `specs/{spec_id}/PLAN.md`: {e}"
-                                ));
-                                return;
-                            }
-                        };
-
-                        // Write TASKS.md atomically
-                        let tasks_path = specs_root.join(&spec_id).join("TASKS.md");
-                        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                        let write_result = tokio::task::block_in_place(|| {
-                            rt.block_on(async {
-                                codemason_specs::io::SpecIo::atomic_write(&tasks_path, &tasks_md)
-                                    .await
-                            })
-                        });
-
-                        match write_result {
-                            Ok(()) => {
-                                // Count tasks for the completion message
-                                let task_count = codemason_specs::PlanParser::parse(&plan_md)
-                                    .map(|t| t.len())
-                                    .unwrap_or(0);
-
-                                // FR-013, T-023: also generate quickstart.md
-                                // with key validation scenarios from SPEC.md
-                                let quickstart_path =
-                                    specs_root.join(&spec_id).join("quickstart.md");
-                                let quickstart_md =
-                                    SpecCommand::build_quickstart_md(&spec_id, &title, &spec_md);
-                                let quickstart_written = match &quickstart_md {
-                                    Some(qs_md) => {
-                                        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                                        let qs_result = tokio::task::block_in_place(|| {
-                                            rt.block_on(async {
-                                                codemason_specs::io::SpecIo::atomic_write(
-                                                    &quickstart_path,
-                                                    qs_md,
-                                                )
-                                                .await
-                                            })
-                                        });
-                                        qs_result.is_ok()
-                                    }
-                                    None => false,
-                                };
-
-                                self.append_assistant_text(
-                                    &SpecCommand::build_tasks_completion_message(
-                                        &spec_id, task_count,
-                                    ),
-                                );
-                                self.push_log_no_agent(
-                                    crate::app::LogLevel::Info,
-                                    SpecCommand::build_tasks_log(&spec_id),
-                                );
-                                if quickstart_written {
-                                    self.status = format!(
-                                        "spec: wrote specs/{}/TASKS.md ({} tasks) + \
-                                         quickstart.md",
-                                        spec_id, task_count
-                                    );
+                                let avail_str = if available.is_empty() {
+                                    "  (none found)".to_string()
                                 } else {
-                                    self.status = format!(
-                                        "spec: wrote specs/{}/TASKS.md ({} tasks)",
-                                        spec_id, task_count
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                self.status = format!("spec: failed to write TASKS.md: {}", e);
-                                self.append_assistant_text(&format!(
-                                    "From: /spec tasks\n\n**Error:** Failed \
-                                     to write `specs/{}/TASKS.md`: {}",
-                                    spec_id, e
+                                    available.join("\n")
+                                };
+                                return Err(format!(
+                                    "Spec `{}` not found.\n\nAvailable specs:\n{}",
+                                    spec_id_owned, avail_str
                                 ));
                             }
+                        };
+                        if spec.status == codemason_specs::spec::SpecStatus::Archived {
+                            return Err(format!(
+                                "spec: '{}' is archived and cannot be updated",
+                                spec_id_owned
+                            ));
+                        }
+                        Ok((spec.spec_md, spec.plan_md, spec.title, spec.status))
+                    })
+                });
+
+                let (spec_md, plan_md, title, _status) = match result {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.status = format!("spec: {}", e);
+                        self.append_assistant_text(&format!(
+                            "From: /spec tasks\n\n**Error:** {}",
+                            e
+                        ));
+                        return std::ops::ControlFlow::Break(());
+                    }
+                };
+
+                // Check PLAN.md is not empty
+                if plan_md.trim().is_empty() {
+                    self.status = format!("spec: PLAN.md is empty for {}", spec_id);
+                    self.append_assistant_text(&SpecCommand::build_tasks_no_plan_error(&spec_id));
+                    return std::ops::ControlFlow::Break(());
+                }
+
+                // Generate TASKS.md content from the task table. A
+                // malformed table is reported as a parse error rather
+                // than silently treated as "no tasks" (FUNC-024).
+                let tasks_md = match SpecCommand::build_tasks_md(&spec_id, &title, &plan_md) {
+                    Ok(Some(md)) => md,
+                    Ok(None) => {
+                        self.status = format!("spec: no tasks found in PLAN.md for {}", spec_id);
+                        self.append_assistant_text(&SpecCommand::build_tasks_no_tasks_error(
+                            &spec_id,
+                        ));
+                        return std::ops::ControlFlow::Break(());
+                    }
+                    Err(e) => {
+                        self.status = format!("spec: PLAN.md parse error for {}", spec_id);
+                        self.append_assistant_text(&format!(
+                            "From: /spec tasks\n\n**Error:** failed to parse \
+                                     `specs/{spec_id}/PLAN.md`: {e}"
+                        ));
+                        return std::ops::ControlFlow::Break(());
+                    }
+                };
+
+                // Write TASKS.md atomically
+                let tasks_path = specs_root.join(&spec_id).join("TASKS.md");
+                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                let write_result = tokio::task::block_in_place(|| {
+                    rt.block_on(async {
+                        codemason_specs::io::SpecIo::atomic_write(&tasks_path, &tasks_md).await
+                    })
+                });
+
+                match write_result {
+                    Ok(()) => {
+                        // Count tasks for the completion message
+                        let task_count = codemason_specs::PlanParser::parse(&plan_md)
+                            .map(|t| t.len())
+                            .unwrap_or(0);
+
+                        // FR-013, T-023: also generate quickstart.md
+                        // with key validation scenarios from SPEC.md
+                        let quickstart_path = specs_root.join(&spec_id).join("quickstart.md");
+                        let quickstart_md =
+                            SpecCommand::build_quickstart_md(&spec_id, &title, &spec_md);
+                        let quickstart_written = match &quickstart_md {
+                            Some(qs_md) => {
+                                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                                let qs_result = tokio::task::block_in_place(|| {
+                                    rt.block_on(async {
+                                        codemason_specs::io::SpecIo::atomic_write(
+                                            &quickstart_path,
+                                            qs_md,
+                                        )
+                                        .await
+                                    })
+                                });
+                                qs_result.is_ok()
+                            }
+                            None => false,
+                        };
+
+                        self.append_assistant_text(&SpecCommand::build_tasks_completion_message(
+                            &spec_id, task_count,
+                        ));
+                        self.push_log_no_agent(
+                            crate::app::LogLevel::Info,
+                            SpecCommand::build_tasks_log(&spec_id),
+                        );
+                        if quickstart_written {
+                            self.status = format!(
+                                "spec: wrote specs/{}/TASKS.md ({} tasks) + \
+                                         quickstart.md",
+                                spec_id, task_count
+                            );
+                        } else {
+                            self.status = format!(
+                                "spec: wrote specs/{}/TASKS.md ({} tasks)",
+                                spec_id, task_count
+                            );
                         }
                     }
-                    SpecCommand::Feedback { spec_id, note } => {
-                        let working_dir = self.cwd_path.clone();
-                        let specs_root = working_dir.join("specs");
+                    Err(e) => {
+                        self.status = format!("spec: failed to write TASKS.md: {}", e);
+                        self.append_assistant_text(&format!(
+                            "From: /spec tasks\n\n**Error:** Failed \
+                                     to write `specs/{}/TASKS.md`: {}",
+                            spec_id, e
+                        ));
+                    }
+                }
+            }
+            SpecCommand::Feedback { spec_id, note } => {
+                let working_dir = self.cwd_path.clone();
+                let specs_root = working_dir.join("specs");
 
-                        // Validate spec ID format
-                        let sid = match codemason_specs::spec::SpecId::new(&spec_id) {
-                            Some(id) => id,
-                            None => {
-                                self.status = format!("spec: invalid spec ID: {}", spec_id);
-                                self.append_assistant_text(&format!(
-                                    "From: /spec feedback\n\n**Error:** Invalid spec ID \
+                // Validate spec ID format
+                let sid = match codemason_specs::spec::SpecId::new(&spec_id) {
+                    Some(id) => id,
+                    None => {
+                        self.status = format!("spec: invalid spec ID: {}", spec_id);
+                        self.append_assistant_text(&format!(
+                            "From: /spec feedback\n\n**Error:** Invalid spec ID \
                                      `{}`. Spec IDs must be alphanumeric with hyphens or \
                                      underscores only.",
-                                    spec_id
-                                ));
-                                return;
-                            }
-                        };
+                            spec_id
+                        ));
+                        return std::ops::ControlFlow::Break(());
+                    }
+                };
 
-                        let mgr = spec_manager();
-                        let rt = tokio::runtime::Handle::current();
+                let mgr = spec_manager();
+                let rt = tokio::runtime::Handle::current();
 
-                        // Read spec to validate it exists and get title + existing FEEDBACK.md
-                        let spec_id_owned = spec_id.clone();
-                        let note_owned = note.clone();
-                        let result: Result<(String, String), String> =
+                // Read spec to validate it exists and get title + existing FEEDBACK.md
+                let spec_id_owned = spec_id.clone();
+                let note_owned = note.clone();
+                let result: Result<(String, String), String> =
                             // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
                             tokio::task::block_in_place(|| {
                                 rt.block_on(async {
@@ -10510,498 +10770,504 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                                 })
                             });
 
-                        let (title, existing_feedback) = match result {
-                            Ok(v) => v,
-                            Err(e) => {
-                                self.status = format!("spec: {}", e);
-                                self.append_assistant_text(&format!(
-                                    "From: /spec feedback\n\n**Error:** {}",
-                                    e
-                                ));
-                                return;
-                            }
-                        };
+                let (title, existing_feedback) = match result {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.status = format!("spec: {}", e);
+                        self.append_assistant_text(&format!(
+                            "From: /spec feedback\n\n**Error:** {}",
+                            e
+                        ));
+                        return std::ops::ControlFlow::Break(());
+                    }
+                };
 
-                        // Build the updated FEEDBACK.md content
-                        let updated_feedback = SpecCommand::append_feedback_note(
-                            &existing_feedback,
-                            &title,
+                // Build the updated FEEDBACK.md content
+                let updated_feedback =
+                    SpecCommand::append_feedback_note(&existing_feedback, &title, &note_owned);
+
+                // Write FEEDBACK.md to disk
+                let feedback_path = specs_root.join(sid.dir_name()).join("FEEDBACK.md");
+                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                let write_result: Result<(), String> = tokio::task::block_in_place(|| {
+                    rt.block_on(async {
+                        codemason_specs::io::SpecIo::atomic_write(&feedback_path, &updated_feedback)
+                            .await
+                            .map_err(|e| e.to_string())
+                    })
+                });
+
+                match write_result {
+                    Ok(()) => {
+                        self.append_assistant_text(&SpecCommand::build_feedback_message(
+                            &spec_id,
                             &note_owned,
+                        ));
+                        self.push_log_no_agent(
+                            crate::app::LogLevel::Info,
+                            SpecCommand::build_feedback_log(&spec_id, &note_owned),
                         );
-
-                        // Write FEEDBACK.md to disk
-                        let feedback_path = specs_root.join(sid.dir_name()).join("FEEDBACK.md");
-                        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                        let write_result: Result<(), String> = tokio::task::block_in_place(|| {
-                            rt.block_on(async {
-                                codemason_specs::io::SpecIo::atomic_write(
-                                    &feedback_path,
-                                    &updated_feedback,
-                                )
-                                .await
-                                .map_err(|e| e.to_string())
-                            })
-                        });
-
-                        match write_result {
-                            Ok(()) => {
-                                self.append_assistant_text(&SpecCommand::build_feedback_message(
-                                    &spec_id,
-                                    &note_owned,
-                                ));
-                                self.push_log_no_agent(
-                                    crate::app::LogLevel::Info,
-                                    SpecCommand::build_feedback_log(&spec_id, &note_owned),
-                                );
-                                self.status = SpecCommand::build_feedback_status(&spec_id);
-                            }
-                            Err(e) => {
-                                self.status = format!("spec: failed to write FEEDBACK.md: {}", e);
-                                self.append_assistant_text(&format!(
-                                    "From: /spec feedback\n\n**Error:** Failed to \
+                        self.status = SpecCommand::build_feedback_status(&spec_id);
+                    }
+                    Err(e) => {
+                        self.status = format!("spec: failed to write FEEDBACK.md: {}", e);
+                        self.append_assistant_text(&format!(
+                            "From: /spec feedback\n\n**Error:** Failed to \
                                      write `specs/{}/FEEDBACK.md`: {}",
-                                    spec_id, e
-                                ));
-                            }
-                        }
-                    }
-                    SpecCommand::GovCreate {
-                        spec_id,
-                        content_ref,
-                        target_folder,
-                        scaffold,
-                        force,
-                    } => {
-                        self.run_govcreate_orchestration(
-                            spec_id,
-                            content_ref,
-                            target_folder,
-                            scaffold,
-                            force,
-                        );
-                    }
-                    SpecCommand::GovCreateUsage(reason) => {
-                        // FR-002 / FR-003: a parseable but invalid invocation
-                        // reports the specific cause alongside the dedicated
-                        // govcreate usage block (NFR-005).
-                        self.append_assistant_text(&format!(
-                            "From: /spec govcreate\n\n[err] **{reason}**\n\n{}",
-                            SpecCommand::build_govcreate_help_message()
+                            spec_id, e
                         ));
-                        self.status = "spec: govcreate usage".to_string();
-                    }
-                    SpecCommand::Reverse {
-                        repo,
-                        create,
-                        depth,
-                        scaffold,
-                        folder,
-                    } => {
-                        // The validated values are handed straight to the
-                        // reverse handler; the scaffold request and its folder
-                        // are not part of the `/reverse` flag grammar, so
-                        // rendering them back to text would drop them.
-                        self.run_spec_reverse(crate::app::reverse::build_spec_reverse_args(
-                            repo, create, depth, scaffold, folder,
-                        ));
-                    }
-                    SpecCommand::ReverseUsage(reason) => {
-                        // A parseable but invalid invocation reports the
-                        // specific cause; `reverse_help_message` already opens
-                        // with its own `From: /spec reverse` header.
-                        self.append_assistant_text(&format!(
-                            "[err] **{reason}**\n\n{}",
-                            crate::app::reverse::reverse_help_message()
-                        ));
-                        self.status = "spec: reverse usage".to_string();
                     }
                 }
             }
-            // -- /mode --------------------------------------------------------
-            "mode" => {
-                let sub = args.trim().to_lowercase();
-                if sub == "help" {
-                    self.append_assistant_text(
+            SpecCommand::GovCreate {
+                spec_id,
+                content_ref,
+                target_folder,
+                scaffold,
+                force,
+            } => {
+                self.run_govcreate_orchestration(
+                    spec_id,
+                    content_ref,
+                    target_folder,
+                    scaffold,
+                    force,
+                );
+            }
+            SpecCommand::GovCreateUsage(reason) => {
+                // FR-002 / FR-003: a parseable but invalid invocation
+                // reports the specific cause alongside the dedicated
+                // govcreate usage block (NFR-005).
+                self.append_assistant_text(&format!(
+                    "From: /spec govcreate\n\n[err] **{reason}**\n\n{}",
+                    SpecCommand::build_govcreate_help_message()
+                ));
+                self.status = "spec: govcreate usage".to_string();
+            }
+            SpecCommand::Reverse {
+                repo,
+                create,
+                depth,
+                scaffold,
+                folder,
+            } => {
+                // The validated values are handed straight to the
+                // reverse handler; the scaffold request and its folder
+                // are not part of the `/reverse` flag grammar, so
+                // rendering them back to text would drop them.
+                self.run_spec_reverse(crate::app::reverse::build_spec_reverse_args(
+                    repo, create, depth, scaffold, folder,
+                ));
+            }
+            SpecCommand::ReverseUsage(reason) => {
+                // A parseable but invalid invocation reports the
+                // specific cause; `reverse_help_message` already opens
+                // with its own `From: /spec reverse` header.
+                self.append_assistant_text(&format!(
+                    "[err] **{reason}**\n\n{}",
+                    crate::app::reverse::reverse_help_message()
+                ));
+                self.status = "spec: reverse usage".to_string();
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/mode` slash command.
+    fn slash_mode(&mut self, args: &str) {
+        let sub = args.trim().to_lowercase();
+        if sub == "help" {
+            self.append_assistant_text(
                         "From: /mode help\n\n## /mode \u{2014} Agent role mode\n\n| Subcommand | Description |\n|---|---|\n| `/mode` or `/mode status` | Show the current role mode |\n| `/mode architect` | Focus the agent on architecture and design tasks |\n| `/mode coder` | Focus the agent on implementation tasks |\n| `/mode reviewer` | Focus the agent on code review |\n| `/mode debugger` | Focus the agent on debugging and diagnosis |\n| `/mode tester` | Focus the agent on testing tasks |\n| `/mode off` (or `normal`) | Return to normal mode (no role focus) |\n| `/mode help` | Show this help |",
                     );
-                    self.status = "mode: help".to_string();
-                } else if sub.is_empty() || sub == "status" {
-                    let current = self
-                        .session
-                        .role_mode
-                        .as_ref()
-                        .map(|m| format!("{} {}", m.icon(), m.label()))
-                        .unwrap_or_else(|| "normal (no role mode active)".to_string());
-                    self.append_assistant_text(&format!(
+            self.status = "mode: help".to_string();
+        } else if sub.is_empty() || sub == "status" {
+            let current = self
+                .session
+                .role_mode
+                .as_ref()
+                .map(|m| format!("{} {}", m.icon(), m.label()))
+                .unwrap_or_else(|| "normal (no role mode active)".to_string());
+            self.append_assistant_text(&format!(
                                 "From: /mode\nCurrent mode: **{current}**\n\n\
                                 Available modes: `architect` `coder` `reviewer` `debugger` `tester`\n\
                                 Use `/mode off` to return to normal mode."
                                 ));
-                } else if sub == "off" || sub == "normal" {
-                    self.session.role_mode = None;
-                    self.status = "mode: normal".to_string();
-                    self.append_assistant_text(
-                        "From: /mode\n[ok] Role mode cleared - back to normal mode.",
-                    );
-                    self.push_log_no_agent(LogLevel::Info, "role mode cleared".to_string());
-                } else if let Some(mode) = RoleMode::from_str(&sub) {
-                    let label = mode.label().to_string();
-                    let icon = mode.icon().to_string();
-                    self.session.role_mode = Some(mode);
-                    self.status = format!("{icon} mode: {label}");
-                    self.append_assistant_text(&format!(
-                        "From: /mode\n{icon} **{label} mode** activated.\n\
+        } else if sub == "off" || sub == "normal" {
+            self.session.role_mode = None;
+            self.status = "mode: normal".to_string();
+            self.append_assistant_text(
+                "From: /mode\n[ok] Role mode cleared - back to normal mode.",
+            );
+            self.push_log_no_agent(LogLevel::Info, "role mode cleared".to_string());
+        } else if let Some(mode) = RoleMode::from_str(&sub) {
+            let label = mode.label().to_string();
+            let icon = mode.icon().to_string();
+            self.session.role_mode = Some(mode);
+            self.status = format!("{icon} mode: {label}");
+            self.append_assistant_text(&format!(
+                "From: /mode\n{icon} **{label} mode** activated.\n\
                                 The agent will now focus on {} tasks.",
-                        label
-                    ));
-                    self.push_log_no_agent(LogLevel::Info, format!("role mode: {label}"));
-                } else {
-                    self.append_assistant_text(&format!(
+                label
+            ));
+            self.push_log_no_agent(LogLevel::Info, format!("role mode: {label}"));
+        } else {
+            self.append_assistant_text(&format!(
                                 "From: /mode\nUnknown mode '{}'. \
                                 Available: `architect` `coder` `reviewer` `debugger` `tester` `off`",
                                 sub
                                 ));
-                }
-            }
-            "memory" => {
-                let project_dir = self.cwd_path.clone();
+        }
+    }
 
-                match args.trim() {
-                    "show" | "" => {
-                        // Toggle the Memory side panel (FR-008), mirroring the
-                        // `/log` and `/task` slash aliases. The textual
-                        // `/memory show` output is still appended to the chat
-                        // so users get both the transcript and the live panel.
-                        self.show_memory = !self.show_memory;
-                        if self.show_memory {
-                            // Entering Memory mode: dismiss the other side
-                            // panels so only one occupies the side column
-                            // (FR-004 mutual-exclusion policy).
-                            self.show_log = false;
-                            self.show_profile = false;
-                            self.show_tasks_panel = false;
-                            self.show_telemetry = false;
-                        }
-                        self.status = if self.show_memory {
-                            "memory panel visible".to_string()
+    /// Run the `/memory` slash command.
+    fn slash_memory(&mut self, args: &str) {
+        let project_dir = self.cwd_path.clone();
+
+        match args.trim() {
+            "show" | "" => {
+                // Toggle the Memory side panel (FR-008), mirroring the
+                // `/log` and `/task` slash aliases. The textual
+                // `/memory show` output is still appended to the chat
+                // so users get both the transcript and the live panel.
+                self.show_memory = !self.show_memory;
+                if self.show_memory {
+                    // Entering Memory mode: dismiss the other side
+                    // panels so only one occupies the side column
+                    // (FR-004 mutual-exclusion policy).
+                    self.show_log = false;
+                    self.show_profile = false;
+                    self.show_tasks_panel = false;
+                    self.show_telemetry = false;
+                }
+                self.status = if self.show_memory {
+                    "memory panel visible".to_string()
+                } else {
+                    "memory panel hidden".to_string()
+                };
+
+                let mut output = String::from("From: /memory show\n\n");
+
+                match self.storage.count_memories_for_project(&project_dir) {
+                    Ok(count) => {
+                        output.push_str(&format!("**Structured memories:** {count}\n\n"));
+                    }
+                    Err(e) => {
+                        output.push_str(&format!(
+                            "[warn] Could not read structured memories: {e}\n\n"
+                        ));
+                    }
+                }
+
+                match self.storage.list_memories_for_project(&project_dir, 50) {
+                    Ok(rows) => {
+                        if rows.is_empty() {
+                            output.push_str("(no memories for this project)\n");
                         } else {
-                            "memory panel hidden".to_string()
-                        };
-
-                        let mut output = String::from("From: /memory show\n\n");
-
-                        match self.storage.count_memories_for_project(&project_dir) {
-                            Ok(count) => {
-                                output.push_str(&format!("**Structured memories:** {count}\n\n"));
+                            let mut by_category: std::collections::BTreeMap<
+                                String,
+                                Vec<&codemason_storage::storage::MemoryRow>,
+                            > = std::collections::BTreeMap::new();
+                            for row in &rows {
+                                by_category
+                                    .entry(row.category.clone())
+                                    .or_default()
+                                    .push(row);
                             }
-                            Err(e) => {
+
+                            for (category, mems) in &by_category {
                                 output.push_str(&format!(
-                                    "[warn] Could not read structured memories: {e}\n\n"
+                                    "### {category} ({} entries)\n",
+                                    mems.len()
                                 ));
-                            }
-                        }
-
-                        match self.storage.list_memories_for_project(&project_dir, 50) {
-                            Ok(rows) => {
-                                if rows.is_empty() {
-                                    output.push_str("(no memories for this project)\n");
-                                } else {
-                                    let mut by_category: std::collections::BTreeMap<
-                                        String,
-                                        Vec<&codemason_storage::storage::MemoryRow>,
-                                    > = std::collections::BTreeMap::new();
-                                    for row in &rows {
-                                        by_category
-                                            .entry(row.category.clone())
-                                            .or_default()
-                                            .push(row);
-                                    }
-
-                                    for (category, mems) in &by_category {
-                                        output.push_str(&format!(
-                                            "### {category} ({} entries)\n",
-                                            mems.len()
-                                        ));
-                                        for row in mems {
-                                            let preview = truncate_bytes(&row.content, 120);
-                                            output.push_str(&format!(
-                                                "- **#{id}** `{conf:.2}` {preview}\n",
-                                                id = row.id,
-                                                conf = row.confidence,
-                                            ));
-                                        }
-                                        output.push_str("\n");
-                                    }
+                                for row in mems {
+                                    let preview = truncate_bytes(&row.content, 120);
+                                    output.push_str(&format!(
+                                        "- **#{id}** `{conf:.2}` {preview}\n",
+                                        id = row.id,
+                                        conf = row.confidence,
+                                    ));
                                 }
-                            }
-                            Err(e) => {
-                                output.push_str(&format!("[warn] Could not list memories: {e}\n"));
+                                output.push_str("\n");
                             }
                         }
-
-                        self.append_assistant_text(&output);
                     }
-                    "clear" => {
-                        // Open a `Yes`/`No` confirmation dialog before removing
-                        // anything. The store is emptied only when the user
-                        // confirms (handled in `input_handler.rs`).
-                        self.open_memory_clear_confirm();
-                        self.status = "confirm clearing memory".to_string();
-                    }
-                    "help" | "--help" | "-h" => {
-                        self.append_assistant_text(
-                            "From: /memory\nUsage: `/memory show` | `/memory clear` | `/memory help`",
-                        );
-                    }
-                    _ => {
-                        self.append_assistant_text(
-                            "From: /memory\nUsage: `/memory show` | `/memory clear` | `/memory help`",
-                        );
+                    Err(e) => {
+                        output.push_str(&format!("[warn] Could not list memories: {e}\n"));
                     }
                 }
-            }
 
-            "github" => match args.trim() {
-                "help" | "--help" | "-h" => {
-                    self.append_assistant_text(
+                self.append_assistant_text(&output);
+            }
+            "clear" => {
+                // Open a `Yes`/`No` confirmation dialog before removing
+                // anything. The store is emptied only when the user
+                // confirms (handled in `input_handler.rs`).
+                self.open_memory_clear_confirm();
+                self.status = "confirm clearing memory".to_string();
+            }
+            "help" | "--help" | "-h" => {
+                self.append_assistant_text(
+                    "From: /memory\nUsage: `/memory show` | `/memory clear` | `/memory help`",
+                );
+            }
+            _ => {
+                self.append_assistant_text(
+                    "From: /memory\nUsage: `/memory show` | `/memory clear` | `/memory help`",
+                );
+            }
+        }
+    }
+
+    /// Run the `/github` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    async fn slash_github(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        match args.trim() {
+            "help" | "--help" | "-h" => {
+                self.append_assistant_text(
                         "From: /github help\n\n## /github \u{2014} GitHub authentication\n\n| Subcommand | Description |\n|---|---|\n| `/github login` | Authenticate via the OAuth device flow (opens the pending dialog) |\n| `/github logout` | Remove the stored GitHub token |\n| `/github status` | Show whether a GitHub token is configured (env `GITHUB_TOKEN` or `~/.codemason/github_token`) |\n| `/github help` | Show this help |",
                     );
-                    self.status = "github: help".to_string();
-                }
-                "login" => {
-                    // Start the device flow synchronously so we can show the
-                    // same OAuth pending dialog that Copilot uses.
-                    let handle = match tokio::runtime::Handle::try_current() {
-                        Ok(h) => h,
-                        Err(_) => {
-                            self.append_assistant_text(
-                                "From: /github login\n[err] Async runtime not available.",
-                            );
-                            return;
+                self.status = "github: help".to_string();
+            }
+            "login" => {
+                // Start the device flow synchronously so we can show the
+                // same OAuth pending dialog that Copilot uses.
+                let handle = match tokio::runtime::Handle::try_current() {
+                    Ok(h) => h,
+                    Err(_) => {
+                        self.append_assistant_text(
+                            "From: /github login\n[err] Async runtime not available.",
+                        );
+                        return std::ops::ControlFlow::Break(());
+                    }
+                };
+
+                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                let start = tokio::task::block_in_place(|| {
+                    handle.block_on(codemason_agent::github::auth::start_device_flow(
+                        &codemason_agent::github::GitHubClient::client_id(),
+                    ))
+                });
+
+                let flow = match start {
+                    Ok(f) => f,
+                    Err(e) => {
+                        self.append_assistant_text(&format!(
+                            "From: /github login\n[err] Device flow failed: {e}"
+                        ));
+                        return std::ops::ControlFlow::Break(());
+                    }
+                };
+
+                let user_code = flow.user_code.clone();
+                let verification_uri = flow.verification_uri.clone();
+                let interval = std::time::Duration::from_secs(flow.interval.max(5));
+                let client_id = codemason_agent::github::GitHubClient::client_id();
+                let event_bus = self.event_bus.clone();
+                self.push_log_exported(
+                    LogLevel::Info,
+                    format!("GitHub login started - enter code {user_code} at {verification_uri}"),
+                    None,
+                    None,
+                );
+
+                self.provider_setup = Some(ProviderSetupStep::DeviceFlowPending {
+                    flow: DeviceFlowKind::GitHub,
+                    user_code,
+                    verification_uri,
+                });
+
+                // Background task: poll until authorised or expired.
+                tokio::spawn(async move {
+                    let deadline =
+                        std::time::Instant::now() + std::time::Duration::from_secs(flow.expires_in);
+                    let mut poll_interval = interval;
+                    loop {
+                        if std::time::Instant::now() > deadline {
+                            event_bus.publish(Event::GithubDeviceFlowComplete {
+                                success: false,
+                                error: Some(
+                                    "Device flow timed out - please try /github login again."
+                                        .to_string(),
+                                ),
+                            });
+                            break;
                         }
-                    };
+                        tokio::time::sleep(poll_interval).await;
 
-                    // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                    let start = tokio::task::block_in_place(|| {
-                        handle.block_on(codemason_agent::github::auth::start_device_flow(
-                            &codemason_agent::github::GitHubClient::client_id(),
-                        ))
-                    });
-
-                    let flow = match start {
-                        Ok(f) => f,
-                        Err(e) => {
-                            self.append_assistant_text(&format!(
-                                "From: /github login\n[err] Device flow failed: {e}"
-                            ));
-                            return;
-                        }
-                    };
-
-                    let user_code = flow.user_code.clone();
-                    let verification_uri = flow.verification_uri.clone();
-                    let interval = std::time::Duration::from_secs(flow.interval.max(5));
-                    let client_id = codemason_agent::github::GitHubClient::client_id();
-                    let event_bus = self.event_bus.clone();
-                    self.push_log_exported(
-                        LogLevel::Info,
-                        format!(
-                            "GitHub login started - enter code {user_code} at {verification_uri}"
-                        ),
-                        None,
-                        None,
-                    );
-
-                    self.provider_setup = Some(ProviderSetupStep::DeviceFlowPending {
-                        flow: DeviceFlowKind::GitHub,
-                        user_code,
-                        verification_uri,
-                    });
-
-                    // Background task: poll until authorised or expired.
-                    tokio::spawn(async move {
-                        let deadline = std::time::Instant::now()
-                            + std::time::Duration::from_secs(flow.expires_in);
-                        let mut poll_interval = interval;
-                        loop {
-                            if std::time::Instant::now() > deadline {
-                                event_bus.publish(Event::GithubDeviceFlowComplete {
-                                    success: false,
-                                    error: Some(
-                                        "Device flow timed out - please try /github login again."
-                                            .to_string(),
-                                    ),
-                                });
+                        match codemason_agent::github::auth::poll_device_flow(&client_id, &flow)
+                            .await
+                        {
+                            Ok(Some(token)) => {
+                                let outcome =
+                                    match codemason_agent::github::auth::save_token(&token) {
+                                        Ok(_) => Event::GithubDeviceFlowComplete {
+                                            success: true,
+                                            error: None,
+                                        },
+                                        Err(e) => Event::GithubDeviceFlowComplete {
+                                            success: false,
+                                            error: Some(format!(
+                                                "Failed to save GitHub token: {e}"
+                                            )),
+                                        },
+                                    };
+                                event_bus.publish(outcome);
                                 break;
                             }
-                            tokio::time::sleep(poll_interval).await;
-
-                            match codemason_agent::github::auth::poll_device_flow(&client_id, &flow)
-                                .await
-                            {
-                                Ok(Some(token)) => {
-                                    let outcome =
-                                        match codemason_agent::github::auth::save_token(&token) {
-                                            Ok(_) => Event::GithubDeviceFlowComplete {
-                                                success: true,
-                                                error: None,
-                                            },
-                                            Err(e) => Event::GithubDeviceFlowComplete {
-                                                success: false,
-                                                error: Some(format!(
-                                                    "Failed to save GitHub token: {e}"
-                                                )),
-                                            },
-                                        };
-                                    event_bus.publish(outcome);
+                            Ok(None) => {}
+                            Err(e) => {
+                                let msg = e.to_string();
+                                if msg.contains("slow_down") {
+                                    poll_interval += std::time::Duration::from_secs(5);
+                                } else {
+                                    event_bus.publish(Event::GithubDeviceFlowComplete {
+                                        success: false,
+                                        error: Some(msg),
+                                    });
                                     break;
-                                }
-                                Ok(None) => {}
-                                Err(e) => {
-                                    let msg = e.to_string();
-                                    if msg.contains("slow_down") {
-                                        poll_interval += std::time::Duration::from_secs(5);
-                                    } else {
-                                        event_bus.publish(Event::GithubDeviceFlowComplete {
-                                            success: false,
-                                            error: Some(msg),
-                                        });
-                                        break;
-                                    }
                                 }
                             }
                         }
-                    });
-                }
-                "logout" => match codemason_agent::github::auth::delete_token() {
-                    Ok(_) => {
-                        self.append_assistant_text("From: /github\n[ok] GitHub token removed.")
                     }
-                    Err(e) => self.append_assistant_text(&format!(
-                        "From: /github\n[err] Failed to remove token: {e}"
-                    )),
-                },
-                "status" | "" => match codemason_agent::github::auth::load_token() {
-                    Some(_) => {
-                        self.append_assistant_text(
+                });
+            }
+            "logout" => match codemason_agent::github::auth::delete_token() {
+                Ok(_) => self.append_assistant_text("From: /github\n[ok] GitHub token removed."),
+                Err(e) => self.append_assistant_text(&format!(
+                    "From: /github\n[err] Failed to remove token: {e}"
+                )),
+            },
+            "status" | "" => match codemason_agent::github::auth::load_token() {
+                Some(_) => {
+                    self.append_assistant_text(
                                                   "From: /github\n[ok] GitHub token configured. (GITHUB_TOKEN env or ~/.codemason/github_token)",
                                               );
-                    }
-                    None => {
-                        self.append_assistant_text(
+                }
+                None => {
+                    self.append_assistant_text(
                                                   "From: /github\n[err] No GitHub token configured.\n\nRun `/github login` to authenticate via OAuth device flow.",
                                               );
-                    }
-                },
-                _ => {
-                    self.append_assistant_text(
-                                          "From: /github\nUsage: `/github login` | `/github logout` | `/github status` | `/github help`",
-                                      );
                 }
             },
-            "gitlab" => match args.trim() {
-                "help" | "--help" | "-h" => {
-                    self.append_assistant_text(
+            _ => {
+                self.append_assistant_text(
+                                          "From: /github\nUsage: `/github login` | `/github logout` | `/github status` | `/github help`",
+                                      );
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/gitlab` slash command.
+    fn slash_gitlab(&mut self, args: &str) {
+        match args.trim() {
+            "help" | "--help" | "-h" => {
+                self.append_assistant_text(
                         "From: /gitlab help\n\n## /gitlab \u{2014} GitLab authentication\n\n| Subcommand | Description |\n|---|---|\n| `/gitlab setup` | Open the setup dialog for instance URL, username, and personal access token |\n| `/gitlab logout` | Remove the stored token and config |\n| `/gitlab status` | Show the current GitLab configuration state |\n| `/gitlab help` | Show this help |",
                     );
-                    self.status = "gitlab: help".to_string();
-                }
-                "setup" => {
-                    // Pre-fill from existing config if available
-                    let (url, _user) = {
-                        let storage = &self.storage;
-                        let cfg = codemason_agent::gitlab::auth::load_config(storage.as_ref());
-                        match cfg {
-                            Some(c) => (c.instance_url, c.username),
-                            None => ("https://gitlab.com".to_string(), String::new()),
-                        }
-                    };
-                    self.provider_setup = Some(ProviderSetupStep::GitLabSetup {
-                        url_input: url,
-                        url_cursor: 0,
-                        token_input: String::new(),
-                        token_cursor: 0,
-                        active_field: 0,
-                        error: None,
-                    });
-                }
-                "logout" => {
+                self.status = "gitlab: help".to_string();
+            }
+            "setup" => {
+                // Pre-fill from existing config if available
+                let (url, _user) = {
                     let storage = &self.storage;
-                    let mut msgs = Vec::new();
-                    if let Err(e) = codemason_agent::gitlab::auth::delete_token(storage.as_ref()) {
-                        msgs.push(format!("[err] Failed to remove token: {e}"));
+                    let cfg = codemason_agent::gitlab::auth::load_config(storage.as_ref());
+                    match cfg {
+                        Some(c) => (c.instance_url, c.username),
+                        None => ("https://gitlab.com".to_string(), String::new()),
                     }
-                    if let Err(e) = codemason_agent::gitlab::auth::delete_config(storage.as_ref()) {
-                        msgs.push(format!("[err] Failed to remove config: {e}"));
-                    }
-                    if msgs.is_empty() {
-                        self.append_assistant_text(
-                            "From: /gitlab\n[ok] GitLab configuration and token removed.",
-                        );
-                    } else {
-                        self.append_assistant_text(&format!("From: /gitlab\n{}", msgs.join("\n")));
-                    }
+                };
+                self.provider_setup = Some(ProviderSetupStep::GitLabSetup {
+                    url_input: url,
+                    url_cursor: 0,
+                    token_input: String::new(),
+                    token_cursor: 0,
+                    active_field: 0,
+                    error: None,
+                });
+            }
+            "logout" => {
+                let storage = &self.storage;
+                let mut msgs = Vec::new();
+                if let Err(e) = codemason_agent::gitlab::auth::delete_token(storage.as_ref()) {
+                    msgs.push(format!("[err] Failed to remove token: {e}"));
                 }
-                "status" | "" => {
-                    let storage = &self.storage;
-                    let config = codemason_agent::gitlab::auth::load_config(storage.as_ref());
-                    let token = codemason_agent::gitlab::auth::load_token(storage.as_ref());
-                    match (config, token) {
-                        (Some(cfg), Some(_)) => {
-                            self.append_assistant_text(&format!(
-                                "From: /gitlab\n[ok] GitLab configured\n\n\
+                if let Err(e) = codemason_agent::gitlab::auth::delete_config(storage.as_ref()) {
+                    msgs.push(format!("[err] Failed to remove config: {e}"));
+                }
+                if msgs.is_empty() {
+                    self.append_assistant_text(
+                        "From: /gitlab\n[ok] GitLab configuration and token removed.",
+                    );
+                } else {
+                    self.append_assistant_text(&format!("From: /gitlab\n{}", msgs.join("\n")));
+                }
+            }
+            "status" | "" => {
+                let storage = &self.storage;
+                let config = codemason_agent::gitlab::auth::load_config(storage.as_ref());
+                let token = codemason_agent::gitlab::auth::load_token(storage.as_ref());
+                match (config, token) {
+                    (Some(cfg), Some(_)) => {
+                        self.append_assistant_text(&format!(
+                            "From: /gitlab\n[ok] GitLab configured\n\n\
                                  **Instance**: {}  \n\
                                  **Username**: {}  \n\
                                  **Token**: [ok] configured",
-                                cfg.instance_url, cfg.username
-                            ));
-                        }
-                        (Some(cfg), None) => {
-                            self.append_assistant_text(&format!(
-                                "From: /gitlab\n[warn]  GitLab partially configured\n\n\
+                            cfg.instance_url, cfg.username
+                        ));
+                    }
+                    (Some(cfg), None) => {
+                        self.append_assistant_text(&format!(
+                            "From: /gitlab\n[warn]  GitLab partially configured\n\n\
                                  **Instance**: {}  \n\
                                  **Username**: {}  \n\
                                  **Token**: [err] not set\n\n\
                                  Run `/gitlab setup` to complete configuration.",
-                                cfg.instance_url, cfg.username
-                            ));
-                        }
-                        _ => {
-                            self.append_assistant_text(
+                            cfg.instance_url, cfg.username
+                        ));
+                    }
+                    _ => {
+                        self.append_assistant_text(
                                 "From: /gitlab\n[err] GitLab not configured.\n\n\
                                  Run `/gitlab setup` to configure instance URL, username, and token.",
                             );
-                        }
                     }
                 }
-                _ => {
-                    self.append_assistant_text(
+            }
+            _ => {
+                self.append_assistant_text(
                         "From: /gitlab\nUsage: `/gitlab setup` | `/gitlab logout` | `/gitlab status` | `/gitlab help`",
                     );
-                }
-            },
+            }
+        }
+    }
 
-            "update" => match args.trim() {
-                "help" | "--help" | "-h" => {
-                    self.append_assistant_text(
+    /// Run the `/update` slash command.
+    async fn slash_update(&mut self, args: &str) {
+        match args.trim() {
+            "help" | "--help" | "-h" => {
+                self.append_assistant_text(
                         "From: /update help\n\n## /update \u{2014} Self-update check and install\n\n| Subcommand | Description |\n|---|---|\n| `/update` | Check the latest GitHub release and report whether an update is available |\n| `/update install` | Download and replace the running binary, then restart codemason |\n| `/update help` | Show this help |",
                     );
-                    self.status = "update: help".to_string();
-                }
-                "install" => {
-                    self.append_assistant_text(
-                        "From: /update install\nv Downloading latest release...",
-                    );
-                    let event_bus = self.event_bus.clone();
-                    let sid = self.session.session_id.clone().unwrap_or_default();
-                    tokio::spawn(async move {
-                        match codemason_agent::updater::check_for_update().await {
-                            Some(info) => match info.download_url {
-                                Some(ref url) => {
-                                    match codemason_agent::updater::download_and_replace(url).await
-                                    {
-                                        Ok(()) => {
-                                            event_bus.publish(
+                self.status = "update: help".to_string();
+            }
+            "install" => {
+                self.append_assistant_text(
+                    "From: /update install\nv Downloading latest release...",
+                );
+                let event_bus = self.event_bus.clone();
+                let sid = self.session.session_id.clone().unwrap_or_default();
+                tokio::spawn(async move {
+                    match codemason_agent::updater::check_for_update().await {
+                        Some(info) => match info.download_url {
+                            Some(ref url) => {
+                                match codemason_agent::updater::download_and_replace(url).await {
+                                    Ok(()) => {
+                                        event_bus.publish(
                                                     codemason_agent::event::Event::AgentError {
                                                         session_id: sid,
                                                         error: format!(
@@ -11010,387 +11276,389 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                                                         ),
                                                     },
                                                 );
-                                        }
-                                        Err(e) => {
-                                            event_bus.publish(
-                                                codemason_agent::event::Event::AgentError {
-                                                    session_id: sid,
-                                                    error: format!("[err] Install failed: {e}"),
-                                                },
-                                            );
-                                        }
+                                    }
+                                    Err(e) => {
+                                        event_bus.publish(
+                                            codemason_agent::event::Event::AgentError {
+                                                session_id: sid,
+                                                error: format!("[err] Install failed: {e}"),
+                                            },
+                                        );
                                     }
                                 }
-                                None => {
-                                    event_bus.publish(codemason_agent::event::Event::AgentError {
+                            }
+                            None => {
+                                event_bus.publish(codemason_agent::event::Event::AgentError {
                                             session_id: sid,
                                             error: format!(
                                                 "[warn]  Update v{} found but no binary available for this platform.\n\nVisit https://github.com/thawkins/codemason/releases to download manually.",
                                                 info.version
                                             ),
                                         });
-                                }
-                            },
-                            None => {
-                                event_bus.publish(codemason_agent::event::Event::AgentError {
-                                    session_id: sid,
-                                    error: format!(
-                                        "[ok] Already up to date (v{}).",
-                                        codemason_agent::updater::CURRENT_VERSION
-                                    ),
-                                });
                             }
+                        },
+                        None => {
+                            event_bus.publish(codemason_agent::event::Event::AgentError {
+                                session_id: sid,
+                                error: format!(
+                                    "[ok] Already up to date (v{}).",
+                                    codemason_agent::updater::CURRENT_VERSION
+                                ),
+                            });
                         }
-                    });
-                }
-                _ => {
-                    self.append_assistant_text("From: /update\n[search] Checking for updates...");
-                    let event_bus = self.event_bus.clone();
-                    let sid = self.session.session_id.clone().unwrap_or_default();
-                    tokio::spawn(async move {
-                        match codemason_agent::updater::check_for_update().await {
-                            Some(info) => {
-                                let notes = if info.body.is_empty() {
-                                    "No release notes.".to_string()
-                                } else {
-                                    info.body.chars().take(500).collect::<String>()
-                                };
-                                event_bus.publish(codemason_agent::event::Event::AgentError {
+                    }
+                });
+            }
+            _ => {
+                self.append_assistant_text("From: /update\n[search] Checking for updates...");
+                let event_bus = self.event_bus.clone();
+                let sid = self.session.session_id.clone().unwrap_or_default();
+                tokio::spawn(async move {
+                    match codemason_agent::updater::check_for_update().await {
+                        Some(info) => {
+                            let notes = if info.body.is_empty() {
+                                "No release notes.".to_string()
+                            } else {
+                                info.body.chars().take(500).collect::<String>()
+                            };
+                            event_bus.publish(codemason_agent::event::Event::AgentError {
                                         session_id: sid,
                                         error: format!(
                                             "[new] Update available: **v{}**\n\n{}\n\nRun `/update install` to install.",
                                             info.version, notes
                                         ),
                                     });
-                            }
-                            None => {
-                                event_bus.publish(codemason_agent::event::Event::AgentError {
-                                    session_id: sid,
-                                    error: format!(
-                                        "[ok] codemason is up to date (v{}).",
-                                        codemason_agent::updater::CURRENT_VERSION
-                                    ),
-                                });
-                            }
                         }
-                    });
-                }
-            },
+                        None => {
+                            event_bus.publish(codemason_agent::event::Event::AgentError {
+                                session_id: sid,
+                                error: format!(
+                                    "[ok] codemason is up to date (v{}).",
+                                    codemason_agent::updater::CURRENT_VERSION
+                                ),
+                            });
+                        }
+                    }
+                });
+            }
+        }
+    }
 
-            "doctor" => {
-                if is_help_args(args) {
-                    self.append_assistant_text(&crate::app::helpers::from_cmd(
+    /// Run the `/doctor` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    async fn slash_doctor(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        if is_help_args(args) {
+            self.append_assistant_text(&crate::app::helpers::from_cmd(
                         "doctor help",
                         "## /doctor - System diagnostics\n\n| Subcommand | Description |\n|---|---|\n| `/doctor` | Check git, ripgrep, GitHub token, config, and other environment prerequisites, then print a diagnostic report |\n| `/doctor help` | Show this help |",
                     ));
-                    self.status = "doctor: help".to_string();
-                    return;
+            self.status = "doctor: help".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+        self.append_assistant_text("From: /doctor\n[stethoscope] Running diagnostics...");
+        let event_bus = self.event_bus.clone();
+        let sid = self.session.session_id.clone().unwrap_or_default();
+        let working_dir = self.cwd_path.clone();
+        let storage = self.storage.clone();
+        let configured_provider = self.configured_provider.clone();
+        let selected_model = self.session.selected_model.clone();
+        let provider_health = self.session.provider_health.clone();
+        let code_index = self.code_index.clone();
+        let code_index_enabled = self.code_index_enabled;
+        let db_path = self.db_path.clone();
+        tokio::spawn(async move {
+            let mut lines = vec!["From: /doctor\n# Diagnostic Report\n".to_string()];
+
+            // Check git
+            let git_ok = std::process::Command::new("git")
+                .args(["--version"])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            lines.push(format!("{} git", if git_ok { "[ok]" } else { "[err]" }));
+
+            // Check ripgrep
+            let rg_ok = std::process::Command::new("rg")
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            lines.push(format!(
+                "{} ripgrep (rg)",
+                if rg_ok {
+                    "[ok]"
+                } else {
+                    "[err] ripgrep not found - install at https://github.com/BurntSushi/ripgrep"
                 }
-                self.append_assistant_text("From: /doctor\n[stethoscope] Running diagnostics...");
-                let event_bus = self.event_bus.clone();
-                let sid = self.session.session_id.clone().unwrap_or_default();
-                let working_dir = self.cwd_path.clone();
-                let storage = self.storage.clone();
-                let configured_provider = self.configured_provider.clone();
-                let selected_model = self.session.selected_model.clone();
-                let provider_health = self.session.provider_health.clone();
-                let code_index = self.code_index.clone();
-                let code_index_enabled = self.code_index_enabled;
-                let db_path = self.db_path.clone();
-                tokio::spawn(async move {
-                    let mut lines = vec!["From: /doctor\n# Diagnostic Report\n".to_string()];
+            ));
 
-                    // Check git
-                    let git_ok = std::process::Command::new("git")
-                        .args(["--version"])
-                        .output()
-                        .map(|o| o.status.success())
-                        .unwrap_or(false);
-                    lines.push(format!("{} git", if git_ok { "[ok]" } else { "[err]" }));
+            // Check GitHub token
+            let gh_ok = codemason_agent::github::auth::load_token().is_some();
+            lines.push(format!(
+                "{} GitHub token",
+                if gh_ok {
+                    "[ok]"
+                } else {
+                    "[warn]  no GitHub token - run /github login"
+                }
+            ));
 
-                    // Check ripgrep
-                    let rg_ok = std::process::Command::new("rg")
-                        .arg("--version")
-                        .output()
-                        .map(|o| o.status.success())
-                        .unwrap_or(false);
-                    lines.push(format!(
-                        "{} ripgrep (rg)",
-                        if rg_ok {
-                            "[ok]"
-                        } else {
-                            "[err] ripgrep not found - install at https://github.com/BurntSushi/ripgrep"
-                        }
-                    ));
-
-                    // Check GitHub token
-                    let gh_ok = codemason_agent::github::auth::load_token().is_some();
-                    lines.push(format!(
-                        "{} GitHub token",
-                        if gh_ok {
-                            "[ok]"
-                        } else {
-                            "[warn]  no GitHub token - run /github login"
-                        }
-                    ));
-
-                    // Check config parse/load
-                    let (config_ok, config_detail) =
-                        match codemason_agent::Config::load_for(&working_dir) {
-                            Ok(cfg) => {
-                                let paths = cfg.config_paths;
-                                if paths.is_empty() {
-                                    (true, "using compiled defaults".to_string())
-                                } else {
-                                    (true, format!("loaded {} config file(s)", paths.len()))
-                                }
-                            }
-                            Err(e) => (false, format!("parse error: {e:#}")),
-                        };
-                    lines.push(format!(
-                        "{} codemason config ({})",
-                        if config_ok { "[ok]" } else { "[err]" },
-                        config_detail
-                    ));
-
-                    // Check storage / SQLite health
-                    let storage_detail = match storage.journal_mode() {
-                        Ok(mode) => format!("SQLite journal_mode={mode}"),
-                        Err(e) => format!("SQLite error: {e:#}"),
-                    };
-                    lines.push(format!(
-                        "{} storage database\n  {} ({})",
-                        if storage_detail.starts_with("SQLite error") {
-                            "[err]"
-                        } else {
-                            "[ok]"
-                        },
-                        storage_detail,
-                        db_path.display()
-                    ));
-
-                    // Check active provider / model
-                    if let Some(ref prov) = configured_provider {
-                        let prov_source = match prov.source {
-                            ProviderSource::EnvVar => "env",
-                            ProviderSource::Database => "database",
-                            ProviderSource::AutoDiscovered => "auto-discovered",
-                        };
-                        let health_icon = match provider_health.load(Ordering::Relaxed) {
-                            1 => " [ok] reachable",
-                            2 => " [err] unreachable",
-                            _ => " [wait] health check pending",
-                        };
-                        let model_line = selected_model
-                            .as_deref()
-                            .map(|m| format!("model={m}"))
-                            .unwrap_or_else(|| "no explicit model".to_string());
-                        lines.push(format!(
-                            "[ok] provider: {} ({} via {prov_source})\n  {model_line}{health_icon}",
-                            prov.name, prov.id
-                        ));
+            // Check config parse/load
+            let (config_ok, config_detail) = match codemason_agent::Config::load_for(&working_dir) {
+                Ok(cfg) => {
+                    let paths = cfg.config_paths;
+                    if paths.is_empty() {
+                        (true, "using compiled defaults".to_string())
                     } else {
-                        lines.push(format!(
-                            "[warn]  no provider configured - run /provider or set an API-key env var"
-                        ));
+                        (true, format!("loaded {} config file(s)", paths.len()))
                     }
+                }
+                Err(e) => (false, format!("parse error: {e:#}")),
+            };
+            lines.push(format!(
+                "{} codemason config ({})",
+                if config_ok { "[ok]" } else { "[err]" },
+                config_detail
+            ));
 
-                    // Check memory dirs
-                    let memory_dir_ok = codemason_config::user_dirs::global_memory_dir()
-                        .and_then(|p| std::fs::create_dir_all(&p).ok());
-                    lines.push(format!(
-                        "{} memory directory (~/.config/codemason/memory/)",
-                        if memory_dir_ok.is_some() {
-                            "[ok]"
-                        } else {
-                            "[err]"
-                        }
-                    ));
+            // Check storage / SQLite health
+            let storage_detail = match storage.journal_mode() {
+                Ok(mode) => format!("SQLite journal_mode={mode}"),
+                Err(e) => format!("SQLite error: {e:#}"),
+            };
+            lines.push(format!(
+                "{} storage database\n  {} ({})",
+                if storage_detail.starts_with("SQLite error") {
+                    "[err]"
+                } else {
+                    "[ok]"
+                },
+                storage_detail,
+                db_path.display()
+            ));
 
-                    // Check memory system config
-                    let memory_config = codemason_agent::Config::load_for(&working_dir)
-                        .map(|c| c.memory)
-                        .unwrap_or_default();
-                    lines.push(format!(
-                        "{} memory system (blocks={}, structured={})",
-                        if memory_config.enabled {
-                            "[ok]"
-                        } else {
-                            "[i]  disabled"
-                        },
-                        if memory_config.enabled {
-                            "enabled"
-                        } else {
-                            "disabled"
-                        },
-                        if memory_config.structured.enabled {
-                            "enabled"
-                        } else {
-                            "disabled"
-                        }
-                    ));
-
-                    // Check project .codemason dir
-                    let project_codemason_ok =
-                        std::fs::create_dir_all(working_dir.join(".codemason")).is_ok();
-                    lines.push(format!(
-                        "{} project .codemason/ directory",
-                        if project_codemason_ok {
-                            "[ok]"
-                        } else {
-                            "[err]"
-                        }
-                    ));
-
-                    // Check AGENTS.md / instruction files
-                    let (_agents_md, discovery) =
-                        codemason_agent::agent::collect_agents_md_content_with_discovery(
-                            &working_dir,
-                        );
-                    match discovery.loaded_file {
-                        Some(ref path) => {
-                            let rel = path
-                                .strip_prefix(&working_dir)
-                                .unwrap_or(path)
-                                .display()
-                                .to_string();
-                            let source = if discovery.used_global_fallback {
-                                " (global fallback)"
-                            } else {
-                                ""
-                            };
-                            lines.push(format!("[ok] project guidelines loaded: {rel}{source}"));
-                        }
-                        None => {
-                            lines.push(format!(
-                                "[i]  no AGENTS.md / instruction file found (optional)"
-                            ));
-                        }
-                    }
-
-                    // Check MCP config (field is `mcp`)
-                    let mcp_configured = codemason_agent::Config::load_for(&working_dir)
-                        .map(|c| !c.mcp.is_empty())
-                        .unwrap_or(false);
-                    lines.push(format!(
-                        "{} MCP servers configured",
-                        if mcp_configured {
-                            "[ok]"
-                        } else {
-                            "[i]  no MCP servers configured (optional)"
-                        }
-                    ));
-
-                    // Check tool registry
-                    let registry = codemason_agent::tool::create_default_registry();
-                    let tool_count = registry.list().len();
-                    lines.push(format!("[ok] tool registry loaded ({} tools)", tool_count));
-
-                    // Check code index
-                    if code_index_enabled {
-                        if let Some(idx) = code_index {
-                            match idx.try_status() {
-                                Some(stats) => {
-                                    lines.push(format!(
-                                        "[ok] code index: {} files, {} symbols, {:.1} KB",
-                                        stats.files_indexed,
-                                        stats.total_symbols,
-                                        stats.index_size_bytes as f64 / 1024.0
-                                    ));
-                                }
-                                None => {
-                                    lines.push(format!(
-                                        "[wait] code index: enabled, status busy/locked"
-                                    ));
-                                }
-                            }
-                        } else {
-                            lines
-                                .push(format!("[warn]  code index: enabled but no index instance"));
-                        }
-                    } else {
-                        lines.push(format!(
-                            "[i]  code index: disabled (use /codeindex on to enable)"
-                        ));
-                    }
-
-                    // Check for update
-                    lines.push("\n**Checking for updates...**".to_string());
-                    let update_msg = match codemason_agent::updater::check_for_update().await {
-                        Some(info) => format!("[warn]  Update available: v{}", info.version),
-                        None => {
-                            format!(
-                                "[ok] Up to date (v{})",
-                                codemason_agent::updater::CURRENT_VERSION
-                            )
-                        }
-                    };
-                    lines.push(update_msg);
-
-                    lines.push("\n*Diagnostics complete.*".to_string());
-
-                    // Diagnostics are a normal status report, not an error.
-                    // Use AgentNotice so the TUI shows the report in the chat
-                    // panel without setting the status bar to "error:".
-                    event_bus.publish(codemason_agent::event::Event::AgentNotice {
-                        session_id: sid,
-                        message: lines.join("\n"),
-                    });
-                });
+            // Check active provider / model
+            if let Some(ref prov) = configured_provider {
+                let prov_source = match prov.source {
+                    ProviderSource::EnvVar => "env",
+                    ProviderSource::Database => "database",
+                    ProviderSource::AutoDiscovered => "auto-discovered",
+                };
+                let health_icon = match provider_health.load(Ordering::Relaxed) {
+                    1 => " [ok] reachable",
+                    2 => " [err] unreachable",
+                    _ => " [wait] health check pending",
+                };
+                let model_line = selected_model
+                    .as_deref()
+                    .map(|m| format!("model={m}"))
+                    .unwrap_or_else(|| "no explicit model".to_string());
+                lines.push(format!(
+                    "[ok] provider: {} ({} via {prov_source})\n  {model_line}{health_icon}",
+                    prov.name, prov.id
+                ));
+            } else {
+                lines.push(format!(
+                    "[warn]  no provider configured - run /provider or set an API-key env var"
+                ));
             }
 
-            "webapi" => match args.trim() {
-                "enable" | "start" => {
-                    if self.webapi_server.is_some() {
-                        let addr = self.webapi_addr.clone();
-                        self.append_assistant_text(&format!(
+            // Check memory dirs
+            let memory_dir_ok = codemason_config::user_dirs::global_memory_dir()
+                .and_then(|p| std::fs::create_dir_all(&p).ok());
+            lines.push(format!(
+                "{} memory directory (~/.config/codemason/memory/)",
+                if memory_dir_ok.is_some() {
+                    "[ok]"
+                } else {
+                    "[err]"
+                }
+            ));
+
+            // Check memory system config
+            let memory_config = codemason_agent::Config::load_for(&working_dir)
+                .map(|c| c.memory)
+                .unwrap_or_default();
+            lines.push(format!(
+                "{} memory system (blocks={}, structured={})",
+                if memory_config.enabled {
+                    "[ok]"
+                } else {
+                    "[i]  disabled"
+                },
+                if memory_config.enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+                if memory_config.structured.enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            ));
+
+            // Check project .codemason dir
+            let project_codemason_ok =
+                std::fs::create_dir_all(working_dir.join(".codemason")).is_ok();
+            lines.push(format!(
+                "{} project .codemason/ directory",
+                if project_codemason_ok {
+                    "[ok]"
+                } else {
+                    "[err]"
+                }
+            ));
+
+            // Check AGENTS.md / instruction files
+            let (_agents_md, discovery) =
+                codemason_agent::agent::collect_agents_md_content_with_discovery(&working_dir);
+            match discovery.loaded_file {
+                Some(ref path) => {
+                    let rel = path
+                        .strip_prefix(&working_dir)
+                        .unwrap_or(path)
+                        .display()
+                        .to_string();
+                    let source = if discovery.used_global_fallback {
+                        " (global fallback)"
+                    } else {
+                        ""
+                    };
+                    lines.push(format!("[ok] project guidelines loaded: {rel}{source}"));
+                }
+                None => {
+                    lines.push(format!(
+                        "[i]  no AGENTS.md / instruction file found (optional)"
+                    ));
+                }
+            }
+
+            // Check MCP config (field is `mcp`)
+            let mcp_configured = codemason_agent::Config::load_for(&working_dir)
+                .map(|c| !c.mcp.is_empty())
+                .unwrap_or(false);
+            lines.push(format!(
+                "{} MCP servers configured",
+                if mcp_configured {
+                    "[ok]"
+                } else {
+                    "[i]  no MCP servers configured (optional)"
+                }
+            ));
+
+            // Check tool registry
+            let registry = codemason_agent::tool::create_default_registry();
+            let tool_count = registry.list().len();
+            lines.push(format!("[ok] tool registry loaded ({} tools)", tool_count));
+
+            // Check code index
+            if code_index_enabled {
+                if let Some(idx) = code_index {
+                    match idx.try_status() {
+                        Some(stats) => {
+                            lines.push(format!(
+                                "[ok] code index: {} files, {} symbols, {:.1} KB",
+                                stats.files_indexed,
+                                stats.total_symbols,
+                                stats.index_size_bytes as f64 / 1024.0
+                            ));
+                        }
+                        None => {
+                            lines.push(format!("[wait] code index: enabled, status busy/locked"));
+                        }
+                    }
+                } else {
+                    lines.push(format!("[warn]  code index: enabled but no index instance"));
+                }
+            } else {
+                lines.push(format!(
+                    "[i]  code index: disabled (use /codeindex on to enable)"
+                ));
+            }
+
+            // Check for update
+            lines.push("\n**Checking for updates...**".to_string());
+            let update_msg = match codemason_agent::updater::check_for_update().await {
+                Some(info) => format!("[warn]  Update available: v{}", info.version),
+                None => {
+                    format!(
+                        "[ok] Up to date (v{})",
+                        codemason_agent::updater::CURRENT_VERSION
+                    )
+                }
+            };
+            lines.push(update_msg);
+
+            lines.push("\n*Diagnostics complete.*".to_string());
+
+            // Diagnostics are a normal status report, not an error.
+            // Use AgentNotice so the TUI shows the report in the chat
+            // panel without setting the status bar to "error:".
+            event_bus.publish(codemason_agent::event::Event::AgentNotice {
+                session_id: sid,
+                message: lines.join("\n"),
+            });
+        });
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/webapi` slash command.
+    async fn slash_webapi(&mut self, args: &str) {
+        match args.trim() {
+            "enable" | "start" => {
+                if self.webapi_server.is_some() {
+                    let addr = self.webapi_addr.clone();
+                    self.append_assistant_text(&format!(
                                 "[warn] Web API is already running at http://{addr}\n\nRun `/webapi disable` to stop it."
                             ));
-                    } else {
-                        use rand::RngExt;
-                        use rand::distr::Alphanumeric;
-                        let token: String = rand::rng()
-                            .sample_iter(&Alphanumeric)
-                            .take(40)
-                            .map(char::from)
-                            .collect();
-                        // SEC-081: register the bearer token before it is
-                        // interpolated into the chat transcript (and thus the log
-                        // spool), so every render path masks it as `[REDACTED]`.
-                        codemason_types::sanitize::register_secret(&token);
-                        self.webapi_token = Some(token.clone());
-                        let addr = self.webapi_addr.clone();
+                } else {
+                    use rand::RngExt;
+                    use rand::distr::Alphanumeric;
+                    let token: String = rand::rng()
+                        .sample_iter(&Alphanumeric)
+                        .take(40)
+                        .map(char::from)
+                        .collect();
+                    // SEC-081: register the bearer token before it is
+                    // interpolated into the chat transcript (and thus the log
+                    // spool), so every render path masks it as `[REDACTED]`.
+                    codemason_types::sanitize::register_secret(&token);
+                    self.webapi_token = Some(token.clone());
+                    let addr = self.webapi_addr.clone();
 
-                        let config =
-                            codemason_agent::Config::load_for(&self.cwd_path).unwrap_or_default();
-                        let app_state = codemason_server::routes::AppState {
-                            event_bus: self.event_bus.clone(),
-                            config: std::sync::Arc::new(tokio::sync::RwLock::new(config)),
-                            storage: self.storage.clone(),
-                            session_processor: self.session_processor.clone(),
-                            auth_token: token.clone(),
-                            rate_limiter: std::sync::Arc::new(tokio::sync::Mutex::new(
-                                std::collections::HashMap::new(),
-                            )),
-                            coordinator: None,
-                            research_runs: std::sync::Arc::new(tokio::sync::Mutex::new(
-                                std::collections::HashMap::new(),
-                            )),
-                            research_root: std::sync::Arc::new(self.cwd_path.join("research")),
-                            worktree_root: std::sync::Arc::new(self.session_worktree_root()),
-                        };
+                    let config =
+                        codemason_agent::Config::load_for(&self.cwd_path).unwrap_or_default();
+                    let app_state = codemason_server::routes::AppState {
+                        event_bus: self.event_bus.clone(),
+                        config: std::sync::Arc::new(tokio::sync::RwLock::new(config)),
+                        storage: self.storage.clone(),
+                        session_processor: self.session_processor.clone(),
+                        auth_token: token.clone(),
+                        rate_limiter: std::sync::Arc::new(tokio::sync::Mutex::new(
+                            std::collections::HashMap::new(),
+                        )),
+                        coordinator: None,
+                        research_runs: std::sync::Arc::new(tokio::sync::Mutex::new(
+                            std::collections::HashMap::new(),
+                        )),
+                        research_root: std::sync::Arc::new(self.cwd_path.join("research")),
+                        worktree_root: std::sync::Arc::new(self.session_worktree_root()),
+                    };
 
-                        let addr_clone = addr.clone();
-                        let handle = tokio::spawn(async move {
-                            if let Err(e) =
-                                codemason_server::routes::start_server(&addr_clone, app_state).await
-                            {
-                                tracing::error!("Web API server error: {e}");
-                            }
-                        });
-                        self.webapi_server = Some(handle);
+                    let addr_clone = addr.clone();
+                    let handle = tokio::spawn(async move {
+                        if let Err(e) =
+                            codemason_server::routes::start_server(&addr_clone, app_state).await
+                        {
+                            tracing::error!("Web API server error: {e}");
+                        }
+                    });
+                    self.webapi_server = Some(handle);
 
-                        self.append_assistant_text(&format!(
+                    self.append_assistant_text(&format!(
                                                       "[ok] **Web API enabled** at `http://{addr}`\n\n\
                                                           **Bearer Token:**\n```\n{token}\n```\n\
                                                           Include this token in all API requests (except `/health`):\n\
@@ -11404,48 +11672,48 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                                                           ```\n\n\
                                                           Run `/webapi help` to see all endpoints."
                                                   ));
-                    }
                 }
-                "disable" | "stop" => {
-                    if let Some(handle) = self.webapi_server.take() {
-                        handle.abort();
-                        // SEC-081: drop the now-dead token from the redaction
-                        // registry so it does not linger process-wide.
-                        if let Some(token) = self.webapi_token.take() {
-                            codemason_types::sanitize::unregister_secret(&token);
-                        }
-                        self.append_assistant_text("[stop] **Web API disabled.**");
-                    } else {
-                        self.append_assistant_text(
-                            "[i] Web API is not running. Use `/webapi enable` to start it.",
-                        );
+            }
+            "disable" | "stop" => {
+                if let Some(handle) = self.webapi_server.take() {
+                    handle.abort();
+                    // SEC-081: drop the now-dead token from the redaction
+                    // registry so it does not linger process-wide.
+                    if let Some(token) = self.webapi_token.take() {
+                        codemason_types::sanitize::unregister_secret(&token);
                     }
+                    self.append_assistant_text("[stop] **Web API disabled.**");
+                } else {
+                    self.append_assistant_text(
+                        "[i] Web API is not running. Use `/webapi enable` to start it.",
+                    );
                 }
-                "help" | "--help" | "-h" | "status" | "" => {
-                    let base = format!("http://{}", self.webapi_addr);
-                    let status = if self.webapi_server.is_some() {
-                        format!("[green] **Running** - {base}")
-                    } else {
-                        "[red] **Disabled** - run `/webapi enable` to start".to_string()
-                    };
-                    let auth_note = if let Some(ref tok) = self.webapi_token {
-                        let curl_example = format!(
-                            "\n### Example curl commands:\n\
+            }
+            "help" | "--help" | "-h" | "status" | "" => {
+                let base = format!("http://{}", self.webapi_addr);
+                let status = if self.webapi_server.is_some() {
+                    format!("[green] **Running** - {base}")
+                } else {
+                    "[red] **Disabled** - run `/webapi enable` to start".to_string()
+                };
+                let auth_note = if let Some(ref tok) = self.webapi_token {
+                    let curl_example = format!(
+                        "\n### Example curl commands:\n\
                                                 ```bash\n\
                                                 # Health check (no auth required)\n\
                                                 curl {base}/health\n\n\
                                                 # Get codemason status (requires auth)\n\
                                                 curl -H 'Authorization: Bearer {tok}' {base}/config\n\
                                                 ```"
-                        );
-                        format!(
-                            "\n**Bearer Token:** `{tok}`\n\
+                    );
+                    format!(
+                        "\n**Bearer Token:** `{tok}`\n\
                                                       Add `Authorization: Bearer {tok}` to all requests (except `/health`).{curl_example}"
-                        )
-                    } else {
-                        "\n*No token set - start the server with `/webapi enable`.*".to_string()
-                    };
-                    self.append_assistant_text(&format!(
+                    )
+                } else {
+                    "\n*No token set - start the server with `/webapi enable`.*".to_string()
+                };
+                self.append_assistant_text(&format!(
                             "## [globe] Web API\n\n\
                             **Status:** {status}{auth_note}\n\n\
                             ### Endpoints\n\n\
@@ -11483,19 +11751,24 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                               {base}/sessions/SESSION_ID/messages\n\
                             ```"
                         ));
-                }
-                _ => {
-                    self.append_assistant_text(
-                        "Usage: `/webapi enable` * `/webapi disable` * `/webapi help`",
-                    );
-                }
-            },
+            }
+            _ => {
+                self.append_assistant_text(
+                    "Usage: `/webapi enable` * `/webapi disable` * `/webapi help`",
+                );
+            }
+        }
+    }
 
-            "websearch" => {
-                let sub = args.split_whitespace().next().unwrap_or("");
-                match sub {
-                    "help" | "--help" | "-h" => {
-                        self.append_assistant_text(
+    /// Run the `/websearch` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check exactly as before.
+    async fn slash_websearch(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        let sub = args.split_whitespace().next().unwrap_or("");
+        match sub {
+            "help" | "--help" | "-h" => {
+                self.append_assistant_text(
                                                     "From: /websearch\n\
                                                     Web search engine diagnostics.\n\n\
                                                     Usage:\n\n\
@@ -11510,67 +11783,65 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                                                     * `/websearch help`\n\
                                                       - show this help",
                                                 );
-                        self.status = "websearch: help".to_string();
-                    }
-                    "test" => {
-                        self.status = "websearch: testing engines...".to_string();
-                        self.append_assistant_text("Starting Websearch test...\n");
-                        // Run the live engine probe off the UI thread: the
-                        // acknowledgement above must render before the network
-                        // round-trips complete, so the rendered table is
-                        // deposited into `websearch_test_result` and drained by
-                        // `poll_websearch_test_result` on a later frame.
-                        spawn_websearch_render(
-                            Arc::clone(&self.websearch_test_result),
-                            "From: /websearch test\n\n\
+                self.status = "websearch: help".to_string();
+            }
+            "test" => {
+                self.status = "websearch: testing engines...".to_string();
+                self.append_assistant_text("Starting Websearch test...\n");
+                // Run the live engine probe off the UI thread: the
+                // acknowledgement above must render before the network
+                // round-trips complete, so the rendered table is
+                // deposited into `websearch_test_result` and drained by
+                // `poll_websearch_test_result` on a later frame.
+                spawn_websearch_render(
+                    Arc::clone(&self.websearch_test_result),
+                    "From: /websearch test\n\n\
                              [err] engine test task panicked - see the application log",
-                            websearch_diag_and_render(),
-                        );
-                    }
-                    "search" => {
-                        let query = args.split_once(char::is_whitespace).map(|(_, q)| q.trim());
-                        let Some(query) = query.filter(|q| !q.is_empty()) else {
-                            self.append_assistant_text(
-                                "From: /websearch search\n\
+                    websearch_diag_and_render(),
+                );
+            }
+            "search" => {
+                let query = args.split_once(char::is_whitespace).map(|(_, q)| q.trim());
+                let Some(query) = query.filter(|q| !q.is_empty()) else {
+                    self.append_assistant_text(
+                        "From: /websearch search\n\
                                  [warn] missing query - usage: `/websearch search <query>`",
-                            );
-                            self.status = "websearch: search needs a query".to_string();
-                            return;
-                        };
-                        self.status = "websearch: searching...".to_string();
-                        self.append_assistant_text(&format!(
-                            "Starting web search for \"{query}\"...\n"
-                        ));
-                        // Same off-UI-thread pattern as the `test` arm above:
-                        // deposit the rendered report into
-                        // `websearch_test_result` for `poll_websearch_test_result`.
-                        let query_owned = query.to_string();
-                        spawn_websearch_render(
-                            Arc::clone(&self.websearch_test_result),
-                            "From: /websearch search\n\n\
+                    );
+                    self.status = "websearch: search needs a query".to_string();
+                    return std::ops::ControlFlow::Break(());
+                };
+                self.status = "websearch: searching...".to_string();
+                self.append_assistant_text(&format!("Starting web search for \"{query}\"...\n"));
+                // Same off-UI-thread pattern as the `test` arm above:
+                // deposit the rendered report into
+                // `websearch_test_result` for `poll_websearch_test_result`.
+                let query_owned = query.to_string();
+                spawn_websearch_render(
+                    Arc::clone(&self.websearch_test_result),
+                    "From: /websearch search\n\n\
                              [err] search task panicked - see the application log",
-                            async move { websearch_search_query(&query_owned).await },
-                        );
-                    }
-                    "show" | "" => {
-                        let ctx = websearch_diag_ctx();
-                        use codemason_tools_extended::masterfetch::tools::search_tool::MfSearchTool;
-                        let engines = MfSearchTool::engine_status(&ctx);
-                        let mut output = String::from(
-                            "From: /websearch show\n\n\
+                    async move { websearch_search_query(&query_owned).await },
+                );
+            }
+            "show" | "" => {
+                let ctx = websearch_diag_ctx();
+                use codemason_tools_extended::masterfetch::tools::search_tool::MfSearchTool;
+                let engines = MfSearchTool::engine_status(&ctx);
+                let mut output = String::from(
+                    "From: /websearch show\n\n\
                                           | Engine | Enabled | In Use | Failed |\n\
                                           |--------|:-------:|:------:|:------:|\n",
-                        );
-                        for e in engines {
-                            let enabled = if e.enabled { "[ok] yes" } else { "[err] no" };
-                            let in_use = if e.in_use { "[ok] yes" } else { "[err] no" };
-                            let failed = if e.failed { "[warn] yes" } else { "[ok] no" };
-                            output.push_str(&format!(
-                                "| {:<10} | {} | {} | {} |\n",
-                                e.name, enabled, in_use, failed
-                            ));
-                        }
-                        output.push_str(
+                );
+                for e in engines {
+                    let enabled = if e.enabled { "[ok] yes" } else { "[err] no" };
+                    let in_use = if e.in_use { "[ok] yes" } else { "[err] no" };
+                    let failed = if e.failed { "[warn] yes" } else { "[ok] no" };
+                    output.push_str(&format!(
+                        "| {:<10} | {} | {} | {} |\n",
+                        e.name, enabled, in_use, failed
+                    ));
+                }
+                output.push_str(
                                           "\nKeyless engines (OpenAlex, Wikipedia) are always enabled. \
                                            LangSearch requires `langsearch_api_key` in `codemason.json`. \
                                            Tavily requires `tavily_api_key` in `codemason.json` or the \
@@ -11580,324 +11851,306 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                                            Serper requires `serper_api_key` in `codemason.json` \
                                            or the `SERPER_API_KEY` environment variable.",
                                       );
-                        self.append_assistant_text(&output);
-                        self.status = "websearch: status shown".to_string();
-                    }
-                    _ => {
-                        self.append_assistant_text(
+                self.append_assistant_text(&output);
+                self.status = "websearch: status shown".to_string();
+            }
+            _ => {
+                self.append_assistant_text(
                                           "From: /websearch\n\
                                           [warn] Unknown subcommand. Use `/websearch help` for available commands.",
                                       );
-                        self.status = "websearch: unknown".to_string();
-                    }
-                }
+                self.status = "websearch: unknown".to_string();
             }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
 
-            "mouse" => {
-                let sub = args.split_whitespace().next().unwrap_or("");
-                match sub {
-                    "help" | "--help" | "-h" => {
-                        self.append_assistant_text(
+    /// Run the `/mouse` slash command.
+    fn slash_mouse(&mut self, args: &str) {
+        let sub = args.split_whitespace().next().unwrap_or("");
+        match sub {
+            "help" | "--help" | "-h" => {
+                self.append_assistant_text(
                             "From: /mouse help\n\n## /mouse \u{2014} Mouse support\n\n| Subcommand | Description |\n|---|---|\n| `/mouse on` | Enable mouse support (scrolling, clicking, selection) |\n| `/mouse off` | Disable mouse support and switch to keyboard-only mode |\n| `/mouse help` | Show this help |\n\nRunning `/mouse` with no subcommand shows the current state.",
                         );
-                        self.status = "mouse: help".to_string();
-                    }
-                    "on" => {
-                        self.mouse_enabled = true;
-                        self.append_assistant_text(
+                self.status = "mouse: help".to_string();
+            }
+            "on" => {
+                self.mouse_enabled = true;
+                self.append_assistant_text(
                                                       "From: /mouse on\n[ok] **Mouse support enabled.**\n\nYou can now use the mouse for scrolling, clicking, and selection."
                                                   );
-                        self.status = "mouse: enabled".to_string();
-                    }
-                    "off" => {
-                        self.mouse_enabled = false;
-                        self.append_assistant_text(
+                self.status = "mouse: enabled".to_string();
+            }
+            "off" => {
+                self.mouse_enabled = false;
+                self.append_assistant_text(
                                         "From: /mouse off\n[ok] **Mouse support disabled.**\n\nKeyboard-only mode active. All mouse interactions are now disabled.\n\nKeyboard shortcuts:\n* Alt+Up/Down: Focus teammates\n* Tab: Navigate UI elements\n* Enter: Select/activate\n* Esc: Close dialogs\n* Ctrl+C: Copy selection\n* Ctrl+V: Paste"
                                     );
-                        self.status = "mouse: disabled (keyboard-only mode)".to_string();
-                    }
-                    _ => {
-                        let status = if self.mouse_enabled {
-                            "enabled"
-                        } else {
-                            "disabled"
-                        };
-                        self.append_assistant_text(&format!(
+                self.status = "mouse: disabled (keyboard-only mode)".to_string();
+            }
+            _ => {
+                let status = if self.mouse_enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                };
+                self.append_assistant_text(&format!(
                                                                               "From: /mouse\n\nMouse support is currently **{}**.\n\nUsage: `/mouse on` | `/mouse off` | `/mouse help`",
                                                                               status
                                                                           ));
-                        self.status = format!("mouse: {}", status);
-                    }
-                }
+                self.status = format!("mouse: {}", status);
             }
+        }
+    }
 
-            "codeindex" => {
-                let sub = args.split_whitespace().next().unwrap_or("");
-                match sub {
-                    "on" | "enable" => {
-                        self.code_index_enabled = true;
-                        // Persist by writing `code_index.enabled: true` into the
-                        // loaded source file, and only that key. A config that
-                        // fails to load is reported, never replaced by defaults:
-                        // `unwrap_or_default()` here once saved an empty config
-                        // over the user's global file.
-                        let persisted =
-                            codemason_agent::Config::load_for(&self.cwd_path).and_then(|cfg| {
-                                cfg.set_source_value(
-                                    &["code_index", "enabled"],
-                                    serde_json::json!(true),
-                                )
-                            });
-                        if self.code_index.is_some() {
-                            // Already active - just ensure watcher is running
-                            if self.code_index_watch_session.is_none() {
-                                if let Some(ref idx) = self.code_index {
-                                    match codemason_codeindex::start_watching(
-                                        idx.clone(),
-                                        codemason_codeindex::worker::WorkerConfig::default(),
-                                    ) {
-                                        Ok(session) => {
-                                            self.code_index_watch_session = Some(session);
-                                            self.append_assistant_text(
+    /// Run the `/codeindex` slash command.
+    fn slash_codeindex(&mut self, args: &str) {
+        let sub = args.split_whitespace().next().unwrap_or("");
+        match sub {
+            "on" | "enable" => {
+                self.code_index_enabled = true;
+                // Persist by writing `code_index.enabled: true` into the
+                // loaded source file, and only that key. A config that
+                // fails to load is reported, never replaced by defaults:
+                // `unwrap_or_default()` here once saved an empty config
+                // over the user's global file.
+                let persisted = codemason_agent::Config::load_for(&self.cwd_path).and_then(|cfg| {
+                    cfg.set_source_value(&["code_index", "enabled"], serde_json::json!(true))
+                });
+                if self.code_index.is_some() {
+                    // Already active - just ensure watcher is running
+                    if self.code_index_watch_session.is_none() {
+                        if let Some(ref idx) = self.code_index {
+                            match codemason_codeindex::start_watching(
+                                idx.clone(),
+                                codemason_codeindex::worker::WorkerConfig::default(),
+                            ) {
+                                Ok(session) => {
+                                    self.code_index_watch_session = Some(session);
+                                    self.append_assistant_text(
                                                 "[ok] **Code index** is already active. File watcher started.",
                                             );
-                                        }
-                                        Err(e) => {
-                                            self.append_assistant_text(&format!(
-                                                "[ok] **Code index** is already active.\n\n[warn] Could not start file watcher: {e}",
-                                            ));
-                                        }
-                                    }
-                                }
-                            } else {
-                                self.append_assistant_text(
-                                    "[ok] **Code index** is already active and enabled.",
-                                );
-                            }
-                        } else {
-                            // Create and initialize the code index
-                            let cwd = self.cwd_path.clone();
-                            let index_config = codemason_codeindex::types::CodeIndexConfig {
-                                enabled: true,
-                                project_root: cwd.clone(),
-                                index_dir: cwd.join(".codemason/codeindex"),
-                                scan_config: codemason_codeindex::types::ScanConfig::default(),
-                            };
-                            match codemason_codeindex::CodeIndex::open(&index_config) {
-                                Ok(idx) => {
-                                    let arc_idx = Arc::new(idx);
-                                    // Start watching - this performs an initial full reindex
-                                    // to catch any changes made while the index was disabled.
-                                    match codemason_codeindex::start_watching(
-                                        arc_idx.clone(),
-                                        codemason_codeindex::worker::WorkerConfig::default(),
-                                    ) {
-                                        Ok(session) => {
-                                            self.code_index_watch_session = Some(session);
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(error = %e, "Failed to start file watcher on codeindex enable");
-                                        }
-                                    }
-                                    self.set_code_index(Some(arc_idx));
-                                    self.append_assistant_text(
-                                        "[ok] **Code index:** enabled and activated. Background reindex in progress.",
-                                    );
                                 }
                                 Err(e) => {
                                     self.append_assistant_text(&format!(
-                                        "[err] **Code index:** could not open index: {e}",
-                                    ));
+                                                "[ok] **Code index** is already active.\n\n[warn] Could not start file watcher: {e}",
+                                            ));
                                 }
                             }
                         }
-                        match persisted {
-                            Ok(_) => {
-                                // P-2: invalidate the cached config so the next turn
-                                // picks up the newly-saved file.
-                                self.session_processor.invalidate_config_cache();
-                                self.status = "codeindex: on".to_string();
+                    } else {
+                        self.append_assistant_text(
+                            "[ok] **Code index** is already active and enabled.",
+                        );
+                    }
+                } else {
+                    // Create and initialize the code index
+                    let cwd = self.cwd_path.clone();
+                    let index_config = codemason_codeindex::types::CodeIndexConfig {
+                        enabled: true,
+                        project_root: cwd.clone(),
+                        index_dir: cwd.join(".codemason/codeindex"),
+                        scan_config: codemason_codeindex::types::ScanConfig::default(),
+                    };
+                    match codemason_codeindex::CodeIndex::open(&index_config) {
+                        Ok(idx) => {
+                            let arc_idx = Arc::new(idx);
+                            // Start watching - this performs an initial full reindex
+                            // to catch any changes made while the index was disabled.
+                            match codemason_codeindex::start_watching(
+                                arc_idx.clone(),
+                                codemason_codeindex::worker::WorkerConfig::default(),
+                            ) {
+                                Ok(session) => {
+                                    self.code_index_watch_session = Some(session);
+                                }
+                                Err(e) => {
+                                    tracing::warn!(error = %e, "Failed to start file watcher on codeindex enable");
+                                }
                             }
-                            Err(e) => {
-                                self.append_assistant_text(&format!(
-                                    "[warn] **Code index:** enabled in memory, but saving config failed: {e}",
-                                ));
-                                self.status = "codeindex: on (unsaved)".to_string();
-                                self.push_log_no_agent(
-                                    LogLevel::Warn,
-                                    format!("codeindex enable save failed: {}", e),
-                                );
-                            }
+                            self.set_code_index(Some(arc_idx));
+                            self.append_assistant_text(
+                                        "[ok] **Code index:** enabled and activated. Background reindex in progress.",
+                                    );
+                        }
+                        Err(e) => {
+                            self.append_assistant_text(&format!(
+                                "[err] **Code index:** could not open index: {e}",
+                            ));
                         }
                     }
-                    "off" | "disable" => {
-                        self.code_index_enabled = false;
-                        // Persist by writing `code_index.enabled: false` into the
-                        // loaded source file, and only that key. A config that
-                        // fails to load is reported, never replaced by defaults:
-                        // `unwrap_or_default()` here once saved an empty config
-                        // over the user's global file.
-                        let persisted =
-                            codemason_agent::Config::load_for(&self.cwd_path).and_then(|cfg| {
-                                cfg.set_source_value(
-                                    &["code_index", "enabled"],
-                                    serde_json::json!(false),
-                                )
-                            });
-                        let was_active = self.code_index.is_some();
-                        // Stop the file watcher + background worker first
-                        if let Some(ref mut session) = self.code_index_watch_session {
-                            session.stop();
-                        }
-                        self.code_index_watch_session = None;
-                        self.code_index = None;
-                        if was_active {
-                            self.append_assistant_text(
+                }
+                match persisted {
+                    Ok(_) => {
+                        // P-2: invalidate the cached config so the next turn
+                        // picks up the newly-saved file.
+                        self.session_processor.invalidate_config_cache();
+                        self.status = "codeindex: on".to_string();
+                    }
+                    Err(e) => {
+                        self.append_assistant_text(&format!(
+                                    "[warn] **Code index:** enabled in memory, but saving config failed: {e}",
+                                ));
+                        self.status = "codeindex: on (unsaved)".to_string();
+                        self.push_log_no_agent(
+                            LogLevel::Warn,
+                            format!("codeindex enable save failed: {}", e),
+                        );
+                    }
+                }
+            }
+            "off" | "disable" => {
+                self.code_index_enabled = false;
+                // Persist by writing `code_index.enabled: false` into the
+                // loaded source file, and only that key. A config that
+                // fails to load is reported, never replaced by defaults:
+                // `unwrap_or_default()` here once saved an empty config
+                // over the user's global file.
+                let persisted = codemason_agent::Config::load_for(&self.cwd_path).and_then(|cfg| {
+                    cfg.set_source_value(&["code_index", "enabled"], serde_json::json!(false))
+                });
+                let was_active = self.code_index.is_some();
+                // Stop the file watcher + background worker first
+                if let Some(ref mut session) = self.code_index_watch_session {
+                    session.stop();
+                }
+                self.code_index_watch_session = None;
+                self.code_index = None;
+                if was_active {
+                    self.append_assistant_text(
                                 "[no] **Code index:** disabled and deactivated. Codeindex tools will no longer be available.\n\n\
                                  Use `/codeindex on` and restart to re-enable.",
                             );
-                        } else {
-                            self.append_assistant_text(
-                                "[i] **Code index:** disabled. It was not currently active.",
-                            );
-                        }
-                        match persisted {
-                            Ok(_) => {
-                                // P-2: invalidate the cached config so the next turn
-                                // picks up the newly-saved file.
-                                self.session_processor.invalidate_config_cache();
-                                self.status = "codeindex: off".to_string();
-                            }
-                            Err(e) => {
-                                self.append_assistant_text(&format!(
+                } else {
+                    self.append_assistant_text(
+                        "[i] **Code index:** disabled. It was not currently active.",
+                    );
+                }
+                match persisted {
+                    Ok(_) => {
+                        // P-2: invalidate the cached config so the next turn
+                        // picks up the newly-saved file.
+                        self.session_processor.invalidate_config_cache();
+                        self.status = "codeindex: off".to_string();
+                    }
+                    Err(e) => {
+                        self.append_assistant_text(&format!(
                                     "[warn] **Code index:** disabled in memory, but saving config failed: {e}",
                                 ));
-                                self.status = "codeindex: off (unsaved)".to_string();
-                                self.push_log_no_agent(
-                                    LogLevel::Warn,
-                                    format!("codeindex disable save failed: {}", e),
-                                );
-                            }
-                        }
+                        self.status = "codeindex: off (unsaved)".to_string();
+                        self.push_log_no_agent(
+                            LogLevel::Warn,
+                            format!("codeindex disable save failed: {}", e),
+                        );
                     }
-                    "show" | "status" | "" => {
-                        let config_enabled = self.code_index_enabled;
-                        // Check if we have an active code index with real stats.
-                        // Non-blocking probe: report busy immediately instead of
-                        // stalling while a background reindex/graph build holds
-                        // the store lock.
-                        if let Some(ref idx) = self.code_index {
-                            match idx.try_status() {
-                                Some(stats) => {
-                                    let mut output = String::from("## Code Index Status\n\n");
-                                    output.push_str(&format!(
-                                        "**Enabled:** {}\n",
-                                        if config_enabled {
-                                            "\u{2713} yes"
-                                        } else {
-                                            "\u{2717} no"
-                                        }
-                                    ));
-                                    output.push_str(&format!(
-                                        "**Files indexed:** {}\n",
-                                        stats.files_indexed
-                                    ));
-                                    output.push_str(&format!(
-                                        "**Total symbols:** {}\n",
-                                        stats.total_symbols
-                                    ));
-                                    output.push_str(&format!(
-                                        "**FTS documents:** {}\n",
-                                        stats.fts_doc_count
-                                    ));
-                                    output.push_str(&format!(
-                                        "**References:** {}\n",
-                                        stats.total_references
-                                    ));
-                                    output.push_str(&format!(
-                                        "**Total size:** {:.1} KB\n",
-                                        stats.total_bytes as f64 / 1024.0
-                                    ));
+                }
+            }
+            "show" | "status" | "" => {
+                let config_enabled = self.code_index_enabled;
+                // Check if we have an active code index with real stats.
+                // Non-blocking probe: report busy immediately instead of
+                // stalling while a background reindex/graph build holds
+                // the store lock.
+                if let Some(ref idx) = self.code_index {
+                    match idx.try_status() {
+                        Some(stats) => {
+                            let mut output = String::from("## Code Index Status\n\n");
+                            output.push_str(&format!(
+                                "**Enabled:** {}\n",
+                                if config_enabled {
+                                    "\u{2713} yes"
+                                } else {
+                                    "\u{2717} no"
+                                }
+                            ));
+                            output
+                                .push_str(&format!("**Files indexed:** {}\n", stats.files_indexed));
+                            output
+                                .push_str(&format!("**Total symbols:** {}\n", stats.total_symbols));
+                            output
+                                .push_str(&format!("**FTS documents:** {}\n", stats.fts_doc_count));
+                            output
+                                .push_str(&format!("**References:** {}\n", stats.total_references));
+                            output.push_str(&format!(
+                                "**Total size:** {:.1} KB\n",
+                                stats.total_bytes as f64 / 1024.0
+                            ));
 
-                                    // FTS sync warning
-                                    if stats.total_symbols > 0 && stats.fts_doc_count == 0 {
-                                        output.push_str("\n\u{26a0}\u{fe0f} **FTS index is empty** - search will not work. Use `/codeindex rebuild` to fix.\n");
-                                    } else if stats.fts_doc_count > 0
-                                        && (stats.fts_doc_count as f64
-                                            / stats.total_symbols.max(1) as f64)
-                                            < 0.5
-                                    {
-                                        output.push_str(&format!(
+                            // FTS sync warning
+                            if stats.total_symbols > 0 && stats.fts_doc_count == 0 {
+                                output.push_str("\n\u{26a0}\u{fe0f} **FTS index is empty** - search will not work. Use `/codeindex rebuild` to fix.\n");
+                            } else if stats.fts_doc_count > 0
+                                && (stats.fts_doc_count as f64 / stats.total_symbols.max(1) as f64)
+                                    < 0.5
+                            {
+                                output.push_str(&format!(
                                             "\n\u{26a0}\u{fe0f} **FTS index may be out of sync** ({} FTS docs vs {} symbols). Use `/codeindex rebuild` to fix.\n",
                                             stats.fts_doc_count, stats.total_symbols
                                         ));
-                                    }
+                            }
 
-                                    if !stats.languages.is_empty() {
-                                        output.push_str("**Languages:** ");
-                                        let langs: Vec<String> = stats
-                                            .languages
-                                            .iter()
-                                            .map(|(lang, count)| format!("{lang} ({count})"))
-                                            .collect();
-                                        output.push_str(&langs.join(", "));
-                                        output.push('\n');
-                                    }
+                            if !stats.languages.is_empty() {
+                                output.push_str("**Languages:** ");
+                                let langs: Vec<String> = stats
+                                    .languages
+                                    .iter()
+                                    .map(|(lang, count)| format!("{lang} ({count})"))
+                                    .collect();
+                                output.push_str(&langs.join(", "));
+                                output.push('\n');
+                            }
 
-                                    if let Some(ts) = &stats.last_full_index {
-                                        output.push_str(&format!("**Last full index:** {ts}\n"));
-                                    }
-                                    if let Some(ts) = &stats.last_incremental_update {
-                                        output.push_str(&format!("**Last incremental:** {ts}\n"));
-                                    }
+                            if let Some(ts) = &stats.last_full_index {
+                                output.push_str(&format!("**Last full index:** {ts}\n"));
+                            }
+                            if let Some(ts) = &stats.last_incremental_update {
+                                output.push_str(&format!("**Last incremental:** {ts}\n"));
+                            }
+                            output.push_str(&format!(
+                                "**Index size:** {:.1} KB\n",
+                                stats.index_size_bytes as f64 / 1024.0
+                            ));
+
+                            // Graph data set status (FR-015). The graph
+                            // is built separately via `/codeindex graph
+                            // build`, so it may be empty even when the
+                            // index is populated.
+                            output.push_str("\n## Graph Dataset\n\n");
+                            if idx.graph_busy() {
+                                let (gdone, gtotal) = idx.graph_build_progress();
+                                output.push_str("\u{26a0}\u{fe0f} **Graph:** building...\n");
+                                if gtotal > 0 {
                                     output.push_str(&format!(
-                                        "**Index size:** {:.1} KB\n",
-                                        stats.index_size_bytes as f64 / 1024.0
+                                        "**Progress:** {gdone}/{gtotal} files\n"
                                     ));
-
-                                    // Graph data set status (FR-015). The graph
-                                    // is built separately via `/codeindex graph
-                                    // build`, so it may be empty even when the
-                                    // index is populated.
-                                    output.push_str("\n## Graph Dataset\n\n");
-                                    if idx.graph_busy() {
-                                        let (gdone, gtotal) = idx.graph_build_progress();
-                                        output
-                                            .push_str("\u{26a0}\u{fe0f} **Graph:** building...\n");
-                                        if gtotal > 0 {
-                                            output.push_str(&format!(
-                                                "**Progress:** {gdone}/{gtotal} files\n"
-                                            ));
-                                        }
-                                    }
-                                    match idx.try_graph_status() {
-                                        Some(gs) => {
-                                            if gs.total_edges == 0 {
-                                                output.push_str(
-                                                    "**Graph:** not built (0 edges).\n\n\
+                                }
+                            }
+                            match idx.try_graph_status() {
+                                Some(gs) => {
+                                    if gs.total_edges == 0 {
+                                        output.push_str(
+                                            "**Graph:** not built (0 edges).\n\n\
                                                      Run `/codeindex graph build` to derive \
                                                      the semantic edge graph from the \
                                                      indexed symbols.\n",
-                                                );
-                                            } else {
-                                                output.push_str(&format!(
-                                                    "**Total edges:** {}\n",
-                                                    gs.total_edges
-                                                ));
-                                                output.push_str(&format!(
-                                                    "**Nodes:** {}\n",
-                                                    gs.nodes
-                                                ));
-                                                output.push_str(&format!(
-                                                    "**Edges by confidence:** {} EXTRACTED, {} INFERRED\n",
-                                                    gs.edges_extracted, gs.edges_inferred
-                                                ));
-                                                output.push_str(&format!(
-                                                    "**Communities:** {}\n",
-                                                    gs.communities
-                                                ));
-                                                output.push_str("**Edges by kind:**\n");
-                                                output.push_str(&format!(
+                                        );
+                                    } else {
+                                        output.push_str(&format!(
+                                            "**Total edges:** {}\n",
+                                            gs.total_edges
+                                        ));
+                                        output.push_str(&format!("**Nodes:** {}\n", gs.nodes));
+                                        output.push_str(&format!(
+                                            "**Edges by confidence:** {} EXTRACTED, {} INFERRED\n",
+                                            gs.edges_extracted, gs.edges_inferred
+                                        ));
+                                        output.push_str(&format!(
+                                            "**Communities:** {}\n",
+                                            gs.communities
+                                        ));
+                                        output.push_str("**Edges by kind:**\n");
+                                        output.push_str(&format!(
                                                     "- calls: {}\n- imports: {}\n- inherits: {}\n- references: {}\n- mixes_in: {}\n- implements: {}\n",
                                                     gs.edges_calls,
                                                     gs.edges_imports,
@@ -11906,99 +12159,94 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                                                     gs.edges_mixes_in,
                                                     gs.edges_implements,
                                                 ));
-                                            }
-                                        }
-                                        None => {
-                                            // Graph stats unavailable because the
-                                            // store lock is held; try_status()
-                                            // succeeded so this is transient.
-                                            output.push_str(
-                                                "\u{26a0}\u{fe0f} Graph stats unavailable \
-                                                 (index busy - retry shortly).\n",
-                                            );
-                                        }
                                     }
-
-                                    self.append_assistant_text(&output);
-                                    self.status = format!(
-                                        "codeindex: {} files, {} symbols, {} FTS docs",
-                                        stats.files_indexed,
-                                        stats.total_symbols,
-                                        stats.fts_doc_count
-                                    );
                                 }
                                 None => {
-                                    // Store/FTS lock held by a background
-                                    // reindex or graph build. Report busy
-                                    // immediately from the lock-free atomics.
-                                    // Attribute the lock holder before claiming
-                                    // the index is busy: a graph build holds the
-                                    // store lock only briefly (snapshot/persist),
-                                    // so during a graph build the index itself is
-                                    // still available.
-                                    let (done, total) = idx.reindex_progress();
-                                    let reindexing = total > 0 && done < total;
-                                    let graph_busy = idx.graph_busy();
-                                    let (gdone, gtotal) = idx.graph_build_progress();
-
-                                    let mut output = String::from("## Code Index Status\n\n");
-                                    output.push_str(&format!(
-                                        "**Enabled:** {}\n",
-                                        if config_enabled {
-                                            "\u{2713} yes"
-                                        } else {
-                                            "\u{2717} no"
-                                        }
-                                    ));
-                                    if reindexing {
-                                        output
-                                            .push_str("**Index:** busy - reindexing in progress\n");
-                                        output.push_str(&format!(
-                                            "**Reindexing:** {done}/{total} files\n"
-                                        ));
-                                        if graph_busy {
-                                            output.push_str(&format!(
-                                                "**Graph:** building ({gdone}/{gtotal} files)\n"
-                                            ));
-                                        }
-                                    } else if graph_busy {
-                                        output.push_str(&format!(
-                                            "**Graph:** building ({gdone}/{gtotal} files)\n"
-                                        ));
-                                        output.push_str(
-                                            "**Index:** available - the graph build holds the \
-                                             store lock only briefly for its \
-                                             snapshot/persist phases\n",
-                                        );
-                                    } else {
-                                        output.push_str(
-                                            "**Index:** busy - the store lock is held by a \
-                                             background operation\n",
-                                        );
-                                        output.push_str(
-                                            "Wait a moment and retry - the background \
-                                             operation will release the lock when done.\n",
-                                        );
-                                    }
-
-                                    self.append_assistant_text(&output);
-                                    self.status = if reindexing {
-                                        "codeindex: busy (reindexing)".to_string()
-                                    } else if graph_busy {
-                                        "codeindex: graph building".to_string()
-                                    } else {
-                                        "codeindex: busy".to_string()
-                                    };
+                                    // Graph stats unavailable because the
+                                    // store lock is held; try_status()
+                                    // succeeded so this is transient.
+                                    output.push_str(
+                                        "\u{26a0}\u{fe0f} Graph stats unavailable \
+                                                 (index busy - retry shortly).\n",
+                                    );
                                 }
                             }
-                        } else {
-                            // No active code index
-                            let state = if config_enabled {
-                                "enabled"
+
+                            self.append_assistant_text(&output);
+                            self.status = format!(
+                                "codeindex: {} files, {} symbols, {} FTS docs",
+                                stats.files_indexed, stats.total_symbols, stats.fts_doc_count
+                            );
+                        }
+                        None => {
+                            // Store/FTS lock held by a background
+                            // reindex or graph build. Report busy
+                            // immediately from the lock-free atomics.
+                            // Attribute the lock holder before claiming
+                            // the index is busy: a graph build holds the
+                            // store lock only briefly (snapshot/persist),
+                            // so during a graph build the index itself is
+                            // still available.
+                            let (done, total) = idx.reindex_progress();
+                            let reindexing = total > 0 && done < total;
+                            let graph_busy = idx.graph_busy();
+                            let (gdone, gtotal) = idx.graph_build_progress();
+
+                            let mut output = String::from("## Code Index Status\n\n");
+                            output.push_str(&format!(
+                                "**Enabled:** {}\n",
+                                if config_enabled {
+                                    "\u{2713} yes"
+                                } else {
+                                    "\u{2717} no"
+                                }
+                            ));
+                            if reindexing {
+                                output.push_str("**Index:** busy - reindexing in progress\n");
+                                output.push_str(&format!("**Reindexing:** {done}/{total} files\n"));
+                                if graph_busy {
+                                    output.push_str(&format!(
+                                        "**Graph:** building ({gdone}/{gtotal} files)\n"
+                                    ));
+                                }
+                            } else if graph_busy {
+                                output.push_str(&format!(
+                                    "**Graph:** building ({gdone}/{gtotal} files)\n"
+                                ));
+                                output.push_str(
+                                    "**Index:** available - the graph build holds the \
+                                             store lock only briefly for its \
+                                             snapshot/persist phases\n",
+                                );
                             } else {
-                                "disabled"
+                                output.push_str(
+                                    "**Index:** busy - the store lock is held by a \
+                                             background operation\n",
+                                );
+                                output.push_str(
+                                    "Wait a moment and retry - the background \
+                                             operation will release the lock when done.\n",
+                                );
+                            }
+
+                            self.append_assistant_text(&output);
+                            self.status = if reindexing {
+                                "codeindex: busy (reindexing)".to_string()
+                            } else if graph_busy {
+                                "codeindex: graph building".to_string()
+                            } else {
+                                "codeindex: busy".to_string()
                             };
-                            self.append_assistant_text(&format!(
+                        }
+                    }
+                } else {
+                    // No active code index
+                    let state = if config_enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    };
+                    self.append_assistant_text(&format!(
                                 "## Code Index Status\n\n\
                                  **Enabled:** {}\n\n\
                                  Code index is not currently active. It may not yet be initialised.\n\n\
@@ -12006,439 +12254,416 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                                  or run `/codeindex help` for available sub-commands.",
                                 if config_enabled { "\u{2713} yes" } else { "\u{2717} no" }
                             ));
-                            self.status = format!("codeindex: {state}").to_string();
-                        }
-                    }
-                    "reindex" => {
-                        if self.code_index.is_some() {
-                            self.append_assistant_text(
+                    self.status = format!("codeindex: {state}").to_string();
+                }
+            }
+            "reindex" => {
+                if self.code_index.is_some() {
+                    self.append_assistant_text(
                                 "[sync] **Re-indexing codebase...** scanning files and extracting symbols. This runs in the background; watch the status bar for the indexing indicator.",
                             );
-                            self.status = "[wait] codeindex: reindexing...".to_string();
-                            match self.spawn_codeindex_reindex() {
+                    self.status = "[wait] codeindex: reindexing...".to_string();
+                    match self.spawn_codeindex_reindex() {
+                        Ok(()) => {}
+                        Err(reason) => {
+                            self.append_assistant_text(&format!("[err] {reason}"));
+                            self.status = "codeindex: reindex failed".to_string();
+                        }
+                    }
+                } else {
+                    self.append_assistant_text(
+                        "[warn] Code index is not active. Enable it first with `/codeindex on`.",
+                    );
+                    self.status = "codeindex: not active".to_string();
+                }
+            }
+            "lang" | "languages" => {
+                let languages = codemason_codeindex::scanner::SUPPORTED_LANGUAGES;
+                let mut output = String::from("## Supported Languages\n\n");
+                output.push_str("The code index supports the following languages:\n\n");
+                for (i, lang) in languages.iter().enumerate() {
+                    if i % 5 == 0 && i > 0 {
+                        output.push('\n');
+                    }
+                    output.push_str(&format!("`{lang}`  "));
+                }
+                output.push_str(&format!("\n\n**Total: {} languages**", languages.len()));
+                self.append_assistant_text(&output);
+                self.status = format!("codeindex: {} languages supported", languages.len());
+            }
+            "graph" => {
+                // Parse the second word: build | export | lang
+                let graph_sub = args.split_whitespace().nth(1).unwrap_or("");
+                match graph_sub {
+                    "build" => {
+                        if self.code_index.is_some() {
+                            self.append_assistant_text(
+                                        "\u{1f517} **Building semantic edge graph...** deriving typed edges from indexed symbols. This runs in the background; the status bar shows a graph indicator while it works.",
+                                    );
+                            self.status = "[wait] codeindex: building graph...".to_string();
+                            match self.spawn_codeindex_graph_build(None) {
                                 Ok(()) => {}
                                 Err(reason) => {
-                                    self.append_assistant_text(&format!("[err] {reason}"));
-                                    self.status = "codeindex: reindex failed".to_string();
+                                    self.append_assistant_text(&format!(
+                                        "\u{274c} Graph build failed: {reason}"
+                                    ));
+                                    self.status = "codeindex: graph build failed".to_string();
                                 }
                             }
                         } else {
                             self.append_assistant_text(
-                                "[warn] Code index is not active. Enable it first with `/codeindex on`.",
-                            );
+                                        "\u{26a0}\u{fe0f} Code index is not active. Enable it first with `/codeindex on`.",
+                                    );
                             self.status = "codeindex: not active".to_string();
                         }
                     }
-                    "lang" | "languages" => {
-                        let languages = codemason_codeindex::scanner::SUPPORTED_LANGUAGES;
-                        let mut output = String::from("## Supported Languages\n\n");
-                        output.push_str("The code index supports the following languages:\n\n");
-                        for (i, lang) in languages.iter().enumerate() {
-                            if i % 5 == 0 && i > 0 {
-                                output.push('\n');
-                            }
-                            output.push_str(&format!("`{lang}`  "));
-                        }
-                        output.push_str(&format!("\n\n**Total: {} languages**", languages.len()));
-                        self.append_assistant_text(&output);
-                        self.status = format!("codeindex: {} languages supported", languages.len());
-                    }
-                    "graph" => {
-                        // Parse the second word: build | export | lang
-                        let graph_sub = args.split_whitespace().nth(1).unwrap_or("");
-                        match graph_sub {
-                            "build" => {
-                                if self.code_index.is_some() {
-                                    self.append_assistant_text(
-                                        "\u{1f517} **Building semantic edge graph...** deriving typed edges from indexed symbols. This runs in the background; the status bar shows a graph indicator while it works.",
-                                    );
-                                    self.status = "[wait] codeindex: building graph...".to_string();
-                                    match self.spawn_codeindex_graph_build(None) {
-                                        Ok(()) => {}
-                                        Err(reason) => {
-                                            self.append_assistant_text(&format!(
-                                                "\u{274c} Graph build failed: {reason}"
-                                            ));
-                                            self.status =
-                                                "codeindex: graph build failed".to_string();
-                                        }
-                                    }
-                                } else {
-                                    self.append_assistant_text(
-                                        "\u{26a0}\u{fe0f} Code index is not active. Enable it first with `/codeindex on`.",
-                                    );
-                                    self.status = "codeindex: not active".to_string();
-                                }
-                            }
-                            "lang" => {
-                                // FR-018: optional per-language graph filter.
-                                let lang = args.split_whitespace().nth(2).unwrap_or("");
-                                if lang.is_empty() {
-                                    self.append_assistant_text(
-                                        "Usage: `/codeindex graph lang <language>`\n\n\
+                    "lang" => {
+                        // FR-018: optional per-language graph filter.
+                        let lang = args.split_whitespace().nth(2).unwrap_or("");
+                        if lang.is_empty() {
+                            self.append_assistant_text(
+                                "Usage: `/codeindex graph lang <language>`\n\n\
                                          Example: `/codeindex graph lang rust`\n\n\
                                          Rebuilds the semantic edge graph using only \
                                            files detected as the given language, allowing \
                                            per-language subgraph analysis.",
-                                    );
-                                    self.status = "codeindex: graph lang (usage)".to_string();
-                                } else if self.code_index.is_some() {
-                                    self.append_assistant_text(&format!(
+                            );
+                            self.status = "codeindex: graph lang (usage)".to_string();
+                        } else if self.code_index.is_some() {
+                            self.append_assistant_text(&format!(
                                           "\u{1f517} **Building graph for language `{lang}`...** This runs in the background; the status bar shows a graph indicator while it works."
                                       ));
-                                    self.status =
-                                        format!("[wait] codeindex: building graph ({lang})...");
-                                    match self.spawn_codeindex_graph_build(Some(lang.to_string())) {
-                                        Ok(()) => {}
-                                        Err(reason) => {
-                                            self.append_assistant_text(&format!(
-                                                "\u{274c} Graph lang build failed: {reason}"
-                                            ));
-                                            self.status =
-                                                "codeindex: graph lang failed".to_string();
-                                        }
-                                    }
-                                } else {
-                                    self.append_assistant_text(
+                            self.status = format!("[wait] codeindex: building graph ({lang})...");
+                            match self.spawn_codeindex_graph_build(Some(lang.to_string())) {
+                                Ok(()) => {}
+                                Err(reason) => {
+                                    self.append_assistant_text(&format!(
+                                        "\u{274c} Graph lang build failed: {reason}"
+                                    ));
+                                    self.status = "codeindex: graph lang failed".to_string();
+                                }
+                            }
+                        } else {
+                            self.append_assistant_text(
                                           "\u{26a0}\u{fe0f} Code index is not active. Enable it first with `/codeindex on`.",
                                       );
-                                    self.status = "codeindex: not active".to_string();
-                                }
-                            }
-                            _ => {
-                                self.append_assistant_text(
-                                    "Usage: `/codeindex graph <build|export|lang <lang>>`",
-                                );
-                            }
-                        }
-                    }
-                    "godnodes" => {
-                        // Parse optional N (default 10, max 100).
-                        let n = args
-                            .split_whitespace()
-                            .nth(1)
-                            .and_then(|s| s.parse::<usize>().ok())
-                            .map(|v| v.clamp(1, 100))
-                            .unwrap_or(10);
-
-                        if let Some(idx) = self.code_index.clone() {
-                            // FR-015: empty-graph guard.
-                            if idx.graph_edge_count().unwrap_or(0) == 0 {
-                                self.append_assistant_text(
-                                    "[warn] No graph data available. \
-                                     Run `/codeindex graph build` first to build \
-                                     the semantic edge graph.",
-                                );
-                                self.status = "codeindex: godnodes (empty graph)".to_string();
-                            } else {
-                                match idx.godnodes(n) {
-                                    Ok(nodes) => {
-                                        let mut output = String::from(
-                                            "## God Nodes (Top Most-Connected Symbols)\n\n",
-                                        );
-                                        output.push_str("| # | Symbol | Source File | Degree |\n");
-                                        output.push_str("|---|--------|-------------|--------|\n");
-                                        for (i, node) in nodes.iter().enumerate() {
-                                            output.push_str(&format!(
-                                                "| {} | `{}` | `{}` | {} |\n",
-                                                i + 1,
-                                                node.name,
-                                                node.source_file,
-                                                node.degree,
-                                            ));
-                                        }
-                                        self.append_assistant_text(&output);
-                                        self.status = format!(
-                                            "codeindex: godnodes ({} symbols)",
-                                            nodes.len()
-                                        );
-                                    }
-                                    Err(e) => {
-                                        self.append_assistant_text(&format!(
-                                            "[err] God nodes query failed: {e}"
-                                        ));
-                                        self.status = "codeindex: godnodes failed".to_string();
-                                    }
-                                }
-                            }
-                        } else {
-                            self.append_assistant_text(
-                                "[warn] Code index is not active. Enable it first with `/codeindex on`.",
-                            );
                             self.status = "codeindex: not active".to_string();
                         }
                     }
-                    "explain" => {
-                        // Parse the symbol name (everything after "explain").
-                        let symbol = args.split_whitespace().nth(1).unwrap_or("").trim();
+                    _ => {
+                        self.append_assistant_text(
+                            "Usage: `/codeindex graph <build|export|lang <lang>>`",
+                        );
+                    }
+                }
+            }
+            "godnodes" => {
+                // Parse optional N (default 10, max 100).
+                let n = args
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .map(|v| v.clamp(1, 100))
+                    .unwrap_or(10);
 
-                        if symbol.is_empty() {
-                            self.append_assistant_text("Usage: `/codeindex explain <symbol>`");
-                            self.status = "codeindex: explain (usage)".to_string();
-                        } else if let Some(idx) = self.code_index.clone() {
-                            // FR-015: empty-graph guard.
-                            if idx.graph_edge_count().unwrap_or(0) == 0 {
-                                self.append_assistant_text(
-                                    "[warn] No graph data available. \
+                if let Some(idx) = self.code_index.clone() {
+                    // FR-015: empty-graph guard.
+                    if idx.graph_edge_count().unwrap_or(0) == 0 {
+                        self.append_assistant_text(
+                            "[warn] No graph data available. \
                                      Run `/codeindex graph build` first to build \
                                      the semantic edge graph.",
-                                );
-                                self.status = "codeindex: explain (empty graph)".to_string();
-                            } else {
-                                match idx.explain(symbol) {
-                                    Ok(Some(result)) => {
-                                        let mut output = format!(
-                                            "## {} `{}` (line {}, degree {})\n\n",
-                                            result.name,
-                                            result.source_file,
-                                            result.line,
-                                            result.degree,
-                                        );
-                                        output.push_str("### Incoming\n\n");
-                                        if result.incoming.is_empty() {
-                                            output.push_str("_(none)_\n\n");
-                                        } else {
-                                            output.push_str(
-                                                "| Symbol | File | Kind | Confidence |\n",
-                                            );
-                                            output.push_str(
-                                                "|--------|------|------|------------|\n",
-                                            );
-                                            for conn in &result.incoming {
-                                                output.push_str(&format!(
-                                                    "| `{}` | `{}` | {} | {} |\n",
-                                                    conn.symbol,
-                                                    conn.source_file,
-                                                    conn.kind,
-                                                    conn.confidence,
-                                                ));
-                                            }
-                                        }
-                                        output.push_str("\n### Outgoing\n\n");
-                                        if result.outgoing.is_empty() {
-                                            output.push_str("_(none)_\n");
-                                        } else {
-                                            output.push_str(
-                                                "| Symbol | File | Kind | Confidence |\n",
-                                            );
-                                            output.push_str(
-                                                "|--------|------|------|------------|\n",
-                                            );
-                                            for conn in &result.outgoing {
-                                                output.push_str(&format!(
-                                                    "| `{}` | `{}` | {} | {} |\n",
-                                                    conn.symbol,
-                                                    conn.source_file,
-                                                    conn.kind,
-                                                    conn.confidence,
-                                                ));
-                                            }
-                                        }
-                                        self.append_assistant_text(&output);
-                                        self.status = "codeindex: explain".to_string();
-                                    }
-                                    Ok(None) => {
-                                        self.append_assistant_text(&format!(
-                                            "[warn] Symbol `{symbol}` not found in the index."
-                                        ));
-                                        self.status = "codeindex: explain (not found)".to_string();
-                                    }
-                                    Err(e) => {
-                                        self.append_assistant_text(&format!(
-                                            "[err] Explain query failed: {e}"
-                                        ));
-                                        self.status = "codeindex: explain failed".to_string();
-                                    }
+                        );
+                        self.status = "codeindex: godnodes (empty graph)".to_string();
+                    } else {
+                        match idx.godnodes(n) {
+                            Ok(nodes) => {
+                                let mut output =
+                                    String::from("## God Nodes (Top Most-Connected Symbols)\n\n");
+                                output.push_str("| # | Symbol | Source File | Degree |\n");
+                                output.push_str("|---|--------|-------------|--------|\n");
+                                for (i, node) in nodes.iter().enumerate() {
+                                    output.push_str(&format!(
+                                        "| {} | `{}` | `{}` | {} |\n",
+                                        i + 1,
+                                        node.name,
+                                        node.source_file,
+                                        node.degree,
+                                    ));
                                 }
+                                self.append_assistant_text(&output);
+                                self.status =
+                                    format!("codeindex: godnodes ({} symbols)", nodes.len());
                             }
-                        } else {
-                            self.append_assistant_text(
-                                "[warn] Code index is not active. Enable it first with `/codeindex on`.",
-                            );
-                            self.status = "codeindex: not active".to_string();
+                            Err(e) => {
+                                self.append_assistant_text(&format!(
+                                    "[err] God nodes query failed: {e}"
+                                ));
+                                self.status = "codeindex: godnodes failed".to_string();
+                            }
                         }
                     }
-                    "path" => {
-                        // Parse two symbol names: path <A> <B>.
-                        let parts: Vec<&str> = args.split_whitespace().collect();
-                        let from = parts.get(1).copied().unwrap_or("");
-                        let to = parts.get(2).copied().unwrap_or("");
+                } else {
+                    self.append_assistant_text(
+                        "[warn] Code index is not active. Enable it first with `/codeindex on`.",
+                    );
+                    self.status = "codeindex: not active".to_string();
+                }
+            }
+            "explain" => {
+                // Parse the symbol name (everything after "explain").
+                let symbol = args.split_whitespace().nth(1).unwrap_or("").trim();
 
-                        if from.is_empty() || to.is_empty() {
-                            self.append_assistant_text(
-                                "Usage: `/codeindex path <symbolA> <symbolB>`",
-                            );
-                            self.status = "codeindex: path (usage)".to_string();
-                        } else if let Some(idx) = self.code_index.clone() {
-                            // FR-015: empty-graph guard.
-                            if idx.graph_edge_count().unwrap_or(0) == 0 {
-                                self.append_assistant_text(
-                                    "[warn] No graph data available. \
+                if symbol.is_empty() {
+                    self.append_assistant_text("Usage: `/codeindex explain <symbol>`");
+                    self.status = "codeindex: explain (usage)".to_string();
+                } else if let Some(idx) = self.code_index.clone() {
+                    // FR-015: empty-graph guard.
+                    if idx.graph_edge_count().unwrap_or(0) == 0 {
+                        self.append_assistant_text(
+                            "[warn] No graph data available. \
                                      Run `/codeindex graph build` first to build \
                                      the semantic edge graph.",
+                        );
+                        self.status = "codeindex: explain (empty graph)".to_string();
+                    } else {
+                        match idx.explain(symbol) {
+                            Ok(Some(result)) => {
+                                let mut output = format!(
+                                    "## {} `{}` (line {}, degree {})\n\n",
+                                    result.name, result.source_file, result.line, result.degree,
                                 );
-                                self.status = "codeindex: path (empty graph)".to_string();
-                            } else {
-                                match idx.path(from, to) {
-                                    Ok(Some(result)) => {
-                                        let mut output = format!(
-                                            "## Shortest Path: {} -> {} ({} hops)\n\n",
-                                            from, to, result.hops,
-                                        );
-                                        if result.steps.is_empty() {
-                                            output.push_str("(empty path)\n");
-                                        } else {
-                                            for (i, (sym, kind)) in result.steps.iter().enumerate()
-                                            {
-                                                if i == 0 {
-                                                    output.push_str(&format!("`{sym}`"));
-                                                } else if let Some(k) = kind {
-                                                    output.push_str(&format!(" --{k}--> `{sym}`"));
-                                                } else {
-                                                    output.push_str(&format!(" --> `{sym}`"));
-                                                }
-                                            }
-                                            output.push('\n');
-                                        }
-                                        self.append_assistant_text(&output);
-                                        self.status = "codeindex: path".to_string();
-                                    }
-                                    Ok(None) => {
-                                        self.append_assistant_text(&format!(
-                                            "[warn] No path found between `{from}` and `{to}`."
+                                output.push_str("### Incoming\n\n");
+                                if result.incoming.is_empty() {
+                                    output.push_str("_(none)_\n\n");
+                                } else {
+                                    output.push_str("| Symbol | File | Kind | Confidence |\n");
+                                    output.push_str("|--------|------|------|------------|\n");
+                                    for conn in &result.incoming {
+                                        output.push_str(&format!(
+                                            "| `{}` | `{}` | {} | {} |\n",
+                                            conn.symbol,
+                                            conn.source_file,
+                                            conn.kind,
+                                            conn.confidence,
                                         ));
-                                        self.status = "codeindex: path (no path)".to_string();
-                                    }
-                                    Err(e) => {
-                                        self.append_assistant_text(&format!(
-                                            "[err] Path query failed: {e}"
-                                        ));
-                                        self.status = "codeindex: path failed".to_string();
                                     }
                                 }
+                                output.push_str("\n### Outgoing\n\n");
+                                if result.outgoing.is_empty() {
+                                    output.push_str("_(none)_\n");
+                                } else {
+                                    output.push_str("| Symbol | File | Kind | Confidence |\n");
+                                    output.push_str("|--------|------|------|------------|\n");
+                                    for conn in &result.outgoing {
+                                        output.push_str(&format!(
+                                            "| `{}` | `{}` | {} | {} |\n",
+                                            conn.symbol,
+                                            conn.source_file,
+                                            conn.kind,
+                                            conn.confidence,
+                                        ));
+                                    }
+                                }
+                                self.append_assistant_text(&output);
+                                self.status = "codeindex: explain".to_string();
                             }
-                        } else {
-                            self.append_assistant_text(
-                                "[warn] Code index is not active. Enable it first with `/codeindex on`.",
-                            );
-                            self.status = "codeindex: not active".to_string();
+                            Ok(None) => {
+                                self.append_assistant_text(&format!(
+                                    "[warn] Symbol `{symbol}` not found in the index."
+                                ));
+                                self.status = "codeindex: explain (not found)".to_string();
+                            }
+                            Err(e) => {
+                                self.append_assistant_text(&format!(
+                                    "[err] Explain query failed: {e}"
+                                ));
+                                self.status = "codeindex: explain failed".to_string();
+                            }
                         }
                     }
-                    "communities" => {
-                        if let Some(idx) = self.code_index.clone() {
-                            // FR-015: empty-graph guard.
-                            if idx.graph_edge_count().unwrap_or(0) == 0 {
-                                self.append_assistant_text(
-                                    "[warn] No graph data available. \
+                } else {
+                    self.append_assistant_text(
+                        "[warn] Code index is not active. Enable it first with `/codeindex on`.",
+                    );
+                    self.status = "codeindex: not active".to_string();
+                }
+            }
+            "path" => {
+                // Parse two symbol names: path <A> <B>.
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                let from = parts.get(1).copied().unwrap_or("");
+                let to = parts.get(2).copied().unwrap_or("");
+
+                if from.is_empty() || to.is_empty() {
+                    self.append_assistant_text("Usage: `/codeindex path <symbolA> <symbolB>`");
+                    self.status = "codeindex: path (usage)".to_string();
+                } else if let Some(idx) = self.code_index.clone() {
+                    // FR-015: empty-graph guard.
+                    if idx.graph_edge_count().unwrap_or(0) == 0 {
+                        self.append_assistant_text(
+                            "[warn] No graph data available. \
                                      Run `/codeindex graph build` first to build \
                                      the semantic edge graph.",
+                        );
+                        self.status = "codeindex: path (empty graph)".to_string();
+                    } else {
+                        match idx.path(from, to) {
+                            Ok(Some(result)) => {
+                                let mut output = format!(
+                                    "## Shortest Path: {} -> {} ({} hops)\n\n",
+                                    from, to, result.hops,
                                 );
-                                self.status = "codeindex: communities (empty graph)".to_string();
-                            } else {
-                                match idx.communities() {
-                                    Ok(communities) => {
-                                        if communities.is_empty() {
-                                            self.append_assistant_text(
-                                                "[warn] No communities detected. \
+                                if result.steps.is_empty() {
+                                    output.push_str("(empty path)\n");
+                                } else {
+                                    for (i, (sym, kind)) in result.steps.iter().enumerate() {
+                                        if i == 0 {
+                                            output.push_str(&format!("`{sym}`"));
+                                        } else if let Some(k) = kind {
+                                            output.push_str(&format!(" --{k}--> `{sym}`"));
+                                        } else {
+                                            output.push_str(&format!(" --> `{sym}`"));
+                                        }
+                                    }
+                                    output.push('\n');
+                                }
+                                self.append_assistant_text(&output);
+                                self.status = "codeindex: path".to_string();
+                            }
+                            Ok(None) => {
+                                self.append_assistant_text(&format!(
+                                    "[warn] No path found between `{from}` and `{to}`."
+                                ));
+                                self.status = "codeindex: path (no path)".to_string();
+                            }
+                            Err(e) => {
+                                self.append_assistant_text(&format!(
+                                    "[err] Path query failed: {e}"
+                                ));
+                                self.status = "codeindex: path failed".to_string();
+                            }
+                        }
+                    }
+                } else {
+                    self.append_assistant_text(
+                        "[warn] Code index is not active. Enable it first with `/codeindex on`.",
+                    );
+                    self.status = "codeindex: not active".to_string();
+                }
+            }
+            "communities" => {
+                if let Some(idx) = self.code_index.clone() {
+                    // FR-015: empty-graph guard.
+                    if idx.graph_edge_count().unwrap_or(0) == 0 {
+                        self.append_assistant_text(
+                            "[warn] No graph data available. \
+                                     Run `/codeindex graph build` first to build \
+                                     the semantic edge graph.",
+                        );
+                        self.status = "codeindex: communities (empty graph)".to_string();
+                    } else {
+                        match idx.communities() {
+                            Ok(communities) => {
+                                if communities.is_empty() {
+                                    self.append_assistant_text(
+                                        "[warn] No communities detected. \
                                                  Run `/codeindex graph build` first.",
-                                            );
-                                            self.status =
-                                                "codeindex: communities (none)".to_string();
-                                        } else {
-                                            let mut output = String::from("## Communities\n\n");
-                                            output.push_str("| Community | Label | Members |\n");
-                                            output.push_str("|-----------|-------|--------|\n");
-                                            for comm in &communities {
-                                                let label = comm.label.as_deref().unwrap_or("-");
-                                                output.push_str(&format!(
-                                                    "| {} | {} | {} |\n",
-                                                    comm.id, label, comm.member_count,
-                                                ));
-                                            }
-                                            self.append_assistant_text(&output);
-                                            self.status = format!(
-                                                "codeindex: communities ({} found)",
-                                                communities.len()
-                                            );
-                                        }
-                                    }
-                                    Err(e) => {
-                                        self.append_assistant_text(&format!(
-                                            "[err] Community detection failed: {e}"
+                                    );
+                                    self.status = "codeindex: communities (none)".to_string();
+                                } else {
+                                    let mut output = String::from("## Communities\n\n");
+                                    output.push_str("| Community | Label | Members |\n");
+                                    output.push_str("|-----------|-------|--------|\n");
+                                    for comm in &communities {
+                                        let label = comm.label.as_deref().unwrap_or("-");
+                                        output.push_str(&format!(
+                                            "| {} | {} | {} |\n",
+                                            comm.id, label, comm.member_count,
                                         ));
-                                        self.status = "codeindex: communities failed".to_string();
                                     }
+                                    self.append_assistant_text(&output);
+                                    self.status = format!(
+                                        "codeindex: communities ({} found)",
+                                        communities.len()
+                                    );
                                 }
                             }
-                        } else {
-                            self.append_assistant_text(
-                                "[warn] Code index is not active. Enable it first with `/codeindex on`.",
-                            );
-                            self.status = "codeindex: not active".to_string();
+                            Err(e) => {
+                                self.append_assistant_text(&format!(
+                                    "[err] Community detection failed: {e}"
+                                ));
+                                self.status = "codeindex: communities failed".to_string();
+                            }
                         }
                     }
-                    "rebuild" => {
-                        if let Some(idx) = self.code_index.clone() {
-                            self.append_assistant_text(
-                                "\u{1f504} **Rebuilding FTS index** from SQLite data...",
-                            );
-                            match idx.rebuild_fts() {
-                                Ok(()) => {
-                                    let fts_count =
-                                        idx.status().map(|s| s.fts_doc_count).unwrap_or(0);
-                                    self.append_assistant_text(&format!(
-                                        "\u{2705} FTS rebuild complete: {} documents indexed.",
-                                        fts_count,
-                                    ));
-                                    self.status =
-                                        format!("codeindex: FTS rebuilt ({fts_count} docs)");
-                                }
-                                Err(e) => {
-                                    self.append_assistant_text(&format!(
-                                        "\u{274c} FTS rebuild failed: {e}"
-                                    ));
-                                    self.status = "codeindex: rebuild failed".to_string();
-                                }
-                            }
-                        } else {
-                            self.append_assistant_text(
+                } else {
+                    self.append_assistant_text(
+                        "[warn] Code index is not active. Enable it first with `/codeindex on`.",
+                    );
+                    self.status = "codeindex: not active".to_string();
+                }
+            }
+            "rebuild" => {
+                if let Some(idx) = self.code_index.clone() {
+                    self.append_assistant_text(
+                        "\u{1f504} **Rebuilding FTS index** from SQLite data...",
+                    );
+                    match idx.rebuild_fts() {
+                        Ok(()) => {
+                            let fts_count = idx.status().map(|s| s.fts_doc_count).unwrap_or(0);
+                            self.append_assistant_text(&format!(
+                                "\u{2705} FTS rebuild complete: {} documents indexed.",
+                                fts_count,
+                            ));
+                            self.status = format!("codeindex: FTS rebuilt ({fts_count} docs)");
+                        }
+                        Err(e) => {
+                            self.append_assistant_text(&format!(
+                                "\u{274c} FTS rebuild failed: {e}"
+                            ));
+                            self.status = "codeindex: rebuild failed".to_string();
+                        }
+                    }
+                } else {
+                    self.append_assistant_text(
                                 "\u{26a0}\u{fe0f} Code index is not active. Enable it first with `/codeindex on`.",
                             );
-                        }
-                    }
-                    "skillgen" => {
-                        self.append_assistant_text(
+                }
+            }
+            "skillgen" => {
+                self.append_assistant_text(
                             "\u{1f9e9} **Generating graphify skill...** writing SKILL.md and references to `~/.codemason/skills/graphify/`.",
                         );
-                        match super::skillgen::generate_graphify_skill() {
-                            Ok(result) => {
-                                let action = if result.already_existed {
-                                    "Updated"
-                                } else {
-                                    "Installed"
-                                };
-                                self.append_assistant_text(&format!(
-                                    "\u{2705} {action} graphify skill: {} files written to `{}`.\n\n\
+                match super::skillgen::generate_graphify_skill() {
+                    Ok(result) => {
+                        let action = if result.already_existed {
+                            "Updated"
+                        } else {
+                            "Installed"
+                        };
+                        self.append_assistant_text(&format!(
+                            "\u{2705} {action} graphify skill: {} files written to `{}`.\n\n\
                                      The skill is now available via `/skill` or `Skill`. \
                                      It provides a `/graphify` command that turns any folder of \
                                      files into a navigable knowledge graph with community \
                                      detection, god nodes, and query/path/explain tools.",
-                                    result.files_written,
-                                    result.dest.display(),
-                                ));
-                                self.status =
-                                    format!("codeindex: skillgen ({} files)", result.files_written);
-                            }
-                            Err(e) => {
-                                self.append_assistant_text(&format!(
-                                    "\u{274c} Failed to generate graphify skill: {e}",
-                                ));
-                                self.status = "codeindex: skillgen failed".to_string();
-                            }
-                        }
+                            result.files_written,
+                            result.dest.display(),
+                        ));
+                        self.status =
+                            format!("codeindex: skillgen ({} files)", result.files_written);
                     }
-                    "help" | "--help" | "-h" => {
-                        self.append_assistant_text(
+                    Err(e) => {
+                        self.append_assistant_text(&format!(
+                            "\u{274c} Failed to generate graphify skill: {e}",
+                        ));
+                        self.status = "codeindex: skillgen failed".to_string();
+                    }
+                }
+            }
+            "help" | "--help" | "-h" => {
+                self.append_assistant_text(
                                                   "## /codeindex \u{2014} Codebase Index Management\n\n\
                                                    **Sub-commands:**\n\n\
                                                    `/codeindex on` \u{2014} Enable codebase indexing\n\
@@ -12468,22 +12693,23 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                                                    - `codeindex_communities` \u{2014} List communities\n\
                                                    - `codeindex_godnodes` \u{2014} List high-degree hub symbols",
                                               );
-                        self.status = "codeindex: help".to_string();
-                    }
-                    _ => {
-                        self.append_assistant_text(
+                self.status = "codeindex: help".to_string();
+            }
+            _ => {
+                self.append_assistant_text(
                             "Usage: `/codeindex on|off|show|status|lang|reindex|rebuild|graph <build|export|lang>|explain <symbol>|path <A> <B>|communities|godnodes|skillgen|help`",
                         );
-                    }
-                }
             }
+        }
+    }
 
-            "router" => {
-                let rest = args.trim();
-                let sub = rest.split_whitespace().next().unwrap_or("");
-                match sub {
-                    "help" | "" => {
-                        self.append_assistant_text(
+    /// Run the `/router` slash command.
+    fn slash_router(&mut self, args: &str) {
+        let rest = args.trim();
+        let sub = rest.split_whitespace().next().unwrap_or("");
+        match sub {
+            "help" | "" => {
+                self.append_assistant_text(
                                                                       "From: /router\n\
                                                                        ## /router - Model Router Management\n\n\
                                                                        | Sub-command | Description |\n\
@@ -12508,38 +12734,37 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                                                                        - `[simple]`, `[complex]`, etc.\n\
                                                                        - `simple mode:`, `deep mode:`, etc.",
                                                                   );
-                        self.status = "router: help".to_string();
-                    }
-                    "reload" => {
-                        // Find the config file path
-                        let cwd = self.cwd_path.clone();
-                        let project_config = cwd.join(".codemason").join("codemason.json");
-                        let config_dir = dirs::config_dir()
-                            .unwrap_or_else(|| cwd.clone())
-                            .join("codemason");
-                        let global_config = config_dir.join("codemason.json");
+                self.status = "router: help".to_string();
+            }
+            "reload" => {
+                // Find the config file path
+                let cwd = self.cwd_path.clone();
+                let project_config = cwd.join(".codemason").join("codemason.json");
+                let config_dir = dirs::config_dir()
+                    .unwrap_or_else(|| cwd.clone())
+                    .join("codemason");
+                let global_config = config_dir.join("codemason.json");
 
-                        let config_path = if project_config.exists() {
-                            Some(project_config)
-                        } else if global_config.exists() {
-                            Some(global_config)
-                        } else {
-                            None
-                        };
+                let config_path = if project_config.exists() {
+                    Some(project_config)
+                } else if global_config.exists() {
+                    Some(global_config)
+                } else {
+                    None
+                };
 
-                        match config_path {
-                            Some(ref path) => {
-                                match std::fs::read_to_string(path) {
-                                    Ok(raw) => {
-                                        match serde_json::from_str::<serde_json::Value>(&raw) {
-                                            Ok(json) => {
-                                                let router_json = json
-                                                    .get("provider")
-                                                    .and_then(|p| p.get("router"));
+                match config_path {
+                    Some(ref path) => {
+                        match std::fs::read_to_string(path) {
+                            Ok(raw) => {
+                                match serde_json::from_str::<serde_json::Value>(&raw) {
+                                    Ok(json) => {
+                                        let router_json =
+                                            json.get("provider").and_then(|p| p.get("router"));
 
-                                                match router_json {
-                                                    Some(rj) => {
-                                                        match serde_json::from_value::<codemason_agent::provider::router_config::RouterConfig>(rj.clone()) {
+                                        match router_json {
+                                            Some(rj) => {
+                                                match serde_json::from_value::<codemason_agent::provider::router_config::RouterConfig>(rj.clone()) {
                                                                                                                                                                       Ok(router_config) => {
                                                                                                                                                                           self.router_enabled = router_config.enabled;
                                                                                                                                                                           self.session.router_current_tier = None; // reset on reload
@@ -12566,71 +12791,69 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                                                                                                                                                                           self.status = "router: reload parse error".to_string();
                                                                                                                                                                       }
                                                                                                                                                                   }
-                                                    }
-                                                    None => {
-                                                        self.append_assistant_text(
+                                            }
+                                            None => {
+                                                self.append_assistant_text(
                                                                                                                                                                       "From: /router\n[warn] No `provider.router` section found in codemason.json. \
                                                                                                                                                                        Add a `router` object under `provider` to configure the router.",
                                                                                                                                                                   );
-                                                        self.status =
-                                                            "router: no config".to_string();
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                self.append_assistant_text(&format!(
-                                                                                                                                                              "From: /router\n[warn] Failed to parse codemason.json: {}",
-                                                                                                                                                              e
-                                                                                                                                                          ));
-                                                self.status =
-                                                    "router: reload parse error".to_string();
+                                                self.status = "router: no config".to_string();
                                             }
                                         }
                                     }
                                     Err(e) => {
                                         self.append_assistant_text(&format!(
-                                            "From: /router\n[warn] Failed to read {}: {}",
-                                            path.display(),
-                                            e
-                                        ));
-                                        self.status = "router: reload read error".to_string();
+                                                                                                                                                              "From: /router\n[warn] Failed to parse codemason.json: {}",
+                                                                                                                                                              e
+                                                                                                                                                          ));
+                                        self.status = "router: reload parse error".to_string();
                                     }
                                 }
                             }
-                            None => {
-                                self.append_assistant_text(
-                                                                                                                                              "From: /router\n[warn] No codemason.json found. Create `.codemason/codemason.json` with a `provider.router` section.",
-                                                                                                                                          );
-                                self.status = "router: reload failed".to_string();
+                            Err(e) => {
+                                self.append_assistant_text(&format!(
+                                    "From: /router\n[warn] Failed to read {}: {}",
+                                    path.display(),
+                                    e
+                                ));
+                                self.status = "router: reload read error".to_string();
                             }
                         }
                     }
-                    "on" => {
-                        self.router_enabled = true;
+                    None => {
                         self.append_assistant_text(
+                                                                                                                                              "From: /router\n[warn] No codemason.json found. Create `.codemason/codemason.json` with a `provider.router` section.",
+                                                                                                                                          );
+                        self.status = "router: reload failed".to_string();
+                    }
+                }
+            }
+            "on" => {
+                self.router_enabled = true;
+                self.append_assistant_text(
                                                                       "From: /router\n[ok] Router enabled. Prompts will be classified and routed to the appropriate model.",
                                                                   );
-                        self.status = "router: on".to_string();
-                    }
-                    "off" => {
-                        self.router_enabled = false;
-                        self.append_assistant_text(
-                                                                      "From: /router\n[ok] Router disabled. All prompts will use the default model.",
-                                                                  );
-                        self.status = "router: off".to_string();
-                    }
-                    "status" => {
-                        let enabled_str = if self.router_enabled {
-                            "enabled"
-                        } else {
-                            "disabled"
-                        };
-                        let tier_str = self
-                            .session
-                            .router_current_tier
-                            .as_deref()
-                            .unwrap_or("none");
-                        self.append_assistant_text(&format!(
+                self.status = "router: on".to_string();
+            }
+            "off" => {
+                self.router_enabled = false;
+                self.append_assistant_text(
+                    "From: /router\n[ok] Router disabled. All prompts will use the default model.",
+                );
+                self.status = "router: off".to_string();
+            }
+            "status" => {
+                let enabled_str = if self.router_enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                };
+                let tier_str = self
+                    .session
+                    .router_current_tier
+                    .as_deref()
+                    .unwrap_or("none");
+                self.append_assistant_text(&format!(
                                                                       "From: /router\n\
                                                                        Router status: **{}**\n\
                                                                        Current tier: {}\n\
@@ -12638,164 +12861,126 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                                                                        Use `/router tiers` to see model mappings, or `/router test <prompt>` to classify a prompt.",
                                                                       enabled_str, tier_str,
                                                                   ));
-                        self.status = "router: status".to_string();
-                    }
-                    "test" => {
-                        let prompt = rest.strip_prefix("test").unwrap_or("").trim();
-                        if prompt.is_empty() {
-                            self.append_assistant_text(
+                self.status = "router: status".to_string();
+            }
+            "test" => {
+                let prompt = rest.strip_prefix("test").unwrap_or("").trim();
+                if prompt.is_empty() {
+                    self.append_assistant_text(
                                                                           "From: /router\nUsage: `/router test <prompt>` - classify a prompt and show scores.",
                                                                       );
-                        } else {
-                            use codemason_agent::provider::router_classifier::{
-                                AttachmentInfo, PromptClassifier,
-                            };
-                            use codemason_agent::provider::router_config::{
-                                BoundaryConfig, WeightConfig,
-                            };
-                            let weights = WeightConfig::default();
-                            let boundaries = BoundaryConfig::default();
-                            let result = PromptClassifier::classify(
-                                prompt,
-                                None,
-                                &weights,
-                                &boundaries,
-                                &AttachmentInfo::default(),
-                            );
-                            let mut table = String::from(
-                                "From: /router\n```\nDimension                 Score\n───────────────────────────────\n",
-                            );
-                            for i in 0..15 {
-                                let name =
-                                    codemason_agent::provider::router_classifier::dimension_name(i);
-                                table.push_str(&format!(
-                                    "{:<26}{:.3}\n",
-                                    name, result.dimension_scores[i]
-                                ));
-                            }
-                            table.push_str(&format!("───────────────────────────────\n"));
-                            table.push_str(&format!(
-                                "{:<26}{:.3}\n",
-                                "composite", result.composite_score
-                            ));
-                            table.push_str(&format!("{:<26}{}\n", "tier", result.tier));
-                            if result.requires_vision {
-                                table.push_str(&format!("{:<26}{}\n", "requires_vision", "true"));
-                            }
-                            table.push_str("```\n");
-                            self.append_assistant_text(&table);
-                            self.session.router_current_tier = Some(result.tier.to_string());
-                            self.status = format!("router: test -> {}", result.tier);
-                        }
+                } else {
+                    use codemason_agent::provider::router_classifier::{
+                        AttachmentInfo, PromptClassifier,
+                    };
+                    use codemason_agent::provider::router_config::{BoundaryConfig, WeightConfig};
+                    let weights = WeightConfig::default();
+                    let boundaries = BoundaryConfig::default();
+                    let result = PromptClassifier::classify(
+                        prompt,
+                        None,
+                        &weights,
+                        &boundaries,
+                        &AttachmentInfo::default(),
+                    );
+                    let mut table = String::from(
+                        "From: /router\n```\nDimension                 Score\n───────────────────────────────\n",
+                    );
+                    for i in 0..15 {
+                        let name = codemason_agent::provider::router_classifier::dimension_name(i);
+                        table.push_str(&format!("{:<26}{:.3}\n", name, result.dimension_scores[i]));
                     }
-                    "weights" => {
-                        use codemason_agent::provider::router_config::WeightConfig;
-                        let sub2 = rest.strip_prefix("weights").unwrap_or("").trim();
-                        if sub2.is_empty() {
-                            let w = WeightConfig::default();
-                            let mut table = String::from(
-                                "From: /router\n```\nDimension                 Weight\n───────────────────────────────\n",
-                            );
-                            for i in 0..15 {
-                                let name =
-                                    codemason_agent::provider::router_classifier::dimension_name(i);
-                                table.push_str(&format!(
-                                    "{:<26}{:.2}\n",
-                                    name,
-                                    w.weight_by_index(i)
-                                ));
-                            }
-                            table.push_str("```\n");
-                            self.append_assistant_text(&table);
-                            self.status = "router: weights".to_string();
-                        } else {
-                            self.append_assistant_text(
+                    table.push_str(&format!("───────────────────────────────\n"));
+                    table.push_str(&format!(
+                        "{:<26}{:.3}\n",
+                        "composite", result.composite_score
+                    ));
+                    table.push_str(&format!("{:<26}{}\n", "tier", result.tier));
+                    if result.requires_vision {
+                        table.push_str(&format!("{:<26}{}\n", "requires_vision", "true"));
+                    }
+                    table.push_str("```\n");
+                    self.append_assistant_text(&table);
+                    self.session.router_current_tier = Some(result.tier.to_string());
+                    self.status = format!("router: test -> {}", result.tier);
+                }
+            }
+            "weights" => {
+                use codemason_agent::provider::router_config::WeightConfig;
+                let sub2 = rest.strip_prefix("weights").unwrap_or("").trim();
+                if sub2.is_empty() {
+                    let w = WeightConfig::default();
+                    let mut table = String::from(
+                        "From: /router\n```\nDimension                 Weight\n───────────────────────────────\n",
+                    );
+                    for i in 0..15 {
+                        let name = codemason_agent::provider::router_classifier::dimension_name(i);
+                        table.push_str(&format!("{:<26}{:.2}\n", name, w.weight_by_index(i)));
+                    }
+                    table.push_str("```\n");
+                    self.append_assistant_text(&table);
+                    self.status = "router: weights".to_string();
+                } else {
+                    self.append_assistant_text(
                                                                           "From: /router\n[warn] Per-dimension weight override is not yet supported. \
                                                                            Configure `provider.router.weights` in `codemason.json`.",
                                                                       );
-                            self.status = "router: weights not supported".to_string();
-                        }
-                    }
-                    "boundaries" => {
-                        use codemason_agent::provider::router_config::BoundaryConfig;
-                        let sub2 = rest.strip_prefix("boundaries").unwrap_or("").trim();
-                        if sub2.is_empty() {
-                            let b = BoundaryConfig::default();
-                            self.append_assistant_text(&format!(
+                    self.status = "router: weights not supported".to_string();
+                }
+            }
+            "boundaries" => {
+                use codemason_agent::provider::router_config::BoundaryConfig;
+                let sub2 = rest.strip_prefix("boundaries").unwrap_or("").trim();
+                if sub2.is_empty() {
+                    let b = BoundaryConfig::default();
+                    self.append_assistant_text(&format!(
                                                                           "From: /router\n```\nBoundary            Threshold\n──────────────────────────\nSIMPLE -> MEDIUM     {:.2}\nMEDIUM -> COMPLEX    {:.2}\nCOMPLEX -> REASONING {:.2}\n```",
                                                                           b.simple_medium, b.medium_complex, b.complex_reasoning,
                                                                       ));
-                            self.status = "router: boundaries".to_string();
-                        } else {
-                            self.append_assistant_text(
+                    self.status = "router: boundaries".to_string();
+                } else {
+                    self.append_assistant_text(
                                                                           "From: /router\n[warn] Boundary override is not yet supported. \
                                                                            Configure `provider.router.boundaries` in `codemason.json`.",
                                                                       );
-                            self.status = "router: boundaries not supported".to_string();
-                        }
+                    self.status = "router: boundaries not supported".to_string();
+                }
+            }
+            "tiers" => {
+                use codemason_agent::provider::router_config::{RouterConfig, Tier};
+                let config = RouterConfig::default();
+                let mut output = String::from(
+                    "From: /router\n```\nTier      Provider/Model                         Timeout\n─────────────────────────────────────────────────\n",
+                );
+                for tier in Tier::all() {
+                    let tc = config.tier_config(*tier);
+                    for (i, entry) in tc.models.iter().enumerate() {
+                        let prefix = if i == 0 {
+                            tier.to_string()
+                        } else {
+                            "  fallback".to_string()
+                        };
+                        let timeout = tc
+                            .timeout_ms
+                            .map(|ms| format!("{}ms", ms))
+                            .unwrap_or_else(|| "default".to_string());
+                        output.push_str(&format!(
+                            "{:<10}{}/{}  {}\n",
+                            prefix, entry.provider_id, entry.model, timeout
+                        ));
                     }
-                    "tiers" => {
-                        use codemason_agent::provider::router_config::{RouterConfig, Tier};
-                        let config = RouterConfig::default();
-                        let mut output = String::from(
-                            "From: /router\n```\nTier      Provider/Model                         Timeout\n─────────────────────────────────────────────────\n",
-                        );
-                        for tier in Tier::all() {
-                            let tc = config.tier_config(*tier);
-                            for (i, entry) in tc.models.iter().enumerate() {
-                                let prefix = if i == 0 {
-                                    tier.to_string()
-                                } else {
-                                    "  fallback".to_string()
-                                };
-                                let timeout = tc
-                                    .timeout_ms
-                                    .map(|ms| format!("{}ms", ms))
-                                    .unwrap_or_else(|| "default".to_string());
-                                output.push_str(&format!(
-                                    "{:<10}{}/{}  {}\n",
-                                    prefix, entry.provider_id, entry.model, timeout
-                                ));
-                            }
-                        }
-                        output.push_str("```\n");
-                        self.append_assistant_text(&output);
-                        self.status = "router: tiers".to_string();
-                    }
-                    _ => {
-                        self.append_assistant_text(
+                }
+                output.push_str("```\n");
+                self.append_assistant_text(&output);
+                self.status = "router: tiers".to_string();
+            }
+            _ => {
+                self.append_assistant_text(
                                                                                                   "From: /router\n[warn] Unknown subcommand. Use `/router help` for available commands.",
                                                                                               );
-                        self.status = "router: unknown".to_string();
-                    }
-                }
-            }
-            // -- /cron ----------------------------------------------------
-            "cron" => self.handle_cron_command(args),
-            // -- /triggers ------------------------------------------------
-            "triggers" => self.handle_triggers_command(args),
-            // -- /inbox ------------------------------------
-            "inbox" => self.handle_inbox_command(args),
-            // -- /queue ---------------------------------------------------
-            "queue" => self.handle_queue_command(args).await,
-            // -- /loop ----------------------------------------------------
-            "loop" => handle_loop_command(self, args),
-            _ => {
-                if !self.invoke_skill_command(cmd, args) {
-                    // Unknown command: the status line alone is easily missed
-                    // (it auto-expires back to "ready"), which made a typo'd
-                    // slash command look like a silently swallowed prompt.
-                    // Surface the rejection in the message window too.
-                    self.status = format!("Unknown command: /{}", cmd);
-                    self.append_assistant_text(&format!(
-                        "From: /{cmd}\n\n\u{26a0} Unknown command: `/{cmd}`. \
-                         Type `/help` for the command list.",
-                    ));
-                    self.push_log_no_agent(LogLevel::Warn, format!("Unknown command: /{}", cmd));
-                }
+                self.status = "router: unknown".to_string();
             }
         }
-        self.assert_ui_invariants();
     }
 
     /// Record the lead's verdict on a teammate's submitted plan (FR-034).
