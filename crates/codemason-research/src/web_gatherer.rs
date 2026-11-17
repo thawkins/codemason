@@ -2031,22 +2031,6 @@ impl WebGatherer {
                 }
             };
         }
-        // Single terminal emission site (FR-004): called once after the
-        // gather loops unwind, with the final captured count. Interim
-        // truncation sites set `truncated` and break without emitting.
-        let emit_deadline_event = |observer: Option<&dyn GatherObserver>, captured: usize| {
-            if let Some(obs) = observer {
-                obs.on_event(GatherEvent::PhaseTimedOut {
-                    deadline_secs,
-                    captured,
-                });
-            }
-            tracing::warn!(
-                deadline_secs,
-                captured,
-                "research: web phase deadline reached; proceeding with sources gathered so far"
-            );
-        };
 
         if let Some(log) = &self.gather_log
             && let Err(e) = log
@@ -2067,141 +2051,16 @@ impl WebGatherer {
         // converted back into `Source::Web` entries and returned directly.
         // Errors are logged and treated as "no matches" so a vault problem
         // never fails a gather pass.
-        if let Some(vault) = &self.vault {
-            match self
-                .gather_from_vault(vault.clone(), topic, max_results, observer)
-                .await
-            {
-                Ok(Some(result)) => {
-                    // FR-016 (T-021): if the vault already contains enough
-                    // sources for the requested tier, skip new web searches.
-                    let required = self.sufficient_sources.unwrap_or(1);
-                    if result.sources.len() >= required {
-                        tracing::info!(
-                            topic,
-                            sources = result.sources.len(),
-                            required,
-                            "research: vault has sufficient sources; skipping web search"
-                        );
-                        if let Some(obs) = observer {
-                            obs.on_event(GatherEvent::VaultSufficient {
-                                count: result.sources.len(),
-                                required,
-                                tier: self
-                                    .sufficient_sources
-                                    .map(|_| "configured".to_string())
-                                    .unwrap_or_else(|| "default".to_string()),
-                            });
-                        }
-                        return Ok(result);
-                    }
-                    tracing::info!(
-                        topic,
-                        sources = result.sources.len(),
-                        required,
-                        "research: vault sources are below tier threshold; continuing to web search"
-                    );
-                }
-                Ok(None) => {
-                    tracing::info!(
-                        topic,
-                        "research: vault lookup returned no matches; continuing to web search"
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "research: vault lookup failed; continuing to web search");
-                }
-            }
+        if let Some(result) = self.vault_shortcut(topic, max_results, observer).await {
+            return Ok(result);
         }
 
         // Determine the set of sub-queries. If no decomposer is configured
         // we still treat the original topic as a single query so callers see
         // a consistent [`GatherResult`].
-        let queries: Vec<String> = if truncated {
-            Vec::new()
-        } else {
-            match &self.decomposer {
-                Some(d) => {
-                    // Bound decomposition by the remaining phase budget; a
-                    // stalled LLM decomposer must not consume the whole
-                    // budget or outlive it. When the deadline elapses here,
-                    // `truncated` short-circuits into an empty query set, so
-                    // no sub-query search is issued at all (FR-008: no new
-                    // work after the deadline).
-                    let decomposed = match tokio::time::timeout(remaining(), d.decompose(topic))
-                        .await
-                    {
-                        Ok(Ok(qs)) if !qs.is_empty() => qs,
-                        Ok(Ok(_)) => {
-                            tracing::warn!(
-                                "research: decomposer returned empty queries; using topic"
-                            );
-                            vec![topic.to_string()]
-                        }
-                        Ok(Err(e)) => {
-                            tracing::warn!(
-                                error = %e,
-                                "research: query decomposition failed; falling back to single query"
-                            );
-                            vec![topic.to_string()]
-                        }
-                        Err(_) => {
-                            if deadline.is_some() {
-                                truncated = true;
-                            }
-                            Vec::new()
-                        }
-                    };
-                    // `--max-queries`: a hard cap on the number of decomposed
-                    // queries this pass searches. The decomposer usually
-                    // applies the cap itself; enforcing it here too keeps the
-                    // limit honest for any decomposer implementation. A limit
-                    // of 0 means "unbounded" and resolves to `None`.
-                    match crate::limits::effective_limit(d.query_limit().unwrap_or(0)) {
-                        Some(limit) if decomposed.len() > limit => {
-                            tracing::debug!(
-                                decomposed = decomposed.len(),
-                                limit,
-                                "research: capping decomposed queries to --max-queries"
-                            );
-                            decomposed.into_iter().take(limit).collect()
-                        }
-                        _ => decomposed,
-                    }
-                }
-                None => vec![topic.to_string()],
-            }
-        };
-
-        // `--age`: append the window's start date to every decomposed query so
-        // the search engine steers towards material inside the window. The
-        // post-fetch filter below is only a backstop - without this hint the
-        // engine is free to return an all-old result set that is then discarded
-        // wholesale, yielding an empty report. The rewrite happens *before* the
-        // `QueriesDecomposed` event so the progress panel and `RESEARCH.md`
-        // report the queries that are actually sent to the search backend.
-        let queries: Vec<String> = match self.max_age {
-            Some(span) => queries
-                .iter()
-                .map(|q| crate::search_query_age_hint(q, span, self.age_reference))
-                .collect(),
-            None => queries,
-        };
-        if let Some(obs) = observer {
-            obs.on_event(GatherEvent::QueriesDecomposed {
-                queries: queries.clone(),
-            });
-        }
-        if let Some(log) = &self.gather_log
-            && let Err(e) =
-                log.lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .log_event(&serde_json::json!({
-                        "event": "queries_decomposed",
-                        "queries": queries,
-                    }))
-        {
-            tracing::warn!(error = %e, "research: failed to write queries to web URL log");
+        let (queries, decompose_timed_out) = self.plan_queries(topic, deadline, observer).await;
+        if decompose_timed_out {
+            truncated = true;
         }
 
         // Run each sub-query in parallel with bounded concurrency. Each
@@ -2248,95 +2107,22 @@ impl WebGatherer {
         let search_futures: Vec<_> = queries
             .iter()
             .map(|q| {
-                let q = q.clone();
-                let tool = search_tool.clone();
-                let budget = search_budget.clone();
-                let cache = query_cache.clone();
-                let stats = provider_stats.clone();
-                let exclude = Arc::clone(&exclude_engines);
-                // `--age`: the exact window start, as an ISO date, handed to
-                // the search tool as a structured bound. `None` without a span.
-                let published_after: Option<String> = self
-                    .max_age
-                    .map(|span| span.oldest_allowed_date(self.age_reference));
-                async move {
-                    // Run-scoped search budget: reserve one call before any
-                    // provider request. Exhaustion skips the search entirely.
-                    if let Some(budget) = &budget
-                        && !budget.try_acquire()
-                    {
-                        return SearchCallOutcome::BudgetExhausted;
-                    }
-                    // Shared query cache: an identical query already answered
-                    // this run is served without a provider call. The exclusion
-                    // set and the `--age` date bound are folded into the cache
-                    // key so a bounded result can never satisfy an unbounded
-                    // query (or a differently bounded one) in the same run.
-                    let cache_key = search_cache_key(&q, &exclude, published_after.as_deref());
-                    if let Some(cache) = &cache
-                        && let Some(hits) = cache.get(&cache_key)
-                    {
-                        return SearchCallOutcome::Ok { hits };
-                    }
-                    // Retry loop with exponential backoff.
-                    let mut attempt: u32 = 0;
-                    let mut last_error;
-                    loop {
-                        let search_result = tool
-                            .search_with_date_bound(
-                                &q,
-                                per_query_allowance,
-                                &exclude,
-                                published_after.as_deref(),
-                            )
-                            .await;
-                        match search_result {
-                            Ok(hits) => {
-                                // Record one logical search call (retries
-                                // included) and memoise the result.
-                                if let Some(stats) = &stats {
-                                    stats.record(&hit_search_tool(&hits));
-                                }
-                                // PERF-077: share the hit vector behind an Arc
-                                // so caching is a refcount hand-off rather than
-                                // a deep clone of every hit.
-                                let hits: Arc<[WebSearchHit]> = hits.into();
-                                if let Some(cache) = &cache {
-                                    cache.insert(&cache_key, Arc::clone(&hits));
-                                }
-                                return SearchCallOutcome::Ok { hits };
-                            }
-                            Err(e) => {
-                                last_error = e.to_string();
-                                if attempt >= max_retries {
-                                    // Record the logical call even on terminal
-                                    // failure so the provider total reflects
-                                    // the paid request.
-                                    if let Some(stats) = &stats {
-                                        stats.record(&hit_search_tool(&[]));
-                                    }
-                                    return SearchCallOutcome::Err {
-                                        error: last_error.clone(),
-                                        retries: attempt,
-                                    };
-                                }
-                                attempt += 1;
-                                let delay_ms = base_delay_ms
-                                    .saturating_mul(
-                                        1u64.checked_shl(attempt - 1).unwrap_or(u64::MAX),
-                                    )
-                                    .min(MAX_SEARCH_RETRY_DELAY_MS);
-                                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                                tracing::warn!(
-                                    query = %q,
-                                    attempt,
-                                    error = %last_error,
-                                    "research: retrying sub-query search after transient failure"
-                                );
-                            }
-                        }
-                    }
-                }
+                search_sub_query(SubQuerySearch {
+                    query: q.clone(),
+                    tool: search_tool.clone(),
+                    budget: search_budget.clone(),
+                    cache: query_cache.clone(),
+                    stats: provider_stats.clone(),
+                    exclude: Arc::clone(&exclude_engines),
+                    // `--age`: the exact window start, as an ISO date, handed to
+                    // the search tool as a structured bound. `None` without a span.
+                    published_after: self
+                        .max_age
+                        .map(|span| span.oldest_allowed_date(self.age_reference)),
+                    per_query_allowance,
+                    max_retries,
+                    base_delay_ms,
+                })
             })
             .collect();
         let mut results = futures::stream::iter(search_futures)
@@ -2358,58 +2144,7 @@ impl WebGatherer {
         // is distinguishable from a complete one, not only when every
         // sub-query fails.
         let mut failed_sub_queries = 0usize;
-        let mut excluded_count = 0usize;
-        let mut considered_count = 0usize;
-        // Per-engine accounting (T-006). All bump sites run on the gather
-        // task itself (search loop + fetch dispatch loop), so a plain map
-        // needs no locking.
-        let mut per_engine: std::collections::BTreeMap<String, EngineSweepStat> =
-            std::collections::BTreeMap::new();
-        // Global per-reason exclusion tally for the summary totals row. Kept
-        // alongside the per-engine breakdown so the totals row reports the
-        // same reasons even when consensus crediting inflates engine sums.
-        let mut excluded_by_reason: std::collections::BTreeMap<ExclusionReason, usize> =
-            std::collections::BTreeMap::new();
-        // Global fetch-failure tally by fine-grained cause, so the `fetch`
-        // reason column on the totals row breaks down into the individual
-        // fetch failure modes.
-        let mut failed_by_kind: std::collections::BTreeMap<FetchFailureKind, usize> =
-            std::collections::BTreeMap::new();
-        let log_rejected = |url: &str,
-                            query: &str,
-                            title: &str,
-                            search_tool: &str,
-                            search_engine: &str,
-                            reason: &str,
-                            detail: Option<&serde_json::Value>| {
-            self.log_url_outcome(
-                url,
-                query,
-                title,
-                search_tool,
-                search_engine,
-                "rejected",
-                reason,
-                detail,
-            );
-        };
-        let log_captured = |url: &str,
-                            query: &str,
-                            title: &str,
-                            search_tool: &str,
-                            search_engine: &str,
-                            detail: Option<&serde_json::Value>| {
-            self.log_url_outcome(
-                url,
-                query,
-                title,
-                search_tool,
-                search_engine,
-                "captured",
-                "",
-                detail,
-            );
-        };
+        let mut tally = SweepTally::default();
         let mut budget_exhausted_emitted = false;
 
         while let Some((idx, outcome)) = next_bounded!(results) {
@@ -2427,170 +2162,22 @@ impl WebGatherer {
                 Arc::from(queries.get(idx).map_or(topic, std::string::String::as_str));
             match outcome {
                 SearchCallOutcome::Ok { hits } => {
-                    // `hits` is an `Arc<[WebSearchHit]>`; clone it into an owned
-                    // `Vec` so each hit can be mutated in place below. The Arc
+                    // `hits` is an `Arc<[WebSearchHit]>`; clone each hit out
+                    // of it so it can be mutated while screening. The Arc
                     // keeps the cache entry alive without a deep copy.
-                    for mut hit in hits.iter().cloned() {
+                    for hit in hits.iter().cloned() {
                         let url_key = hit.url.to_lowercase();
                         if !seen_urls.insert(url_key) {
                             continue;
                         }
-                        // Classify once so the two branches below can reuse the
-                        // result instead of re-splitting the engine CSV twice.
-                        let is_scholarly = is_scholarly_hit(&hit);
-                        let is_encyclopedia = is_encyclopedia_hit(&hit);
-                        // Count every deduplicated hit as considered so the
-                        // summary balances exactly:
-                        // considered = captured + excluded + capped + cancelled.
-                        considered_count += 1;
-                        bump_engine_stats(&mut per_engine, &hit.search_engine, |s| {
-                            s.considered += 1
-                        });
-                        self.log_url_outcome(
-                            &hit.url,
+                        if let Some(hit) = self.screen_search_hit(
+                            hit,
                             &query,
-                            &hit.title,
-                            &hit.search_tool,
-                            &hit.search_engine,
-                            "considered",
-                            "",
-                            None,
-                        );
-                        // Filter out scholarly hits unless --papers is set.
-                        if self.disable_scholarly && is_scholarly {
-                            excluded_count += 1;
-                            bump_engine_exclusions(
-                                &mut per_engine,
-                                &mut excluded_by_reason,
-                                &hit.search_engine,
-                                ExclusionReason::ScholarlyEngine,
-                            );
-                            let reason = "scholarly engine excluded (--papers not set)";
-                            tracing::info!(
-                                query = %query,
-                                url = %hit.url,
-                                "research: skipping scholarly hit (--papers not set)"
-                            );
-                            log_rejected(
-                                &hit.url,
-                                &query,
-                                &hit.title,
-                                &hit.search_tool,
-                                &hit.search_engine,
-                                reason,
-                                None,
-                            );
-                            continue;
-                        }
-                        // Filter out PDF web sources unless explicitly enabled.
-                        if !self.allow_pdf_web_sources
-                            && classify_web_source(&hit.url, None) == WebSourceKind::Pdf
-                        {
-                            excluded_count += 1;
-                            bump_engine_exclusions(
-                                &mut per_engine,
-                                &mut excluded_by_reason,
-                                &hit.search_engine,
-                                ExclusionReason::PdfDisabled,
-                            );
-                            let reason = "PDF web source excluded; use --use-pdf to enable";
-                            tracing::info!(
-                                query = %query,
-                                url = %hit.url,
-                                "research: skipping PDF web source (use --use-pdf to enable)"
-                            );
-                            log_rejected(
-                                &hit.url,
-                                &query,
-                                &hit.title,
-                                &hit.search_tool,
-                                &hit.search_engine,
-                                reason,
-                                None,
-                            );
-                            if let Some(obs) = observer {
-                                obs.on_event(GatherEvent::SourceExcluded {
-                                    url: hit.url.clone(),
-                                    reason: reason.to_string(),
-                                });
-                            }
-                            continue;
-                        }
-                        // Scholarly hits (e.g. OpenAlex) are already ranked by
-                        // the source engine's own relevance score and carry a
-                        // reconstructed abstract in the snippet. The lexical
-                        // pre-filter is a heuristic for unranked HTML scrapers
-                        // and would wrongly reject scholarly titles that do not
-                        // lexically overlap the (often rephrased) sub-query, so
-                        // these hits bypass it entirely.
-                        if is_scholarly {
-                            hit.matched_query =
-                                format!("{query} [Scholarly - engine-ranked abstract]");
+                            observer,
+                            &mut prepared_queries,
+                            &mut tally,
+                        ) {
                             hits_by_url.push((Arc::clone(&query), hit));
-                            continue;
-                        }
-                        // Encyclopedia hits (e.g. Wikipedia) are already ranked
-                        // by the source engine's own search relevance and carry
-                        // a clean page summary in the snippet. The lexical
-                        // pre-filter is a heuristic for unranked HTML scrapers
-                        // and would wrongly reject encyclopedia titles (proper
-                        // names, technical terms) that do not lexically overlap
-                        // the sub-query, so these hits bypass it entirely.
-                        if is_encyclopedia {
-                            hit.matched_query =
-                                format!("{query} [Encyclopedia - engine-ranked summary]");
-                            hits_by_url.push((Arc::clone(&query), hit));
-                            continue;
-                        }
-                        // Pre-filter by title/snippet relevance before any
-                        // expensive full-page fetch (B-001). The query is
-                        // normalised once per sub-query and reused for every
-                        // hit under it (PERF-068).
-                        let prepared = prepared_queries
-                            .entry(Arc::clone(&query))
-                            .or_insert_with(|| PreparedQuery::new(&query));
-                        if let Some((label, retained)) = self.filter_hit(prepared, &hit) {
-                            if !retained {
-                                // Retained because keep_low_relevance is on.
-                                tracing::info!(
-                                    query = %query,
-                                    url = %hit.url,
-                                    relevance = %label,
-                                    "research: retaining low-relevance hit due to --use-low-relevance"
-                                );
-                            }
-                            hit.matched_query = format!("{query} [{label}]");
-                            hits_by_url.push((Arc::clone(&query), hit));
-                        } else {
-                            excluded_count += 1;
-                            bump_engine_exclusions(
-                                &mut per_engine,
-                                &mut excluded_by_reason,
-                                &hit.search_engine,
-                                ExclusionReason::LowRelevance,
-                            );
-                            let reason =
-                                format!("title/snippet relevance too low for query {query}");
-                            tracing::info!(
-                                query = %query,
-                                url = %hit.url,
-                                "research: skipping search hit due to low title/snippet relevance"
-                            );
-                            log_rejected(
-                                &hit.url,
-                                &query,
-                                &hit.title,
-                                &hit.search_tool,
-                                &hit.search_engine,
-                                &reason,
-                                None,
-                            );
-                            if let Some(obs) = observer {
-                                obs.on_event(GatherEvent::SourceExcluded {
-                                    url: hit.url.clone(),
-                                    reason,
-                                });
-                            }
                         }
                     }
                 }
@@ -2652,53 +2239,7 @@ impl WebGatherer {
         }
 
         if hits_by_url.is_empty() {
-            if let Some(err) = any_search_error {
-                if let Some(obs) = observer {
-                    obs.on_event(GatherEvent::SearchFailed { error: err });
-                }
-            } else if let Some(obs) = observer {
-                obs.on_event(GatherEvent::SearchReturnedNoHits);
-            }
-            tracing::info!("research: websearch returned 0 hits");
-            if let Some(log) = &self.gather_log
-                && let Err(e) =
-                    log.lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .log_event(&serde_json::json!({
-                            "event": "gather_summary",
-                            "queries": queries,
-                            "considered": considered_count,
-                            "captured": 0,
-                            "rejected": excluded_count,
-                            "excluded_by_reason": excluded_by_reason.clone(),
-                            "failed_by_kind": failed_by_kind.clone(),
-                        }))
-            {
-                tracing::warn!(error = %e, "research: failed to write gather summary to web URL log");
-            }
-            if let Some(obs) = observer {
-                obs.on_event(GatherEvent::WidthSweepSummary {
-                    queries: queries.clone(),
-                    engines: Vec::new(),
-                    considered: considered_count,
-                    captured: 0,
-                    excluded: excluded_count,
-                    per_engine: Vec::new(),
-                    excluded_by_reason,
-                    failed_by_kind,
-                    capped: 0,
-                    cancelled: 0,
-                });
-            }
-            return Ok(GatherResult {
-                queries,
-                sources: Vec::new(),
-                pdf_count: 0,
-                youtube_count: 0,
-                excluded_count,
-                considered_count,
-                engines: Vec::new(),
-            });
+            return Ok(self.finish_without_hits(queries, any_search_error, tally, observer));
         }
 
         // Fetch each unique candidate concurrently up to `fetch_concurrency`
@@ -2741,61 +2282,14 @@ impl WebGatherer {
         // allowance above.
         let candidate_total = hits_by_url.len();
         let capped_count = candidate_total.saturating_sub(fetch_budget);
-        let fetch_futures = hits_by_url
-            .into_iter()
-            .take(fetch_budget)
-            .enumerate()
-            .map(|(index, (query, hit))| (index, query, hit))
-            .map(|(index, query, hit)| {
-                let fetch_tool = fetch_tool.clone();
-                async move {
-                    // Scholarly and encyclopedia hits are captured as
-                    // self-contained sources from the snippet - the underlying
-                    // page is either a paywalled redirect (DOI/landing page)
-                    // or a large article whose readability extraction is
-                    // unreliable, so a URL fetch would drop or degrade the
-                    // result. Synthesize a page directly from the hit instead.
-                    let special_page_type: Option<&str> = if is_scholarly_hit(&hit) {
-                        Some("scholarly")
-                    } else if is_encyclopedia_hit(&hit) {
-                        Some("encyclopedia")
-                    } else {
-                        None
-                    };
-                    let result: Result<
-                        Result<WebFetchedPage, anyhow::Error>,
-                        tokio::time::error::Elapsed,
-                    > = if let Some(page_type) = special_page_type {
-                        Ok(Ok(synthesize_hit_page(&hit, page_type)))
-                    } else {
-                        tokio::time::timeout(
-                            fetch_timeout,
-                            fetch_tool.fetch_with_limit(&hit.url, MAX_SOURCE_BODY_BYTES),
-                        )
-                        .await
-                    };
-                    // Best-effort language detection is CPU-bound lingua work:
-                    // compute it here, concurrent with the other in-flight
-                    // fetches, instead of serially in the dispatch loop where
-                    // it stalls the whole event stream behind every page.
-                    let language_fallback = match &result {
-                        Ok(Ok(page)) => {
-                            // PERF-077: clone the body `Arc`, not the page
-                            // bytes, so language detection adds no page-sized
-                            // allocation and the page keeps its own copy.
-                            let body = page.body.clone();
-                            tokio::task::spawn_blocking(move || {
-                                detectable_body(&body).and_then(detect_language_best_effort)
-                            })
-                            .await
-                            .ok()
-                            .flatten()
-                        }
-                        _ => None,
-                    };
-                    (index, query, hit, result, language_fallback)
-                }
-            });
+        let fetch_futures =
+            hits_by_url
+                .into_iter()
+                .take(fetch_budget)
+                .enumerate()
+                .map(|(index, (query, hit))| {
+                    fetch_candidate(fetch_tool.clone(), fetch_timeout, index, query, hit)
+                });
         let mut collected: Vec<(usize, Option<Source>)> =
             Vec::with_capacity(candidate_total.min(UNCAPTED_MAX_RESULTS));
         let mut stream = futures::stream::iter(fetch_futures).buffer_unordered(fetch_concurrency);
@@ -2804,385 +2298,31 @@ impl WebGatherer {
         // started regardless of the phase deadline and in-flight fetches are
         // never cancelled on deadline - each fetch is still individually
         // capped by `fetch_timeout`, so the stage stays bounded.
-        while let Some((index, query, hit, result, language_fallback)) = stream.next().await {
+        while let Some(FetchedCandidate {
+            index,
+            query,
+            hit,
+            result,
+            language_fallback,
+        }) = stream.next().await
+        {
             match result {
                 Ok(Ok(page)) => {
-                    let scholarly = page.page_type.as_deref() == Some("scholarly");
-                    let encyclopedia = page.page_type.as_deref() == Some("encyclopedia");
-                    let mut title = clean_web_source_title(&page.title, &hit.title);
-                    let body_path = web_body_path(index);
-                    let body = fence_source_body(&page.body);
-                    // Classify the media type once per page; three render
-                    // sites below (SourceCaptured event, vault store, final
-                    // Source::Web) previously re-classified independently.
-                    let media_type = classify_web_source(&page.url, page.content_type.as_deref())
-                        .as_str()
-                        .to_string();
-                    // Use the fetcher's language when available; otherwise run
-                    // an aggressive best-guess detector on the body so that
-                    // stored `Source::Web.language` is rarely `None`.
-                    let detected_language = page.language.clone().or(language_fallback);
-                    // Scholarly and encyclopedia sources are already ranked by
-                    // the source engine (e.g. OpenAlex's `relevance_score`,
-                    // Wikipedia's search relevance); skip the lexical
-                    // post-fetch filter, which would reject them for the same
-                    // lack of query-term overlap as the pre-filter.
-                    let (relevance, retained) = if scholarly {
-                        ("Scholarly - engine-ranked abstract".to_string(), true)
-                    } else if encyclopedia {
-                        ("Encyclopedia - engine-ranked summary".to_string(), true)
-                    } else {
-                        // Post-fetch relevance, reusing the prepared query built
-                        // by the pre-filter (PERF-068).
-                        let prepared = prepared_queries
-                            .entry(Arc::clone(&query))
-                            .or_insert_with(|| PreparedQuery::new(&query));
-                        prepared.label(&title, &hit.snippet, &page.url)
-                    };
-                    if !retained && !self.keep_low_relevance {
-                        excluded_count += 1;
-                        bump_engine_exclusions(
-                            &mut per_engine,
-                            &mut excluded_by_reason,
-                            &hit.search_engine,
-                            ExclusionReason::LowRelevance,
-                        );
-                        tracing::info!(
-                            query = %query,
-                            url = %page.url,
-                            relevance = %relevance,
-                            "research: skipping web source due to low relevance"
-                        );
-                        if let Some(obs) = observer {
-                            obs.on_event(GatherEvent::SourceExcluded {
-                                url: page.url.clone(),
-                                reason: format!("relevance too low ({relevance})"),
-                            });
-                        }
-                        collected.push((index, None));
-                        log_rejected(
-                            &page.url,
-                            &query,
-                            &title,
-                            &hit.search_tool,
-                            &hit.search_engine,
-                            &format!("relevance too low ({relevance})"),
-                            Some(&serde_json::json!({"relevance": relevance})),
-                        );
-                        continue;
-                    }
-                    // Reject pages whose extracted content is shorter than the
-                    // minimum extractable content length. Near-empty
-                    // extractions (paywalls, JS-only renders, soft 404s, empty
-                    // PDFs) add noise to the synthesis prompt without
-                    // contributing usable evidence. Scholarly sources use a
-                    // lower threshold - their body is the concise reconstructed
-                    // abstract, not a full page.
-                    let mut page = page;
-                    let mut oa_recovery: Option<Box<RecoveredOpenAccess>> = None;
-                    if self.open_access_recovery {
-                        let is_short = page.body.chars().count() < self.oa_min_full_text_chars;
-                        let is_scholarly_url = scholarly
-                            || page.page_type.as_deref() == Some("scholarly")
-                            || crate::open_access::extract_doi(&page.url).is_some();
-                        if is_short
-                            && is_scholarly_url
-                            && let Some(client) = self.oa_client.clone()
-                        {
-                            let email = self.contact_email.as_deref();
-                            // Bound the OA lookup so a stalled Unpaywall /
-                            // Europe PMC API cannot freeze the whole dispatch
-                            // loop (the loop blocks on every completion, so an
-                            // un-timed lookup halts progress for every other
-                            // in-flight fetch).
-                            match tokio::time::timeout(
-                                OA_LOOKUP_TIMEOUT,
-                                recover_open_access(&page.url, email, client.as_ref()),
-                            )
-                            .await
-                            {
-                                Ok(Ok(Some(recovered))) => {
-                                    let recovered_url = recovered.url.clone();
-                                    let recovered_source = recovered.source.to_string();
-                                    tracing::info!(
-                                        url = %page.url,
-                                        recovered_url = %recovered_url,
-                                        source = %recovered_source,
-                                        "research: recovering open-access full text"
-                                    );
-                                    let recovered_result = tokio::time::timeout(
-                                        fetch_timeout,
-                                        fetch_tool.fetch_with_limit(
-                                            &recovered_url,
-                                            MAX_SOURCE_BODY_BYTES,
-                                        ),
-                                    )
-                                    .await;
-                                    match recovered_result {
-                                        Ok(Ok(recovered_page)) => {
-                                            page.body = recovered_page.body;
-                                            page.title = recovered_page.title;
-                                            page.content_type = recovered_page.content_type.clone();
-                                            page.page_type = recovered_page.page_type.clone();
-                                            page.language = recovered_page.language.clone();
-                                            page.author = recovered_page.author.clone();
-                                            // Recompute the source title from the recovered page
-                                            // so the References Index reflects the OA copy.
-                                            title = clean_web_source_title(&page.title, &hit.title);
-                                            oa_recovery = Some(Box::new(recovered));
-                                        }
-                                        Ok(Err(e)) => {
-                                            tracing::warn!(
-                                                url = %page.url,
-                                                recovered_url = %recovered_url,
-                                                error = %e,
-                                                "research: failed to fetch recovered OA copy; keeping original"
-                                            );
-                                        }
-                                        Err(_) => {
-                                            tracing::warn!(
-                                                url = %page.url,
-                                                recovered_url = %recovered_url,
-                                                "research: recovered OA fetch timed out; keeping original"
-                                            );
-                                        }
-                                    }
-                                }
-                                Ok(Ok(None)) => {}
-                                Ok(Err(e)) => {
-                                    tracing::warn!(
-                                        url = %page.url,
-                                        error = %e,
-                                        "research: OA recovery lookup failed"
-                                    );
-                                }
-                                Err(_) => {
-                                    tracing::warn!(
-                                        url = %page.url,
-                                        timeout_secs = OA_LOOKUP_TIMEOUT.as_secs(),
-                                        "research: OA recovery lookup timed out; keeping original"
-                                    );
-                                }
-                            }
-                        }
-                    }
-
-                    // `--age`: drop pages published outside the requested span.
-                    // The publication date is only known once the page has
-                    // been fetched, so this runs post-fetch. An undated page is
-                    // rejected as well: the caller asked for recent sources, and
-                    // an undated page cannot be shown to satisfy that.
-                    if let Some(span) = self.max_age
-                        && let Some(reason) =
-                            span.rejection_reason(page.published_at, self.age_reference)
-                    {
-                        excluded_count += 1;
-                        bump_engine_exclusions(
-                            &mut per_engine,
-                            &mut excluded_by_reason,
-                            &hit.search_engine,
-                            ExclusionReason::TooOld,
-                        );
-                        tracing::info!(
-                            query = %query,
-                            url = %page.url,
-                            reason = %reason,
-                            "research: skipping web source outside --age window"
-                        );
-                        if let Some(obs) = observer {
-                            obs.on_event(GatherEvent::SourceExcluded {
-                                url: page.url.clone(),
-                                reason: reason.clone(),
-                            });
-                        }
-                        collected.push((index, None));
-                        log_rejected(
-                            &page.url,
-                            &query,
-                            &title,
-                            &hit.search_tool,
-                            &hit.search_engine,
-                            &reason,
-                            Some(&serde_json::json!({
-                                "max_age": span.to_string(),
-                                "published_at": page
-                                    .published_at
-                                    .map(|dt| dt.to_rfc3339()),
-                            })),
-                        );
-                        continue;
-                    }
-
-                    let content_chars = page.body.chars().count();
-                    let min_chars = if scholarly || encyclopedia {
-                        if scholarly {
-                            MIN_SCHOLARLY_CONTENT_CHARS
-                        } else {
-                            MIN_ENCYCLOPEDIA_CONTENT_CHARS
-                        }
-                    } else {
-                        MIN_EXTRACTABLE_CONTENT_CHARS
-                    };
-                    if content_chars < min_chars {
-                        excluded_count += 1;
-                        bump_engine_exclusions(
-                            &mut per_engine,
-                            &mut excluded_by_reason,
-                            &hit.search_engine,
-                            ExclusionReason::ContentTooShort,
-                        );
-                        let error = if scholarly {
-                            format!(
-                                "scholarly abstract too short ({content_chars} < {min_chars} chars)"
-                            )
-                        } else if encyclopedia {
-                            format!(
-                                "encyclopedia summary too short ({content_chars} < {min_chars} chars)"
-                            )
-                        } else {
-                            format!(
-                                "extracted content too short ({content_chars} < {min_chars} chars)"
-                            )
-                        };
-                        tracing::info!(
-                            query = %query,
-                            url = %page.url,
-                            content_chars,
-                            "research: skipping web source - extracted content below minimum"
-                        );
-                        if let Some(obs) = observer {
-                            obs.on_event(GatherEvent::SourceExcluded {
-                                url: page.url.clone(),
-                                reason: error.clone(),
-                            });
-                        }
-                        collected.push((index, None));
-                        log_rejected(
-                            &page.url,
-                            &query,
-                            &title,
-                            &hit.search_tool,
-                            &hit.search_engine,
-                            &error,
-                            Some(&serde_json::json!({"content_chars": content_chars})),
-                        );
-                        continue;
-                    }
-                    let body_preview = body_preview_of(&page.body);
-                    tracing::info!(
-                        query = %query,
-                        url = %page.url,
-                        title = %title,
-                        body_path = %body_path.display(),
-                        body_chars = body.chars().count(),
-                        relevance = %relevance,
-                        "research: captured web source"
-                    );
-                    if let Some(obs) = observer {
-                        obs.on_event(GatherEvent::SourceCaptured {
-                            url: page.url.clone(),
-                            title: title.clone(),
-                            search_tool: hit.search_tool.clone(),
-                            search_engine: hit.search_engine.clone(),
-                            body_preview,
-                            language: detected_language
-                                .as_deref()
-                                .map(str::to_uppercase)
-                                .unwrap_or_else(|| "UNKNOWN".to_string()),
-                            oa_recovery: oa_recovery.clone(),
-                            media_type: media_type.clone(),
-                        });
-                    }
-                    log_captured(
-                        &page.url,
-                        &query,
-                        &title,
-                        &hit.search_tool,
-                        &hit.search_engine,
-                        Some(&serde_json::json!({
-                            "relevance": relevance,
-                            "content_chars": content_chars,
-                        })),
-                    );
-                    let captured_at = Utc::now();
-                    let mut summary_text: Option<String> = None;
-                    let body_for_source: String = if let Some(sum) = self.summarizer.as_ref() {
-                        match sum.summarize_page(&page.url, &page.body).await {
-                            Ok(page_summary) => {
-                                summary_text = Some(page_summary.summary.clone());
-                                tracing::info!(
-                                    url = %page.url,
-                                    summary_chars = page_summary.summary.chars().count(),
-                                    "research: summarized web source"
-                                );
-                                page_summary.summary
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    error = %e,
-                                    url = %page.url,
-                                    "research: page summarization failed; using full body"
-                                );
-                                body.clone()
-                            }
-                        }
-                    } else {
-                        body.clone()
-                    };
-                    if let Some(vault) = self.vault.as_ref() {
-                        let new_source = crate::source_vault::NewVaultSource {
-                            url: page.url.clone(),
-                            title: title.clone(),
-                            fetch_timestamp: Some(captured_at),
-                            search_tool: hit.search_tool.clone(),
-                            search_engine: hit.search_engine.clone(),
-                            media_type: media_type.clone(),
-                            content_type: page.content_type.clone(),
-                            body_text: body.clone(),
-                            summary_text: summary_text.clone(),
-                        };
-                        // Off-load the blocking vault write to the blocking pool
-                        // so a slow disk does not park a tokio worker (FUNC-017).
-                        if let Err(e) = vault.store_async(&new_source).await {
-                            tracing::warn!(
-                                error = %e,
-                                url = %page.url,
-                                "research: failed to store source in vault"
-                            );
-                            // FUNC-030: surface the persistence failure so a
-                            // captured-but-unstored source is not silently
-                            // counted as fully captured.
-                            if let Some(obs) = observer {
-                                obs.on_event(GatherEvent::VaultStoreFailed {
-                                    url: page.url.clone(),
-                                    error: e.to_string(),
-                                });
-                            }
-                        }
-                    }
-                    // Credit the capture before `hit.search_engine` is moved
-                    // into the source below, so no clone is needed.
-                    bump_engine_stats(&mut per_engine, &hit.search_engine, |s| s.captured += 1);
-                    collected.push((
-                        index,
-                        Some(Source::Web {
-                            url: page.url.clone(),
-                            title,
-                            captured_at,
-                            published_at: page.published_at,
-                            body_path,
-                            body: body_for_source,
-                            relevance,
-                            search_tool: hit.search_tool,
-                            search_engine: hit.search_engine,
-                            content_type: page.content_type.clone(),
-                            page_type: page.page_type.clone(),
-                            media_type: media_type.clone(),
-                            language: detected_language.clone(),
-                            author: page.author.clone(),
-                            oa_recovery,
-                        }),
-                    ));
+                    let source = self
+                        .capture_page(
+                            index,
+                            query,
+                            hit,
+                            page,
+                            language_fallback,
+                            observer,
+                            &mut prepared_queries,
+                            &mut tally,
+                            &fetch_tool,
+                            fetch_timeout,
+                        )
+                        .await;
+                    collected.push((index, source));
                 }
                 Ok(Err(e)) => {
                     if let Some(obs) = observer {
@@ -3197,15 +2337,8 @@ impl WebGatherer {
                         error = %e,
                         "research: webfetch failed; skipping"
                     );
-                    excluded_count += 1;
-                    bump_engine_fetch_failure(
-                        &mut per_engine,
-                        &mut excluded_by_reason,
-                        &mut failed_by_kind,
-                        &hit.search_engine,
-                        classify_fetch_failure(&e),
-                    );
-                    log_rejected(
+                    tally.fetch_failed(&hit.search_engine, classify_fetch_failure(&e));
+                    self.log_rejected(
                         &hit.url,
                         &query,
                         &hit.title,
@@ -3229,15 +2362,8 @@ impl WebGatherer {
                         url = %hit.url,
                         "research: webfetch timed out; skipping"
                     );
-                    excluded_count += 1;
-                    bump_engine_fetch_failure(
-                        &mut per_engine,
-                        &mut excluded_by_reason,
-                        &mut failed_by_kind,
-                        &hit.search_engine,
-                        FetchFailureKind::Timeout,
-                    );
-                    log_rejected(
+                    tally.fetch_failed(&hit.search_engine, FetchFailureKind::Timeout);
+                    self.log_rejected(
                         &hit.url,
                         &query,
                         &hit.title,
@@ -3250,6 +2376,46 @@ impl WebGatherer {
                 }
             }
         }
+        Ok(self.finish_sweep(
+            collected,
+            queries,
+            engines,
+            tally,
+            capped_count,
+            truncated,
+            deadline,
+            deadline_secs,
+            observer,
+        ))
+    }
+
+    /// Close a gather pass that captured candidates: restore search-ranking
+    /// order, count PDF and YouTube sources, emit the deadline diagnostic,
+    /// write the gather summary, and build the [`GatherResult`].
+    ///
+    /// This is the single terminal emission site for `PhaseTimedOut`
+    /// (FR-004): it runs once after the gather loops unwind, with the final
+    /// captured count. Interim truncation sites set `truncated` and break
+    /// without emitting.
+    fn finish_sweep(
+        &self,
+        mut collected: Vec<(usize, Option<Source>)>,
+        queries: Vec<String>,
+        engines: Vec<String>,
+        tally: SweepTally,
+        capped_count: usize,
+        truncated: bool,
+        deadline: Option<Instant>,
+        deadline_secs: u64,
+        observer: Option<&dyn GatherObserver>,
+    ) -> GatherResult {
+        let SweepTally {
+            considered: considered_count,
+            excluded: excluded_count,
+            per_engine,
+            excluded_by_reason,
+            failed_by_kind,
+        } = tally;
         // Restore search-ranking order so `web-NN.md` numbers track hit
         // position rather than fetch-completion timing.
         collected.sort_by_key(|(index, _)| *index);
@@ -3284,7 +2450,18 @@ impl WebGatherer {
         // truth: the unbounded fetch stage can outlive it without any
         // bounded wait expiring.
         if deadline.is_some_and(|d| d <= std::time::Instant::now()) {
-            emit_deadline_event(observer, sources.len());
+            let captured = sources.len();
+            if let Some(obs) = observer {
+                obs.on_event(GatherEvent::PhaseTimedOut {
+                    deadline_secs,
+                    captured,
+                });
+            }
+            tracing::warn!(
+                deadline_secs,
+                captured,
+                "research: web phase deadline reached; proceeding with sources gathered so far"
+            );
         }
         // Cancellation accounting (T-006): the fetch stage never cancels
         // fetches for the phase deadline, so this is structurally 0; the
@@ -3336,7 +2513,7 @@ impl WebGatherer {
                 tool_calls: stats.by_tool(),
             });
         }
-        Ok(GatherResult {
+        GatherResult {
             queries,
             sources,
             pdf_count,
@@ -3344,7 +2521,1060 @@ impl WebGatherer {
             excluded_count,
             considered_count,
             engines,
+        }
+    }
+
+    /// Try to satisfy the request from the source vault before any new web
+    /// search (FR-009). Returns the vault result when it already holds enough
+    /// sources for the requested tier (FR-016, T-021); otherwise `None`, after
+    /// logging why the gather pass continues to web search.
+    async fn vault_shortcut(
+        &self,
+        topic: &str,
+        max_results: usize,
+        observer: Option<&dyn GatherObserver>,
+    ) -> Option<GatherResult> {
+        let vault = self.vault.as_ref()?;
+        match self
+            .gather_from_vault(vault.clone(), topic, max_results, observer)
+            .await
+        {
+            Ok(Some(result)) => {
+                // FR-016 (T-021): if the vault already contains enough
+                // sources for the requested tier, skip new web searches.
+                let required = self.sufficient_sources.unwrap_or(1);
+                if result.sources.len() >= required {
+                    tracing::info!(
+                        topic,
+                        sources = result.sources.len(),
+                        required,
+                        "research: vault has sufficient sources; skipping web search"
+                    );
+                    if let Some(obs) = observer {
+                        obs.on_event(GatherEvent::VaultSufficient {
+                            count: result.sources.len(),
+                            required,
+                            tier: self
+                                .sufficient_sources
+                                .map(|_| "configured".to_string())
+                                .unwrap_or_else(|| "default".to_string()),
+                        });
+                    }
+                    return Some(result);
+                }
+                tracing::info!(
+                    topic,
+                    sources = result.sources.len(),
+                    required,
+                    "research: vault sources are below tier threshold; continuing to web search"
+                );
+            }
+            Ok(None) => {
+                tracing::info!(
+                    topic,
+                    "research: vault lookup returned no matches; continuing to web search"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "research: vault lookup failed; continuing to web search");
+            }
+        }
+        None
+    }
+
+    /// Decompose `topic` into the sub-queries this pass searches, apply the
+    /// `--age` hint, and report them to the observer and the gather log.
+    ///
+    /// Returns the queries and whether the phase deadline expired while the
+    /// decomposer ran, in which case the query set is empty.
+    async fn plan_queries(
+        &self,
+        topic: &str,
+        deadline: Option<Instant>,
+        observer: Option<&dyn GatherObserver>,
+    ) -> (Vec<String>, bool) {
+        let mut timed_out = false;
+        let remaining = deadline.map_or_else(
+            || std::time::Duration::from_secs(u64::MAX / 2),
+            |d| d.saturating_duration_since(std::time::Instant::now()),
+        );
+        let queries: Vec<String> = match &self.decomposer {
+            Some(d) => {
+                // Bound decomposition by the remaining phase budget; a
+                // stalled LLM decomposer must not consume the whole
+                // budget or outlive it. When the deadline elapses here,
+                // `truncated` short-circuits into an empty query set, so
+                // no sub-query search is issued at all (FR-008: no new
+                // work after the deadline).
+                let decomposed = match tokio::time::timeout(remaining, d.decompose(topic)).await {
+                    Ok(Ok(qs)) if !qs.is_empty() => qs,
+                    Ok(Ok(_)) => {
+                        tracing::warn!("research: decomposer returned empty queries; using topic");
+                        vec![topic.to_string()]
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!(
+                            error = %e,
+                            "research: query decomposition failed; falling back to single query"
+                        );
+                        vec![topic.to_string()]
+                    }
+                    Err(_) => {
+                        if deadline.is_some() {
+                            timed_out = true;
+                        }
+                        Vec::new()
+                    }
+                };
+                // `--max-queries`: a hard cap on the number of decomposed
+                // queries this pass searches. The decomposer usually
+                // applies the cap itself; enforcing it here too keeps the
+                // limit honest for any decomposer implementation. A limit
+                // of 0 means "unbounded" and resolves to `None`.
+                match crate::limits::effective_limit(d.query_limit().unwrap_or(0)) {
+                    Some(limit) if decomposed.len() > limit => {
+                        tracing::debug!(
+                            decomposed = decomposed.len(),
+                            limit,
+                            "research: capping decomposed queries to --max-queries"
+                        );
+                        decomposed.into_iter().take(limit).collect()
+                    }
+                    _ => decomposed,
+                }
+            }
+            None => vec![topic.to_string()],
+        };
+
+        // `--age`: append the window's start date to every decomposed query so
+        // the search engine steers towards material inside the window. The
+        // post-fetch filter below is only a backstop - without this hint the
+        // engine is free to return an all-old result set that is then discarded
+        // wholesale, yielding an empty report. The rewrite happens *before* the
+        // `QueriesDecomposed` event so the progress panel and `RESEARCH.md`
+        // report the queries that are actually sent to the search backend.
+        let queries: Vec<String> = match self.max_age {
+            Some(span) => queries
+                .iter()
+                .map(|q| crate::search_query_age_hint(q, span, self.age_reference))
+                .collect(),
+            None => queries,
+        };
+        if let Some(obs) = observer {
+            obs.on_event(GatherEvent::QueriesDecomposed {
+                queries: queries.clone(),
+            });
+        }
+        if let Some(log) = &self.gather_log
+            && let Err(e) =
+                log.lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .log_event(&serde_json::json!({
+                        "event": "queries_decomposed",
+                        "queries": queries,
+                    }))
+        {
+            tracing::warn!(error = %e, "research: failed to write queries to web URL log");
+        }
+        (queries, timed_out)
+    }
+
+    /// Screen one deduplicated search hit before any fetch: count it as
+    /// considered, then drop scholarly hits (without `--papers`), PDF hits
+    /// (without `--use-pdf`) and low-relevance hits. Scholarly and
+    /// encyclopedia hits bypass the lexical pre-filter.
+    ///
+    /// Returns the hit, labelled with its matched query, when it is kept.
+    fn screen_search_hit(
+        &self,
+        mut hit: WebSearchHit,
+        query: &Arc<str>,
+        observer: Option<&dyn GatherObserver>,
+        prepared_queries: &mut std::collections::HashMap<Arc<str>, PreparedQuery>,
+        tally: &mut SweepTally,
+    ) -> Option<WebSearchHit> {
+        // Classify once so the two branches below can reuse the
+        // result instead of re-splitting the engine CSV twice.
+        let is_scholarly = is_scholarly_hit(&hit);
+        let is_encyclopedia = is_encyclopedia_hit(&hit);
+        // Count every deduplicated hit as considered so the
+        // summary balances exactly:
+        // considered = captured + excluded + capped + cancelled.
+        tally.considered += 1;
+        bump_engine_stats(&mut tally.per_engine, &hit.search_engine, |s| {
+            s.considered += 1
+        });
+        self.log_url_outcome(
+            &hit.url,
+            &query,
+            &hit.title,
+            &hit.search_tool,
+            &hit.search_engine,
+            "considered",
+            "",
+            None,
+        );
+        // Filter out scholarly hits unless --papers is set.
+        if self.disable_scholarly && is_scholarly {
+            tally.exclude(&hit.search_engine, ExclusionReason::ScholarlyEngine);
+            let reason = "scholarly engine excluded (--papers not set)";
+            tracing::info!(
+                query = %query,
+                url = %hit.url,
+                "research: skipping scholarly hit (--papers not set)"
+            );
+            self.log_rejected(
+                &hit.url,
+                &query,
+                &hit.title,
+                &hit.search_tool,
+                &hit.search_engine,
+                reason,
+                None,
+            );
+            return None;
+        }
+        // Filter out PDF web sources unless explicitly enabled.
+        if !self.allow_pdf_web_sources && classify_web_source(&hit.url, None) == WebSourceKind::Pdf
+        {
+            tally.exclude(&hit.search_engine, ExclusionReason::PdfDisabled);
+            let reason = "PDF web source excluded; use --use-pdf to enable";
+            tracing::info!(
+                query = %query,
+                url = %hit.url,
+                "research: skipping PDF web source (use --use-pdf to enable)"
+            );
+            self.log_rejected(
+                &hit.url,
+                &query,
+                &hit.title,
+                &hit.search_tool,
+                &hit.search_engine,
+                reason,
+                None,
+            );
+            if let Some(obs) = observer {
+                obs.on_event(GatherEvent::SourceExcluded {
+                    url: hit.url.clone(),
+                    reason: reason.to_string(),
+                });
+            }
+            return None;
+        }
+        // Scholarly hits (e.g. OpenAlex) are already ranked by
+        // the source engine's own relevance score and carry a
+        // reconstructed abstract in the snippet. The lexical
+        // pre-filter is a heuristic for unranked HTML scrapers
+        // and would wrongly reject scholarly titles that do not
+        // lexically overlap the (often rephrased) sub-query, so
+        // these hits bypass it entirely.
+        if is_scholarly {
+            hit.matched_query = format!("{query} [Scholarly - engine-ranked abstract]");
+            return Some(hit);
+        }
+        // Encyclopedia hits (e.g. Wikipedia) are already ranked
+        // by the source engine's own search relevance and carry
+        // a clean page summary in the snippet. The lexical
+        // pre-filter is a heuristic for unranked HTML scrapers
+        // and would wrongly reject encyclopedia titles (proper
+        // names, technical terms) that do not lexically overlap
+        // the sub-query, so these hits bypass it entirely.
+        if is_encyclopedia {
+            hit.matched_query = format!("{query} [Encyclopedia - engine-ranked summary]");
+            return Some(hit);
+        }
+        // Pre-filter by title/snippet relevance before any
+        // expensive full-page fetch (B-001). The query is
+        // normalised once per sub-query and reused for every
+        // hit under it (PERF-068).
+        let prepared = prepared_queries
+            .entry(Arc::clone(query))
+            .or_insert_with(|| PreparedQuery::new(&query));
+        if let Some((label, retained)) = self.filter_hit(prepared, &hit) {
+            if !retained {
+                // Retained because keep_low_relevance is on.
+                tracing::info!(
+                    query = %query,
+                    url = %hit.url,
+                    relevance = %label,
+                    "research: retaining low-relevance hit due to --use-low-relevance"
+                );
+            }
+            hit.matched_query = format!("{query} [{label}]");
+            return Some(hit);
+        } else {
+            tally.exclude(&hit.search_engine, ExclusionReason::LowRelevance);
+            let reason = format!("title/snippet relevance too low for query {query}");
+            tracing::info!(
+                query = %query,
+                url = %hit.url,
+                "research: skipping search hit due to low title/snippet relevance"
+            );
+            self.log_rejected(
+                &hit.url,
+                &query,
+                &hit.title,
+                &hit.search_tool,
+                &hit.search_engine,
+                &reason,
+                None,
+            );
+            if let Some(obs) = observer {
+                obs.on_event(GatherEvent::SourceExcluded {
+                    url: hit.url.clone(),
+                    reason,
+                });
+            }
+        }
+        None
+    }
+
+    /// The result of a pass whose search stage kept no hits: report the
+    /// search failure or the empty result, write the gather summary, and
+    /// return an empty [`GatherResult`].
+    fn finish_without_hits(
+        &self,
+        queries: Vec<String>,
+        any_search_error: Option<String>,
+        tally: SweepTally,
+        observer: Option<&dyn GatherObserver>,
+    ) -> GatherResult {
+        let SweepTally {
+            considered: considered_count,
+            excluded: excluded_count,
+            excluded_by_reason,
+            failed_by_kind,
+            ..
+        } = tally;
+        if let Some(err) = any_search_error {
+            if let Some(obs) = observer {
+                obs.on_event(GatherEvent::SearchFailed { error: err });
+            }
+        } else if let Some(obs) = observer {
+            obs.on_event(GatherEvent::SearchReturnedNoHits);
+        }
+        tracing::info!("research: websearch returned 0 hits");
+        if let Some(log) = &self.gather_log
+            && let Err(e) =
+                log.lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .log_event(&serde_json::json!({
+                        "event": "gather_summary",
+                        "queries": queries,
+                        "considered": considered_count,
+                        "captured": 0,
+                        "rejected": excluded_count,
+                        "excluded_by_reason": excluded_by_reason.clone(),
+                        "failed_by_kind": failed_by_kind.clone(),
+                    }))
+        {
+            tracing::warn!(error = %e, "research: failed to write gather summary to web URL log");
+        }
+        if let Some(obs) = observer {
+            obs.on_event(GatherEvent::WidthSweepSummary {
+                queries: queries.clone(),
+                engines: Vec::new(),
+                considered: considered_count,
+                captured: 0,
+                excluded: excluded_count,
+                per_engine: Vec::new(),
+                excluded_by_reason,
+                failed_by_kind,
+                capped: 0,
+                cancelled: 0,
+            });
+        }
+        GatherResult {
+            queries,
+            sources: Vec::new(),
+            pdf_count: 0,
+            youtube_count: 0,
+            excluded_count,
+            considered_count,
+            engines: Vec::new(),
+        }
+    }
+
+    /// Turn one fetched page into a captured [`Source::Web`], or `None` when
+    /// it is excluded for low relevance, the `--age` window, or too little
+    /// extracted content. A short scholarly page may first be swapped for its
+    /// open-access full text.
+    async fn capture_page(
+        &self,
+        index: usize,
+        query: Arc<str>,
+        hit: WebSearchHit,
+        page: WebFetchedPage,
+        language_fallback: Option<String>,
+        observer: Option<&dyn GatherObserver>,
+        prepared_queries: &mut std::collections::HashMap<Arc<str>, PreparedQuery>,
+        tally: &mut SweepTally,
+        fetch_tool: &Arc<dyn WebFetchTool>,
+        fetch_timeout: Duration,
+    ) -> Option<Source> {
+        let scholarly = page.page_type.as_deref() == Some("scholarly");
+        let encyclopedia = page.page_type.as_deref() == Some("encyclopedia");
+        let mut title = clean_web_source_title(&page.title, &hit.title);
+        let body_path = web_body_path(index);
+        let body = fence_source_body(&page.body);
+        // Classify the media type once per page; three render
+        // sites below (SourceCaptured event, vault store, final
+        // Source::Web) previously re-classified independently.
+        let media_type = classify_web_source(&page.url, page.content_type.as_deref())
+            .as_str()
+            .to_string();
+        // Use the fetcher's language when available; otherwise run
+        // an aggressive best-guess detector on the body so that
+        // stored `Source::Web.language` is rarely `None`.
+        let detected_language = page.language.clone().or(language_fallback);
+        // Scholarly and encyclopedia sources are already ranked by
+        // the source engine (e.g. OpenAlex's `relevance_score`,
+        // Wikipedia's search relevance); skip the lexical
+        // post-fetch filter, which would reject them for the same
+        // lack of query-term overlap as the pre-filter.
+        let (relevance, retained) = if scholarly {
+            ("Scholarly - engine-ranked abstract".to_string(), true)
+        } else if encyclopedia {
+            ("Encyclopedia - engine-ranked summary".to_string(), true)
+        } else {
+            // Post-fetch relevance, reusing the prepared query built
+            // by the pre-filter (PERF-068).
+            let prepared = prepared_queries
+                .entry(Arc::clone(&query))
+                .or_insert_with(|| PreparedQuery::new(&query));
+            prepared.label(&title, &hit.snippet, &page.url)
+        };
+        if !retained && !self.keep_low_relevance {
+            tally.exclude(&hit.search_engine, ExclusionReason::LowRelevance);
+            tracing::info!(
+                query = %query,
+                url = %page.url,
+                relevance = %relevance,
+                "research: skipping web source due to low relevance"
+            );
+            if let Some(obs) = observer {
+                obs.on_event(GatherEvent::SourceExcluded {
+                    url: page.url.clone(),
+                    reason: format!("relevance too low ({relevance})"),
+                });
+            }
+            self.log_rejected(
+                &page.url,
+                &query,
+                &title,
+                &hit.search_tool,
+                &hit.search_engine,
+                &format!("relevance too low ({relevance})"),
+                Some(&serde_json::json!({"relevance": relevance})),
+            );
+            return None;
+        }
+        // Reject pages whose extracted content is shorter than the
+        // minimum extractable content length. Near-empty
+        // extractions (paywalls, JS-only renders, soft 404s, empty
+        // PDFs) add noise to the synthesis prompt without
+        // contributing usable evidence. Scholarly sources use a
+        // lower threshold - their body is the concise reconstructed
+        // abstract, not a full page.
+        let mut page = page;
+        let oa_recovery = self
+            .recover_open_access_copy(&mut page, scholarly, fetch_tool, fetch_timeout)
+            .await;
+        if oa_recovery.is_some() {
+            // Recompute the source title from the recovered page
+            // so the References Index reflects the OA copy.
+            title = clean_web_source_title(&page.title, &hit.title);
+        }
+
+        // `--age`: drop pages published outside the requested span.
+        // The publication date is only known once the page has
+        // been fetched, so this runs post-fetch. An undated page is
+        // rejected as well: the caller asked for recent sources, and
+        // an undated page cannot be shown to satisfy that.
+        if let Some(span) = self.max_age
+            && let Some(reason) = span.rejection_reason(page.published_at, self.age_reference)
+        {
+            tally.exclude(&hit.search_engine, ExclusionReason::TooOld);
+            tracing::info!(
+                query = %query,
+                url = %page.url,
+                reason = %reason,
+                "research: skipping web source outside --age window"
+            );
+            if let Some(obs) = observer {
+                obs.on_event(GatherEvent::SourceExcluded {
+                    url: page.url.clone(),
+                    reason: reason.clone(),
+                });
+            }
+            self.log_rejected(
+                &page.url,
+                &query,
+                &title,
+                &hit.search_tool,
+                &hit.search_engine,
+                &reason,
+                Some(&serde_json::json!({
+                    "max_age": span.to_string(),
+                    "published_at": page
+                        .published_at
+                        .map(|dt| dt.to_rfc3339()),
+                })),
+            );
+            return None;
+        }
+
+        let content_chars = page.body.chars().count();
+        let min_chars = if scholarly || encyclopedia {
+            if scholarly {
+                MIN_SCHOLARLY_CONTENT_CHARS
+            } else {
+                MIN_ENCYCLOPEDIA_CONTENT_CHARS
+            }
+        } else {
+            MIN_EXTRACTABLE_CONTENT_CHARS
+        };
+        if content_chars < min_chars {
+            tally.exclude(&hit.search_engine, ExclusionReason::ContentTooShort);
+            let error = if scholarly {
+                format!("scholarly abstract too short ({content_chars} < {min_chars} chars)")
+            } else if encyclopedia {
+                format!("encyclopedia summary too short ({content_chars} < {min_chars} chars)")
+            } else {
+                format!("extracted content too short ({content_chars} < {min_chars} chars)")
+            };
+            tracing::info!(
+                query = %query,
+                url = %page.url,
+                content_chars,
+                "research: skipping web source - extracted content below minimum"
+            );
+            if let Some(obs) = observer {
+                obs.on_event(GatherEvent::SourceExcluded {
+                    url: page.url.clone(),
+                    reason: error.clone(),
+                });
+            }
+            self.log_rejected(
+                &page.url,
+                &query,
+                &title,
+                &hit.search_tool,
+                &hit.search_engine,
+                &error,
+                Some(&serde_json::json!({"content_chars": content_chars})),
+            );
+            return None;
+        }
+        let body_preview = body_preview_of(&page.body);
+        tracing::info!(
+            query = %query,
+            url = %page.url,
+            title = %title,
+            body_path = %body_path.display(),
+            body_chars = body.chars().count(),
+            relevance = %relevance,
+            "research: captured web source"
+        );
+        if let Some(obs) = observer {
+            obs.on_event(GatherEvent::SourceCaptured {
+                url: page.url.clone(),
+                title: title.clone(),
+                search_tool: hit.search_tool.clone(),
+                search_engine: hit.search_engine.clone(),
+                body_preview,
+                language: detected_language
+                    .as_deref()
+                    .map(str::to_uppercase)
+                    .unwrap_or_else(|| "UNKNOWN".to_string()),
+                oa_recovery: oa_recovery.clone(),
+                media_type: media_type.clone(),
+            });
+        }
+        self.log_captured(
+            &page.url,
+            &query,
+            &title,
+            &hit.search_tool,
+            &hit.search_engine,
+            Some(&serde_json::json!({
+                "relevance": relevance,
+                "content_chars": content_chars,
+            })),
+        );
+        let captured_at = Utc::now();
+        let body_for_source = self
+            .summarize_and_store(
+                &page,
+                &title,
+                &hit,
+                &media_type,
+                &body,
+                captured_at,
+                observer,
+            )
+            .await;
+        // Credit the capture before `hit.search_engine` is moved
+        // into the source below, so no clone is needed.
+        bump_engine_stats(&mut tally.per_engine, &hit.search_engine, |s| {
+            s.captured += 1
+        });
+        Some(Source::Web {
+            url: page.url.clone(),
+            title,
+            captured_at,
+            published_at: page.published_at,
+            body_path,
+            body: body_for_source,
+            relevance,
+            search_tool: hit.search_tool,
+            search_engine: hit.search_engine,
+            content_type: page.content_type.clone(),
+            page_type: page.page_type.clone(),
+            media_type: media_type.clone(),
+            language: detected_language.clone(),
+            author: page.author.clone(),
+            oa_recovery,
         })
+    }
+
+    /// When open-access recovery is on and `page` is a short scholarly page,
+    /// look up an open-access copy and, if one is found and fetched, replace
+    /// the page's body and metadata with it.
+    ///
+    /// Returns the recovery record when the page was replaced.
+    async fn recover_open_access_copy(
+        &self,
+        page: &mut WebFetchedPage,
+        scholarly: bool,
+        fetch_tool: &Arc<dyn WebFetchTool>,
+        fetch_timeout: Duration,
+    ) -> Option<Box<RecoveredOpenAccess>> {
+        let mut oa_recovery: Option<Box<RecoveredOpenAccess>> = None;
+        if self.open_access_recovery {
+            let is_short = page.body.chars().count() < self.oa_min_full_text_chars;
+            let is_scholarly_url = scholarly
+                || page.page_type.as_deref() == Some("scholarly")
+                || crate::open_access::extract_doi(&page.url).is_some();
+            if is_short
+                && is_scholarly_url
+                && let Some(client) = self.oa_client.clone()
+            {
+                let email = self.contact_email.as_deref();
+                // Bound the OA lookup so a stalled Unpaywall /
+                // Europe PMC API cannot freeze the whole dispatch
+                // loop (the loop blocks on every completion, so an
+                // un-timed lookup halts progress for every other
+                // in-flight fetch).
+                match tokio::time::timeout(
+                    OA_LOOKUP_TIMEOUT,
+                    recover_open_access(&page.url, email, client.as_ref()),
+                )
+                .await
+                {
+                    Ok(Ok(Some(recovered))) => {
+                        let recovered_url = recovered.url.clone();
+                        let recovered_source = recovered.source.to_string();
+                        tracing::info!(
+                            url = %page.url,
+                            recovered_url = %recovered_url,
+                            source = %recovered_source,
+                            "research: recovering open-access full text"
+                        );
+                        let recovered_result = tokio::time::timeout(
+                            fetch_timeout,
+                            fetch_tool.fetch_with_limit(&recovered_url, MAX_SOURCE_BODY_BYTES),
+                        )
+                        .await;
+                        match recovered_result {
+                            Ok(Ok(recovered_page)) => {
+                                page.body = recovered_page.body;
+                                page.title = recovered_page.title;
+                                page.content_type = recovered_page.content_type.clone();
+                                page.page_type = recovered_page.page_type.clone();
+                                page.language = recovered_page.language.clone();
+                                page.author = recovered_page.author.clone();
+                                oa_recovery = Some(Box::new(recovered));
+                            }
+                            Ok(Err(e)) => {
+                                tracing::warn!(
+                                    url = %page.url,
+                                    recovered_url = %recovered_url,
+                                    error = %e,
+                                    "research: failed to fetch recovered OA copy; keeping original"
+                                );
+                            }
+                            Err(_) => {
+                                tracing::warn!(
+                                    url = %page.url,
+                                    recovered_url = %recovered_url,
+                                    "research: recovered OA fetch timed out; keeping original"
+                                );
+                            }
+                        }
+                    }
+                    Ok(Ok(None)) => {}
+                    Ok(Err(e)) => {
+                        tracing::warn!(
+                            url = %page.url,
+                            error = %e,
+                            "research: OA recovery lookup failed"
+                        );
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            url = %page.url,
+                            timeout_secs = OA_LOOKUP_TIMEOUT.as_secs(),
+                            "research: OA recovery lookup timed out; keeping original"
+                        );
+                    }
+                }
+            }
+        }
+        oa_recovery
+    }
+
+    /// Summarize a captured page when a summarizer is configured and store it
+    /// in the source vault when one is configured.
+    ///
+    /// Returns the body to keep on the source: the summary, or the fenced
+    /// full body when there is no summarizer or summarization failed.
+    async fn summarize_and_store(
+        &self,
+        page: &WebFetchedPage,
+        title: &str,
+        hit: &WebSearchHit,
+        media_type: &str,
+        body: &str,
+        captured_at: DateTime<Utc>,
+        observer: Option<&dyn GatherObserver>,
+    ) -> String {
+        let mut summary_text: Option<String> = None;
+        let body_for_source: String = if let Some(sum) = self.summarizer.as_ref() {
+            match sum.summarize_page(&page.url, &page.body).await {
+                Ok(page_summary) => {
+                    summary_text = Some(page_summary.summary.clone());
+                    tracing::info!(
+                        url = %page.url,
+                        summary_chars = page_summary.summary.chars().count(),
+                        "research: summarized web source"
+                    );
+                    page_summary.summary
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        url = %page.url,
+                        "research: page summarization failed; using full body"
+                    );
+                    body.to_string()
+                }
+            }
+        } else {
+            body.to_string()
+        };
+        if let Some(vault) = self.vault.as_ref() {
+            let new_source = crate::source_vault::NewVaultSource {
+                url: page.url.clone(),
+                title: title.to_string(),
+                fetch_timestamp: Some(captured_at),
+                search_tool: hit.search_tool.clone(),
+                search_engine: hit.search_engine.clone(),
+                media_type: media_type.to_string(),
+                content_type: page.content_type.clone(),
+                body_text: body.to_string(),
+                summary_text: summary_text.clone(),
+            };
+            // Off-load the blocking vault write to the blocking pool
+            // so a slow disk does not park a tokio worker (FUNC-017).
+            if let Err(e) = vault.store_async(&new_source).await {
+                tracing::warn!(
+                    error = %e,
+                    url = %page.url,
+                    "research: failed to store source in vault"
+                );
+                // FUNC-030: surface the persistence failure so a
+                // captured-but-unstored source is not silently
+                // counted as fully captured.
+                if let Some(obs) = observer {
+                    obs.on_event(GatherEvent::VaultStoreFailed {
+                        url: page.url.clone(),
+                        error: e.to_string(),
+                    });
+                }
+            }
+        }
+        body_for_source
+    }
+
+    /// Record a rejected URL in the gather log.
+    fn log_rejected(
+        &self,
+        url: &str,
+        query: &str,
+        title: &str,
+        search_tool: &str,
+        search_engine: &str,
+        reason: &str,
+        detail: Option<&serde_json::Value>,
+    ) {
+        self.log_url_outcome(
+            url,
+            query,
+            title,
+            search_tool,
+            search_engine,
+            "rejected",
+            reason,
+            detail,
+        );
+    }
+
+    /// Record a captured URL in the gather log.
+    fn log_captured(
+        &self,
+        url: &str,
+        query: &str,
+        title: &str,
+        search_tool: &str,
+        search_engine: &str,
+        detail: Option<&serde_json::Value>,
+    ) {
+        self.log_url_outcome(
+            url,
+            query,
+            title,
+            search_tool,
+            search_engine,
+            "captured",
+            "",
+            detail,
+        );
+    }
+}
+
+/// Running counts for one gather pass, shared by the search and fetch stages.
+#[derive(Default)]
+struct SweepTally {
+    /// Deduplicated hits seen by the search stage.
+    considered: usize,
+    /// Hits and pages excluded by either stage.
+    excluded: usize,
+    // Per-engine accounting (T-006). All bump sites run on the gather
+    // task itself (search loop + fetch dispatch loop), so a plain map
+    // needs no locking.
+    per_engine: std::collections::BTreeMap<String, EngineSweepStat>,
+    // Global per-reason exclusion tally for the summary totals row. Kept
+    // alongside the per-engine breakdown so the totals row reports the
+    // same reasons even when consensus crediting inflates engine sums.
+    excluded_by_reason: std::collections::BTreeMap<ExclusionReason, usize>,
+    // Global fetch-failure tally by fine-grained cause, so the `fetch`
+    // reason column on the totals row breaks down into the individual
+    // fetch failure modes.
+    failed_by_kind: std::collections::BTreeMap<FetchFailureKind, usize>,
+}
+
+impl SweepTally {
+    /// Count one exclusion and credit it to every engine of the hit.
+    fn exclude(&mut self, engines_csv: &str, reason: ExclusionReason) {
+        self.excluded += 1;
+        bump_engine_exclusions(
+            &mut self.per_engine,
+            &mut self.excluded_by_reason,
+            engines_csv,
+            reason,
+        );
+    }
+
+    /// Count one fetch failure as an exclusion and credit it to every engine
+    /// of the hit.
+    fn fetch_failed(&mut self, engines_csv: &str, kind: FetchFailureKind) {
+        self.excluded += 1;
+        bump_engine_fetch_failure(
+            &mut self.per_engine,
+            &mut self.excluded_by_reason,
+            &mut self.failed_by_kind,
+            engines_csv,
+            kind,
+        );
+    }
+}
+
+/// Inputs for one sub-query search future.
+struct SubQuerySearch {
+    query: String,
+    tool: Arc<dyn WebSearchTool>,
+    budget: Option<Arc<SearchBudget>>,
+    cache: Option<Arc<SharedQueryCache>>,
+    stats: Option<Arc<ProviderCallStats>>,
+    exclude: Arc<[&'static str]>,
+    // `--age`: the exact window start, as an ISO date, handed to
+    // the search tool as a structured bound. `None` without a span.
+    published_after: Option<String>,
+    per_query_allowance: usize,
+    max_retries: u32,
+    base_delay_ms: u64,
+}
+
+/// Run one sub-query search: reserve a search-budget call, serve a cached
+/// answer when there is one, and otherwise search with exponential-backoff
+/// retries on transient failures (Milestone H-002).
+async fn search_sub_query(search: SubQuerySearch) -> SearchCallOutcome {
+    let SubQuerySearch {
+        query: q,
+        tool,
+        budget,
+        cache,
+        stats,
+        exclude,
+        published_after,
+        per_query_allowance,
+        max_retries,
+        base_delay_ms,
+    } = search;
+    // Run-scoped search budget: reserve one call before any
+    // provider request. Exhaustion skips the search entirely.
+    if let Some(budget) = &budget
+        && !budget.try_acquire()
+    {
+        return SearchCallOutcome::BudgetExhausted;
+    }
+    // Shared query cache: an identical query already answered
+    // this run is served without a provider call. The exclusion
+    // set and the `--age` date bound are folded into the cache
+    // key so a bounded result can never satisfy an unbounded
+    // query (or a differently bounded one) in the same run.
+    let cache_key = search_cache_key(&q, &exclude, published_after.as_deref());
+    if let Some(cache) = &cache
+        && let Some(hits) = cache.get(&cache_key)
+    {
+        return SearchCallOutcome::Ok { hits };
+    }
+    // Retry loop with exponential backoff.
+    let mut attempt: u32 = 0;
+    let mut last_error;
+    loop {
+        let search_result = tool
+            .search_with_date_bound(
+                &q,
+                per_query_allowance,
+                &exclude,
+                published_after.as_deref(),
+            )
+            .await;
+        match search_result {
+            Ok(hits) => {
+                // Record one logical search call (retries
+                // included) and memoise the result.
+                if let Some(stats) = &stats {
+                    stats.record(&hit_search_tool(&hits));
+                }
+                // PERF-077: share the hit vector behind an Arc
+                // so caching is a refcount hand-off rather than
+                // a deep clone of every hit.
+                let hits: Arc<[WebSearchHit]> = hits.into();
+                if let Some(cache) = &cache {
+                    cache.insert(&cache_key, Arc::clone(&hits));
+                }
+                return SearchCallOutcome::Ok { hits };
+            }
+            Err(e) => {
+                last_error = e.to_string();
+                if attempt >= max_retries {
+                    // Record the logical call even on terminal
+                    // failure so the provider total reflects
+                    // the paid request.
+                    if let Some(stats) = &stats {
+                        stats.record(&hit_search_tool(&[]));
+                    }
+                    return SearchCallOutcome::Err {
+                        error: last_error.clone(),
+                        retries: attempt,
+                    };
+                }
+                attempt += 1;
+                let delay_ms = base_delay_ms
+                    .saturating_mul(1u64.checked_shl(attempt - 1).unwrap_or(u64::MAX))
+                    .min(MAX_SEARCH_RETRY_DELAY_MS);
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                tracing::warn!(
+                    query = %q,
+                    attempt,
+                    error = %last_error,
+                    "research: retrying sub-query search after transient failure"
+                );
+            }
+        }
+    }
+}
+
+/// One fetched candidate as it leaves the fetch stream.
+struct FetchedCandidate {
+    index: usize,
+    query: Arc<str>,
+    hit: WebSearchHit,
+    result: Result<Result<WebFetchedPage, anyhow::Error>, tokio::time::error::Elapsed>,
+    language_fallback: Option<String>,
+}
+
+/// Fetch one candidate (or synthesize its page from the hit for scholarly and
+/// encyclopedia hits), bounded by `fetch_timeout`, and detect the page
+/// language alongside the other in-flight fetches.
+async fn fetch_candidate(
+    fetch_tool: Arc<dyn WebFetchTool>,
+    fetch_timeout: Duration,
+    index: usize,
+    query: Arc<str>,
+    hit: WebSearchHit,
+) -> FetchedCandidate {
+    // Scholarly and encyclopedia hits are captured as
+    // self-contained sources from the snippet - the underlying
+    // page is either a paywalled redirect (DOI/landing page)
+    // or a large article whose readability extraction is
+    // unreliable, so a URL fetch would drop or degrade the
+    // result. Synthesize a page directly from the hit instead.
+    let special_page_type: Option<&str> = if is_scholarly_hit(&hit) {
+        Some("scholarly")
+    } else if is_encyclopedia_hit(&hit) {
+        Some("encyclopedia")
+    } else {
+        None
+    };
+    let result: Result<Result<WebFetchedPage, anyhow::Error>, tokio::time::error::Elapsed> =
+        if let Some(page_type) = special_page_type {
+            Ok(Ok(synthesize_hit_page(&hit, page_type)))
+        } else {
+            tokio::time::timeout(
+                fetch_timeout,
+                fetch_tool.fetch_with_limit(&hit.url, MAX_SOURCE_BODY_BYTES),
+            )
+            .await
+        };
+    // Best-effort language detection is CPU-bound lingua work:
+    // compute it here, concurrent with the other in-flight
+    // fetches, instead of serially in the dispatch loop where
+    // it stalls the whole event stream behind every page.
+    let language_fallback = match &result {
+        Ok(Ok(page)) => {
+            // PERF-077: clone the body `Arc`, not the page
+            // bytes, so language detection adds no page-sized
+            // allocation and the page keeps its own copy.
+            let body = page.body.clone();
+            tokio::task::spawn_blocking(move || {
+                detectable_body(&body).and_then(detect_language_best_effort)
+            })
+            .await
+            .ok()
+            .flatten()
+        }
+        _ => None,
+    };
+    FetchedCandidate {
+        index,
+        query,
+        hit,
+        result,
+        language_fallback,
     }
 }
 
