@@ -489,6 +489,450 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
     // Install the panic hook first so panics during startup are also captured.
     panic_hook::install();
 
+    check_and_stamp_crash_marker(&working_dir);
+
+    let mut startup = StartupTimings::new();
+    let t0 = Instant::now();
+    startup.record("CLI parse", t0.elapsed());
+
+    if cli.no_git_context {
+        codemason_agent::agent::disable_git_prompt_context();
+    }
+    if cli.no_readme_context {
+        codemason_agent::agent::disable_readme_prompt_context();
+    }
+
+    // Initialize tracing.
+    //
+    // For GUI mode: install a channel-based layer so all tracing output is
+    // captured by the GUI's log panel.
+    //
+    // For non-GUI modes (--no-tui, headless run, server, etc.): fall back to
+    // the normal fmt subscriber so logs appear in the terminal as usual.
+    let t0 = Instant::now();
+    let (gui_log_rx, logs_cell, gui_will_run) = init_tracing(&cli)?;
+    startup.record("Tracing init", t0.elapsed());
+    tracing::info!(log_level = %cli.log_level, gui_mode = gui_will_run, "Tracing initialized");
+
+    // Load config
+    let t0 = Instant::now();
+    let config = load_startup_config(&cli)?;
+    startup.record("Config load", t0.elapsed());
+    // Keep the in-memory runtime flags in sync with the loaded config. The
+    // helper takes the already-loaded values, so no module reloads the config
+    // from disk a second time.
+    //
+    // This is the value the whole process serves permission prompts from, so an
+    // unexpected default here is worth a line: `yolo`/`edit_log`/`gcf` all
+    // default to off, and the intermittent "YOLO keeps going off" report is a
+    // silent fall back to those defaults (a config that fails to parse, or a
+    // global file that lost the key). Logging the effective flag state at
+    // startup makes such a fallback attributable instead of invisible.
+    codemason_config::sync_runtime_flags(&config);
+    tracing::info!(
+        yolo = config.yolo,
+        edit_log = config.edit_log,
+        activity_log = config.activity_log,
+        gcf = config.gcf.enabled,
+        config_paths = ?config.config_paths,
+        "Configuration loaded successfully"
+    );
+
+    let auto_extract_config = config.memory.auto_extract.clone();
+
+    // Initialize storage
+    let db_path = data_dir().join("codemason.db");
+    tracing::info!(db_path = %db_path.display(), "Opening database");
+    let t0 = Instant::now();
+    let storage = Arc::new(Storage::open(&db_path)?);
+    startup.record("Storage open", t0.elapsed());
+    tracing::info!("Storage initialized successfully");
+
+    // Message-age retention (opt-in via `storage.retention.enabled`).
+    //
+    // Off-loaded to a blocking thread: the delete is a three-table cascade and
+    // must not stall the startup critical path. Session rows are kept, so an
+    // expired transcript leaves the session listed but empty rather than
+    // vanishing from the session list.
+    spawn_message_retention(&config, &storage);
+
+    // M5: Warm the session message FTS index in the background so the
+    // conversation/session search tools return up-to-date results after
+    // startup or schema changes.
+    //
+    // Open a *separate* Storage connection for the warmup so the background
+    // FTS rebuild does not hold the main thread's `Mutex<Connection>` -
+    // which would block `get_setting` and other startup queries for the
+    // entire duration of the rebuild (10+ seconds on large histories).
+    spawn_search_index_warmup(db_path.clone());
+
+    // Seed the secret registry from stored provider credentials so that
+    // redact_secrets() can mask them by exact match in all log output.
+    //
+    // This is a full scan of the `provider_auth` table with per-row
+    // deobfuscation. It only feeds log redaction, so it is off-loaded to a
+    // background thread to keep it off the startup critical path. The
+    // well-known environment variables below are still seeded synchronously
+    // so the common credential sources are redacted from the first log line.
+    let t0 = Instant::now();
+    seed_secret_registry(&storage);
+    startup.record("Secret registry seed", t0.elapsed());
+
+    // Create event bus
+    let t0 = Instant::now();
+    let event_bus = Arc::new(EventBus::new(2048));
+    tracing::debug!(capacity = 2048, "Event bus created");
+
+    // Create registries
+    let (provider_registry, tool_registry) = build_registries(&storage);
+    let provider_count = provider_registry.list().len();
+    let tool_count = tool_registry.list().len();
+    startup.record("Provider & tool registries", t0.elapsed());
+    tracing::info!(
+        providers = provider_count,
+        tools = tool_count,
+        "Registries created"
+    );
+
+    let t0 = Instant::now();
+    let permission_checker = Arc::new(parking_lot::RwLock::new(PermissionChecker::new(
+        config.permission.clone(),
+    )));
+    startup.record("Permission checker", t0.elapsed());
+
+    let resolved_agent =
+        resolve_startup_agent(&cli, &config, &provider_registry, &storage, &mut startup)?;
+
+    let max_background_agents = config.experimental.max_background_agents;
+    let background_agent_timeout = config.experimental.background_agent_timeout;
+    let stream_config = config.stream.clone();
+
+    let config = Arc::new(tokio::sync::RwLock::new(config));
+
+    // Initialise telemetry subsystem from configuration.
+    // A ShutdownGuard keeps the provider alive for the process lifetime and
+    // flushes pending metrics on normal or panic exit paths.
+    //
+    // SEC-codemason-telemetry-002 (SECTASKS T-020): enablement and endpoint come
+    // from user-owned configuration only. The repository-local
+    // `.codemason/codemason.json` is merged through `Config::merge_project`, which
+    // drops its `telemetry` block entirely, so a cloned project cannot turn
+    // telemetry on or point the OTLP endpoint at an attacker host.
+    let t0 = Instant::now();
+    let telemetry = init_telemetry(&*config.read().await, logs_cell);
+    // The guard shares the live subsystem via `Arc` - with the same handle
+    // also wired into the session processor below, the shared-instance guard
+    // flushes the actual provider rather than a disabled clone.
+    let _telemetry_guard = ShutdownGuard::new(Arc::clone(&telemetry));
+    // Export every agent-loop profiler scope as `codemason.profile.duration`
+    // (tagged with its profiler bucket) while OTel export is enabled.
+    codemason_agent::session::profiler::agent_loop_profiler()
+        .attach_telemetry(Arc::clone(&telemetry));
+    startup.record("Telemetry init", t0.elapsed());
+
+    // Create session manager and processor
+    let t0 = Instant::now();
+    let (session_manager, session_processor) = build_session_processor(
+        &cli,
+        &storage,
+        &event_bus,
+        &provider_registry,
+        &tool_registry,
+        permission_checker,
+        stream_config,
+        telemetry,
+    );
+    tracing::info!(auto_approve = cli.yes, "Session processor initialized");
+    startup.record("Session manager & processor", t0.elapsed());
+
+    let t0 = Instant::now();
+    wire_agent_services(
+        &session_processor,
+        auto_extract_config,
+        &event_bus,
+        &storage,
+        max_background_agents,
+        background_agent_timeout,
+    );
+    startup.record("Agent mgr & bg service", t0.elapsed());
+
+    // Connect MCP servers from config in the background so the TUI (or
+    // headless run) appears immediately.  Each MCP connection spawns a child
+    // process and performs a handshake + tool-list round-trip; doing this
+    // sequentially on the main task can add 5-15 seconds to startup when one
+    // or more servers are slow to start.
+    //
+    // FR-030 MCP bridge: enabled plugins also contribute MCP servers (their
+    // manifest `mcpServers` section). Configured servers take precedence on an
+    // id collision; the merged set connects exactly like before.
+    //
+    // Enable state: whether a server is started is a durable, global choice
+    // recorded in the MCP enable-state ledger. A server absent from the ledger
+    // is enabled, so a newly added server starts connected.
+    // Connector bridge (spec `connectors` T-008; FR-008, FR-020): an enabled
+    // connector's servers are resolved into bridged ids (`<connector>.<server>`)
+    // and connect through the same loop as the configured servers, so their tools
+    // surface as the ordinary `mcp_<server>_<tool>` tools of the shared client.
+    // `scan_connector_bridge` is the read-only half (store scan + collision
+    // refusal, no connection); the connect loop applies the durable per-server
+    // enable ledger to the bridged ids exactly as it does for configured servers.
+    connect_mcp_servers(&config, &session_processor, &event_bus).await;
+
+    // Initialize spec manager for all modes (TUI, serve, run, etc.)
+    let t0 = Instant::now();
+    let specs_root = crate::working_dir().join("specs");
+    let _ = session_processor // INTENTIONAL: fallible wiring/persistence call; the in-memory state is authoritative
+        .spec_manager
+        .set(Arc::new(codemason_specs::SpecManager::new(&specs_root)));
+    startup.record("Spec manager init", t0.elapsed());
+    if cli.dry_run {
+        run_dry_run_and_exit(
+            cli.config.clone(),
+            &cli.agent,
+            cli.model.as_deref(),
+            cli.json,
+            Arc::clone(&provider_registry),
+            Arc::clone(&tool_registry),
+        )
+        .await;
+    }
+
+    // Wire the activity-log store into the session processor.
+    //
+    // The handle is set unconditionally; recording is gated at each call site
+    // by `codemason_config::activity_log::is_enabled()` so `/alog off` suppresses
+    // writes without unwiring the handle. A failure to open the log is
+    // non-fatal - the agent loop simply skips recording (best-effort).
+    //
+    // The open is off-loaded to a background thread: it opens a *separate*
+    // SQLite database (`activity_log.db`) and runs its schema migration, so
+    // doing it synchronously here would stall the TUI's first frame. The
+    // handle is wired via `OnceLock` (`set_activity_log`) once the open
+    // completes; recording only begins after the session starts, by which
+    // time the background open has finished.
+    //
+    // This is intentionally placed *after* the `dry_run` early-return so a
+    // readiness check does not open (or create) the activity-log database.
+    spawn_activity_log_open(&db_path, &session_processor);
+
+    // R-23: the command dispatch below moves `storage` into the TUI (and into
+    // several handlers), so keep a handle for the graceful-shutdown WAL
+    // checkpoint at the end of this function.
+    let storage_for_shutdown = Arc::clone(&storage);
+    match cli.command {
+        None => {
+            // Default: open the desktop GUI (`--no-tui` keeps plain stdio).
+            if cli.interactive.mode() == Mode::Plain {
+                run_plain_interactive(
+                    &resolved_agent,
+                    &config,
+                    &provider_registry,
+                    &session_manager,
+                    &session_processor,
+                )
+                .await?;
+            } else {
+                launch_gui(
+                    event_bus,
+                    storage,
+                    provider_registry,
+                    session_processor,
+                    &resolved_agent,
+                    cli.log,
+                    if cli.new_session {
+                        StartupSession::New
+                    } else {
+                        StartupSession::Restore
+                    },
+                    gui_log_rx,
+                    db_path.clone(),
+                    &config,
+                    startup,
+                    gui_launcher,
+                )
+                .await?;
+            }
+        }
+        Some(Commands::Run { prompt }) => {
+            // FR-013 CLI parity: a `/new` prompt is executed by the same
+            // scaffold engine as `codemason new`, not sent to the LLM. The
+            // scaffolder is a deterministic local operation; there is no
+            // agent turn to run.
+            let trimmed = prompt.trim();
+            if trimmed == "/new" || trimmed.starts_with("/new ") {
+                return cli::handle_new_prompt(trimmed.trim_start_matches("/new"));
+            }
+            run_headless(
+                prompt,
+                &resolved_agent,
+                &config,
+                &provider_registry,
+                &session_manager,
+                &session_processor,
+            )
+            .await?;
+        }
+        Some(Commands::Serve { addr }) => {
+            serve(addr, event_bus, config, storage, session_processor).await?;
+        }
+        Some(Commands::Orchestrate) => {
+            tracing::info!("Starting orchestration example");
+            cli::run_orchestration_example().await?;
+        }
+        Some(Commands::Project { command }) => {
+            run_project_command(command, &config, &storage, &event_bus).await?;
+        }
+        Some(Commands::Session { command }) => match command {
+            SessionCommands::List { project, json } => {
+                run_session_list(&storage, project, json)?;
+            }
+            SessionCommands::Resume { id } => {
+                // Verify session exists before launching the GUI
+                if storage.get_session(&id)?.is_none() {
+                    anyhow::bail!("Session not found: {id}");
+                }
+                tracing::info!(session_id = %id, "Resuming session");
+                launch_gui(
+                    event_bus,
+                    storage,
+                    provider_registry,
+                    session_processor,
+                    &resolved_agent,
+                    cli.log,
+                    StartupSession::Resume(id),
+                    gui_log_rx,
+                    db_path.clone(),
+                    &config,
+                    startup,
+                    gui_launcher,
+                )
+                .await?;
+            }
+            SessionCommands::ExportArchive {
+                id,
+                output,
+                no_triggers,
+                no_cron,
+                no_loop_state,
+                include_cost: _,
+            } => {
+                run_session_export(&storage, id, output, no_triggers, no_cron, no_loop_state)?;
+            }
+            SessionCommands::Import { file } => {
+                run_session_import(&storage, file).await?;
+            }
+        },
+        Some(Commands::Db { command }) => match command {
+            DbCommands::Prune { days, dry_run } => {
+                run_db_prune(days, dry_run, &config, &storage).await?;
+            }
+        },
+        Some(Commands::Auth { provider, key }) => {
+            storage.set_provider_auth(&provider, &key)?;
+            tracing::info!(provider = %provider, "Stored API key");
+        }
+        Some(Commands::Models {
+            provider: filter,
+            ollama_url,
+        }) => {
+            list_models(filter, ollama_url, &storage, &provider_registry).await?;
+        }
+        Some(Commands::Config { command }) => match command {
+            Some(ConfigCommands::Check { json }) => {
+                run_dry_run_and_exit(
+                    cli.config.clone(),
+                    &cli.agent,
+                    cli.model.as_deref(),
+                    cli.json || json,
+                    Arc::clone(&provider_registry),
+                    Arc::clone(&tool_registry),
+                )
+                .await;
+            }
+            _ => {
+                let config = config.read().await;
+                cliprintln!("{:#?}", *config);
+                drop(config);
+            }
+        },
+        Some(Commands::Memory { command }) => {
+            run_memory_command(command, &storage)?;
+        }
+        Some(Commands::Research { command }) => {
+            // Use the startup config, so `--config <file>` settings apply.
+            let startup_config = Arc::new(config.read().await.clone());
+            Box::pin(cli::handle_research_command_with_model(
+                *command,
+                startup_config,
+                resolved_agent.model.clone(),
+                Some(storage.clone()),
+                Some(provider_registry.clone()),
+            ))
+            .await?;
+        }
+        Some(Commands::New { scaffold, .. }) => {
+            dispatch_new_command(scaffold)?;
+        }
+        Some(Commands::Spec { command }) => {
+            run_spec_command(
+                command,
+                cli.model.clone(),
+                &config,
+                storage,
+                provider_registry,
+            )
+            .await?;
+        }
+        Some(Commands::Plugins { args }) => {
+            // Sync dispatch: the ephemeral plugin session owns `!Send` rquickjs
+            // contexts, so it must not cross an `.await`. `run_cli` is fully
+            // synchronous, keeping this future `Send` for the async runtime.
+            plugins::run_cli(&args)?;
+        }
+        Some(Commands::Connectors { args }) => {
+            // The connector surface drives an ephemeral lifecycle session over
+            // the CLI connection seam and never touches a live TUI client, so it
+            // is safe to await on the main task.
+            connectors::run_cli(&args).await?;
+        }
+        Some(Commands::Automation { args }) => {
+            // Automation service CLI parity surface (spec `openhands` T-016;
+            // FR-018). Lists automations and their run history, or enqueues a
+            // manual run; the run-history reads are synchronous storage calls.
+            let config = config.read().await.clone();
+            cli::handle_automation_command(&args, Arc::clone(&storage), &config)?;
+        }
+        Some(Commands::Openapi { client }) => {
+            // FR-007 parity surface: emit the OpenAPI 3.1 document, or the
+            // generated typed client, from the same route table the server
+            // serves. Synchronous stdout writes only.
+            write_openapi(client)?;
+        }
+        Some(Commands::AcpServer) => {
+            // Spec `openhands` T-008 (FR-022, FR-028): serve the ACP endpoint on
+            // stdio for an IDE client. Off by default - `acp_server::run` refuses
+            // unless the feature is compiled in *and* `acp.server_enabled` is set.
+            acp_server::run(
+                config.read().await.clone().into(),
+                Arc::clone(&session_processor),
+                Arc::clone(&event_bus),
+                working_dir.clone(),
+            )
+            .await?;
+        }
+    }
+    // R-23: on a graceful exit, truncate the WAL so the next start does not
+    // inherit a file that grew to the high-water mark of this session's
+    // largest write burst. Best-effort: a failure here must never turn a
+    // successful command into an error exit.
+    if let Err(e) = storage_for_shutdown.checkpoint_wal() {
+        tracing::warn!(error = %e, "Failed to checkpoint WAL on shutdown");
+    }
+    Ok(())
+}
+
+/// Report a previous unclean exit, then stamp this process's crash marker.
+fn check_and_stamp_crash_marker(working_dir: &std::path::Path) {
     // Read the PREVIOUS marker FIRST. `write_record` truncates and replaces the
     // marker with this process's pid, so checking afterwards could never see the
     // stale record (its pid would always be this live process) and the warning
@@ -513,26 +957,23 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
     if let Err(e) = crash_dump::write_record(&working_dir, "running") {
         cliprintln_err!("warning: failed to write crash marker: {e}");
     }
+}
 
-    let mut startup = StartupTimings::new();
-    let t0 = Instant::now();
-    startup.record("CLI parse", t0.elapsed());
-
-    if cli.no_git_context {
-        codemason_agent::agent::disable_git_prompt_context();
-    }
-    if cli.no_readme_context {
-        codemason_agent::agent::disable_readme_prompt_context();
-    }
-
-    // Initialize tracing.
-    //
-    // For GUI mode: install a channel-based layer so all tracing output is
-    // captured by the GUI's log panel.
-    //
-    // For non-GUI modes (--no-tui, headless run, server, etc.): fall back to
-    // the normal fmt subscriber so logs appear in the terminal as usual.
-    let t0 = Instant::now();
+/// Install the global tracing subscriber for the selected command.
+///
+/// Returns the GUI log receiver (GUI mode only), the OTLP logs layer's swap
+/// cell, and whether the GUI will run.
+///
+/// # Errors
+///
+/// Returns an error when the GUI will run but no display is reachable.
+fn init_tracing(
+    cli: &Cli,
+) -> Result<(
+    Option<codemason_app_core::log_channel::TuiLogReceiver>,
+    codemason_agent::telemetry::ExportCell,
+    bool,
+)> {
     // `--log-level all` is the operator's "record everything" spelling. It is
     // not an `EnvFilter` directive, so map it to the `trace` directive before
     // the filter is parsed: `trace` is the highest verbosity `tracing` defines,
@@ -632,11 +1073,15 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
             .init();
         None
     };
-    startup.record("Tracing init", t0.elapsed());
-    tracing::info!(log_level = %cli.log_level, gui_mode = gui_will_run, "Tracing initialized");
+    Ok((gui_log_rx, logs_cell, gui_will_run))
+}
 
-    // Load config
-    let t0 = Instant::now();
+/// Load the configuration from `--config <path>`, or the layered default.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be read or parsed.
+fn load_startup_config(cli: &Cli) -> Result<Config> {
     let config = if let Some(ref path_str) = cli.config {
         let path = PathBuf::from(path_str);
         tracing::info!(config_path = %path.display(), "Loading config from file");
@@ -688,43 +1133,11 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
     } else {
         Config::load()?
     };
-    startup.record("Config load", t0.elapsed());
-    // Keep the in-memory runtime flags in sync with the loaded config. The
-    // helper takes the already-loaded values, so no module reloads the config
-    // from disk a second time.
-    //
-    // This is the value the whole process serves permission prompts from, so an
-    // unexpected default here is worth a line: `yolo`/`edit_log`/`gcf` all
-    // default to off, and the intermittent "YOLO keeps going off" report is a
-    // silent fall back to those defaults (a config that fails to parse, or a
-    // global file that lost the key). Logging the effective flag state at
-    // startup makes such a fallback attributable instead of invisible.
-    codemason_config::sync_runtime_flags(&config);
-    tracing::info!(
-        yolo = config.yolo,
-        edit_log = config.edit_log,
-        activity_log = config.activity_log,
-        gcf = config.gcf.enabled,
-        config_paths = ?config.config_paths,
-        "Configuration loaded successfully"
-    );
+    Ok(config)
+}
 
-    let auto_extract_config = config.memory.auto_extract.clone();
-
-    // Initialize storage
-    let db_path = data_dir().join("codemason.db");
-    tracing::info!(db_path = %db_path.display(), "Opening database");
-    let t0 = Instant::now();
-    let storage = Arc::new(Storage::open(&db_path)?);
-    startup.record("Storage open", t0.elapsed());
-    tracing::info!("Storage initialized successfully");
-
-    // Message-age retention (opt-in via `storage.retention.enabled`).
-    //
-    // Off-loaded to a blocking thread: the delete is a three-table cascade and
-    // must not stall the startup critical path. Session rows are kept, so an
-    // expired transcript leaves the session listed but empty rather than
-    // vanishing from the session list.
+/// Prune messages past the opt-in retention window on a blocking thread.
+fn spawn_message_retention(config: &Config, storage: &Arc<Storage>) {
     {
         let retention = config.storage.retention;
         if retention.enabled {
@@ -749,16 +1162,10 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
             });
         }
     }
+}
 
-    // M5: Warm the session message FTS index in the background so the
-    // conversation/session search tools return up-to-date results after
-    // startup or schema changes.
-    //
-    // Open a *separate* Storage connection for the warmup so the background
-    // FTS rebuild does not hold the main thread's `Mutex<Connection>` -
-    // which would block `get_setting` and other startup queries for the
-    // entire duration of the rebuild (10+ seconds on large histories).
-    let db_path_warm = db_path.clone();
+/// Warm the session message FTS index on a separate connection, off-thread.
+fn spawn_search_index_warmup(db_path_warm: PathBuf) {
     tokio::task::spawn_blocking(move || match Storage::open(&db_path_warm) {
         Ok(warm_storage) => match warm_storage.warm_message_search_index() {
             Ok(count) => tracing::info!(indexed_messages = count, "Warmed message search index"),
@@ -766,16 +1173,10 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
         },
         Err(e) => tracing::warn!(error = %e, "Failed to open storage for FTS warmup"),
     });
+}
 
-    // Seed the secret registry from stored provider credentials so that
-    // redact_secrets() can mask them by exact match in all log output.
-    //
-    // This is a full scan of the `provider_auth` table with per-row
-    // deobfuscation. It only feeds log redaction, so it is off-loaded to a
-    // background thread to keep it off the startup critical path. The
-    // well-known environment variables below are still seeded synchronously
-    // so the common credential sources are redacted from the first log line.
-    let t0 = Instant::now();
+/// Seed the secret registry from stored credentials and well-known env vars.
+fn seed_secret_registry(storage: &Arc<Storage>) {
     {
         let storage = Arc::clone(&storage);
         tokio::task::spawn_blocking(move || {
@@ -827,14 +1228,12 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
             codemason_agent::sanitize::register_secret(&val);
         }
     }
-    startup.record("Secret registry seed", t0.elapsed());
+}
 
-    // Create event bus
-    let t0 = Instant::now();
-    let event_bus = Arc::new(EventBus::new(2048));
-    tracing::debug!(capacity = 2048, "Event bus created");
-
-    // Create registries
+/// Build the provider and tool registries and wire storage into providers.
+fn build_registries(
+    storage: &Arc<Storage>,
+) -> (Arc<provider::ProviderRegistry>, Arc<tool::ToolRegistry>) {
     let provider_registry = Arc::new(provider::create_default_registry());
     // Attach the provider registry to the router so it can delegate to
     // concrete providers at chat time.
@@ -854,21 +1253,21 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
         openrouter_provider.set_storage(Arc::clone(&storage));
     }
     let tool_registry = Arc::new(tool::create_default_registry());
-    let provider_count = provider_registry.list().len();
-    let tool_count = tool_registry.list().len();
-    startup.record("Provider & tool registries", t0.elapsed());
-    tracing::info!(
-        providers = provider_count,
-        tools = tool_count,
-        "Registries created"
-    );
+    (provider_registry, tool_registry)
+}
 
-    let t0 = Instant::now();
-    let permission_checker = Arc::new(parking_lot::RwLock::new(PermissionChecker::new(
-        config.permission.clone(),
-    )));
-    startup.record("Permission checker", t0.elapsed());
-
+/// Resolve the startup agent and apply the `--maxsteps` / model overrides.
+///
+/// # Errors
+///
+/// Returns an error for an unknown agent or a malformed `--model`.
+fn resolve_startup_agent(
+    cli: &Cli,
+    config: &Config,
+    provider_registry: &Arc<provider::ProviderRegistry>,
+    storage: &Arc<Storage>,
+    startup: &mut StartupTimings,
+) -> Result<Arc<agent::AgentInfo>> {
     // Resolve the active agent
     let agent_name = &cli.agent;
     tracing::info!(agent = %agent_name, "Resolving agent");
@@ -915,24 +1314,17 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
         }
     }
     startup.record("Model selection", t0.elapsed());
+    Ok(resolved_agent)
+}
 
-    let max_background_agents = config.experimental.max_background_agents;
-    let background_agent_timeout = config.experimental.background_agent_timeout;
-    let stream_config = config.stream.clone();
-
-    let config = Arc::new(tokio::sync::RwLock::new(config));
-
-    // Initialise telemetry subsystem from configuration.
-    // A ShutdownGuard keeps the provider alive for the process lifetime and
-    // flushes pending metrics on normal or panic exit paths.
-    //
-    // SEC-codemason-telemetry-002 (SECTASKS T-020): enablement and endpoint come
-    // from user-owned configuration only. The repository-local
-    // `.codemason/codemason.json` is merged through `Config::merge_project`, which
-    // drops its `telemetry` block entirely, so a cloned project cannot turn
-    // telemetry on or point the OTLP endpoint at an attacker host.
-    let t0 = Instant::now();
-    let telemetry_config = config.read().await.telemetry.otel.clone();
+/// Build the telemetry subsystem and hand it the tracing logs-layer cell.
+///
+/// A construction failure is logged and replaced by a disabled subsystem.
+fn init_telemetry(
+    config: &Config,
+    logs_cell: codemason_agent::telemetry::ExportCell,
+) -> Arc<TelemetrySubsystem> {
+    let telemetry_config = config.telemetry.otel.clone();
     let telemetry = match TelemetrySubsystem::new(telemetry_config) {
         Ok(sub) => {
             tracing::info!(
@@ -963,18 +1355,20 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
             }
         );
     }
-    // The guard shares the live subsystem via `Arc` - with the same handle
-    // also wired into the session processor below, the shared-instance guard
-    // flushes the actual provider rather than a disabled clone.
-    let _telemetry_guard = ShutdownGuard::new(Arc::clone(&telemetry));
-    // Export every agent-loop profiler scope as `codemason.profile.duration`
-    // (tagged with its profiler bucket) while OTel export is enabled.
-    codemason_agent::session::profiler::agent_loop_profiler()
-        .attach_telemetry(Arc::clone(&telemetry));
-    startup.record("Telemetry init", t0.elapsed());
+    telemetry
+}
 
-    // Create session manager and processor
-    let t0 = Instant::now();
+/// Create the session manager and the session processor that drives it.
+fn build_session_processor(
+    cli: &Cli,
+    storage: &Arc<Storage>,
+    event_bus: &Arc<EventBus>,
+    provider_registry: &Arc<provider::ProviderRegistry>,
+    tool_registry: &Arc<tool::ToolRegistry>,
+    permission_checker: Arc<parking_lot::RwLock<PermissionChecker>>,
+    stream_config: codemason_agent::StreamConfig,
+    telemetry: Arc<TelemetrySubsystem>,
+) -> (Arc<SessionManager>, Arc<SessionProcessor>) {
     let session_manager = Arc::new(SessionManager::new(storage.clone(), event_bus.clone()));
     tracing::debug!("Session manager created");
     let session_processor = Arc::new(SessionProcessor {
@@ -1027,10 +1421,18 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
         last_message_end_reason: std::sync::RwLock::new(std::collections::HashMap::new()),
         pending_verdicts: codemason_agent::session::pending::PendingVerdicts::new(),
     });
-    tracing::info!(auto_approve = cli.yes, "Session processor initialized");
-    startup.record("Session manager & processor", t0.elapsed());
+    (session_manager, session_processor)
+}
 
-    let t0 = Instant::now();
+/// Wire the memory extractor, agent manager and background task service.
+fn wire_agent_services(
+    session_processor: &Arc<SessionProcessor>,
+    auto_extract_config: codemason_config::AutoExtractConfig,
+    event_bus: &Arc<EventBus>,
+    storage: &Arc<Storage>,
+    max_background_agents: usize,
+    background_agent_timeout: u64,
+) {
     if auto_extract_config.enabled {
         let extraction_engine = Arc::new(codemason_agent::memory::ExtractionEngine::new(
             auto_extract_config,
@@ -1054,28 +1456,15 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
     ));
     let _ = session_processor.bg_service.set(bg_service); // INTENTIONAL: OnceLock set race is benign
     tracing::debug!("Background task service initialized");
-    startup.record("Agent mgr & bg service", t0.elapsed());
+}
 
-    // Connect MCP servers from config in the background so the TUI (or
-    // headless run) appears immediately.  Each MCP connection spawns a child
-    // process and performs a handshake + tool-list round-trip; doing this
-    // sequentially on the main task can add 5-15 seconds to startup when one
-    // or more servers are slow to start.
-    //
-    // FR-030 MCP bridge: enabled plugins also contribute MCP servers (their
-    // manifest `mcpServers` section). Configured servers take precedence on an
-    // id collision; the merged set connects exactly like before.
-    //
-    // Enable state: whether a server is started is a durable, global choice
-    // recorded in the MCP enable-state ledger. A server absent from the ledger
-    // is enabled, so a newly added server starts connected.
-    // Connector bridge (spec `connectors` T-008; FR-008, FR-020): an enabled
-    // connector's servers are resolved into bridged ids (`<connector>.<server>`)
-    // and connect through the same loop as the configured servers, so their tools
-    // surface as the ordinary `mcp_<server>_<tool>` tools of the shared client.
-    // `scan_connector_bridge` is the read-only half (store scan + collision
-    // refusal, no connection); the connect loop applies the durable per-server
-    // enable ledger to the bridged ids exactly as it does for configured servers.
+/// Publish the shared MCP client and connect the configured, plugin and
+/// connector-bridged MCP servers on a background task.
+async fn connect_mcp_servers(
+    config: &Arc<tokio::sync::RwLock<Config>>,
+    session_processor: &Arc<SessionProcessor>,
+    event_bus: &Arc<EventBus>,
+) {
     let (mcp_configs, connector_session) = {
         let working_dir = crate::working_dir();
         let guard = config.read().await;
@@ -1168,42 +1557,10 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
             });
         });
     }
+}
 
-    // Initialize spec manager for all modes (TUI, serve, run, etc.)
-    let t0 = Instant::now();
-    let specs_root = crate::working_dir().join("specs");
-    let _ = session_processor // INTENTIONAL: fallible wiring/persistence call; the in-memory state is authoritative
-        .spec_manager
-        .set(Arc::new(codemason_specs::SpecManager::new(&specs_root)));
-    startup.record("Spec manager init", t0.elapsed());
-    if cli.dry_run {
-        run_dry_run_and_exit(
-            cli.config.clone(),
-            &cli.agent,
-            cli.model.as_deref(),
-            cli.json,
-            Arc::clone(&provider_registry),
-            Arc::clone(&tool_registry),
-        )
-        .await;
-    }
-
-    // Wire the activity-log store into the session processor.
-    //
-    // The handle is set unconditionally; recording is gated at each call site
-    // by `codemason_config::activity_log::is_enabled()` so `/alog off` suppresses
-    // writes without unwiring the handle. A failure to open the log is
-    // non-fatal - the agent loop simply skips recording (best-effort).
-    //
-    // The open is off-loaded to a background thread: it opens a *separate*
-    // SQLite database (`activity_log.db`) and runs its schema migration, so
-    // doing it synchronously here would stall the TUI's first frame. The
-    // handle is wired via `OnceLock` (`set_activity_log`) once the open
-    // completes; recording only begins after the session starts, by which
-    // time the background open has finished.
-    //
-    // This is intentionally placed *after* the `dry_run` early-return so a
-    // readiness check does not open (or create) the activity-log database.
+/// Open the activity-log store off-thread and wire it into the processor.
+fn spawn_activity_log_open(db_path: &std::path::Path, session_processor: &Arc<SessionProcessor>) {
     let alog_path = codemason_agent::storage::ActivityLog::default_path(&db_path);
     {
         let sp = Arc::clone(&session_processor);
@@ -1231,727 +1588,730 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
             }
         });
     }
+}
 
-    // R-23: the command dispatch below moves `storage` into the TUI (and into
-    // several handlers), so keep a handle for the graceful-shutdown WAL
-    // checkpoint at the end of this function.
-    let storage_for_shutdown = Arc::clone(&storage);
-    match cli.command {
-        None => {
-            // Default: open the desktop GUI (`--no-tui` keeps plain stdio).
-            if cli.interactive.mode() == Mode::Plain {
-                tracing::info!("Starting interactive mode (plain, no GUI)");
-                use tokio::io::AsyncBufReadExt;
+/// Run the plain (no GUI) interactive loop: one agent turn per stdin line.
+///
+/// # Errors
+///
+/// Returns an error on stdin, session or stdout failures.
+async fn run_plain_interactive(
+    resolved_agent: &Arc<agent::AgentInfo>,
+    config: &Arc<tokio::sync::RwLock<Config>>,
+    provider_registry: &Arc<provider::ProviderRegistry>,
+    session_manager: &Arc<SessionManager>,
+    session_processor: &Arc<SessionProcessor>,
+) -> Result<()> {
+    tracing::info!("Starting interactive mode (plain, no GUI)");
+    use tokio::io::AsyncBufReadExt;
 
-                let mut resolved_agent = resolved_agent.clone();
-                let config_guard = config.read().await;
-                agent::apply_fallback_thinking(
-                    Arc::make_mut(&mut resolved_agent),
-                    &config_guard,
-                    provider_registry.as_ref(),
-                );
+    let mut resolved_agent = resolved_agent.clone();
+    let config_guard = config.read().await;
+    agent::apply_fallback_thinking(
+        Arc::make_mut(&mut resolved_agent),
+        &config_guard,
+        provider_registry.as_ref(),
+    );
 
-                tracing::info!("Starting codemason interactive mode (plain)");
-                let dir = std::fs::canonicalize(".")?;
-                let session = session_manager.create_session(dir)?;
-                let reader = tokio::io::BufReader::new(tokio::io::stdin());
-                let mut lines = reader.lines();
-                while let Some(line) = lines.next_line().await? {
-                    if line.is_empty() {
-                        continue;
-                    }
-                    match session_processor
-                        .process_message(
-                            &session.id,
-                            &line,
-                            &resolved_agent,
-                            Arc::new(AtomicBool::new(false)),
-                        )
-                        .await
-                    {
-                        Ok(msg) => {
-                            if !crate::cli_out::writeln_io_log(
-                                std::io::stdout().lock(),
-                                format_args!("{}", msg.text_content()),
-                            ) {
-                                return Err(cli::CliExit::failure().into());
-                            }
-                        }
-                        Err(e) => tracing::error!(error = %e, "Failed to process message"),
-                    }
-                }
-            } else {
-                print_banner();
-                // `run_gui`'s future is large; box it so it is heap-allocated
-                // rather than inlined into this caller's future
-                // (clippy::large_futures).
-                Box::pin(codemason_gui::run_gui(codemason_gui::GuiOptions {
-                    event_bus,
-                    storage,
-                    provider_registry,
-                    session_processor,
-                    agent: (*resolved_agent).clone(),
-                    show_log: cli.log,
-                    startup: if cli.new_session {
-                        StartupSession::New
-                    } else {
-                        StartupSession::Restore
-                    },
-                    log_rx: gui_log_rx.unwrap_or_else(|| tui_log_channel(1).1),
-                    db_path: db_path.clone(),
-                    config_paths: config.read().await.config_paths.clone(),
-                    timings: startup,
-                    launcher: gui_launcher,
-                }))
-                .await?;
-            }
+    tracing::info!("Starting codemason interactive mode (plain)");
+    let dir = std::fs::canonicalize(".")?;
+    let session = session_manager.create_session(dir)?;
+    let reader = tokio::io::BufReader::new(tokio::io::stdin());
+    let mut lines = reader.lines();
+    while let Some(line) = lines.next_line().await? {
+        if line.is_empty() {
+            continue;
         }
-        Some(Commands::Run { prompt }) => {
-            // FR-013 CLI parity: a `/new` prompt is executed by the same
-            // scaffold engine as `codemason new`, not sent to the LLM. The
-            // scaffolder is a deterministic local operation; there is no
-            // agent turn to run.
-            let trimmed = prompt.trim();
-            if trimmed == "/new" || trimmed.starts_with("/new ") {
-                return cli::handle_new_prompt(trimmed.trim_start_matches("/new"));
-            }
-            tracing::info!("Starting headless run mode");
-            let mut resolved_agent = resolved_agent.clone();
-            let config_guard = config.read().await;
-            agent::apply_fallback_thinking(
-                Arc::make_mut(&mut resolved_agent),
-                &config_guard,
-                provider_registry.as_ref(),
-            );
-            let dir = std::fs::canonicalize(".")?;
-            let session = session_manager.create_session(dir.clone())?;
-
-            // If the prompt starts with `!`, run it as a shell command first
-            // and ask the model to review the output.
-            let final_prompt = if let Some(cmd) = prompt.strip_prefix('!') {
-                let cmd = cmd.trim();
-                if cmd.is_empty() {
-                    prompt.clone()
-                } else {
-                    // SEC-077: the bang command must pass the same 7-layer bash
-                    // validation the `Bash` tool applies; otherwise
-                    // `codemason run "!<cmd>"` bypassed every guard (banned tools,
-                    // directory escape, denied patterns, obfuscation).
-                    if let Err(e) =
-                        codemason_tools_core::bash::validate_shell_command(cmd, &dir).await
-                    {
-                        cliprintln_err!("command rejected: {e}");
-                        std::process::exit(2);
-                    }
-                    // Async context: spawn_blocking keeps a slow/hanging shell
-                    // command from stalling the tokio worker thread (the bash
-                    // tool applies the same principle via kill_on_drop).
-                    let owned_cmd = cmd.to_string();
-                    let output = tokio::task::spawn_blocking(move || {
-                        std::process::Command::new("sh")
-                            .arg("-c")
-                            .arg(&owned_cmd)
-                            .output()
-                    })
-                    .await
-                    .map_err(|e| anyhow::anyhow!("bang command task failed: {e}"))?;
-                    codemason_agent::bang_command::bang_command_prompt_from_output(cmd, &output)
-                }
-            } else {
-                prompt.clone()
-            };
-
-            match session_processor
-                .process_message(
-                    &session.id,
-                    &final_prompt,
-                    &resolved_agent,
-                    Arc::new(AtomicBool::new(false)),
-                )
-                .await
-            {
-                Ok(msg) => {
-                    if !crate::cli_out::writeln_io_log(
-                        std::io::stdout(),
-                        format_args!("{}", msg.text_content()),
-                    ) {
-                        return Err(cli::CliExit::failure().into());
-                    }
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "Run failed");
-                    // Kill any stdio MCP server children before exiting: a
-                    // leaked child outlives this one-shot run as an orphan.
-                    session_processor.shutdown_mcp().await;
-                    std::process::exit(1);
+        match session_processor
+            .process_message(
+                &session.id,
+                &line,
+                &resolved_agent,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await
+        {
+            Ok(msg) => {
+                if !crate::cli_out::writeln_io_log(
+                    std::io::stdout().lock(),
+                    format_args!("{}", msg.text_content()),
+                ) {
+                    return Err(cli::CliExit::failure().into());
                 }
             }
-            // Tear down MCP connections so the stdio server children codemason
-            // spawned are killed before this short-lived process exits.
-            session_processor.shutdown_mcp().await;
+            Err(e) => tracing::error!(error = %e, "Failed to process message"),
         }
-        Some(Commands::Serve { addr }) => {
-            tracing::info!(address = %addr, "Starting HTTP server");
-            // FR-012, FR-024, FR-032: when the OpenAI-compatible surface is
-            // explicitly enabled, its bearer token must be configured. The token
-            // is the server's one bearer token (FR-024) - codemason does not run a
-            // second credential - resolved from `openai.token` then the ambient
-            // `CODEMASON_TOKEN`, instead of the ephemeral generated one. When the
-            // surface is enabled without one, refuse to start rather than serve
-            // it unauthenticated (FR-032).
-            let (openai_enabled, openai_token) = {
-                let guard = config.read().await;
-                let enabled = guard.openai_surface_enabled();
-                let token = guard.openai_surface_token().or_else(|| {
-                    // Route the ambient fallback through the canonical
-                    // credential reader so blank/whitespace handling matches
-                    // the rest of the workspace (audit T-111).
-                    codemason_config::credential_env::read_credential_env("CODEMASON_TOKEN")
-                });
-                (enabled, token)
-            };
-            let auth_token = if openai_enabled {
-                match openai_token {
-                    Some(token) => token,
-                    None => anyhow::bail!(
-                        "the OpenAI-compatible surface is enabled (openai.enabled: true) \
-                         but no bearer token is configured; set `openai.token` or \
-                         CODEMASON_TOKEN, or disable the surface"
-                    ),
-                }
-            } else if let Some(token) = openai_token {
-                token
-            } else {
-                // No configured token: generate one for this run and print it,
-                // or every protected route would answer 401 with no way to
-                // learn the credential (SI-02; owner decision O-04). stderr,
-                // so it never mixes with piped stdout.
-                let token = uuid::Uuid::new_v4().to_string();
-                eprintln!(
-                    "cdmn serve: no bearer token configured (openai.token or CODEMASON_TOKEN); \
-                     using a token generated for this run:\n  {token}\n\
-                     Send it as `Authorization: Bearer <token>`."
-                );
-                token
-            };
-            // Automation scheduler (spec `openhands` T-016; FR-014): when the
-            // project config enables the subsystem, tick the scheduled
-            // automations for the lifetime of the served process. An
-            // unconfigured project starts no scheduler, so no runs fire. It
-            // shares the session processor, so it is set up before the state
-            // takes ownership of it.
-            let automation_config = {
-                let guard = config.read().await;
-                guard.automation_config()
-            };
-            let _automation_scheduler = if automation_config.is_enabled() {
-                let service = Arc::new(codemason_agent::automation::AutomationService::new(
-                    Arc::clone(&session_processor),
-                    automation_config,
-                    crate::working_dir(),
-                ));
-                Some(service.spawn_scheduler())
-            } else {
-                None
-            };
-            let orchestrator_registry = codemason_agent::orchestrator::AgentRegistry::new();
-            let coordinator =
-                codemason_agent::orchestrator::Coordinator::new(orchestrator_registry);
-            let state = codemason_server::routes::AppState {
-                event_bus,
-                config,
-                storage,
-                session_processor,
-                auth_token,
-                rate_limiter: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
-                coordinator: Some(coordinator),
-                research_runs: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
-                research_root: Arc::new(crate::working_dir().join("research")),
-                worktree_root: Arc::new(
-                    codemason_agent::project::worktree::default_worktree_root()
-                        .unwrap_or_else(|| crate::working_dir().join(".codemason/worktrees")),
-                ),
-            };
-            codemason_server::start_server(&addr, state).await?;
+    }
+    Ok(())
+}
+
+/// Launch the desktop GUI with `startup` as its first session.
+///
+/// # Errors
+///
+/// Returns an error when the GUI fails to start or exits with an error.
+async fn launch_gui(
+    event_bus: Arc<EventBus>,
+    storage: Arc<Storage>,
+    provider_registry: Arc<provider::ProviderRegistry>,
+    session_processor: Arc<SessionProcessor>,
+    resolved_agent: &agent::AgentInfo,
+    show_log: bool,
+    startup: StartupSession,
+    gui_log_rx: Option<codemason_app_core::log_channel::TuiLogReceiver>,
+    db_path: PathBuf,
+    config: &tokio::sync::RwLock<Config>,
+    timings: StartupTimings,
+    launcher: codemason_gui::GuiLauncher,
+) -> Result<()> {
+    print_banner();
+    // `run_gui`'s future is large; box it so it is heap-allocated
+    // rather than inlined into this caller's future
+    // (clippy::large_futures).
+    Box::pin(codemason_gui::run_gui(codemason_gui::GuiOptions {
+        event_bus,
+        storage,
+        provider_registry,
+        session_processor,
+        agent: resolved_agent.clone(),
+        show_log,
+        startup,
+        log_rx: gui_log_rx.unwrap_or_else(|| tui_log_channel(1).1),
+        db_path,
+        config_paths: config.read().await.config_paths.clone(),
+        timings,
+        launcher,
+    }))
+    .await?;
+    Ok(())
+}
+
+/// Run one headless agent turn for `prompt` and print the reply.
+///
+/// A `!cmd` prompt runs the validated shell command first and asks the
+/// model to review its output.
+///
+/// # Errors
+///
+/// Returns an error on session, shell-task or stdout failures.
+async fn run_headless(
+    prompt: String,
+    resolved_agent: &Arc<agent::AgentInfo>,
+    config: &Arc<tokio::sync::RwLock<Config>>,
+    provider_registry: &Arc<provider::ProviderRegistry>,
+    session_manager: &Arc<SessionManager>,
+    session_processor: &Arc<SessionProcessor>,
+) -> Result<()> {
+    tracing::info!("Starting headless run mode");
+    let mut resolved_agent = resolved_agent.clone();
+    let config_guard = config.read().await;
+    agent::apply_fallback_thinking(
+        Arc::make_mut(&mut resolved_agent),
+        &config_guard,
+        provider_registry.as_ref(),
+    );
+    let dir = std::fs::canonicalize(".")?;
+    let session = session_manager.create_session(dir.clone())?;
+
+    // If the prompt starts with `!`, run it as a shell command first
+    // and ask the model to review the output.
+    let final_prompt = if let Some(cmd) = prompt.strip_prefix('!') {
+        let cmd = cmd.trim();
+        if cmd.is_empty() {
+            prompt.clone()
+        } else {
+            // SEC-077: the bang command must pass the same 7-layer bash
+            // validation the `Bash` tool applies; otherwise
+            // `codemason run "!<cmd>"` bypassed every guard (banned tools,
+            // directory escape, denied patterns, obfuscation).
+            if let Err(e) = codemason_tools_core::bash::validate_shell_command(cmd, &dir).await {
+                cliprintln_err!("command rejected: {e}");
+                std::process::exit(2);
+            }
+            // Async context: spawn_blocking keeps a slow/hanging shell
+            // command from stalling the tokio worker thread (the bash
+            // tool applies the same principle via kill_on_drop).
+            let owned_cmd = cmd.to_string();
+            let output = tokio::task::spawn_blocking(move || {
+                std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&owned_cmd)
+                    .output()
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("bang command task failed: {e}"))?;
+            codemason_agent::bang_command::bang_command_prompt_from_output(cmd, &output)
         }
-        Some(Commands::Orchestrate) => {
-            tracing::info!("Starting orchestration example");
-            cli::run_orchestration_example().await?;
-        }
-        Some(Commands::Project { command }) => {
-            use codemason_agent::project::{ProjectManager, report};
-            let github_hosts = config.read().await.vcs.github.hosts.clone();
-            let manager = ProjectManager::new(Arc::clone(&storage), Arc::clone(&event_bus))
-                .with_github_hosts(github_hosts);
-            let find = |name: &str| {
-                manager
-                    .find(name)?
-                    .ok_or_else(|| anyhow::anyhow!("no project named '{name}'"))
-            };
-            let mut stdout = std::io::stdout().lock();
-            match command {
-                ProjectCommands::List => write!(stdout, "{}", report::projects_text(&storage)?)?,
-                ProjectCommands::Show { name } => {
-                    let project = find(&name)?;
-                    let live = storage.list_project_sessions(&project.id, false)?.len();
-                    write!(stdout, "{}", report::project_text(&project, live))?;
-                }
-                ProjectCommands::Add { path } => {
-                    let dir = std::path::Path::new(&path)
-                        .canonicalize()
-                        .with_context(|| format!("cannot use '{path}'"))?;
-                    anyhow::ensure!(dir.is_dir(), "'{path}' is not a directory");
-                    let project = manager.resolve_for_dir(&dir)?;
-                    write!(stdout, "{}", report::project_text(&project, 0))?;
-                }
-                ProjectCommands::Remove { name } => {
-                    let project = find(&name)?;
-                    manager.remove(&project.id)?;
-                    writeln!(
-                        stdout,
-                        "Removed project {} from the list; its files are untouched.",
-                        project.name
-                    )?;
-                }
-            }
-        }
-        Some(Commands::Session { command }) => match command {
-            SessionCommands::List { project, json } => {
-                use codemason_agent::project::report;
-                let mut stdout = std::io::stdout().lock();
-                if json {
-                    let listing = report::grouped_sessions_json(&storage, project.as_deref())?;
-                    writeln!(stdout, "{}", serde_json::to_string_pretty(&listing)?)?;
-                } else {
-                    write!(
-                        stdout,
-                        "{}",
-                        report::grouped_sessions_text(&storage, project.as_deref())?
-                    )?;
-                }
-            }
-            SessionCommands::Resume { id } => {
-                // Verify session exists before launching the GUI
-                if storage.get_session(&id)?.is_none() {
-                    anyhow::bail!("Session not found: {id}");
-                }
-                tracing::info!(session_id = %id, "Resuming session");
-                print_banner();
-                // See the `run_gui` call above: box the large future.
-                Box::pin(codemason_gui::run_gui(codemason_gui::GuiOptions {
-                    event_bus,
-                    storage,
-                    provider_registry,
-                    session_processor,
-                    agent: (*resolved_agent).clone(),
-                    show_log: cli.log,
-                    startup: StartupSession::Resume(id),
-                    log_rx: gui_log_rx.unwrap_or_else(|| tui_log_channel(1).1),
-                    db_path: db_path.clone(),
-                    config_paths: config.read().await.config_paths.clone(),
-                    timings: startup,
-                    launcher: gui_launcher,
-                }))
-                .await?;
-            }
-            SessionCommands::ExportArchive {
-                id,
-                output,
-                no_triggers,
-                no_cron,
-                no_loop_state,
-                include_cost: _,
-            } => {
-                use codemason_agent::session::archive::{ArchiveConfig, export_session_archive};
-                use std::path::Path;
+    } else {
+        prompt.clone()
+    };
 
-                let config = ArchiveConfig {
-                    include_triggers: !no_triggers,
-                    include_cron: !no_cron,
-                    include_loop_state: !no_loop_state,
-                    include_cost: false,
-                };
-
-                let output_path = Path::new(&output);
-                match export_session_archive(&storage, None, &id, output_path, &config) {
-                    Ok(archive_path) => {
-                        writeln!(
-                            std::io::stdout(),
-                            "Exported session {} to {}",
-                            id,
-                            archive_path.display()
-                        )?;
-                    }
-                    Err(e) => {
-                        cliprintln_err!("codemason session export: {e}");
-                        std::process::exit(1);
-                    }
-                }
-            }
-            SessionCommands::Import { file } => {
-                use codemason_agent::session::archive::{ImportConfig, import_session_archive};
-                use std::path::Path;
-
-                let archive_path = Path::new(&file);
-                let config = ImportConfig {
-                    verify_checksums: true,
-                    import_triggers: false,
-                    activate_triggers: false,
-                    activate_cron: false,
-                    restore_loop_state: true,
-                };
-
-                match import_session_archive(&storage, None, archive_path, &config).await {
-                    Ok(result) => {
-                        writeln!(
-                            std::io::stdout(),
-                            "Imported session {} ({} messages, {} triggers, {} cron jobs, {} loop state files)",
-                            result.session_id,
-                            result.messages_imported,
-                            result.triggers_imported,
-                            result.cron_jobs_imported,
-                            result.loop_state_files_restored
-                        )?;
-                    }
-                    Err(e) => {
-                        cliprintln_err!("codemason session import: {e}");
-                        std::process::exit(1);
-                    }
-                }
-            }
-        },
-        Some(Commands::Db { command }) => match command {
-            DbCommands::Prune { days, dry_run } => {
-                let days = match days {
-                    Some(0) => {
-                        cliprintln_err!("codemason db prune: --days must be at least 1");
-                        std::process::exit(2);
-                    }
-                    Some(days) => days,
-                    None => config.read().await.storage.retention.message_days,
-                };
-                let window = chrono::Duration::try_days(i64::from(days))
-                    .ok_or_else(|| anyhow::anyhow!("retention window out of range: {days} days"))?;
-
-                if dry_run {
-                    let n = storage.count_messages_older_than(window)?;
-                    writeln!(
-                        std::io::stdout(),
-                        "Would delete {n} message(s) older than {days} day(s); sessions are kept."
-                    )?;
-                } else {
-                    let deleted = storage.prune_messages_older_than(window)?;
-                    writeln!(
-                        std::io::stdout(),
-                        "Deleted {deleted} message(s) older than {days} day(s); sessions are kept."
-                    )?;
-                    writeln!(
-                        std::io::stdout(),
-                        "The database file does not shrink until a VACUUM, which needs \
-                         exclusive access - stop every other codemason process first."
-                    )?;
-                }
-            }
-        },
-        Some(Commands::Auth { provider, key }) => {
-            storage.set_provider_auth(&provider, &key)?;
-            tracing::info!(provider = %provider, "Stored API key");
-        }
-        Some(Commands::Models {
-            provider: filter,
-            ollama_url,
-        }) => {
-            // Buffer the model listing in a `String` first: the stdout lock is
-            // not `Send`, so it must not be held across the `.await` calls
-            // below (a `future_not_send` error otherwise). The buffer is
-            // flushed to a single stdout lock once all awaits are done, so a
-            // piped consumer such as `codemason models | head` still sees a single
-            // writer.
-            use std::fmt::Write as _;
-            let mut out = String::new();
-            if filter.as_deref() == Some("ollama_cloud") {
-                let api_key = storage
-                    .get_provider_auth("ollama_cloud")
-                    .ok()
-                    .flatten()
-                    .filter(|k| !k.is_empty())
-                    .or_else(|| {
-                        codemason_config::credential_env::read_credential_env(
-                            "OLLAMA_CLOUD_API_KEY",
-                        )
-                    })
-                    .or_else(|| {
-                        codemason_config::credential_env::read_credential_env("OLLAMA_API_KEY")
-                    })
-                    .unwrap_or_default();
-
-                match codemason_agent::provider::ollama_cloud::list_ollama_cloud_models(
-                    &api_key,
-                    ollama_url.as_deref(),
-                )
-                .await
-                {
-                    Ok(models) if models.is_empty() => {
-                        writeln!(out, "No models found on Ollama Cloud.")?;
-                    }
-                    Ok(models) => {
-                        writeln!(out, "ollama_cloud models:")?;
-                        for m in &models {
-                            writeln!(out, "  ollama_cloud/{:<28} {}", m.id, m.name)?;
-                        }
-                        if api_key.is_empty() {
-                            writeln!(
-                                out,
-                                "\nNote: Chat requires an API key. Run `codemason auth \
-                                 ollama_cloud <key>` or set OLLAMA_API_KEY."
-                            )?;
-                        }
-                    }
-                    Err(e) => {
-                        writeln!(out, "Could not connect to Ollama Cloud: {e}")?;
-                    }
-                }
-            } else if filter.as_deref() == Some("openrouter") {
-                let api_key = storage
-                    .get_provider_auth("openrouter")
-                    .ok()
-                    .flatten()
-                    .filter(|k| !k.is_empty())
-                    .or_else(|| {
-                        codemason_config::credential_env::read_credential_env("OPENROUTER_API_KEY")
-                    })
-                    .unwrap_or_default();
-
-                if let Some(provider) = provider_registry.get("openrouter") {
-                    match provider.discover_models().await {
-                        Ok(models) if models.is_empty() => {
-                            writeln!(out, "No models found on OpenRouter.")?;
-                        }
-                        Ok(models) => {
-                            writeln!(out, "openrouter models:")?;
-                            for ModelInfo { id, name, .. } in &models {
-                                writeln!(out, "  openrouter/{:<28} {}", id, name)?;
-                            }
-                            if api_key.is_empty() {
-                                writeln!(
-                                    out,
-                                    "\nNote: Chat requires an API key. Run `codemason auth \
-                                     openrouter <key>` or set OPENROUTER_API_KEY."
-                                )?;
-                            }
-                        }
-                        Err(e) => {
-                            writeln!(out, "Could not connect to OpenRouter: {e}")?;
-                        }
-                    }
-                } else {
-                    writeln!(out, "OpenRouter provider is not registered.")?;
-                }
-            } else if filter.as_deref() == Some("ollama") || ollama_url.is_some() {
-                match codemason_agent::provider::ollama::list_ollama_models(ollama_url.as_deref())
-                    .await
-                {
-                    Ok(models) if models.is_empty() => {
-                        writeln!(
-                            out,
-                            "No models found on Ollama server. Pull models with: ollama pull <model>"
-                        )?;
-                    }
-                    Ok(models) => {
-                        writeln!(out, "ollama models:")?;
-                        for m in &models {
-                            writeln!(out, "  ollama/{:<28} {}", m.id, m.name)?;
-                        }
-                    }
-                    Err(e) => {
-                        writeln!(out, "Could not connect to Ollama: {e}")?;
-                        writeln!(out, "Is Ollama running? Start with: ollama serve")?;
-                    }
-                }
-                if filter.as_deref() != Some("ollama") {
-                    let providers = provider_registry.list();
-                    for p in &providers {
-                        if p.id == "ollama" || p.id == "ollama_cloud" {
-                            continue;
-                        }
-                        for m in &p.models {
-                            writeln!(out, "{}/{}", p.id, m.id)?;
-                        }
-                    }
-                }
-            } else {
-                let providers = provider_registry.list();
-                let providers: Vec<_> = if let Some(ref f) = filter {
-                    providers.into_iter().filter(|p| p.id == *f).collect()
-                } else {
-                    providers
-                };
-
-                if providers.is_empty() {
-                    writeln!(out, "No providers found matching filter")?;
-                } else {
-                    for p in &providers {
-                        for m in &p.models {
-                            writeln!(out, "{}/{}", p.id, m.id)?;
-                        }
-                    }
-                }
-            }
-            // Flush stdout before the runtime is shut down so a closed pipe
-            // (e.g. `codemason models | head`) cannot race the print and turn into
-            // a `Broken pipe` panic (see the note on `main`'s bounded shutdown).
-            // The `write_io_log` helper classifies EPIPE as benign and logs it at
-            // `debug` rather than propagating a
-            // `failed printing to stdout` panic.
-            let mut stdout = std::io::stdout().lock();
-            if !crate::cli_out::write_io_log(&mut stdout, format_args!("{out}"), false) {
+    match session_processor
+        .process_message(
+            &session.id,
+            &final_prompt,
+            &resolved_agent,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+    {
+        Ok(msg) => {
+            if !crate::cli_out::writeln_io_log(
+                std::io::stdout(),
+                format_args!("{}", msg.text_content()),
+            ) {
                 return Err(cli::CliExit::failure().into());
             }
         }
-        Some(Commands::Config { command }) => match command {
-            Some(ConfigCommands::Check { json }) => {
-                run_dry_run_and_exit(
-                    cli.config.clone(),
-                    &cli.agent,
-                    cli.model.as_deref(),
-                    cli.json || json,
-                    Arc::clone(&provider_registry),
-                    Arc::clone(&tool_registry),
-                )
-                .await;
-            }
-            _ => {
-                let config = config.read().await;
-                cliprintln!("{:#?}", *config);
-                drop(config);
-            }
-        },
-        Some(Commands::Memory { command }) => {
-            let project_dir = crate::working_dir();
-            match command {
-                MemoryCommands::List => {
-                    let mut stdout = std::io::stdout().lock();
+        Err(e) => {
+            tracing::error!(error = %e, "Run failed");
+            // Kill any stdio MCP server children before exiting: a
+            // leaked child outlives this one-shot run as an orphan.
+            session_processor.shutdown_mcp().await;
+            std::process::exit(1);
+        }
+    }
+    // Tear down MCP connections so the stdio server children codemason
+    // spawned are killed before this short-lived process exits.
+    session_processor.shutdown_mcp().await;
+    Ok(())
+}
 
-                    // List structured memory stats scoped to the current directory.
-                    let memory_count = storage.count_memories_for_project(&project_dir)?;
-                    writeln!(stdout, "Structured memories: {memory_count}")?;
+/// Serve the HTTP API on `addr` until the server exits.
+///
+/// # Errors
+///
+/// Returns an error when the OpenAI surface is enabled without a token, or
+/// when the server fails.
+async fn serve(
+    addr: String,
+    event_bus: Arc<EventBus>,
+    config: Arc<tokio::sync::RwLock<Config>>,
+    storage: Arc<Storage>,
+    session_processor: Arc<SessionProcessor>,
+) -> Result<()> {
+    tracing::info!(address = %addr, "Starting HTTP server");
+    // FR-012, FR-024, FR-032: when the OpenAI-compatible surface is
+    // explicitly enabled, its bearer token must be configured. The token
+    // is the server's one bearer token (FR-024) - codemason does not run a
+    // second credential - resolved from `openai.token` then the ambient
+    // `CODEMASON_TOKEN`, instead of the ephemeral generated one. When the
+    // surface is enabled without one, refuse to start rather than serve
+    // it unauthenticated (FR-032).
+    let (openai_enabled, openai_token) = {
+        let guard = config.read().await;
+        let enabled = guard.openai_surface_enabled();
+        let token = guard.openai_surface_token().or_else(|| {
+            // Route the ambient fallback through the canonical
+            // credential reader so blank/whitespace handling matches
+            // the rest of the workspace (audit T-111).
+            codemason_config::credential_env::read_credential_env("CODEMASON_TOKEN")
+        });
+        (enabled, token)
+    };
+    let auth_token = if openai_enabled {
+        match openai_token {
+            Some(token) => token,
+            None => anyhow::bail!(
+                "the OpenAI-compatible surface is enabled (openai.enabled: true) \
+                         but no bearer token is configured; set `openai.token` or \
+                         CODEMASON_TOKEN, or disable the surface"
+            ),
+        }
+    } else if let Some(token) = openai_token {
+        token
+    } else {
+        // No configured token: generate one for this run and print it,
+        // or every protected route would answer 401 with no way to
+        // learn the credential (SI-02; owner decision O-04). stderr,
+        // so it never mixes with piped stdout.
+        let token = uuid::Uuid::new_v4().to_string();
+        eprintln!(
+            "cdmn serve: no bearer token configured (openai.token or CODEMASON_TOKEN); \
+                     using a token generated for this run:\n  {token}\n\
+                     Send it as `Authorization: Bearer <token>`."
+        );
+        token
+    };
+    // Automation scheduler (spec `openhands` T-016; FR-014): when the
+    // project config enables the subsystem, tick the scheduled
+    // automations for the lifetime of the served process. An
+    // unconfigured project starts no scheduler, so no runs fire. It
+    // shares the session processor, so it is set up before the state
+    // takes ownership of it.
+    let automation_config = {
+        let guard = config.read().await;
+        guard.automation_config()
+    };
+    let _automation_scheduler = if automation_config.is_enabled() {
+        let service = Arc::new(codemason_agent::automation::AutomationService::new(
+            Arc::clone(&session_processor),
+            automation_config,
+            crate::working_dir(),
+        ));
+        Some(service.spawn_scheduler())
+    } else {
+        None
+    };
+    let orchestrator_registry = codemason_agent::orchestrator::AgentRegistry::new();
+    let coordinator = codemason_agent::orchestrator::Coordinator::new(orchestrator_registry);
+    let state = codemason_server::routes::AppState {
+        event_bus,
+        config,
+        storage,
+        session_processor,
+        auth_token,
+        rate_limiter: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+        coordinator: Some(coordinator),
+        research_runs: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+        research_root: Arc::new(crate::working_dir().join("research")),
+        worktree_root: Arc::new(
+            codemason_agent::project::worktree::default_worktree_root()
+                .unwrap_or_else(|| crate::working_dir().join(".codemason/worktrees")),
+        ),
+    };
+    codemason_server::start_server(&addr, state).await?;
+    Ok(())
+}
 
-                    if memory_count == 0 {
+/// Run a `codemason project` subcommand.
+///
+/// # Errors
+///
+/// Returns an error on an unknown project, storage or stdout failure.
+async fn run_project_command(
+    command: ProjectCommands,
+    config: &Arc<tokio::sync::RwLock<Config>>,
+    storage: &Arc<Storage>,
+    event_bus: &Arc<EventBus>,
+) -> Result<()> {
+    use codemason_agent::project::{ProjectManager, report};
+    let github_hosts = config.read().await.vcs.github.hosts.clone();
+    let manager = ProjectManager::new(Arc::clone(&storage), Arc::clone(&event_bus))
+        .with_github_hosts(github_hosts);
+    let find = |name: &str| {
+        manager
+            .find(name)?
+            .ok_or_else(|| anyhow::anyhow!("no project named '{name}'"))
+    };
+    let mut stdout = std::io::stdout().lock();
+    match command {
+        ProjectCommands::List => write!(stdout, "{}", report::projects_text(&storage)?)?,
+        ProjectCommands::Show { name } => {
+            let project = find(&name)?;
+            let live = storage.list_project_sessions(&project.id, false)?.len();
+            write!(stdout, "{}", report::project_text(&project, live))?;
+        }
+        ProjectCommands::Add { path } => {
+            let dir = std::path::Path::new(&path)
+                .canonicalize()
+                .with_context(|| format!("cannot use '{path}'"))?;
+            anyhow::ensure!(dir.is_dir(), "'{path}' is not a directory");
+            let project = manager.resolve_for_dir(&dir)?;
+            write!(stdout, "{}", report::project_text(&project, 0))?;
+        }
+        ProjectCommands::Remove { name } => {
+            let project = find(&name)?;
+            manager.remove(&project.id)?;
+            writeln!(
+                stdout,
+                "Removed project {} from the list; its files are untouched.",
+                project.name
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Print the session list, grouped by project, as text or JSON.
+///
+/// # Errors
+///
+/// Returns an error on storage, serialisation or stdout failures.
+fn run_session_list(storage: &Arc<Storage>, project: Option<String>, json: bool) -> Result<()> {
+    use codemason_agent::project::report;
+    let mut stdout = std::io::stdout().lock();
+    if json {
+        let listing = report::grouped_sessions_json(&storage, project.as_deref())?;
+        writeln!(stdout, "{}", serde_json::to_string_pretty(&listing)?)?;
+    } else {
+        write!(
+            stdout,
+            "{}",
+            report::grouped_sessions_text(&storage, project.as_deref())?
+        )?;
+    }
+    Ok(())
+}
+
+/// Export session `id` to an archive at `output`; exits 1 on failure.
+///
+/// # Errors
+///
+/// Returns an error when stdout cannot be written.
+fn run_session_export(
+    storage: &Arc<Storage>,
+    id: String,
+    output: String,
+    no_triggers: bool,
+    no_cron: bool,
+    no_loop_state: bool,
+) -> Result<()> {
+    use codemason_agent::session::archive::{ArchiveConfig, export_session_archive};
+    use std::path::Path;
+
+    let config = ArchiveConfig {
+        include_triggers: !no_triggers,
+        include_cron: !no_cron,
+        include_loop_state: !no_loop_state,
+        include_cost: false,
+    };
+
+    let output_path = Path::new(&output);
+    match export_session_archive(&storage, None, &id, output_path, &config) {
+        Ok(archive_path) => {
+            writeln!(
+                std::io::stdout(),
+                "Exported session {} to {}",
+                id,
+                archive_path.display()
+            )?;
+        }
+        Err(e) => {
+            cliprintln_err!("codemason session export: {e}");
+            std::process::exit(1);
+        }
+    }
+    Ok(())
+}
+
+/// Import a session archive from `file`; exits 1 on failure.
+///
+/// # Errors
+///
+/// Returns an error when stdout cannot be written.
+async fn run_session_import(storage: &Arc<Storage>, file: String) -> Result<()> {
+    use codemason_agent::session::archive::{ImportConfig, import_session_archive};
+    use std::path::Path;
+
+    let archive_path = Path::new(&file);
+    let config = ImportConfig {
+        verify_checksums: true,
+        import_triggers: false,
+        activate_triggers: false,
+        activate_cron: false,
+        restore_loop_state: true,
+    };
+
+    match import_session_archive(&storage, None, archive_path, &config).await {
+        Ok(result) => {
+            writeln!(
+                std::io::stdout(),
+                "Imported session {} ({} messages, {} triggers, {} cron jobs, {} loop state files)",
+                result.session_id,
+                result.messages_imported,
+                result.triggers_imported,
+                result.cron_jobs_imported,
+                result.loop_state_files_restored
+            )?;
+        }
+        Err(e) => {
+            cliprintln_err!("codemason session import: {e}");
+            std::process::exit(1);
+        }
+    }
+    Ok(())
+}
+
+/// Delete (or with `dry_run`, count) messages older than the window.
+///
+/// # Errors
+///
+/// Returns an error on an out-of-range window, storage or stdout failure.
+async fn run_db_prune(
+    days: Option<u32>,
+    dry_run: bool,
+    config: &Arc<tokio::sync::RwLock<Config>>,
+    storage: &Arc<Storage>,
+) -> Result<()> {
+    let days = match days {
+        Some(0) => {
+            cliprintln_err!("codemason db prune: --days must be at least 1");
+            std::process::exit(2);
+        }
+        Some(days) => days,
+        None => config.read().await.storage.retention.message_days,
+    };
+    let window = chrono::Duration::try_days(i64::from(days))
+        .ok_or_else(|| anyhow::anyhow!("retention window out of range: {days} days"))?;
+
+    if dry_run {
+        let n = storage.count_messages_older_than(window)?;
+        writeln!(
+            std::io::stdout(),
+            "Would delete {n} message(s) older than {days} day(s); sessions are kept."
+        )?;
+    } else {
+        let deleted = storage.prune_messages_older_than(window)?;
+        writeln!(
+            std::io::stdout(),
+            "Deleted {deleted} message(s) older than {days} day(s); sessions are kept."
+        )?;
+        writeln!(
+            std::io::stdout(),
+            "The database file does not shrink until a VACUUM, which needs \
+                         exclusive access - stop every other codemason process first."
+        )?;
+    }
+    Ok(())
+}
+
+/// Print the models of every provider, or of the `filter` provider.
+///
+/// # Errors
+///
+/// Returns an error when the listing cannot be formatted or written.
+async fn list_models(
+    filter: Option<String>,
+    ollama_url: Option<String>,
+    storage: &Arc<Storage>,
+    provider_registry: &Arc<provider::ProviderRegistry>,
+) -> Result<()> {
+    // Buffer the model listing in a `String` first: the stdout lock is
+    // not `Send`, so it must not be held across the `.await` calls
+    // below (a `future_not_send` error otherwise). The buffer is
+    // flushed to a single stdout lock once all awaits are done, so a
+    // piped consumer such as `codemason models | head` still sees a single
+    // writer.
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    if filter.as_deref() == Some("ollama_cloud") {
+        let api_key = storage
+            .get_provider_auth("ollama_cloud")
+            .ok()
+            .flatten()
+            .filter(|k| !k.is_empty())
+            .or_else(|| {
+                codemason_config::credential_env::read_credential_env("OLLAMA_CLOUD_API_KEY")
+            })
+            .or_else(|| codemason_config::credential_env::read_credential_env("OLLAMA_API_KEY"))
+            .unwrap_or_default();
+
+        match codemason_agent::provider::ollama_cloud::list_ollama_cloud_models(
+            &api_key,
+            ollama_url.as_deref(),
+        )
+        .await
+        {
+            Ok(models) if models.is_empty() => {
+                writeln!(out, "No models found on Ollama Cloud.")?;
+            }
+            Ok(models) => {
+                writeln!(out, "ollama_cloud models:")?;
+                for m in &models {
+                    writeln!(out, "  ollama_cloud/{:<28} {}", m.id, m.name)?;
+                }
+                if api_key.is_empty() {
+                    writeln!(
+                        out,
+                        "\nNote: Chat requires an API key. Run `codemason auth \
+                                 ollama_cloud <key>` or set OLLAMA_API_KEY."
+                    )?;
+                }
+            }
+            Err(e) => {
+                writeln!(out, "Could not connect to Ollama Cloud: {e}")?;
+            }
+        }
+    } else if filter.as_deref() == Some("openrouter") {
+        let api_key = storage
+            .get_provider_auth("openrouter")
+            .ok()
+            .flatten()
+            .filter(|k| !k.is_empty())
+            .or_else(|| codemason_config::credential_env::read_credential_env("OPENROUTER_API_KEY"))
+            .unwrap_or_default();
+
+        if let Some(provider) = provider_registry.get("openrouter") {
+            match provider.discover_models().await {
+                Ok(models) if models.is_empty() => {
+                    writeln!(out, "No models found on OpenRouter.")?;
+                }
+                Ok(models) => {
+                    writeln!(out, "openrouter models:")?;
+                    for ModelInfo { id, name, .. } in &models {
+                        writeln!(out, "  openrouter/{:<28} {}", id, name)?;
+                    }
+                    if api_key.is_empty() {
                         writeln!(
-                            stdout,
-                            "
-No memories stored for this project yet."
-                        )?;
-                    } else {
-                        writeln!(
-                            stdout,
-                            "
-Use the TUI Memory panel (Alt+M or /memory) to browse entries."
+                            out,
+                            "\nNote: Chat requires an API key. Run `codemason auth \
+                                     openrouter <key>` or set OPENROUTER_API_KEY."
                         )?;
                     }
                 }
+                Err(e) => {
+                    writeln!(out, "Could not connect to OpenRouter: {e}")?;
+                }
+            }
+        } else {
+            writeln!(out, "OpenRouter provider is not registered.")?;
+        }
+    } else if filter.as_deref() == Some("ollama") || ollama_url.is_some() {
+        match codemason_agent::provider::ollama::list_ollama_models(ollama_url.as_deref()).await {
+            Ok(models) if models.is_empty() => {
+                writeln!(
+                    out,
+                    "No models found on Ollama server. Pull models with: ollama pull <model>"
+                )?;
+            }
+            Ok(models) => {
+                writeln!(out, "ollama models:")?;
+                for m in &models {
+                    writeln!(out, "  ollama/{:<28} {}", m.id, m.name)?;
+                }
+            }
+            Err(e) => {
+                writeln!(out, "Could not connect to Ollama: {e}")?;
+                writeln!(out, "Is Ollama running? Start with: ollama serve")?;
             }
         }
-        Some(Commands::Research { command }) => {
-            // Use the startup config, so `--config <file>` settings apply.
-            let startup_config = Arc::new(config.read().await.clone());
-            Box::pin(cli::handle_research_command_with_model(
-                *command,
-                startup_config,
-                resolved_agent.model.clone(),
-                Some(storage.clone()),
-                Some(provider_registry.clone()),
-            ))
-            .await?;
-        }
-        Some(Commands::New { scaffold, .. }) => {
-            dispatch_new_command(scaffold)?;
-        }
-        Some(Commands::Spec { command }) => match command {
-            cli::SpecCommands::GovCreate(args) => {
-                let model_str = cli
-                    .model
-                    .clone()
-                    .or_else(|| storage.get_setting("selected_model").ok().flatten());
-                let Some(model_ref) = model_str.as_deref().and_then(|s| s.split_once('/')).map(
-                    |(provider, model)| agent::ModelRef {
-                        provider_id: provider.to_string(),
-                        model_id: model.to_string(),
-                    },
-                ) else {
-                    cliprintln_err!(
-                        "codemason spec govcreate: no model configured \
-                         - pass --model provider/model or set one via /model in the TUI"
-                    );
-                    std::process::exit(2);
-                };
-                let cwd =
-                    std::env::current_dir().map_err(|e| anyhow::anyhow!("cannot read cwd: {e}"))?;
-                let tokens = args.to_token_string();
-                cli::handle_govcreate_command(&tokens, model_ref, provider_registry, storage, cwd)
-                    .await?;
-            }
-            cli::SpecCommands::Status { spec_id, status } => {
-                let cwd =
-                    std::env::current_dir().map_err(|e| anyhow::anyhow!("cannot read cwd: {e}"))?;
-                // Use the startup config, so `--config <file>` gates apply.
-                let sdd = config.read().await.sdd.clone();
-                cli::handle_spec_status_command(&cwd, &spec_id, status.as_deref(), &sdd).await?;
-            }
-        },
-        Some(Commands::Plugins { args }) => {
-            // Sync dispatch: the ephemeral plugin session owns `!Send` rquickjs
-            // contexts, so it must not cross an `.await`. `run_cli` is fully
-            // synchronous, keeping this future `Send` for the async runtime.
-            plugins::run_cli(&args)?;
-        }
-        Some(Commands::Connectors { args }) => {
-            // The connector surface drives an ephemeral lifecycle session over
-            // the CLI connection seam and never touches a live TUI client, so it
-            // is safe to await on the main task.
-            connectors::run_cli(&args).await?;
-        }
-        Some(Commands::Automation { args }) => {
-            // Automation service CLI parity surface (spec `openhands` T-016;
-            // FR-018). Lists automations and their run history, or enqueues a
-            // manual run; the run-history reads are synchronous storage calls.
-            let config = config.read().await.clone();
-            cli::handle_automation_command(&args, Arc::clone(&storage), &config)?;
-        }
-        Some(Commands::Openapi { client }) => {
-            // FR-007 parity surface: emit the OpenAPI 3.1 document, or the
-            // generated typed client, from the same route table the server
-            // serves. Synchronous stdout writes only.
-            let mut stdout = std::io::stdout().lock();
-            if client {
-                stdout
-                    .write_all(codemason_server::routes::openapi::typescript_client().as_bytes())?;
-            } else {
-                let doc =
-                    serde_json::to_string_pretty(&codemason_server::routes::openapi::document())?;
-                stdout.write_all(doc.as_bytes())?;
-                stdout.write_all(b"\n")?;
+        if filter.as_deref() != Some("ollama") {
+            let providers = provider_registry.list();
+            for p in &providers {
+                if p.id == "ollama" || p.id == "ollama_cloud" {
+                    continue;
+                }
+                for m in &p.models {
+                    writeln!(out, "{}/{}", p.id, m.id)?;
+                }
             }
         }
-        Some(Commands::AcpServer) => {
-            // Spec `openhands` T-008 (FR-022, FR-028): serve the ACP endpoint on
-            // stdio for an IDE client. Off by default - `acp_server::run` refuses
-            // unless the feature is compiled in *and* `acp.server_enabled` is set.
-            acp_server::run(
-                config.read().await.clone().into(),
-                Arc::clone(&session_processor),
-                Arc::clone(&event_bus),
-                working_dir.clone(),
-            )
-            .await?;
+    } else {
+        let providers = provider_registry.list();
+        let providers: Vec<_> = if let Some(ref f) = filter {
+            providers.into_iter().filter(|p| p.id == *f).collect()
+        } else {
+            providers
+        };
+
+        if providers.is_empty() {
+            writeln!(out, "No providers found matching filter")?;
+        } else {
+            for p in &providers {
+                for m in &p.models {
+                    writeln!(out, "{}/{}", p.id, m.id)?;
+                }
+            }
         }
     }
-    // R-23: on a graceful exit, truncate the WAL so the next start does not
-    // inherit a file that grew to the high-water mark of this session's
-    // largest write burst. Best-effort: a failure here must never turn a
-    // successful command into an error exit.
-    if let Err(e) = storage_for_shutdown.checkpoint_wal() {
-        tracing::warn!(error = %e, "Failed to checkpoint WAL on shutdown");
+    // Flush stdout before the runtime is shut down so a closed pipe
+    // (e.g. `codemason models | head`) cannot race the print and turn into
+    // a `Broken pipe` panic (see the note on `main`'s bounded shutdown).
+    // The `write_io_log` helper classifies EPIPE as benign and logs it at
+    // `debug` rather than propagating a
+    // `failed printing to stdout` panic.
+    let mut stdout = std::io::stdout().lock();
+    if !crate::cli_out::write_io_log(&mut stdout, format_args!("{out}"), false) {
+        return Err(cli::CliExit::failure().into());
+    }
+    Ok(())
+}
+
+/// Run a `codemason memory` subcommand.
+///
+/// # Errors
+///
+/// Returns an error on storage or stdout failures.
+fn run_memory_command(command: MemoryCommands, storage: &Arc<Storage>) -> Result<()> {
+    let project_dir = crate::working_dir();
+    match command {
+        MemoryCommands::List => {
+            let mut stdout = std::io::stdout().lock();
+
+            // List structured memory stats scoped to the current directory.
+            let memory_count = storage.count_memories_for_project(&project_dir)?;
+            writeln!(stdout, "Structured memories: {memory_count}")?;
+
+            if memory_count == 0 {
+                writeln!(
+                    stdout,
+                    "
+No memories stored for this project yet."
+                )?;
+            } else {
+                writeln!(
+                    stdout,
+                    "
+Use the TUI Memory panel (Alt+M or /memory) to browse entries."
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Run a `codemason spec` subcommand.
+///
+/// # Errors
+///
+/// Returns an error when the cwd cannot be read or the command fails.
+async fn run_spec_command(
+    command: cli::SpecCommands,
+    cli_model: Option<String>,
+    config: &Arc<tokio::sync::RwLock<Config>>,
+    storage: Arc<Storage>,
+    provider_registry: Arc<provider::ProviderRegistry>,
+) -> Result<()> {
+    match command {
+        cli::SpecCommands::GovCreate(args) => {
+            let model_str =
+                cli_model.or_else(|| storage.get_setting("selected_model").ok().flatten());
+            let Some(model_ref) =
+                model_str
+                    .as_deref()
+                    .and_then(|s| s.split_once('/'))
+                    .map(|(provider, model)| agent::ModelRef {
+                        provider_id: provider.to_string(),
+                        model_id: model.to_string(),
+                    })
+            else {
+                cliprintln_err!(
+                    "codemason spec govcreate: no model configured \
+                         - pass --model provider/model or set one via /model in the TUI"
+                );
+                std::process::exit(2);
+            };
+            let cwd =
+                std::env::current_dir().map_err(|e| anyhow::anyhow!("cannot read cwd: {e}"))?;
+            let tokens = args.to_token_string();
+            cli::handle_govcreate_command(&tokens, model_ref, provider_registry, storage, cwd)
+                .await?;
+        }
+        cli::SpecCommands::Status { spec_id, status } => {
+            let cwd =
+                std::env::current_dir().map_err(|e| anyhow::anyhow!("cannot read cwd: {e}"))?;
+            // Use the startup config, so `--config <file>` gates apply.
+            let sdd = config.read().await.sdd.clone();
+            cli::handle_spec_status_command(&cwd, &spec_id, status.as_deref(), &sdd).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Write the OpenAPI document, or with `client` the TypeScript client.
+///
+/// # Errors
+///
+/// Returns an error when stdout cannot be written.
+fn write_openapi(client: bool) -> Result<()> {
+    let mut stdout = std::io::stdout().lock();
+    if client {
+        stdout.write_all(codemason_server::routes::openapi::typescript_client().as_bytes())?;
+    } else {
+        let doc = serde_json::to_string_pretty(&codemason_server::routes::openapi::document())?;
+        stdout.write_all(doc.as_bytes())?;
+        stdout.write_all(b"\n")?;
     }
     Ok(())
 }
