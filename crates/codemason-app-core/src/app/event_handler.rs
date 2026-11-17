@@ -186,17 +186,7 @@ impl App {
         self.needs_redraw = true;
         match event {
             Event::SessionCreated { ref session_id } if self.session.session_id.is_none() => {
-                self.session.session_id = Some(session_id.clone());
-                // Map the primary session's short_sid to the current agent name
-                let short_sid = short_session_id(session_id);
-                self.sid_to_display_name
-                    .insert(short_sid, self.session.agent_name.clone());
-                self.push_log_no_agent(
-                    LogLevel::Info,
-                    format!("session created: {}", short_id(session_id)),
-                );
-                telemetry_counters::increment_sessions_total(1);
-                telemetry_counters::add_sessions_active(1);
+                self.on_session_created(session_id);
             }
             Event::TextDelta {
                 ref session_id,
@@ -240,37 +230,12 @@ impl App {
                 did_compress,
                 ..
             } if self.is_current_session(session_id) => {
-                self.session.compress_in_progress = false;
-                self.session.last_input_tokens = compressed_tokens as u64;
-                self.needs_redraw = true;
-                telemetry_counters::increment_context_compressions(1);
-                if did_compress {
-                    let saved = original_tokens.saturating_sub(compressed_tokens);
-                    self.status = format!(
-                        "compress: saved {} tokens ({:.0}%)",
-                        saved,
-                        (1.0 - 1.0 / compression_ratio) * 100.0
-                    );
-                    self.push_log_no_agent(
-                        LogLevel::Info,
-                        format!(
-                            "Context compression finished: {} -> {} tokens ({:.2}x ratio, saved {})",
-                            original_tokens, compressed_tokens, compression_ratio, saved
-                        ),
-                    );
-                } else {
-                    self.status = format!(
-                        "compress: no change ({} tokens, {:.0}% threshold)",
-                        original_tokens, 80.0
-                    );
-                    self.push_log_no_agent(
-                        LogLevel::Info,
-                        format!(
-                            "Context compression finished: no change ({} tokens)",
-                            original_tokens
-                        ),
-                    );
-                }
+                self.on_compression_finished(
+                    original_tokens,
+                    compressed_tokens,
+                    compression_ratio,
+                    did_compress,
+                );
             }
             Event::RequestStarted {
                 ref session_id,
@@ -290,55 +255,7 @@ impl App {
             } if self.is_current_session(session_id)
                 || self.is_tracked_agent_session(session_id) =>
             {
-                let is_primary = self.is_current_session(session_id);
-                if is_primary {
-                    self.session.stream_in_bytes += (call_id.len() + tool.len()) as u64;
-                    telemetry_counters::increment_tool_invocations(1);
-                }
-                // Get the current step count from the event bus (single source of truth)
-                let step = self.event_bus.current_step(session_id) as u32;
-                let short_sid = short_session_id(session_id);
-                // Check if step changed - if so, reset substep counter to 0
-                let last_step = self
-                    .last_step_per_session
-                    .get(session_id)
-                    .copied()
-                    .unwrap_or(0);
-                if step != last_step {
-                    self.substep_counter_per_session
-                        .insert(session_id.clone(), 0);
-                    self.last_step_per_session.insert(session_id.clone(), step);
-                }
-                // Increment sub-step counter for this session
-                let substep = self
-                    .substep_counter_per_session
-                    .entry(session_id.clone())
-                    .or_insert(0);
-                *substep += 1;
-                let current_substep = *substep;
-                self.tool_step_map
-                    .insert(call_id.clone(), (short_sid.clone(), step, current_substep));
-                if is_primary {
-                    self.add_tool_call_part(tool, call_id);
-
-                    // If args were received before the start event, apply them now.
-                    if let Some(args_json) = self.pending_tool_args.remove(call_id) {
-                        let _ = self.update_tool_call_input(call_id, &args_json); // INTENTIONAL: returns whether the pending call matched; no error
-                    }
-                    self.status = format!("running: {}", tool);
-                }
-                // Log the step for the primary session AND for every tracked
-                // sub-agent/teammate session so the Agents/Teams panels' step
-                // count (one per ToolCallStart) is visible in the log.
-                let (agent_tag, agent_prefix, log_session_id) =
-                    self.tracked_log_context(session_id, is_primary);
-                self.push_log_for(
-                    LogLevel::Tool,
-                    format!("{agent_prefix}[{step}.{current_substep}] tool call: {tool}"),
-                    agent_tag,
-                    log_session_id,
-                );
-                self.needs_redraw = true;
+                self.on_tool_call_start(session_id, call_id, tool);
             }
             Event::ToolCallEnd {
                 ref session_id,
@@ -349,45 +266,7 @@ impl App {
             } if self.is_current_session(session_id)
                 || self.is_tracked_agent_session(session_id) =>
             {
-                let is_primary = self.is_current_session(session_id);
-                if is_primary {
-                    telemetry_counters::set_tool_duration_last(duration_ms as f64);
-                    self.update_tool_call_status(
-                        call_id,
-                        error.is_none(),
-                        error.as_deref(),
-                        duration_ms,
-                    );
-                    self.set_status_working("processing");
-                }
-                let step_tag = self
-                    .tool_step_map
-                    .get(call_id)
-                    .map(|(_sid, step, substep)| format!("[{step}.{substep}] "))
-                    .unwrap_or_default();
-                let (agent_tag, agent_prefix, log_session_id) =
-                    self.tracked_log_context(session_id, is_primary);
-                if let Some(err) = error {
-                    self.push_log_for(
-                        LogLevel::Error,
-                        format!(
-                            "{agent_prefix}{step_tag}tool {tool} failed: {err} ({duration_ms}ms)"
-                        ),
-                        agent_tag,
-                        log_session_id,
-                    );
-                } else {
-                    let message =
-                        format!("{agent_prefix}{step_tag}tool {tool} completed ({duration_ms}ms)");
-                    self.push_log_for(LogLevel::Tool, message, agent_tag, log_session_id);
-                }
-                if is_primary {
-                    // T-010/FR-013: the tool-call state changed, so refresh the
-                    // Context panel snapshot off the UI thread (no-op when the
-                    // panel is closed or a refresh is already in flight).
-                    self.schedule_context_snapshot_refresh();
-                }
-                self.needs_redraw = true;
+                self.on_tool_call_end(session_id, call_id, tool, error, duration_ms);
             }
             Event::ToolCallBatch {
                 ref session_id,
@@ -396,247 +275,20 @@ impl App {
             } if self.is_current_session(session_id)
                 || self.is_tracked_agent_session(session_id) =>
             {
-                let is_primary = self.is_current_session(session_id);
-                // Atomic fallback: if per-call ToolCallStart/End events were
-                // dropped by the broadcast bridge during a burst, the batch
-                // still carries the final status/duration for every call.
-                for entry in calls {
-                    // If the ToolCallStart event was dropped we never tagged
-                    // the call with a step/substep, so the log would show one
-                    // fewer "tool call" line than the Agents/Teams panels'
-                    // step count (which counts every ToolCallStart). Rebuild
-                    // the tag and log the missing line now.
-                    if !self.tool_step_map.contains_key(&entry.call_id) {
-                        let step = self.event_bus.current_step(session_id) as u32;
-                        let short_sid = short_session_id(session_id);
-                        let last_step = self
-                            .last_step_per_session
-                            .get(session_id)
-                            .copied()
-                            .unwrap_or(0);
-                        if step != last_step {
-                            self.substep_counter_per_session
-                                .insert(session_id.clone(), 0);
-                            self.last_step_per_session.insert(session_id.clone(), step);
-                        }
-                        let substep = self
-                            .substep_counter_per_session
-                            .entry(session_id.clone())
-                            .or_insert(0);
-                        *substep += 1;
-                        let current_substep = *substep;
-                        self.tool_step_map.insert(
-                            entry.call_id.clone(),
-                            (short_sid.clone(), step, current_substep),
-                        );
-                        let (agent_tag, agent_prefix, log_session_id) =
-                            self.tracked_log_context(session_id, is_primary);
-                        let message = format!(
-                            "{agent_prefix}[{step}.{current_substep}] tool call: {}",
-                            entry.tool
-                        );
-                        self.push_log_for(LogLevel::Tool, message, agent_tag, log_session_id);
-                    }
-                    if is_primary {
-                        if !self.find_tool_call_part(&entry.call_id) {
-                            self.add_tool_call_part(&entry.tool, &entry.call_id);
-                        }
-                        // If the start event was dropped we never consumed the
-                        // pending ToolCallArgs, so the newly-created part would
-                        // render with a missing input summary. Apply any pending
-                        // args now so the header shows the path/command/etc.
-                        if let Some(args_json) = self.pending_tool_args.remove(&entry.call_id) {
-                            let _ = self.update_tool_call_input(&entry.call_id, &args_json); // INTENTIONAL: returns whether the pending call matched; no error
-                        }
-                        // The batch entry now carries the call's raw JSON args, so
-                        // apply them as a fallback when the per-call ToolCallArgs
-                        // event never arrived (e.g. the broadcast->mpsc bridge task
-                        // aborted after a Lagged error racing a permission prompt).
-                        // Pending args already applied above take precedence.
-                        let _ = self.update_tool_call_input(&entry.call_id, &entry.args); // INTENTIONAL: returns whether the pending call matched; no error
-                        self.update_tool_call_status(
-                            &entry.call_id,
-                            entry.success,
-                            entry.error.as_deref(),
-                            entry.duration_ms,
-                        );
-                    }
-                }
-                if is_primary {
-                    // T-010/FR-013: atomic batch finalized multiple tool calls,
-                    // so refresh the Context panel snapshot off the UI thread.
-                    self.schedule_context_snapshot_refresh();
-                }
-                self.needs_redraw = true;
+                self.on_tool_call_batch(session_id, calls);
             }
             Event::MessageStart {
                 ref session_id,
                 ref message_id,
             } if self.is_current_session(session_id) => {
-                self.session.is_processing = true;
-                // Only a turn that autopilot is still driving may clear the
-                // completion latch. `agent_complete` switches autopilot off and
-                // sets the latch from inside the tool phase, but the loop keeps
-                // publishing lifecycle events afterwards, so a `MessageStart`
-                // can arrive *after* the completion (a continuation dispatched by
-                // the same drain's `MessageEnd`, or a queued message). Clearing
-                // the latch there would let `poll_autopilot_continue` dispatch
-                // another turn on the next wake and autopilot would never exit.
-                if self.session.autopilot_enabled {
-                    self.session.last_task_completed_at = None;
-                }
-                self.session.agent_halted = false;
-                self.set_status_working("processing");
-                telemetry_counters::increment_messages_user(1);
-                self.push_log_no_agent(
-                    LogLevel::Info,
-                    format!("response started ({})", short_id(message_id)),
-                );
+                self.on_message_start(message_id);
             }
             Event::MessageEnd {
                 ref session_id,
                 ref message_id,
                 ref reason,
             } if self.is_current_session(session_id) => {
-                // The "init" message_id is used exclusively by the AGENTS.md
-                // acknowledgment exchange that runs before the main agent loop.
-                // It must NOT reset processing state - the main loop hasn't
-                // started yet.  Only set force_new_message so the real response
-                // starts in a fresh message block.
-                if message_id == "init" {
-                    self.session.force_new_message = true;
-                    return;
-                }
-                telemetry_counters::add_sessions_active(-1);
-                self.session.is_processing = false;
-                self.session.cancel_flag = None;
-                if *reason == FinishReason::Cancelled {
-                    self.session.agent_halted = true;
-                    self.status = "halted - /resume to continue".to_string();
-                    self.push_log_no_agent(LogLevel::Warn, "Agent halted by user".to_string());
-                } else {
-                    self.session.agent_halted = false;
-                    self.status = "ready".to_string();
-                    self.status_set_at = None;
-                }
-                self.session.force_new_message = true;
-                self.push_log_no_agent(LogLevel::Info, format!("response finished ({reason:?})"));
-                // T-010/FR-013: the conversation changed, so refresh the
-                // Context panel snapshot off the UI thread (no-op when the
-                // panel is closed or a refresh is already in flight).
-                self.schedule_context_snapshot_refresh();
-
-                // Compaction no longer runs through the agent loop
-                // (SessionProcessor::compact_session is a direct runner call),
-                // so no MessageEnd arrives for it. Compaction completion and
-                // queued-send dispatch are handled by poll_compaction_result.
-                self.session.compact_in_progress = false;
-                // Handle pending plan delegation: switch agent and auto-send task
-                if let Some((task, context)) = self.session.pending_plan_task.take() {
-                    self.execute_plan_delegation(session_id, task, context);
-                }
-
-                // FR-012: /spec reverse --create <name> chaining - after the LLM
-                // finishes generating the synthetic prompt, invoke
-                // `/spec create <name> <generated-prompt>` using the last
-                // assistant message as the prompt text.
-                if let Some(spec_name) = self.session.pending_reverse_create.take() {
-                    let scaffold_folder = self.session.pending_reverse_create_folder.take();
-                    if *reason != FinishReason::Cancelled {
-                        let prompt = self
-                            .session
-                            .messages
-                            .iter()
-                            .rev()
-                            .find(|m| m.role == Role::Assistant)
-                            .map(|m| m.text_content())
-                            .unwrap_or_default();
-                        if !prompt.is_empty() {
-                            // FR-027: a `--folder` run already scaffolded the
-                            // project, so its `specs/` root must receive the
-                            // generated spec rather than the invoking
-                            // directory. The folder is quoted so a path with
-                            // whitespace re-parses as one argument.
-                            let cmd = match scaffold_folder {
-                                Some(folder) => {
-                                    format!(
-                                        "/spec create {spec_name} --folder \"{folder}\" {prompt}"
-                                    )
-                                }
-                                None => format!("/spec create {spec_name} {prompt}"),
-                            };
-                            self.execute_slash_command(&cmd).await;
-                        }
-                    }
-                }
-
-                // /spec impl sequential driver: after each agent turn ends,
-                // check the just-run task's status and dispatch the next task
-                // (or finish the run). Skip when the turn was cancelled so the
-                // user can resume manually with `/spec impl`.
-                if self.session.spec_impl_state.is_some() && *reason != FinishReason::Cancelled {
-                    self.advance_spec_impl();
-                }
-
-                // Autopilot auto-continue: after agent completes a turn without calling
-                // agent_complete, automatically send a continuation prompt so the agent
-                // keeps working towards its goal.
-                // If TaskCompleted was consumed before us, autopilot_enabled will already
-                // be false and this block is unreachable - this is just a defensive fallback.
-                if self.session.autopilot_enabled
-                    && *reason != FinishReason::Cancelled
-                    && self.session.last_task_completed_at.is_none()
-                {
-                    // Check time limit
-                    let time_exceeded = self
-                        .session
-                        .autopilot_time_limit_secs
-                        .and_then(|limit| {
-                            self.session
-                                .autopilot_started_at
-                                .map(|s| s.elapsed().as_secs() >= limit)
-                        })
-                        .unwrap_or(false);
-                    if time_exceeded {
-                        self.session.autopilot_enabled = false;
-                        self.session.autopilot_started_at = None;
-                        self.session.autopilot_pending_continue = None;
-                        self.status = "autopilot: time limit reached".to_string();
-                        self.append_assistant_text(" **Autopilot stopped** - time limit reached.");
-                        self.push_log_no_agent(
-                            LogLevel::Warn,
-                            "autopilot stopped: time limit".to_string(),
-                        );
-                    } else {
-                        // Schedule a continuation on the next render tick
-                        self.session.autopilot_pending_continue = Some(
-                                "Continue working on the task. When fully done, call agent_complete with a summary.".to_string()
-                            );
-                        self.status = " autopilot".to_string();
-                    }
-                }
-
-                // Auto-compaction no longer runs through the agent loop, so a
-                // MessageEnd can only be the init/prepare_client-failure echo
-                // of a compaction attempt and must not dispatch the queued
-                // send. poll_compaction_result handles all compaction
-                // completion paths. Consume the flag so the stale value cannot
-                // leak into a later turn-end.
-                self.session.auto_compact_in_progress = false;
-
-                // FR-006/FR-019: after a non-cancelled turn the oldest queued
-                // message becomes the next user turn (FIFO). A cancelled turn
-                // retains the queue (FR-018), so the drain is skipped then; it
-                // is also a no-op while compaction or a run still owns the turn
-                // (FR-016), deferring to the next boundary.
-                //
-                // A queue-control `Next` selection (FR-024) cancels the turn
-                // precisely so the oldest entry can run, so it forces the drain at
-                // the very boundary its own cancel opened - otherwise the deferred
-                // run would never fire on the cancelled path.
-                if *reason != FinishReason::Cancelled || self.session.queue_next_pending {
-                    self.advance_input_queue().await;
-                }
+                self.on_message_end(session_id, message_id, reason).await;
             }
             Event::PermissionRequested {
                 ref session_id,
@@ -645,56 +297,13 @@ impl App {
                 ref description,
                 ref options,
             } => {
-                if self.is_current_session(session_id) {
-                    // Deduplicate: skip if this request_id is already queued.
-                    if self
-                        .session
-                        .permission_queue
-                        .iter()
-                        .any(|r| r.id == *request_id)
-                    {
-                        tracing::warn!(
-                            request_id = %request_id,
-                            "Duplicate PermissionRequested ignored"
-                        );
-                    } else {
-                        tracing::info!(
-                            session_id = %session_id,
-                            request_id = %request_id,
-                            permission = %permission,
-                            "TUI received PermissionRequested, showing dialog"
-                        );
-                        let created_at = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs();
-                        self.session.permission_queue.push_back(PermissionRequest {
-                            id: request_id.clone(),
-                            session_id: session_id.clone(),
-                            permission: permission.clone(),
-                            patterns: vec![description.clone()],
-                            metadata: serde_json::json!({
-                                "created_at": created_at,
-                                "timeout_secs": 120u64,
-                                "options": options,
-                            }),
-                            tool_call_id: None,
-                        });
-                        self.note_permission_front();
-                        self.status = "awaiting permission".to_string();
-                        self.push_log_no_agent(
-                            LogLevel::Warn,
-                            format!("permission requested: {} - {}", permission, description),
-                        );
-                    }
-                } else {
-                    tracing::warn!(
-                        expected_session = %self.session.session_id.as_deref().unwrap_or("none"),
-                        received_session = %session_id,
-                        permission = %permission,
-                        "Ignoring PermissionRequested for different session"
-                    );
-                }
+                self.on_permission_requested(
+                    session_id,
+                    request_id,
+                    permission,
+                    description,
+                    options,
+                );
             }
             Event::QuestionRequested {
                 ref session_id,
@@ -704,46 +313,14 @@ impl App {
                 default_index,
                 secret,
             } => {
-                // Allow questions from any session (including sub-agents) to be displayed
-                // since they require user interaction to proceed.
-                if self
-                    .session
-                    .question_queue
-                    .iter()
-                    .any(|r| r.id == *request_id)
-                {
-                    tracing::warn!(
-                        request_id = %request_id,
-                        "Duplicate QuestionRequested ignored"
-                    );
-                } else {
-                    tracing::info!(
-                        session_id = %session_id,
-                        request_id = %request_id,
-                        "TUI received QuestionRequested, showing dialog"
-                    );
-                    let expire_at_ms =
-                        crate::text_utils::now_unix_ms() + QUESTION_TIMEOUT_SECS * 1000;
-                    self.session.question_queue.push_back(QuestionRequest {
-                        id: request_id.clone(),
-                        session_id: session_id.clone(),
-                        question: question.clone(),
-                        options: options.clone(),
-                        default_index,
-                        expire_at_ms: Some(expire_at_ms),
-                        secret,
-                    });
-                    // The typed answer and highlight are reset only when this
-                    // question becomes the front: one queued behind the
-                    // question being answered leaves them alone.
-                    self.note_question_front();
-                    self.status = "awaiting question".to_string();
-                    self.needs_redraw = true;
-                    self.push_log_no_agent(
-                        LogLevel::Warn,
-                        format!("question requested: {}", question),
-                    );
-                }
+                self.on_question_requested(
+                    session_id,
+                    request_id,
+                    question,
+                    options,
+                    default_index,
+                    secret,
+                );
             }
             Event::PermissionReplied {
                 ref session_id,
@@ -751,58 +328,21 @@ impl App {
                 allowed,
                 ..
             } if self.is_current_session(session_id) => {
-                // Remove the specific answered request from the queue. A
-                // reply typed in this App already removed its request
-                // (`answer_front_permission`), so its echo removes nothing
-                // and changes nothing else (it never removes the next one).
-                let before = self.session.permission_queue.len();
-                self.session
-                    .permission_queue
-                    .retain(|r| r.id != *request_id);
-                if self.session.permission_queue.len() != before {
-                    // The next request is shown from now on.
-                    self.note_permission_front();
-                    if self.session.permission_queue.is_empty() {
-                        self.set_status_working("processing");
-                    }
-                }
-                self.push_log_no_agent(
-                    LogLevel::Info,
-                    format!("permission {}", if allowed { "granted" } else { "denied" }),
-                );
+                self.on_permission_replied(request_id, allowed);
             }
             Event::QuestionAnswered {
                 ref session_id,
                 ref request_id,
                 ..
             } if self.is_current_session(session_id) => {
-                // A question answered in this App already left the queue,
-                // so its echo removes nothing and changes nothing else (it
-                // never clears the answer being typed to the next one).
-                let before = self.session.question_queue.len();
-                self.session.question_queue.retain(|r| r.id != *request_id);
-                if self.session.question_queue.len() != before {
-                    self.note_question_front();
-                    if self.session.question_queue.is_empty() {
-                        self.set_status_working("processing");
-                    }
-                }
+                self.on_question_answered(request_id);
             }
             Event::AgentSwitched {
                 ref session_id,
                 ref from,
                 ref to,
             } if self.is_current_session(session_id) => {
-                self.session.agent_name = to.clone();
-                // Update the display name mapping for the current session
-                if let Some(ref sid) = self.session.session_id {
-                    let short_sid = short_session_id(sid);
-                    self.sid_to_display_name.insert(short_sid, to.clone());
-                }
-                self.push_log_no_agent(
-                    LogLevel::Info,
-                    format!("agent switched: {} -> {}", from, to),
-                );
+                self.on_agent_switched(from, to);
             }
             Event::AgentSwitchRequested {
                 ref session_id,
@@ -820,293 +360,38 @@ impl App {
                 ref session_id,
                 ref summary,
             } if self.is_current_session(session_id) => {
-                self.push_log_no_agent(
-                    LogLevel::Info,
-                    format!("agent restore requested ({} chars)", summary.len()),
-                );
-                // Show plan approval dialog instead of immediately restoring.
-                // The user presses Approve/Reject (Enter/r) to proceed.
-                self.session.plan_approval_pending = Some(PlanApprovalState {
-                    plan_text: summary.clone(),
-                    cursor_approve: true,
-                });
+                self.on_agent_restore_requested(summary);
             }
             Event::TaskCompleted {
                 ref session_id,
                 ref summary,
             } if self.is_current_session(session_id) => {
-                // Only the PRIMARY agent's `agent_complete` ends the run: it
-                // clears the autopilot continuation and renders the terminal
-                // summary. The guard above is `is_current_session`, not
-                // `is_current_or_descendant_session`, and that is load-bearing -
-                // `agent_complete` publishes `TaskCompleted` with the CALLING
-                // session's id, and every sub-agent / teammate is instructed to
-                // end each run with `agent_complete`. Matching a descendant here
-                // would let whichever child finished first cancel the primary's
-                // autopilot run. The descendant arm below only logs.
-                self.push_log_no_agent(LogLevel::Info, "agent_complete signalled".to_string());
-                self.session.last_task_completed_at = Some(std::time::Instant::now());
-                // Exit autopilot mode on task completion
-                if self.session.autopilot_enabled {
-                    self.session.autopilot_enabled = false;
-                    self.session.autopilot_started_at = None;
-                    self.session.autopilot_pending_continue = None;
-                    self.status = "task complete".to_string();
-                    self.push_log_no_agent(
-                        LogLevel::Info,
-                        "autopilot stopped: task complete".to_string(),
-                    );
-                }
-                // Render the summary as markdown so headers, bullet points,
-                // and bold text create visual structure instead of a wall of
-                // plain text.  Normal LLM streaming text bypasses markdown
-                // rendering (it arrives in fragments), but the agent_complete
-                // summary is a complete, self-contained message.
-                //
-                // `hard_break_lines` is required because the pipeline's
-                // html2text step collapses newlines inside a paragraph into
-                // spaces: without it, a plain multi-line summary renders as
-                // one continuous paragraph with its line ends stripped.
-                let rendered = self.render_markdown_unconditionally(&format!(
-                    "[ok] **Task Complete**\n\n{}",
-                    hard_break_lines(summary)
-                ));
-                self.session.force_new_message = true;
-                self.append_assistant_text(&rendered);
+                self.on_task_completed(summary);
             }
             Event::TaskCompleted {
                 ref session_id,
                 ref summary,
             } if self.is_current_or_descendant_session(session_id) => {
-                // A sub-agent or teammate ended its own run with
-                // `agent_complete`. That is mandatory for every child run, so it
-                // is routine, not a task-level completion: it must NOT stop the
-                // primary's autopilot, clear `last_task_completed_at`, or render
-                // a "Task Complete" banner into the primary's transcript. The
-                // child's own report already reaches the UI through
-                // `SubagentComplete` (which carries the durable output path), so
-                // this arm only records a log line.
-                self.push_log_for(
-                    LogLevel::Info,
-                    format!("{} completed: {}", short_id(session_id), summary),
-                    self.agent_log_tag(session_id),
-                    Some(session_id.clone()),
-                );
+                self.on_descendant_task_completed(session_id, summary);
             }
             Event::AgentNotice {
                 ref session_id,
                 ref message,
             } if self.is_current_session(session_id) => {
-                // Deck stage reports (FR-031) are sentinel-prefixed and carry a
-                // fixed stage list, so they are folded into one in-place
-                // `Research Progress` message rather than appended as per-stage
-                // notice bubbles.
-                if let Some(decoded) = crate::deck_progress::decode_deck_progress_event(message) {
-                    self.apply_deck_progress(decoded);
-                    return;
-                }
-                // Research progress events are sentinel-prefixed; route them
-                // to the dedicated progress log list instead of the generic
-                // agent-notice chat bubble.
-                if let Some(decoded) = crate::research_progress::decode_progress_event(message) {
-                    let level = if decoded.status == crate::research_progress::StepStatus::Error {
-                        LogLevel::Warn
-                    } else {
-                        LogLevel::Info
-                    };
-                    // Per-URL web capture/failure/exclusion events are
-                    // aggregated into counts by `ResearchProgress::apply`;
-                    // keep them out of the log panel so it stays a phase
-                    // overview rather than a per-source listing.
-                    let is_per_url_event = decoded.phase
-                        == crate::research_progress::SessionPhase::Web
-                        && (decoded.detail.starts_with("captured ")
-                            || decoded.detail.starts_with("fetch failed for ")
-                            || decoded.detail.starts_with("excluded "));
-                    if !is_per_url_event {
-                        self.push_log_no_agent(
-                            level,
-                            format!(
-                                "research: {} - {}",
-                                decoded.phase.as_str(),
-                                crate::app::helpers::sanitize_for_display(&decoded.detail)
-                            ),
-                        );
-                    } // Keep the status bar in sync with the running phase.
-                    // The `[wait]` prefix marks this as async-in-progress so
-                    // [`App::arm_status_expiry`] will not auto-clear it to
-                    // "ready" while the background research is still running.
-                    // Errors outside the web phase surface as a warning
-                    // status instead.
-                    if decoded.status == crate::research_progress::StepStatus::Error
-                        && decoded.phase != crate::research_progress::SessionPhase::Web
-                    {
-                        self.status = format!("[warn] research: {}", decoded.detail);
-                    } else if decoded.total_sources.is_none() {
-                        self.status = format!(
-                            "[wait] research: {} - {} ({}) - running",
-                            decoded.name,
-                            decoded.phase.as_str(),
-                            decoded.status.icon(),
-                        );
-                    }
-                    let progress = if let Some(existing) = self
-                        .research_progress
-                        .iter_mut()
-                        .find(|p| p.name == decoded.name)
-                    {
-                        existing
-                    } else {
-                        // First event for this run arrived before the
-                        // `/research create` handler seeded the tracker (or
-                        // the run was started through a non-TUI path). Create
-                        // it on demand so progress is never lost.
-                        self.research_progress.push(
-                            crate::research_progress::ResearchProgress::new(
-                                decoded.name.clone(),
-                                decoded.topic.clone(),
-                            ),
-                        );
-                        let Some(last) = self.research_progress.last_mut() else {
-                            // Logically unreachable: the entry was just pushed.
-                            tracing::debug!("research progress list empty immediately after push");
-                            return;
-                        };
-                        last
-                    };
-                    progress.apply(decoded.phase, decoded.status, decoded.detail.clone());
-                    // A run that ends at its finalize step (`/research
-                    // cluster`, which carries no source count) has just
-                    // completed.
-                    let completed_at_finalize = progress.completes_at_finalize
-                        && progress.done
-                        && decoded.phase == crate::research_progress::SessionPhase::Finalize
-                        && decoded.status == crate::research_progress::StepStatus::Done;
-                    // A finalize-phase error is the terminal failure report a
-                    // `/research` spawn publishes when its run fails, so end
-                    // the run rather than leaving it "running".
-                    if decoded.phase == crate::research_progress::SessionPhase::Finalize
-                        && decoded.status == crate::research_progress::StepStatus::Error
-                    {
-                        progress.fail();
-                        if let Some(deck) = progress.deck.as_mut() {
-                            deck.fail(decoded.detail.clone());
-                        }
-                    }
-                    if let Some(total) = decoded.total_sources {
-                        progress.finish(
-                            total,
-                            decoded.pdf_count,
-                            decoded.youtube_count,
-                            decoded.excluded_count,
-                        ); // The final progress event marks the run complete.
-                        // Drop the `[wait]` in-progress status for a terminal
-                        // message and arm the auto-expiry timer so it
-                        // transitions to "ready" after the grace period.
-                        let mut status =
-                            format!("research: {} complete - {total} sources", decoded.name);
-                        if decoded.pdf_count > 0 {
-                            status.push_str(&format!(
-                                ", {} PDF{}",
-                                decoded.pdf_count,
-                                if decoded.pdf_count == 1 { "" } else { "s" }
-                            ));
-                        }
-                        if decoded.youtube_count > 0 {
-                            status.push_str(&format!(
-                                ", {} YouTube video{}",
-                                decoded.youtube_count,
-                                if decoded.youtube_count == 1 { "" } else { "s" }
-                            ));
-                        }
-                        if decoded.excluded_count > 0 {
-                            status.push_str(&format!(", {} excluded", decoded.excluded_count));
-                        }
-                        self.status = status;
-                        self.arm_status_expiry();
-                    } else if completed_at_finalize {
-                        // `/research cluster` does not carry a source count;
-                        // its final progress event is a finalize/done step.
-                        self.status = format!("research: {} extraction complete", decoded.name);
-                        self.arm_status_expiry();
-                    }
-                    let name_for_refresh = decoded.name.clone();
-                    self.refresh_research_progress_message(&name_for_refresh);
-                    return;
-                }
-                self.push_log_no_agent(LogLevel::Info, format!("agent notice: {}", message));
-                // Agent notices are displayed in the message window only.
-                // They are intentionally not mirrored to the status bar so
-                // multi-line summaries do not overflow or duplicate there.
-                // Each notice gets its own chat bubble: force a new message
-                // before appending so consecutive notices never run onto each
-                // other, and again afterwards so streamed text does not merge
-                // into the notice bubble (the renderer adds a trailing blank
-                // line after every notice for separation).
-                self.session.force_new_message = true;
-                self.append_assistant_text(&format!("{}\n{}", "Agent Notice", message));
-                self.session.force_new_message = true;
+                self.on_agent_notice(message);
             }
             Event::AgentError {
                 ref session_id,
                 ref error,
             } if self.is_current_session(session_id) => {
-                self.session.is_processing = false;
-                self.session.cancel_flag = None;
-                self.session.agent_halted = false;
-                if self.session.auto_compact_in_progress {
-                    self.session.auto_compact_in_progress = false;
-                    self.session.auto_compact_failed = true;
-                    self.session.pending_send_after_compact = None;
-                    self.push_log_no_agent(
-                        LogLevel::Warn,
-                        "Auto-compaction failed; send blocked for this turn".to_string(),
-                    );
-                }
-                self.session.compact_in_progress = false;
-                self.needs_redraw = true;
-                // Full details go to the log panel only
-                self.push_log_no_agent(LogLevel::Error, format!("agent error: {}", error)); // Clean summary for the status bar and chat panel
-                let summary = summarise_error(error);
-                self.status = format!("error: {}", summary);
-                self.append_assistant_text(&format!("[warn] {}", summary));
-                // FR-007/FR-018: an errored turn must not strand the queue.
-                // Every processing/compaction guard the drain checks has just
-                // been cleared above, so the oldest entry becomes the next user
-                // turn via the shared asynchronous dispatch path; a failed turn
-                // never discards the remaining entries.
-                self.advance_input_queue().await;
+                self.on_agent_error(error).await;
             }
             Event::TokenUsage {
                 ref session_id,
                 input_tokens,
                 output_tokens,
             } if self.is_current_session(session_id) => {
-                // An output-only usage event (Anthropic/Bedrock
-                // `message_delta`) carries `input_tokens: 0`; keep the last
-                // real context-usage figure instead of resetting it to zero.
-                if input_tokens > 0 {
-                    self.session.last_input_tokens = input_tokens;
-                }
-                self.session.token_usage.0 += input_tokens;
-                self.session.token_usage.1 += output_tokens;
-                telemetry_counters::increment_tokens_input(input_tokens);
-                telemetry_counters::increment_tokens_output(output_tokens);
-                self.push_log_no_agent(
-                    LogLevel::Info,
-                    format!(
-                        "tokens: +{}in +{}out (total {}in {}out)",
-                        input_tokens,
-                        output_tokens,
-                        self.session.token_usage.0,
-                        self.session.token_usage.1
-                    ),
-                );
-                // T-010/FR-013: the reported input tokens are the actual
-                // context size sent to the model this turn ("Sent to model"
-                // row), so refresh the Context panel snapshot immediately.
-                self.schedule_context_snapshot_refresh();
-                self.needs_redraw = true;
+                self.on_token_usage(input_tokens, output_tokens);
             }
             Event::LoopTerminated {
                 ref session_id,
@@ -1115,28 +400,7 @@ impl App {
                 ref verification,
                 ref reason,
             } if self.is_current_session(session_id) => {
-                // T-025 (FR-019): the termination renders as a status-aware
-                // banner in the message window - icon + phrase + iteration
-                // count - with verification outcome and failure reason
-                // appended when present. The log panel carries the same
-                // detail on a single line.
-                let mut banner = crate::app::helpers::loop_termination_banner(status, iterations);
-                let mut line = format!(
-                    "loop terminated * {status} * {}",
-                    crate::app::helpers::plural(iterations, "iteration"),
-                );
-                if let Some(outcome) = verification {
-                    banner.push_str(&format!("\nVerification: {outcome}"));
-                    line.push_str(&format!(" * verification: {outcome}"));
-                }
-                if let Some(why) = reason {
-                    banner.push_str(&format!("\nReason: {why}"));
-                    line.push_str(&format!(" * {why}"));
-                }
-                self.session.force_new_message = true;
-                self.append_assistant_text(&banner);
-                self.push_log_no_agent(LogLevel::Info, line);
-                self.needs_redraw = true;
+                self.on_loop_terminated(status, iterations, verification, reason);
             }
             Event::LoopChangeSummary {
                 ref session_id,
@@ -1148,53 +412,16 @@ impl App {
                 ref diffstat,
                 ref files,
             } if self.is_current_session(session_id) => {
-                // T-012 (FR-019): the change summary is surfaced as a log
-                // line (diffstat + counts + affected files). T-025 renders
-                // the same summary as a diffstat line in the message window
-                // and arms the interactive rollback offer.
-                let mut line = format!(
-                    "loop changes * {status} * {} * \
-                     {modified} modified, {created} created, {deleted} deleted * \
-                     {diffstat}",
-                    crate::app::helpers::plural(iterations, "iteration"),
-                    modified = files_modified,
-                    created = files_created,
-                    deleted = files_deleted,
-                );
-                line.push_str(&crate::app::helpers::files_preview(files, 8));
-                // Diffstat line in the message window: counts + diffstat +
-                // affected paths, mirroring the log line.
-                let mut summary_line = format!(
-                    "* Loop changes ({status}, {}): \
-                     {modified} modified, {created} created, {deleted} deleted - {diffstat}",
-                    crate::app::helpers::plural(iterations, "iteration"),
-                    modified = files_modified,
-                    created = files_created,
-                    deleted = files_deleted,
-                );
-                summary_line.push_str(&crate::app::helpers::files_preview(files, 8));
-                summary_line.push_str(
-                    "\nRoll back to the pre-loop snapshot? Enter: roll back, Esc: keep changes",
-                );
-                self.session.force_new_message = true;
-                self.append_assistant_text(&summary_line);
-                self.push_log_no_agent(LogLevel::Info, line);
-                // T-013 (FR-020): offer a one-key rollback to the pre-loop
-                // snapshot. Enter accepts (restores the snapshot), Esc
-                // declines (changes are kept). The offer arms only when the
-                // loop made workspace changes; a no-write loop never
-                // publishes a change summary in the first place.
-                self.session.pending_rollback = Some(RollbackOfferState {
-                    session_id: session_id.clone(),
-                    status: status.clone(),
+                self.on_loop_change_summary(
+                    session_id,
+                    status,
                     iterations,
-                    diffstat: diffstat.clone(),
-                    files: files.clone(),
-                });
-                self.status =
-                    "loop ended - Enter: roll back to pre-loop snapshot, Esc: keep changes"
-                        .to_string();
-                self.needs_redraw = true;
+                    files_modified,
+                    files_created,
+                    files_deleted,
+                    diffstat,
+                    files,
+                );
             }
             Event::RunCostSummary {
                 ref session_id,
@@ -1204,31 +431,12 @@ impl App {
                 total_cost_usd,
                 duration_ms,
             } if self.is_current_session(session_id) => {
-                telemetry_counters::set_cost_session_last(total_cost_usd);
-                let duration_secs = (duration_ms as f64) / 1000.0;
-                // Compact one-line banner shown transiently (dismissed on keypress).
-                let banner = format!(
-                    "* run complete * {in}+{out} tokens * ${cost:.4} * {dur:.1}s",
-                    in = input_tokens,
-                    out = output_tokens,
-                    cost = total_cost_usd,
-                    dur = duration_secs,
-                );
-                self.session.run_cost_banner = Some(banner);
-                self.session.run_cost_banner_at = Some(std::time::Instant::now());
-                self.needs_redraw = true;
-                // Full details always go to the log panel (model + ms precision).
-                self.push_log_no_agent(
-                    LogLevel::Info,
-                    format!(
-                        "* run complete * {in}in / {out}out tokens * model {model} * ${cost:.6} * {ms}ms ({dur:.2}s)",
-                        in = input_tokens,
-                        out = output_tokens,
-                        model = model_id,
-                        cost = total_cost_usd,
-                        ms = duration_ms,
-                        dur = duration_secs,
-                    ),
+                self.on_run_cost_summary(
+                    model_id,
+                    input_tokens,
+                    output_tokens,
+                    total_cost_usd,
+                    duration_ms,
                 );
             }
             Event::HookWarning {
@@ -1237,16 +445,7 @@ impl App {
                 ref tool,
                 ref stderr,
             } if self.is_current_session(session_id) => {
-                // Show a short transient toast in the status bar.  We deliberately
-                // omit the "[warn]" prefix so that `arm_status_expiry()` will
-                // auto-clear the toast after the standard grace period.
-                let short_reason = codemason_types::strutil::truncate_bytes(stderr, 80);
-                self.status = format!("hook warning: {} - {}", tool, short_reason);
-                self.arm_status_expiry();
-                self.push_log_no_agent(
-                    LogLevel::Warn,
-                    format!("hook warning on {} ({}): {}", tool, hook_command, stderr),
-                );
+                self.on_hook_warning(hook_command, tool, stderr);
             }
             Event::ToolResultFlagged {
                 ref session_id,
@@ -1254,14 +453,7 @@ impl App {
                 ref hook_command,
                 ref reason,
             } if self.is_current_session(session_id) => {
-                self.status = format!("[warn] {} flagged", tool);
-                self.push_log_no_agent(
-                    LogLevel::Error,
-                    format!(
-                        "[flag] tool {} flagged by {}: {}",
-                        tool, hook_command, reason
-                    ),
-                );
+                self.on_tool_result_flagged(tool, hook_command, reason);
             }
             Event::SecurityVerdict {
                 ref session_id,
@@ -1269,20 +461,7 @@ impl App {
                 ref verdict,
                 ref rationale,
             } if self.is_current_session(session_id) => {
-                // FR-006 / FR-017: surface the LLM security analyzer's verdict
-                // and rationale so the user sees *why* a proposed action was
-                // allowed, denied, or escalated to a prompt.
-                self.session.security_verdicts = self.session.security_verdicts.saturating_add(1);
-                let level = if verdict == "allow" {
-                    LogLevel::Info
-                } else {
-                    LogLevel::Warn
-                };
-                self.status = format!("security: {verdict} {tool}");
-                self.push_log_no_agent(
-                    level,
-                    format!("security analyzer: {verdict} {tool} - {rationale}"),
-                );
+                self.on_security_verdict(tool, verdict, rationale);
             }
             Event::QuotaUpdate {
                 ref session_id,
@@ -1312,27 +491,7 @@ impl App {
                 input_tokens,
                 output_tokens,
             } if self.is_current_session(session_id) => {
-                telemetry_counters::set_llm_duration_last(elapsed_ms as f64);
-                if let Some(model_ref) = self.active_model_ref_string() {
-                    self.session.llm_request_stats.push(LlmRequestStat {
-                        model_ref,
-                        elapsed_ms,
-                        input_tokens,
-                        output_tokens,
-                    });
-                    // R-22: Cap the stats vec to a rolling window so it does
-                    // not grow without bound over a long session.
-                    const MAX_LLM_REQUEST_STATS: usize = 1000;
-                    if self.session.llm_request_stats.len() > MAX_LLM_REQUEST_STATS {
-                        let drop_count =
-                            self.session.llm_request_stats.len() - MAX_LLM_REQUEST_STATS;
-                        self.session.llm_request_stats.drain(0..drop_count);
-                    }
-                }
-                self.push_log_no_agent(
-                    LogLevel::Info,
-                    format!("model response ({elapsed_ms}ms): {text}"),
-                );
+                self.on_model_response(text, elapsed_ms, input_tokens, output_tokens);
             }
             Event::ToolCallArgs {
                 ref session_id,
@@ -1340,41 +499,7 @@ impl App {
                 ref tool,
                 ref args,
             } if self.is_current_session(session_id) => {
-                self.session.stream_in_bytes += (call_id.len() + tool.len() + args.len()) as u64;
-                // Try to apply args to an existing ToolCall part; if not found,
-                // store them pending until the ToolCallStart event arrives.
-                let applied = self.update_tool_call_input(call_id, args);
-                if !applied {
-                    self.pending_tool_args.insert(call_id.clone(), args.clone());
-                }
-                let step_tag = self
-                    .tool_step_map
-                    .get(call_id)
-                    .map(|(_sid, step, substep)| format!("[{step}.{substep}] "))
-                    .unwrap_or_default();
-                // Pretty-print JSON args as a single truncated log entry
-                // (H-009) rather than one entry per line, which both avoided
-                // dozens of `format!` allocations for a large payload and
-                // (previously) bumped the global log version per line. Compact
-                // serialization is used because newlines render poorly in the
-                // single-line log panel and only the first 200 chars survive
-                // the preview cap anyway.
-                //
-                // FR-007: the preview decodes through the shared helper, so a
-                // double-encoded or whitespace payload is shown the way the
-                // tool will receive it instead of the TUI inventing a second
-                // JSON rule.
-                let pretty = codemason_types::tool_args::decode_tool_arguments(args)
-                    .ok()
-                    .and_then(|v| serde_json::to_string(&v).ok())
-                    .unwrap_or_else(|| args.to_string());
-                // Cap at ~200 chars so a single tool call cannot flood the log.
-                let preview = crate::app::helpers::truncate_chars(pretty.trim(), 200);
-                self.push_log_no_agent(
-                    LogLevel::Tool,
-                    format!("{}-> {}({})", step_tag, tool, preview),
-                );
-                self.needs_redraw = true;
+                self.on_tool_call_args(call_id, tool, args);
             }
             Event::ToolResult {
                 ref session_id,
@@ -1386,52 +511,14 @@ impl App {
                 success,
                 ..
             } if self.is_current_session(session_id) => {
-                self.update_tool_call_output(call_id, content_line_count, metadata.as_ref());
-                if *tool == "team_create"
-                    && success
-                    && let Some(meta) = metadata
-                    && let Some(team_name) = meta.get("team_name").and_then(|v| v.as_str())
-                {
-                    let working_dir = self.cwd_path.clone();
-                    if let Ok(store) = TeamStore::load_by_name(team_name, &working_dir) {
-                        let name = store.config.name.clone();
-                        let team_dir = store.dir.clone();
-                        self.session.team_members = store.config.members.clone();
-                        self.session.active_team = Some(store.config);
-                        self.show_teams = true;
-                        // Reconcile is needed here: team was created via LLM tool path,
-                        // so the TeamManager didn't exist during blueprint seeding and
-                        // members may have been queued in Spawning state.
-                        self.ensure_team_manager_for_team_inner(&name, Some(team_dir), true);
-                    }
-                }
-                let step_tag = self
-                    .tool_step_map
-                    .get(call_id)
-                    .map(|(_sid, step, substep)| format!("[{step}.{substep}] "))
-                    .unwrap_or_default();
-                let icon = if success { "[ok]" } else { "[x]" };
-                let display_content = truncate_str(content, 2516);
-                let log_line = if display_content.is_empty() {
-                    format!("{}<- {} {}", step_tag, tool, icon)
-                } else {
-                    format!("{}<- {} {} {}", step_tag, tool, icon, display_content)
-                };
-                self.push_log_no_agent(LogLevel::Tool, log_line);
-                // Mark the Tasks side-panel cache stale when task data
-                // mutates, so the next panel render reflects the change.
-                // spec_task_update mirrors its change into the session
-                // task tracker, so it must invalidate the cache too.
-                if matches!(
-                    tool.as_str(),
-                    "TaskCreate" | "TaskUpdate" | "spec_task_update"
-                ) {
-                    self.session.tasks_cache_dirty = true;
-                }
-                // T-010/FR-013: the tool result changed the conversation
-                // history/tool-call payload, so refresh the Context panel.
-                self.schedule_context_snapshot_refresh();
-                self.needs_redraw = true;
+                self.on_tool_result(
+                    call_id,
+                    tool,
+                    content,
+                    content_line_count,
+                    metadata,
+                    success,
+                );
             }
             Event::SubagentStart {
                 ref session_id,
@@ -1443,17 +530,7 @@ impl App {
                 detached,
                 ..
             } if self.is_current_or_descendant_session(session_id) => {
-                // Map the child session's short_sid to the task id for display.
-                // The task id already encodes the agent type plus a unique suffix
-                // (e.g. "explore-a1b2c3d4") so tools and panels can distinguish
-                // multiple subagents of the same type.
-                let short_sid = short_session_id(child_session_id);
-                self.sid_to_display_name.insert(short_sid, task_id.clone());
-
-                // Add to active_tasks so the agent panel shows it immediately
-                // (FR-047); a replayed spawn refreshes the painted row instead
-                // of appending a second one (FR-072).
-                let appended = self.note_subagent_started(
+                self.on_subagent_start(
                     session_id,
                     task_id,
                     child_session_id,
@@ -1462,25 +539,6 @@ impl App {
                     background,
                     detached,
                 );
-                if appended {
-                    telemetry_counters::increment_subagent_spawns(1);
-                    telemetry_counters::add_agents_active(1);
-                    // FR-020: the log line names the same three contracts the
-                    // painted type column derives from the registry entry.
-                    let (icon, kind) = if detached {
-                        ("[dt]", "Detached")
-                    } else if background {
-                        ("[bg]", "Background")
-                    } else {
-                        ("[fg]", "Foreground")
-                    };
-                    self.push_log_for(
-                        LogLevel::Info,
-                        format!("{} {} task started: {} ({})", icon, kind, task_id, agent),
-                        None,
-                        Some(child_session_id.clone()),
-                    );
-                }
             }
             Event::SubagentComplete {
                 ref session_id,
@@ -1493,84 +551,21 @@ impl App {
                 ref output_file,
                 ..
             } if self.is_current_or_descendant_session(session_id) => {
-                // Record the report status derived from the finish reason and
-                // drop the row (FR-048). Both the painted status and the log
-                // marker come from that one derived value, so the panel can
-                // never disagree with the row written by the task registry
-                // (`list_agents` / `wait_agents`).
-                // The event carries the registry's terminal status and the
-                // durable `output_file`: the registry entry itself may already
-                // have been reaped by the time this event is handled.
-                let recorded = self.note_subagent_completed(
+                self.on_subagent_complete(
                     task_id,
+                    child_session_id,
+                    summary,
                     finish_reason,
                     success,
                     status,
-                    output_file.as_deref(),
-                );
-                self.close_agents_window_when_empty();
-                let report_status = recorded.unwrap_or_else(|| {
-                    codemason_agent::task::ReportStatus::from_finish_reason_label(finish_reason)
-                });
-                if recorded.is_some() {
-                    telemetry_counters::add_agents_active(-1);
-                }
-                telemetry_counters::increment_agents_completed(1);
-                let (icon, verb) = if success {
-                    ("[ok]", "completed")
-                } else {
-                    ("[err]", "failed")
-                };
-                let suffix = match report_status {
-                    codemason_agent::task::ReportStatus::Continued => {
-                        " (truncated; continuation retry recovered the tail)"
-                    }
-                    codemason_agent::task::ReportStatus::Truncated => {
-                        " (TRUNCATED by provider; report is incomplete)"
-                    }
-                    codemason_agent::task::ReportStatus::Complete => "",
-                };
-                self.push_log_for(
-                    LogLevel::Info,
-                    format!(
-                        "{} Task {}{} ({}): {}",
-                        icon,
-                        verb,
-                        suffix,
-                        short_id(task_id),
-                        summary
-                    ),
-                    None,
-                    Some(child_session_id.clone()),
+                    output_file,
                 );
             }
             Event::SubagentCancelled {
                 ref session_id,
                 ref task_id,
             } if self.is_current_or_descendant_session(session_id) => {
-                // Remove the row (FR-049). The cancel log line is attributed to
-                // the cancelled agent's own output view when the row was still
-                // tracked; a cancel for an untracked task is log-only.
-                match self.note_subagent_cancelled(task_id) {
-                    Some(child_session_id) => {
-                        telemetry_counters::add_agents_active(-1);
-                        self.push_log_for(
-                            LogLevel::Info,
-                            format!("[cancel] Task cancelled ({})", short_id(task_id)),
-                            None,
-                            Some(child_session_id),
-                        );
-                    }
-                    None => {
-                        self.push_log_no_agent(
-                            LogLevel::Info,
-                            format!("[cancel] Task cancelled ({})", short_id(task_id)),
-                        );
-                    }
-                }
-                // The list may have just emptied: drop the Agents window with
-                // it (FR-063).
-                self.close_agents_window_when_empty();
+                self.on_subagent_cancelled(task_id);
             }
             Event::SubagentSuspended {
                 ref session_id,
@@ -1604,41 +599,14 @@ impl App {
                 ref child_session_id,
                 force,
             } if self.is_current_or_descendant_session(session_id) => {
-                if self.note_subagent_killed(task_id, force) {
-                    telemetry_counters::add_agents_active(-1);
-                }
-                let label = if force { "Force-killed" } else { "Terminating" };
-                self.push_log_for(
-                    LogLevel::Info,
-                    format!("[kill] {} task ({})", label, short_id(task_id)),
-                    None,
-                    Some(child_session_id.clone()),
-                );
-                // The list may have just emptied: drop the Agents window with
-                // it (FR-063).
-                self.close_agents_window_when_empty();
+                self.on_subagent_killed(task_id, child_session_id, force);
             }
             Event::BackgroundTaskSpawned {
                 ref session_id,
                 ref task_id,
                 ref command,
             } if self.is_current_session(session_id) => {
-                self.bg_tasks.push(BgTaskView {
-                    id: task_id.clone(),
-                    session_id: session_id.clone(),
-                    command: command.clone(),
-                    status: "running".to_string(),
-                    created_at: chrono::Utc::now(),
-                    completed_at: None,
-                });
-                self.push_log_no_agent(
-                    LogLevel::Info,
-                    format!(
-                        "[bg]  Background task started: {} ({})",
-                        short_id(task_id),
-                        command
-                    ),
-                );
+                self.on_background_task_spawned(session_id, task_id, command);
             }
             Event::BackgroundTaskUpdated {
                 ref session_id,
@@ -1659,30 +627,7 @@ impl App {
                 ref status,
                 ..
             } if self.is_current_session(session_id) => {
-                if let Some(task) = self.bg_tasks.iter_mut().find(|t| t.id == *task_id) {
-                    task.status = status.clone();
-                    task.completed_at = Some(chrono::Utc::now());
-                }
-                let icon = if status == "completed" {
-                    "[ok]"
-                } else {
-                    "[err]"
-                };
-                self.push_log_no_agent(
-                    LogLevel::Info,
-                    format!(
-                        "{} Background task completed ({}): {}",
-                        icon,
-                        short_id(task_id),
-                        status
-                    ),
-                );
-                // Remove the background task from the Agents panel once it
-                // reaches a terminal state.
-                self.bg_tasks.retain(|t| t.id != *task_id);
-                // The list may have just emptied: drop the Agents window with
-                // it (FR-063).
-                self.close_agents_window_when_empty();
+                self.on_background_task_completed(task_id, status);
             }
             Event::TeammateSpawned {
                 ref session_id,
@@ -1690,91 +635,7 @@ impl App {
                 ref teammate_name,
                 ref agent_id,
             } if self.is_current_session(session_id) => {
-                telemetry_counters::set_team_members(self.session.team_members.len() as i64 + 1);
-                // Add new member to team_members if not already present.
-                if !self
-                    .session
-                    .team_members
-                    .iter()
-                    .any(|m| m.agent_id == *agent_id)
-                {
-                    let member =
-                        TeamMember::new(teammate_name.as_str(), agent_id.as_str(), "teammate");
-                    self.session.team_members.push(member);
-                    self.session
-                        .team_message_counts
-                        .entry(agent_id.clone())
-                        .or_insert((0, 0));
-                }
-                // Always refresh the stored values (session id, status, current task)
-                // from disk so races between UI hydration and spawn events don't
-                // leave the UI showing an outdated state.
-                let mut known_team_dir: Option<std::path::PathBuf> = None;
-                let teammate_session_id = if let Some(m) = self
-                    .session
-                    .team_members
-                    .iter_mut()
-                    .find(|m| m.agent_id == *agent_id)
-                {
-                    let working_dir = self.cwd_path.clone();
-                    if let Ok(store) = TeamStore::load_by_name(team_name, &working_dir) {
-                        known_team_dir = Some(store.dir.clone());
-                        // FR-050: the spawned teammate implies its team is the
-                        // active one, even when the `team_create` tool result
-                        // never reached this session (e.g. a server-driven
-                        // run that skipped the lead's own tool path). Without
-                        // this the strip can never become visible because its
-                        // visibility rule requires an active team.
-                        if self.session.active_team.is_none() {
-                            self.session.active_team = Some(store.config.clone());
-                        }
-                        if let Some(stored) = store
-                            .config
-                            .members
-                            .iter()
-                            .find(|x| x.agent_id == *agent_id)
-                        {
-                            m.session_id = stored.session_id.clone();
-                            m.status = stored.status.clone();
-                            m.current_task_id = stored.current_task_id.clone();
-                            // Map this teammate's session short_sid -> a unique display
-                            // label (name + agent id) so tool step tags and panels can
-                            // distinguish teammates with the same name.
-                            if let Some(ref sid) = stored.session_id {
-                                let short_sid = short_session_id(sid);
-                                let display_name = format!("{}-{}", teammate_name, agent_id);
-                                self.sid_to_display_name.insert(short_sid, display_name);
-                            }
-                        }
-                    }
-                    m.session_id.clone()
-                } else {
-                    None
-                };
-                // FR-051: bind the runtime tracker (watchdog, suspend/resume
-                // dispatches, `record_progress`) when this session never
-                // created a `TeamManager`, so the progress recording in the
-                // status handlers below is not a silent no-op for the whole
-                // run. `reconcile = false`: the spawning owner manages its own
-                // members; this only attaches observation. Observation never
-                // displaces a live runtime bound to another team (events from
-                // two teams would otherwise flip the binding back and forth).
-                let bound_elsewhere = self
-                    .session_processor
-                    .team_manager
-                    .get()
-                    .is_some_and(|bound| bound.team_name != *team_name)
-                    && self.session_processor.team_manager.stale().is_none();
-                if !bound_elsewhere {
-                    self.ensure_team_manager_for_team_inner(team_name, known_team_dir, false);
-                }
-                self.show_teams = true;
-                self.push_log_for(
-                    LogLevel::Info,
-                    format!("[team] [{team_name}] Spawned teammate '{teammate_name}' ({agent_id})"),
-                    None,
-                    teammate_session_id,
-                );
+                self.on_teammate_spawned(team_name, teammate_name, agent_id);
             }
             Event::TeammateMessage {
                 ref session_id,
@@ -1784,28 +645,7 @@ impl App {
                 ref message_type,
                 ref preview,
             } if self.is_current_session(session_id) => {
-                if from.as_str() != "lead" {
-                    let counts = self
-                        .session
-                        .team_message_counts
-                        .entry(from.clone())
-                        .or_insert((0, 0));
-                    counts.0 = counts.0.saturating_add(1);
-                }
-                if to.as_str() != "lead" {
-                    let counts = self
-                        .session
-                        .team_message_counts
-                        .entry(to.clone())
-                        .or_insert((0, 0));
-                    counts.1 = counts.1.saturating_add(1);
-                }
-                self.push_log_for(
-                    LogLevel::Info,
-                    format!("[msg] [{team_name}] {from} -> {to} ({message_type}): {preview}"),
-                    None,
-                    self.team_member_session_id_by_agent_id(from),
-                );
+                self.on_teammate_message(team_name, from, to, message_type, preview);
             }
             Event::TeammateP2PMessage {
                 ref session_id,
@@ -1815,59 +655,14 @@ impl App {
                 ref message_type,
                 ref preview,
             } if self.is_current_session(session_id) => {
-                // Same counter rule as TeammateMessage (FR-052): increment the
-                // sender's sent count and the recipient's received count,
-                // ignoring a sender or recipient named `lead` so the lead's
-                // own columns never move.
-                if from.as_str() != "lead" {
-                    let counts = self
-                        .session
-                        .team_message_counts
-                        .entry(from.clone())
-                        .or_insert((0, 0));
-                    counts.0 = counts.0.saturating_add(1);
-                }
-                if to.as_str() != "lead" {
-                    let counts = self
-                        .session
-                        .team_message_counts
-                        .entry(to.clone())
-                        .or_insert((0, 0));
-                    counts.1 = counts.1.saturating_add(1);
-                }
-                self.push_log_for(
-                    LogLevel::Info,
-                    format!(
-                        "[shuffle] [{team_name}] P2P {from} -> {to} ({message_type}): {preview}"
-                    ),
-                    None,
-                    self.team_member_session_id_by_agent_id(from),
-                );
+                self.on_teammate_p2p_message(team_name, from, to, message_type, preview);
             }
             Event::TeammateIdle {
                 ref session_id,
                 ref team_name,
                 ref agent_id,
             } if self.is_current_session(session_id) => {
-                if let Some(m) = self
-                    .session
-                    .team_members
-                    .iter_mut()
-                    .find(|m| m.agent_id == *agent_id)
-                {
-                    m.status = MemberStatus::Idle;
-                }
-                // M6-T1: record progress so the watchdog does not flag this
-                // teammate as hung.
-                if let Some(tm) = self.session_processor.team_manager.get() {
-                    tm.record_progress(agent_id);
-                }
-                self.push_log_for(
-                    LogLevel::Info,
-                    format!("[sleep] [{team_name}] Teammate {agent_id} is idle"),
-                    None,
-                    self.team_member_session_id_by_agent_id(agent_id),
-                );
+                self.on_teammate_idle(team_name, agent_id);
             }
             Event::TeammateFailed {
                 ref session_id,
@@ -1875,29 +670,7 @@ impl App {
                 ref agent_id,
                 ref error,
             } if self.is_current_session(session_id) => {
-                if let Some(m) = self
-                    .session
-                    .team_members
-                    .iter_mut()
-                    .find(|m| m.agent_id == *agent_id)
-                {
-                    m.status = MemberStatus::Failed;
-                    m.last_spawn_error = Some(error.clone());
-                }
-                // M6-T1: record progress so the watchdog stops tracking
-                // this agent.
-                if let Some(tm) = self.session_processor.team_manager.get() {
-                    tm.record_progress(agent_id);
-                }
-                // Truncate on a char boundary so the appended ellipsis cannot
-                // split a multi-byte UTF-8 sequence.
-                let short_err = truncate_str(error, ERROR_PREVIEW_CHARS);
-                self.push_log_for(
-                    LogLevel::Error,
-                    format!("[err] [{team_name}] Teammate {agent_id} failed: {short_err}"),
-                    None,
-                    self.team_member_session_id_by_agent_id(agent_id),
-                );
+                self.on_teammate_failed(team_name, agent_id, error);
             }
             Event::TeammateStopped {
                 ref session_id,
@@ -1905,85 +678,21 @@ impl App {
                 ref agent_id,
                 ref cause,
             } if self.is_current_session(session_id) => {
-                // FR-017: the stop is published by the runtime's status writer,
-                // so the row follows a shutdown acked by the teammate, one
-                // forced by the lead, and a team cleanup.
-                if let Some(m) = self
-                    .session
-                    .team_members
-                    .iter_mut()
-                    .find(|m| m.agent_id == *agent_id)
-                {
-                    m.status = MemberStatus::Stopped;
-                    m.current_task_id = None;
-                }
-                // M6-T1: record progress so the watchdog stops tracking this
-                // agent (a stopped member has no session left to fail).
-                if let Some(tm) = self.session_processor.team_manager.get() {
-                    tm.record_progress(agent_id);
-                }
-                self.push_log_for(
-                    LogLevel::Info,
-                    format!("[stop] [{team_name}] Teammate {agent_id} stopped ({cause})"),
-                    None,
-                    self.team_member_session_id_by_agent_id(agent_id),
-                );
+                self.on_teammate_stopped(team_name, agent_id, cause);
             }
             Event::TeammateSuspended {
                 ref session_id,
                 ref team_name,
                 ref agent_id,
             } if self.is_current_session(session_id) => {
-                // FR-040 plumbing: the `[stop]` click (or `/team suspend`)
-                // suspends the teammate on disk and publishes this event; the
-                // row must follow immediately instead of waiting for the next
-                // render-time store hydration.
-                if let Some(m) = self
-                    .session
-                    .team_members
-                    .iter_mut()
-                    .find(|m| m.agent_id == *agent_id)
-                {
-                    m.status = MemberStatus::Suspended;
-                }
-                // M6-T1: record progress so the watchdog does not flag this
-                // teammate as hung.
-                if let Some(tm) = self.session_processor.team_manager.get() {
-                    tm.record_progress(agent_id);
-                }
-                self.push_log_for(
-                    LogLevel::Info,
-                    format!("[pause] [{team_name}] Teammate {agent_id} suspended"),
-                    None,
-                    self.team_member_session_id_by_agent_id(agent_id),
-                );
+                self.on_teammate_suspended(team_name, agent_id);
             }
             Event::TeammateResumed {
                 ref session_id,
                 ref team_name,
                 ref agent_id,
             } if self.is_current_session(session_id) => {
-                // The resume direction of the same control restores the row;
-                // the runtime marks the member idle again on disk.
-                if let Some(m) = self
-                    .session
-                    .team_members
-                    .iter_mut()
-                    .find(|m| m.agent_id == *agent_id)
-                {
-                    m.status = MemberStatus::Idle;
-                }
-                // M6-T1: record progress so the watchdog does not flag this
-                // teammate as hung.
-                if let Some(tm) = self.session_processor.team_manager.get() {
-                    tm.record_progress(agent_id);
-                }
-                self.push_log_for(
-                    LogLevel::Info,
-                    format!("[play] [{team_name}] Teammate {agent_id} resumed (idle)"),
-                    None,
-                    self.team_member_session_id_by_agent_id(agent_id),
-                );
+                self.on_teammate_resumed(team_name, agent_id);
             }
             Event::TeamTaskClaimed {
                 ref session_id,
@@ -1991,25 +700,7 @@ impl App {
                 ref agent_id,
                 ref task_id,
             } if self.is_current_session(session_id) => {
-                if let Some(m) = self
-                    .session
-                    .team_members
-                    .iter_mut()
-                    .find(|m| m.agent_id == *agent_id)
-                {
-                    m.status = MemberStatus::Working;
-                    m.current_task_id = Some(task_id.clone());
-                }
-                // M6-T1: record progress.
-                if let Some(tm) = self.session_processor.team_manager.get() {
-                    tm.record_progress(agent_id);
-                }
-                self.push_log_for(
-                    LogLevel::Info,
-                    format!("[notice] [{team_name}] {agent_id} claimed task {task_id}"),
-                    None,
-                    self.team_member_session_id_by_agent_id(agent_id),
-                );
+                self.on_team_task_claimed(team_name, agent_id, task_id);
             }
             Event::TeamTaskCompleted {
                 ref session_id,
@@ -2017,24 +708,7 @@ impl App {
                 ref agent_id,
                 ref task_id,
             } if self.is_current_session(session_id) => {
-                if let Some(m) = self
-                    .session
-                    .team_members
-                    .iter_mut()
-                    .find(|m| m.agent_id == *agent_id)
-                {
-                    m.current_task_id = None;
-                }
-                // M6-T1: record progress.
-                if let Some(tm) = self.session_processor.team_manager.get() {
-                    tm.record_progress(agent_id);
-                }
-                self.push_log_for(
-                    LogLevel::Info,
-                    format!("[ok] [{team_name}] {agent_id} completed task {task_id}"),
-                    None,
-                    self.team_member_session_id_by_agent_id(agent_id),
-                );
+                self.on_team_task_completed(team_name, agent_id, task_id);
             }
             // FR-044: a completion the FR-001 ownership rule refused. The
             // previous release silently re-assigned the task to whoever
@@ -2049,45 +723,15 @@ impl App {
                 ref reason,
                 ref message,
             } if self.is_current_session(session_id) => {
-                self.push_log_for(
-                    LogLevel::Warn,
-                    format!(
-                        "[rej] [{team_name}] {agent_id} could not complete task {task_id} \
-                         (owner: {owner}, {reason}): {message}"
-                    ),
-                    None,
-                    self.team_member_session_id_by_agent_id(agent_id),
+                self.on_team_task_completion_rejected(
+                    team_name, agent_id, task_id, owner, reason, message,
                 );
             }
             Event::TeamCleanedUp {
                 ref session_id,
                 ref team_name,
             } if self.is_current_session(session_id) => {
-                // The `team_cleanup` tool has already removed the directory;
-                // stop a finalising swarm's job so it runs no further hooks
-                // for the removed team (best effort: it may have raced the
-                // removal already).
-                self.stop_swarm_autocomplete(team_name).await;
-                self.session.active_team = None;
-                self.session.team_members.clear();
-                self.session.team_message_counts.clear();
-                self.show_teams = false;
-                self.session.focused_teammate = None;
-                // FR-053: cleanup hides the Teams popup too, so a removed team
-                // cannot keep a window open showing a lead row with no team.
-                self.show_teams_window = false;
-                if self
-                    .session
-                    .swarm_state
-                    .as_ref()
-                    .is_some_and(|s| &s.team_name == team_name)
-                {
-                    self.session.swarm_state = None;
-                }
-                self.push_log_no_agent(
-                    LogLevel::Info,
-                    format!("[clr] Team '{team_name}' cleaned up"),
-                );
+                self.on_team_cleaned_up(team_name).await;
             }
             Event::ShellCwdChanged {
                 ref session_id,
@@ -2127,63 +771,7 @@ impl App {
                 ref models,
                 ref error,
             } => {
-                self.model_loading_state = None;
-                let parsed_models: Vec<ModelInfo> = models
-                    .iter()
-                    .filter_map(|v| serde_json::from_value(v.clone()).ok())
-                    .collect();
-
-                // Only persist successful non-empty discovery results; an empty
-                // result from a failed discovery should not wipe a previously
-                // useful cache or prevent fallback to static defaults.
-                if !parsed_models.is_empty() {
-                    self.cache_discovered_models(provider_id, &parsed_models);
-                }
-
-                if let Some(err) = error {
-                    self.push_log_no_agent(
-                        LogLevel::Error,
-                        format!("{} model discovery failed: {}", provider_name, err),
-                    );
-                    self.status = format!("{}: discovery failed", provider_name);
-                } else {
-                    self.push_log_no_agent(
-                        LogLevel::Info,
-                        format!(
-                            "{} model discovery finished ({} models)",
-                            provider_name,
-                            parsed_models.len()
-                        ),
-                    );
-                }
-
-                // Advance the provider-setup dialog if it is waiting on this provider.
-                if let Some(ProviderSetupStep::LoadingModels {
-                    provider_id: ref pid,
-                    ..
-                }) = self.provider_setup
-                {
-                    if pid == provider_id {
-                        let entries = if parsed_models.is_empty() {
-                            // Fall back to static defaults so the user still sees
-                            // models even when dynamic discovery fails.
-                            self.picker_entries_from_models(
-                                self.provider_registry
-                                    .get(provider_id)
-                                    .map(|p| p.default_models())
-                                    .unwrap_or_default(),
-                            )
-                        } else {
-                            self.picker_entries_from_models(parsed_models)
-                        };
-                        self.provider_setup = Some(ProviderSetupStep::SelectModel {
-                            provider_id: provider_id.clone(),
-                            provider_name: provider_name.clone(),
-                            models: entries,
-                            selected: 0,
-                        });
-                    }
-                }
+                self.on_provider_loading_finished(provider_id, provider_name, models, error);
             }
             Event::RouterClassification {
                 ref session_id,
@@ -2194,25 +782,13 @@ impl App {
                 ref prompt,
                 ref dimensions,
             } if self.is_current_session(session_id) => {
-                self.session.router_current_tier = Some(tier.clone());
-                self.session.router_current_model = Some(model.clone());
-                let dims = dimensions
-                    .iter()
-                    .map(|(name, score)| format!("{}={:.2}", name, score))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let prompt_display = codemason_types::strutil::truncate_bytes(prompt, 80);
-                let fallback_note = requested_tier
-                    .as_ref()
-                    .filter(|rt| rt.as_str() != tier.as_str())
-                    .map(|rt| format!(" (requested {})", rt))
-                    .unwrap_or_default();
-                self.push_log_no_agent(
-                    LogLevel::Info,
-                    format!(
-                        "Router: bucket={} model={} composite={:.4} prompt=\"{}\" dimensions=[{}]{}",
-                        tier, model, composite_score, prompt_display, dims, fallback_note
-                    ),
+                self.on_router_classification(
+                    tier,
+                    requested_tier,
+                    model,
+                    composite_score,
+                    prompt,
+                    dimensions,
                 );
             } // -- Model download progress (progress bar popup) ---------------
             Event::ModelDownloadStarted {
@@ -2220,17 +796,7 @@ impl App {
                 ref model_id,
                 ..
             } => {
-                let _provider_name = self
-                    .provider_registry
-                    .get(provider_id)
-                    .map(|p| p.name().to_string())
-                    .unwrap_or_else(|| provider_id.clone());
-                self.model_download_state = Some(ModelDownloadState {
-                    provider_id: provider_id.clone(),
-                    model_id: model_id.clone(),
-                    percent: 0.0,
-                    started_at: std::time::Instant::now(),
-                });
+                self.on_model_download_started(provider_id, model_id);
             }
             Event::ModelDownloadProgress {
                 ref provider_id,
@@ -2238,15 +804,7 @@ impl App {
                 percent,
                 ..
             } => {
-                if let Some(ref mut state) = self.model_download_state {
-                    if state.provider_id == *provider_id && state.model_id == *model_id {
-                        state.percent = percent;
-                        // Progress proves the latch is alive: restart the
-                        // staleness clock so slow-but-moving downloads are
-                        // not reaped by the watchdog purely on start time.
-                        state.started_at = std::time::Instant::now();
-                    }
-                }
+                self.on_model_download_progress(provider_id, model_id, percent);
             }
             Event::ModelDownloadFinished {
                 ref provider_id,
@@ -2254,30 +812,7 @@ impl App {
                 ref session_id,
                 ref error,
             } => {
-                self.model_download_state = None;
-                if let Some(err) = error {
-                    let display_name = self
-                        .provider_registry
-                        .get(provider_id)
-                        .map(|p| p.name().to_string())
-                        .unwrap_or_else(|| provider_id.clone());
-                    self.push_log_no_agent(
-                        LogLevel::Error,
-                        format!("Download failed for {}/{}: {}", provider_id, model_id, err),
-                    );
-                    if self.is_current_session(session_id) {
-                        self.status = format!("download failed: {}", model_id);
-                        self.append_assistant_text(&format!(
-                                        "[warn] **Model download failed**\n\nProvider: `{}`\nModel: `{}`\nError: {}",
-                                        display_name, model_id, err
-                                    ));
-                    }
-                } else {
-                    self.push_log_no_agent(
-                        LogLevel::Info,
-                        format!("Download finished for {}/{}", provider_id, model_id),
-                    );
-                }
+                self.on_model_download_finished(provider_id, model_id, session_id, error);
             } // -- Service start errors (local runtime failed to start) --
             Event::ServiceStartError {
                 ref session_id,
@@ -2287,65 +822,26 @@ impl App {
                 ref stderr,
                 ref error,
             } => {
-                let summary = format!(
-                    "[warn] **{} failed to start**\n\nCommand: `{}`\nError: {}\n\nstdout:\n```\n{}\n```\n\nstderr:\n```\n{}\n```",
-                    service, command_path, error, stdout, stderr
+                self.on_service_start_error(
+                    session_id,
+                    service,
+                    command_path,
+                    stdout,
+                    stderr,
+                    error,
                 );
-                self.push_log_no_agent(LogLevel::Error, summary.clone());
-                if self.is_current_session(session_id) {
-                    self.append_assistant_text(&summary);
-                    self.status = format!("{} failed to start", service);
-                }
             }
             Event::McpStatusChanged {
                 ref server_id,
                 ref status,
             } => {
-                // The startup connect loop's completion sentinel: it carries an
-                // empty server id and the status `initialized`. The report and
-                // the tool-registry reconciliation must NOT run per-server here
-                // (each would block the event loop behind the loop's write lock,
-                // which it holds across a multi-second connect). Do them once,
-                // now that every server has settled; `report_mcp_startup` latches
-                // its own one-shot.
-                if server_id.is_empty() && status == "initialized" {
-                    self.register_mcp_tools().await;
-                    self.report_mcp_startup().await;
-                    return;
-                }
-                // Track the live status per server id. The background startup
-                // connect loop publishes this; without it the `/mcp` display
-                // list has no way to learn a fresh server's real state and
-                // shows it as `disabled` (BUG-001).
-                let mapped = super::slash::mcp_status_from_event(status);
-                self.mcp_status_map
-                    .insert(server_id.clone(), mapped.clone());
-                if let Some(server) = self.mcp_servers.iter_mut().find(|s| s.id == *server_id) {
-                    server.status = mapped;
-                }
-                // Re-register the live MCP tools into the registry: startup
-                // `set_mcp_client` runs before any server is Connected, so the
-                // registry would otherwise never see this server's tools and
-                // `/tools` (and the model's own tool surface) would stay empty.
-                // The registry is keyed by name, so a repeat registration is
-                // idempotent.
-                if status == "connected" {
-                    self.register_mcp_tools().await;
-                }
+                self.on_mcp_status_changed(server_id, status).await;
             }
             Event::McpServerEnabledChanged {
                 ref server_id,
                 enabled,
             } => {
-                self.mcp_enabled_map.insert(server_id.clone(), enabled);
-                if let Some(server) = self.mcp_servers.iter_mut().find(|s| s.id == *server_id) {
-                    server.status = if enabled {
-                        super::slash::mcp_status_from_event("connected")
-                    } else {
-                        codemason_agent::mcp::McpStatus::Disabled
-                    };
-                }
-                self.register_mcp_tools().await;
+                self.on_mcp_server_enabled_changed(server_id, enabled).await;
             }
             _ => {}
         }
@@ -2357,84 +853,2049 @@ impl App {
             ref api_base,
         } = event
         {
-            // Fire-and-forget persistence, but a silent failure here would
-            // lose the token on next restart, so log the outcome.
-            if let Err(e) = self.storage.set_provider_auth("copilot", token) {
-                tracing::warn!(error = %e, "failed to persist copilot auth token");
-            }
-            if let Err(e) = self.storage.set_setting("copilot_api_base", api_base) {
-                tracing::warn!(error = %e, "failed to persist copilot api base");
-            }
-            if let Err(e) = self.storage.delete_setting("provider_copilot_disabled") {
-                tracing::warn!(error = %e, "failed to clear copilot disabled flag");
-            }
-            self.push_log_no_agent(
-                LogLevel::Info,
-                format!("Copilot authorised (api: {api_base})"),
-            );
-            self.refresh_provider();
-            let models = self.models_for_provider("copilot");
-            self.provider_setup = Some(ProviderSetupStep::SelectModel {
-                provider_id: "copilot".to_string(),
-                provider_name: "GitHub Copilot".to_string(),
-                models,
-                selected: 0,
-            });
+            self.on_copilot_device_flow_complete(token, api_base);
         }
 
         // -- GitHub device-flow complete ----------------------------------
         if let Event::GithubDeviceFlowComplete { success, ref error } = event {
-            self.provider_setup = None;
-            if success {
-                self.push_log_no_agent(
-                    LogLevel::Info,
-                    "GitHub authentication successful".to_string(),
-                );
-                self.append_assistant_text(
-                    "From: /github login\n[ok] GitHub authentication successful! Token saved to ~/.codemason/github_token.",
-                );
-                self.status = "GitHub authenticated".to_string();
-            } else {
-                let msg = error
-                    .clone()
-                    .unwrap_or_else(|| "GitHub login failed.".to_string());
-                self.push_log_no_agent(LogLevel::Warn, format!("GitHub login failed: {msg}"));
-                self.append_assistant_text(&format!("From: /github login\n[err] {msg}"));
-                self.status = "GitHub login failed".to_string();
-            }
+            self.on_github_device_flow_complete(success, error);
         }
 
         // -- GitLab setup complete ----------------------------------------
         if let Event::GitLabSetupComplete { success, ref error } = event {
-            if success {
-                self.provider_setup = None;
-                self.push_log_no_agent(
-                    LogLevel::Info,
-                    "GitLab configured successfully".to_string(),
+            self.on_gitlab_setup_complete(success, error);
+        }
+    }
+
+    /// Handle [`Event::CopilotDeviceFlowComplete`] after the main dispatch.
+    fn on_copilot_device_flow_complete(&mut self, token: &str, api_base: &str) {
+        // Fire-and-forget persistence, but a silent failure here would
+        // lose the token on next restart, so log the outcome.
+        if let Err(e) = self.storage.set_provider_auth("copilot", token) {
+            tracing::warn!(error = %e, "failed to persist copilot auth token");
+        }
+        if let Err(e) = self.storage.set_setting("copilot_api_base", api_base) {
+            tracing::warn!(error = %e, "failed to persist copilot api base");
+        }
+        if let Err(e) = self.storage.delete_setting("provider_copilot_disabled") {
+            tracing::warn!(error = %e, "failed to clear copilot disabled flag");
+        }
+        self.push_log_no_agent(
+            LogLevel::Info,
+            format!("Copilot authorised (api: {api_base})"),
+        );
+        self.refresh_provider();
+        let models = self.models_for_provider("copilot");
+        self.provider_setup = Some(ProviderSetupStep::SelectModel {
+            provider_id: "copilot".to_string(),
+            provider_name: "GitHub Copilot".to_string(),
+            models,
+            selected: 0,
+        });
+    }
+
+    /// Handle [`Event::GithubDeviceFlowComplete`] after the main dispatch.
+    fn on_github_device_flow_complete(&mut self, success: bool, error: &Option<String>) {
+        self.provider_setup = None;
+        if success {
+            self.push_log_no_agent(
+                LogLevel::Info,
+                "GitHub authentication successful".to_string(),
+            );
+            self.append_assistant_text(
+                    "From: /github login\n[ok] GitHub authentication successful! Token saved to ~/.codemason/github_token.",
+                );
+            self.status = "GitHub authenticated".to_string();
+        } else {
+            let msg = error
+                .clone()
+                .unwrap_or_else(|| "GitHub login failed.".to_string());
+            self.push_log_no_agent(LogLevel::Warn, format!("GitHub login failed: {msg}"));
+            self.append_assistant_text(&format!("From: /github login\n[err] {msg}"));
+            self.status = "GitHub login failed".to_string();
+        }
+    }
+
+    /// Handle [`Event::GitLabSetupComplete`] after the main dispatch.
+    fn on_gitlab_setup_complete(&mut self, success: bool, error: &Option<String>) {
+        if success {
+            self.provider_setup = None;
+            self.push_log_no_agent(LogLevel::Info, "GitLab configured successfully".to_string());
+        } else {
+            // Revert to form with error
+            let (url, tok) = if let Some(ProviderSetupStep::GitLabValidating {
+                ref instance_url,
+                ref token,
+            }) = self.provider_setup
+            {
+                (instance_url.clone(), token.clone())
+            } else {
+                (String::new(), String::new())
+            };
+            self.provider_setup = Some(ProviderSetupStep::GitLabSetup {
+                url_input: url,
+                url_cursor: 0,
+                token_input: tok,
+                token_cursor: 0,
+                active_field: 0,
+                error: error
+                    .clone()
+                    .or_else(|| Some("Validation failed.".to_string())),
+            });
+        }
+    }
+
+    /// Handle [`Event::SessionCreated`] for the focused session.
+    fn on_session_created(&mut self, session_id: &str) {
+        self.session.session_id = Some(session_id.to_string());
+        // Map the primary session's short_sid to the current agent name
+        let short_sid = short_session_id(session_id);
+        self.sid_to_display_name
+            .insert(short_sid, self.session.agent_name.clone());
+        self.push_log_no_agent(
+            LogLevel::Info,
+            format!("session created: {}", short_id(session_id)),
+        );
+        telemetry_counters::increment_sessions_total(1);
+        telemetry_counters::add_sessions_active(1);
+    }
+
+    /// Handle [`Event::CompressionFinished`] for the focused session.
+    fn on_compression_finished(
+        &mut self,
+        original_tokens: usize,
+        compressed_tokens: usize,
+        compression_ratio: f64,
+        did_compress: bool,
+    ) {
+        self.session.compress_in_progress = false;
+        self.session.last_input_tokens = compressed_tokens as u64;
+        self.needs_redraw = true;
+        telemetry_counters::increment_context_compressions(1);
+        if did_compress {
+            let saved = original_tokens.saturating_sub(compressed_tokens);
+            self.status = format!(
+                "compress: saved {} tokens ({:.0}%)",
+                saved,
+                (1.0 - 1.0 / compression_ratio) * 100.0
+            );
+            self.push_log_no_agent(
+                LogLevel::Info,
+                format!(
+                    "Context compression finished: {} -> {} tokens ({:.2}x ratio, saved {})",
+                    original_tokens, compressed_tokens, compression_ratio, saved
+                ),
+            );
+        } else {
+            self.status = format!(
+                "compress: no change ({} tokens, {:.0}% threshold)",
+                original_tokens, 80.0
+            );
+            self.push_log_no_agent(
+                LogLevel::Info,
+                format!(
+                    "Context compression finished: no change ({} tokens)",
+                    original_tokens
+                ),
+            );
+        }
+    }
+
+    /// Handle [`Event::ToolCallStart`] for the focused session.
+    fn on_tool_call_start(&mut self, session_id: &str, call_id: &str, tool: &str) {
+        let is_primary = self.is_current_session(session_id);
+        if is_primary {
+            self.session.stream_in_bytes += (call_id.len() + tool.len()) as u64;
+            telemetry_counters::increment_tool_invocations(1);
+        }
+        // Get the current step count from the event bus (single source of truth)
+        let step = self.event_bus.current_step(session_id) as u32;
+        let short_sid = short_session_id(session_id);
+        // Check if step changed - if so, reset substep counter to 0
+        let last_step = self
+            .last_step_per_session
+            .get(session_id)
+            .copied()
+            .unwrap_or(0);
+        if step != last_step {
+            self.substep_counter_per_session
+                .insert(session_id.to_string(), 0);
+            self.last_step_per_session
+                .insert(session_id.to_string(), step);
+        }
+        // Increment sub-step counter for this session
+        let substep = self
+            .substep_counter_per_session
+            .entry(session_id.to_string())
+            .or_insert(0);
+        *substep += 1;
+        let current_substep = *substep;
+        self.tool_step_map.insert(
+            call_id.to_string(),
+            (short_sid.clone(), step, current_substep),
+        );
+        if is_primary {
+            self.add_tool_call_part(tool, call_id);
+
+            // If args were received before the start event, apply them now.
+            if let Some(args_json) = self.pending_tool_args.remove(call_id) {
+                let _ = self.update_tool_call_input(call_id, &args_json); // INTENTIONAL: returns whether the pending call matched; no error
+            }
+            self.status = format!("running: {}", tool);
+        }
+        // Log the step for the primary session AND for every tracked
+        // sub-agent/teammate session so the Agents/Teams panels' step
+        // count (one per ToolCallStart) is visible in the log.
+        let (agent_tag, agent_prefix, log_session_id) =
+            self.tracked_log_context(session_id, is_primary);
+        self.push_log_for(
+            LogLevel::Tool,
+            format!("{agent_prefix}[{step}.{current_substep}] tool call: {tool}"),
+            agent_tag,
+            log_session_id,
+        );
+        self.needs_redraw = true;
+    }
+
+    /// Handle [`Event::ToolCallEnd`] for the focused session.
+    fn on_tool_call_end(
+        &mut self,
+        session_id: &str,
+        call_id: &str,
+        tool: &str,
+        error: &Option<String>,
+        duration_ms: u64,
+    ) {
+        let is_primary = self.is_current_session(session_id);
+        if is_primary {
+            telemetry_counters::set_tool_duration_last(duration_ms as f64);
+            self.update_tool_call_status(call_id, error.is_none(), error.as_deref(), duration_ms);
+            self.set_status_working("processing");
+        }
+        let step_tag = self
+            .tool_step_map
+            .get(call_id)
+            .map(|(_sid, step, substep)| format!("[{step}.{substep}] "))
+            .unwrap_or_default();
+        let (agent_tag, agent_prefix, log_session_id) =
+            self.tracked_log_context(session_id, is_primary);
+        if let Some(err) = error {
+            self.push_log_for(
+                LogLevel::Error,
+                format!("{agent_prefix}{step_tag}tool {tool} failed: {err} ({duration_ms}ms)"),
+                agent_tag,
+                log_session_id,
+            );
+        } else {
+            let message =
+                format!("{agent_prefix}{step_tag}tool {tool} completed ({duration_ms}ms)");
+            self.push_log_for(LogLevel::Tool, message, agent_tag, log_session_id);
+        }
+        if is_primary {
+            // T-010/FR-013: the tool-call state changed, so refresh the
+            // Context panel snapshot off the UI thread (no-op when the
+            // panel is closed or a refresh is already in flight).
+            self.schedule_context_snapshot_refresh();
+        }
+        self.needs_redraw = true;
+    }
+
+    /// Handle [`Event::ToolCallBatch`] for the focused session.
+    fn on_tool_call_batch(
+        &mut self,
+        session_id: &str,
+        calls: &[codemason_types::event::ToolCallBatchEntry],
+    ) {
+        let is_primary = self.is_current_session(session_id);
+        // Atomic fallback: if per-call ToolCallStart/End events were
+        // dropped by the broadcast bridge during a burst, the batch
+        // still carries the final status/duration for every call.
+        for entry in calls {
+            // If the ToolCallStart event was dropped we never tagged
+            // the call with a step/substep, so the log would show one
+            // fewer "tool call" line than the Agents/Teams panels'
+            // step count (which counts every ToolCallStart). Rebuild
+            // the tag and log the missing line now.
+            if !self.tool_step_map.contains_key(&entry.call_id) {
+                let step = self.event_bus.current_step(session_id) as u32;
+                let short_sid = short_session_id(session_id);
+                let last_step = self
+                    .last_step_per_session
+                    .get(session_id)
+                    .copied()
+                    .unwrap_or(0);
+                if step != last_step {
+                    self.substep_counter_per_session
+                        .insert(session_id.to_string(), 0);
+                    self.last_step_per_session
+                        .insert(session_id.to_string(), step);
+                }
+                let substep = self
+                    .substep_counter_per_session
+                    .entry(session_id.to_string())
+                    .or_insert(0);
+                *substep += 1;
+                let current_substep = *substep;
+                self.tool_step_map.insert(
+                    entry.call_id.clone(),
+                    (short_sid.clone(), step, current_substep),
+                );
+                let (agent_tag, agent_prefix, log_session_id) =
+                    self.tracked_log_context(session_id, is_primary);
+                let message = format!(
+                    "{agent_prefix}[{step}.{current_substep}] tool call: {}",
+                    entry.tool
+                );
+                self.push_log_for(LogLevel::Tool, message, agent_tag, log_session_id);
+            }
+            if is_primary {
+                if !self.find_tool_call_part(&entry.call_id) {
+                    self.add_tool_call_part(&entry.tool, &entry.call_id);
+                }
+                // If the start event was dropped we never consumed the
+                // pending ToolCallArgs, so the newly-created part would
+                // render with a missing input summary. Apply any pending
+                // args now so the header shows the path/command/etc.
+                if let Some(args_json) = self.pending_tool_args.remove(&entry.call_id) {
+                    let _ = self.update_tool_call_input(&entry.call_id, &args_json); // INTENTIONAL: returns whether the pending call matched; no error
+                }
+                // The batch entry now carries the call's raw JSON args, so
+                // apply them as a fallback when the per-call ToolCallArgs
+                // event never arrived (e.g. the broadcast->mpsc bridge task
+                // aborted after a Lagged error racing a permission prompt).
+                // Pending args already applied above take precedence.
+                let _ = self.update_tool_call_input(&entry.call_id, &entry.args); // INTENTIONAL: returns whether the pending call matched; no error
+                self.update_tool_call_status(
+                    &entry.call_id,
+                    entry.success,
+                    entry.error.as_deref(),
+                    entry.duration_ms,
+                );
+            }
+        }
+        if is_primary {
+            // T-010/FR-013: atomic batch finalized multiple tool calls,
+            // so refresh the Context panel snapshot off the UI thread.
+            self.schedule_context_snapshot_refresh();
+        }
+        self.needs_redraw = true;
+    }
+
+    /// Handle [`Event::MessageStart`] for the focused session.
+    fn on_message_start(&mut self, message_id: &str) {
+        self.session.is_processing = true;
+        // Only a turn that autopilot is still driving may clear the
+        // completion latch. `agent_complete` switches autopilot off and
+        // sets the latch from inside the tool phase, but the loop keeps
+        // publishing lifecycle events afterwards, so a `MessageStart`
+        // can arrive *after* the completion (a continuation dispatched by
+        // the same drain's `MessageEnd`, or a queued message). Clearing
+        // the latch there would let `poll_autopilot_continue` dispatch
+        // another turn on the next wake and autopilot would never exit.
+        if self.session.autopilot_enabled {
+            self.session.last_task_completed_at = None;
+        }
+        self.session.agent_halted = false;
+        self.set_status_working("processing");
+        telemetry_counters::increment_messages_user(1);
+        self.push_log_no_agent(
+            LogLevel::Info,
+            format!("response started ({})", short_id(message_id)),
+        );
+    }
+
+    /// Handle [`Event::MessageEnd`] for the focused session.
+    async fn on_message_end(&mut self, session_id: &str, message_id: &str, reason: &FinishReason) {
+        // The "init" message_id is used exclusively by the AGENTS.md
+        // acknowledgment exchange that runs before the main agent loop.
+        // It must NOT reset processing state - the main loop hasn't
+        // started yet.  Only set force_new_message so the real response
+        // starts in a fresh message block.
+        if message_id == "init" {
+            self.session.force_new_message = true;
+            return;
+        }
+        telemetry_counters::add_sessions_active(-1);
+        self.session.is_processing = false;
+        self.session.cancel_flag = None;
+        if *reason == FinishReason::Cancelled {
+            self.session.agent_halted = true;
+            self.status = "halted - /resume to continue".to_string();
+            self.push_log_no_agent(LogLevel::Warn, "Agent halted by user".to_string());
+        } else {
+            self.session.agent_halted = false;
+            self.status = "ready".to_string();
+            self.status_set_at = None;
+        }
+        self.session.force_new_message = true;
+        self.push_log_no_agent(LogLevel::Info, format!("response finished ({reason:?})"));
+        // T-010/FR-013: the conversation changed, so refresh the
+        // Context panel snapshot off the UI thread (no-op when the
+        // panel is closed or a refresh is already in flight).
+        self.schedule_context_snapshot_refresh();
+
+        // Compaction no longer runs through the agent loop
+        // (SessionProcessor::compact_session is a direct runner call),
+        // so no MessageEnd arrives for it. Compaction completion and
+        // queued-send dispatch are handled by poll_compaction_result.
+        self.session.compact_in_progress = false;
+        // Handle pending plan delegation: switch agent and auto-send task
+        if let Some((task, context)) = self.session.pending_plan_task.take() {
+            self.execute_plan_delegation(session_id, task, context);
+        }
+
+        // FR-012: /spec reverse --create <name> chaining - after the LLM
+        // finishes generating the synthetic prompt, invoke
+        // `/spec create <name> <generated-prompt>` using the last
+        // assistant message as the prompt text.
+        if let Some(spec_name) = self.session.pending_reverse_create.take() {
+            let scaffold_folder = self.session.pending_reverse_create_folder.take();
+            if *reason != FinishReason::Cancelled {
+                let prompt = self
+                    .session
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == Role::Assistant)
+                    .map(|m| m.text_content())
+                    .unwrap_or_default();
+                if !prompt.is_empty() {
+                    // FR-027: a `--folder` run already scaffolded the
+                    // project, so its `specs/` root must receive the
+                    // generated spec rather than the invoking
+                    // directory. The folder is quoted so a path with
+                    // whitespace re-parses as one argument.
+                    let cmd = match scaffold_folder {
+                        Some(folder) => {
+                            format!("/spec create {spec_name} --folder \"{folder}\" {prompt}")
+                        }
+                        None => format!("/spec create {spec_name} {prompt}"),
+                    };
+                    self.execute_slash_command(&cmd).await;
+                }
+            }
+        }
+
+        // /spec impl sequential driver: after each agent turn ends,
+        // check the just-run task's status and dispatch the next task
+        // (or finish the run). Skip when the turn was cancelled so the
+        // user can resume manually with `/spec impl`.
+        if self.session.spec_impl_state.is_some() && *reason != FinishReason::Cancelled {
+            self.advance_spec_impl();
+        }
+
+        // Autopilot auto-continue: after agent completes a turn without calling
+        // agent_complete, automatically send a continuation prompt so the agent
+        // keeps working towards its goal.
+        // If TaskCompleted was consumed before us, autopilot_enabled will already
+        // be false and this block is unreachable - this is just a defensive fallback.
+        if self.session.autopilot_enabled
+            && *reason != FinishReason::Cancelled
+            && self.session.last_task_completed_at.is_none()
+        {
+            // Check time limit
+            let time_exceeded = self
+                .session
+                .autopilot_time_limit_secs
+                .and_then(|limit| {
+                    self.session
+                        .autopilot_started_at
+                        .map(|s| s.elapsed().as_secs() >= limit)
+                })
+                .unwrap_or(false);
+            if time_exceeded {
+                self.session.autopilot_enabled = false;
+                self.session.autopilot_started_at = None;
+                self.session.autopilot_pending_continue = None;
+                self.status = "autopilot: time limit reached".to_string();
+                self.append_assistant_text(" **Autopilot stopped** - time limit reached.");
+                self.push_log_no_agent(LogLevel::Warn, "autopilot stopped: time limit".to_string());
+            } else {
+                // Schedule a continuation on the next render tick
+                self.session.autopilot_pending_continue = Some(
+                                "Continue working on the task. When fully done, call agent_complete with a summary.".to_string()
+                            );
+                self.status = " autopilot".to_string();
+            }
+        }
+
+        // Auto-compaction no longer runs through the agent loop, so a
+        // MessageEnd can only be the init/prepare_client-failure echo
+        // of a compaction attempt and must not dispatch the queued
+        // send. poll_compaction_result handles all compaction
+        // completion paths. Consume the flag so the stale value cannot
+        // leak into a later turn-end.
+        self.session.auto_compact_in_progress = false;
+
+        // FR-006/FR-019: after a non-cancelled turn the oldest queued
+        // message becomes the next user turn (FIFO). A cancelled turn
+        // retains the queue (FR-018), so the drain is skipped then; it
+        // is also a no-op while compaction or a run still owns the turn
+        // (FR-016), deferring to the next boundary.
+        //
+        // A queue-control `Next` selection (FR-024) cancels the turn
+        // precisely so the oldest entry can run, so it forces the drain at
+        // the very boundary its own cancel opened - otherwise the deferred
+        // run would never fire on the cancelled path.
+        if *reason != FinishReason::Cancelled || self.session.queue_next_pending {
+            self.advance_input_queue().await;
+        }
+    }
+
+    /// Handle [`Event::PermissionRequested`] for the focused session.
+    fn on_permission_requested(
+        &mut self,
+        session_id: &str,
+        request_id: &str,
+        permission: &str,
+        description: &str,
+        options: &[String],
+    ) {
+        if self.is_current_session(session_id) {
+            // Deduplicate: skip if this request_id is already queued.
+            if self
+                .session
+                .permission_queue
+                .iter()
+                .any(|r| r.id == *request_id)
+            {
+                tracing::warn!(
+                    request_id = %request_id,
+                    "Duplicate PermissionRequested ignored"
                 );
             } else {
-                // Revert to form with error
-                let (url, tok) = if let Some(ProviderSetupStep::GitLabValidating {
-                    ref instance_url,
-                    ref token,
-                }) = self.provider_setup
-                {
-                    (instance_url.clone(), token.clone())
-                } else {
-                    (String::new(), String::new())
+                tracing::info!(
+                    session_id = %session_id,
+                    request_id = %request_id,
+                    permission = %permission,
+                    "TUI received PermissionRequested, showing dialog"
+                );
+                let created_at = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                self.session.permission_queue.push_back(PermissionRequest {
+                    id: request_id.to_string(),
+                    session_id: session_id.to_string(),
+                    permission: permission.to_string(),
+                    patterns: vec![description.to_string()],
+                    metadata: serde_json::json!({
+                        "created_at": created_at,
+                        "timeout_secs": 120u64,
+                        "options": options,
+                    }),
+                    tool_call_id: None,
+                });
+                self.note_permission_front();
+                self.status = "awaiting permission".to_string();
+                self.push_log_no_agent(
+                    LogLevel::Warn,
+                    format!("permission requested: {} - {}", permission, description),
+                );
+            }
+        } else {
+            tracing::warn!(
+                expected_session = %self.session.session_id.as_deref().unwrap_or("none"),
+                received_session = %session_id,
+                permission = %permission,
+                "Ignoring PermissionRequested for different session"
+            );
+        }
+    }
+
+    /// Handle [`Event::QuestionRequested`] for the focused session.
+    fn on_question_requested(
+        &mut self,
+        session_id: &str,
+        request_id: &str,
+        question: &str,
+        options: &[String],
+        default_index: Option<usize>,
+        secret: bool,
+    ) {
+        // Allow questions from any session (including sub-agents) to be displayed
+        // since they require user interaction to proceed.
+        if self
+            .session
+            .question_queue
+            .iter()
+            .any(|r| r.id == *request_id)
+        {
+            tracing::warn!(
+                request_id = %request_id,
+                "Duplicate QuestionRequested ignored"
+            );
+        } else {
+            tracing::info!(
+                session_id = %session_id,
+                request_id = %request_id,
+                "TUI received QuestionRequested, showing dialog"
+            );
+            let expire_at_ms = crate::text_utils::now_unix_ms() + QUESTION_TIMEOUT_SECS * 1000;
+            self.session.question_queue.push_back(QuestionRequest {
+                id: request_id.to_string(),
+                session_id: session_id.to_string(),
+                question: question.to_string(),
+                options: options.to_vec(),
+                default_index,
+                expire_at_ms: Some(expire_at_ms),
+                secret,
+            });
+            // The typed answer and highlight are reset only when this
+            // question becomes the front: one queued behind the
+            // question being answered leaves them alone.
+            self.note_question_front();
+            self.status = "awaiting question".to_string();
+            self.needs_redraw = true;
+            self.push_log_no_agent(LogLevel::Warn, format!("question requested: {}", question));
+        }
+    }
+
+    /// Handle [`Event::PermissionReplied`] for the focused session.
+    fn on_permission_replied(&mut self, request_id: &str, allowed: bool) {
+        // Remove the specific answered request from the queue. A
+        // reply typed in this App already removed its request
+        // (`answer_front_permission`), so its echo removes nothing
+        // and changes nothing else (it never removes the next one).
+        let before = self.session.permission_queue.len();
+        self.session
+            .permission_queue
+            .retain(|r| r.id != *request_id);
+        if self.session.permission_queue.len() != before {
+            // The next request is shown from now on.
+            self.note_permission_front();
+            if self.session.permission_queue.is_empty() {
+                self.set_status_working("processing");
+            }
+        }
+        self.push_log_no_agent(
+            LogLevel::Info,
+            format!("permission {}", if allowed { "granted" } else { "denied" }),
+        );
+    }
+
+    /// Handle [`Event::QuestionAnswered`] for the focused session.
+    fn on_question_answered(&mut self, request_id: &str) {
+        // A question answered in this App already left the queue,
+        // so its echo removes nothing and changes nothing else (it
+        // never clears the answer being typed to the next one).
+        let before = self.session.question_queue.len();
+        self.session.question_queue.retain(|r| r.id != *request_id);
+        if self.session.question_queue.len() != before {
+            self.note_question_front();
+            if self.session.question_queue.is_empty() {
+                self.set_status_working("processing");
+            }
+        }
+    }
+
+    /// Handle [`Event::AgentSwitched`] for the focused session.
+    fn on_agent_switched(&mut self, from: &str, to: &str) {
+        self.session.agent_name = to.to_string();
+        // Update the display name mapping for the current session
+        if let Some(ref sid) = self.session.session_id {
+            let short_sid = short_session_id(sid);
+            self.sid_to_display_name.insert(short_sid, to.to_string());
+        }
+        self.push_log_no_agent(
+            LogLevel::Info,
+            format!("agent switched: {} -> {}", from, to),
+        );
+    }
+
+    /// Handle [`Event::AgentRestoreRequested`] for the focused session.
+    fn on_agent_restore_requested(&mut self, summary: &str) {
+        self.push_log_no_agent(
+            LogLevel::Info,
+            format!("agent restore requested ({} chars)", summary.len()),
+        );
+        // Show plan approval dialog instead of immediately restoring.
+        // The user presses Approve/Reject (Enter/r) to proceed.
+        self.session.plan_approval_pending = Some(PlanApprovalState {
+            plan_text: summary.to_string(),
+            cursor_approve: true,
+        });
+    }
+
+    /// Handle [`Event::TaskCompleted`] for the focused session.
+    fn on_task_completed(&mut self, summary: &str) {
+        // Only the PRIMARY agent's `agent_complete` ends the run: it
+        // clears the autopilot continuation and renders the terminal
+        // summary. The guard above is `is_current_session`, not
+        // `is_current_or_descendant_session`, and that is load-bearing -
+        // `agent_complete` publishes `TaskCompleted` with the CALLING
+        // session's id, and every sub-agent / teammate is instructed to
+        // end each run with `agent_complete`. Matching a descendant here
+        // would let whichever child finished first cancel the primary's
+        // autopilot run. The descendant arm below only logs.
+        self.push_log_no_agent(LogLevel::Info, "agent_complete signalled".to_string());
+        self.session.last_task_completed_at = Some(std::time::Instant::now());
+        // Exit autopilot mode on task completion
+        if self.session.autopilot_enabled {
+            self.session.autopilot_enabled = false;
+            self.session.autopilot_started_at = None;
+            self.session.autopilot_pending_continue = None;
+            self.status = "task complete".to_string();
+            self.push_log_no_agent(
+                LogLevel::Info,
+                "autopilot stopped: task complete".to_string(),
+            );
+        }
+        // Render the summary as markdown so headers, bullet points,
+        // and bold text create visual structure instead of a wall of
+        // plain text.  Normal LLM streaming text bypasses markdown
+        // rendering (it arrives in fragments), but the agent_complete
+        // summary is a complete, self-contained message.
+        //
+        // `hard_break_lines` is required because the pipeline's
+        // html2text step collapses newlines inside a paragraph into
+        // spaces: without it, a plain multi-line summary renders as
+        // one continuous paragraph with its line ends stripped.
+        let rendered = self.render_markdown_unconditionally(&format!(
+            "[ok] **Task Complete**\n\n{}",
+            hard_break_lines(summary)
+        ));
+        self.session.force_new_message = true;
+        self.append_assistant_text(&rendered);
+    }
+
+    /// Handle [`Event::TaskCompleted`] for the focused session.
+    fn on_descendant_task_completed(&mut self, session_id: &str, summary: &str) {
+        // A sub-agent or teammate ended its own run with
+        // `agent_complete`. That is mandatory for every child run, so it
+        // is routine, not a task-level completion: it must NOT stop the
+        // primary's autopilot, clear `last_task_completed_at`, or render
+        // a "Task Complete" banner into the primary's transcript. The
+        // child's own report already reaches the UI through
+        // `SubagentComplete` (which carries the durable output path), so
+        // this arm only records a log line.
+        self.push_log_for(
+            LogLevel::Info,
+            format!("{} completed: {}", short_id(session_id), summary),
+            self.agent_log_tag(session_id),
+            Some(session_id.to_string()),
+        );
+    }
+
+    /// Handle [`Event::AgentNotice`] for the focused session.
+    fn on_agent_notice(&mut self, message: &str) {
+        // Deck stage reports (FR-031) are sentinel-prefixed and carry a
+        // fixed stage list, so they are folded into one in-place
+        // `Research Progress` message rather than appended as per-stage
+        // notice bubbles.
+        if let Some(decoded) = crate::deck_progress::decode_deck_progress_event(message) {
+            self.apply_deck_progress(decoded);
+            return;
+        }
+        // Research progress events are sentinel-prefixed; route them
+        // to the dedicated progress log list instead of the generic
+        // agent-notice chat bubble.
+        if let Some(decoded) = crate::research_progress::decode_progress_event(message) {
+            let level = if decoded.status == crate::research_progress::StepStatus::Error {
+                LogLevel::Warn
+            } else {
+                LogLevel::Info
+            };
+            // Per-URL web capture/failure/exclusion events are
+            // aggregated into counts by `ResearchProgress::apply`;
+            // keep them out of the log panel so it stays a phase
+            // overview rather than a per-source listing.
+            let is_per_url_event = decoded.phase == crate::research_progress::SessionPhase::Web
+                && (decoded.detail.starts_with("captured ")
+                    || decoded.detail.starts_with("fetch failed for ")
+                    || decoded.detail.starts_with("excluded "));
+            if !is_per_url_event {
+                self.push_log_no_agent(
+                    level,
+                    format!(
+                        "research: {} - {}",
+                        decoded.phase.as_str(),
+                        crate::app::helpers::sanitize_for_display(&decoded.detail)
+                    ),
+                );
+            } // Keep the status bar in sync with the running phase.
+            // The `[wait]` prefix marks this as async-in-progress so
+            // [`App::arm_status_expiry`] will not auto-clear it to
+            // "ready" while the background research is still running.
+            // Errors outside the web phase surface as a warning
+            // status instead.
+            if decoded.status == crate::research_progress::StepStatus::Error
+                && decoded.phase != crate::research_progress::SessionPhase::Web
+            {
+                self.status = format!("[warn] research: {}", decoded.detail);
+            } else if decoded.total_sources.is_none() {
+                self.status = format!(
+                    "[wait] research: {} - {} ({}) - running",
+                    decoded.name,
+                    decoded.phase.as_str(),
+                    decoded.status.icon(),
+                );
+            }
+            let progress = if let Some(existing) = self
+                .research_progress
+                .iter_mut()
+                .find(|p| p.name == decoded.name)
+            {
+                existing
+            } else {
+                // First event for this run arrived before the
+                // `/research create` handler seeded the tracker (or
+                // the run was started through a non-TUI path). Create
+                // it on demand so progress is never lost.
+                self.research_progress
+                    .push(crate::research_progress::ResearchProgress::new(
+                        decoded.name.clone(),
+                        decoded.topic.clone(),
+                    ));
+                let Some(last) = self.research_progress.last_mut() else {
+                    // Logically unreachable: the entry was just pushed.
+                    tracing::debug!("research progress list empty immediately after push");
+                    return;
                 };
-                self.provider_setup = Some(ProviderSetupStep::GitLabSetup {
-                    url_input: url,
-                    url_cursor: 0,
-                    token_input: tok,
-                    token_cursor: 0,
-                    active_field: 0,
-                    error: error
-                        .clone()
-                        .or_else(|| Some("Validation failed.".to_string())),
+                last
+            };
+            progress.apply(decoded.phase, decoded.status, decoded.detail.clone());
+            // A run that ends at its finalize step (`/research
+            // cluster`, which carries no source count) has just
+            // completed.
+            let completed_at_finalize = progress.completes_at_finalize
+                && progress.done
+                && decoded.phase == crate::research_progress::SessionPhase::Finalize
+                && decoded.status == crate::research_progress::StepStatus::Done;
+            // A finalize-phase error is the terminal failure report a
+            // `/research` spawn publishes when its run fails, so end
+            // the run rather than leaving it "running".
+            if decoded.phase == crate::research_progress::SessionPhase::Finalize
+                && decoded.status == crate::research_progress::StepStatus::Error
+            {
+                progress.fail();
+                if let Some(deck) = progress.deck.as_mut() {
+                    deck.fail(decoded.detail.clone());
+                }
+            }
+            if let Some(total) = decoded.total_sources {
+                progress.finish(
+                    total,
+                    decoded.pdf_count,
+                    decoded.youtube_count,
+                    decoded.excluded_count,
+                ); // The final progress event marks the run complete.
+                // Drop the `[wait]` in-progress status for a terminal
+                // message and arm the auto-expiry timer so it
+                // transitions to "ready" after the grace period.
+                let mut status = format!("research: {} complete - {total} sources", decoded.name);
+                if decoded.pdf_count > 0 {
+                    status.push_str(&format!(
+                        ", {} PDF{}",
+                        decoded.pdf_count,
+                        if decoded.pdf_count == 1 { "" } else { "s" }
+                    ));
+                }
+                if decoded.youtube_count > 0 {
+                    status.push_str(&format!(
+                        ", {} YouTube video{}",
+                        decoded.youtube_count,
+                        if decoded.youtube_count == 1 { "" } else { "s" }
+                    ));
+                }
+                if decoded.excluded_count > 0 {
+                    status.push_str(&format!(", {} excluded", decoded.excluded_count));
+                }
+                self.status = status;
+                self.arm_status_expiry();
+            } else if completed_at_finalize {
+                // `/research cluster` does not carry a source count;
+                // its final progress event is a finalize/done step.
+                self.status = format!("research: {} extraction complete", decoded.name);
+                self.arm_status_expiry();
+            }
+            let name_for_refresh = decoded.name.clone();
+            self.refresh_research_progress_message(&name_for_refresh);
+            return;
+        }
+        self.push_log_no_agent(LogLevel::Info, format!("agent notice: {}", message));
+        // Agent notices are displayed in the message window only.
+        // They are intentionally not mirrored to the status bar so
+        // multi-line summaries do not overflow or duplicate there.
+        // Each notice gets its own chat bubble: force a new message
+        // before appending so consecutive notices never run onto each
+        // other, and again afterwards so streamed text does not merge
+        // into the notice bubble (the renderer adds a trailing blank
+        // line after every notice for separation).
+        self.session.force_new_message = true;
+        self.append_assistant_text(&format!("{}\n{}", "Agent Notice", message));
+        self.session.force_new_message = true;
+    }
+
+    /// Handle [`Event::AgentError`] for the focused session.
+    async fn on_agent_error(&mut self, error: &str) {
+        self.session.is_processing = false;
+        self.session.cancel_flag = None;
+        self.session.agent_halted = false;
+        if self.session.auto_compact_in_progress {
+            self.session.auto_compact_in_progress = false;
+            self.session.auto_compact_failed = true;
+            self.session.pending_send_after_compact = None;
+            self.push_log_no_agent(
+                LogLevel::Warn,
+                "Auto-compaction failed; send blocked for this turn".to_string(),
+            );
+        }
+        self.session.compact_in_progress = false;
+        self.needs_redraw = true;
+        // Full details go to the log panel only
+        self.push_log_no_agent(LogLevel::Error, format!("agent error: {}", error)); // Clean summary for the status bar and chat panel
+        let summary = summarise_error(error);
+        self.status = format!("error: {}", summary);
+        self.append_assistant_text(&format!("[warn] {}", summary));
+        // FR-007/FR-018: an errored turn must not strand the queue.
+        // Every processing/compaction guard the drain checks has just
+        // been cleared above, so the oldest entry becomes the next user
+        // turn via the shared asynchronous dispatch path; a failed turn
+        // never discards the remaining entries.
+        self.advance_input_queue().await;
+    }
+
+    /// Handle [`Event::TokenUsage`] for the focused session.
+    fn on_token_usage(&mut self, input_tokens: u64, output_tokens: u64) {
+        // An output-only usage event (Anthropic/Bedrock
+        // `message_delta`) carries `input_tokens: 0`; keep the last
+        // real context-usage figure instead of resetting it to zero.
+        if input_tokens > 0 {
+            self.session.last_input_tokens = input_tokens;
+        }
+        self.session.token_usage.0 += input_tokens;
+        self.session.token_usage.1 += output_tokens;
+        telemetry_counters::increment_tokens_input(input_tokens);
+        telemetry_counters::increment_tokens_output(output_tokens);
+        self.push_log_no_agent(
+            LogLevel::Info,
+            format!(
+                "tokens: +{}in +{}out (total {}in {}out)",
+                input_tokens, output_tokens, self.session.token_usage.0, self.session.token_usage.1
+            ),
+        );
+        // T-010/FR-013: the reported input tokens are the actual
+        // context size sent to the model this turn ("Sent to model"
+        // row), so refresh the Context panel snapshot immediately.
+        self.schedule_context_snapshot_refresh();
+        self.needs_redraw = true;
+    }
+
+    /// Handle [`Event::LoopTerminated`] for the focused session.
+    fn on_loop_terminated(
+        &mut self,
+        status: &str,
+        iterations: u64,
+        verification: &Option<String>,
+        reason: &Option<String>,
+    ) {
+        // T-025 (FR-019): the termination renders as a status-aware
+        // banner in the message window - icon + phrase + iteration
+        // count - with verification outcome and failure reason
+        // appended when present. The log panel carries the same
+        // detail on a single line.
+        let mut banner = crate::app::helpers::loop_termination_banner(status, iterations);
+        let mut line = format!(
+            "loop terminated * {status} * {}",
+            crate::app::helpers::plural(iterations, "iteration"),
+        );
+        if let Some(outcome) = verification {
+            banner.push_str(&format!("\nVerification: {outcome}"));
+            line.push_str(&format!(" * verification: {outcome}"));
+        }
+        if let Some(why) = reason {
+            banner.push_str(&format!("\nReason: {why}"));
+            line.push_str(&format!(" * {why}"));
+        }
+        self.session.force_new_message = true;
+        self.append_assistant_text(&banner);
+        self.push_log_no_agent(LogLevel::Info, line);
+        self.needs_redraw = true;
+    }
+
+    /// Handle [`Event::LoopChangeSummary`] for the focused session.
+    fn on_loop_change_summary(
+        &mut self,
+        session_id: &str,
+        status: &str,
+        iterations: u64,
+        files_modified: u64,
+        files_created: u64,
+        files_deleted: u64,
+        diffstat: &str,
+        files: &[String],
+    ) {
+        // T-012 (FR-019): the change summary is surfaced as a log
+        // line (diffstat + counts + affected files). T-025 renders
+        // the same summary as a diffstat line in the message window
+        // and arms the interactive rollback offer.
+        let mut line = format!(
+            "loop changes * {status} * {} * \
+                     {modified} modified, {created} created, {deleted} deleted * \
+                     {diffstat}",
+            crate::app::helpers::plural(iterations, "iteration"),
+            modified = files_modified,
+            created = files_created,
+            deleted = files_deleted,
+        );
+        line.push_str(&crate::app::helpers::files_preview(files, 8));
+        // Diffstat line in the message window: counts + diffstat +
+        // affected paths, mirroring the log line.
+        let mut summary_line = format!(
+            "* Loop changes ({status}, {}): \
+                     {modified} modified, {created} created, {deleted} deleted - {diffstat}",
+            crate::app::helpers::plural(iterations, "iteration"),
+            modified = files_modified,
+            created = files_created,
+            deleted = files_deleted,
+        );
+        summary_line.push_str(&crate::app::helpers::files_preview(files, 8));
+        summary_line
+            .push_str("\nRoll back to the pre-loop snapshot? Enter: roll back, Esc: keep changes");
+        self.session.force_new_message = true;
+        self.append_assistant_text(&summary_line);
+        self.push_log_no_agent(LogLevel::Info, line);
+        // T-013 (FR-020): offer a one-key rollback to the pre-loop
+        // snapshot. Enter accepts (restores the snapshot), Esc
+        // declines (changes are kept). The offer arms only when the
+        // loop made workspace changes; a no-write loop never
+        // publishes a change summary in the first place.
+        self.session.pending_rollback = Some(RollbackOfferState {
+            session_id: session_id.to_string(),
+            status: status.to_string(),
+            iterations,
+            diffstat: diffstat.to_string(),
+            files: files.to_vec(),
+        });
+        self.status =
+            "loop ended - Enter: roll back to pre-loop snapshot, Esc: keep changes".to_string();
+        self.needs_redraw = true;
+    }
+
+    /// Handle [`Event::RunCostSummary`] for the focused session.
+    fn on_run_cost_summary(
+        &mut self,
+        model_id: &str,
+        input_tokens: u64,
+        output_tokens: u64,
+        total_cost_usd: f64,
+        duration_ms: u64,
+    ) {
+        telemetry_counters::set_cost_session_last(total_cost_usd);
+        let duration_secs = (duration_ms as f64) / 1000.0;
+        // Compact one-line banner shown transiently (dismissed on keypress).
+        let banner = format!(
+            "* run complete * {in}+{out} tokens * ${cost:.4} * {dur:.1}s",
+            in = input_tokens,
+            out = output_tokens,
+            cost = total_cost_usd,
+            dur = duration_secs,
+        );
+        self.session.run_cost_banner = Some(banner);
+        self.session.run_cost_banner_at = Some(std::time::Instant::now());
+        self.needs_redraw = true;
+        // Full details always go to the log panel (model + ms precision).
+        self.push_log_no_agent(
+                    LogLevel::Info,
+                    format!(
+                        "* run complete * {in}in / {out}out tokens * model {model} * ${cost:.6} * {ms}ms ({dur:.2}s)",
+                        in = input_tokens,
+                        out = output_tokens,
+                        model = model_id,
+                        cost = total_cost_usd,
+                        ms = duration_ms,
+                        dur = duration_secs,
+                    ),
+                );
+    }
+
+    /// Handle [`Event::HookWarning`] for the focused session.
+    fn on_hook_warning(&mut self, hook_command: &str, tool: &str, stderr: &str) {
+        // Show a short transient toast in the status bar.  We deliberately
+        // omit the "[warn]" prefix so that `arm_status_expiry()` will
+        // auto-clear the toast after the standard grace period.
+        let short_reason = codemason_types::strutil::truncate_bytes(stderr, 80);
+        self.status = format!("hook warning: {} - {}", tool, short_reason);
+        self.arm_status_expiry();
+        self.push_log_no_agent(
+            LogLevel::Warn,
+            format!("hook warning on {} ({}): {}", tool, hook_command, stderr),
+        );
+    }
+
+    /// Handle [`Event::ToolResultFlagged`] for the focused session.
+    fn on_tool_result_flagged(&mut self, tool: &str, hook_command: &str, reason: &str) {
+        self.status = format!("[warn] {} flagged", tool);
+        self.push_log_no_agent(
+            LogLevel::Error,
+            format!(
+                "[flag] tool {} flagged by {}: {}",
+                tool, hook_command, reason
+            ),
+        );
+    }
+
+    /// Handle [`Event::SecurityVerdict`] for the focused session.
+    fn on_security_verdict(&mut self, tool: &str, verdict: &str, rationale: &str) {
+        // FR-006 / FR-017: surface the LLM security analyzer's verdict
+        // and rationale so the user sees *why* a proposed action was
+        // allowed, denied, or escalated to a prompt.
+        self.session.security_verdicts = self.session.security_verdicts.saturating_add(1);
+        let level = if verdict == "allow" {
+            LogLevel::Info
+        } else {
+            LogLevel::Warn
+        };
+        self.status = format!("security: {verdict} {tool}");
+        self.push_log_no_agent(
+            level,
+            format!("security analyzer: {verdict} {tool} - {rationale}"),
+        );
+    }
+
+    /// Handle [`Event::ModelResponse`] for the focused session.
+    fn on_model_response(
+        &mut self,
+        text: &str,
+        elapsed_ms: u64,
+        input_tokens: u64,
+        output_tokens: u64,
+    ) {
+        telemetry_counters::set_llm_duration_last(elapsed_ms as f64);
+        if let Some(model_ref) = self.active_model_ref_string() {
+            self.session.llm_request_stats.push(LlmRequestStat {
+                model_ref,
+                elapsed_ms,
+                input_tokens,
+                output_tokens,
+            });
+            // R-22: Cap the stats vec to a rolling window so it does
+            // not grow without bound over a long session.
+            const MAX_LLM_REQUEST_STATS: usize = 1000;
+            if self.session.llm_request_stats.len() > MAX_LLM_REQUEST_STATS {
+                let drop_count = self.session.llm_request_stats.len() - MAX_LLM_REQUEST_STATS;
+                self.session.llm_request_stats.drain(0..drop_count);
+            }
+        }
+        self.push_log_no_agent(
+            LogLevel::Info,
+            format!("model response ({elapsed_ms}ms): {text}"),
+        );
+    }
+
+    /// Handle [`Event::ToolCallArgs`] for the focused session.
+    fn on_tool_call_args(&mut self, call_id: &str, tool: &str, args: &str) {
+        self.session.stream_in_bytes += (call_id.len() + tool.len() + args.len()) as u64;
+        // Try to apply args to an existing ToolCall part; if not found,
+        // store them pending until the ToolCallStart event arrives.
+        let applied = self.update_tool_call_input(call_id, args);
+        if !applied {
+            self.pending_tool_args
+                .insert(call_id.to_string(), args.to_string());
+        }
+        let step_tag = self
+            .tool_step_map
+            .get(call_id)
+            .map(|(_sid, step, substep)| format!("[{step}.{substep}] "))
+            .unwrap_or_default();
+        // Pretty-print JSON args as a single truncated log entry
+        // (H-009) rather than one entry per line, which both avoided
+        // dozens of `format!` allocations for a large payload and
+        // (previously) bumped the global log version per line. Compact
+        // serialization is used because newlines render poorly in the
+        // single-line log panel and only the first 200 chars survive
+        // the preview cap anyway.
+        //
+        // FR-007: the preview decodes through the shared helper, so a
+        // double-encoded or whitespace payload is shown the way the
+        // tool will receive it instead of the TUI inventing a second
+        // JSON rule.
+        let pretty = codemason_types::tool_args::decode_tool_arguments(args)
+            .ok()
+            .and_then(|v| serde_json::to_string(&v).ok())
+            .unwrap_or_else(|| args.to_string());
+        // Cap at ~200 chars so a single tool call cannot flood the log.
+        let preview = crate::app::helpers::truncate_chars(pretty.trim(), 200);
+        self.push_log_no_agent(
+            LogLevel::Tool,
+            format!("{}-> {}({})", step_tag, tool, preview),
+        );
+        self.needs_redraw = true;
+    }
+
+    /// Handle [`Event::ToolResult`] for the focused session.
+    fn on_tool_result(
+        &mut self,
+        call_id: &str,
+        tool: &str,
+        content: &str,
+        content_line_count: usize,
+        metadata: &Option<serde_json::Value>,
+        success: bool,
+    ) {
+        self.update_tool_call_output(call_id, content_line_count, metadata.as_ref());
+        if tool == "team_create"
+            && success
+            && let Some(meta) = metadata
+            && let Some(team_name) = meta.get("team_name").and_then(|v| v.as_str())
+        {
+            let working_dir = self.cwd_path.clone();
+            if let Ok(store) = TeamStore::load_by_name(team_name, &working_dir) {
+                let name = store.config.name.clone();
+                let team_dir = store.dir.clone();
+                self.session.team_members = store.config.members.clone();
+                self.session.active_team = Some(store.config);
+                self.show_teams = true;
+                // Reconcile is needed here: team was created via LLM tool path,
+                // so the TeamManager didn't exist during blueprint seeding and
+                // members may have been queued in Spawning state.
+                self.ensure_team_manager_for_team_inner(&name, Some(team_dir), true);
+            }
+        }
+        let step_tag = self
+            .tool_step_map
+            .get(call_id)
+            .map(|(_sid, step, substep)| format!("[{step}.{substep}] "))
+            .unwrap_or_default();
+        let icon = if success { "[ok]" } else { "[x]" };
+        let display_content = truncate_str(content, 2516);
+        let log_line = if display_content.is_empty() {
+            format!("{}<- {} {}", step_tag, tool, icon)
+        } else {
+            format!("{}<- {} {} {}", step_tag, tool, icon, display_content)
+        };
+        self.push_log_no_agent(LogLevel::Tool, log_line);
+        // Mark the Tasks side-panel cache stale when task data
+        // mutates, so the next panel render reflects the change.
+        // spec_task_update mirrors its change into the session
+        // task tracker, so it must invalidate the cache too.
+        if matches!(tool, "TaskCreate" | "TaskUpdate" | "spec_task_update") {
+            self.session.tasks_cache_dirty = true;
+        }
+        // T-010/FR-013: the tool result changed the conversation
+        // history/tool-call payload, so refresh the Context panel.
+        self.schedule_context_snapshot_refresh();
+        self.needs_redraw = true;
+    }
+
+    /// Handle [`Event::SubagentStart`] for the focused session.
+    fn on_subagent_start(
+        &mut self,
+        session_id: &str,
+        task_id: &str,
+        child_session_id: &str,
+        agent: &str,
+        task: &str,
+        background: bool,
+        detached: bool,
+    ) {
+        // Map the child session's short_sid to the task id for display.
+        // The task id already encodes the agent type plus a unique suffix
+        // (e.g. "explore-a1b2c3d4") so tools and panels can distinguish
+        // multiple subagents of the same type.
+        let short_sid = short_session_id(child_session_id);
+        self.sid_to_display_name
+            .insert(short_sid, task_id.to_string());
+
+        // Add to active_tasks so the agent panel shows it immediately
+        // (FR-047); a replayed spawn refreshes the painted row instead
+        // of appending a second one (FR-072).
+        let appended = self.note_subagent_started(
+            session_id,
+            task_id,
+            child_session_id,
+            agent,
+            task,
+            background,
+            detached,
+        );
+        if appended {
+            telemetry_counters::increment_subagent_spawns(1);
+            telemetry_counters::add_agents_active(1);
+            // FR-020: the log line names the same three contracts the
+            // painted type column derives from the registry entry.
+            let (icon, kind) = if detached {
+                ("[dt]", "Detached")
+            } else if background {
+                ("[bg]", "Background")
+            } else {
+                ("[fg]", "Foreground")
+            };
+            self.push_log_for(
+                LogLevel::Info,
+                format!("{} {} task started: {} ({})", icon, kind, task_id, agent),
+                None,
+                Some(child_session_id.to_string()),
+            );
+        }
+    }
+
+    /// Handle [`Event::SubagentComplete`] for the focused session.
+    fn on_subagent_complete(
+        &mut self,
+        task_id: &str,
+        child_session_id: &str,
+        summary: &str,
+        finish_reason: &str,
+        success: bool,
+        status: &str,
+        output_file: &Option<std::path::PathBuf>,
+    ) {
+        // Record the report status derived from the finish reason and
+        // drop the row (FR-048). Both the painted status and the log
+        // marker come from that one derived value, so the panel can
+        // never disagree with the row written by the task registry
+        // (`list_agents` / `wait_agents`).
+        // The event carries the registry's terminal status and the
+        // durable `output_file`: the registry entry itself may already
+        // have been reaped by the time this event is handled.
+        let recorded = self.note_subagent_completed(
+            task_id,
+            finish_reason,
+            success,
+            status,
+            output_file.as_deref(),
+        );
+        self.close_agents_window_when_empty();
+        let report_status = recorded.unwrap_or_else(|| {
+            codemason_agent::task::ReportStatus::from_finish_reason_label(finish_reason)
+        });
+        if recorded.is_some() {
+            telemetry_counters::add_agents_active(-1);
+        }
+        telemetry_counters::increment_agents_completed(1);
+        let (icon, verb) = if success {
+            ("[ok]", "completed")
+        } else {
+            ("[err]", "failed")
+        };
+        let suffix = match report_status {
+            codemason_agent::task::ReportStatus::Continued => {
+                " (truncated; continuation retry recovered the tail)"
+            }
+            codemason_agent::task::ReportStatus::Truncated => {
+                " (TRUNCATED by provider; report is incomplete)"
+            }
+            codemason_agent::task::ReportStatus::Complete => "",
+        };
+        self.push_log_for(
+            LogLevel::Info,
+            format!(
+                "{} Task {}{} ({}): {}",
+                icon,
+                verb,
+                suffix,
+                short_id(task_id),
+                summary
+            ),
+            None,
+            Some(child_session_id.to_string()),
+        );
+    }
+
+    /// Handle [`Event::SubagentCancelled`] for the focused session.
+    fn on_subagent_cancelled(&mut self, task_id: &str) {
+        // Remove the row (FR-049). The cancel log line is attributed to
+        // the cancelled agent's own output view when the row was still
+        // tracked; a cancel for an untracked task is log-only.
+        match self.note_subagent_cancelled(task_id) {
+            Some(child_session_id) => {
+                telemetry_counters::add_agents_active(-1);
+                self.push_log_for(
+                    LogLevel::Info,
+                    format!("[cancel] Task cancelled ({})", short_id(task_id)),
+                    None,
+                    Some(child_session_id),
+                );
+            }
+            None => {
+                self.push_log_no_agent(
+                    LogLevel::Info,
+                    format!("[cancel] Task cancelled ({})", short_id(task_id)),
+                );
+            }
+        }
+        // The list may have just emptied: drop the Agents window with
+        // it (FR-063).
+        self.close_agents_window_when_empty();
+    }
+
+    /// Handle [`Event::SubagentKilled`] for the focused session.
+    fn on_subagent_killed(&mut self, task_id: &str, child_session_id: &str, force: bool) {
+        if self.note_subagent_killed(task_id, force) {
+            telemetry_counters::add_agents_active(-1);
+        }
+        let label = if force { "Force-killed" } else { "Terminating" };
+        self.push_log_for(
+            LogLevel::Info,
+            format!("[kill] {} task ({})", label, short_id(task_id)),
+            None,
+            Some(child_session_id.to_string()),
+        );
+        // The list may have just emptied: drop the Agents window with
+        // it (FR-063).
+        self.close_agents_window_when_empty();
+    }
+
+    /// Handle [`Event::BackgroundTaskSpawned`] for the focused session.
+    fn on_background_task_spawned(&mut self, session_id: &str, task_id: &str, command: &str) {
+        self.bg_tasks.push(BgTaskView {
+            id: task_id.to_string(),
+            session_id: session_id.to_string(),
+            command: command.to_string(),
+            status: "running".to_string(),
+            created_at: chrono::Utc::now(),
+            completed_at: None,
+        });
+        self.push_log_no_agent(
+            LogLevel::Info,
+            format!(
+                "[bg]  Background task started: {} ({})",
+                short_id(task_id),
+                command
+            ),
+        );
+    }
+
+    /// Handle [`Event::BackgroundTaskCompleted`] for the focused session.
+    fn on_background_task_completed(&mut self, task_id: &str, status: &str) {
+        if let Some(task) = self.bg_tasks.iter_mut().find(|t| t.id == *task_id) {
+            task.status = status.to_string();
+            task.completed_at = Some(chrono::Utc::now());
+        }
+        let icon = if status == "completed" {
+            "[ok]"
+        } else {
+            "[err]"
+        };
+        self.push_log_no_agent(
+            LogLevel::Info,
+            format!(
+                "{} Background task completed ({}): {}",
+                icon,
+                short_id(task_id),
+                status
+            ),
+        );
+        // Remove the background task from the Agents panel once it
+        // reaches a terminal state.
+        self.bg_tasks.retain(|t| t.id != *task_id);
+        // The list may have just emptied: drop the Agents window with
+        // it (FR-063).
+        self.close_agents_window_when_empty();
+    }
+
+    /// Handle [`Event::TeammateSpawned`] for the focused session.
+    fn on_teammate_spawned(&mut self, team_name: &str, teammate_name: &str, agent_id: &str) {
+        telemetry_counters::set_team_members(self.session.team_members.len() as i64 + 1);
+        // Add new member to team_members if not already present.
+        if !self
+            .session
+            .team_members
+            .iter()
+            .any(|m| m.agent_id == *agent_id)
+        {
+            let member = TeamMember::new(teammate_name, agent_id, "teammate");
+            self.session.team_members.push(member);
+            self.session
+                .team_message_counts
+                .entry(agent_id.to_string())
+                .or_insert((0, 0));
+        }
+        // Always refresh the stored values (session id, status, current task)
+        // from disk so races between UI hydration and spawn events don't
+        // leave the UI showing an outdated state.
+        let mut known_team_dir: Option<std::path::PathBuf> = None;
+        let teammate_session_id = if let Some(m) = self
+            .session
+            .team_members
+            .iter_mut()
+            .find(|m| m.agent_id == *agent_id)
+        {
+            let working_dir = self.cwd_path.clone();
+            if let Ok(store) = TeamStore::load_by_name(team_name, &working_dir) {
+                known_team_dir = Some(store.dir.clone());
+                // FR-050: the spawned teammate implies its team is the
+                // active one, even when the `team_create` tool result
+                // never reached this session (e.g. a server-driven
+                // run that skipped the lead's own tool path). Without
+                // this the strip can never become visible because its
+                // visibility rule requires an active team.
+                if self.session.active_team.is_none() {
+                    self.session.active_team = Some(store.config.clone());
+                }
+                if let Some(stored) = store
+                    .config
+                    .members
+                    .iter()
+                    .find(|x| x.agent_id == *agent_id)
+                {
+                    m.session_id = stored.session_id.clone();
+                    m.status = stored.status.clone();
+                    m.current_task_id = stored.current_task_id.clone();
+                    // Map this teammate's session short_sid -> a unique display
+                    // label (name + agent id) so tool step tags and panels can
+                    // distinguish teammates with the same name.
+                    if let Some(ref sid) = stored.session_id {
+                        let short_sid = short_session_id(sid);
+                        let display_name = format!("{}-{}", teammate_name, agent_id);
+                        self.sid_to_display_name.insert(short_sid, display_name);
+                    }
+                }
+            }
+            m.session_id.clone()
+        } else {
+            None
+        };
+        // FR-051: bind the runtime tracker (watchdog, suspend/resume
+        // dispatches, `record_progress`) when this session never
+        // created a `TeamManager`, so the progress recording in the
+        // status handlers below is not a silent no-op for the whole
+        // run. `reconcile = false`: the spawning owner manages its own
+        // members; this only attaches observation. Observation never
+        // displaces a live runtime bound to another team (events from
+        // two teams would otherwise flip the binding back and forth).
+        let bound_elsewhere = self
+            .session_processor
+            .team_manager
+            .get()
+            .is_some_and(|bound| bound.team_name != *team_name)
+            && self.session_processor.team_manager.stale().is_none();
+        if !bound_elsewhere {
+            self.ensure_team_manager_for_team_inner(team_name, known_team_dir, false);
+        }
+        self.show_teams = true;
+        self.push_log_for(
+            LogLevel::Info,
+            format!("[team] [{team_name}] Spawned teammate '{teammate_name}' ({agent_id})"),
+            None,
+            teammate_session_id,
+        );
+    }
+
+    /// Handle [`Event::TeammateMessage`] for the focused session.
+    fn on_teammate_message(
+        &mut self,
+        team_name: &str,
+        from: &str,
+        to: &str,
+        message_type: &str,
+        preview: &str,
+    ) {
+        if from != "lead" {
+            let counts = self
+                .session
+                .team_message_counts
+                .entry(from.to_string())
+                .or_insert((0, 0));
+            counts.0 = counts.0.saturating_add(1);
+        }
+        if to != "lead" {
+            let counts = self
+                .session
+                .team_message_counts
+                .entry(to.to_string())
+                .or_insert((0, 0));
+            counts.1 = counts.1.saturating_add(1);
+        }
+        self.push_log_for(
+            LogLevel::Info,
+            format!("[msg] [{team_name}] {from} -> {to} ({message_type}): {preview}"),
+            None,
+            self.team_member_session_id_by_agent_id(from),
+        );
+    }
+
+    /// Handle [`Event::TeammateP2PMessage`] for the focused session.
+    fn on_teammate_p2p_message(
+        &mut self,
+        team_name: &str,
+        from: &str,
+        to: &str,
+        message_type: &str,
+        preview: &str,
+    ) {
+        // Same counter rule as TeammateMessage (FR-052): increment the
+        // sender's sent count and the recipient's received count,
+        // ignoring a sender or recipient named `lead` so the lead's
+        // own columns never move.
+        if from != "lead" {
+            let counts = self
+                .session
+                .team_message_counts
+                .entry(from.to_string())
+                .or_insert((0, 0));
+            counts.0 = counts.0.saturating_add(1);
+        }
+        if to != "lead" {
+            let counts = self
+                .session
+                .team_message_counts
+                .entry(to.to_string())
+                .or_insert((0, 0));
+            counts.1 = counts.1.saturating_add(1);
+        }
+        self.push_log_for(
+            LogLevel::Info,
+            format!("[shuffle] [{team_name}] P2P {from} -> {to} ({message_type}): {preview}"),
+            None,
+            self.team_member_session_id_by_agent_id(from),
+        );
+    }
+
+    /// Handle [`Event::TeammateIdle`] for the focused session.
+    fn on_teammate_idle(&mut self, team_name: &str, agent_id: &str) {
+        if let Some(m) = self
+            .session
+            .team_members
+            .iter_mut()
+            .find(|m| m.agent_id == *agent_id)
+        {
+            m.status = MemberStatus::Idle;
+        }
+        // M6-T1: record progress so the watchdog does not flag this
+        // teammate as hung.
+        if let Some(tm) = self.session_processor.team_manager.get() {
+            tm.record_progress(agent_id);
+        }
+        self.push_log_for(
+            LogLevel::Info,
+            format!("[sleep] [{team_name}] Teammate {agent_id} is idle"),
+            None,
+            self.team_member_session_id_by_agent_id(agent_id),
+        );
+    }
+
+    /// Handle [`Event::TeammateFailed`] for the focused session.
+    fn on_teammate_failed(&mut self, team_name: &str, agent_id: &str, error: &str) {
+        if let Some(m) = self
+            .session
+            .team_members
+            .iter_mut()
+            .find(|m| m.agent_id == *agent_id)
+        {
+            m.status = MemberStatus::Failed;
+            m.last_spawn_error = Some(error.to_string());
+        }
+        // M6-T1: record progress so the watchdog stops tracking
+        // this agent.
+        if let Some(tm) = self.session_processor.team_manager.get() {
+            tm.record_progress(agent_id);
+        }
+        // Truncate on a char boundary so the appended ellipsis cannot
+        // split a multi-byte UTF-8 sequence.
+        let short_err = truncate_str(error, ERROR_PREVIEW_CHARS);
+        self.push_log_for(
+            LogLevel::Error,
+            format!("[err] [{team_name}] Teammate {agent_id} failed: {short_err}"),
+            None,
+            self.team_member_session_id_by_agent_id(agent_id),
+        );
+    }
+
+    /// Handle [`Event::TeammateStopped`] for the focused session.
+    fn on_teammate_stopped(&mut self, team_name: &str, agent_id: &str, cause: &str) {
+        // FR-017: the stop is published by the runtime's status writer,
+        // so the row follows a shutdown acked by the teammate, one
+        // forced by the lead, and a team cleanup.
+        if let Some(m) = self
+            .session
+            .team_members
+            .iter_mut()
+            .find(|m| m.agent_id == *agent_id)
+        {
+            m.status = MemberStatus::Stopped;
+            m.current_task_id = None;
+        }
+        // M6-T1: record progress so the watchdog stops tracking this
+        // agent (a stopped member has no session left to fail).
+        if let Some(tm) = self.session_processor.team_manager.get() {
+            tm.record_progress(agent_id);
+        }
+        self.push_log_for(
+            LogLevel::Info,
+            format!("[stop] [{team_name}] Teammate {agent_id} stopped ({cause})"),
+            None,
+            self.team_member_session_id_by_agent_id(agent_id),
+        );
+    }
+
+    /// Handle [`Event::TeammateSuspended`] for the focused session.
+    fn on_teammate_suspended(&mut self, team_name: &str, agent_id: &str) {
+        // FR-040 plumbing: the `[stop]` click (or `/team suspend`)
+        // suspends the teammate on disk and publishes this event; the
+        // row must follow immediately instead of waiting for the next
+        // render-time store hydration.
+        if let Some(m) = self
+            .session
+            .team_members
+            .iter_mut()
+            .find(|m| m.agent_id == *agent_id)
+        {
+            m.status = MemberStatus::Suspended;
+        }
+        // M6-T1: record progress so the watchdog does not flag this
+        // teammate as hung.
+        if let Some(tm) = self.session_processor.team_manager.get() {
+            tm.record_progress(agent_id);
+        }
+        self.push_log_for(
+            LogLevel::Info,
+            format!("[pause] [{team_name}] Teammate {agent_id} suspended"),
+            None,
+            self.team_member_session_id_by_agent_id(agent_id),
+        );
+    }
+
+    /// Handle [`Event::TeammateResumed`] for the focused session.
+    fn on_teammate_resumed(&mut self, team_name: &str, agent_id: &str) {
+        // The resume direction of the same control restores the row;
+        // the runtime marks the member idle again on disk.
+        if let Some(m) = self
+            .session
+            .team_members
+            .iter_mut()
+            .find(|m| m.agent_id == *agent_id)
+        {
+            m.status = MemberStatus::Idle;
+        }
+        // M6-T1: record progress so the watchdog does not flag this
+        // teammate as hung.
+        if let Some(tm) = self.session_processor.team_manager.get() {
+            tm.record_progress(agent_id);
+        }
+        self.push_log_for(
+            LogLevel::Info,
+            format!("[play] [{team_name}] Teammate {agent_id} resumed (idle)"),
+            None,
+            self.team_member_session_id_by_agent_id(agent_id),
+        );
+    }
+
+    /// Handle [`Event::TeamTaskClaimed`] for the focused session.
+    fn on_team_task_claimed(&mut self, team_name: &str, agent_id: &str, task_id: &str) {
+        if let Some(m) = self
+            .session
+            .team_members
+            .iter_mut()
+            .find(|m| m.agent_id == *agent_id)
+        {
+            m.status = MemberStatus::Working;
+            m.current_task_id = Some(task_id.to_string());
+        }
+        // M6-T1: record progress.
+        if let Some(tm) = self.session_processor.team_manager.get() {
+            tm.record_progress(agent_id);
+        }
+        self.push_log_for(
+            LogLevel::Info,
+            format!("[notice] [{team_name}] {agent_id} claimed task {task_id}"),
+            None,
+            self.team_member_session_id_by_agent_id(agent_id),
+        );
+    }
+
+    /// Handle [`Event::TeamTaskCompleted`] for the focused session.
+    fn on_team_task_completed(&mut self, team_name: &str, agent_id: &str, task_id: &str) {
+        if let Some(m) = self
+            .session
+            .team_members
+            .iter_mut()
+            .find(|m| m.agent_id == *agent_id)
+        {
+            m.current_task_id = None;
+        }
+        // M6-T1: record progress.
+        if let Some(tm) = self.session_processor.team_manager.get() {
+            tm.record_progress(agent_id);
+        }
+        self.push_log_for(
+            LogLevel::Info,
+            format!("[ok] [{team_name}] {agent_id} completed task {task_id}"),
+            None,
+            self.team_member_session_id_by_agent_id(agent_id),
+        );
+    }
+
+    /// Handle [`Event::TeamTaskCompletionRejected`] for the focused session.
+    fn on_team_task_completion_rejected(
+        &mut self,
+        team_name: &str,
+        agent_id: &str,
+        task_id: &str,
+        owner: &str,
+        reason: &str,
+        message: &str,
+    ) {
+        self.push_log_for(
+            LogLevel::Warn,
+            format!(
+                "[rej] [{team_name}] {agent_id} could not complete task {task_id} \
+                         (owner: {owner}, {reason}): {message}"
+            ),
+            None,
+            self.team_member_session_id_by_agent_id(agent_id),
+        );
+    }
+
+    /// Handle [`Event::TeamCleanedUp`] for the focused session.
+    async fn on_team_cleaned_up(&mut self, team_name: &str) {
+        // The `team_cleanup` tool has already removed the directory;
+        // stop a finalising swarm's job so it runs no further hooks
+        // for the removed team (best effort: it may have raced the
+        // removal already).
+        self.stop_swarm_autocomplete(team_name).await;
+        self.session.active_team = None;
+        self.session.team_members.clear();
+        self.session.team_message_counts.clear();
+        self.show_teams = false;
+        self.session.focused_teammate = None;
+        // FR-053: cleanup hides the Teams popup too, so a removed team
+        // cannot keep a window open showing a lead row with no team.
+        self.show_teams_window = false;
+        if self
+            .session
+            .swarm_state
+            .as_ref()
+            .is_some_and(|s| s.team_name == team_name)
+        {
+            self.session.swarm_state = None;
+        }
+        self.push_log_no_agent(
+            LogLevel::Info,
+            format!("[clr] Team '{team_name}' cleaned up"),
+        );
+    }
+
+    /// Handle [`Event::ProviderLoadingFinished`] for the focused session.
+    fn on_provider_loading_finished(
+        &mut self,
+        provider_id: &str,
+        provider_name: &str,
+        models: &[serde_json::Value],
+        error: &Option<String>,
+    ) {
+        self.model_loading_state = None;
+        let parsed_models: Vec<ModelInfo> = models
+            .iter()
+            .filter_map(|v| serde_json::from_value(v.clone()).ok())
+            .collect();
+
+        // Only persist successful non-empty discovery results; an empty
+        // result from a failed discovery should not wipe a previously
+        // useful cache or prevent fallback to static defaults.
+        if !parsed_models.is_empty() {
+            self.cache_discovered_models(provider_id, &parsed_models);
+        }
+
+        if let Some(err) = error {
+            self.push_log_no_agent(
+                LogLevel::Error,
+                format!("{} model discovery failed: {}", provider_name, err),
+            );
+            self.status = format!("{}: discovery failed", provider_name);
+        } else {
+            self.push_log_no_agent(
+                LogLevel::Info,
+                format!(
+                    "{} model discovery finished ({} models)",
+                    provider_name,
+                    parsed_models.len()
+                ),
+            );
+        }
+
+        // Advance the provider-setup dialog if it is waiting on this provider.
+        if let Some(ProviderSetupStep::LoadingModels {
+            provider_id: ref pid,
+            ..
+        }) = self.provider_setup
+        {
+            if pid == provider_id {
+                let entries = if parsed_models.is_empty() {
+                    // Fall back to static defaults so the user still sees
+                    // models even when dynamic discovery fails.
+                    self.picker_entries_from_models(
+                        self.provider_registry
+                            .get(provider_id)
+                            .map(|p| p.default_models())
+                            .unwrap_or_default(),
+                    )
+                } else {
+                    self.picker_entries_from_models(parsed_models)
+                };
+                self.provider_setup = Some(ProviderSetupStep::SelectModel {
+                    provider_id: provider_id.to_string(),
+                    provider_name: provider_name.to_string(),
+                    models: entries,
+                    selected: 0,
                 });
             }
         }
+    }
+
+    /// Handle [`Event::RouterClassification`] for the focused session.
+    fn on_router_classification(
+        &mut self,
+        tier: &str,
+        requested_tier: &Option<String>,
+        model: &str,
+        composite_score: f64,
+        prompt: &str,
+        dimensions: &[(String, f64)],
+    ) {
+        self.session.router_current_tier = Some(tier.to_string());
+        self.session.router_current_model = Some(model.to_string());
+        let dims = dimensions
+            .iter()
+            .map(|(name, score)| format!("{}={:.2}", name, score))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let prompt_display = codemason_types::strutil::truncate_bytes(prompt, 80);
+        let fallback_note = requested_tier
+            .as_ref()
+            .filter(|rt| rt.as_str() != tier)
+            .map(|rt| format!(" (requested {})", rt))
+            .unwrap_or_default();
+        self.push_log_no_agent(
+            LogLevel::Info,
+            format!(
+                "Router: bucket={} model={} composite={:.4} prompt=\"{}\" dimensions=[{}]{}",
+                tier, model, composite_score, prompt_display, dims, fallback_note
+            ),
+        );
+    }
+
+    /// Handle [`Event::ModelDownloadStarted`] for the focused session.
+    fn on_model_download_started(&mut self, provider_id: &str, model_id: &str) {
+        let _provider_name = self
+            .provider_registry
+            .get(provider_id)
+            .map(|p| p.name().to_string())
+            .unwrap_or_else(|| provider_id.to_string());
+        self.model_download_state = Some(ModelDownloadState {
+            provider_id: provider_id.to_string(),
+            model_id: model_id.to_string(),
+            percent: 0.0,
+            started_at: std::time::Instant::now(),
+        });
+    }
+
+    /// Handle [`Event::ModelDownloadProgress`] for the focused session.
+    fn on_model_download_progress(&mut self, provider_id: &str, model_id: &str, percent: f32) {
+        if let Some(ref mut state) = self.model_download_state {
+            if state.provider_id == *provider_id && state.model_id == *model_id {
+                state.percent = percent;
+                // Progress proves the latch is alive: restart the
+                // staleness clock so slow-but-moving downloads are
+                // not reaped by the watchdog purely on start time.
+                state.started_at = std::time::Instant::now();
+            }
+        }
+    }
+
+    /// Handle [`Event::ModelDownloadFinished`] for the focused session.
+    fn on_model_download_finished(
+        &mut self,
+        provider_id: &str,
+        model_id: &str,
+        session_id: &str,
+        error: &Option<String>,
+    ) {
+        self.model_download_state = None;
+        if let Some(err) = error {
+            let display_name = self
+                .provider_registry
+                .get(provider_id)
+                .map(|p| p.name().to_string())
+                .unwrap_or_else(|| provider_id.to_string());
+            self.push_log_no_agent(
+                LogLevel::Error,
+                format!("Download failed for {}/{}: {}", provider_id, model_id, err),
+            );
+            if self.is_current_session(session_id) {
+                self.status = format!("download failed: {}", model_id);
+                self.append_assistant_text(&format!(
+                    "[warn] **Model download failed**\n\nProvider: `{}`\nModel: `{}`\nError: {}",
+                    display_name, model_id, err
+                ));
+            }
+        } else {
+            self.push_log_no_agent(
+                LogLevel::Info,
+                format!("Download finished for {}/{}", provider_id, model_id),
+            );
+        }
+    }
+
+    /// Handle [`Event::ServiceStartError`] for the focused session.
+    fn on_service_start_error(
+        &mut self,
+        session_id: &str,
+        service: &str,
+        command_path: &str,
+        stdout: &str,
+        stderr: &str,
+        error: &str,
+    ) {
+        let summary = format!(
+            "[warn] **{} failed to start**\n\nCommand: `{}`\nError: {}\n\nstdout:\n```\n{}\n```\n\nstderr:\n```\n{}\n```",
+            service, command_path, error, stdout, stderr
+        );
+        self.push_log_no_agent(LogLevel::Error, summary.clone());
+        if self.is_current_session(session_id) {
+            self.append_assistant_text(&summary);
+            self.status = format!("{} failed to start", service);
+        }
+    }
+
+    /// Handle [`Event::McpStatusChanged`] for the focused session.
+    async fn on_mcp_status_changed(&mut self, server_id: &str, status: &str) {
+        // The startup connect loop's completion sentinel: it carries an
+        // empty server id and the status `initialized`. The report and
+        // the tool-registry reconciliation must NOT run per-server here
+        // (each would block the event loop behind the loop's write lock,
+        // which it holds across a multi-second connect). Do them once,
+        // now that every server has settled; `report_mcp_startup` latches
+        // its own one-shot.
+        if server_id.is_empty() && status == "initialized" {
+            self.register_mcp_tools().await;
+            self.report_mcp_startup().await;
+            return;
+        }
+        // Track the live status per server id. The background startup
+        // connect loop publishes this; without it the `/mcp` display
+        // list has no way to learn a fresh server's real state and
+        // shows it as `disabled` (BUG-001).
+        let mapped = super::slash::mcp_status_from_event(status);
+        self.mcp_status_map
+            .insert(server_id.to_string(), mapped.clone());
+        if let Some(server) = self.mcp_servers.iter_mut().find(|s| s.id == *server_id) {
+            server.status = mapped;
+        }
+        // Re-register the live MCP tools into the registry: startup
+        // `set_mcp_client` runs before any server is Connected, so the
+        // registry would otherwise never see this server's tools and
+        // `/tools` (and the model's own tool surface) would stay empty.
+        // The registry is keyed by name, so a repeat registration is
+        // idempotent.
+        if status == "connected" {
+            self.register_mcp_tools().await;
+        }
+    }
+
+    /// Handle [`Event::McpServerEnabledChanged`] for the focused session.
+    async fn on_mcp_server_enabled_changed(&mut self, server_id: &str, enabled: bool) {
+        self.mcp_enabled_map.insert(server_id.to_string(), enabled);
+        if let Some(server) = self.mcp_servers.iter_mut().find(|s| s.id == *server_id) {
+            server.status = if enabled {
+                super::slash::mcp_status_from_event("connected")
+            } else {
+                codemason_agent::mcp::McpStatus::Disabled
+            };
+        }
+        self.register_mcp_tools().await;
     }
 
     /// Dispatch a background-shell cancellation through the background task
