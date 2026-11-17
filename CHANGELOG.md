@@ -45,6 +45,7 @@
 
 ### Changed
 
+- Changed: `handle_provider_setup_key` (app-core `input.rs`) is split in place: each setup step's key handling (provider, key entry, device flow, model, Azure resource, thinking level, agent, configured provider, provider config, reset, GitLab, telemetry) moves into its own `on_<step>` function; the dialog's behavior is unchanged.
 - Changed: `build_system_prompt_with_storage_inner` (agent `agent/mod.rs`) is split in place: its fixed prompt sections become named constants, and the template expansion, project-context sections and sub-agent spawning list move to helpers; every built-in agent's system prompt is byte-identical.
 - Changed: `TeamCreateTool::execute` (agent `tool/team_create.rs`) is split in place into named helpers - opening the team store, finding the blueprint directory, running `task-seed.json` and `spawn-prompts.json`, building spawn arguments, recording a pending teammate, and the roster and failed-spawn summaries; the tool's output, metadata and log messages are unchanged.
 - Changed: `create_builtin_agents` (agent `agent/mod.rs`) builds each built-in through one `builtin_agent` constructor that holds the nine fields every built-in shares; agents that differ override `hidden`, `temperature` or `thinking` with struct-update syntax. 545 -> 324 lines; the `{:#?}` dump of all 17 agents is byte-identical before and after (deep-refactor S-09, #9).
