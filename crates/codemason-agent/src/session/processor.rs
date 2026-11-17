@@ -2396,91 +2396,12 @@ impl SessionProcessor {
         // so we can accumulate usage across all loop iterations, then publish a single `Event::RunCostSummary` when the
         // run ends. The listener is aborted on return so it never leaks.
         let usage_accum = Arc::new(Mutex::new((0u64, 0u64)));
-        let usage_listener = {
-            let bus = self.event_bus.clone();
-            let sid = session_id.to_string();
-            let accum = usage_accum.clone();
-            // Subscribe synchronously BEFORE spawning the task. `tokio::spawn`
-            // only queues the future; the task may not be polled until after a
-            // fast LLM exchange has already published its `TokenUsage` events.
-            // Subscribing here closes that window so no usage is missed.
-            let mut rx = bus.subscribe();
-            tokio::spawn(async move {
-                loop {
-                    match rx.recv().await {
-                        Ok(Event::TokenUsage {
-                            session_id,
-                            input_tokens,
-                            output_tokens,
-                        }) if session_id == sid => {
-                            let mut locked = accum
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            locked.0 += input_tokens;
-                            locked.1 += output_tokens;
-                        }
-                        Ok(Event::MessageEnd { session_id, .. }) if session_id == sid => break,
-                        Ok(_) => {}
-                        Err(_) => break,
-                    }
-                }
-            })
-        };
+        let usage_listener = self.spawn_usage_listener(session_id, usage_accum.clone());
         use crate::session::AbortOnDrop;
         let _usage_guard = AbortOnDrop(usage_listener);
 
-        let prices = merged_prices(&turn.session_config.prices);
-        let publish_run_cost_summary = {
-            let bus = self.event_bus.clone();
-            let storage = self.session_manager.storage().clone();
-            let sid = session_id.to_string();
-            let model_id = turn.model_ref.model_id.clone();
-            let accum = usage_accum.clone();
-            move |duration_ms: u64| {
-                let (input_tokens, output_tokens) = accum
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clone();
-                let summary = compute_run_cost(
-                    vec![UsageRecord {
-                        model_id: model_id.clone(),
-                        input_tokens,
-                        output_tokens,
-                    }],
-                    &prices,
-                );
-                codemason_telemetry::counters::set_cost_session_last(summary.total_cost_usd);
-                // Persist the summary so it can be attached to an explicit
-                // `--include-cost` session export (FR-018). Stored separately
-                // from the transcript so the default export never leaks cost.
-                let row = crate::storage::RunCostSummaryRow {
-                    id: Uuid::new_v4().to_string(),
-                    session_id: sid.clone(),
-                    model_id: model_id.clone(),
-                    input_tokens: summary.total_input_tokens,
-                    output_tokens: summary.total_output_tokens,
-                    total_cost_usd: summary.total_cost_usd,
-                    duration_ms,
-                    created_at: chrono::Utc::now().to_rfc3339(),
-                };
-                let storage_for_persist = storage.clone();
-                tokio::task::spawn_blocking(move || {
-                    // Best-effort persist: a failure silently breaks the
-                    // `--include-cost` export, so at least log it.
-                    if let Err(e) = storage_for_persist.create_run_cost_summary(&row) {
-                        tracing::warn!(error = %e, "run cost summary persist failed");
-                    }
-                });
-                bus.publish(Event::RunCostSummary {
-                    session_id: sid.clone(),
-                    model_id: model_id.clone(),
-                    input_tokens: summary.total_input_tokens,
-                    output_tokens: summary.total_output_tokens,
-                    total_cost_usd: summary.total_cost_usd,
-                    duration_ms,
-                });
-            }
-        };
+        let publish_run_cost_summary =
+            self.run_cost_summary_publisher(session_id, &turn, usage_accum.clone());
 
         // 3. Build system prompt
         let system_prompt = self
@@ -2524,72 +2445,9 @@ impl SessionProcessor {
         // denied at dispatch (fail closed).
         let agent_is_subagent = agent.mode == crate::agent::AgentMode::Subagent;
         self.event_bus.set_step(session_id, 0);
-        // T-009 (FR-008): when a goal-driven loop with a configured tool set
-        // is active, the loop's tool surface is exactly that set plus the
-        // mandatory safety tools - other tools stay visible to the rest of
-        // the application but are not offered to this loop's requests.
-        let loop_tool_set: Option<std::collections::HashSet<String>> = {
-            let specs = self.active_loop_specs.read().await;
-            specs
-                .get(session_id)
-                .filter(|spec| spec.has_tool_set())
-                .map(|spec| {
-                    let mut allowed: std::collections::HashSet<String> =
-                        spec.tool_set.iter().cloned().collect();
-                    // `any` (any case) names every tool: the set keeps that entry so
-                    // the filter admits everything instead of only the safety
-                    // tools (FR-029).
-                    if !spec
-                        .tool_set
-                        .iter()
-                        .any(|entry| crate::tool::allowed_tools::is_any_tool_entry(entry))
-                    {
-                        for name in crate::session::loop_state::LOOP_ALWAYS_ALLOWED_TOOLS {
-                            allowed.insert((*name).to_string());
-                        }
-                        for name in crate::tool::always_allowed_tool_names() {
-                            allowed.insert(name.to_string());
-                        }
-                    }
-                    allowed
-                })
-        };
-        // PERF-034: the wire tool surface is resolved once per turn, but a
-        // sub-agent turn otherwise rebuilds the interactive-filtered vector over
-        // ~111 definitions every turn. When no loop restricts the set, take the
-        // version-keyed cache entry instead; loop-restricted turns keep the
-        // fused filter (they are rare and depend on the loop spec).
-        let tool_definitions: std::sync::Arc<Vec<ToolDefinition>> = if max_steps <= 1 {
-            std::sync::Arc::new(Vec::new())
-        } else if let Some(allowed) = loop_tool_set {
-            let all = self.get_cached_tool_definitions(&turn.tool_registry, &turn.alias_table);
-            std::sync::Arc::new(
-                all.iter()
-                    .filter(|def| {
-                        crate::tool::is_allowed_tool(&def.name, &allowed)
-                            && !(agent_is_subagent
-                                && crate::session::permissions::is_interactive_tool(&def.name))
-                    })
-                    .cloned()
-                    .collect(),
-            )
-        } else if agent_is_subagent {
-            // Interactive-tool block (subagent): remove interactive tools from
-            // the wire surface so a sub-agent is never offered a tool it cannot
-            // use. The dispatch gate below still denies a hallucinated call
-            // (fail closed). Cached by tool-registry version.
-            self.system_prompt_cache()
-                .get_subagent_tool_definitions(
-                    &turn.tool_registry,
-                    &turn.alias_table,
-                    turn.session_config.tools.expose_alias_names,
-                )
-                .unwrap_or_else(|| {
-                    self.get_cached_tool_definitions(&turn.tool_registry, &turn.alias_table)
-                })
-        } else {
-            self.get_cached_tool_definitions(&turn.tool_registry, &turn.alias_table)
-        };
+        let tool_definitions: std::sync::Arc<Vec<ToolDefinition>> = self
+            .turn_tool_definitions(session_id, &turn, max_steps, agent_is_subagent)
+            .await;
         // P-7: prime the tool-definition byte cache alongside the definitions
         // cache so the per-step request-size estimator can reuse the sum.
         let _ = self.get_cached_tool_definition_bytes();
@@ -2730,56 +2588,15 @@ impl SessionProcessor {
             // gate entirely. Suspension takes effect between steps: the LLM
             // call or tool execution in progress when the request lands
             // finishes first.
-            if let Some(suspend_flag) = self
-                .agent_manager
-                .get()
-                .and_then(|m| m.suspend_flag_for_session(session_id))
-            {
-                while suspend_flag.load(Ordering::Relaxed) {
-                    if cancel_flag.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-                }
-            }
+            self.wait_while_suspended(session_id, &cancel_flag).await;
             if let Some(tracker) = loop_tracker.as_mut() {
-                if !tracker.begin_step() {
-                    // FR-013/FR-014: the step or token budget was reached -
-                    // terminate with `budget_exhausted` before sending
-                    // another LLM request.
-                    let breach = tracker
-                        .budget_breach()
-                        .unwrap_or(crate::session::loop_state::StopCondition::BudgetExhausted);
-                    let reason = if tracker
-                        .cost_limit()
-                        .is_some_and(|limit| tracker.tokens() >= limit)
-                    {
-                        format!(
-                            "token cost budget exhausted ({} tokens accumulated)",
-                            tracker.tokens()
-                        )
-                    } else {
-                        format!(
-                            "step budget exhausted ({}/{} iterations)",
-                            tracker.steps(),
-                            tracker.max_steps().unwrap_or(0)
-                        )
-                    };
-                    self.terminate_loop_inner(
-                        session_id,
-                        breach,
-                        Some(total_start),
-                        None,
-                        None,
-                        Some(reason),
-                        Some(&turn.working_dir),
-                    )
-                    .await;
+                if self
+                    .begin_loop_step(session_id, &turn, total_start, tracker)
+                    .await
+                    .is_break()
+                {
                     break;
                 }
-                // Persist the incremented step counter so the next iteration
-                // (and any external termination) sees it.
-                self.persist_loop_tracker(session_id, &tracker).await;
             }
             let _step_scope = profiler.scope("loop.step.total");
             let step = {
@@ -2896,87 +2713,38 @@ impl SessionProcessor {
                     // run summarisation, persist the synthetic compaction
                     // message, and replace the in-memory history with the
                     // compaction message plus the verbatim recent tail.
-                    let messages =
-                        crate::compaction::convert::chat_messages_to_messages(&chat_messages);
-                    let previous_summary = messages
-                        .iter()
-                        .rev()
-                        .find(|m| m.role == Role::Compaction)
-                        .map(|m| m.text_content());
                     compaction_attempted_this_turn = true;
-                    if turn.session_config.compaction.model.is_some() {
-                        self.event_bus.publish(Event::AgentNotice {
-                            session_id: session_id.to_string(),
-                            message: "compact.model override currently applies only to /compact and                                       loop-steps compaction; the pre-send path uses the session model"
-                                .to_string(),
-                        });
-                    }
-                    let compact_result = crate::compaction::compact(
-                        session_id,
-                        messages,
-                        &turn.model_ref.model_id,
-                        context_window,
-                        0,
-                        &turn.session_config.compaction,
-                        previous_summary.as_deref(),
-                        &turn.client,
-                        &self.event_bus,
-                        "auto",
-                        &self.stream_config,
-                        // In-loop compaction runs mid-turn with no caller
-                        // supplied cancel flag; a fresh never-set flag keeps
-                        // the cooperative-cancel API uniform without breaking
-                        // the turn-level cancellation semantics.
-                        &std::sync::atomic::AtomicBool::new(false),
-                    )
-                    .await;
-                    match compact_result {
-                        Ok(outcome) => {
-                            // Persist the synthetic compaction message so
-                            // future turns load history from the compaction
-                            // point forward (FR-005 / FR-007).
-                            let compaction_msg = outcome.compaction_message.clone();
-                            let persist_err = self
-                                .storage_op(move |s| s.create_message(&compaction_msg))
-                                .await
-                                .err();
-                            if let Some(e) = persist_err {
-                                warn!(error = %e, "failed to persist compaction message");
-                            }
-                            let new_chat = crate::compaction::convert::messages_to_chat_messages(
-                                &outcome.new_messages,
-                            );
-                            chat_messages = Arc::new(new_chat);
-                            compressed_this_turn = true;
-                            // The history was replaced: no provider count
-                            // describes it yet, so drop the anchor.
-                            reported_anchor_estimate = None;
-                            // Re-arm candidate: the trigger stays disarmed until
-                            // the provider's next report confirms the request is
-                            // back under the threshold (the local estimate can
-                            // undercount system/tool overhead). A summary that
-                            // did not shrink the history never re-arms.
-                            if outcome.compressed_tokens < outcome.original_tokens {
-                                rearm_below_threshold = Some(decision.threshold);
-                            }
-                            last_reported_input_tokens = outcome.compressed_tokens as u64;
-                            self.persist_last_reported_input_tokens(
-                                session_id,
-                                outcome.compressed_tokens as u64,
-                            );
-                            tracing::info!(
-                                original_tokens = outcome.original_tokens,
-                                compressed_tokens = outcome.compressed_tokens,
-                                kept_messages = outcome.kept_message_count,
-                                "pre-send compaction applied"
-                            );
+                    if let Some(outcome) = self
+                        .run_pre_send_compaction(session_id, &turn, &chat_messages, context_window)
+                        .await
+                    {
+                        let new_chat = crate::compaction::convert::messages_to_chat_messages(
+                            &outcome.new_messages,
+                        );
+                        chat_messages = Arc::new(new_chat);
+                        compressed_this_turn = true;
+                        // The history was replaced: no provider count
+                        // describes it yet, so drop the anchor.
+                        reported_anchor_estimate = None;
+                        // Re-arm candidate: the trigger stays disarmed until
+                        // the provider's next report confirms the request is
+                        // back under the threshold (the local estimate can
+                        // undercount system/tool overhead). A summary that
+                        // did not shrink the history never re-arms.
+                        if outcome.compressed_tokens < outcome.original_tokens {
+                            rearm_below_threshold = Some(decision.threshold);
                         }
-                        Err(e) => {
-                            warn!(
-                                error = %e,
-                                "pre-send compaction failed; continuing with uncompressed history"
-                            );
-                        }
+                        last_reported_input_tokens = outcome.compressed_tokens as u64;
+                        self.persist_last_reported_input_tokens(
+                            session_id,
+                            outcome.compressed_tokens as u64,
+                        );
+                        tracing::info!(
+                            original_tokens = outcome.original_tokens,
+                            compressed_tokens = outcome.compressed_tokens,
+                            kept_messages = outcome.kept_message_count,
+                            "pre-send compaction applied"
+                        );
                     }
                 }
             }
@@ -3134,43 +2902,14 @@ impl SessionProcessor {
                     && llm_result.text_buffer.len() < SUBAGENT_NARRATION_BYTE_LIMIT
                 {
                     subagent_summary_nudged = true;
-                    self.event_bus.publish(Event::AgentNotice {
-                        session_id: session_id.to_string(),
-                        message: "Sub-agent ended with a short text-only \
-                                 response after tool work - nudging it to \
-                                 produce its findings report."
-                            .to_string(),
-                    });
-                    tracing::info!(
-                        session_id = %session_id,
-                        step,
-                        text_len = llm_result.text_buffer.len(),
-                        "sub-agent premature termination detected; injecting \
-                         summary nudge"
-                    );
-                    // Remove the narration text that was prematurely
-                    // pushed into `assistant_parts` so the final saved
-                    // message contains only the actual findings.
-                    {
-                        let parts = std::sync::Arc::make_mut(&mut assistant_parts);
-                        if matches!(parts.last(), Some(MessagePart::Text { .. })) {
-                            parts.pop();
-                        }
-                    }
-                    // Push the assistant's narration into chat history so the
-                    // model sees its own last message, then push the nudge as
-                    // a user message.
                     let narration = std::mem::take(&mut llm_result.text_buffer);
-                    if !narration.is_empty() {
-                        Arc::make_mut(&mut chat_messages).push(ChatMessage {
-                            role: "assistant".to_string(),
-                            content: ChatContent::Text(narration),
-                        });
-                    }
-                    Arc::make_mut(&mut chat_messages).push(ChatMessage {
-                        role: "user".to_string(),
-                        content: ChatContent::Text(SUBAGENT_SUMMARY_NUDGE.to_string()),
-                    });
+                    self.inject_subagent_summary_nudge(
+                        session_id,
+                        step,
+                        narration,
+                        &mut assistant_parts,
+                        &mut chat_messages,
+                    );
                     continue;
                 }
                 // T-005 (FR-007, FR-010): the verification gate. A
@@ -3180,86 +2919,18 @@ impl SessionProcessor {
                 // failure with steps remaining appends the failure output as
                 // an observation and continues; failure with the budget
                 // breached ends the run as `budget_exhausted`.
-                // Bind the spec outside the `if let` scrutinee so the
-                // `active_loop_specs` read guard drops immediately (clippy
-                // significant_drop_in_scrutinee).
-                let loop_spec = self.active_loop_specs.read().await.get(session_id).cloned();
-                if let Some(spec) = loop_spec {
-                    if let Some(verify_cmd) = spec.verify_cmd.clone() {
-                        let outcome = crate::session::verification::run_verification_command(
-                            &verify_cmd,
-                            &turn.working_dir,
-                        )
-                        .await
-                        .unwrap_or_else(|e| {
-                            crate::session::verification::VerificationOutcome::Failure {
-                                reason: format!("gate error: {e}"),
-                                output: String::new(),
-                            }
-                        });
-                        let label = outcome.label();
-                        let output = outcome.output().to_string();
-                        tracing::info!(
-                            session_id = %session_id,
-                            passed = outcome.passed(),
-                            "verification gate ran"
-                        );
-                        if outcome.passed() {
-                            self.terminate_loop_inner(
-                                session_id,
-                                crate::session::loop_state::StopCondition::GoalAchieved,
-                                Some(total_start),
-                                Some((llm_result.last_input_tokens, llm_result.last_output_tokens)),
-                                Some(label),
-                                None,
-                                Some(&turn.working_dir),
-                            )
-                            .await;
-                            break;
-                        }
-                        // Failure: with no step remaining the loop cannot
-                        // retry the verification, so the run is a budget
-                        // exhaustion (FR-007); otherwise the failure output
-                        // becomes the next observation and the loop continues.
-                        let steps_remaining = loop_tracker
-                            .as_ref()
-                            .is_none_or(|tracker| tracker.budget_breach().is_none());
-                        if !steps_remaining {
-                            // A silent failure still needs an informative
-                            // verification field, so fall back to the label.
-                            let verification_summary = if output.is_empty() {
-                                label.clone()
-                            } else {
-                                output.clone()
-                            };
-                            let reason = format!(
-                                "verification command failed and no steps remain ({label})"
-                            );
-                            self.terminate_loop_inner(
-                                session_id,
-                                crate::session::loop_state::StopCondition::BudgetExhausted,
-                                Some(total_start),
-                                None,
-                                Some(verification_summary),
-                                Some(reason),
-                                Some(&turn.working_dir),
-                            )
-                            .await;
-                            break;
-                        }
-                        let observation =
-                            crate::session::verification::verification_failure_observation(
-                                &verify_cmd,
-                                &outcome,
-                            );
-                        self.event_bus.publish(Event::AgentNotice {
-                            session_id: session_id.to_string(),
-                            message: format!(
-                                "Verification gate failed - {label}. Appending \
-                                 the failure output as an observation and \
-                                 continuing the loop."
-                            ),
-                        });
+                match self
+                    .run_verification_gate(
+                        session_id,
+                        &turn,
+                        total_start,
+                        (llm_result.last_input_tokens, llm_result.last_output_tokens),
+                        loop_tracker.as_ref(),
+                    )
+                    .await
+                {
+                    Some(std::ops::ControlFlow::Break(())) => break,
+                    Some(std::ops::ControlFlow::Continue(observation)) => {
                         Arc::make_mut(&mut chat_messages).push(ChatMessage {
                             role: "user".to_string(),
                             content: ChatContent::Text(observation),
@@ -3274,6 +2945,7 @@ impl SessionProcessor {
                         }
                         continue;
                     }
+                    None => {}
                 }
                 // Goal-driven loop stop condition 1 (FR-010): a no-tool-call
                 // response with no verification command means the goal was
@@ -4148,33 +3820,7 @@ impl SessionProcessor {
                     // Activity log: record each tool result from the batch
                     // (PERF-040: queued onto the background writer task, which
                     // batches the whole step into one blocking hop).
-                    let batch_log: Vec<_> = batch_entries
-                        .iter()
-                        .map(|e| {
-                            (
-                                e.call_id.clone(),
-                                e.tool.clone(),
-                                e.success,
-                                e.content.clone(),
-                            )
-                        })
-                        .collect();
-                    let run_id_for_results = run_id.clone();
-                    self.record_activity_event(move |log| {
-                        for (call_id, tool, success, content) in batch_log {
-                            log.record_tool_result(
-                                &run_id_for_results,
-                                call_id,
-                                tool,
-                                success,
-                                content,
-                            )?;
-                        }
-                        // Each append already yielded its own event; the batch
-                        // closure reports none of its own.
-                        Ok(None)
-                    })
-                    .await;
+                    self.record_step_tool_results(&run_id, &batch_entries).await;
                     // T-017 (FR-025): tally this iteration's tool calls into
                     // the loop tracker so the run's tool-call total is
                     // published with the loop telemetry on termination. The
@@ -4201,115 +3847,30 @@ impl SessionProcessor {
                 // retry allowance (FR-012). Successful steps reset the
                 // consecutive-failure counter.
                 if let Some(tracker) = loop_tracker.as_mut() {
-                    let step_errors: Vec<String> = batch_entries
-                        .iter()
-                        .filter(|entry| !entry.success)
-                        .filter_map(|entry| entry.error.clone())
-                        .collect();
-                    let hard_failure = tool_panic.clone().or_else(|| {
-                        step_errors
-                            .iter()
-                            .find(|msg| classify_message(msg).is_unrecoverable())
-                            .cloned()
-                    });
-                    if let Some(failure) = hard_failure {
-                        let reason = format!("unrecoverable tool failure: {failure}");
-                        tracing::error!(
-                            session_id = %session_id,
-                            reason,
-                            "loop terminated by unrecoverable tool failure (FR-011); no retry"
-                        );
-                        self.terminate_loop_inner(
+                    if self
+                        .classify_step_failures(
                             session_id,
-                            crate::session::loop_state::StopCondition::UnrecoverableError,
-                            Some(total_start),
-                            None,
-                            None,
-                            Some(reason),
-                            Some(&turn.working_dir),
+                            &turn,
+                            total_start,
+                            tracker,
+                            &batch_entries,
+                            tool_panic.clone(),
                         )
-                        .await;
+                        .await
+                        .is_break()
+                    {
                         break;
                     }
-                    if step_errors.is_empty() {
-                        tracker.record_success();
-                    } else if tracker.record_failure() {
-                        let reason = format!(
-                            "retry allowance exceeded ({} consecutive recoverable \
-                             tool failures: {})",
-                            tracker.consecutive_failures(),
-                            step_errors.join("; ")
-                        );
-                        tracing::error!(
-                            session_id = %session_id,
-                            reason,
-                            "loop terminated at the retry allowance (FR-012)"
-                        );
-                        self.terminate_loop_inner(
-                            session_id,
-                            crate::session::loop_state::StopCondition::UnrecoverableError,
-                            Some(total_start),
-                            None,
-                            None,
-                            Some(reason),
-                            Some(&turn.working_dir),
-                        )
-                        .await;
-                        break;
-                    }
-                    // Persist the updated failure counter so the next
-                    // iteration (and any external termination) sees it.
-                    self.persist_loop_tracker(session_id, &tracker).await;
                 }
                 // Auto task status updates (P-10: reuse the `active_spec_id`
                 // already read above for the `ToolContext`, and short-circuit
                 // when no spec is active or no file-write tool was called).
-                {
-                    if let Some(ref spec_id_str) = active_spec_id
-                        && let Some(ref spec_mgr) = self.spec_manager.get()
-                        && llm_result.tool_calls.iter().any(|tc| {
-                            matches!(
-                                tc.name.as_str(),
-                                "Write"
-                                    | "Edit"
-                                    | "multiedit"
-                                    | "multi_edit"
-                                    | "patch"
-                                    | "create"
-                                    | "append_to_file"
-                            )
-                        })
-                        && let Some(id) = codemason_specs::spec::SpecId::new(spec_id_str)
-                        && let Ok(mut spec) = spec_mgr.read_spec(&id).await
-                        // Only auto-complete tasks when a write tool actually
-                        // touched a path inside this spec's own directory: an
-                        // unrelated write elsewhere in the workspace (docs,
-                        // scratch files, snapshots) must not silently complete
-                        // spec tasks and corrupt PLAN.md.
-                        && writes_in_spec_dir(&llm_result.tool_calls, &turn.working_dir, spec_mgr.root(), &id)
-                    {
-                        let mut updated = false;
-                        for task in spec.tasks.iter_mut() {
-                            if task.status == codemason_specs::spec::TaskStatus::InProgress {
-                                task.status = codemason_specs::spec::TaskStatus::Completed;
-                                task.completed_at = Some(
-                                    std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_secs(),
-                                );
-                                updated = true;
-                            }
-                        }
-                        if updated {
-                            if let Err(e) = spec_mgr.write_spec(&spec).await {
-                                tracing::warn!(error = %e, "Auto task update: failed to write spec");
-                            } else {
-                                tracing::info!(spec_id = %spec_id_str, "Auto-updated in_progress tasks to completed after file write");
-                            }
-                        }
-                    }
-                }
+                self.auto_complete_spec_tasks(
+                    active_spec_id.as_deref(),
+                    &llm_result.tool_calls,
+                    &turn.working_dir,
+                )
+                .await;
                 // Append to chat history (P-17: `std::mem::take` moves the
                 // contents into `ChatContent::Parts` while leaving the Vec
                 // buffer allocated for reuse on the next step). P-6: mutate the
@@ -4333,136 +3894,31 @@ impl SessionProcessor {
             // Background task injection (sub-agents)
             {
                 let _scope = profiler.scope("loop.background.total");
-                if let Some(tm) = self.agent_manager.get() {
-                    // P-11: skip the lock+scan when no background tasks are
-                    // pending. The flag is set by `spawn_background` and
-                    // cleared by `drain_completed` when nothing remains.
-                    if tm.has_pending_background() {
-                        let completed = tm.drain_completed(session_id).await;
-                        if !completed.is_empty() {
-                            let _scope = profiler.scope("loop.background.inject_completed");
-                            // P-17: reuse the hoisted `bg_parts` buffer.
-                            bg_parts.clear();
-                            for task in &completed {
-                                let status_label = match task.status {
-                                    crate::task::TaskStatus::Completed => "completed",
-                                    crate::task::TaskStatus::Failed => "failed",
-                                    crate::task::TaskStatus::Cancelled => "cancelled",
-                                    crate::task::TaskStatus::Suspended => "suspended",
-                                    crate::task::TaskStatus::Terminating => "terminating",
-                                    crate::task::TaskStatus::Running => "running",
-                                    crate::task::TaskStatus::TimedOut => "timed_out",
-                                };
-                                let body = task
-                                    .result
-                                    .as_deref()
-                                    .or(task.error.as_deref())
-                                    .unwrap_or("(no output)");
-                                let mut text = format!(
-                                    "[Background Task {status_label}: {} - {}]\n\n{body}",
-                                    task.agent_name,
-                                    codemason_types::strutil::short_prefix(&task.id, 8)
-                                );
-                                // The injected body may later be cut by the
-                                // generic 12k tool-result truncation; point at
-                                // the durable on-disk report so the model can
-                                // recover any omitted content with the `read`
-                                // tool instead of re-running the sub-agent.
-                                if let Some(ref file) = task.output_file {
-                                    text.push_str(&format!(
-                                        "\n\n(Full untruncated report: {} - read this \
-                                         file with the `read` tool if the output above \
-                                         appears truncated.)",
-                                        file.display()
-                                    ));
-                                }
-                                bg_parts.push(ContentPart::Text { text });
-                            }
-                            Arc::make_mut(&mut chat_messages).push(ChatMessage {
-                                role: "user".to_string(),
-                                content: ChatContent::Parts(std::mem::take(&mut bg_parts)),
-                            });
-                        }
-                    }
-                }
+                self.inject_background_task_results(
+                    session_id,
+                    &profiler,
+                    &mut chat_messages,
+                    &mut bg_parts,
+                )
+                .await;
             }
 
             // Background shell task injection (M3 / T-023)
             {
                 let _scope = profiler.scope("loop.background.bg_shell");
-                if let Some(bg) = self.bg_service.get() {
-                    if bg.has_pending_completions() {
-                        let completed = bg.drain_completed(session_id).await;
-                        if !completed.is_empty() {
-                            bg_parts.clear();
-                            for task in &completed {
-                                let exit_str = task
-                                    .exit_code
-                                    .map(|c| format!("exit={c}"))
-                                    .unwrap_or_else(|| "exit=?".to_string());
-                                let text = format!(
-                                    "[Background Shell Task {}: {} - {} ({})]\n\n{}",
-                                    task.status,
-                                    task.command,
-                                    codemason_types::strutil::short_prefix(&task.task_id, 8),
-                                    exit_str,
-                                    if task.tail.is_empty() {
-                                        "(no output)"
-                                    } else {
-                                        &task.tail
-                                    }
-                                );
-                                bg_parts.push(ContentPart::Text { text });
-                            }
-                            Arc::make_mut(&mut chat_messages).push(ChatMessage {
-                                role: "user".to_string(),
-                                content: ChatContent::Parts(std::mem::take(&mut bg_parts)),
-                            });
-                        }
-                    }
-                }
+                self.inject_background_shell_results(session_id, &mut chat_messages, &mut bg_parts)
+                    .await;
             }
             // Interim save
             {
                 let _scope = profiler.scope("storage.assistant_interim.update");
-                // M-008: avoid rewriting the full SQLite row when nothing was
-                // appended since the last save. Tool-call parts are carried in
-                // the transcript (`chat_messages`) as well, and the row is
-                // finalised on the final save, so an interim rewrite that only
-                // re-serialises unchanged content is wasted work.
-                //
-                // Invariant: non-tool-call parts are only pushed (stream
-                // deltas) or popped (sub-agent narration nudge) - never
-                // mutated in place - and tool-call parts are appended once per
-                // completed call, so the total count alone is a sufficient
-                // save gate; hashing the serialised parts (the previous P-12
-                // gate) re-serialised every tool-call input/output on every
-                // step, which is exactly the cost this interim save exists to
-                // avoid. Persisting tool-call appends keeps the row in step
-                // with the run so the TUI output-view overlay renders live
-                // steps instead of a frozen snapshot.
-                let interim_parts_count = (*assistant_parts).len();
-                if last_interim_parts_count != Some(interim_parts_count) {
-                    let mut interim =
-                        Message::new(session_id, Role::Assistant, (*assistant_parts).clone());
-                    interim.id = assistant_msg_id.clone();
-                    // H3: use the FTS-skip variant for the interim save. The
-                    // searchable text content of the interim message is either
-                    // unchanged (only a tool-call status transition) or the
-                    // message is still accumulating deltas and will be
-                    // re-synced wholesale on the final save. Rewriting the FTS
-                    // index on every stream event (DELETE + re-INSERT) was the
-                    // dominant cost of `storage.assistant_interim.update`.
-                    // Best-effort interim FTS write; the final save re-syncs
-                    // wholesale. Log a failure rather than swallowing it.
-                    if let Err(e) = self
-                        .storage_op(move |s| s.update_message_parts_skip_fts(&interim))
-                        .await
-                    {
-                        tracing::warn!(error = %e, "interim message-parts save failed");
-                    }
-                    last_interim_parts_count = Some(interim_parts_count);
-                }
+                self.save_interim_assistant(
+                    session_id,
+                    &assistant_parts,
+                    &assistant_msg_id,
+                    &mut last_interim_parts_count,
+                )
+                .await;
             }
         }
 
@@ -4548,6 +4004,790 @@ impl SessionProcessor {
         tokio::task::yield_now().await;
         publish_run_cost_summary(total_elapsed_ms);
         let end_reason = last_finish_reason.unwrap_or(FinishReason::Stop);
+        self.publish_turn_end(session_id, agent, end_reason, msg_id_for_end, &run_id)
+            .await;
+        // FR-033: the Stop (`on_session_end`) hooks have already run inside the
+        // loop, where a blocking hook can feed findings back to the model, so no
+        // second dispatch happens here.
+        Ok(saved_msg)
+    }
+
+    /// Sub-agent suspension gate (spec `agentui` FR-035): block between steps
+    /// while this child session is parked, until it is resumed or the user
+    /// cancels the turn.
+    async fn wait_while_suspended(&self, session_id: &str, cancel_flag: &AtomicBool) {
+        if let Some(suspend_flag) = self
+            .agent_manager
+            .get()
+            .and_then(|m| m.suspend_flag_for_session(session_id))
+        {
+            while suspend_flag.load(Ordering::Relaxed) {
+                if cancel_flag.load(Ordering::Relaxed) {
+                    break;
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+            }
+        }
+    }
+
+    /// T-008 (FR-013, FR-014): count a new loop step. When the step or
+    /// token budget is reached, terminate the loop with `budget_exhausted`
+    /// and return `Break`; otherwise persist the incremented counter.
+    async fn begin_loop_step(
+        &self,
+        session_id: &str,
+        turn: &crate::session::loop_steps::TurnClient,
+        total_start: Instant,
+        tracker: &mut crate::session::loop_state::LoopTracker,
+    ) -> std::ops::ControlFlow<()> {
+        if !tracker.begin_step() {
+            // FR-013/FR-014: the step or token budget was reached -
+            // terminate with `budget_exhausted` before sending
+            // another LLM request.
+            let breach = tracker
+                .budget_breach()
+                .unwrap_or(crate::session::loop_state::StopCondition::BudgetExhausted);
+            let reason = if tracker
+                .cost_limit()
+                .is_some_and(|limit| tracker.tokens() >= limit)
+            {
+                format!(
+                    "token cost budget exhausted ({} tokens accumulated)",
+                    tracker.tokens()
+                )
+            } else {
+                format!(
+                    "step budget exhausted ({}/{} iterations)",
+                    tracker.steps(),
+                    tracker.max_steps().unwrap_or(0)
+                )
+            };
+            self.terminate_loop_inner(
+                session_id,
+                breach,
+                Some(total_start),
+                None,
+                None,
+                Some(reason),
+                Some(&turn.working_dir),
+            )
+            .await;
+            return std::ops::ControlFlow::Break(());
+        }
+        // Persist the incremented step counter so the next iteration
+        // (and any external termination) sees it.
+        self.persist_loop_tracker(session_id, &tracker).await;
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Subscribe to `Event::TokenUsage` for one session and accumulate its
+    /// input/output token totals into `accum` until the session's
+    /// `Event::MessageEnd` (T-012). The caller aborts the task on return.
+    fn spawn_usage_listener(
+        &self,
+        session_id: &str,
+        accum: Arc<Mutex<(u64, u64)>>,
+    ) -> tokio::task::JoinHandle<()> {
+        let bus = self.event_bus.clone();
+        let sid = session_id.to_string();
+        // Subscribe synchronously BEFORE spawning the task. `tokio::spawn`
+        // only queues the future; the task may not be polled until after a
+        // fast LLM exchange has already published its `TokenUsage` events.
+        // Subscribing here closes that window so no usage is missed.
+        let mut rx = bus.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(Event::TokenUsage {
+                        session_id,
+                        input_tokens,
+                        output_tokens,
+                    }) if session_id == sid => {
+                        let mut locked = accum
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        locked.0 += input_tokens;
+                        locked.1 += output_tokens;
+                    }
+                    Ok(Event::MessageEnd { session_id, .. }) if session_id == sid => break,
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+            }
+        })
+    }
+
+    /// Build the closure that publishes (and persists) this run's
+    /// `Event::RunCostSummary` from the accumulated token usage (T-012).
+    fn run_cost_summary_publisher(
+        &self,
+        session_id: &str,
+        turn: &crate::session::loop_steps::TurnClient,
+        accum: Arc<Mutex<(u64, u64)>>,
+    ) -> impl Fn(u64) + use<> {
+        let prices = merged_prices(&turn.session_config.prices);
+        let bus = self.event_bus.clone();
+        let storage = self.session_manager.storage().clone();
+        let sid = session_id.to_string();
+        let model_id = turn.model_ref.model_id.clone();
+        move |duration_ms: u64| {
+            let (input_tokens, output_tokens) = accum
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            let summary = compute_run_cost(
+                vec![UsageRecord {
+                    model_id: model_id.clone(),
+                    input_tokens,
+                    output_tokens,
+                }],
+                &prices,
+            );
+            codemason_telemetry::counters::set_cost_session_last(summary.total_cost_usd);
+            // Persist the summary so it can be attached to an explicit
+            // `--include-cost` session export (FR-018). Stored separately
+            // from the transcript so the default export never leaks cost.
+            let row = crate::storage::RunCostSummaryRow {
+                id: Uuid::new_v4().to_string(),
+                session_id: sid.clone(),
+                model_id: model_id.clone(),
+                input_tokens: summary.total_input_tokens,
+                output_tokens: summary.total_output_tokens,
+                total_cost_usd: summary.total_cost_usd,
+                duration_ms,
+                created_at: chrono::Utc::now().to_rfc3339(),
+            };
+            let storage_for_persist = storage.clone();
+            tokio::task::spawn_blocking(move || {
+                // Best-effort persist: a failure silently breaks the
+                // `--include-cost` export, so at least log it.
+                if let Err(e) = storage_for_persist.create_run_cost_summary(&row) {
+                    tracing::warn!(error = %e, "run cost summary persist failed");
+                }
+            });
+            bus.publish(Event::RunCostSummary {
+                session_id: sid.clone(),
+                model_id: model_id.clone(),
+                input_tokens: summary.total_input_tokens,
+                output_tokens: summary.total_output_tokens,
+                total_cost_usd: summary.total_cost_usd,
+                duration_ms,
+            });
+        }
+    }
+
+    /// Resolve the wire tool surface for this turn: empty for a single-step
+    /// agent, the loop's configured set (plus the safety tools) for a
+    /// goal-driven loop, and the interactive-filtered set for a sub-agent.
+    async fn turn_tool_definitions(
+        &self,
+        session_id: &str,
+        turn: &crate::session::loop_steps::TurnClient,
+        max_steps: usize,
+        agent_is_subagent: bool,
+    ) -> std::sync::Arc<Vec<ToolDefinition>> {
+        // T-009 (FR-008): when a goal-driven loop with a configured tool set
+        // is active, the loop's tool surface is exactly that set plus the
+        // mandatory safety tools - other tools stay visible to the rest of
+        // the application but are not offered to this loop's requests.
+        let loop_tool_set: Option<std::collections::HashSet<String>> = {
+            let specs = self.active_loop_specs.read().await;
+            specs
+                .get(session_id)
+                .filter(|spec| spec.has_tool_set())
+                .map(|spec| {
+                    let mut allowed: std::collections::HashSet<String> =
+                        spec.tool_set.iter().cloned().collect();
+                    // `any` (any case) names every tool: the set keeps that entry so
+                    // the filter admits everything instead of only the safety
+                    // tools (FR-029).
+                    if !spec
+                        .tool_set
+                        .iter()
+                        .any(|entry| crate::tool::allowed_tools::is_any_tool_entry(entry))
+                    {
+                        for name in crate::session::loop_state::LOOP_ALWAYS_ALLOWED_TOOLS {
+                            allowed.insert((*name).to_string());
+                        }
+                        for name in crate::tool::always_allowed_tool_names() {
+                            allowed.insert(name.to_string());
+                        }
+                    }
+                    allowed
+                })
+        };
+        // PERF-034: the wire tool surface is resolved once per turn, but a
+        // sub-agent turn otherwise rebuilds the interactive-filtered vector over
+        // ~111 definitions every turn. When no loop restricts the set, take the
+        // version-keyed cache entry instead; loop-restricted turns keep the
+        // fused filter (they are rare and depend on the loop spec).
+        if max_steps <= 1 {
+            std::sync::Arc::new(Vec::new())
+        } else if let Some(allowed) = loop_tool_set {
+            let all = self.get_cached_tool_definitions(&turn.tool_registry, &turn.alias_table);
+            std::sync::Arc::new(
+                all.iter()
+                    .filter(|def| {
+                        crate::tool::is_allowed_tool(&def.name, &allowed)
+                            && !(agent_is_subagent
+                                && crate::session::permissions::is_interactive_tool(&def.name))
+                    })
+                    .cloned()
+                    .collect(),
+            )
+        } else if agent_is_subagent {
+            // Interactive-tool block (subagent): remove interactive tools from
+            // the wire surface so a sub-agent is never offered a tool it cannot
+            // use. The dispatch gate below still denies a hallucinated call
+            // (fail closed). Cached by tool-registry version.
+            self.system_prompt_cache()
+                .get_subagent_tool_definitions(
+                    &turn.tool_registry,
+                    &turn.alias_table,
+                    turn.session_config.tools.expose_alias_names,
+                )
+                .unwrap_or_else(|| {
+                    self.get_cached_tool_definitions(&turn.tool_registry, &turn.alias_table)
+                })
+        } else {
+            self.get_cached_tool_definitions(&turn.tool_registry, &turn.alias_table)
+        }
+    }
+
+    /// Run the pre-send compaction of `chat_messages` and persist the
+    /// synthetic compaction message. Returns `None` when summarisation
+    /// failed; the turn then continues with the uncompressed history.
+    async fn run_pre_send_compaction(
+        &self,
+        session_id: &str,
+        turn: &crate::session::loop_steps::TurnClient,
+        chat_messages: &[ChatMessage],
+        context_window: usize,
+    ) -> Option<crate::compaction::CompactionOutcome> {
+        let messages = crate::compaction::convert::chat_messages_to_messages(&chat_messages);
+        let previous_summary = messages
+            .iter()
+            .rev()
+            .find(|m| m.role == Role::Compaction)
+            .map(|m| m.text_content());
+        if turn.session_config.compaction.model.is_some() {
+            self.event_bus.publish(Event::AgentNotice {
+                            session_id: session_id.to_string(),
+                            message: "compact.model override currently applies only to /compact and                                       loop-steps compaction; the pre-send path uses the session model"
+                                .to_string(),
+                        });
+        }
+        let compact_result = crate::compaction::compact(
+            session_id,
+            messages,
+            &turn.model_ref.model_id,
+            context_window,
+            0,
+            &turn.session_config.compaction,
+            previous_summary.as_deref(),
+            &turn.client,
+            &self.event_bus,
+            "auto",
+            &self.stream_config,
+            // In-loop compaction runs mid-turn with no caller
+            // supplied cancel flag; a fresh never-set flag keeps
+            // the cooperative-cancel API uniform without breaking
+            // the turn-level cancellation semantics.
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .await;
+        match compact_result {
+            Ok(outcome) => {
+                // Persist the synthetic compaction message so
+                // future turns load history from the compaction
+                // point forward (FR-005 / FR-007).
+                let compaction_msg = outcome.compaction_message.clone();
+                let persist_err = self
+                    .storage_op(move |s| s.create_message(&compaction_msg))
+                    .await
+                    .err();
+                if let Some(e) = persist_err {
+                    warn!(error = %e, "failed to persist compaction message");
+                }
+                Some(outcome)
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "pre-send compaction failed; continuing with uncompressed history"
+                );
+                None
+            }
+        }
+    }
+
+    /// Replace a sub-agent's short narration with a one-shot nudge asking
+    /// for its findings report: drop the narration from `assistant_parts`,
+    /// echo it into the history, and append the nudge as a user turn.
+    fn inject_subagent_summary_nudge(
+        &self,
+        session_id: &str,
+        step: usize,
+        narration: String,
+        assistant_parts: &mut std::sync::Arc<Vec<MessagePart>>,
+        chat_messages: &mut std::sync::Arc<Vec<ChatMessage>>,
+    ) {
+        self.event_bus.publish(Event::AgentNotice {
+            session_id: session_id.to_string(),
+            message: "Sub-agent ended with a short text-only \
+                                 response after tool work - nudging it to \
+                                 produce its findings report."
+                .to_string(),
+        });
+        tracing::info!(
+            session_id = %session_id,
+            step,
+            text_len = narration.len(),
+            "sub-agent premature termination detected; injecting \
+             summary nudge"
+        );
+        // Remove the narration text that was prematurely
+        // pushed into `assistant_parts` so the final saved
+        // message contains only the actual findings.
+        {
+            let parts = std::sync::Arc::make_mut(assistant_parts);
+            if matches!(parts.last(), Some(MessagePart::Text { .. })) {
+                parts.pop();
+            }
+        }
+        // Push the assistant's narration into chat history so the
+        // model sees its own last message, then push the nudge as
+        // a user message.
+        if !narration.is_empty() {
+            Arc::make_mut(chat_messages).push(ChatMessage {
+                role: "assistant".to_string(),
+                content: ChatContent::Text(narration),
+            });
+        }
+        Arc::make_mut(chat_messages).push(ChatMessage {
+            role: "user".to_string(),
+            content: ChatContent::Text(SUBAGENT_SUMMARY_NUDGE.to_string()),
+        });
+    }
+
+    /// T-005 (FR-007, FR-010): run an active loop's verification gate after a
+    /// no-tool-call response. Returns `None` when no gate is configured,
+    /// `Break` once the loop was terminated (goal achieved or budget
+    /// exhausted), and `Continue(observation)` when the failure output must be
+    /// appended and the loop continued.
+    async fn run_verification_gate(
+        &self,
+        session_id: &str,
+        turn: &crate::session::loop_steps::TurnClient,
+        total_start: Instant,
+        tokens: (u64, u64),
+        loop_tracker: Option<&crate::session::loop_state::LoopTracker>,
+    ) -> Option<std::ops::ControlFlow<(), String>> {
+        // Bind the spec outside the `if let` scrutinee so the
+        // `active_loop_specs` read guard drops immediately (clippy
+        // significant_drop_in_scrutinee).
+        let loop_spec = self.active_loop_specs.read().await.get(session_id).cloned();
+        if let Some(spec) = loop_spec {
+            if let Some(verify_cmd) = spec.verify_cmd.clone() {
+                let outcome = crate::session::verification::run_verification_command(
+                    &verify_cmd,
+                    &turn.working_dir,
+                )
+                .await
+                .unwrap_or_else(|e| {
+                    crate::session::verification::VerificationOutcome::Failure {
+                        reason: format!("gate error: {e}"),
+                        output: String::new(),
+                    }
+                });
+                let label = outcome.label();
+                let output = outcome.output().to_string();
+                tracing::info!(
+                    session_id = %session_id,
+                    passed = outcome.passed(),
+                    "verification gate ran"
+                );
+                if outcome.passed() {
+                    self.terminate_loop_inner(
+                        session_id,
+                        crate::session::loop_state::StopCondition::GoalAchieved,
+                        Some(total_start),
+                        Some(tokens),
+                        Some(label),
+                        None,
+                        Some(&turn.working_dir),
+                    )
+                    .await;
+                    return Some(std::ops::ControlFlow::Break(()));
+                }
+                // Failure: with no step remaining the loop cannot
+                // retry the verification, so the run is a budget
+                // exhaustion (FR-007); otherwise the failure output
+                // becomes the next observation and the loop continues.
+                let steps_remaining = loop_tracker
+                    .as_ref()
+                    .is_none_or(|tracker| tracker.budget_breach().is_none());
+                if !steps_remaining {
+                    // A silent failure still needs an informative
+                    // verification field, so fall back to the label.
+                    let verification_summary = if output.is_empty() {
+                        label.clone()
+                    } else {
+                        output.clone()
+                    };
+                    let reason =
+                        format!("verification command failed and no steps remain ({label})");
+                    self.terminate_loop_inner(
+                        session_id,
+                        crate::session::loop_state::StopCondition::BudgetExhausted,
+                        Some(total_start),
+                        None,
+                        Some(verification_summary),
+                        Some(reason),
+                        Some(&turn.working_dir),
+                    )
+                    .await;
+                    return Some(std::ops::ControlFlow::Break(()));
+                }
+                let observation = crate::session::verification::verification_failure_observation(
+                    &verify_cmd,
+                    &outcome,
+                );
+                self.event_bus.publish(Event::AgentNotice {
+                    session_id: session_id.to_string(),
+                    message: format!(
+                        "Verification gate failed - {label}. Appending \
+                                 the failure output as an observation and \
+                                 continuing the loop."
+                    ),
+                });
+                return Some(std::ops::ControlFlow::Continue(observation));
+            }
+        }
+        None
+    }
+
+    /// Activity log: record each tool result of a step's batch (PERF-040:
+    /// queued onto the background writer task as one blocking hop).
+    async fn record_step_tool_results(
+        &self,
+        run_id: &codemason_types::id::RunId,
+        batch_entries: &[codemason_types::event::ToolCallBatchEntry],
+    ) {
+        let batch_log: Vec<_> = batch_entries
+            .iter()
+            .map(|e| {
+                (
+                    e.call_id.clone(),
+                    e.tool.clone(),
+                    e.success,
+                    e.content.clone(),
+                )
+            })
+            .collect();
+        let run_id_for_results = run_id.clone();
+        self.record_activity_event(move |log| {
+            for (call_id, tool, success, content) in batch_log {
+                log.record_tool_result(&run_id_for_results, call_id, tool, success, content)?;
+            }
+            // Each append already yielded its own event; the batch
+            // closure reports none of its own.
+            Ok(None)
+        })
+        .await;
+    }
+
+    /// T-007 (FR-011, FR-012): classify a step's tool results for an active
+    /// loop. A panic or unrecoverable failure terminates the loop at once; a
+    /// recoverable failure terminates it only past the retry allowance.
+    /// Returns `Break` when the loop was terminated.
+    async fn classify_step_failures(
+        &self,
+        session_id: &str,
+        turn: &crate::session::loop_steps::TurnClient,
+        total_start: Instant,
+        tracker: &mut crate::session::loop_state::LoopTracker,
+        batch_entries: &[codemason_types::event::ToolCallBatchEntry],
+        tool_panic: Option<String>,
+    ) -> std::ops::ControlFlow<()> {
+        let step_errors: Vec<String> = batch_entries
+            .iter()
+            .filter(|entry| !entry.success)
+            .filter_map(|entry| entry.error.clone())
+            .collect();
+        let hard_failure = tool_panic.or_else(|| {
+            step_errors
+                .iter()
+                .find(|msg| classify_message(msg).is_unrecoverable())
+                .cloned()
+        });
+        if let Some(failure) = hard_failure {
+            let reason = format!("unrecoverable tool failure: {failure}");
+            tracing::error!(
+                session_id = %session_id,
+                reason,
+                "loop terminated by unrecoverable tool failure (FR-011); no retry"
+            );
+            self.terminate_loop_inner(
+                session_id,
+                crate::session::loop_state::StopCondition::UnrecoverableError,
+                Some(total_start),
+                None,
+                None,
+                Some(reason),
+                Some(&turn.working_dir),
+            )
+            .await;
+            return std::ops::ControlFlow::Break(());
+        }
+        if step_errors.is_empty() {
+            tracker.record_success();
+        } else if tracker.record_failure() {
+            let reason = format!(
+                "retry allowance exceeded ({} consecutive recoverable \
+                             tool failures: {})",
+                tracker.consecutive_failures(),
+                step_errors.join("; ")
+            );
+            tracing::error!(
+                session_id = %session_id,
+                reason,
+                "loop terminated at the retry allowance (FR-012)"
+            );
+            self.terminate_loop_inner(
+                session_id,
+                crate::session::loop_state::StopCondition::UnrecoverableError,
+                Some(total_start),
+                None,
+                None,
+                Some(reason),
+                Some(&turn.working_dir),
+            )
+            .await;
+            return std::ops::ControlFlow::Break(());
+        }
+        // Persist the updated failure counter so the next
+        // iteration (and any external termination) sees it.
+        self.persist_loop_tracker(session_id, &tracker).await;
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Auto task status updates (P-10): when a file-write tool touched the
+    /// active spec's own directory, mark its in-progress tasks completed.
+    async fn auto_complete_spec_tasks(
+        &self,
+        active_spec_id: Option<&str>,
+        tool_calls: &[crate::session::history::PendingToolCall],
+        working_dir: &std::path::Path,
+    ) {
+        if let Some(spec_id_str) = active_spec_id
+                        && let Some(ref spec_mgr) = self.spec_manager.get()
+                        && tool_calls.iter().any(|tc| {
+                            matches!(
+                                tc.name.as_str(),
+                                "Write"
+                                    | "Edit"
+                                    | "multiedit"
+                                    | "multi_edit"
+                                    | "patch"
+                                    | "create"
+                                    | "append_to_file"
+                            )
+                        })
+                        && let Some(id) = codemason_specs::spec::SpecId::new(spec_id_str)
+                        && let Ok(mut spec) = spec_mgr.read_spec(&id).await
+                        // Only auto-complete tasks when a write tool actually
+                        // touched a path inside this spec's own directory: an
+                        // unrelated write elsewhere in the workspace (docs,
+                        // scratch files, snapshots) must not silently complete
+                        // spec tasks and corrupt PLAN.md.
+                        && writes_in_spec_dir(tool_calls, working_dir, spec_mgr.root(), &id)
+        {
+            let mut updated = false;
+            for task in spec.tasks.iter_mut() {
+                if task.status == codemason_specs::spec::TaskStatus::InProgress {
+                    task.status = codemason_specs::spec::TaskStatus::Completed;
+                    task.completed_at = Some(
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs(),
+                    );
+                    updated = true;
+                }
+            }
+            if updated {
+                if let Err(e) = spec_mgr.write_spec(&spec).await {
+                    tracing::warn!(error = %e, "Auto task update: failed to write spec");
+                } else {
+                    tracing::info!(spec_id = %spec_id_str, "Auto-updated in_progress tasks to completed after file write");
+                }
+            }
+        }
+    }
+
+    /// Background task injection (sub-agents): append each completed
+    /// background sub-agent's report to the history as a user turn.
+    async fn inject_background_task_results(
+        &self,
+        session_id: &str,
+        profiler: &std::sync::Arc<crate::session::profiler::AgentLoopProfiler>,
+        chat_messages: &mut std::sync::Arc<Vec<ChatMessage>>,
+        bg_parts: &mut Vec<ContentPart>,
+    ) {
+        if let Some(tm) = self.agent_manager.get() {
+            // P-11: skip the lock+scan when no background tasks are
+            // pending. The flag is set by `spawn_background` and
+            // cleared by `drain_completed` when nothing remains.
+            if tm.has_pending_background() {
+                let completed = tm.drain_completed(session_id).await;
+                if !completed.is_empty() {
+                    let _scope = profiler.scope("loop.background.inject_completed");
+                    // P-17: reuse the hoisted `bg_parts` buffer.
+                    bg_parts.clear();
+                    for task in &completed {
+                        let status_label = match task.status {
+                            crate::task::TaskStatus::Completed => "completed",
+                            crate::task::TaskStatus::Failed => "failed",
+                            crate::task::TaskStatus::Cancelled => "cancelled",
+                            crate::task::TaskStatus::Suspended => "suspended",
+                            crate::task::TaskStatus::Terminating => "terminating",
+                            crate::task::TaskStatus::Running => "running",
+                            crate::task::TaskStatus::TimedOut => "timed_out",
+                        };
+                        let body = task
+                            .result
+                            .as_deref()
+                            .or(task.error.as_deref())
+                            .unwrap_or("(no output)");
+                        let mut text = format!(
+                            "[Background Task {status_label}: {} - {}]\n\n{body}",
+                            task.agent_name,
+                            codemason_types::strutil::short_prefix(&task.id, 8)
+                        );
+                        // The injected body may later be cut by the
+                        // generic 12k tool-result truncation; point at
+                        // the durable on-disk report so the model can
+                        // recover any omitted content with the `read`
+                        // tool instead of re-running the sub-agent.
+                        if let Some(ref file) = task.output_file {
+                            text.push_str(&format!(
+                                "\n\n(Full untruncated report: {} - read this \
+                                         file with the `read` tool if the output above \
+                                         appears truncated.)",
+                                file.display()
+                            ));
+                        }
+                        bg_parts.push(ContentPart::Text { text });
+                    }
+                    Arc::make_mut(chat_messages).push(ChatMessage {
+                        role: "user".to_string(),
+                        content: ChatContent::Parts(std::mem::take(bg_parts)),
+                    });
+                }
+            }
+        }
+    }
+
+    /// Background shell task injection (M3 / T-023): append each completed
+    /// background shell task's tail to the history as a user turn.
+    async fn inject_background_shell_results(
+        &self,
+        session_id: &str,
+        chat_messages: &mut std::sync::Arc<Vec<ChatMessage>>,
+        bg_parts: &mut Vec<ContentPart>,
+    ) {
+        if let Some(bg) = self.bg_service.get() {
+            if bg.has_pending_completions() {
+                let completed = bg.drain_completed(session_id).await;
+                if !completed.is_empty() {
+                    bg_parts.clear();
+                    for task in &completed {
+                        let exit_str = task
+                            .exit_code
+                            .map(|c| format!("exit={c}"))
+                            .unwrap_or_else(|| "exit=?".to_string());
+                        let text = format!(
+                            "[Background Shell Task {}: {} - {} ({})]\n\n{}",
+                            task.status,
+                            task.command,
+                            codemason_types::strutil::short_prefix(&task.task_id, 8),
+                            exit_str,
+                            if task.tail.is_empty() {
+                                "(no output)"
+                            } else {
+                                &task.tail
+                            }
+                        );
+                        bg_parts.push(ContentPart::Text { text });
+                    }
+                    Arc::make_mut(chat_messages).push(ChatMessage {
+                        role: "user".to_string(),
+                        content: ChatContent::Parts(std::mem::take(bg_parts)),
+                    });
+                }
+            }
+        }
+    }
+
+    /// Interim save of the in-progress assistant message (M-008: skipped when
+    /// no part was appended since the last save).
+    async fn save_interim_assistant(
+        &self,
+        session_id: &str,
+        assistant_parts: &[MessagePart],
+        assistant_msg_id: &str,
+        last_interim_parts_count: &mut Option<usize>,
+    ) {
+        // M-008: avoid rewriting the full SQLite row when nothing was
+        // appended since the last save. Tool-call parts are carried in
+        // the transcript (`chat_messages`) as well, and the row is
+        // finalised on the final save, so an interim rewrite that only
+        // re-serialises unchanged content is wasted work.
+        //
+        // Invariant: non-tool-call parts are only pushed (stream
+        // deltas) or popped (sub-agent narration nudge) - never
+        // mutated in place - and tool-call parts are appended once per
+        // completed call, so the total count alone is a sufficient
+        // save gate; hashing the serialised parts (the previous P-12
+        // gate) re-serialised every tool-call input/output on every
+        // step, which is exactly the cost this interim save exists to
+        // avoid. Persisting tool-call appends keeps the row in step
+        // with the run so the TUI output-view overlay renders live
+        // steps instead of a frozen snapshot.
+        let interim_parts_count = assistant_parts.len();
+        if *last_interim_parts_count != Some(interim_parts_count) {
+            let mut interim = Message::new(session_id, Role::Assistant, assistant_parts.to_vec());
+            interim.id = assistant_msg_id.to_string();
+            // H3: use the FTS-skip variant for the interim save. The
+            // searchable text content of the interim message is either
+            // unchanged (only a tool-call status transition) or the
+            // message is still accumulating deltas and will be
+            // re-synced wholesale on the final save. Rewriting the FTS
+            // index on every stream event (DELETE + re-INSERT) was the
+            // dominant cost of `storage.assistant_interim.update`.
+            // Best-effort interim FTS write; the final save re-syncs
+            // wholesale. Log a failure rather than swallowing it.
+            if let Err(e) = self
+                .storage_op(move |s| s.update_message_parts_skip_fts(&interim))
+                .await
+            {
+                tracing::warn!(error = %e, "interim message-parts save failed");
+            }
+            *last_interim_parts_count = Some(interim_parts_count);
+        }
+    }
+
+    /// Record the turn's terminal reason, warn an interactive session about a
+    /// truncated reply, publish `Event::MessageEnd`, and log the completion.
+    async fn publish_turn_end(
+        &self,
+        session_id: &str,
+        agent: &AgentInfo,
+        end_reason: FinishReason,
+        message_id: String,
+        run_id: &codemason_types::id::RunId,
+    ) {
         // Record the terminal reason before publishing `MessageEnd` so a
         // parent context (the task registry's `SubagentComplete` publisher)
         // can report the real loop outcome instead of hard-coding `"stop"`.
@@ -4571,7 +4811,7 @@ impl SessionProcessor {
         }
         self.event_bus.publish(Event::MessageEnd {
             session_id: session_id.to_string(),
-            message_id: msg_id_for_end,
+            message_id,
             reason: end_reason,
         });
         // Activity log: record normal completion.
@@ -4584,10 +4824,6 @@ impl SessionProcessor {
             .map(Some)
         })
         .await;
-        // FR-033: the Stop (`on_session_end`) hooks have already run inside the
-        // loop, where a blocking hook can feed findings back to the model, so no
-        // second dispatch happens here.
-        Ok(saved_msg)
     }
 
     /// Announce the project instruction files (`AGENTS.md` and friends) that
