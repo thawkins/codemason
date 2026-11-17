@@ -45,6 +45,7 @@
 
 ### Changed
 
+- Changed: `WebGatherer::gather_with_observer` (research `web_gatherer.rs`) is split in place: the vault shortcut, query planning, sub-query search, hit screening, candidate fetch, page capture, open-access recovery, summarize-and-store and end-of-pass summary move into named helpers, and the pass's running counts live in one `SweepTally`; events, log lines and the gather summary are unchanged.
 - Changed: `handle_provider_setup_key` (app-core `input.rs`) is split in place: each setup step's key handling (provider, key entry, device flow, model, Azure resource, thinking level, agent, configured provider, provider config, reset, GitLab, telemetry) moves into its own `on_<step>` function; the dialog's behavior is unchanged.
 - Changed: `build_system_prompt_with_storage_inner` (agent `agent/mod.rs`) is split in place: its fixed prompt sections become named constants, and the template expansion, project-context sections and sub-agent spawning list move to helpers; every built-in agent's system prompt is byte-identical.
 - Changed: `TeamCreateTool::execute` (agent `tool/team_create.rs`) is split in place into named helpers - opening the team store, finding the blueprint directory, running `task-seed.json` and `spawn-prompts.json`, building spawn arguments, recording a pending teammate, and the roster and failed-spawn summaries; the tool's output, metadata and log messages are unchanged.
