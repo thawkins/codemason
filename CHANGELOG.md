@@ -45,6 +45,7 @@
 
 ### Changed
 
+- Changed: `async_main` in `src/main.rs` is decomposed in place (1,492 to 467 lines) into startup phase helpers (`init_tracing`, `load_startup_config`, `build_registries`, `resolve_startup_agent`, `init_telemetry`, `build_session_processor`, `connect_mcp_servers`, ...) and per-command handlers (`run_headless`, `serve`, `launch_gui`, `list_models`, `run_session_export`, ...); the duplicated GUI launch for the default and `session resume` paths now shares `launch_gui`. Behaviour and output strings are unchanged.
 - Changed: `WebGatherer::gather_with_observer` (research `web_gatherer.rs`) is split in place: the vault shortcut, query planning, sub-query search, hit screening, candidate fetch, page capture, open-access recovery, summarize-and-store and end-of-pass summary move into named helpers, and the pass's running counts live in one `SweepTally`; events, log lines and the gather summary are unchanged.
 - Changed: `handle_provider_setup_key` (app-core `input.rs`) is split in place: each setup step's key handling (provider, key entry, device flow, model, Azure resource, thinking level, agent, configured provider, provider config, reset, GitLab, telemetry) moves into its own `on_<step>` function; the dialog's behavior is unchanged.
 - Changed: `build_system_prompt_with_storage_inner` (agent `agent/mod.rs`) is split in place: its fixed prompt sections become named constants, and the template expansion, project-context sections and sub-agent spawning list move to helpers; every built-in agent's system prompt is byte-identical.
