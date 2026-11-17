@@ -2433,165 +2433,16 @@ pub fn build_system_prompt_with_storage_and_memory_and_config(
     )
 }
 
-fn build_system_prompt_with_storage_inner(
-    agent: &AgentInfo,
-    working_dir: &Path,
-    file_tree: &str,
-    skills: Option<&crate::skill::SkillRegistry>,
-    git_status: Option<&str>,
-    readme: Option<&str>,
-    agents_md: Option<&str>,
-    storage: Option<&crate::storage::Storage>,
-    memory_config: Option<&crate::MemoryConfig>,
-    memory_section: Option<&str>,
-    config: Option<&codemason_config::Config>,
-) -> String {
-    let mut prompt = String::new();
-
-    // Use provided agents_md content or collect it from the project tree.
-    let agents_md_content =
-        agents_md.map_or_else(|| collect_agents_md_content(working_dir), ToOwned::to_owned);
-    let git_status_text =
-        git_status.map_or_else(|| read_git_status(working_dir), ToOwned::to_owned);
-    let readme_text = readme.map_or_else(|| read_readme(working_dir), ToOwned::to_owned);
-
-    // Agent identity and role - substitute template variables used by custom agents.
-    if let Some(ref agent_prompt) = agent.prompt {
-        let date_str = {
-            let dt = chrono::Utc::now();
-            dt.format("%Y-%m-%d").to_string()
-        };
-
-        let expanded = agent_prompt
-            .replace("{{WORKING_DIR}}", &working_dir.display().to_string())
-            .replace("{{FILE_TREE}}", file_tree)
-            .replace("{{AGENTS_MD}}", &agents_md_content)
-            .replace("{{GIT_STATUS}}", &git_status_text)
-            .replace("{{README}}", &readme_text)
-            .replace("{{DATE}}", &date_str);
-
-        prompt.push_str(&expanded);
-        prompt.push_str("\n\n");
-    }
-
-    // Single-step agents (e.g. "ask") are tool-free; skip project context
-    // so the model focuses on answering the user's question directly.
-    let has_tools = agent.max_steps.is_none_or(|s| s > 1);
-    if !has_tools {
-        // The response-language rule still applies to a tool-free agent, so it
-        // is emitted on this path too before the project context is skipped.
-        if let Some(section) = build_response_language_section(config) {
-            prompt.push_str(&section);
-        }
-        return prompt;
-    }
-
-    // Working directory context (skip if already embedded via template variable)
-    if agent
-        .prompt
-        .as_deref()
-        .is_none_or(|p| !p.contains("{{WORKING_DIR}}"))
-    {
-        let _ = write!(
-            prompt,
-            "## Working Directory\nYou are operating in: {}\n\n",
-            working_dir.display()
-        );
-    }
-
-    // File tree context (skip if already embedded via template variable)
-    if agent
-        .prompt
-        .as_deref()
-        .is_none_or(|p| !p.contains("{{FILE_TREE}}"))
-        && !file_tree.is_empty()
-    {
-        prompt.push_str("## Project Structure\n");
-        prompt.push_str("```\n");
-        prompt.push_str(file_tree);
-        prompt.push_str("\n```\n\n");
-    }
-
-    // AGENTS.md project guidelines (skip if already embedded via template variable)
-    if agent
-        .prompt
-        .as_deref()
-        .is_none_or(|p| !p.contains("{{AGENTS_MD}}"))
-        && !agents_md_content.is_empty()
-    {
-        prompt.push_str("## Project Guidelines (AGENTS.md)\n");
-        prompt.push_str(&agents_md_content);
-        prompt.push_str("\n\n");
-    }
-
-    if agent
-        .prompt
-        .as_deref()
-        .is_none_or(|p| !p.contains("{{GIT_STATUS}}"))
-        && !git_status_text.trim().is_empty()
-    {
-        prompt.push_str("## Git Context\n");
-        prompt.push_str(&git_status_text);
-        prompt.push_str("\n\n");
-    }
-
-    if agent
-        .prompt
-        .as_deref()
-        .is_none_or(|p| !p.contains("{{README}}"))
-        && !readme_text.trim().is_empty()
-    {
-        prompt.push_str("## README\n");
-        prompt.push_str(&readme_text);
-        prompt.push_str("\n\n");
-    }
-
-    // PERF-028: the memory-block + SQLite memory section is computed off
-    // the async path (via `tokio::task::spawn_blocking`) by
-    // `process_user_message` and passed in via `memory_section`. When
-    // `None` (tests / sub-agent fallback), it is computed synchronously
-    // here via [`build_memory_prompt_section`].
-    let memory_section_owned;
-    let memory_section_str: &str = if let Some(s) = memory_section {
-        s
-    } else {
-        memory_section_owned = build_memory_prompt_section(working_dir, storage, memory_config);
-        &memory_section_owned
-    };
-    if !memory_section_str.is_empty() {
-        prompt.push_str(memory_section_str);
-    }
-
-    // Available skills (per SPEC S.3.19 prompt assembly order)
-    // FR-007/FR-008: inject the compact SkillCatalog (metadata only) instead
-    // of full skill bodies. Bodies are loaded on demand when a skill is
-    // invoked, cached per-session in `SessionProcessor::skill_body_cache`.
-    if let Some(registry) = skills {
-        let section = skills_prompt_section(registry, agent);
-        if !section.is_empty() {
-            prompt.push_str(&section);
-            prompt.push('\n');
-        }
-    }
-
-    prompt.push_str(
-        "## Reasoning Tool\n\n\
+/// The `think` tool reminder every tool-using agent gets.
+const REASONING_TOOL_SECTION: &str = "## Reasoning Tool\n\n\
          When useful, use the `think` tool to record short reasoning notes before \
          making non-trivial decisions. Keep thoughts brief and focused on the next \
-         action.\n\n",
-    );
+         action.\n\n";
 
-    // GCF encoding primer (spec `gcf` FR-006) - shown only while the GCF
-    // feature flag is enabled so the prompt stays byte-identical to
-    // pre-feature prompts when the setting is at its default-off state.
-    // The primer is short (~15 lines): the block markers, the generic
-    // profile grammar (flat scalars, `## section` headers, `path` nesting,
-    // `tags[2]: a,b` lists, `-` for null), the lossless guarantee, and how
-    // to read a block. It teaches exactly what the `tool_result_content_for_llm`
-    // encoding hook in `session/history.rs` may emit.
-    if codemason_config::gcf::is_enabled() {
-        prompt.push_str(
-            "## GCF Encoding Primer\n\n\
+/// GCF encoding primer (spec `gcf` FR-006), shown only while the GCF feature
+/// flag is enabled. It teaches exactly what the `tool_result_content_for_llm`
+/// encoding hook in `session/history.rs` may emit.
+const GCF_PRIMER_SECTION: &str = "## GCF Encoding Primer\n\n\
              Some tool results below may be wrapped in GCF (Graph Compact Format) \
              blocks:\n\
              \x20\x20[BEGIN GCF generic]\n\
@@ -2615,115 +2466,20 @@ fn build_system_prompt_with_storage_inner(
              - Empty list/map: `## empty_list [0]` / `## empty_map`.\n\n\
              When you need the original JSON (e.g. to echo an exact payload), \
              read the GCF block as data and reason over it directly - do not \
-             attempt to re-encode or quote the block back verbatim.\n\n",
-        );
-    }
+             attempt to re-encode or quote the block back verbatim.\n\n";
 
-    // Sub-agent spawning guidance (new_agent tool) - shown for primary agents only.
-    // Agent list is generated dynamically from builtins + custom agents so it stays in sync.
-    if agent.mode == AgentMode::Primary {
-        let builtins = builtin_agents();
-        let spawnable: Vec<&AgentInfo> = builtins
-            .iter()
-            .filter(|a| a.mode == AgentMode::Subagent && !a.hidden)
-            .map(|a| a.as_ref())
-            .collect();
-        let max_background_agents = config
-            .map(|c| c.experimental.max_background_agents)
-            .unwrap_or_else(|| {
-                crate::Config::load()
-                    .map(|c| c.experimental.max_background_agents)
-                    .unwrap_or(crate::task::DEFAULT_MAX_BACKGROUND_TASKS)
-            });
-
-        // Load custom agents and collect the spawnable ones
-        let (custom_defs, _) = custom::load_custom_agents(working_dir);
-        let spawnable_custom: Vec<Arc<AgentInfo>> = custom_defs
-            .into_iter()
-            .filter(|d| {
-                (d.agent_info.mode == AgentMode::Subagent || d.agent_info.mode == AgentMode::All)
-                    && !d.agent_info.hidden
-            })
-            .map(|d| d.agent_info)
-            .collect();
-
-        let mut section = String::from(
-            "## Sub-Agent Spawning\n\n\
+/// Opening of the primary agent's "Sub-Agent Spawning" section, before the
+/// generated list of available agents.
+const SUBAGENT_SPAWNING_HEADER: &str = "## Sub-Agent Spawning\n\n\
              **CRITICAL: Prefer using sub-agents over doing the work yourself.**\n\
              When sub-agents are available, your role shifts from a coder to a manager of \
              specialised agents. Delegate exploration, builds, and planning to them - they run \
              faster and cheaper than you would inline.\n\n\
-             **Available agents:**\n",
-        );
+             **Available agents:**\n";
 
-        for sa in &spawnable {
-            // Derive key traits for the LLM to reason about
-            let model_tier = sa.model.as_ref().map_or("standard", |m| {
-                if m.model_id.contains("haiku") {
-                    "fast / low-cost"
-                } else if m.model_id.contains("opus") {
-                    "powerful / higher-cost"
-                } else {
-                    "standard"
-                }
-            });
-
-            let can_write = sa
-                .permission
-                .iter()
-                .any(|r| r.permission == Permission::Edit && r.action == PermissionAction::Allow);
-            let can_bash = sa
-                .permission
-                .iter()
-                .any(|r| r.permission == Permission::Bash && r.action == PermissionAction::Allow);
-
-            let mut traits = Vec::new();
-            if !can_write {
-                traits.push("read-only");
-            }
-            if can_bash {
-                traits.push("can run shell commands");
-            }
-            traits.push(model_tier);
-
-            let _ = writeln!(
-                section,
-                "- `{}` - {} [{}]",
-                sa.name,
-                sa.description,
-                traits.join(", "),
-            );
-        }
-
-        // Append any project/global custom agents so the LLM knows they're available
-        if !spawnable_custom.is_empty() {
-            section.push_str("\n**Custom agents (project/user defined):**\n");
-            for ca in &spawnable_custom {
-                let can_write = ca.permission.iter().any(|r| {
-                    r.permission == Permission::Edit && r.action == PermissionAction::Allow
-                });
-                let can_bash = ca.permission.iter().any(|r| {
-                    r.permission == Permission::Bash && r.action == PermissionAction::Allow
-                });
-                let mut traits = vec!["custom"];
-                if !can_write {
-                    traits.push("read-only");
-                }
-                if can_bash {
-                    traits.push("can run shell commands");
-                }
-                let _ = writeln!(
-                    section,
-                    "- `{}` - {} [{}]",
-                    ca.name,
-                    ca.description,
-                    traits.join(", "),
-                );
-            }
-        }
-
-        section.push_str(
-            "\n**Choosing an agent:**\n\
+/// Rest of the "Sub-Agent Spawning" section after the agent list. Every
+/// `MAX_BG_TASKS` is replaced with the session's background-task limit.
+const SUBAGENT_SPAWNING_GUIDE: &str = "\n**Choosing an agent:**\n\
               - `explore` - fastest and cheapest; use for ANY codebase search, reading, or understanding.\n\
                 Read-only. Stateless - loses all context between calls.\n\
                 **Always prefer `explore` over doing file searches yourself.**\n\
@@ -2834,26 +2590,11 @@ fn build_system_prompt_with_storage_inner(
                 `output_file` with the `read` tool rather than re-running the agent or\n\
                 re-reading source files yourself.\n\
               - The tool's metadata `\"results\"` array additionally mirrors every agent's\n\
-                complete `\"output\"` plus the `\"output_file\"` path.\n\n",
-        );
-        section = section.replace("MAX_BG_TASKS", &max_background_agents.to_string());
+                complete `\"output\"` plus the `\"output_file\"` path.\n\n";
 
-        prompt.push_str(&section);
-    }
-
-    // Sub-agent terminal-signal guidance - shown for sub-agent mode only.
-    //
-    // Without an explicit terminal action most models end with a text-only
-    // message and the loop terminates via the no-tool-call path; several
-    // models also narrate further work after writing their report, keeping
-    // the task entry Running (and `wait_agents` waiting) longer than the
-    // visible report implies. Instructing the model to call `agent_complete`
-    // as its FINAL action makes the completion boundary deterministic: the
-    // tool result breaks the loop immediately (verified: the one sampled run
-    // that called it completed the moment the tool executed).
-    if agent.mode == AgentMode::Subagent {
-        prompt.push_str(
-            "## Sub-Agent Completion Protocol (MANDATORY - HARD REQUIREMENT)\n\n\
+/// Sub-agent completion protocol and deliverable rules, shown in sub-agent
+/// mode only.
+const SUBAGENT_COMPLETION_SECTION: &str = "## Sub-Agent Completion Protocol (MANDATORY - HARD REQUIREMENT)\n\n\
                You are running as a sub-agent. The parent session is BLOCKED \
                waiting on your completion. You have exactly ONE way to end \
                your run: the `agent_complete` tool. Ending with a plain text \
@@ -2909,28 +2650,18 @@ fn build_system_prompt_with_storage_inner(
                - If you cannot write the file (permission denied, read-only \
                  scope), say so explicitly in the `summary` and include the \
                  full findings inline instead. Never claim a file was \
-                 written when it was not.\n\n",
-        );
-    }
+                 written when it was not.\n\n";
 
-    // Tool usage guidelines
-    prompt.push_str(
-        "## Guidelines\n\
+/// General tool-usage guidelines.
+const GUIDELINES_SECTION: &str = "## Guidelines\n\
          - Use tools to verify information rather than guessing\n\
          - Read files before editing them to understand context\n\
          - Make precise, targeted changes\n\
          - Test changes when possible using the Bash tool\n\
-         - Explain what you're doing and why\n\n",
-    );
+         - Explain what you're doing and why\n\n";
 
-    // Specific guidance on using line ranges for file reads.
-    // -------------------------------------------------------------------
-    // VCS / remote safety - these rules are also in AGENTS.md, but
-    // reinforcing them in the system prompt reduces accidental pushes,
-    // tags, merges, and destructive git checkouts.
-    // -------------------------------------------------------------------
-    prompt.push_str(
-        "## Version Control Safety\n\n\
+/// Version-control safety rules.
+const VCS_SAFETY_SECTION: &str = "## Version Control Safety\n\n\
          Treat remote operations as destructive. Follow these rules exactly:\n\
          - **NEVER push to a remote** unless the user explicitly says words like \
            \"push to remote\", \"push to github\", or \"commit and push\". \
@@ -2940,22 +2671,13 @@ fn build_system_prompt_with_storage_inner(
            format `Version: X.Y.Z` (e.g. `Version: 0.1.0-beta.36`). Do NOT use \"chore: bump version...\".\n\
          - **Do NOT use `git checkout` to rewind files.** `git checkout` always risks lost work.\n\
          - Only merge, fast-forward, or force-push when the user has explicitly asked for it.\n\
-         - Prefer `git_status`, `git_diff`, and `git_log` to inspect state before any write operation.\n\n",
-    );
+         - Prefer `git_status`, `git_diff`, and `git_log` to inspect state before any write operation.\n\n";
 
-    // Built into the system prompt (not just AGENTS.md) so the guidance
-    // travels with the agent across all projects.  AGENTS.md is project-
-    // specific and can vary widely; putting Read-tool guidance there
-    // means models only see it on projects that happen to include it.
-    // Emphasising `start_line` + `num_lines` (the most intuitive pair)
-    // removes the historical "end_line as count" mistake that tripped
-    // up many models.  `end_line` is kept as a documented escape hatch
-    // in the tool schema for callers that need an absolute last line.
-    prompt.push_str(
-                                      "## File Reading Best Practices\n\n                                       When reading files with the `read` tool:\n                                       - **PREFERRED**: use `start_line` + `num_lines`.  `start_line` is the 1-based\n                                         absolute line number where reading begins, and `num_lines` is the COUNT of\n                                         lines to read from that start.  Example: `start_line=201, num_lines=100`\n                                         reads lines 201-300 (inclusive).  This pair expresses the same intent as\n                                         `start_line` + `end_line` but is much harder to get wrong.\n                                       - `end_line` is the absolute last line number to include (NOT a count).\n                                         It is still supported, but only use it when you specifically need an\n                                         absolute last-line boundary.  If you do, remember: `end_line` must be\n                                         >= `start_line` and is the ACTUAL last line number - e.g.\n                                         `start_line=200, end_line=300` reads lines 200-300 (101 lines total).\n                                       - Common mistake: writing `end_line=100` to mean \"100 lines\".  That is\n                                         wrong; `end_line` is absolute.  If you meant \"100 lines starting at 200\"\n                                         use `start_line=200, num_lines=100` (preferred) or `end_line=299`.\n                                       - The tool rejects `end_line < start_line` with a diagnostic that points\n                                         at the right fix; read the error message and retry with `num_lines`.\n                                       - For files > 100 lines, do not read the whole file in one call - read\n                                         in focused sections.  First call without a range returns the first 100\n                                         lines plus a section map; the response metadata always includes `total_lines`.\n                                       - Strategy:\n                                         1. Read the file without `start_line`/`num_lines` first - for large files\n                                            this returns the first 100 lines plus a section map with the total\n                                            line count.\n                                         2. Use `total_lines` from the response metadata to plan subsequent reads.\n                                         3. Then read specific sections with `start_line` + `num_lines`.\n                                         4. Never read an entire file > 100 lines in a single call.\n\n",
-                                      ); // Guidance on using edit / multiedit tools
-    prompt.push_str(
-        "\n## Editing Files\n\
+/// `read` tool line-range guidance.
+const FILE_READING_SECTION: &str = "## File Reading Best Practices\n\n                                       When reading files with the `read` tool:\n                                       - **PREFERRED**: use `start_line` + `num_lines`.  `start_line` is the 1-based\n                                         absolute line number where reading begins, and `num_lines` is the COUNT of\n                                         lines to read from that start.  Example: `start_line=201, num_lines=100`\n                                         reads lines 201-300 (inclusive).  This pair expresses the same intent as\n                                         `start_line` + `end_line` but is much harder to get wrong.\n                                       - `end_line` is the absolute last line number to include (NOT a count).\n                                         It is still supported, but only use it when you specifically need an\n                                         absolute last-line boundary.  If you do, remember: `end_line` must be\n                                         >= `start_line` and is the ACTUAL last line number - e.g.\n                                         `start_line=200, end_line=300` reads lines 200-300 (101 lines total).\n                                       - Common mistake: writing `end_line=100` to mean \"100 lines\".  That is\n                                         wrong; `end_line` is absolute.  If you meant \"100 lines starting at 200\"\n                                         use `start_line=200, num_lines=100` (preferred) or `end_line=299`.\n                                       - The tool rejects `end_line < start_line` with a diagnostic that points\n                                         at the right fix; read the error message and retry with `num_lines`.\n                                       - For files > 100 lines, do not read the whole file in one call - read\n                                         in focused sections.  First call without a range returns the first 100\n                                         lines plus a section map; the response metadata always includes `total_lines`.\n                                       - Strategy:\n                                         1. Read the file without `start_line`/`num_lines` first - for large files\n                                            this returns the first 100 lines plus a section map with the total\n                                            line count.\n                                         2. Use `total_lines` from the response metadata to plan subsequent reads.\n                                         3. Then read specific sections with `start_line` + `num_lines`.\n                                         4. Never read an entire file > 100 lines in a single call.\n\n";
+
+/// `Edit` / `multi_edit` / `patch` guidance.
+const EDITING_FILES_SECTION: &str = "\n## Editing Files\n\
          \n\
          Choose the right tool for the change:\n\
          - `Edit` - one surgical replacement in one file (default choice).\n\
@@ -3023,22 +2745,10 @@ fn build_system_prompt_with_storage_inner(
             and applied highest-offset-first, so input order does not matter.\n\
          - Each edit is exact-match-once with the same failure recovery as `Edit`\n\
             above; a failing edit index is named in the error.\n\
-         ",
-    );
-    // -------------------------------------------------------------------
-    // Task tool family - the difference between `agent_complete` and
-    // `team_task_complete` trips up many models, leading to the wrong
-    // tool being called with the wrong parameters.  This section is
-    // injected into every primary agent's system prompt so the
-    // distinction is always visible.
-    // -------------------------------------------------------------------
-    prompt.push_str(TASK_TOOL_FAMILY_GUIDANCE);
-    // -------------------------------------------------------------------
-    // Compact per-tool argument cheat sheet for the most frequently used
-    // file and directory tools. The full schemas are in the tool list.
-    // -------------------------------------------------------------------
-    prompt.push_str(
-        "## File Tool Quick Reference\n\n\
+         ";
+
+/// Compact argument cheat sheet for the file and directory tools.
+const FILE_TOOL_REFERENCE_SECTION: &str = "## File Tool Quick Reference\n\n\
          | Tool | Required | Common optional | Notes |\n\
          |------|----------|-----------------|-------|\n\
          | `read` | none | `start_line`, `num_lines` (preferred), `end_line` (absolute) | For files >100 lines read in sections. |\n\
@@ -3054,15 +2764,10 @@ fn build_system_prompt_with_storage_inner(
          | `make_directory` | `path` | - | Equivalent to `mkdir -p`. |\n\
          | `Glob` | `pattern` | `path` | Find files matching a glob. |\n\
          | `list` | none | `path`, `depth` | Directory tree listing. |\n\
-         | `file_info` | `path` | - | Metadata: size, mtime, type. |\n\n",
-    );
+         | `file_info` | `path` | - | Metadata: size, mtime, type. |\n\n";
 
-    // -------------------------------------------------------------------
-    // Web / MasterFetch guidance - clarify when to use which tool and how
-    // to fetch safely.
-    // -------------------------------------------------------------------
-    prompt.push_str(
-        "## Web and MasterFetch Tools\n\n\
+/// When to use which web / MasterFetch tool.
+const WEB_TOOLS_SECTION: &str = "## Web and MasterFetch Tools\n\n\
          - Use `mf_fetch` for rich extraction (markdown/HTML/text/raw), PDFs, bulk fetch, \
            `css_selector` narrowing, or when you need envelope signals (`content_ok`, \
            `page_type`, `next_action`, `is_stale`).\n\
@@ -3074,14 +2779,10 @@ fn build_system_prompt_with_storage_inner(
            allows crawling; do not hammer the same domain with repeated calls.\n\
          - `mf_fetch` supports bulk fetch via the `urls` array (parallel, up to 8 concurrent).\n\
          - `mf_crawl` is best-first same-domain crawl; cap with `max_pages`, `max_total_chars`, \
-           and `deadline_ms` to avoid runaway fetches.\n\n",
-    );
+           and `deadline_ms` to avoid runaway fetches.\n\n";
 
-    // -------------------------------------------------------------------
-    // Memory guidance - confidence scale, categories, tags.
-    // -------------------------------------------------------------------
-    prompt.push_str(
-        "## Memory Tools\n\n\
+/// Memory tool parameters, categories, confidence scale and tags.
+const MEMORY_TOOLS_SECTION: &str = "## Memory Tools\n\n\
          Structured memories (`memory_store`, `memory_recall`, `memory_forget`) are stored in \
          SQLite with category, tags, and confidence.\n\n\
          - `memory_store` required parameters: `content`, `category`. Optional: `tags` (array \
@@ -3094,16 +2795,10 @@ fn build_system_prompt_with_storage_inner(
          - `memory_forget` deletes by `id` OR by filter (`older_than_days`, `category`, tags, \
            `max_confidence`). At least one criterion is required.\n\
          - Tags are free-form but should be lowercase and hyphenated (e.g. `rust`, `startup`, \
-           `fts-warmup`). Use them consistently to improve recall.\n\n",
-    );
+           `fts-warmup`). Use them consistently to improve recall.\n\n";
 
-    // -------------------------------------------------------------------
-    // ask_user guidance - keep in sync with the tool schema. The old
-    // standalone `question` tool was removed; `AskUserQuestion` is the only
-    // interactive-question tool.
-    // -------------------------------------------------------------------
-    prompt.push_str(
-        "## AskUser Tool\n\n\
+/// `AskUserQuestion` guidance.
+const ASK_USER_SECTION: &str = "## AskUser Tool\n\n\
          - `AskUserQuestion` required parameter: `question` (string). Optional: `options` (array of \
            strings). When `options` is provided the user picks one; otherwise they type free text.\
            \n\
@@ -3113,15 +2808,10 @@ fn build_system_prompt_with_storage_inner(
            when present).\
            \n\
          - Use `AskUserQuestion` for clarification, prioritisation, or confirmation before proceeding.\
-           \n\n",
-    );
+           \n\n";
 
-    // -------------------------------------------------------------------
-    // Compact team-tool required-parameter table. The task/anti-confusion
-    // rules are in TASK_TOOL_FAMILY_GUIDANCE and are not duplicated here.
-    // -------------------------------------------------------------------
-    prompt.push_str(
-        "## Team Tools Quick Reference\n\n\
+/// Team tool required-parameter table.
+const TEAM_TOOLS_SECTION: &str = "## Team Tools Quick Reference\n\n\
          All team tools operate inside an active team. `team_name` is required by nearly every tool.\n\n\
          | Tool | Required parameters | Purpose |\n\
          |------|---------------------|---------|\n\
@@ -3144,8 +2834,148 @@ fn build_system_prompt_with_storage_inner(
          | `team_shutdown_ack` | `team_name` | Teammate acks shutdown and exits. |\n\
          | `team_cleanup` | `team_name` | Lead tears down the team after all stopped. |\n\
          | `team_memory_read` | `team_name` | Read team memory bucket. |\n\
-         | `team_memory_write` | `team_name`, `content` | Write team memory bucket. |\n\n",
-    );
+         | `team_memory_write` | `team_name`, `content` | Write team memory bucket. |\n\n";
+
+fn build_system_prompt_with_storage_inner(
+    agent: &AgentInfo,
+    working_dir: &Path,
+    file_tree: &str,
+    skills: Option<&crate::skill::SkillRegistry>,
+    git_status: Option<&str>,
+    readme: Option<&str>,
+    agents_md: Option<&str>,
+    storage: Option<&crate::storage::Storage>,
+    memory_config: Option<&crate::MemoryConfig>,
+    memory_section: Option<&str>,
+    config: Option<&codemason_config::Config>,
+) -> String {
+    let mut prompt = String::new();
+
+    // Use provided agents_md content or collect it from the project tree.
+    let agents_md_content =
+        agents_md.map_or_else(|| collect_agents_md_content(working_dir), ToOwned::to_owned);
+    let git_status_text =
+        git_status.map_or_else(|| read_git_status(working_dir), ToOwned::to_owned);
+    let readme_text = readme.map_or_else(|| read_readme(working_dir), ToOwned::to_owned);
+    let context = ProjectContext {
+        working_dir,
+        file_tree,
+        agents_md: &agents_md_content,
+        git_status: &git_status_text,
+        readme: &readme_text,
+    };
+
+    // Agent identity and role - substitute template variables used by custom agents.
+    if let Some(ref agent_prompt) = agent.prompt {
+        prompt.push_str(&expand_agent_prompt(agent_prompt, &context));
+        prompt.push_str("\n\n");
+    }
+
+    // Single-step agents (e.g. "ask") are tool-free; skip project context
+    // so the model focuses on answering the user's question directly.
+    let has_tools = agent.max_steps.is_none_or(|s| s > 1);
+    if !has_tools {
+        // The response-language rule still applies to a tool-free agent, so it
+        // is emitted on this path too before the project context is skipped.
+        if let Some(section) = build_response_language_section(config) {
+            prompt.push_str(&section);
+        }
+        return prompt;
+    }
+
+    push_project_context(&mut prompt, agent, &context);
+
+    // PERF-028: the memory-block + SQLite memory section is computed off
+    // the async path (via `tokio::task::spawn_blocking`) by
+    // `process_user_message` and passed in via `memory_section`. When
+    // `None` (tests / sub-agent fallback), it is computed synchronously
+    // here via [`build_memory_prompt_section`].
+    let memory_section_owned;
+    let memory_section_str: &str = if let Some(s) = memory_section {
+        s
+    } else {
+        memory_section_owned = build_memory_prompt_section(working_dir, storage, memory_config);
+        &memory_section_owned
+    };
+    if !memory_section_str.is_empty() {
+        prompt.push_str(memory_section_str);
+    }
+
+    // Available skills (per SPEC S.3.19 prompt assembly order)
+    // FR-007/FR-008: inject the compact SkillCatalog (metadata only) instead
+    // of full skill bodies. Bodies are loaded on demand when a skill is
+    // invoked, cached per-session in `SessionProcessor::skill_body_cache`.
+    if let Some(registry) = skills {
+        let section = skills_prompt_section(registry, agent);
+        if !section.is_empty() {
+            prompt.push_str(&section);
+            prompt.push('\n');
+        }
+    }
+
+    prompt.push_str(REASONING_TOOL_SECTION);
+
+    // The GCF primer is shown only while the GCF feature flag is enabled so
+    // the prompt stays byte-identical to pre-feature prompts when the
+    // setting is at its default-off state.
+    if codemason_config::gcf::is_enabled() {
+        prompt.push_str(GCF_PRIMER_SECTION);
+    }
+
+    // Sub-agent spawning guidance (new_agent tool) - shown for primary agents only.
+    if agent.mode == AgentMode::Primary {
+        prompt.push_str(&subagent_spawning_section(working_dir, config));
+    }
+
+    // Sub-agent terminal-signal guidance - shown for sub-agent mode only.
+    //
+    // Without an explicit terminal action most models end with a text-only
+    // message and the loop terminates via the no-tool-call path; several
+    // models also narrate further work after writing their report, keeping
+    // the task entry Running (and `wait_agents` waiting) longer than the
+    // visible report implies. Instructing the model to call `agent_complete`
+    // as its FINAL action makes the completion boundary deterministic: the
+    // tool result breaks the loop immediately (verified: the one sampled run
+    // that called it completed the moment the tool executed).
+    if agent.mode == AgentMode::Subagent {
+        prompt.push_str(SUBAGENT_COMPLETION_SECTION);
+    }
+
+    prompt.push_str(GUIDELINES_SECTION);
+
+    // VCS / remote safety - these rules are also in AGENTS.md, but
+    // reinforcing them in the system prompt reduces accidental pushes,
+    // tags, merges, and destructive git checkouts.
+    prompt.push_str(VCS_SAFETY_SECTION);
+
+    // Built into the system prompt (not just AGENTS.md) so the guidance
+    // travels with the agent across all projects.  AGENTS.md is project-
+    // specific and can vary widely; putting Read-tool guidance there
+    // means models only see it on projects that happen to include it.
+    // Emphasising `start_line` + `num_lines` (the most intuitive pair)
+    // removes the historical "end_line as count" mistake that tripped
+    // up many models.  `end_line` is kept as a documented escape hatch
+    // in the tool schema for callers that need an absolute last line.
+    prompt.push_str(FILE_READING_SECTION);
+    prompt.push_str(EDITING_FILES_SECTION);
+    // -------------------------------------------------------------------
+    // Task tool family - the difference between `agent_complete` and
+    // `team_task_complete` trips up many models, leading to the wrong
+    // tool being called with the wrong parameters.  This section is
+    // injected into every primary agent's system prompt so the
+    // distinction is always visible.
+    // -------------------------------------------------------------------
+    prompt.push_str(TASK_TOOL_FAMILY_GUIDANCE);
+    // The full schemas are in the tool list; these are compact references.
+    prompt.push_str(FILE_TOOL_REFERENCE_SECTION);
+    prompt.push_str(WEB_TOOLS_SECTION);
+    prompt.push_str(MEMORY_TOOLS_SECTION);
+    // The old standalone `question` tool was removed; `AskUserQuestion` is
+    // the only interactive-question tool.
+    prompt.push_str(ASK_USER_SECTION);
+    // The task/anti-confusion rules are in TASK_TOOL_FAMILY_GUIDANCE and are
+    // not duplicated in the team table.
+    prompt.push_str(TEAM_TOOLS_SECTION);
 
     // -------------------------------------------------------------------
     // Response language. This is the LAST section so it is the final
@@ -3161,4 +2991,190 @@ fn build_system_prompt_with_storage_inner(
     }
 
     prompt
+}
+
+/// The project facts a system prompt embeds, either through a custom agent's
+/// `{{...}}` template variables or as their own sections.
+struct ProjectContext<'a> {
+    working_dir: &'a Path,
+    file_tree: &'a str,
+    agents_md: &'a str,
+    git_status: &'a str,
+    readme: &'a str,
+}
+
+/// Substitute the `{{WORKING_DIR}}`, `{{FILE_TREE}}`, `{{AGENTS_MD}}`,
+/// `{{GIT_STATUS}}`, `{{README}}` and `{{DATE}}` template variables in an
+/// agent's prompt.
+fn expand_agent_prompt(agent_prompt: &str, context: &ProjectContext<'_>) -> String {
+    let date_str = {
+        let dt = chrono::Utc::now();
+        dt.format("%Y-%m-%d").to_string()
+    };
+
+    agent_prompt
+        .replace(
+            "{{WORKING_DIR}}",
+            &context.working_dir.display().to_string(),
+        )
+        .replace("{{FILE_TREE}}", context.file_tree)
+        .replace("{{AGENTS_MD}}", context.agents_md)
+        .replace("{{GIT_STATUS}}", context.git_status)
+        .replace("{{README}}", context.readme)
+        .replace("{{DATE}}", &date_str)
+}
+
+/// True when the agent's prompt does not already embed `variable` through a
+/// template, so the matching context section must be emitted on its own.
+fn prompt_lacks(agent: &AgentInfo, variable: &str) -> bool {
+    agent
+        .prompt
+        .as_deref()
+        .is_none_or(|p| !p.contains(variable))
+}
+
+/// Append the working directory, project structure, AGENTS.md, git and README
+/// sections, each skipped when the agent's prompt already embeds it via a
+/// template variable or when its content is empty.
+fn push_project_context(prompt: &mut String, agent: &AgentInfo, context: &ProjectContext<'_>) {
+    // Working directory context (skip if already embedded via template variable)
+    if prompt_lacks(agent, "{{WORKING_DIR}}") {
+        let _ = write!(
+            prompt,
+            "## Working Directory\nYou are operating in: {}\n\n",
+            context.working_dir.display()
+        );
+    }
+
+    // File tree context (skip if already embedded via template variable)
+    if prompt_lacks(agent, "{{FILE_TREE}}") && !context.file_tree.is_empty() {
+        prompt.push_str("## Project Structure\n");
+        prompt.push_str("```\n");
+        prompt.push_str(context.file_tree);
+        prompt.push_str("\n```\n\n");
+    }
+
+    // AGENTS.md project guidelines (skip if already embedded via template variable)
+    if prompt_lacks(agent, "{{AGENTS_MD}}") && !context.agents_md.is_empty() {
+        prompt.push_str("## Project Guidelines (AGENTS.md)\n");
+        prompt.push_str(context.agents_md);
+        prompt.push_str("\n\n");
+    }
+
+    if prompt_lacks(agent, "{{GIT_STATUS}}") && !context.git_status.trim().is_empty() {
+        prompt.push_str("## Git Context\n");
+        prompt.push_str(context.git_status);
+        prompt.push_str("\n\n");
+    }
+
+    if prompt_lacks(agent, "{{README}}") && !context.readme.trim().is_empty() {
+        prompt.push_str("## README\n");
+        prompt.push_str(context.readme);
+        prompt.push_str("\n\n");
+    }
+}
+
+/// Whether an agent's permission rules explicitly allow editing files and
+/// running shell commands, in that order.
+fn write_and_bash_allowed(permission: &PermissionRuleset) -> (bool, bool) {
+    let can_write = permission
+        .iter()
+        .any(|r| r.permission == Permission::Edit && r.action == PermissionAction::Allow);
+    let can_bash = permission
+        .iter()
+        .any(|r| r.permission == Permission::Bash && r.action == PermissionAction::Allow);
+    (can_write, can_bash)
+}
+
+/// The primary agent's "Sub-Agent Spawning" section. The agent list is
+/// generated from the built-ins plus the project/user custom agents so it
+/// stays in sync, and `MAX_BG_TASKS` becomes the background-task limit from
+/// `config` (or a fresh `Config::load()` when none was passed).
+fn subagent_spawning_section(
+    working_dir: &Path,
+    config: Option<&codemason_config::Config>,
+) -> String {
+    let builtins = builtin_agents();
+    let spawnable: Vec<&AgentInfo> = builtins
+        .iter()
+        .filter(|a| a.mode == AgentMode::Subagent && !a.hidden)
+        .map(|a| a.as_ref())
+        .collect();
+    let max_background_agents = config
+        .map(|c| c.experimental.max_background_agents)
+        .unwrap_or_else(|| {
+            crate::Config::load()
+                .map(|c| c.experimental.max_background_agents)
+                .unwrap_or(crate::task::DEFAULT_MAX_BACKGROUND_TASKS)
+        });
+
+    // Load custom agents and collect the spawnable ones
+    let (custom_defs, _) = custom::load_custom_agents(working_dir);
+    let spawnable_custom: Vec<Arc<AgentInfo>> = custom_defs
+        .into_iter()
+        .filter(|d| {
+            (d.agent_info.mode == AgentMode::Subagent || d.agent_info.mode == AgentMode::All)
+                && !d.agent_info.hidden
+        })
+        .map(|d| d.agent_info)
+        .collect();
+
+    let mut section = String::from(SUBAGENT_SPAWNING_HEADER);
+
+    for sa in &spawnable {
+        // Derive key traits for the LLM to reason about
+        let model_tier = sa.model.as_ref().map_or("standard", |m| {
+            if m.model_id.contains("haiku") {
+                "fast / low-cost"
+            } else if m.model_id.contains("opus") {
+                "powerful / higher-cost"
+            } else {
+                "standard"
+            }
+        });
+
+        let (can_write, can_bash) = write_and_bash_allowed(&sa.permission);
+
+        let mut traits = Vec::new();
+        if !can_write {
+            traits.push("read-only");
+        }
+        if can_bash {
+            traits.push("can run shell commands");
+        }
+        traits.push(model_tier);
+
+        let _ = writeln!(
+            section,
+            "- `{}` - {} [{}]",
+            sa.name,
+            sa.description,
+            traits.join(", "),
+        );
+    }
+
+    // Append any project/global custom agents so the LLM knows they're available
+    if !spawnable_custom.is_empty() {
+        section.push_str("\n**Custom agents (project/user defined):**\n");
+        for ca in &spawnable_custom {
+            let (can_write, can_bash) = write_and_bash_allowed(&ca.permission);
+            let mut traits = vec!["custom"];
+            if !can_write {
+                traits.push("read-only");
+            }
+            if can_bash {
+                traits.push("can run shell commands");
+            }
+            let _ = writeln!(
+                section,
+                "- `{}` - {} [{}]",
+                ca.name,
+                ca.description,
+                traits.join(", "),
+            );
+        }
+    }
+
+    section.push_str(SUBAGENT_SPAWNING_GUIDE);
+    section.replace("MAX_BG_TASKS", &max_background_agents.to_string())
 }

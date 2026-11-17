@@ -45,6 +45,7 @@
 
 ### Changed
 
+- Changed: `build_system_prompt_with_storage_inner` (agent `agent/mod.rs`) is split in place: its fixed prompt sections become named constants, and the template expansion, project-context sections and sub-agent spawning list move to helpers; every built-in agent's system prompt is byte-identical.
 - Changed: `TeamCreateTool::execute` (agent `tool/team_create.rs`) is split in place into named helpers - opening the team store, finding the blueprint directory, running `task-seed.json` and `spawn-prompts.json`, building spawn arguments, recording a pending teammate, and the roster and failed-spawn summaries; the tool's output, metadata and log messages are unchanged.
 - Changed: `create_builtin_agents` (agent `agent/mod.rs`) builds each built-in through one `builtin_agent` constructor that holds the nine fields every built-in shares; agents that differ override `hidden`, `temperature` or `thinking` with struct-update syntax. 545 -> 324 lines; the `{:#?}` dump of all 17 agents is byte-identical before and after (deep-refactor S-09, #9).
 - Changed: `call_llm_step` (agent `loop_steps.rs`) is split in place into named helpers - chat-failure and stream-error handling, the shared emergency overflow compaction (previously duplicated), finish-reason settling, the wait notice, stream flushing, argument accumulation and narrated tool-call recovery - cutting it from 845 to 428 lines with behaviour and every notice string unchanged (deep-refactor S-09, #9).
