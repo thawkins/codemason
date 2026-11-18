@@ -33,6 +33,14 @@
 > removed. The tables below are not re-measured; a full
 > `cargo nextest run --workspace` on this tree ran 15,866 tests, all passing.
 >
+> **GUI phase 3 (unreleased, branch `feat/ui-phase3`).** `/verbosity` and
+> `/thinking-display`, activity rows that fold tool calls and reasoning, inline
+> diffs and the Diff pane, diff and command previews in the permission dialog,
+> and the bundled Lucide icon font. No crate is added or removed. The tables
+> below are not re-measured; a full `cargo nextest run --workspace` on this
+> tree ran 15,947 tests, all passing (3,849 app-core and GUI tests after merging
+> `main`).
+>
 > **GUI phase 2 (unreleased, branch `feat/ui-phase2`).** Transcript block
 > model, Markdown rendering through `egui_commonmark`, tree-sitter code
 > highlighting with Copy/Wrap/Insert, selectable text with Copy as Markdown and

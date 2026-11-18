@@ -169,7 +169,11 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   system's dark or light setting; `/theme` opens a picker over seven built-in
   themes (dark, light, high contrast, Catppuccin Mocha, Gruvbox, Nord, Tokyo
   Night), and your own themes are JSON files in `~/.config/codemason/themes/`
-  or `.codemason/themes/`. Without a display
+  or `.codemason/themes/`. Tool calls fold into one activity row per run
+  (`/verbosity low|medium|high`), reasoning sits under a collapsible Thinking
+  row (`/thinking-display`), and edits show their diff, with a Diff pane for
+  reviewing changed files and diff or command previews in the permission
+  dialog. Without a display
   (an SSH session) `cdmn` exits with a pointer to `cdmn run`
 - **Telemetry export health** — every OTLP metric export outcome is classified
   (success, non-2xx collector response, transport error, export timeout) and a
