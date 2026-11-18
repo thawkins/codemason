@@ -9,11 +9,13 @@
 
 #![deny(unsafe_code)]
 
+pub mod activity;
 pub mod app;
 pub mod branch_names;
 pub mod clipboard;
 pub mod context_panel;
 pub mod deck_progress;
+pub mod diff_view;
 pub mod geometry;
 pub mod input;
 pub mod input_event;
@@ -26,6 +28,7 @@ pub mod message_blocks;
 pub mod message_lines;
 pub mod message_text;
 pub mod open_in;
+pub mod permission_preview;
 pub mod project_properties;
 pub mod research_adapter;
 pub mod research_progress;
@@ -38,6 +41,7 @@ pub mod syntax_highlight;
 pub mod text_utils;
 pub mod theme_tokens;
 pub mod tracing_layer;
+pub mod transcript_prefs;
 pub mod usage_stats;
 
 /// Self-healing staleness caps for spinner/progress latches (in seconds).

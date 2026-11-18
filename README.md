@@ -169,7 +169,11 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   system's dark or light setting; `/theme` opens a picker over seven built-in
   themes (dark, light, high contrast, Catppuccin Mocha, Gruvbox, Nord, Tokyo
   Night), and your own themes are JSON files in `~/.config/codemason/themes/`
-  or `.codemason/themes/`. Without a display
+  or `.codemason/themes/`. Tool calls fold into one activity row per run
+  (`/verbosity low|medium|high`), reasoning sits under a collapsible Thinking
+  row (`/thinking-display`), and edits show their diff, with a Diff pane for
+  reviewing changed files and diff or command previews in the permission
+  dialog. Without a display
   (an SSH session) `cdmn` exits with a pointer to `cdmn run`
 - **Telemetry export health** — every OTLP metric export outcome is classified
   (success, non-2xx collector response, transport error, export timeout) and a
@@ -1066,7 +1070,10 @@ The GUI embeds font software: the Hack Bold font
 (`crates/codemason-gui/assets/fonts/Hack-Bold.ttf`, Hack v3.003, Source Foundry;
 MIT and Bitstream Vera licences), the Inter Regular and Inter SemiBold fonts
 (`crates/codemason-gui/assets/fonts/Inter-Regular.ttf`, `Inter-SemiBold.ttf`,
-Inter 4.1, The Inter Project Authors; SIL Open Font License 1.1) and egui's
+Inter 4.1, The Inter Project Authors; SIL Open Font License 1.1), the Lucide
+icon font (`crates/codemason-gui/assets/fonts/lucide.ttf`, lucide-static
+1.66.0, Lucide Icons and Contributors; ISC licence, the Feather-derived icons
+MIT) and egui's
 default fonts (Hack Regular, Noto
 Emoji under the SIL Open Font License 1.1, Ubuntu Light under the Ubuntu Font
 Licence 1.0, and the MIT-licensed emoji-icon-font). The full notices are in

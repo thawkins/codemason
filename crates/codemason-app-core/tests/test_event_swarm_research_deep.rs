@@ -485,6 +485,7 @@ async fn permission_requested_duplicate_and_other_session_are_ignored() {
             permission: "file:write".to_string(),
             description: "write a file".to_string(),
             options: vec!["once".to_string()],
+            tool_call: None,
         })
         .await;
     }
@@ -500,6 +501,7 @@ async fn permission_requested_duplicate_and_other_session_are_ignored() {
         permission: "file:write".to_string(),
         description: "other session".to_string(),
         options: Vec::new(),
+        tool_call: None,
     })
     .await;
     assert_eq!(

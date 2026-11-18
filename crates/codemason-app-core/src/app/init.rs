@@ -487,6 +487,8 @@ impl App {
             memory_entry_count_pending: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             memory_stats_last_refresh: std::time::Instant::now(),
             theme,
+            transcript_prefs: crate::transcript_prefs::startup(),
+            diff_pane: crate::diff_view::DiffPaneState::default(),
             themes,
             mouse_enabled: true,
             status_history: StatusHistory::new(),

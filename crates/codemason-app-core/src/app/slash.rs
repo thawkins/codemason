@@ -992,6 +992,12 @@ impl App {
                     "help".to_string(),
                 ]
             }
+            "verbosity" => vec!["low".to_string(), "medium".to_string(), "high".to_string()],
+            "thinking-display" => vec![
+                "show".to_string(),
+                "hide".to_string(),
+                "collapse".to_string(),
+            ],
             "theme" => vec![
                 "default".to_string(),
                 "high-contrast".to_string(),
@@ -4400,6 +4406,8 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                 }
             }
             "theme" => self.slash_theme(args),
+            "verbosity" => self.slash_verbosity(args),
+            "thinking-display" => self.slash_thinking_display(args),
             "yolo" => self.slash_yolo(args),
             // -- /undo ------------------------------------------------------
             // FR-014: Remove the last user/assistant turn pair from the conversation.
@@ -8787,6 +8795,53 @@ Changes are persisted immediately to `.codemason/codemason.json` and take effect
                 }
             },
         }
+        self.needs_redraw = true;
+    }
+
+    /// Run the `/verbosity` slash command: a bare form reports the level,
+    /// `low|medium|high` sets it for the running window. The `verbosity`
+    /// config key sets the startup level.
+    fn slash_verbosity(&mut self, args: &str) {
+        use crate::transcript_prefs::Verbosity;
+
+        let arg = args.trim().to_lowercase();
+        if arg.is_empty() {
+            self.status = format!("verbosity: {}", self.transcript_prefs.verbosity);
+        } else {
+            match arg.parse::<Verbosity>() {
+                Ok(level) => {
+                    self.transcript_prefs.verbosity = level;
+                    self.status = format!("verbosity: {level}");
+                }
+                Err(err) => self.status = format!("verbosity: {err}"),
+            }
+        }
+        self.needs_redraw = true;
+    }
+
+    /// Run the `/thinking-display` slash command: a bare form reports the
+    /// mode, `show|hide|collapse` sets it for the running window. The
+    /// `thinking_display` config key sets the startup mode.
+    fn slash_thinking_display(&mut self, args: &str) {
+        use crate::transcript_prefs::ThinkingDisplay;
+
+        let arg = args.trim().to_lowercase();
+        let mode = match arg.as_str() {
+            "" => None,
+            "show" => Some(ThinkingDisplay::Expanded),
+            "hide" => Some(ThinkingDisplay::Hidden),
+            "collapse" => Some(ThinkingDisplay::Collapsed),
+            other => {
+                self.status =
+                    format!("thinking-display: unknown `{other}`, use show, hide or collapse");
+                self.needs_redraw = true;
+                return;
+            }
+        };
+        if let Some(mode) = mode {
+            self.transcript_prefs.thinking = mode;
+        }
+        self.status = format!("thinking-display: {}", self.transcript_prefs.thinking);
         self.needs_redraw = true;
     }
 

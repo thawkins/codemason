@@ -55,6 +55,16 @@ pub struct Config {
     /// the running window without writing this key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// Transcript verbosity at startup: `"low"`, `"medium"` or `"high"`.
+    ///
+    /// Unset or unrecognised means `low`. `/verbosity` changes it for the
+    /// running window without writing this key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verbosity: Option<String>,
+    /// How thinking text shows at startup: `"collapsed"`, `"expanded"` or
+    /// `"hidden"`. Unset or unrecognised means `collapsed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_display: Option<String>,
     /// Name of the agent to use when none is specified.
     #[serde(default = "default_agent_name", alias = "defaultAgent")]
     pub default_agent: String,
@@ -401,6 +411,8 @@ impl Default for Config {
         Self {
             username: None,
             theme: None,
+            verbosity: None,
+            thinking_display: None,
             default_agent: default_agent_name(),
             specified_default_agent: false,
             provider: HashMap::new(),
@@ -3397,6 +3409,12 @@ impl Config {
         }
         if overlay.theme.is_some() {
             base.theme = overlay.theme;
+        }
+        if overlay.verbosity.is_some() {
+            base.verbosity = overlay.verbosity;
+        }
+        if overlay.thinking_display.is_some() {
+            base.thinking_display = overlay.thinking_display;
         }
         if overlay.specified_default_agent {
             base.default_agent = overlay.default_agent;

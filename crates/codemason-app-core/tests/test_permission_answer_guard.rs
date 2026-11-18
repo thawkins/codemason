@@ -27,6 +27,7 @@ async fn request(app: &mut App, id: &str) {
         permission: "bash".to_string(),
         description: "ls".to_string(),
         options: Vec::new(),
+        tool_call: None,
     })
     .await;
 }
@@ -90,7 +91,7 @@ async fn test_permission_double_y_answers_once_and_never_the_next_unread() {
     })
     .await;
     press_y(&mut app).await;
-    assert!(replies(&mut bus).is_empty());
+    assert_eq!(replies(&mut bus), [] as [std::string::String; 0]);
     assert_eq!(app.session.permission_queue.len(), 1, "req-2 stays pending");
 
     wait_shown(&mut app);

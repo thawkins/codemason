@@ -107,6 +107,17 @@ pub struct ToolCallBatchEntry {
     pub success: bool,
 }
 
+/// The tool call a [`Event::PermissionRequested`] is about.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionToolCall {
+    /// The call's id.
+    pub id: String,
+    /// The tool's name as called.
+    pub name: String,
+    /// The input the call will run with, after any `pre_tool_use` hook.
+    pub input: serde_json::Value,
+}
+
 /// A discrete occurrence in the lifecycle of a session.
 ///
 /// TODO: Consider using `Cow<'static, str>` for string fields that are
@@ -208,6 +219,11 @@ pub enum Event {
         /// returned as the response.
         #[serde(default)]
         options: Vec<String>,
+        /// The tool call the request is about, with the input it will run
+        /// with (after any `pre_tool_use` hook), when the request comes from
+        /// a tool call; a frontend previews it from this.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_call: Option<PermissionToolCall>,
     },
     /// The user has replied to a permission request.
     PermissionReplied {

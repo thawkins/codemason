@@ -191,3 +191,30 @@ fn test_fonts_window_draws_block_and_status_glyphs_without_tofu() {
             .is_some()
     );
 }
+
+#[test]
+fn test_fonts_icon_glyphs_present() {
+    let ctx = context(true);
+    for icon in codemason_gui::icons::Icon::ALL {
+        assert!(
+            codemason_gui::icons::has_icon(&ctx, icon),
+            "{icon:?} is not in the icon family"
+        );
+        let label = codemason_gui::icons::icon_label(&ctx, icon, FONT_SIZE, egui::Color32::WHITE);
+        assert_eq!(label.text(), icon.glyph(), "{icon:?}");
+    }
+    // Lucide stays out of the text families: a private-use character in
+    // text is still drawn as its stand-in.
+    let font = FontId::proportional(FONT_SIZE);
+    assert_eq!(drawable(&ctx, &font, "\u{E5B6}"), "?");
+}
+
+#[test]
+fn test_fonts_icons_fall_back_to_ascii_without_the_icon_font() {
+    let ctx = context(false);
+    for icon in codemason_gui::icons::Icon::ALL {
+        assert!(!codemason_gui::icons::has_icon(&ctx, icon), "{icon:?}");
+        let label = codemason_gui::icons::icon_label(&ctx, icon, FONT_SIZE, egui::Color32::WHITE);
+        assert_eq!(label.text(), icon.ascii(), "{icon:?}");
+    }
+}

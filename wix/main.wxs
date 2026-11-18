@@ -104,7 +104,7 @@
 
                     <!--
                       Licence notices of the fonts embedded in the binary
-                      (Hack, Inter, the egui default fonts); their licences require
+                      (Hack, Inter, Lucide, the egui default fonts); their licences require
                       the notice to travel with every copy.
                     -->
                     <Component Id='ThirdPartyNotices' Guid='*'>

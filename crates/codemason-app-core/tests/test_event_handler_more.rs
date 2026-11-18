@@ -74,6 +74,7 @@ async fn permission_replied_removes_request_and_restores_working_status() {
         permission: "file:write".to_string(),
         description: "write a file".to_string(),
         options: Vec::new(),
+        tool_call: None,
     })
     .await;
     assert_eq!(app.session.permission_queue.len(), 1);
@@ -106,6 +107,7 @@ async fn duplicate_permission_request_is_deduplicated() {
             permission: "bash".to_string(),
             description: "run".to_string(),
             options: Vec::new(),
+            tool_call: None,
         })
         .await;
     }

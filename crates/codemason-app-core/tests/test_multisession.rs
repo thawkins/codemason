@@ -84,6 +84,7 @@ async fn test_multisession_background_permission_queues_without_dialog() {
         permission: "file:write".to_string(),
         description: "write a file".to_string(),
         options: vec!["once".to_string()],
+        tool_call: None,
     })
     .await;
 
@@ -466,6 +467,7 @@ async fn test_multisession_background_attention_fires_notification_hook() {
         permission: "file:write".to_string(),
         description: "write".to_string(),
         options: vec!["once".to_string()],
+        tool_call: None,
     })
     .await;
 

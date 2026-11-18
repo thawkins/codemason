@@ -115,6 +115,8 @@ pub fn permission_bits_enforced() -> bool {
 
 #[path = "test_active_tasks_reconcile.rs"]
 mod test_active_tasks_reconcile;
+#[path = "test_activity.rs"]
+mod test_activity;
 #[path = "test_agent_notice_separation.rs"]
 mod test_agent_notice_separation;
 #[path = "test_agent_switching.rs"]
@@ -207,6 +209,8 @@ mod test_context_panel_t015;
 mod test_cron_add_positional;
 #[path = "test_db_command.rs"]
 mod test_db_command;
+#[path = "test_diff_view.rs"]
+mod test_diff_view;
 #[path = "test_dirs_show.rs"]
 mod test_dirs_show;
 #[path = "test_dispatch_ops_deep.rs"]
@@ -373,6 +377,8 @@ mod test_perf_render_idle;
 mod test_permission_answer_guard;
 #[path = "test_permission_countdown.rs"]
 mod test_permission_countdown;
+#[path = "test_permission_preview.rs"]
+mod test_permission_preview;
 #[path = "test_picker_empty_guard.rs"]
 mod test_picker_empty_guard;
 #[path = "test_plugin_commands.rs"]
@@ -595,6 +601,8 @@ mod test_tool_display;
 mod test_tool_event_state;
 #[path = "test_transcript_context_menu.rs"]
 mod test_transcript_context_menu;
+#[path = "test_transcript_prefs.rs"]
+mod test_transcript_prefs;
 #[path = "test_undo_redo.rs"]
 mod test_undo_redo;
 #[path = "test_user_commands.rs"]

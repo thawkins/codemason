@@ -67,5 +67,8 @@ fn test_markdown_ends_with_viewer_footer() {
     let lines = markdown_to_styled("body", Path::new("/"), 80);
     let last = lines.last().expect("footer line");
     assert!(last.text().starts_with("[Esc to close"));
-    assert!(lines[lines.len() - 2].spans.is_empty());
+    assert_eq!(
+        lines[lines.len() - 2].spans,
+        [] as [codemason_app_core::styled::StyledSpan; 0]
+    );
 }

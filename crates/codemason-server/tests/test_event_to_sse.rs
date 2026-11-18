@@ -206,6 +206,7 @@ fn test_permission_requested() {
         permission: "file:write".into(),
         description: "Write to /tmp/out".into(),
         options: vec![],
+        tool_call: None,
     });
     assert_eq!(name, "permission_requested");
     assert_eq!(v["permission"], "file:write");

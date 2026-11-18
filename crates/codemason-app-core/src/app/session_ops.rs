@@ -3681,6 +3681,8 @@ impl App {
             "quit" | "exit" => None,
             "clear" => None,
             "undo" => None,
+            "verbosity" => Some("[low|medium|high]".to_string()),
+            "thinking-display" => Some("[show|hide|collapse]".to_string()),
             "theme" => Some("[<name>|system|dark|light|list|help]".to_string()),
             "redo" => None,
             "compact" | "compress" => None,

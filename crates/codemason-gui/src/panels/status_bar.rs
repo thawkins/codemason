@@ -45,11 +45,12 @@ pub const BUSY_LABEL: &str = "Working";
 /// How often the busy spinner asks for a new frame.
 const SPINNER_FRAME: std::time::Duration = std::time::Duration::from_millis(60);
 
-/// The turn-in-progress spinner: a three-quarter arc that turns once a second.
+/// A progress spinner: a three-quarter arc that turns once a second,
+/// labelled `label` for assistive technology.
 ///
 /// It asks for its next frame after [`SPINNER_FRAME`] instead of at once, so
 /// an idle window still sleeps between frames.
-fn busy_spinner(ui: &mut egui::Ui, palette: &Palette) {
+pub(crate) fn busy_spinner(ui: &mut egui::Ui, palette: &Palette, label: &str) {
     let size = ui.text_style_height(&egui::TextStyle::Body);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     if ui.is_rect_visible(rect) {
@@ -68,7 +69,7 @@ fn busy_spinner(ui: &mut egui::Ui, palette: &Palette) {
         ));
     }
     ui.ctx().request_repaint_after(SPINNER_FRAME);
-    response.widget_info(|| WidgetInfo::labeled(Role::ProgressIndicator, true, BUSY_LABEL));
+    response.widget_info(|| WidgetInfo::labeled(Role::ProgressIndicator, true, label));
 }
 
 /// Characters of the last prompt shown in its tag, as in the TUI.
@@ -154,7 +155,7 @@ fn context_percent(app: &App) -> Option<u64> {
 /// states that need attention. Everything else is in [`details`].
 fn summary(ui: &mut egui::Ui, app: &App, palette: &Palette) {
     if app.session.is_processing {
-        busy_spinner(ui, palette);
+        busy_spinner(ui, palette, BUSY_LABEL);
     }
     if !app.status.is_empty() && !app.status.eq_ignore_ascii_case("Ready") {
         item(ui, app.status.as_str(), palette.warning, true);

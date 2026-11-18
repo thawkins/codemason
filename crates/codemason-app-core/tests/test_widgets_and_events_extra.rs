@@ -1112,6 +1112,7 @@ async fn event_permission_and_question_queue_push() {
         permission: "file:write".to_string(),
         description: "write a file".to_string(),
         options: vec![],
+        tool_call: None,
     })
     .await;
     assert_eq!(app.session.permission_queue.len(), 1);

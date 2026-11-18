@@ -77,10 +77,11 @@ async fn edit_non_ascii(active: u8) {
 
 #[tokio::test]
 async fn test_gitlab_setup_url_field_edits_non_ascii_by_char() {
-    edit_non_ascii(0).await;
+    // Boxed: the App's future is large (clippy::large_futures).
+    Box::pin(edit_non_ascii(0)).await;
 }
 
 #[tokio::test]
 async fn test_gitlab_setup_token_field_edits_non_ascii_by_char() {
-    edit_non_ascii(1).await;
+    Box::pin(edit_non_ascii(1)).await;
 }

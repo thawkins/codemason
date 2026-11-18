@@ -19,12 +19,23 @@ use std::collections::HashMap;
 use std::hash::BuildHasher;
 use std::path::PathBuf;
 
-use codemason_agent::message::{Message, MessagePart, Role};
+use codemason_agent::message::{Message, MessagePart, Role, ToolCallStatus};
 use codemason_types::sanitize_terminal::sanitize_terminal;
 
 use crate::message_lines::part_lines;
 use crate::message_text::{capitalize_tool_name, is_agent_notice};
 use crate::styled::StyledLine;
+
+/// Where a tool call is in its lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolState {
+    /// Waiting to run, or running.
+    Running,
+    /// Finished.
+    Done,
+    /// Failed.
+    Failed,
+}
 
 /// One block of a message.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,7 +62,19 @@ pub enum TranscriptBlock {
         lines: Vec<StyledLine>,
         /// `"<Tool>: <status>"`.
         status_label: String,
+        /// The tool's name as called.
+        name: String,
+        /// Where the call is in its lifecycle.
+        state: ToolState,
+        /// How long the call ran, once it finished.
+        duration_ms: Option<u64>,
     },
+    /// A run of tool calls and reasoning folded into one row (see
+    /// [`crate::activity::group_activity`]).
+    Activity(crate::activity::ActivityGroup),
+    /// The changes a finished edit call made to one file, after its
+    /// [`TranscriptBlock::Tool`] block.
+    Diff(crate::diff_view::FileDiff),
     /// The model's reasoning, as styled lines (narrated tool-call markup
     /// already removed).
     Thinking(Vec<StyledLine>),
@@ -77,6 +100,25 @@ impl TranscriptBlock {
                 .collect::<Vec<_>>()
                 .join("\n"),
             Self::Image { name, .. } => format!("[image: {name}]"),
+            Self::Activity(group) => group.summary.label(),
+            Self::Diff(diff) => {
+                let mut text = diff.path.clone();
+                for hunk in &diff.hunks {
+                    text.push('\n');
+                    text.push_str(&hunk.header);
+                    for line in &hunk.lines {
+                        let mark = match line.kind {
+                            crate::diff_view::DiffLineKind::Context => ' ',
+                            crate::diff_view::DiffLineKind::Added => '+',
+                            crate::diff_view::DiffLineKind::Removed => '-',
+                        };
+                        text.push('\n');
+                        text.push(mark);
+                        text.push_str(&line.text);
+                    }
+                }
+                text
+            }
         }
     }
 }
@@ -95,7 +137,8 @@ impl TranscriptBlock {
 /// with each top-level code block as a [`TranscriptBlock::Code`] between the
 /// Markdown around it (an agent notice is [`TranscriptBlock::Notice`]), the
 /// user's text [`TranscriptBlock::Plain`], and a compaction summary Markdown.
-/// Text that is empty after trimming produces no block.
+/// A finished edit call is followed by a [`TranscriptBlock::Diff`] per file
+/// it changed. Text that is empty after trimming produces no block.
 pub fn message_to_blocks<S: BuildHasher>(
     msg: &Message,
     tool_step_map: &HashMap<String, (String, u32, u32), S>,
@@ -103,7 +146,25 @@ pub fn message_to_blocks<S: BuildHasher>(
 ) -> Vec<TranscriptBlock> {
     msg.parts
         .iter()
-        .filter_map(|part| part_block(&msg.role, part, tool_step_map, cwd))
+        .flat_map(|part| {
+            let block = part_block(&msg.role, part, tool_step_map, cwd);
+            let diffs = match part {
+                // A dry run reports the change without making it.
+                MessagePart::ToolCall { tool, state, .. }
+                    if state.status == ToolCallStatus::Completed
+                        && !crate::diff_view::is_dry_run(&state.input) =>
+                {
+                    crate::diff_view::diffs_from_tool_input(tool, &state.input)
+                }
+                MessagePart::ToolCall { .. }
+                | MessagePart::Text { .. }
+                | MessagePart::Reasoning { .. }
+                | MessagePart::Image(_) => Vec::new(),
+            };
+            block
+                .into_iter()
+                .chain(diffs.into_iter().map(TranscriptBlock::Diff))
+        })
         .flat_map(|block| match block {
             TranscriptBlock::Markdown(text) => split_code_blocks(&text),
             other => vec![other],
@@ -225,8 +286,15 @@ fn part_block<S: BuildHasher>(
             })
         }
         MessagePart::ToolCall { tool, state, .. } => Some(TranscriptBlock::Tool {
-            lines: lines(),
+            lines: crate::activity::truncate_result_lines(lines()),
             status_label: format!("{}: {}", capitalize_tool_name(tool), state.status),
+            name: tool.clone(),
+            state: match state.status {
+                ToolCallStatus::Pending | ToolCallStatus::Running => ToolState::Running,
+                ToolCallStatus::Completed => ToolState::Done,
+                ToolCallStatus::Error => ToolState::Failed,
+            },
+            duration_ms: state.duration_ms,
         }),
         MessagePart::Reasoning { .. } => {
             let lines = lines();

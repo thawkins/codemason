@@ -24,7 +24,10 @@ fn test_text_style_builders_set_fields() {
 
 #[test]
 fn test_styled_line_raw_drops_newlines_and_empty() {
-    assert!(StyledLine::raw("").spans.is_empty());
+    assert_eq!(
+        StyledLine::raw("").spans,
+        [] as [codemason_app_core::styled::StyledSpan; 0]
+    );
     let l = StyledLine::raw("a\nb");
     assert_eq!(l.spans.len(), 2);
     assert_eq!(l.text(), "ab");

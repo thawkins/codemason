@@ -110,6 +110,9 @@ async fn test_message_view_scroll_wheel_reveals_earlier_messages() {
 #[tokio::test]
 async fn test_message_view_tool_call_shows_status_label() {
     let mut app = support::make_app();
+    // Each call is its own block at high verbosity; low folds them into an
+    // activity row (`test_activity_rows`).
+    app.transcript_prefs.verbosity = codemason_app_core::transcript_prefs::Verbosity::High;
     app.session.messages = vec![
         tool_message(ToolCallStatus::Running),
         tool_message(ToolCallStatus::Error),
@@ -605,7 +608,7 @@ fn test_code_block_layout_is_reused_until_the_code_or_theme_changes() {
     let themes = ThemeCatalog::builtin();
     let dark = Palette::from_tokens(&themes.resolve(&ThemeSelection::System, true));
     let light = Palette::from_tokens(&themes.resolve(&ThemeSelection::System, false));
-    let id = egui::Id::new("code-cache-test");
+    let id = egui::Id::unique("code-cache-test");
     let slot = id.with("job");
     let mut harness = Harness::new_ui_state(
         |ui, (code, palette): &mut (String, Palette)| {

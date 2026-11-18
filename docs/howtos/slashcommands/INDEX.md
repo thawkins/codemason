@@ -85,6 +85,8 @@ Per-command reference documents for the codemason GUI slash commands. Each docum
 | `/bug-report` | [bug-report](bug-report.md) | Generate diagnostic bug report with redacted session data (output to log/) |
 | `/triggers` | [triggers](triggers.md) | Manage trigger rules: /triggers [list\|enable\|disable\|remove\|status\|help] |
 | `/theme` | [theme](theme.md) | Switch the colour theme: /theme opens the picker, /theme <name>\|system\|dark\|light switches (/theme help) |
+| `/verbosity` | [verbosity](verbosity.md) | Set how much the transcript shows: /verbosity low\|medium\|high |
+| `/thinking-display` | [thinking-display](thinking-display.md) | Set how thinking text shows: /thinking-display show\|hide\|collapse |
 | `/undo` | [undo](undo.md) | Remove the last turn and restore the files it changed; /redo puts it back (/undo help) |
 | `/redo` | [redo](redo.md) | Restore the turn the last /undo removed (/redo help) |
 | `/name` | [name](name.md) | Set a human-readable display name for the session: /name <display-name> \| /name help |

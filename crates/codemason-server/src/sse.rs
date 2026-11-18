@@ -523,12 +523,15 @@ pub fn event_to_parts(event: &Event) -> (&'static str, String) {
             reason,
         }),
 
+        // The SSE payload keeps its shape: the tool call (with its full input)
+        // is for the local frontend's preview, not the HTTP event stream.
         Event::PermissionRequested {
             session_id,
             request_id,
             permission,
             description,
             options,
+            tool_call: _,
         } => to_data(&PermReqP {
             session_id,
             request_id,

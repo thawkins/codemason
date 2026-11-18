@@ -79,6 +79,7 @@ fn test_message_blocks_keep_part_order_and_skip_empty_text() {
     let TranscriptBlock::Tool {
         lines,
         status_label,
+        ..
     } = &got[1]
     else {
         panic!("tool block expected: {got:?}");

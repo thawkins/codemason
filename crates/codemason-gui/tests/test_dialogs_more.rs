@@ -795,7 +795,10 @@ fn test_timed_question_behind_another_modal_auto_answers_its_default() {
         !dialog_shown(&harness, QUESTION_TITLE),
         "the shortcuts panel is above it"
     );
-    assert!(answers(&mut bus).is_empty());
+    assert_eq!(
+        answers(&mut bus),
+        [] as [(std::string::String, std::string::String); 0]
+    );
 
     // The question's 120 s timeout passes on the test clock; nothing sleeps.
     harness

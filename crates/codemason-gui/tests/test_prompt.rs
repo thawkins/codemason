@@ -670,8 +670,7 @@ fn test_prompt_has_no_visible_label() {
     let (_rt, harness) = rig(|_| {});
 
     // The name is on the editor itself; no separate "Prompt" label is drawn.
-    let named: Vec<_> = harness.query_all_by_label(PROMPT_LABEL).collect();
-    assert_eq!(named.len(), 1);
+    assert_eq!(harness.query_all_by_label(PROMPT_LABEL).count(), 1);
     prompt(&harness);
 }
 
