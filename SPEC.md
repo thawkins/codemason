@@ -2163,6 +2163,38 @@ the window on the next frame. Spacing, corner radii and text sizes come from
 the scales in `crates/codemason-gui/src/metrics.rs` (spacing 4/8/12/16/24,
 radii 4/6/10, text 12/14/16/20).
 
+**Transcript.** The Messages pane draws each message as blocks
+(`TranscriptBlock` in `crates/codemason-app-core/src/message_blocks.rs`,
+built by `message_to_blocks`): the assistant's text as Markdown, with each
+top-level fenced code block split out as a `Code` block (a code block inside a
+list or quote stays in its Markdown; an unclosed fence runs to the end), the
+user's text as typed (`Plain`), tool calls and agent notices as the styled
+lines `message_lines::part_lines` renders for them, reasoning (`Thinking`) and
+images. Every block's text passes through `sanitize_terminal`. The GUI draws
+Markdown with `egui_commonmark` 0.26 (headings, lists, tables, block quotes,
+links that open in the browser), a user turn as a raised card with a `You`
+chip, a compaction summary as a card with a `Compaction` chip, and an
+assistant turn with a 2-point accent rule down its left edge. A `Code` block is
+a card with the fence's language (or `code`) and click-only `Copy`, `Wrap`
+(long lines scroll sideways until it is on; kept per block) and `Insert` (puts
+the code at the end of the prompt on a line of its own) buttons; the code is
+highlighted by `crates/codemason-app-core/src/syntax_highlight.rs`
+(`tree-sitter-highlight` over the Rust, Python, JavaScript/JSX, TypeScript/TSX,
+Go, C, C++, Java, Bash and JSON grammars, chosen by the fence's language or a
+common alias; code over 64 KiB or in another language is drawn plain) in the
+theme's `syntax.*` colours. Attached images are thumbnails of at most 160
+points that open full size in an `Image` view (Close or a click outside closes
+it; Esc is left to the session); an image that cannot be loaded is named
+instead. The reply still streaming ends with an accent caret. All transcript
+text is selectable; right-clicking the transcript opens a menu with `Copy`
+(egui's text selection; a press on text places an empty selection, so it is
+enabled there and copies nothing), `Copy as Markdown` and `Quote in reply`
+(`> `-prefixed lines after the draft) for the message under the pointer. Each
+message's widgets are children of the transcript's `Log` node in the
+accessibility tree. The transcript stays virtualised: an unmeasured message's
+height is estimated from its blocks' rows (exact for plain one-paragraph
+messages) and corrected when it is drawn.
+
 Keyboard shortcuts for the window are craft-keymap commands: `panel.log`
 (`Alt+L` | `Cmd+Shift+L`), `panel.profile` (`Alt+P` | `Cmd+Shift+P`),
 `panel.tasks` (`Alt+I` | `Cmd+Shift+I`), `panel.memory` (`Alt+M` |
