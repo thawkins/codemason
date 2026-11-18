@@ -117,6 +117,7 @@ const BLUEPRINTS_SUBS: &[&str] = &["help", "list"];
 const OSINFO_SUBS: &[&str] = &["show", "help"];
 const DB_SUBS: &[&str] = &["prune", "help"];
 const DB_FLAGS: &[&str] = &["--days", "--dry-run"];
+const STATS_FLAGS: &[&str] = &["--days", "--project", "--json"];
 const ROUTER_SUBS: &[&str] = &[
     "help",
     "on",
@@ -403,6 +404,12 @@ pub const COMMAND_CATALOG: &[CommandCatalogEntry] = &[
         description: "Analyse the project and write a summary, or create a default config: /init [config|help]",
         subcommands: INIT_SUBS,
         flags: EMPTY,
+    },
+    CommandCatalogEntry {
+        trigger: "stats",
+        description: "Usage and cost across sessions: /stats [--days N] [--project] [--json] | /stats help",
+        subcommands: HELP_ONLY,
+        flags: STATS_FLAGS,
     },
     CommandCatalogEntry {
         trigger: "llmstats",

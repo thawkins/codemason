@@ -3643,6 +3643,7 @@ impl App {
             "team" => Some("<subcommand>".to_string()),
             "memory" => Some("<subcommand> [<arg>]".to_string()),
             "db" => Some("[prune [--days N] [--dry-run]|help]".to_string()),
+            "stats" => Some("[--days N] [--project] [--json] | help".to_string()),
             "agent" => Some("[<name>]".to_string()),
             "codeindex" => Some("[on|off|show|sync|reindex|help]".to_string()),
             "gcf" => Some("[on|off|show|help]".to_string()),

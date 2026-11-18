@@ -909,6 +909,10 @@ pub const SLASH_COMMANDS: &[SlashCommandDef] = &[
         description: "Alias for /profile - toggle the agent-loop perf panel (/perf on|off|help)",
     },
     SlashCommandDef {
+        trigger: "stats",
+        description: "Usage and cost across sessions: /stats [--days N] [--project] [--json] | /stats help",
+    },
+    SlashCommandDef {
         trigger: "llmstats",
         description: "Show average LLM response time and token throughput",
     },

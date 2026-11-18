@@ -163,6 +163,19 @@ enum Commands {
         command: DbCommands,
     },
 
+    /// Show usage and cost per model across sessions (the `/stats` command)
+    Stats {
+        /// Only count runs from the last N days (default: all time)
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+        days: Option<u32>,
+        /// Only count sessions of the current directory's project
+        #[arg(long)]
+        project: bool,
+        /// Emit JSON instead of a table
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Manage persistent memory (list)
     Memory {
         #[command(subcommand)]
@@ -586,6 +599,7 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
                 | Commands::Session { .. }
                 | Commands::Project { .. }
                 | Commands::Db { .. }
+                | Commands::Stats { .. }
                 | Commands::Config { .. }
                 | Commands::Research { .. }
         )
@@ -1653,6 +1667,21 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
                 }
             }
         },
+        Some(Commands::Stats {
+            days,
+            project,
+            json,
+        }) => {
+            let args = codemason_app_core::usage_stats::StatsArgs {
+                days,
+                project,
+                json,
+            };
+            let cwd = std::env::current_dir()?;
+            let report =
+                codemason_app_core::usage_stats::usage_stats_report(&storage, &args, &cwd)?;
+            writeln!(std::io::stdout(), "{report}")?;
+        }
         Some(Commands::Auth { provider, key }) => {
             storage.set_provider_auth(&provider, &key)?;
             tracing::info!(provider = %provider, "Stored API key");

@@ -28,6 +28,7 @@ Per-command reference documents for the codemason GUI slash commands. Each docum
 | `/loop` | [loop](loop.md) | Goal-driven agent loop: /loop opens setup, /loop <agent> <goal> starts, /loop help shows usage |
 | `/profile` | [profile](profile.md) | Toggle the agent-loop profiler panel (/profile on\|off\|help) |
 | `/perf` | [perf](perf.md) | Alias for /profile  -  toggle the agent-loop perf panel (/perf on\|off\|help) |
+| `/stats` | [stats](stats.md) | Usage and cost across sessions: /stats [--days N] [--project] [--json] \| /stats help |
 | `/llmstats` | [llmstats](llmstats.md) | Show average LLM response time and token throughput |
 | `/model` | [model](model.md) | Switch the active model, or show metadata with /model show (/model help for usage) |
 | `/thinking` | [thinking](thinking.md) | Switch the current thinking level: /thinking auto\|off\|low\|medium\|high |

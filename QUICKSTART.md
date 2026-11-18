@@ -2057,6 +2057,7 @@ Type `/` in the input to open an autocomplete menu:
 | `/compact [help]` | Summarise and compact history |
 | `/help` | Show available commands |
 | `/log` | Toggle log panel |
+| `/stats [--days N] [--project] [--json]` | Usage and cost per model across sessions (CLI: `cdmn stats`) |
 | `/model` | Switch model |
 | `/thinking auto|off|low|medium|high` | Switch reasoning level for the active model |
 | `/provider` | Change provider |

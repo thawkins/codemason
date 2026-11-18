@@ -541,6 +541,8 @@ mod test_spec_jtbd;
 mod test_startup_services;
 #[path = "test_startup_session.rs"]
 mod test_startup_session;
+#[path = "test_stats_command.rs"]
+mod test_stats_command;
 #[path = "test_status_expiry.rs"]
 mod test_status_expiry;
 #[path = "test_statusbar_last_prompt.rs"]

@@ -114,6 +114,8 @@ mod test_task_delete_and_snapshot_bounds;
 mod test_tasks_list_plan;
 #[path = "test_todos_migration.rs"]
 mod test_todos_migration;
+#[path = "test_usage_stats.rs"]
+mod test_usage_stats;
 #[path = "test_wal_warmup.rs"]
 mod test_wal_warmup;
 #[path = "test_warm_index_scan.rs"]

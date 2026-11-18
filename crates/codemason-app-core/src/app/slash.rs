@@ -962,6 +962,7 @@ impl App {
                 // Mirrors the subcommands the `/db` arm actually handles.
                 vec!["prune".to_string(), "help".to_string()]
             }
+            "stats" => vec!["help".to_string()],
             "agent" | "agents" => {
                 // Suggest agent-related subcommands
                 vec!["list".to_string(), "switch".to_string(), "help".to_string()]
@@ -2445,6 +2446,64 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                      Usage: `/db prune [--days N] [--dry-run]|help`",
                 );
                 self.status = "db: usage".to_string();
+            }
+        }
+    }
+
+    /// Dispatch the `/stats` command: usage and cost across sessions.
+    ///
+    /// `help` prints the flag table; anything else is parsed by
+    /// [`crate::usage_stats::parse_stats_args`] and rendered by
+    /// [`crate::usage_stats::usage_stats_report`]. `--project` filters on the
+    /// focused session's working directory.
+    fn handle_stats_command(&mut self, args: &str) {
+        use crate::app::helpers::from_cmd;
+        use crate::usage_stats::{STATS_USAGE, parse_stats_args, usage_stats_report};
+
+        let first = args.split_whitespace().next().unwrap_or("").to_lowercase();
+        if matches!(first.as_str(), "help" | "--help" | "-h") {
+            self.append_assistant_text(&from_cmd(
+                "stats help",
+                "## /stats - Usage and cost across sessions\n\n\
+                 Totals per model from every completed agent run stored in the \
+                 session database. `/cost` covers the current session only.\n\n\
+                 | Form | Description |\n\
+                 |---|---|\n\
+                 | `/stats` | All time, all projects |\n\
+                 | `/stats --days N` | Runs from the last N days |\n\
+                 | `/stats --project` | Sessions of the current project directory |\n\
+                 | `/stats --json` | JSON instead of a table |\n\
+                 | `/stats help` | Show this help |\n",
+            ));
+            self.status = "stats: help".to_string();
+            return;
+        }
+        let parsed = match parse_stats_args(args.split_whitespace()) {
+            Ok(parsed) => parsed,
+            Err(token) => {
+                self.append_assistant_text(&from_cmd(
+                    "stats",
+                    &format!("Unrecognised argument `{token}`. Usage: `{STATS_USAGE}`"),
+                ));
+                self.status = "stats: usage".to_string();
+                return;
+            }
+        };
+        match usage_stats_report(&self.storage, &parsed, &self.cwd_path) {
+            Ok(report) if parsed.json => {
+                self.append_assistant_text(&from_cmd("stats", &format!("```json\n{report}\n```")));
+                self.status = "stats".to_string();
+            }
+            Ok(report) => {
+                self.append_assistant_text(&from_cmd("stats", &report));
+                self.status = "stats".to_string();
+            }
+            Err(e) => {
+                self.append_assistant_text(&from_cmd(
+                    "stats",
+                    &format!("[warn] Could not read usage statistics: {e}"),
+                ));
+                self.status = "stats: failed".to_string();
             }
         }
     }
@@ -4141,6 +4200,7 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
             "telemetry" => self.handle_telemetry_command(args),
             "osinfo" => self.handle_osinfo_command(args),
             "db" => self.handle_db_command(args),
+            "stats" => self.handle_stats_command(args),
             "backend" => self.handle_backend_command(args),
             "automation" => self.handle_automation_command(args).await,
             "about" => {

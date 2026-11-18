@@ -2322,6 +2322,7 @@ repository and does not use ETags.
 | `/compact` | Summarise and compact the conversation history (one-shot LLM summarisation; FR-009). `/compress` is a deprecated alias |
 | `/memory` | Structured-memory panel and summary: `/memory` / `/memory show` (same), `/memory clear` (a `Yes`/`No` dialog clears this project's memories), `/memory help` |
 | `/db` | Session database: `/db prune [--days N] [--dry-run]` deletes messages older than the retention window (the session row is kept; a real prune arms a `Yes`/`No` dialog that opens on `No`), `/db help` (also the bare form) |
+| `/stats` | Usage and cost per model across sessions, from the persisted run-cost summaries: `/stats [--days N] [--project] [--json]`, `/stats help`; `/cost` covers the current session only. CLI parity via `cdmn stats` |
 | `/yolo` | Toggle YOLO mode (`on`/`off` set and persist the state, `status` reports it, a bare `/yolo` toggles; the toggle writes the user-global config, or the `--config` file when one was loaded) |
 | `/task` | Toggle the TASKS side panel (also Alt+T); `/task list`, `/task help` |
 | `/team create <name>` | Create a team |
