@@ -18,13 +18,46 @@ fn test_action_catalog_lookup() {
     assert_eq!(help.key, None);
 }
 
-#[test]
-fn test_run_action_shows_the_shortcuts_panel() {
+#[tokio::test]
+async fn test_run_action_shows_the_shortcuts_panel() {
     let mut app = support::make_app();
     app.show_shortcuts = false;
-    assert!(app.run_action("help.shortcuts"));
+    assert!(app.run_action("help.shortcuts").await);
     assert!(app.show_shortcuts);
-    assert!(app.run_action("palette.show"));
+    assert!(app.run_action("palette.show").await);
     assert!(app.palette.is_some());
-    assert!(!app.run_action("no.such"));
+    assert!(!app.run_action("no.such").await);
+}
+
+#[tokio::test]
+async fn test_run_action_opens_pickers() {
+    let mut app = support::make_app();
+    assert!(app.run_action("picker.agent").await);
+    assert!(matches!(
+        app.provider_setup,
+        Some(codemason_app_core::app::ProviderSetupStep::SelectAgent { .. })
+    ));
+    app.provider_setup = None;
+    assert!(app.run_action("picker.model").await);
+    assert!(app.provider_setup.is_some(), "the model or provider picker");
+}
+
+#[test]
+fn test_leader_settings_from_config() {
+    use codemason_app_core::shortcuts::{DEFAULT_LEADER, LeaderSettings};
+    let mut config = codemason_config::Config::default();
+    assert_eq!(
+        LeaderSettings::from_config(&config).key.as_deref(),
+        Some(DEFAULT_LEADER)
+    );
+    config.leader = Some("none".to_string());
+    config.leader_timeout_ms = Some(500);
+    let settings = LeaderSettings::from_config(&config);
+    assert_eq!(settings.key, None);
+    assert_eq!(settings.timeout_ms, 500);
+    // Leader keys come from the catalog.
+    assert_eq!(
+        codemason_app_core::shortcuts::action("picker.model").and_then(|a| a.leader_key),
+        Some('m')
+    );
 }

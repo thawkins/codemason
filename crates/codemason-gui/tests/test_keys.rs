@@ -1209,3 +1209,142 @@ fn test_keys_action_without_a_terminal_key_is_queued_for_the_shell() {
     assert_eq!(router.take_actions(), ["help.shortcuts"]);
     assert_eq!(router.take_actions(), Vec::<String>::new());
 }
+
+/// Ctrl+G, the default leader, as egui reports it on Linux.
+fn leader_press() -> egui::Event {
+    press(
+        egui::Key::G,
+        egui::Modifiers::CTRL | egui::Modifiers::COMMAND,
+    )
+}
+
+/// Route `events` at egui time `time` with nothing focused.
+fn route_at(
+    router: &mut KeyRouter,
+    events: Vec<egui::Event>,
+    time: f64,
+) -> (Vec<KeyInput>, Vec<egui::Event>) {
+    let mut input = input_with(events);
+    input.time = time;
+    let keys = router.route(&mut input, Focus::Elsewhere);
+    (keys, input.events)
+}
+
+#[test]
+fn test_leader_then_m_opens_the_model_picker() {
+    let mut router = KeyRouter::new(default_keymap(Platform::Linux));
+    let (keys, left) = route_at(&mut router, vec![leader_press()], 1.0);
+    assert!(keys.is_empty() && left.is_empty(), "{keys:?} {left:?}");
+    assert!(router.pending_leader());
+    let (keys, left) = route_at(
+        &mut router,
+        vec![
+            press(egui::Key::M, egui::Modifiers::NONE),
+            egui::Event::Text("m".into()),
+        ],
+        1.2,
+    );
+    assert!(keys.is_empty(), "{keys:?}");
+    assert!(left.is_empty(), "the m is not typed: {left:?}");
+    assert_eq!(router.take_actions(), ["picker.model"]);
+    assert!(!router.pending_leader());
+}
+
+#[test]
+fn test_leader_times_out_and_the_next_key_types() {
+    let mut router = KeyRouter::new(default_keymap(Platform::Linux));
+    route_at(&mut router, vec![leader_press()], 1.0);
+    // 2 000 ms later the wait is over; m is an ordinary key again.
+    let (_, left) = route_at(
+        &mut router,
+        vec![
+            press(egui::Key::M, egui::Modifiers::NONE),
+            egui::Event::Text("m".into()),
+        ],
+        3.1,
+    );
+    assert!(!router.pending_leader());
+    assert_eq!(router.take_actions(), Vec::<String>::new());
+    assert!(
+        left.iter()
+            .any(|e| matches!(e, egui::Event::Text(t) if t == "m")),
+        "{left:?}"
+    );
+}
+
+#[test]
+fn test_leader_then_an_unbound_key_does_nothing() {
+    let mut router = KeyRouter::new(default_keymap(Platform::Linux));
+    route_at(&mut router, vec![leader_press()], 1.0);
+    let (keys, left) = route_at(
+        &mut router,
+        vec![
+            press(egui::Key::Z, egui::Modifiers::NONE),
+            egui::Event::Text("z".into()),
+        ],
+        1.1,
+    );
+    assert!(keys.is_empty() && left.is_empty(), "{keys:?} {left:?}");
+    assert_eq!(router.take_actions(), Vec::<String>::new());
+    assert!(!router.pending_leader());
+}
+
+#[test]
+fn test_leader_keyed_action_runs_as_its_key_and_user_bindings_load() {
+    let path = scratch("leader").join("gui-keys.json");
+    std::fs::write(
+        &path,
+        r#"{ "panel.log": ["Alt+L", "<leader> l"], "no.such": "<leader> q", "mode.yolo": "<leader>yy" }"#,
+    )
+    .expect("write overrides");
+    let (keymap, warnings) = load_keymap(Platform::Linux, &path);
+    assert_eq!(
+        warnings,
+        Vec::<String>::new(),
+        "leader texts are not craft-keymap's"
+    );
+    assert_eq!(
+        bound(&keymap, "panel.log"),
+        vec![Binding::parse("Alt+L").expect("parse")]
+    );
+    let (bindings, warnings) = codemason_gui::keys::load_leader_bindings(&path);
+    assert_eq!(bindings.get(&'l').map(String::as_str), Some("panel.log"));
+    assert_eq!(warnings.len(), 2, "{warnings:?}");
+
+    let mut router = KeyRouter::new(keymap);
+    router.bind_after_leader(bindings);
+    route_at(&mut router, vec![leader_press()], 1.0);
+    let (keys, _) = route_at(
+        &mut router,
+        vec![press(egui::Key::L, egui::Modifiers::NONE)],
+        1.1,
+    );
+    assert_eq!(
+        keys,
+        vec![KeyInput {
+            key: Key::Char('l'),
+            mods: Modifiers::ALT,
+        }]
+    );
+}
+
+#[test]
+fn test_parse_chord() {
+    use codemason_gui::keys::parse_chord;
+    assert_eq!(
+        parse_chord("Ctrl+G"),
+        Some((
+            egui::Key::G,
+            egui::Modifiers {
+                ctrl: true,
+                ..egui::Modifiers::NONE
+            }
+        ))
+    );
+    assert_eq!(
+        parse_chord("cmd+shift+k").map(|(k, m)| (k, m.mac_cmd, m.shift)),
+        Some((egui::Key::K, true, true))
+    );
+    assert_eq!(parse_chord("Hyper+G"), None);
+    assert_eq!(parse_chord("Ctrl+NoSuchKey"), None);
+}

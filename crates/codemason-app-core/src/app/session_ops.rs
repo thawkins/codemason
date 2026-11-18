@@ -5429,7 +5429,7 @@ impl App {
     ///
     /// `true` when the action was run here; `false` for an action the
     /// frontend runs, or an unknown id.
-    pub fn run_action(&mut self, id: &str) -> bool {
+    pub async fn run_action(&mut self, id: &str) -> bool {
         match id {
             "help.shortcuts" => {
                 self.show_shortcuts = true;
@@ -5438,6 +5438,24 @@ impl App {
             }
             "palette.show" => {
                 self.open_palette();
+                true
+            }
+            "picker.model" => {
+                let _ = self.slash_model_picker(); // INTENTIONAL: opening the picker reports in the UI
+                self.needs_redraw = true;
+                true
+            }
+            "picker.agent" => {
+                let _ = self.slash_agent_picker(); // INTENTIONAL: opening the picker reports in the UI
+                self.needs_redraw = true;
+                true
+            }
+            "session.undo" => {
+                Box::pin(self.execute_slash_command("/undo")).await;
+                true
+            }
+            "session.redo" => {
+                Box::pin(self.execute_slash_command("/redo")).await;
                 true
             }
             _ => false,

@@ -55,6 +55,7 @@ pub mod question;
 pub mod session_menu;
 pub mod shortcuts;
 pub mod stores;
+pub mod which_key;
 
 use codemason_app_core::app::{App, ProviderSetupStep};
 use codemason_app_core::input_event::{Key, KeyInput, Modifiers};

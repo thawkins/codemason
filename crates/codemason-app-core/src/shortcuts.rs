@@ -11,7 +11,11 @@
 //! `App::handle_key` or nothing, for an action `App::run_action` or the
 //! frontend runs itself.
 //!
-//! Depends on [`crate::input_event`] (key presses).
+//! [`LeaderSettings`] is the leader key a frontend's key sequences start
+//! with (`<leader> m`), from the `leader` and `leader_timeout_ms` config
+//! keys.
+//!
+//! Depends on [`crate::input_event`] (key presses) and `codemason-config`.
 
 use crate::input_event::{Key, KeyInput, Modifiers};
 
@@ -29,6 +33,8 @@ pub struct ActionSpec {
     /// The terminal key press that runs it through `App::handle_key`, or
     /// `None` when `App::run_action` or the frontend runs it.
     pub key: Option<KeyInput>,
+    /// The key that runs it after the leader key (`<leader> m`), if any.
+    pub leader_key: Option<char>,
 }
 
 /// A key press of `c` with `mods`.
@@ -53,6 +59,20 @@ const fn keyed(
         default_key: Some(pc),
         mac_key: Some(mac),
         key,
+        leader_key: None,
+    }
+}
+
+/// An action with no default chord and no terminal key press, run by
+/// `App::run_action`, optionally after the leader key.
+const fn keyless(id: &'static str, title: &'static str, leader_key: Option<char>) -> ActionSpec {
+    ActionSpec {
+        id,
+        title,
+        default_key: None,
+        mac_key: None,
+        key: None,
+        leader_key,
     }
 }
 
@@ -196,14 +216,13 @@ const ACTIONS: &[ActionSpec] = &[
         default_key: Some("Ctrl+P"),
         mac_key: Some("Cmd+P"),
         key: None,
+        leader_key: None,
     },
-    ActionSpec {
-        id: "help.shortcuts",
-        title: "Show Keyboard Shortcuts",
-        default_key: None,
-        mac_key: None,
-        key: None,
-    },
+    keyless("picker.model", "Choose Model", Some('m')),
+    keyless("picker.agent", "Choose Agent", Some('a')),
+    keyless("session.undo", "Undo Last Turn", Some('u')),
+    keyless("session.redo", "Redo Turn", Some('r')),
+    keyless("help.shortcuts", "Show Keyboard Shortcuts", None),
 ];
 
 /// Every action a frontend may bind to a key, in display order.
@@ -286,3 +305,65 @@ pub const KEYBINDINGS: &[(&str, &str)] = &[
     ("Esc", "Close any open dialog or menu"),
     ("y / a / n", "Allow / Always / Deny permission request"),
 ];
+
+/// The default leader key.
+pub const DEFAULT_LEADER: &str = "Ctrl+G";
+
+/// The default wait for the key after the leader, in milliseconds.
+pub const DEFAULT_LEADER_TIMEOUT_MS: u64 = 2_000;
+
+/// The leader key settings: the key (`None` when leader sequences are off)
+/// and how long to wait for the next key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaderSettings {
+    /// The leader chord as text, e.g. `"Ctrl+G"`; `None` turns it off.
+    pub key: Option<String>,
+    /// How long to wait for the key after the leader, in milliseconds.
+    pub timeout_ms: u64,
+}
+
+impl Default for LeaderSettings {
+    fn default() -> Self {
+        Self {
+            key: Some(DEFAULT_LEADER.to_string()),
+            timeout_ms: DEFAULT_LEADER_TIMEOUT_MS,
+        }
+    }
+}
+
+impl LeaderSettings {
+    /// The settings the `leader` and `leader_timeout_ms` config keys ask for:
+    /// unset means the defaults, `"none"` (or an empty text) turns the leader
+    /// off.
+    #[must_use]
+    pub fn from_config(config: &codemason_config::Config) -> Self {
+        let key = match config.leader.as_deref().map(str::trim) {
+            None => Some(DEFAULT_LEADER.to_string()),
+            Some(text) if text.is_empty() || text.eq_ignore_ascii_case("none") => None,
+            Some(text) => Some(text.to_string()),
+        };
+        Self {
+            key,
+            timeout_ms: config
+                .leader_timeout_ms
+                .unwrap_or(DEFAULT_LEADER_TIMEOUT_MS),
+        }
+    }
+}
+
+/// The leader settings the launch configuration asks for, set once by the
+/// binary.
+static LEADER: std::sync::OnceLock<LeaderSettings> = std::sync::OnceLock::new();
+
+/// Record the launch configuration's leader settings. The first call wins.
+pub fn set_leader_startup(settings: LeaderSettings) {
+    // INTENTIONAL: a second call keeps the first settings.
+    let _ = LEADER.set(settings);
+}
+
+/// The leader settings the window starts with: the ones given to
+/// [`set_leader_startup`], else the defaults.
+#[must_use]
+pub fn leader_startup() -> LeaderSettings {
+    LEADER.get().cloned().unwrap_or_default()
+}

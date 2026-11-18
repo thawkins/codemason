@@ -208,9 +208,17 @@ fn run_window(launch: GuiLaunch) -> Result<(), GuiLaunchError> {
                 shell = shell.with_layout_file(path);
             }
             let platform = craft_keymap::egui::platform(&cc.egui_ctx);
-            let (keymap, key_warnings) = match keys::keys_path() {
+            let (keymap, mut key_warnings) = match keys::keys_path() {
                 Some(path) => keys::load_keymap(platform, &path),
                 None => (keys::default_keymap(platform), Vec::new()),
+            };
+            let leader_bindings = match keys::keys_path() {
+                Some(path) => {
+                    let (bindings, warnings) = keys::load_leader_bindings(&path);
+                    key_warnings.extend(warnings);
+                    bindings
+                }
+                None => std::collections::BTreeMap::new(),
             };
             for warning in key_warnings {
                 shell
@@ -223,7 +231,9 @@ fn run_window(launch: GuiLaunch) -> Result<(), GuiLaunchError> {
             if let Some(native) = crate::platform::menu::install(&cc.egui_ctx, &keymap) {
                 shell = shell.with_native_menu(native, &keymap);
             }
-            shell = shell.with_keymap(keymap);
+            shell = shell
+                .with_keymap(keymap)
+                .with_leader_bindings(leader_bindings);
             Ok(Box::new(shell))
         }),
     );

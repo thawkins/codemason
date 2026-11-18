@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added: a leader key, `Ctrl+G` by default (`leader` and `leader_timeout_ms` in `codemason.json`): press it, then `m` choose model, `a` choose agent, `u` undo, `r` redo, `b` Sessions panel. After a moment a popup lists the keys. Bind your own in `gui-keys.json` as `"<leader> x"`.
 - Added: a command palette (`Ctrl+P` | `Cmd+P`). It searches every shortcut action, slash command, theme, agent and session with fuzzy matching; Enter runs the top row, Esc closes. A slash command that takes arguments is put in the prompt to finish. Action rows show their current key.
 - Added: every GUI shortcut is an action in one catalog with a dotted id (`panel.context`, `session.new`, `mode.yolo`, `help.shortcuts`, ...), so all of them can be rebound in `gui-keys.json`. Problems in that file (an unknown id, a key that does not parse) and a binding that takes another action's default key are reported in the Log pane at startup; your binding wins.
 - Added: macOS gets Cmd+Shift chords for the context, sessions, agents and teams panels and for the autopilot, YOLO, edit-log, GCF and image-paste toggles.

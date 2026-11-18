@@ -4590,6 +4590,16 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
     ///
     /// Returns `Break` where the command returns early, so the dispatcher
     /// skips its trailing UI-invariant check exactly as before.
+    /// Open the agent picker, as a bare `/agent` does.
+    pub(crate) fn slash_agent_picker(&mut self) -> std::ops::ControlFlow<()> {
+        self.slash_agent("")
+    }
+
+    /// Open the model picker, as a bare `/model` does.
+    pub(crate) fn slash_model_picker(&mut self) -> std::ops::ControlFlow<()> {
+        self.slash_model("")
+    }
+
     fn slash_agent(&mut self, args: &str) -> std::ops::ControlFlow<()> {
         if is_help_args(args) {
             self.append_assistant_text(

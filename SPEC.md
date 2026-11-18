@@ -2275,7 +2275,9 @@ key press that runs it, if any). The actions and their default keys
 `Cmd+Shift+G`), `attach.image` (`Alt+V` | `Cmd+Shift+V`), `session.new`
 (`Ctrl+N` | `Cmd+N`), `teammate.next` (`Alt+Down` | `Cmd+Alt+Down`),
 `teammate.prev` (`Alt+Up` | `Cmd+Alt+Up`), `app.quit` (`Ctrl+D` | `Cmd+Q`),
-`palette.show` (`Ctrl+P` | `Cmd+P`) and `help.shortcuts` (no default key). An action with a terminal key press runs as
+`palette.show` (`Ctrl+P` | `Cmd+P`), `picker.model`, `picker.agent`,
+`session.undo`, `session.redo` and `help.shortcuts` (no default chord; the
+first four have leader keys, below). An action with a terminal key press runs as
 that press through `App::handle_key`, so the GUI and the terminal handler
 cannot drift; one without is queued by the router (`KeyRouter::take_actions`)
 and run by `App::run_action` or the shell. `gui-keys.json` maps action ids to
@@ -2307,6 +2309,24 @@ to. The GUI dialog (`dialogs::palette`) draws a focused search field that edits
 the query in place and the rows with their hint and, for an action, the key the
 keymap binds it to now (`KeyRouter::action_keys`); a click highlights a row, a
 double click runs it.
+
+**Leader key.** The `leader` config key (default `Ctrl+G`; `"none"` turns it
+off) and `leader_timeout_ms` (default 2000) set a key that starts a two-key
+sequence (`shortcuts::LeaderSettings`, recorded by the binary from the loaded
+configuration). The key router takes the leader and the next key press out of
+the input (neither types, and neither reaches the App): the second key runs the
+action bound to it, or nothing when none is; a wait longer than the timeout
+ends with no action, and a modal dialog cancels the wait. Default sequences
+come from each catalog action's `leader_key`: `m` choose model
+(`picker.model`), `a` choose agent (`picker.agent`), `u` undo the last turn
+(`session.undo`), `r` redo (`session.redo`) and `b` the Sessions panel
+(`panel.sessions`). In `gui-keys.json` a text `"<leader> x"` binds `x` after
+the leader to that action (`keys::load_leader_bindings`; an unknown id or more
+than one key after `<leader>` is a warning); those texts are kept out of
+craft-keymap's overrides. After the leader has waited 400 ms the which-key
+popup (`dialogs::which_key`, "Leader keys") lists every key bound after it with
+its action's title. Ctrl+X keeps cutting the prompt's selection and, without
+one, cancelling a running agent.
 
 ### 6.1 GUI Layout
 

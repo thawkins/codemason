@@ -135,3 +135,37 @@ fn test_action_rows_show_their_key() {
     harness.get_by_label("Toggle Log Panel");
     harness.get_by_label("Alt+L");
 }
+
+#[test]
+fn test_which_key_popup_lists_the_leader_keys_after_a_moment() {
+    use codemason_gui::dialogs::which_key::WHICH_KEY_TITLE;
+    let (_rt, mut harness) = rig();
+    harness.run();
+    let ctrl = egui::Modifiers::CTRL | egui::Modifiers::COMMAND;
+    for pressed in [true, false] {
+        harness.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::G,
+            physical_key: Some(egui::Key::G),
+            pressed,
+            repeat: false,
+            modifiers: ctrl,
+        });
+    }
+    // One frame: the leader waits, the popup is not up yet.
+    harness.step();
+    assert_eq!(harness.state().app().session.input, "");
+    assert!(
+        harness
+            .query_by_role_and_label(Role::Dialog, WHICH_KEY_TITLE)
+            .is_none()
+    );
+    // After 400 ms of waiting, and well before the 2 s timeout (egui shows
+    // a new area from its second frame).
+    // The harness advances its clock by a quarter second per step.
+    for _ in 0..3 {
+        harness.step();
+    }
+    harness.get_by_role_and_label(Role::Dialog, WHICH_KEY_TITLE);
+    harness.get_by_label("Choose Model");
+    harness.get_by_label("m");
+}

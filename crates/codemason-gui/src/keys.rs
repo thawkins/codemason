@@ -492,6 +492,14 @@ pub struct KeyRouter {
     /// Actions with no terminal key press that ran since the last
     /// [`KeyRouter::take_actions`], by id.
     actions: Vec<String>,
+    /// The leader chord, if leader sequences are on.
+    leader: Option<(egui::Key, egui::Modifiers)>,
+    /// How long the leader waits for the next key, in seconds.
+    leader_timeout: f64,
+    /// The action each key runs after the leader.
+    leader_bindings: std::collections::BTreeMap<char, String>,
+    /// When the leader was pressed (egui input time), while it waits.
+    leader_since: Option<f64>,
 }
 
 impl KeyRouter {
@@ -511,6 +519,123 @@ impl KeyRouter {
             dispatcher: Dispatcher::new(),
             label_selection: false,
             actions: Vec::new(),
+            leader: None,
+            leader_timeout: 0.0,
+            leader_bindings: default_leader_bindings(),
+            leader_since: None,
+        }
+        .with_leader(&codemason_app_core::shortcuts::leader_startup())
+    }
+
+    /// This router with the leader key and wait of `settings`. A leader
+    /// text that does not parse turns leader sequences off.
+    #[must_use]
+    pub fn with_leader(mut self, settings: &codemason_app_core::shortcuts::LeaderSettings) -> Self {
+        self.leader = settings.key.as_deref().and_then(parse_chord);
+        self.leader_timeout = settings.timeout_ms as f64 / 1000.0;
+        self
+    }
+
+    /// Add or replace the actions keys run after the leader, by key (a
+    /// user's `"<leader> x"` bindings, see [`load_leader_bindings`]).
+    pub fn bind_after_leader(&mut self, bindings: std::collections::BTreeMap<char, String>) {
+        self.leader_bindings.extend(bindings);
+    }
+
+    /// Whether the leader was pressed and the router waits for the next key.
+    #[must_use]
+    pub fn pending_leader(&self) -> bool {
+        self.leader_since.is_some()
+    }
+
+    /// How long the leader has waited, in seconds, at egui time `now`.
+    #[must_use]
+    pub fn leader_waited(&self, now: f64) -> Option<f64> {
+        self.leader_since.map(|since| now - since)
+    }
+
+    /// The leader's wait, in seconds.
+    #[must_use]
+    pub fn leader_timeout(&self) -> f64 {
+        self.leader_timeout
+    }
+
+    /// The keys that run an action after the leader, with the action's
+    /// title, in key order.
+    #[must_use]
+    pub fn leader_entries(&self) -> Vec<(char, String)> {
+        self.leader_bindings
+            .iter()
+            .map(|(key, id)| {
+                let title = codemason_app_core::shortcuts::action(id)
+                    .map_or_else(|| id.clone(), |a| a.title.to_string());
+                (*key, title)
+            })
+            .collect()
+    }
+
+    /// Take the leader and the key after it out of `input`: the leader
+    /// starts a wait, and the next key press ends it, running the action
+    /// bound to that key (if any) and never typing. A wait longer than the
+    /// leader's timeout ends with no action. Not while a modal owns the keys.
+    fn take_leader_sequences(
+        &mut self,
+        input: &mut egui::InputState,
+        focus: Focus,
+        keys: &mut Vec<KeyInput>,
+    ) {
+        let now = input.time;
+        if self
+            .leader_since
+            .is_some_and(|since| now - since > self.leader_timeout)
+        {
+            self.leader_since = None;
+        }
+        let Some((leader_key, leader_mods)) = self.leader else {
+            return;
+        };
+        if matches!(focus, Focus::Modal { .. }) {
+            self.leader_since = None;
+            return;
+        }
+        let mut drop_text = false;
+        let mut ran: Vec<String> = Vec::new();
+        input.events.retain(|event| match event {
+            egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } => {
+                drop_text = false;
+                if self.leader_since.take().is_some() {
+                    // The key after the leader: its action, if bound.
+                    if let Key::Char(c) = neutral_key(*key, modifiers.shift)
+                        && let Some(id) = self.leader_bindings.get(&c)
+                    {
+                        ran.push(id.clone());
+                    }
+                    drop_text = true;
+                    return false;
+                }
+                if *key == leader_key && same_modifiers(*modifiers, leader_mods) {
+                    self.leader_since = Some(now);
+                    drop_text = true;
+                    return false;
+                }
+                true
+            }
+            egui::Event::Text(_) if drop_text || self.leader_since.is_some() => {
+                drop_text = false;
+                false
+            }
+            _ => true,
+        });
+        for id in ran {
+            match codemason_app_core::shortcuts::action(&id).and_then(|a| a.key) {
+                Some(key) => keys.push(key),
+                None => self.actions.push(id),
+            }
         }
     }
 
@@ -614,6 +739,8 @@ impl KeyRouter {
     ///
     /// The key presses for the App.
     pub fn route(&mut self, input: &mut egui::InputState, focus: Focus) -> Vec<KeyInput> {
+        let mut leader_keys = Vec::new();
+        self.take_leader_sequences(input, focus, &mut leader_keys);
         let platform = self.keymap.platform();
         let (typing, has_selection) = match focus {
             Focus::Elsewhere | Focus::Modal { .. } => (false, false),
@@ -633,7 +760,7 @@ impl KeyRouter {
             ..Active::NONE
         };
         let hits = self.dispatcher.dispatch(input, &self.keymap, &active);
-        let mut keys: Vec<KeyInput> = Vec::new();
+        let mut keys: Vec<KeyInput> = leader_keys;
         for hit in &hits {
             match command_key_input(&hit.command) {
                 Some(key) => keys.push(key),
@@ -756,6 +883,114 @@ impl KeyRouter {
     }
 }
 
+/// The keys that run an action after the leader by default: each catalog
+/// action's `leader_key`.
+fn default_leader_bindings() -> std::collections::BTreeMap<char, String> {
+    action_catalog()
+        .iter()
+        .filter_map(|a| a.leader_key.map(|c| (c, a.id.to_string())))
+        .collect()
+}
+
+/// Whether two sets of modifiers name the same chord: Ctrl, Alt, Shift and
+/// macOS Cmd all match.
+fn same_modifiers(a: egui::Modifiers, b: egui::Modifiers) -> bool {
+    a.ctrl == b.ctrl && a.alt == b.alt && a.shift == b.shift && a.mac_cmd == b.mac_cmd
+}
+
+/// Parse a chord written like `Ctrl+G` or `Cmd+Shift+K` into its egui key
+/// and modifiers; `None` when it does not parse.
+#[must_use]
+pub fn parse_chord(text: &str) -> Option<(egui::Key, egui::Modifiers)> {
+    let mut parts: Vec<&str> = text.split('+').map(str::trim).collect();
+    let key_name = parts.pop()?;
+    let key = egui::Key::from_name(key_name)
+        .or_else(|| egui::Key::from_name(&key_name.to_uppercase()))?;
+    let mut mods = egui::Modifiers::NONE;
+    for part in parts {
+        match part.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => mods.ctrl = true,
+            "alt" | "option" => mods.alt = true,
+            "shift" => mods.shift = true,
+            "cmd" | "command" | "super" | "meta" => mods.mac_cmd = true,
+            _ => return None,
+        }
+    }
+    Some((key, mods))
+}
+
+/// The prefix of a `gui-keys.json` value that binds a key after the leader.
+const LEADER_PREFIX: &str = "<leader>";
+
+/// Read the `"<leader> x"` bindings from the key overrides file at `path`.
+///
+/// # Returns
+///
+/// The action bound to each key after the leader, and one warning per entry
+/// that names an unknown action or whose text after `<leader>` is not one
+/// character. A missing or unreadable file gives none (see
+/// [`load_keymap`] for its warnings).
+pub fn load_leader_bindings(
+    path: &Path,
+) -> (std::collections::BTreeMap<char, String>, Vec<String>) {
+    let mut bindings = std::collections::BTreeMap::new();
+    let mut warnings = Vec::new();
+    let Some(entries) = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|value| value.as_object().cloned())
+    else {
+        return (bindings, warnings);
+    };
+    let shown = path.display();
+    for (id, value) in entries {
+        for text in leader_texts(&value) {
+            let rest: Vec<char> = text.trim().chars().collect();
+            match (codemason_app_core::shortcuts::action(&id), rest.as_slice()) {
+                (None, _) => warnings.push(format!("{shown}: unknown action `{id}`, ignored")),
+                (Some(_), [c]) => {
+                    bindings.insert(c.to_ascii_lowercase(), id.clone());
+                }
+                (Some(_), _) => warnings.push(format!(
+                    "{shown}: `<leader>{text}` for `{id}` is not one key after the leader, ignored"
+                )),
+            }
+        }
+    }
+    (bindings, warnings)
+}
+
+/// The texts after `<leader>` in an overrides value (one text or a list).
+fn leader_texts(value: &serde_json::Value) -> Vec<String> {
+    let texts: Vec<&str> = match value {
+        serde_json::Value::String(text) => vec![text.as_str()],
+        serde_json::Value::Array(items) => items.iter().filter_map(|v| v.as_str()).collect(),
+        _ => Vec::new(),
+    };
+    texts
+        .into_iter()
+        .filter_map(|t| t.trim().strip_prefix(LEADER_PREFIX).map(str::to_string))
+        .collect()
+}
+
+/// `value` without its `"<leader> x"` texts, for craft-keymap's overrides.
+fn without_leader_texts(value: serde_json::Value) -> Option<serde_json::Value> {
+    match value {
+        serde_json::Value::String(text) if text.trim().starts_with(LEADER_PREFIX) => None,
+        serde_json::Value::Array(items) => {
+            let kept: Vec<serde_json::Value> = items
+                .into_iter()
+                .filter(|v| {
+                    !v.as_str()
+                        .is_some_and(|t| t.trim().starts_with(LEADER_PREFIX))
+                })
+                .collect();
+            (!kept.is_empty()).then_some(serde_json::Value::Array(kept))
+        }
+        other => Some(other),
+    }
+}
+
 /// Resolve where the key overrides are persisted:
 /// `<config_dir>/codemason/gui-keys.json`, beside the dock layout.
 ///
@@ -799,6 +1034,18 @@ pub fn load_keymap(platform: Platform, path: &Path) -> (Keymap, Vec<String>) {
                 )],
             );
         }
+    };
+    // `"<leader> x"` texts are the router's (`load_leader_bindings`), not
+    // craft-keymap's.
+    let text = match serde_json::from_str::<serde_json::Value>(&text) {
+        Ok(serde_json::Value::Object(entries)) => serde_json::Value::Object(
+            entries
+                .into_iter()
+                .filter_map(|(id, value)| without_leader_texts(value).map(|v| (id, v)))
+                .collect(),
+        )
+        .to_string(),
+        Ok(_) | Err(_) => text,
     };
     let overrides = match serde_json::from_str::<Overrides>(&text) {
         Ok(overrides) => overrides,

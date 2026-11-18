@@ -170,7 +170,7 @@ impl App {
                     Some(key) => {
                         let _ = Box::pin(self.handle_key(key)).await; // INTENTIONAL: the outcome is the App's own
                     }
-                    None if self.run_action(name) => {}
+                    None if Box::pin(self.run_action(name)).await => {}
                     None => self.frontend_action = Some(name.to_string()),
                 },
                 None => {}

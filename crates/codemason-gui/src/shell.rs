@@ -234,6 +234,17 @@ impl Shell {
         self
     }
 
+    /// Add the user's `"<leader> x"` bindings (from
+    /// [`crate::keys::load_leader_bindings`]); call after [`Self::with_keymap`].
+    #[must_use]
+    pub fn with_leader_bindings(
+        mut self,
+        bindings: std::collections::BTreeMap<char, String>,
+    ) -> Self {
+        self.keys.bind_after_leader(bindings);
+        self
+    }
+
     /// Keep `geometry` (the window placement eframe opened the window with)
     /// up to date: each frame records the window's state, a change is written
     /// once it holds, and the exit steps write it.
@@ -428,6 +439,21 @@ impl Shell {
         });
         if self.app.palette.is_some() {
             dialogs::palette::set_action_keys(ui.ctx(), self.keys.action_keys());
+        }
+        // The leader waits for its second key: after a moment, list the keys.
+        let now = ui.input(|i| i.time);
+        if let Some(waited) = self.keys.leader_waited(now) {
+            if waited >= dialogs::which_key::WHICH_KEY_DELAY {
+                dialogs::which_key::show(ui.ctx(), &self.keys.leader_entries());
+            }
+            // Wake to show the popup, and to end the wait at its timeout.
+            let next = if waited < dialogs::which_key::WHICH_KEY_DELAY {
+                dialogs::which_key::WHICH_KEY_DELAY - waited
+            } else {
+                (self.keys.leader_timeout() - waited).max(0.0) + 0.01
+            };
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs_f64(next));
         }
         dialogs::show(ui.ctx(), &mut self.app);
         dialogs::image_view::show(ui.ctx());
@@ -901,7 +927,10 @@ impl Shell {
     /// Run the catalog action `id` that has no terminal key press: through
     /// `App::run_action` when app-core knows it, else here.
     fn run_action(&mut self, ctx: &egui::Context, id: &str) {
-        if self.app.run_action(id) {
+        let Some(sources) = self.sources.as_ref() else {
+            return;
+        };
+        if sources.runtime.block_on(self.app.run_action(id)) {
             ctx.request_repaint();
             return;
         }
