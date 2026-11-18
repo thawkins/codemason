@@ -2127,8 +2127,11 @@ modes (`cdmn run`, `serve`, ACP) are unchanged, and `--no-tui` keeps the plain
 stdin/stdout mode. The window opens maximized the first time and then restores
 its size, position and maximized state (`gui-window.json`); the dock layout is
 persisted in `gui-layout.json` and shortcut overrides in `gui-keys.json`, all in
-the codemason config directory. The font stack bundles Hack Bold (MIT and
-Bitstream Vera licences, `crates/codemason-gui/assets/fonts/Hack-LICENSE.txt`).
+the codemason config directory. The font stack bundles Inter Regular and Inter
+SemiBold for proportional text and its bold weight (SIL Open Font License 1.1,
+`crates/codemason-gui/assets/fonts/Inter-LICENSE.txt`) and Hack Bold for bold
+code (MIT and Bitstream Vera licences,
+`crates/codemason-gui/assets/fonts/Hack-LICENSE.txt`).
 
 Keyboard shortcuts for the window are craft-keymap commands: `panel.log`
 (`Alt+L` | `Cmd+Shift+L`), `panel.profile` (`Alt+P` | `Cmd+Shift+P`),

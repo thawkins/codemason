@@ -1,24 +1,33 @@
-//! The window's font stack: symbol and block-glyph fallbacks, a bold face,
-//! and installed system fonts for every other script.
+//! The window's font stack: a proportional UI face with its own bold
+//! weight, symbol and block-glyph fallbacks, a bold code face, and installed
+//! system fonts for every other script.
 //!
-//! egui's default faces leave gaps the core's text falls into: the
-//! proportional face (Ubuntu Light) has no box-drawing, block-element or
-//! geometric-shape glyphs (the U+2580..U+259F blocks, the U+25C6 running
-//! diamond), no CJK, and there is no bold weight at all.
+//! egui's default proportional face (Ubuntu Light) has one light weight, no
+//! box-drawing, block-element or geometric-shape glyphs (the U+2580..U+259F
+//! blocks, the U+25C6 running diamond) and no CJK.
 //! [`font_stack`] builds craft-ui's [`UiFonts`] stack with:
 //!
-//! - egui's default faces first in the proportional and monospace families;
+//! - the bundled Inter Regular face ([`UI_FACE`]) leading the proportional
+//!   family, and Inter SemiBold ([`UI_BOLD_FACE`]) leading [`BOLD_FAMILY`],
+//!   so bold prose is drawn in the same typeface as the text around it
+//!   (`assets/fonts/Inter-Regular.ttf`, `Inter-SemiBold.ttf`, Inter 4.1, SIL
+//!   Open Font License 1.1, see `assets/fonts/Inter-LICENSE.txt`);
+//! - egui's default faces after it in the proportional family and first in
+//!   the monospace family;
 //! - egui's bundled `Hack` face ([`SYMBOL_FACE`]) after them in the
 //!   proportional family, for the whole U+2500..U+25FF range (box drawing,
 //!   block elements, geometric shapes);
-//! - two bold families, [`BOLD_FAMILY`] for proportional text and
-//!   [`BOLD_MONO_FAMILY`] for code, led by the bundled Hack Bold face
-//!   ([`BOLD_FACE`], `assets/fonts/Hack-Bold.ttf`, Hack v3.003, MIT and
-//!   Bitstream Vera licences, see `assets/fonts/Hack-LICENSE.txt`);
+//! - the bundled Hack Bold face ([`BOLD_FACE`], `assets/fonts/Hack-Bold.ttf`,
+//!   Hack v3.003, MIT and Bitstream Vera licences, see
+//!   `assets/fonts/Hack-LICENSE.txt`) leading [`BOLD_MONO_FAMILY`] for bold
+//!   code, and following Inter SemiBold in [`BOLD_FAMILY`] for the block and
+//!   box-drawing glyphs Inter lacks;
 //! - installed system fonts (craft-ui's `system_fonts` feature) for
 //!   everything the bundled faces lack: CJK and other scripts, emoji, and
-//!   the U+2717 ballot cross, U+2139 info and U+26A0 warning status icons. [`SystemFonts::Off`] leaves them out, so tests draw
-//!   the same on every machine.
+//!   the U+2139 info status icon (Inter draws the U+2717 ballot cross and
+//!   U+26A0 warning icons in proportional text; in code they come from system
+//!   fonts too). [`SystemFonts::Off`] leaves them out, so tests draw the same
+//!   on every machine.
 //!
 //! [`install`] installs the stack in a context; the window does so once at
 //! start with [`SystemFonts::AfterCraft`].
@@ -35,8 +44,14 @@ pub const BOLD_FAMILY: &str = "codemason-bold";
 /// The family bold monospace text is drawn in.
 pub const BOLD_MONO_FAMILY: &str = "codemason-bold-mono";
 
-/// The egui font name of the bundled bold face.
+/// The egui font name of the bundled bold monospace face.
 pub const BOLD_FACE: &str = "Hack-Bold";
+
+/// The egui font name of the bundled proportional UI face.
+pub const UI_FACE: &str = "Inter-Regular";
+
+/// The egui font name of the bundled bold proportional UI face.
+pub const UI_BOLD_FACE: &str = "Inter-SemiBold";
 
 /// egui's bundled face that covers box drawing, block elements and
 /// geometric shapes; the proportional family falls back to it.
@@ -44,6 +59,12 @@ pub const SYMBOL_FACE: &str = "Hack";
 
 /// Hack Bold v3.003 (Source Foundry; MIT and Bitstream Vera licences).
 const HACK_BOLD: &[u8] = include_bytes!("../assets/fonts/Hack-Bold.ttf");
+
+/// Inter Regular 4.1 (The Inter Project Authors; SIL Open Font License 1.1).
+const INTER_REGULAR: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
+
+/// Inter SemiBold 4.1 (The Inter Project Authors; SIL Open Font License 1.1).
+const INTER_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/Inter-SemiBold.ttf");
 
 /// The `wght` the bold families draw variable system fonts at.
 const BOLD_WEIGHT: u16 = 700;
@@ -57,9 +78,10 @@ const BOLD_WEIGHT: u16 = 700;
 ///
 /// # Returns
 ///
-/// The stack: egui's default faces, [`SYMBOL_FACE`] as the proportional
-/// fallback, the two bold families led by [`BOLD_FACE`], then system fonts
-/// when `system` allows them.
+/// The stack: [`UI_FACE`] then egui's default faces in the proportional
+/// family with [`SYMBOL_FACE`] as its fallback, [`BOLD_FAMILY`] led by
+/// [`UI_BOLD_FACE`], [`BOLD_MONO_FAMILY`] led by [`BOLD_FACE`], then system
+/// fonts when `system` allows them.
 #[must_use]
 pub fn font_stack(system: SystemFonts) -> Stack {
     let bold = [
@@ -67,6 +89,16 @@ pub fn font_stack(system: SystemFonts) -> Stack {
         FontFamily::Name(BOLD_MONO_FAMILY.into()),
     ];
     UiFonts::new(&I18nScripts)
+        .app_face(
+            UI_FACE,
+            FontData::from_static(INTER_REGULAR),
+            &[FontFamily::Proportional],
+        )
+        .app_face(
+            UI_BOLD_FACE,
+            FontData::from_static(INTER_SEMIBOLD),
+            &[FontFamily::Name(BOLD_FAMILY.into())],
+        )
         .app_face(BOLD_FACE, FontData::from_static(HACK_BOLD), &bold)
         .egui_face(SYMBOL_FACE, &[FontFamily::Proportional])
         .family(Family::named(BOLD_FAMILY).weight(BOLD_WEIGHT))
