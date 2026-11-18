@@ -2131,7 +2131,18 @@ the codemason config directory. The font stack bundles Inter Regular and Inter
 SemiBold for proportional text and its bold weight (SIL Open Font License 1.1,
 `crates/codemason-gui/assets/fonts/Inter-LICENSE.txt`) and Hack Bold for bold
 code (MIT and Bitstream Vera licences,
-`crates/codemason-gui/assets/fonts/Hack-LICENSE.txt`).
+`crates/codemason-gui/assets/fonts/Hack-LICENSE.txt`). The Lucide icon font
+(`crates/codemason-gui/assets/fonts/lucide.ttf`, lucide-static 1.66.0, ISC
+licence with the Feather-derived icons under MIT,
+`crates/codemason-gui/assets/fonts/Lucide-LICENSE.txt`) sits alone in the
+`codemason-icons` family, so its private-use code points never stand in for
+text. `icons::Icon` names the icons the window draws (read, edit, command,
+search, agent, check, cross, warning, info, the two chevrons and copy), each
+with an ASCII stand-in `icons::icon_label` draws when the stack lacks the
+font. An activity row starts with the icon of its main kind of work (edit,
+then command, search, read, other tool), and a finished tool call's `* ` or
+`[x] ` marker is drawn as a check (`state.success`) or cross (`state.error`)
+icon beside its lines.
 
 **Themes.** Every colour in the window comes from a theme: a set of semantic
 tokens (`ThemeTokens` in `crates/codemason-app-core/src/theme_tokens.rs`, no

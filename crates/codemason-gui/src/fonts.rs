@@ -14,6 +14,10 @@
 //!   Open Font License 1.1, see `assets/fonts/Inter-LICENSE.txt`);
 //! - egui's default faces after it in the proportional family and first in
 //!   the monospace family;
+//! - the bundled Lucide icon face ([`crate::icons::ICON_FACE`],
+//!   `assets/fonts/lucide.ttf`, ISC licence, see
+//!   `assets/fonts/Lucide-LICENSE.txt`) alone in
+//!   [`crate::icons::ICON_FAMILY`], used only to draw icons;
 //! - egui's bundled `Hack` face ([`SYMBOL_FACE`]) after them in the
 //!   proportional family, for the whole U+2500..U+25FF range (box drawing,
 //!   block elements, geometric shapes);
@@ -79,7 +83,8 @@ const BOLD_WEIGHT: u16 = 700;
 /// # Returns
 ///
 /// The stack: [`UI_FACE`] then egui's default faces in the proportional
-/// family with [`SYMBOL_FACE`] as its fallback, [`BOLD_FAMILY`] led by
+/// family with [`SYMBOL_FACE`] as its fallback, the Lucide icon face alone
+/// in [`crate::icons::ICON_FAMILY`], [`BOLD_FAMILY`] led by
 /// [`UI_BOLD_FACE`], [`BOLD_MONO_FAMILY`] led by [`BOLD_FACE`], then system
 /// fonts when `system` allows them.
 #[must_use]
@@ -99,9 +104,17 @@ pub fn font_stack(system: SystemFonts) -> Stack {
             FontData::from_static(INTER_SEMIBOLD),
             &[FontFamily::Name(BOLD_FAMILY.into())],
         )
+        // Icons, in a family of their own: Lucide's private-use code points
+        // would otherwise draw icons for characters other faces reserve.
+        .app_face(
+            crate::icons::ICON_FACE,
+            FontData::from_static(crate::icons::LUCIDE),
+            &[FontFamily::Name(crate::icons::ICON_FAMILY.into())],
+        )
         .app_face(BOLD_FACE, FontData::from_static(HACK_BOLD), &bold)
         .egui_face(SYMBOL_FACE, &[FontFamily::Proportional])
         .family(Family::named(BOLD_FAMILY).weight(BOLD_WEIGHT))
+        .family(Family::named(crate::icons::ICON_FAMILY))
         .family(
             Family::named(BOLD_MONO_FAMILY)
                 .weight(BOLD_WEIGHT)

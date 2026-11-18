@@ -51,7 +51,7 @@ use std::time::{Duration, Instant};
 use codemason_agent::message::{Message, Role as MessageRole};
 use codemason_app_core::activity::{ActivityGroup, group_activity};
 use codemason_app_core::app::App;
-use codemason_app_core::message_blocks::{TranscriptBlock, message_to_blocks};
+use codemason_app_core::message_blocks::{ToolState, TranscriptBlock, message_to_blocks};
 use codemason_app_core::message_lines::MESSAGE_STREAM_MIN_INTERVAL;
 use codemason_app_core::styled::StyledLine;
 use codemason_app_core::transcript_prefs::{ThinkingDisplay, TranscriptPrefs, Verbosity};
@@ -59,6 +59,7 @@ use codemason_types::sanitize_terminal::sanitize_terminal;
 use egui::{FontId, Rect, Role, ScrollArea, Sense, WidgetInfo, pos2, vec2};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
+use crate::icons::{Icon, icon_label};
 use crate::metrics::{radius, space, text_size};
 use crate::palette::Palette;
 use crate::panels::code_block::{CodeAction, code_block_ui};
@@ -911,8 +912,9 @@ fn draw_blocks(
             TranscriptBlock::Tool {
                 lines,
                 status_label,
+                state,
                 ..
-            } => tool_ui(ui, lines, status_label, style),
+            } => tool_ui(ui, lines, status_label, *state, style),
             TranscriptBlock::Image { name, path } => {
                 let uri = format!("file://{}", path.display());
                 let alt = format!("Image: {name}");
@@ -960,7 +962,46 @@ pub const ACTIVITY_RUNNING_LABEL: &str = "Running";
 pub const THINKING_LABEL: &str = "Thinking";
 
 /// A tool call's lines, labelled with its status for assistive technology.
-fn tool_ui(ui: &mut egui::Ui, lines: &[StyledLine], status_label: &str, style: BlockStyle<'_>) {
+/// A finished call's leading marker (`* ` or `[x] `) is drawn as a check or
+/// a cross icon beside the lines instead.
+fn tool_ui(
+    ui: &mut egui::Ui,
+    lines: &[StyledLine],
+    status_label: &str,
+    state: ToolState,
+    style: BlockStyle<'_>,
+) {
+    let icon = match state {
+        ToolState::Done => Some((Icon::Check, style.palette.success)),
+        ToolState::Failed => Some((Icon::Cross, style.palette.error)),
+        ToolState::Running => None,
+    };
+    let mut lines = lines.to_vec();
+    let marked = lines
+        .first()
+        .and_then(|l| l.spans.first())
+        .is_some_and(|marker| matches!(marker.text.as_str(), "* " | "[x] "));
+    let Some((icon, color)) = icon.filter(|_| marked) else {
+        draw_tool_lines(ui, &lines, status_label, style);
+        return;
+    };
+    if let Some(first) = lines.first_mut() {
+        first.spans.remove(0);
+    }
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = space::XS;
+        ui.label(icon_label(ui.ctx(), icon, FONT_SIZE, color));
+        draw_tool_lines(ui, &lines, status_label, style);
+    });
+}
+
+/// A tool call's lines as one selectable label.
+fn draw_tool_lines(
+    ui: &mut egui::Ui,
+    lines: &[StyledLine],
+    status_label: &str,
+    style: BlockStyle<'_>,
+) {
     let job = styled_to_layout_job(lines, style.palette, ui.available_width(), style.bold);
     let text = job.text.clone();
     let response = ui.add(egui::Label::new(job).wrap());
@@ -980,6 +1021,7 @@ fn disclosure(
     ui: &mut egui::Ui,
     id: egui::Id,
     label: &str,
+    icon: Option<Icon>,
     palette: &Palette,
     default_open: bool,
     extra: impl FnOnce(&mut egui::Ui),
@@ -987,6 +1029,10 @@ fn disclosure(
     let key = id.with("open");
     let mut open = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(default_open);
     ui.horizontal(|ui| {
+        if let Some(icon) = icon {
+            let size = egui::TextStyle::Body.resolve(ui.style()).size;
+            ui.label(icon_label(ui.ctx(), icon, size, palette.muted));
+        }
         let row = ui.text_style_height(&egui::TextStyle::Body);
         let galley = egui::WidgetText::from(egui::RichText::new(label).color(palette.muted))
             .into_galley(
@@ -1046,6 +1092,7 @@ fn thinking_ui(ui: &mut egui::Ui, id: egui::Id, lines: &[StyledLine], style: Blo
                 ui,
                 id,
                 THINKING_LABEL,
+                None,
                 style.palette,
                 style.streaming,
                 |_| {},
@@ -1069,7 +1116,21 @@ fn activity_ui(
     let palette = style.palette;
     let label = group.summary.label();
     let errors = group.summary.errors;
-    let open = disclosure(ui, id, &label, palette, false, |ui| {
+    let summary = group.summary;
+    let kind = if summary.edits > 0 {
+        Icon::Edit
+    } else if summary.commands > 0 {
+        Icon::Command
+    } else if summary.searches > 0 {
+        Icon::Search
+    } else if summary.reads > 0 {
+        Icon::Read
+    } else if summary.other > 0 {
+        Icon::Agent
+    } else {
+        Icon::Info
+    };
+    let open = disclosure(ui, id, &label, Some(kind), palette, false, |ui| {
         if group.running {
             crate::panels::status_bar::busy_spinner(ui, palette, ACTIVITY_RUNNING_LABEL);
         }
@@ -1091,8 +1152,9 @@ fn activity_ui(
                     TranscriptBlock::Tool {
                         lines,
                         status_label,
+                        state,
                         ..
-                    } => tool_ui(ui, lines, status_label, style),
+                    } => tool_ui(ui, lines, status_label, *state, style),
                     TranscriptBlock::Thinking(lines) => {
                         thinking_ui(ui, id.with(index), lines, style);
                     }

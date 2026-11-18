@@ -1066,7 +1066,10 @@ The GUI embeds font software: the Hack Bold font
 (`crates/codemason-gui/assets/fonts/Hack-Bold.ttf`, Hack v3.003, Source Foundry;
 MIT and Bitstream Vera licences), the Inter Regular and Inter SemiBold fonts
 (`crates/codemason-gui/assets/fonts/Inter-Regular.ttf`, `Inter-SemiBold.ttf`,
-Inter 4.1, The Inter Project Authors; SIL Open Font License 1.1) and egui's
+Inter 4.1, The Inter Project Authors; SIL Open Font License 1.1), the Lucide
+icon font (`crates/codemason-gui/assets/fonts/lucide.ttf`, lucide-static
+1.66.0, Lucide Icons and Contributors; ISC licence, the Feather-derived icons
+MIT) and egui's
 default fonts (Hack Regular, Noto
 Emoji under the SIL Open Font License 1.1, Ubuntu Light under the Ubuntu Font
 Licence 1.0, and the MIT-licensed emoji-icon-font). The full notices are in
