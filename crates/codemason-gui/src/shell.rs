@@ -865,6 +865,10 @@ impl Shell {
         let Some(sources) = self.sources.as_ref() else {
             return;
         };
+        let label_selection = ctx
+            .with_plugin::<egui::text_selection::LabelSelectionState, _>(|s| s.has_selection())
+            .unwrap_or(false);
+        self.keys.set_label_selection(label_selection);
         let keys = ctx.input_mut(|input| self.keys.route(input, focus));
         // egui chose where Tab or an arrow moves its focus when the frame
         // began, before the router took the press for the App; with the
@@ -968,12 +972,7 @@ fn messages_body(ui: &mut egui::Ui, app: &mut App, messages: &mut MessagesView, 
         crate::panels::empty_state::empty_state_ui(ui, app, palette);
     }
     let transcript = messages.show(ui, app, palette);
-    if let Some(code) = messages.take_insert() {
-        insert_into_prompt(ui.ctx(), app, &code);
-    }
-    if let Some(path) = messages.take_enlarge() {
-        dialogs::image_view::open(ui.ctx(), path);
-    }
+    messages.apply_actions(ui.ctx(), app);
     let right_click = ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Secondary));
     // `contains_pointer`, not `hovered`: the transcript's selectable text
     // sits on top of its hover-only node.
@@ -981,20 +980,6 @@ fn messages_body(ui: &mut egui::Ui, app: &mut App, messages: &mut MessagesView, 
         let message = messages.message_at_pointer().map(str::to_string);
         dialogs::context_menu::open_transcript(ui.ctx(), app, message);
     }
-}
-
-/// Put `code` at the end of the prompt, on a line of its own, and focus the
-/// prompt.
-fn insert_into_prompt(ctx: &egui::Context, app: &mut App, code: &str) {
-    let input = &mut app.session.input;
-    if !input.is_empty() && !input.ends_with('\n') {
-        input.push('\n');
-    }
-    input.push_str(code);
-    let end = app.session.input.chars().count();
-    // Moves the cursor to the end and refreshes the completion menus.
-    app.input_edited(end);
-    ctx.memory_mut(|memory| memory.request_focus(crate::panels::prompt::prompt_id()));
 }
 
 /// A pane with no panel of its own (the queue, drawn above the prompt): its

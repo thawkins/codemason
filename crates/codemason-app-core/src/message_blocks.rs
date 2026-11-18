@@ -117,7 +117,9 @@ pub fn message_to_blocks<S: BuildHasher>(
 /// A code block inside a list item or block quote stays in its Markdown, so
 /// the list or quote is not cut in two. An unclosed fence (a reply still
 /// streaming) is a code block up to the end of the text, as CommonMark
-/// reads it.
+/// reads it. Once a code block is split out, the message's link reference
+/// definitions are appended to each Markdown fragment, so a reference link
+/// still resolves when its definition is on the other side of the code.
 ///
 /// # Returns
 ///
@@ -126,21 +128,34 @@ pub fn message_to_blocks<S: BuildHasher>(
 pub fn split_code_blocks(markdown: &str) -> Vec<TranscriptBlock> {
     use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 
+    let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
+    // Each Markdown fragment is parsed on its own, so a reference link
+    // (`[docs][d]`) on one side of a code block needs the definitions from
+    // the whole message: they are appended to every fragment once a code
+    // block is split out (a definition renders as nothing).
+    let definitions: Vec<&str> = Parser::new_ext(markdown, options)
+        .reference_definitions()
+        .iter()
+        .filter_map(|(_, def)| markdown.get(def.span.clone()))
+        .map(str::trim)
+        .collect();
     let mut blocks = Vec::new();
-    let push_markdown = |blocks: &mut Vec<TranscriptBlock>, text: &str| {
-        if !text.trim().is_empty() {
-            blocks.push(TranscriptBlock::Markdown(
-                text.trim_matches('\n').to_string(),
-            ));
+    let mut split = false;
+    let push_markdown = |blocks: &mut Vec<TranscriptBlock>, text: &str, split: bool| {
+        if text.trim().is_empty() {
+            return;
         }
+        let mut text = text.trim_matches('\n').to_string();
+        if split && !definitions.is_empty() {
+            text.push_str("\n\n");
+            text.push_str(&definitions.join("\n"));
+        }
+        blocks.push(TranscriptBlock::Markdown(text));
     };
     let mut depth = 0usize;
     let mut copied_to = 0usize;
     let mut code: Option<(Option<String>, String, usize)> = None;
-    let parser = Parser::new_ext(
-        markdown,
-        Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH,
-    );
+    let parser = Parser::new_ext(markdown, options);
     for (event, range) in parser.into_offset_iter() {
         match event {
             Event::Start(Tag::CodeBlock(kind)) if depth == 0 => {
@@ -161,7 +176,8 @@ pub fn split_code_blocks(markdown: &str) -> Vec<TranscriptBlock> {
             }
             Event::End(TagEnd::CodeBlock) if code.is_some() => {
                 if let Some((lang, body, start)) = code.take() {
-                    push_markdown(&mut blocks, &markdown[copied_to..start]);
+                    split = true;
+                    push_markdown(&mut blocks, &markdown[copied_to..start], split);
                     let text = body.strip_suffix('\n').unwrap_or(&body).to_string();
                     blocks.push(TranscriptBlock::Code { lang, text });
                     copied_to = range.end;
@@ -172,7 +188,7 @@ pub fn split_code_blocks(markdown: &str) -> Vec<TranscriptBlock> {
             _ => {}
         }
     }
-    push_markdown(&mut blocks, &markdown[copied_to..]);
+    push_markdown(&mut blocks, &markdown[copied_to..], split);
     blocks
 }
 

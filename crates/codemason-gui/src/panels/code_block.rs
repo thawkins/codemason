@@ -10,10 +10,17 @@
 //! The buttons are click-only, so they never hold the keyboard focus and
 //! cannot take an Enter meant for the prompt.
 //!
+//! The highlighted layout is kept in egui memory under the block's id with a
+//! hash of the code, language and colours, so a repaint (scrolling, hover, a
+//! streamed token elsewhere) reuses it and only a changed block or theme is
+//! parsed again.
+//!
 //! [`TranscriptBlock::Code`]: codemason_app_core::message_blocks::TranscriptBlock::Code
 //!
 //! Dependencies: `egui`, `codemason-app-core` (highlighting),
 //! [`crate::palette`] and [`crate::metrics`].
+
+use std::sync::Arc;
 
 use codemason_app_core::syntax_highlight::highlight;
 use egui::text::LayoutJob;
@@ -63,6 +70,31 @@ pub fn code_job(code: &str, lang: Option<&str>, palette: &Palette) -> LayoutJob 
         None => job.append(code, 0.0, format(palette.text)),
     }
     job
+}
+
+/// [`code_job`] for the block `id`, from egui memory when its code,
+/// language and colours are unchanged since it was last built.
+fn cached_code_job(
+    ctx: &egui::Context,
+    id: egui::Id,
+    code: &str,
+    lang: Option<&str>,
+    palette: &Palette,
+) -> LayoutJob {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (code, lang, palette.syntax, palette.text).hash(&mut hasher);
+    let key = hasher.finish();
+    let slot = id.with("job");
+    if let Some((cached_key, job)) = ctx.data(|d| d.get_temp::<(u64, Arc<LayoutJob>)>(slot))
+        && cached_key == key
+    {
+        return (*job).clone();
+    }
+    let job = Arc::new(code_job(code, lang, palette));
+    ctx.data_mut(|d| d.insert_temp(slot, (key, Arc::clone(&job))));
+    (*job).clone()
 }
 
 /// Draw one code block.
@@ -120,7 +152,7 @@ pub fn code_block_ui(
                 });
             });
             ui.add_space(space::XS);
-            let job = code_job(code, lang, palette);
+            let job = cached_code_job(ui.ctx(), id, code, lang, palette);
             if wrap {
                 ui.add(egui::Label::new(job).wrap());
             } else {
