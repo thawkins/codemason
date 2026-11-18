@@ -59,11 +59,57 @@ fn press_alt_o(runtime: &tokio::runtime::Runtime, app: &mut App) {
     }));
 }
 
+/// Open the status bar's Details popup.
+fn open_details(rig: &mut Rig) {
+    rig.harness
+        .get_by_label(codemason_gui::panels::status_bar::DETAILS_LABEL)
+        .click();
+    rig.harness.run();
+}
+
 #[test]
-fn test_status_bar_shows_autopilot_off_before_enabling() {
-    let rig = rig(|_, app| assert!(!app.session.autopilot_enabled));
-    rig.harness.get_by_label("AUTO [x]");
+fn test_status_bar_shows_autopilot_off_only_in_details() {
+    let mut rig = rig(|_, app| assert!(!app.session.autopilot_enabled));
+    // The bar shows the autopilot tag only while autopilot is on.
+    assert!(rig.harness.query_by_label("AUTO [x]").is_none());
     assert!(rig.harness.query_by_label("AUTO [ok]").is_none());
+
+    open_details(&mut rig);
+    rig.harness.get_by_label("AUTO [x]");
+}
+
+#[test]
+fn test_status_bar_is_one_row_with_service_tags_in_details() {
+    let mut rig = rig(|_, _| {});
+    // None of the service tags or identity fields is in the bar itself.
+    for hidden in [
+        "GCF [ok]",
+        "GCF [x]",
+        "CDX [ok]",
+        "CDX [x]",
+        "TELE [x]",
+        "TELE [ok]",
+    ] {
+        assert!(rig.harness.query_by_label(hidden).is_none(), "{hidden}");
+    }
+    assert!(
+        rig.harness
+            .query_by_label(&format!("codemason v{}", env!("CARGO_PKG_VERSION")))
+            .is_none()
+    );
+    rig.harness.get_by_label_contains("Agent: ");
+
+    open_details(&mut rig);
+    rig.harness
+        .get_by_label(&format!("codemason v{}", env!("CARGO_PKG_VERSION")));
+    assert!(
+        rig.harness.query_by_label("GCF [ok]").is_some()
+            || rig.harness.query_by_label("GCF [x]").is_some()
+    );
+    assert!(
+        rig.harness.query_by_label("TELE [ok]").is_some()
+            || rig.harness.query_by_label("TELE [x]").is_some()
+    );
 }
 
 #[test]
@@ -121,12 +167,16 @@ fn test_status_bar_hides_code_index_indicators_when_idle() {
 
 #[test]
 fn test_status_bar_surfaces_the_default_local_backend() {
-    let rig = rig(|_, app| {
+    let mut rig = rig(|_, app| {
         assert_eq!(
             app.session.active_backend, "local",
             "FR-019 default backend"
         );
     });
+    // The default backend is listed in Details; only a non-default one is
+    // shown in the bar itself.
+    assert!(rig.harness.query_by_label("Backend:local").is_none());
+    open_details(&mut rig);
     rig.harness.get_by_label("Backend:local");
 }
 
@@ -143,4 +193,10 @@ fn test_status_bar_shows_a_spinner_only_while_a_turn_runs() {
     let busy = rig(|_, app| app.session.is_processing = true);
     busy.harness
         .get_by_role_and_label(Role::ProgressIndicator, BUSY_LABEL);
+}
+
+#[test]
+fn test_status_bar_keeps_a_non_default_backend_in_view() {
+    let rig = rig(|_, app| app.session.active_backend = "docker".to_string());
+    rig.harness.get_by_label("Backend:docker");
 }
