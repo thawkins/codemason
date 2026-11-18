@@ -166,6 +166,7 @@ impl Entry {
                     | TranscriptBlock::Thinking(_)
                     | TranscriptBlock::Tool { .. } => lines * rows.styled,
                     TranscriptBlock::Activity(_) => rows.label,
+                    TranscriptBlock::Diff(_) => lines * rows.code,
                 }
             })
             .sum();
@@ -890,6 +891,13 @@ fn draw_blocks(
                 ui.add(egui::Label::new(job).wrap());
             }
             TranscriptBlock::Thinking(lines) => thinking_ui(ui, id, lines, style),
+            TranscriptBlock::Diff(_) => {
+                ui.label(
+                    egui::RichText::new(block.plain_text())
+                        .monospace()
+                        .color(palette.muted),
+                );
+            }
             TranscriptBlock::Activity(group) => activity_ui(ui, id, group, style),
             TranscriptBlock::Tool {
                 lines,
@@ -1078,6 +1086,13 @@ fn activity_ui(ui: &mut egui::Ui, id: egui::Id, group: &ActivityGroup, style: Bl
                     | TranscriptBlock::Notice(_)
                     | TranscriptBlock::Image { .. }
                     | TranscriptBlock::Activity(_) => {}
+                    TranscriptBlock::Diff(_) => {
+                        ui.label(
+                            egui::RichText::new(item.plain_text())
+                                .monospace()
+                                .color(palette.muted),
+                        );
+                    }
                 }
             }
         });

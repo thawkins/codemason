@@ -125,7 +125,8 @@ impl ActivitySummary {
             | TranscriptBlock::Plain(_)
             | TranscriptBlock::Notice(_)
             | TranscriptBlock::Image { .. }
-            | TranscriptBlock::Activity(_) => {}
+            | TranscriptBlock::Activity(_)
+            | TranscriptBlock::Diff(_) => {}
         }
     }
 
@@ -209,7 +210,7 @@ fn folds(block: &TranscriptBlock, verbosity: Verbosity) -> bool {
     match verbosity {
         Verbosity::Low => matches!(
             block,
-            TranscriptBlock::Tool { .. } | TranscriptBlock::Thinking(_)
+            TranscriptBlock::Tool { .. } | TranscriptBlock::Thinking(_) | TranscriptBlock::Diff(_)
         ),
         Verbosity::Medium => matches!(block, TranscriptBlock::Thinking(_)),
         Verbosity::High => false,
@@ -219,7 +220,8 @@ fn folds(block: &TranscriptBlock, verbosity: Verbosity) -> bool {
 /// Fold runs of activity in `blocks` into [`TranscriptBlock::Activity`]
 /// groups, as `verbosity` asks.
 ///
-/// `Low` folds every maximal run of consecutive tool and reasoning blocks;
+/// `Low` folds every maximal run of consecutive tool, diff and reasoning
+/// blocks;
 /// `Medium` folds only reasoning and keeps each tool call as its own block;
 /// `High` returns `blocks` unchanged. Every other block stays where it is.
 #[must_use]

@@ -209,6 +209,8 @@ mod test_context_panel_t015;
 mod test_cron_add_positional;
 #[path = "test_db_command.rs"]
 mod test_db_command;
+#[path = "test_diff_view.rs"]
+mod test_diff_view;
 #[path = "test_dirs_show.rs"]
 mod test_dirs_show;
 #[path = "test_dispatch_ops_deep.rs"]

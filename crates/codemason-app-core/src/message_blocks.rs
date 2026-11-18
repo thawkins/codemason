@@ -72,6 +72,9 @@ pub enum TranscriptBlock {
     /// A run of tool calls and reasoning folded into one row (see
     /// [`crate::activity::group_activity`]).
     Activity(crate::activity::ActivityGroup),
+    /// The changes a finished edit call made to one file, after its
+    /// [`TranscriptBlock::Tool`] block.
+    Diff(crate::diff_view::FileDiff),
     /// The model's reasoning, as styled lines (narrated tool-call markup
     /// already removed).
     Thinking(Vec<StyledLine>),
@@ -98,6 +101,24 @@ impl TranscriptBlock {
                 .join("\n"),
             Self::Image { name, .. } => format!("[image: {name}]"),
             Self::Activity(group) => group.summary.label(),
+            Self::Diff(diff) => {
+                let mut text = diff.path.clone();
+                for hunk in &diff.hunks {
+                    text.push('\n');
+                    text.push_str(&hunk.header);
+                    for line in &hunk.lines {
+                        let mark = match line.kind {
+                            crate::diff_view::DiffLineKind::Context => ' ',
+                            crate::diff_view::DiffLineKind::Added => '+',
+                            crate::diff_view::DiffLineKind::Removed => '-',
+                        };
+                        text.push('\n');
+                        text.push(mark);
+                        text.push_str(&line.text);
+                    }
+                }
+                text
+            }
         }
     }
 }
@@ -116,7 +137,8 @@ impl TranscriptBlock {
 /// with each top-level code block as a [`TranscriptBlock::Code`] between the
 /// Markdown around it (an agent notice is [`TranscriptBlock::Notice`]), the
 /// user's text [`TranscriptBlock::Plain`], and a compaction summary Markdown.
-/// Text that is empty after trimming produces no block.
+/// A finished edit call is followed by a [`TranscriptBlock::Diff`] per file
+/// it changed. Text that is empty after trimming produces no block.
 pub fn message_to_blocks<S: BuildHasher>(
     msg: &Message,
     tool_step_map: &HashMap<String, (String, u32, u32), S>,
@@ -124,7 +146,23 @@ pub fn message_to_blocks<S: BuildHasher>(
 ) -> Vec<TranscriptBlock> {
     msg.parts
         .iter()
-        .filter_map(|part| part_block(&msg.role, part, tool_step_map, cwd))
+        .flat_map(|part| {
+            let block = part_block(&msg.role, part, tool_step_map, cwd);
+            let diffs = match part {
+                MessagePart::ToolCall { tool, state, .. }
+                    if state.status == ToolCallStatus::Completed =>
+                {
+                    crate::diff_view::diffs_from_tool_input(tool, &state.input)
+                }
+                MessagePart::ToolCall { .. }
+                | MessagePart::Text { .. }
+                | MessagePart::Reasoning { .. }
+                | MessagePart::Image(_) => Vec::new(),
+            };
+            block
+                .into_iter()
+                .chain(diffs.into_iter().map(TranscriptBlock::Diff))
+        })
         .flat_map(|block| match block {
             TranscriptBlock::Markdown(text) => split_code_blocks(&text),
             other => vec![other],
