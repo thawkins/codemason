@@ -664,3 +664,41 @@ fn test_prompt_typing_is_not_swallowed_by_a_focused_button() {
     );
     assert!(prompt(&harness).is_focused());
 }
+
+#[test]
+fn test_prompt_has_no_visible_label() {
+    let (_rt, harness) = rig(|_| {});
+
+    // The name is on the editor itself; no separate "Prompt" label is drawn.
+    let named: Vec<_> = harness.query_all_by_label(PROMPT_LABEL).collect();
+    assert_eq!(named.len(), 1);
+    prompt(&harness);
+}
+
+#[test]
+fn test_prompt_grows_with_its_text_up_to_eight_rows() {
+    let height = |lines: usize| {
+        let text = vec!["line"; lines].join("\n");
+        let (_rt, mut harness) = rig(move |app| app.session.input = text);
+        harness.run();
+        codemason_gui::panels::prompt::prompt_visible_height(&harness.ctx)
+            .expect("the prompt was drawn")
+    };
+    let one = height(1);
+    let three = height(3);
+    let eight = height(8);
+    let thirty = height(30);
+
+    assert!(
+        three > one * 2.0,
+        "three rows are taller than one: {one} -> {three}"
+    );
+    assert!(
+        eight > three,
+        "the editor keeps growing: {three} -> {eight}"
+    );
+    assert!(
+        thirty <= eight + 1.0,
+        "beyond eight rows the editor scrolls instead of growing: {eight} -> {thirty}"
+    );
+}

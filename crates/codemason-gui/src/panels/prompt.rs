@@ -78,6 +78,45 @@ use crate::keys::{Focus, is_key_text, is_prompt_app_key, is_prompt_edit_key, to_
 /// Accessible label of the prompt input.
 pub const PROMPT_LABEL: &str = "Prompt";
 
+/// The most text rows the prompt editor grows to before it scrolls.
+const MAX_ROWS: f32 = 8.0;
+
+/// Where the height of the prompt's laid-out text is recorded each frame.
+fn text_height_id() -> Id {
+    prompt_id().with("text_height")
+}
+
+/// The prompt's text editor.
+fn editor(
+    ui: &mut egui::Ui,
+    app: &mut App,
+    id: Id,
+    editable: bool,
+) -> egui::text_edit::TextEditOutput {
+    egui::TextEdit::multiline(&mut app.session.input)
+        .id(id)
+        .desired_rows(1)
+        .desired_width(f32::INFINITY)
+        .return_key(None)
+        .interactive(editable)
+        .hint_text(HINT)
+        .show(ui)
+}
+
+/// Where the height of the editor's visible area is recorded each frame.
+fn visible_height_id() -> Id {
+    prompt_id().with("visible_height")
+}
+
+/// The height of the prompt editor's visible area on the last frame: the
+/// part of the editor that is on screen, which stops growing at the row cap
+/// while the editor's own rectangle keeps the full height of its text.
+#[doc(hidden)]
+#[must_use]
+pub fn prompt_visible_height(ctx: &egui::Context) -> Option<f32> {
+    ctx.data(|data| data.get_temp(visible_height_id()))
+}
+
 /// Accessible label of the `@` mention completion list.
 pub const MENTION_LABEL: &str = "Mention completions";
 
@@ -482,25 +521,64 @@ pub fn prompt_ui(ui: &mut egui::Ui, app: &mut App) {
         .then(|| egui::TextEdit::load_state(ui.ctx(), id))
         .flatten();
     attachments_row(ui, app);
-    let output = ui
-        .horizontal(|ui| {
-            let label = ui.label(PROMPT_LABEL);
-            if queued > 0 {
-                // The TUI's queue counter before the prompt, e.g. "03>".
-                ui.label(format!("{queued:02}>"));
-            }
-            let output = egui::TextEdit::multiline(&mut app.session.input)
-                .id(id)
-                .desired_rows(1)
-                .desired_width(f32::INFINITY)
-                .return_key(None)
-                .interactive(editable)
-                .hint_text(HINT)
-                .show(ui);
-            output.response.response.clone().labelled_by(label.id);
-            output
+    // The editor starts one row tall and grows with its text. Once the text
+    // is taller than `MAX_ROWS` (or than the pane has room for) the editor
+    // stops growing and scrolls. The text height is last frame's, so the
+    // switch happens one frame after the text crosses the limit.
+    let row_height = ui.text_style_height(&egui::TextStyle::Body);
+    let max_height = (row_height * MAX_ROWS)
+        .min(ui.available_height())
+        .max(row_height);
+    let text_height: f32 = ui
+        .ctx()
+        .data(|data| data.get_temp(text_height_id()))
+        .unwrap_or_default();
+    let scrolls = text_height > max_height;
+    let counter = |ui: &mut egui::Ui| {
+        if queued > 0 {
+            // The TUI's queue counter before the prompt, e.g. "03>".
+            ui.label(format!("{queued:02}>"));
+        }
+    };
+    let output = if scrolls {
+        // A plain `horizontal` row is one text row tall; this row is given
+        // the whole height budget for the scroll area to fill.
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), max_height),
+            egui::Layout::left_to_right(egui::Align::TOP),
+            |ui| {
+                counter(ui);
+                egui::ScrollArea::vertical()
+                    .id_salt("prompt_scroll")
+                    .max_height(max_height)
+                    .auto_shrink(false)
+                    .show(ui, |ui| editor(ui, app, id, editable))
+                    .inner
+            },
+        )
+        .inner
+    } else {
+        ui.horizontal(|ui| {
+            counter(ui);
+            editor(ui, app, id, editable)
         })
-        .inner;
+        .inner
+    };
+    let visible_height = if scrolls {
+        max_height
+    } else {
+        output.response.response.rect.height()
+    };
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(text_height_id(), output.galley.size().y);
+        data.insert_temp(visible_height_id(), visible_height);
+    });
+    // No visible label: the hint text names the field on screen, and the
+    // accessible name is set on the editor itself.
+    ui.ctx()
+        .accesskit_node_builder(output.response.response.id, |node| {
+            node.set_label(PROMPT_LABEL);
+        });
     let mut cursor = output.cursor_range.map(|range| range.primary.index.0);
     if let Some(state) = keep_selection_through_right_click(
         ui.ctx(),
