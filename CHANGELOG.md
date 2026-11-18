@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added: line-range mentions. `@src/a.rs#20-45` (or `#20`) sends only those lines of the file, clamped to its length.
+- Added: `/editor` (leader `e`) edits the prompt in `$VISUAL` or `$EDITOR`; the prompt is locked until the editor exits.
 - Added: model favourites. In the model picker `Ctrl+F` marks or unmarks the highlighted model; favourites are listed first and marked `*`. The picker's filter now matches fuzzily on name or id.
 - Added: `F2` switches to the next of your 5 most recently chosen models (`model.cycle_recent`, rebindable).
 - Added: agent and session pickers with fuzzy search: leader `a` (`picker.agent`) and leader `s` (`picker.session`).

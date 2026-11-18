@@ -221,6 +221,8 @@ mod test_esc_stops_agent;
 mod test_event_handler_more;
 #[path = "test_event_swarm_research_deep.rs"]
 mod test_event_swarm_research_deep;
+#[path = "test_external_editor.rs"]
+mod test_external_editor;
 #[path = "test_force_cleanup_modal.rs"]
 mod test_force_cleanup_modal;
 #[path = "test_fr030_surface_agreement.rs"]
@@ -335,6 +337,8 @@ mod test_mcp_remove;
 mod test_memory_clear_confirm;
 #[path = "test_memory_panel.rs"]
 mod test_memory_panel;
+#[path = "test_mentions.rs"]
+mod test_mentions;
 #[path = "test_message_blocks.rs"]
 mod test_message_blocks;
 #[path = "test_message_edit_seq_cache.rs"]

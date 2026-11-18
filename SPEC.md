@@ -2277,8 +2277,8 @@ key press that runs it, if any). The actions and their default keys
 `teammate.prev` (`Alt+Up` | `Cmd+Alt+Up`), `app.quit` (`Ctrl+D` | `Cmd+Q`),
 `palette.show` (`Ctrl+P` | `Cmd+P`), `model.cycle_recent` (`F2`),
 `picker.model`, `picker.agent`, `picker.session`, `session.undo`,
-`session.redo` and `help.shortcuts` (no default chord; the first five have
-leader keys, below). An action with a terminal key press runs as
+`session.redo`, `prompt.editor` and `help.shortcuts` (no default chord; all
+but the first and last have leader keys, below). An action with a terminal key press runs as
 that press through `App::handle_key`, so the GUI and the terminal handler
 cannot drift; one without is queued by the router (`KeyRouter::take_actions`)
 and run by `App::run_action` or the shell. `gui-keys.json` maps action ids to
@@ -2329,6 +2329,27 @@ after the current one, wrapping, without reordering the list
 `RecentModel`), beside `selected_model`. The GUI model picker's filter is a
 fuzzy match on the name or id (`fuzzy::fuzzy_score`), best match first.
 
+**Line-range mentions.** A file mention may name lines: `@src/a.rs#20-45`
+(lines 20 to 45, 1-based, inclusive) or `@src/a.rs#20` (one line)
+(`reference::parse_mention`, `FileMention`). `parse_refs` splits a valid range
+off a non-URL reference into `ParsedRef::range`; an invalid suffix (`#45-20`,
+`#0`, not numeric) stays part of the path, and a URL keeps its `#` fragment.
+The resolver includes only those lines, under their own numbers, clamped to
+the file's length, and tags the block `<file path=".." lines="20-45">`. The
+`@` file menu closes once a `#` follows the path, so Enter sends the mention
+rather than replacing it.
+
+**External editor.** `/editor` and the action `prompt.editor` (leader `e`)
+edit the prompt in `$VISUAL`, else `$EDITOR`
+(`external_editor::edit_in_external_editor`): the prompt is written to a
+temporary file, the editor command runs through the shell with the file as
+its last argument, and the saved text (less one trailing newline) replaces the
+prompt. App-core locks the prompt meanwhile (`App::begin_external_edit` /
+`finish_external_edit`, `external_editor_open`); a failure or a missing editor
+is reported in the status line and keeps the prompt. `/editor` asks the
+frontend (`prompt.editor` frontend action); the GUI runs the editor on a
+worker thread (`external_edit::ExternalEdit`) so the window keeps drawing.
+
 **Leader key.** The `leader` config key (default `Ctrl+G`; `"none"` turns it
 off) and `leader_timeout_ms` (default 2000) set a key that starts a two-key
 sequence (`shortcuts::LeaderSettings`, recorded by the binary from the loaded
@@ -2338,7 +2359,8 @@ action bound to it, or nothing when none is; a wait longer than the timeout
 ends with no action, and a modal dialog cancels the wait. Default sequences
 come from each catalog action's `leader_key`: `m` choose model
 (`picker.model`), `a` choose agent (`picker.agent`), `s` choose session
-(`picker.session`), `u` undo the last turn
+(`picker.session`), `e` edit the prompt externally (`prompt.editor`), `u` undo
+the last turn
 (`session.undo`), `r` redo (`session.redo`) and `b` the Sessions panel
 (`panel.sessions`). In `gui-keys.json` a text `"<leader> x"` binds `x` after
 the leader to that action (`keys::load_leader_bindings`; an unknown id or more

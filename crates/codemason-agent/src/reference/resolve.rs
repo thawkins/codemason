@@ -52,6 +52,8 @@ pub struct ResolvedRef {
     pub truncated: bool,
     /// The resolved absolute path (for files/directories), if applicable.
     pub resolved_path: Option<PathBuf>,
+    /// The line range the content was limited to (`@path#from-to`).
+    pub range: Option<(u32, u32)>,
 }
 
 /// Resolve a single parsed reference to its content.
@@ -62,19 +64,26 @@ pub struct ResolvedRef {
 /// be fetched.
 pub async fn resolve_ref(parsed: &ParsedRef, working_dir: &Path) -> Result<ResolvedRef> {
     match &parsed.kind {
-        FileRef::File(path) => resolve_file(path, &parsed.raw, working_dir).await,
+        FileRef::File(path) => resolve_file(path, parsed, working_dir).await,
         FileRef::Directory(path) => resolve_directory(path, &parsed.raw, working_dir),
         FileRef::Url(url) => resolve_url(shared_http_client()?, url, &parsed.raw).await,
-        FileRef::Fuzzy(name) => resolve_fuzzy(name, &parsed.raw, working_dir).await,
+        FileRef::Fuzzy(name) => resolve_fuzzy(name, parsed, working_dir).await,
     }
 }
 
 /// Read a file's content, trying binary formats first then falling back to
-/// text. Text content is line-numbered. Returns a [`ResolvedRef`] on success.
+/// text. Text content is line-numbered; with a `range` only those lines
+/// (1-based, inclusive, clamped to the file) are kept, under their own
+/// numbers. Returns a [`ResolvedRef`] on success.
 ///
 /// Shared by [`resolve_file`] and [`resolve_fuzzy`] to avoid duplicating the
 /// binary-read / truncate / number-lines / ResolvedRef-construction sequence.
-async fn read_file_content(abs_path: &Path, file_ref: FileRef, raw: &str) -> Result<ResolvedRef> {
+async fn read_file_content(
+    abs_path: &Path,
+    file_ref: FileRef,
+    raw: &str,
+    range: Option<(u32, u32)>,
+) -> Result<ResolvedRef> {
     if let Some(content) = try_read_binary(abs_path, raw).await? {
         let (content, truncated) = truncate_content(content);
         return Ok(ResolvedRef {
@@ -83,6 +92,7 @@ async fn read_file_content(abs_path: &Path, file_ref: FileRef, raw: &str) -> Res
             content,
             truncated,
             resolved_path: Some(abs_path.to_path_buf()),
+            range: None,
         });
     }
 
@@ -90,9 +100,13 @@ async fn read_file_content(abs_path: &Path, file_ref: FileRef, raw: &str) -> Res
         .await
         .with_context(|| format!("Cannot read file '@{raw}' ({})", abs_path.display()))?;
 
-    let (content, truncated) = truncate_content(content);
-
-    let numbered = number_lines(&content);
+    let (numbered, truncated) = match range {
+        Some(range) => truncate_content(number_line_range(&content, range)),
+        None => {
+            let (content, truncated) = truncate_content(content);
+            (number_lines(&content), truncated)
+        }
+    };
 
     Ok(ResolvedRef {
         original: raw.to_string(),
@@ -100,6 +114,7 @@ async fn read_file_content(abs_path: &Path, file_ref: FileRef, raw: &str) -> Res
         content: numbered,
         truncated,
         resolved_path: Some(abs_path.to_path_buf()),
+        range,
     })
 }
 
@@ -113,18 +128,38 @@ fn number_lines(content: &str) -> String {
         .join("\n")
 }
 
+/// Format lines `from..=to` (1-based) of `content` with their line numbers;
+/// lines past the end of the file are ignored.
+fn number_line_range(content: &str, (from, to): (u32, u32)) -> String {
+    let (from, to) = (from as usize, to as usize);
+    content
+        .lines()
+        .enumerate()
+        .skip(from.saturating_sub(1))
+        .take(to + 1 - from)
+        .map(|(i, line)| format!("{:>4}  {}", i + 1, line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Resolve a file reference by reading its contents.
 ///
 /// For the binary PDF format (`.pdf`), delegates to the PDF reader tool.
 /// Text files are read with `read_to_string`.
-async fn resolve_file(path: &Path, raw: &str, working_dir: &Path) -> Result<ResolvedRef> {
+async fn resolve_file(path: &Path, parsed: &ParsedRef, working_dir: &Path) -> Result<ResolvedRef> {
     let abs_path = if path.is_absolute() {
         path.to_path_buf()
     } else {
         working_dir.join(path)
     };
 
-    read_file_content(&abs_path, FileRef::File(path.to_path_buf()), raw).await
+    read_file_content(
+        &abs_path,
+        FileRef::File(path.to_path_buf()),
+        &parsed.raw,
+        parsed.range,
+    )
+    .await
 }
 
 /// Resolve a directory reference by listing its contents.
@@ -152,6 +187,7 @@ fn resolve_directory(path: &Path, raw: &str, working_dir: &Path) -> Result<Resol
         content,
         truncated,
         resolved_path: Some(abs_path),
+        range: None,
     })
 }
 
@@ -203,11 +239,13 @@ async fn resolve_url(client: &reqwest::Client, url: &str, raw: &str) -> Result<R
         content,
         truncated,
         resolved_path: None,
+        range: None,
     })
 }
 
 /// Resolve a fuzzy name by finding the best-matching project file.
-async fn resolve_fuzzy(name: &str, raw: &str, working_dir: &Path) -> Result<ResolvedRef> {
+async fn resolve_fuzzy(name: &str, parsed: &ParsedRef, working_dir: &Path) -> Result<ResolvedRef> {
+    let raw = parsed.raw.as_str();
     // PERF-051: the tree walk is filesystem-bound; run it off the async worker.
     let candidates = collect_project_files_async(working_dir, 10_000).await?;
     let matches = fuzzy_match(name, &candidates);
@@ -218,7 +256,13 @@ async fn resolve_fuzzy(name: &str, raw: &str, working_dir: &Path) -> Result<Reso
 
     let abs_path = working_dir.join(&best.path);
 
-    read_file_content(&abs_path, FileRef::File(best.path.clone()), raw).await
+    read_file_content(
+        &abs_path,
+        FileRef::File(best.path.clone()),
+        raw,
+        parsed.range,
+    )
+    .await
 }
 
 /// Attempt to read a file as a binary document (PDF).
@@ -308,6 +352,13 @@ pub async fn resolve_all_refs(
                         format!("<file name=\"{n}\">")
                     }
                 }
+            };
+            // A ranged block names its lines: `<file path=".." lines="20-45">`.
+            let tag = match r.range {
+                Some((from, to)) => {
+                    format!("{} lines=\"{from}-{to}\">", tag.trim_end_matches('>'))
+                }
+                None => tag,
             };
             output.push_str(&tag);
             output.push('\n');

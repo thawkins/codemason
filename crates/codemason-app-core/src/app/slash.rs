@@ -4423,6 +4423,12 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                     return;
                 }
             }
+            // -- /editor ----------------------------------------------------
+            // The frontend runs the editor (off its UI thread).
+            "editor" => {
+                self.frontend_action = Some("prompt.editor".to_string());
+                return;
+            }
             // -- /name ------------------------------------------------------
             // FR-015: Set a human-readable display name on the active session.
             // The name is persisted in session metadata and appears in session lists.

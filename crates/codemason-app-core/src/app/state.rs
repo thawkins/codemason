@@ -1187,6 +1187,10 @@ pub const SLASH_COMMANDS: &[SlashCommandDef] = &[
         description: "Restore the turn the last /undo removed (/redo help)",
     },
     SlashCommandDef {
+        trigger: "editor",
+        description: "Edit the prompt in $VISUAL or $EDITOR (GUI)",
+    },
+    SlashCommandDef {
         trigger: "name",
         description: "Set a human-readable display name for the session: /name <display-name> | /name help",
     },
@@ -3843,6 +3847,9 @@ pub struct App {
     pub bg_tasks: Vec<BgTaskView>,
     /// Whether the keybindings help panel is currently visible.
     pub show_shortcuts: bool,
+    /// Whether the prompt is out in an external editor (`/editor`); the
+    /// prompt is locked meanwhile.
+    pub external_editor_open: bool,
     /// Whether this frontend draws the keybindings help panel. When `false`,
     /// `?` on an empty prompt is typed like any other character instead of
     /// opening an invisible, input-locking panel. Defaults to `true`.

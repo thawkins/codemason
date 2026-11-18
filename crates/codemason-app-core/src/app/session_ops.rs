@@ -1238,6 +1238,7 @@ impl App {
             || self.palette.is_some()
             || self.context_menu.is_some()
             || self.show_shortcuts
+            || self.external_editor_open
             || self.session.compact_in_progress
             || self.session.auto_compact_in_progress
             || self.session.pending_send_after_compact.is_some()
@@ -3687,6 +3688,7 @@ impl App {
             "thinking-display" => Some("[show|hide|collapse]".to_string()),
             "theme" => Some("[<name>|system|dark|light|list|help]".to_string()),
             "redo" => None,
+            "editor" => None,
             "compact" | "compress" => None,
             "halt" => None,
             "resume" => None,
@@ -5003,6 +5005,12 @@ impl App {
             return;
         };
         let query = active.query(&self.session.input).to_string();
+        // `@path#20-45`: the file is chosen and a line range is being typed;
+        // the menu would replace the mention and drop the range.
+        if query.contains('#') {
+            self.file_menu = None;
+            return;
+        }
 
         if let Some(dir) = self.file_menu.as_ref().and_then(|m| m.current_dir.clone()) {
             self.populate_directory_menu(&dir, Some(&query));

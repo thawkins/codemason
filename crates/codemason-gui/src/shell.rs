@@ -137,6 +137,8 @@ pub struct Shell {
     geometry: Option<WindowGeometry>,
     /// Set by the Ctrl+C / SIGTERM task ([`crate::signal`]): quit.
     shutdown_signal: Option<Arc<AtomicBool>>,
+    /// `/editor`: the prompt out in an external editor.
+    external_edit: crate::external_edit::ExternalEdit,
 }
 
 impl std::fmt::Debug for Shell {
@@ -187,6 +189,7 @@ impl Shell {
             native_menu: None,
             geometry: None,
             shutdown_signal: None,
+            external_edit: crate::external_edit::ExternalEdit::default(),
         }
     }
 
@@ -217,6 +220,19 @@ impl Shell {
     #[must_use]
     pub fn layout(&self) -> &Layout<PaneId> {
         &self.layout
+    }
+
+    /// Run `/editor` with `editor`, writing the prompt file in
+    /// `scratch_dir`, instead of `$VISUAL` / `$EDITOR` and the system temp
+    /// directory.
+    ///
+    /// # Returns
+    ///
+    /// The shell using that editor.
+    #[must_use]
+    pub fn with_external_editor(mut self, editor: String, scratch_dir: PathBuf) -> Self {
+        self.external_edit = crate::external_edit::ExternalEdit::with_editor(editor, scratch_dir);
+        self
     }
 
     /// Replace the keyboard shortcuts.
@@ -698,6 +714,7 @@ impl Shell {
         self.apply_file_answers(ctx);
         self.housekeeping(ctx);
         self.poll_timers(ctx);
+        self.external_edit.poll(ctx, &mut self.app);
         clipboard::forward_copies(ctx);
         if let Some(geometry) = self.geometry.as_mut() {
             geometry.track(ctx);
@@ -934,7 +951,10 @@ impl Shell {
             ctx.request_repaint();
             return;
         }
-        tracing::debug!(action = id, "no handler for the action");
+        match id {
+            "prompt.editor" => self.external_edit.start(ctx, &mut self.app),
+            _ => tracing::debug!(action = id, "no handler for the action"),
+        }
     }
 
     /// Run the key presses the dialogs' buttons sent this frame through

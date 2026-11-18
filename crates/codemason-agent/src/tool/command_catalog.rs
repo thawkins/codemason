@@ -709,6 +709,12 @@ pub const COMMAND_CATALOG: &[CommandCatalogEntry] = &[
         flags: EMPTY,
     },
     CommandCatalogEntry {
+        trigger: "editor",
+        description: "Edit the prompt in $VISUAL or $EDITOR (GUI)",
+        subcommands: EMPTY,
+        flags: EMPTY,
+    },
+    CommandCatalogEntry {
         trigger: "update",
         description: "Check for or install updates: /update | /update install | /update help",
         subcommands: EMPTY,

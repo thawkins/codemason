@@ -425,6 +425,7 @@ impl App {
             active_tasks_reconcile_inflight: false,
             bg_tasks: Vec::new(),
             show_shortcuts: false,
+            external_editor_open: false,
             shortcuts_panel_enabled: true,
             quit_armed: false,
             permission_clock: None,

@@ -231,6 +231,7 @@ const ACTIONS: &[ActionSpec] = &[
     },
     keyless("session.undo", "Undo Last Turn", Some('u')),
     keyless("session.redo", "Redo Turn", Some('r')),
+    keyless("prompt.editor", "Edit Prompt in External Editor", Some('e')),
     keyless("help.shortcuts", "Show Keyboard Shortcuts", None),
 ];
 

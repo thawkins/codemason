@@ -16,6 +16,7 @@ pub mod clipboard;
 pub mod context_panel;
 pub mod deck_progress;
 pub mod diff_view;
+pub mod external_editor;
 pub mod fuzzy;
 pub mod geometry;
 pub mod input;
