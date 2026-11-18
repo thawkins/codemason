@@ -1822,6 +1822,31 @@ fn on_select_model(
     selected: usize,
 ) {
     match key.key {
+        Key::Char('f') if key.mods.contains(Modifiers::CTRL) => {
+            // Toggle the highlighted model as a favourite and re-sort, keeping
+            // the highlight on the same model.
+            let mut models = models;
+            let mut selected = selected;
+            if let Some(entry) = models.get(selected).cloned() {
+                let favorite = app.toggle_favorite_model(&entry.provider_id, &entry.id);
+                app.sort_favorites_first(&mut models);
+                selected = models
+                    .iter()
+                    .position(|m| m.provider_id == entry.provider_id && m.id == entry.id)
+                    .unwrap_or(0);
+                app.status = if favorite {
+                    format!("favourite: {}", entry.name)
+                } else {
+                    format!("not a favourite: {}", entry.name)
+                };
+            }
+            app.provider_setup = Some(ProviderSetupStep::SelectModel {
+                provider_id,
+                provider_name,
+                models,
+                selected,
+            });
+        }
         Key::Up => {
             let new = if models.is_empty() {
                 0

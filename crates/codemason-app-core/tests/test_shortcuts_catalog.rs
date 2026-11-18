@@ -32,12 +32,18 @@ async fn test_run_action_shows_the_shortcuts_panel() {
 #[tokio::test]
 async fn test_run_action_opens_pickers() {
     let mut app = support::make_app();
+    use codemason_app_core::palette::PaletteScope;
     assert!(app.run_action("picker.agent").await);
-    assert!(matches!(
-        app.provider_setup,
-        Some(codemason_app_core::app::ProviderSetupStep::SelectAgent { .. })
-    ));
-    app.provider_setup = None;
+    assert_eq!(
+        app.palette.as_ref().map(|p| p.scope),
+        Some(PaletteScope::Agent)
+    );
+    assert!(app.run_action("picker.session").await);
+    assert_eq!(
+        app.palette.as_ref().map(|p| p.scope),
+        Some(PaletteScope::Session)
+    );
+    app.palette = None;
     assert!(app.run_action("picker.model").await);
     assert!(app.provider_setup.is_some(), "the model or provider picker");
 }

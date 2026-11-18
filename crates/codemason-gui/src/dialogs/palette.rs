@@ -12,6 +12,9 @@
 //! override included), which the shell publishes with [`set_action_keys`];
 //! without it, the action's default key.
 //!
+//! The agent and session pickers are the palette scoped to one kind of
+//! entry (`PaletteScope`); the dialog's title follows the scope.
+//!
 //! Dependencies: `codemason-app-core` and `egui`.
 
 use std::collections::BTreeMap;
@@ -19,12 +22,13 @@ use std::sync::Arc;
 
 use codemason_app_core::app::App;
 use codemason_app_core::input_event::Key;
+use codemason_app_core::palette::PaletteScope;
 use egui::{Id, RichText};
 
 use super::{modal, plain, send_key};
 
 /// Title and accessible label of the palette.
-pub const PALETTE_TITLE: &str = "Command palette";
+pub const PALETTE_TITLE: &str = PaletteScope::All.title();
 
 /// Accessible label of the search field.
 pub const SEARCH_LABEL: &str = "Search commands";
@@ -59,12 +63,13 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         return false;
     };
     let selected = palette.selected;
+    let title = palette.scope.title();
     let mut query = palette.query.clone();
     let keys: Arc<BTreeMap<String, String>> =
         ctx.data(|d| d.get_temp(keys_id())).unwrap_or_default();
     let rows = app.palette_results();
     let mut clicked: Option<(usize, bool)> = None;
-    modal(ctx, "codemason_command_palette", PALETTE_TITLE, |ui| {
+    modal(ctx, "codemason_command_palette", title, |ui| {
         ui.set_width((ctx.content_rect().width() * 0.6).max(320.0));
         let field = ui.add(
             egui::TextEdit::singleline(&mut query)

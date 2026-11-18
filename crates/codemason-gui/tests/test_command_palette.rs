@@ -169,3 +169,49 @@ fn test_which_key_popup_lists_the_leader_keys_after_a_moment() {
     harness.get_by_label("Choose Model");
     harness.get_by_label("m");
 }
+
+#[test]
+fn test_agent_picker_is_the_palette_scoped_to_agents() {
+    use codemason_app_core::palette::PaletteScope;
+    let (_rt, mut harness) = rig();
+    harness
+        .state_mut()
+        .app_mut()
+        .open_palette_scoped(PaletteScope::Agent);
+    harness.run();
+    assert!(
+        harness
+            .query_by_role_and_label(Role::Dialog, PaletteScope::Agent.title())
+            .is_some(),
+        "the agent picker is titled for its scope"
+    );
+    assert!(!shown(&harness), "not titled as the command palette");
+    let rows = harness.state().app().palette_results();
+    assert_ne!(rows.len(), 0, "agents are listed");
+    assert!(rows.iter().all(|row| row.id.starts_with("agent:")));
+}
+
+#[test]
+fn test_f2_cycles_the_recent_models() {
+    let (_rt, mut harness) = rig();
+    {
+        let app = harness.state_mut().app_mut();
+        app.storage
+            .set_setting(
+                codemason_app_core::app::RECENT_MODELS_KEY,
+                r#"[{"provider_id":"openai","provider_name":"OpenAI","id":"gpt-4o",
+                    "name":"GPT-4o","context_window":128000},
+                   {"provider_id":"openai","provider_name":"OpenAI","id":"o3",
+                    "name":"o3","context_window":200000}]"#,
+            )
+            .expect("seed recent models");
+        app.session.selected_model = Some("openai/gpt-4o".to_string());
+    }
+    harness.run();
+    key(&mut harness, egui::Key::F2, egui::Modifiers::NONE);
+    harness.run();
+    assert_eq!(
+        harness.state().app().session.selected_model.as_deref(),
+        Some("openai/o3")
+    );
+}

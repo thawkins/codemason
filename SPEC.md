@@ -2275,9 +2275,10 @@ key press that runs it, if any). The actions and their default keys
 `Cmd+Shift+G`), `attach.image` (`Alt+V` | `Cmd+Shift+V`), `session.new`
 (`Ctrl+N` | `Cmd+N`), `teammate.next` (`Alt+Down` | `Cmd+Alt+Down`),
 `teammate.prev` (`Alt+Up` | `Cmd+Alt+Up`), `app.quit` (`Ctrl+D` | `Cmd+Q`),
-`palette.show` (`Ctrl+P` | `Cmd+P`), `picker.model`, `picker.agent`,
-`session.undo`, `session.redo` and `help.shortcuts` (no default chord; the
-first four have leader keys, below). An action with a terminal key press runs as
+`palette.show` (`Ctrl+P` | `Cmd+P`), `model.cycle_recent` (`F2`),
+`picker.model`, `picker.agent`, `picker.session`, `session.undo`,
+`session.redo` and `help.shortcuts` (no default chord; the first five have
+leader keys, below). An action with a terminal key press runs as
 that press through `App::handle_key`, so the GUI and the terminal handler
 cannot drift; one without is queued by the router (`KeyRouter::take_actions`)
 and run by `App::run_action` or the shell. `gui-keys.json` maps action ids to
@@ -2310,6 +2311,24 @@ the query in place and the rows with their hint and, for an action, the key the
 keymap binds it to now (`KeyRouter::action_keys`); a click highlights a row, a
 double click runs it.
 
+**Agent and session pickers.** `picker.agent` and `picker.session` open the
+palette scoped to one kind of entry (`PaletteState::scope`, a `PaletteScope`):
+only `agent:` or only `session:` rows, with the same fuzzy ranking and keys,
+under the title "Choose agent" or "Choose session". A bare `/agent` still opens
+the provider-setup agent list.
+
+**Model favourites and recent models.** In the model picker (`SelectModel`),
+`Ctrl+F` toggles the highlighted model as a favourite; favourites are listed
+first (`App::sort_favorites_first`, applied by `models_for_provider` and
+`picker_entries_from_models`) and the GUI marks them with `*`. Choosing a model
+in the picker records it in the recent list, newest first, distinct, at most 5
+(`RECENT_MODELS_MAX`). `model.cycle_recent` (`F2`) switches to the recent model
+after the current one, wrapping, without reordering the list
+(`App::cycle_recent_model`). Both lists are JSON in the storage settings
+(`favorite_models`, an array of `provider/id`; `recent_models`, an array of
+`RecentModel`), beside `selected_model`. The GUI model picker's filter is a
+fuzzy match on the name or id (`fuzzy::fuzzy_score`), best match first.
+
 **Leader key.** The `leader` config key (default `Ctrl+G`; `"none"` turns it
 off) and `leader_timeout_ms` (default 2000) set a key that starts a two-key
 sequence (`shortcuts::LeaderSettings`, recorded by the binary from the loaded
@@ -2318,7 +2337,8 @@ the input (neither types, and neither reaches the App): the second key runs the
 action bound to it, or nothing when none is; a wait longer than the timeout
 ends with no action, and a modal dialog cancels the wait. Default sequences
 come from each catalog action's `leader_key`: `m` choose model
-(`picker.model`), `a` choose agent (`picker.agent`), `u` undo the last turn
+(`picker.model`), `a` choose agent (`picker.agent`), `s` choose session
+(`picker.session`), `u` undo the last turn
 (`session.undo`), `r` redo (`session.redo`) and `b` the Sessions panel
 (`panel.sessions`). In `gui-keys.json` a text `"<leader> x"` binds `x` after
 the leader to that action (`keys::load_leader_bindings`; an unknown id or more

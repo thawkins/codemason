@@ -1198,7 +1198,9 @@ reopens maximized.
 | `/`                             | `/`                   | Open slash-command menu                     |
 | `?`                             | `?`                   | Show keybindings help (when prompt is empty)|
 | `Ctrl+P`                        | `Cmd+P`               | Command palette: search actions, commands, themes, agents and sessions |
-| `Ctrl+G`, then a key            | `Ctrl+G`, then a key  | Leader: `m` model, `a` agent, `u` undo, `r` redo, `b` Sessions pane |
+| `Ctrl+G`, then a key            | `Ctrl+G`, then a key  | Leader: `m` model, `a` agent, `s` session, `u` undo, `r` redo, `b` Sessions pane |
+| `F2`                            | `F2`                  | Switch to the next of the 5 most recent models |
+| `Ctrl+F` (model picker)         | `Ctrl+F` (model picker) | Mark or unmark the highlighted model as a favourite (listed first, marked `*`) |
 
 The `-` rows are not in the GUI keymap: they are the app-core chords sent as
 typed. Every other row is an action you can rebind in `gui-keys.json` in the
@@ -1212,8 +1214,8 @@ The ids are `panel.log`, `panel.profile`, `panel.tasks`, `panel.memory`,
 `panel.context`, `panel.sessions`, `panel.agents`, `panel.teams`, `queue.menu`,
 `mode.autopilot`, `mode.yolo`, `mode.edit_log`, `mode.gcf`, `attach.image`,
 `session.new`, `teammate.next`, `teammate.prev`, `app.quit`, `palette.show`,
-`picker.model`, `picker.agent`, `session.undo`, `session.redo` and
-`help.shortcuts`. Write `"<leader> x"` to bind a key after the leader, e.g.
+`model.cycle_recent`, `picker.model`, `picker.agent`, `picker.session`,
+`session.undo`, `session.redo` and `help.shortcuts`. Write `"<leader> x"` to bind a key after the leader, e.g.
 `{ "panel.log": "<leader> l" }`; `leader` in `codemason.json` changes the
 leader itself (`"none"` turns it off). A key another action uses by default moves to yours; the Log
 pane says so at startup, and lists any id or key it could not use. The `?`

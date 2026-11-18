@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, LockResult, MutexGuard};
 
 use crate::geometry::Area;
+use crate::palette::PaletteScope;
 
 use codemason_agent::team::{Mailbox, MessageType, TeamStore};
 use codemason_agent::{
@@ -5446,8 +5447,15 @@ impl App {
                 true
             }
             "picker.agent" => {
-                let _ = self.slash_agent_picker(); // INTENTIONAL: opening the picker reports in the UI
-                self.needs_redraw = true;
+                self.open_palette_scoped(PaletteScope::Agent);
+                true
+            }
+            "picker.session" => {
+                self.open_palette_scoped(PaletteScope::Session);
+                true
+            }
+            "model.cycle_recent" => {
+                self.cycle_recent_model();
                 true
             }
             "session.undo" => {

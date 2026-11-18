@@ -40,6 +40,41 @@ pub struct PaletteEntry {
     pub key: Option<String>,
 }
 
+/// Which entries the palette lists: all of them, or one kind (the agent
+/// and session pickers).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PaletteScope {
+    /// Every entry: the command palette.
+    #[default]
+    All,
+    /// Only `agent:` entries: the agent picker.
+    Agent,
+    /// Only `session:` entries: the session picker.
+    Session,
+}
+
+impl PaletteScope {
+    /// The id prefix the scope keeps, or `None` for every entry.
+    #[must_use]
+    pub const fn prefix(self) -> Option<&'static str> {
+        match self {
+            Self::All => None,
+            Self::Agent => Some("agent:"),
+            Self::Session => Some("session:"),
+        }
+    }
+
+    /// The dialog title for the scope.
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::All => "Command palette",
+            Self::Agent => "Choose agent",
+            Self::Session => "Choose session",
+        }
+    }
+}
+
 /// The open palette.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PaletteState {
@@ -47,6 +82,8 @@ pub struct PaletteState {
     pub query: String,
     /// The highlighted row of [`App::palette_results`].
     pub selected: usize,
+    /// Which entries are listed.
+    pub scope: PaletteScope,
 }
 
 /// Everything the palette lists, in kind order: actions, slash commands,
@@ -98,7 +135,16 @@ pub fn palette_entries(app: &App) -> Vec<PaletteEntry> {
 impl App {
     /// Open the command palette with an empty query.
     pub fn open_palette(&mut self) {
-        self.palette = Some(PaletteState::default());
+        self.open_palette_scoped(PaletteScope::All);
+    }
+
+    /// Open the palette listing only the entries of `scope`: the agent and
+    /// session pickers.
+    pub fn open_palette_scoped(&mut self, scope: PaletteScope) {
+        self.palette = Some(PaletteState {
+            scope,
+            ..PaletteState::default()
+        });
         self.needs_redraw = true;
     }
 
@@ -110,7 +156,10 @@ impl App {
         let Some(palette) = self.palette.as_ref() else {
             return Vec::new();
         };
-        let entries = palette_entries(self);
+        let mut entries = palette_entries(self);
+        if let Some(prefix) = palette.scope.prefix() {
+            entries.retain(|e| e.id.starts_with(prefix));
+        }
         fuzzy_rank(&palette.query, &entries, |e| e.title.as_str())
             .into_iter()
             .take(PALETTE_MAX_ROWS)

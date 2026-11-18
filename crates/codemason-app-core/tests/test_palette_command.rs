@@ -78,3 +78,55 @@ async fn test_palette_slash_rows_run_or_fill_the_prompt() {
     app.run_palette_entry("action:panel.log").await;
     assert_ne!(app.show_log, shown);
 }
+
+#[tokio::test]
+async fn test_palette_agent_picker_lists_agents_and_switches() {
+    let mut app = app();
+    assert!(app.run_action("picker.agent").await);
+    assert_eq!(
+        app.palette.as_ref().map(|p| p.scope),
+        Some(codemason_app_core::palette::PaletteScope::Agent)
+    );
+    let results = app.palette_results();
+    assert_ne!(results.len(), 0, "agents are listed");
+    assert!(results.iter().all(|e| e.id.starts_with("agent:")));
+    let target = app
+        .cycleable_agents
+        .iter()
+        .map(|a| a.name.clone())
+        .find(|name| *name != app.session.agent_name)
+        .expect("a second agent");
+    app.set_palette_query(&target);
+    assert_eq!(
+        app.palette_results().first().map(|e| e.id.clone()),
+        Some(format!("agent:{target}"))
+    );
+    press(&mut app, Key::Enter).await;
+    assert!(app.palette.is_none());
+    assert_eq!(app.session.agent_name, target);
+}
+
+#[tokio::test]
+async fn test_palette_session_picker_lists_sessions_and_switches() {
+    let mut app = app();
+    app.execute_slash_command("/session new").await;
+    let current = app.session.session_id.clone().expect("focused session");
+    let other = app
+        .background
+        .iter()
+        .find_map(|v| v.session_id.clone())
+        .expect("background session");
+    codemason_app_core::sessions_sidebar_state::refresh_if_dirty(&mut app);
+    assert!(app.run_action("picker.session").await);
+    let results = app.palette_results();
+    assert!(results.iter().all(|e| e.id.starts_with("session:")));
+    let row = results
+        .iter()
+        .position(|e| e.id == format!("session:{other}"))
+        .expect("the other session is listed");
+    app.palette.as_mut().expect("open").selected = row;
+    press(&mut app, Key::Enter).await;
+    assert!(app.palette.is_none());
+    assert_eq!(app.session.session_id.as_deref(), Some(other.as_str()));
+    assert_ne!(other, current);
+}

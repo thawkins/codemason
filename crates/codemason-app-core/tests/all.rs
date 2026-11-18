@@ -351,6 +351,8 @@ mod test_message_widget_summaries2;
 mod test_message_widget_tests;
 #[path = "test_misc_modules_deep.rs"]
 mod test_misc_modules_deep;
+#[path = "test_model_favorites.rs"]
+mod test_model_favorites;
 #[path = "test_models_state_misc.rs"]
 mod test_models_state_misc;
 #[path = "test_modules_arms_deep.rs"]

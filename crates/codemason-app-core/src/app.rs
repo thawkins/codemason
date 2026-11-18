@@ -35,6 +35,10 @@ pub use self::md_worker::MdWorker;
 pub mod md_worker;
 
 mod connector;
+mod model_favorites;
+pub use self::model_favorites::{
+    FAVORITE_MODELS_KEY, RECENT_MODELS_KEY, RECENT_MODELS_MAX, RecentModel,
+};
 mod models;
 mod newproj;
 mod outcome;
