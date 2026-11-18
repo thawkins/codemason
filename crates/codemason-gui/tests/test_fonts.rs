@@ -1,6 +1,6 @@
 //! Tests for `codemason_gui::fonts`: the font stack registers the fallback
 //! and bold families, the bundled faces cover the glyphs the core draws
-//! (status icons, the block-character logo, box drawing), `drawable` keeps
+//! (status icons, block elements, box drawing), `drawable` keeps
 //! those glyphs once the stack is installed, and bold spans use the bold
 //! face. Every check runs with system fonts off, so nothing depends on the
 //! fonts installed on the host.
@@ -18,8 +18,8 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 
 /// Glyphs the core emits that the bundled faces must draw: the running
-/// diamond and success dot, the full and half blocks and a quadrant of the
-/// logo, and box-drawing lines.
+/// diamond and success dot, the full and half blocks and a quadrant, and
+/// box-drawing lines.
 const COVERED: [char; 8] = [
     '\u{25C6}', '\u{25CF}', '\u{2588}', '\u{2580}', '\u{2584}', '\u{259F}', '\u{2500}', '\u{256C}',
 ];
@@ -100,8 +100,8 @@ fn test_fonts_bundled_faces_cover_status_and_block_glyphs() {
 fn test_fonts_drawable_keeps_glyphs_the_stack_covers() {
     let ctx = context(true);
     let font = FontId::proportional(FONT_SIZE);
-    let logo = "\u{2588}\u{2580}\u{2584} \u{25C6} running \u{25CF} done \u{2500}\u{2500}";
-    assert_eq!(drawable(&ctx, &font, logo), logo);
+    let covered = "\u{2588}\u{2580}\u{2584} \u{25C6} running \u{25CF} done \u{2500}\u{2500}";
+    assert_eq!(drawable(&ctx, &font, covered), covered);
     // Only the glyphs no configured face has are still replaced.
     for (c, stand_in) in SYSTEM_ONLY {
         assert_eq!(
@@ -154,7 +154,7 @@ fn test_fonts_bold_spans_use_the_bold_face() {
 }
 
 #[test]
-fn test_fonts_window_draws_logo_and_status_glyphs_without_tofu() {
+fn test_fonts_window_draws_block_and_status_glyphs_without_tofu() {
     // No `allow_missing_glyphs`: kittest fails the frame on any tofu.
     let mut harness = Harness::builder()
         .with_size(egui::vec2(400.0, 120.0))

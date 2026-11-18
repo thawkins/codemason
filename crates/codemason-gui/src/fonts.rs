@@ -3,8 +3,8 @@
 //!
 //! egui's default faces leave gaps the core's text falls into: the
 //! proportional face (Ubuntu Light) has no box-drawing, block-element or
-//! geometric-shape glyphs (the startup logo's U+2580..U+259F blocks, the
-//! U+25C6 running diamond), no CJK, and there is no bold weight at all.
+//! geometric-shape glyphs (the U+2580..U+259F blocks, the U+25C6 running
+//! diamond), no CJK, and there is no bold weight at all.
 //! [`font_stack`] builds craft-ui's [`UiFonts`] stack with:
 //!
 //! - egui's default faces first in the proportional and monospace families;
