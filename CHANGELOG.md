@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added: `/stats` and `cdmn stats` report tokens, estimated cost and run time per model across all sessions, with `--days N`, `--project` and `--json`. `/cost` still covers the current session only.
+- Added: user-defined slash commands. A Markdown file in `.codemason/commands/` (project) or `~/.config/codemason/commands/` (every project) defines `/<name>`; the body is a prompt template with `$ARGUMENTS` and `$1`..`$9`. A file cannot replace a built-in command or a skill.
+- Added: formatters after edits. With `"formatter": { "enabled": true }` in the user-global config, `rustfmt`, `gofmt`, `ruff` or `prettier` (or a custom command) runs on each file a file-writing tool writes. Off by default; a project config cannot set it.
+- Added: `/redo` puts back the turn the last `/undo` removed, messages and files, while nothing has been sent since.
+- Added: `docs/OCGAP.md`, a feature gap analysis against opencode v2.
+
+### Changed
+
+- Changed: `/undo` now deletes the last turn from the session database and restores the work tree to a snapshot taken before that turn's first tool call. Before, it only removed the turn from the view, and the model still received it. Snapshots are kept in a private git repository under `~/.config/codemason/snapshots/`; the project's own `.git` is not touched. Hand edits made after the turn started are reverted with it and return on `/redo`.
+
 ### Security
 
 - Security: a project-local `.codemason/codemason.json` may no longer set `execution_backend`, `backends`, `automation`, `gitlab`, `plugins`, `connectors`, the search API keys, `loop`, `prices`, `input_queue_capacity`, the background-agent limits, `activity_log` or `edit_log`; they are ignored with a warning, like `mcp` and `hooks` already were. A cloned repository could use them to send a stored provider or GitLab key to its own server, post an environment variable from an unattended automation, downgrade a docker sandbox to the host, lift a plugin's permission gate, or raise budgets. Move any of these you set per project into `~/.config/codemason/codemason.json`.
