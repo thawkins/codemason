@@ -79,9 +79,13 @@ Every token is required and every colour is `#rrggbb`:
 ## Notes
 
 - An unknown name changes nothing and lists the available themes.
+- Theme names are trimmed and lowercased when a file is read, so `Nord` in a
+  file replaces the built-in `nord`, and `/theme Ocean Mist` selects a theme
+  named `ocean mist`. A user theme named `dark` or `light` wins over those
+  aliases; `system` and `default` always mean `system`.
 - `/theme` does not write the config file; only the `theme` key persists.
-- A theme file that does not parse, or is larger than 64 KiB, is skipped with a
-  warning in the Log pane.
+- A theme file that does not parse, is larger than 64 KiB, or is not a regular
+  file (a FIFO or a device), is skipped with a warning in the Log pane.
 - A loaded theme whose text is hard to read is still used, with a warning in
   the Log pane: `text.base` and `text.muted` need a contrast of 4.5:1 on
   `bg.base`; `text.subtle`, `accent` and the `state` colours need 3:1.

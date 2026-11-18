@@ -8631,7 +8631,8 @@ Changes are persisted immediately to `.codemason/codemason.json` and take effect
     fn slash_theme(&mut self, args: &str) {
         use crate::app::helpers::from_cmd;
 
-        let sub = args.split_whitespace().next().unwrap_or("").to_lowercase();
+        // The whole argument: a theme name may contain spaces.
+        let sub = args.trim().to_lowercase();
         let names = std::iter::once("system")
             .chain(self.themes.names())
             .map(|name| format!("`{name}`"))

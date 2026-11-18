@@ -131,6 +131,44 @@ async fn test_theme_picker_previews_applies_and_cancels() {
     assert_eq!(app.theme_picker.as_ref().map(|p| p.selected), Some(last));
 }
 
+#[tokio::test]
+async fn test_theme_takes_the_whole_argument_as_the_name() {
+    let mut app = make_app();
+    app.themes.insert(
+        codemason_app_core::theme_tokens::ThemeTokens::from_json(
+            &include_str!("../themes/codemason-dark.json")
+                .replace("\"codemason-dark\"", "\"Ocean Mist\""),
+        )
+        .expect("parse"),
+    );
+    app.execute_slash_command("/theme Ocean Mist").await;
+    assert_eq!(app.theme, named("ocean mist"));
+    assert_eq!(app.status, "theme: ocean mist");
+}
+
+#[tokio::test]
+async fn test_theme_picker_rows_select_catalog_names_not_aliases() {
+    let mut app = make_app();
+    // A user theme whose name is also the `dark` alias.
+    app.themes.insert(
+        codemason_app_core::theme_tokens::ThemeTokens::from_json(
+            &include_str!("../themes/codemason-dark.json")
+                .replace("\"codemason-dark\"", "\"dark\""),
+        )
+        .expect("parse"),
+    );
+    app.open_theme_picker();
+    let row = app
+        .theme_picker
+        .as_ref()
+        .and_then(|p| p.entries.iter().position(|e| e == "dark"))
+        .expect("the user theme is listed");
+    app.theme_picker_select(row);
+    assert_eq!(app.theme, named("dark"));
+    app.theme_picker_select(0);
+    assert_eq!(app.theme, ThemeSelection::System);
+}
+
 #[test]
 fn test_theme_config_key_parses_and_merges() {
     let base: codemason_config::Config =

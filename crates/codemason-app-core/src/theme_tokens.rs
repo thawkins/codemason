@@ -258,12 +258,21 @@ pub struct ThemeTokens {
 impl ThemeTokens {
     /// Parses a theme from JSON in the token shape.
     ///
+    /// The name is trimmed and lowercased, so a theme is selected, listed and
+    /// replaced by one spelling: a file naming its theme `Nord` replaces the
+    /// built-in `nord`.
+    ///
     /// # Errors
     ///
     /// Returns the parse error when the JSON is malformed, a token is missing
-    /// or unknown, or a colour is not `#rrggbb`.
+    /// or unknown, a colour is not `#rrggbb`, or the name is empty.
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(json)
+        let mut theme: Self = serde_json::from_str(json)?;
+        theme.name = theme.name.trim().to_lowercase();
+        if theme.name.is_empty() {
+            return Err(serde::de::Error::custom("the theme name is empty"));
+        }
+        Ok(theme)
     }
 
     /// Checks the theme's text colours against its window background.
@@ -410,25 +419,28 @@ impl ThemeCatalog {
 
     /// Parses what the user typed into a selection.
     ///
-    /// `system` and `default` follow the operating system; `dark`, `light` and
-    /// the spellings `high_contrast`/`highcontrast` are aliases of the built-in
-    /// themes; anything else must be a theme name in the catalog. Matching
+    /// `system` and `default` follow the operating system. Any other input is
+    /// a theme name; failing that, `dark`, `light` and the spellings
+    /// `high_contrast`/`highcontrast` are aliases of the built-in themes, so a
+    /// user theme called `dark` is reachable by its name. Matching trims and
     /// ignores case.
     ///
     /// Returns `None` when `input` names no theme.
     #[must_use]
     pub fn parse(&self, input: &str) -> Option<ThemeSelection> {
         let lowered = input.trim().to_lowercase();
-        let name = match lowered.as_str() {
-            "system" | "default" => return Some(ThemeSelection::System),
+        if matches!(lowered.as_str(), "system" | "default") {
+            return Some(ThemeSelection::System);
+        }
+        let alias = match lowered.as_str() {
             "dark" => DARK_THEME,
             "light" => LIGHT_THEME,
             "high_contrast" | "highcontrast" => HIGH_CONTRAST_THEME,
             other => other,
         };
-        self.themes
-            .iter()
-            .find(|t| t.name.to_lowercase() == name)
+        [lowered.as_str(), alias]
+            .into_iter()
+            .find_map(|name| self.get(name))
             .map(|t| ThemeSelection::Named(t.name.clone()))
     }
 
@@ -461,15 +473,33 @@ fn fallback_theme() -> Arc<ThemeTokens> {
         .clone()
 }
 
-/// Reads and parses one theme file, refusing one over [`MAX_THEME_BYTES`].
+/// Reads and parses one theme file.
+///
+/// Only a regular file (or a symlink to one) is read, so a FIFO cannot block
+/// startup and a device cannot be read without end. At most
+/// [`MAX_THEME_BYTES`] + 1 bytes are read, so a file that grows after the size
+/// check is still refused.
 fn read_theme(path: &Path) -> Result<ThemeTokens, String> {
-    let size = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
-    if size > MAX_THEME_BYTES {
+    use std::io::Read as _;
+
+    let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    if !metadata.is_file() {
+        return Err("not a regular file".to_string());
+    }
+    if metadata.len() > MAX_THEME_BYTES {
         return Err(format!(
-            "{size} bytes is over the {MAX_THEME_BYTES} byte limit"
+            "{} bytes is over the {MAX_THEME_BYTES} byte limit",
+            metadata.len()
         ));
     }
-    let json = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut json = String::new();
+    file.take(MAX_THEME_BYTES + 1)
+        .read_to_string(&mut json)
+        .map_err(|e| e.to_string())?;
+    if json.len() as u64 > MAX_THEME_BYTES {
+        return Err(format!("over the {MAX_THEME_BYTES} byte limit"));
+    }
     ThemeTokens::from_json(&json).map_err(|e| e.to_string())
 }
 

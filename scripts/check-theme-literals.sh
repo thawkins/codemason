@@ -24,11 +24,18 @@ cd "$ROOT"
 EGUI='Color32::(from_(rgb|gray|rgba_premultiplied|rgba_unmultiplied|black_alpha|white_alpha)\b|[A-Z][A-Z_]+\b)|hex_color!'
 ANSI='ThemeColor::(Rgb|Indexed|Black|Red|Green|Yellow|Blue|Magenta|Cyan|Gray|DarkGray|LightRed|LightGreen|LightYellow|LightBlue|LightMagenta|LightCyan|White)\b'
 
-# Prints the offending lines of the given files, one per line.
+# Prints the offending lines of the given files, one per line. An allowed
+# occurrence (Color32::TRANSPARENT) is removed and the rest of the line is
+# scanned again, so a forbidden colour on the same line is still reported.
 scan() {
     grep -nHE "$EGUI|$ANSI" "$@" 2>/dev/null \
-        | grep -v 'Color32::TRANSPARENT' \
-        | grep -v 'theme-literal-ok:' || true
+        | grep -v 'theme-literal-ok:' \
+        | while IFS= read -r line; do
+            rest="${line//Color32::TRANSPARENT/}"
+            if grep -qE "$EGUI|$ANSI" <<<"$rest"; then
+                printf '%s\n' "$line"
+            fi
+        done
 }
 
 if [[ "${1:-}" == "--self-test" ]]; then
@@ -41,13 +48,14 @@ if [[ "${1:-}" == "--self-test" ]]; then
         'let c = ThemeColor::Yellow;' \
         'let d = Color32::TRANSPARENT;' \
         'let e = ThemeColor::Warning;' \
-        'let f = Color32::BLACK; // theme-literal-ok: test' >"$seeded"
+        'let f = Color32::BLACK; // theme-literal-ok: test' \
+        'let g = if on { Color32::RED } else { Color32::TRANSPARENT };' >"$seeded"
     found="$(scan "$seeded" | wc -l)"
-    if [[ "$found" -ne 3 ]]; then
-        echo "self-test FAILED: expected 3 seeded violations, found $found" >&2
+    if [[ "$found" -ne 4 ]]; then
+        echo "self-test FAILED: expected 4 seeded violations, found $found" >&2
         exit 1
     fi
-    echo "self-test passed: 3 seeded violations found, 3 allowed lines ignored"
+    echo "self-test passed: 4 seeded violations found, 3 allowed lines ignored"
     exit 0
 fi
 

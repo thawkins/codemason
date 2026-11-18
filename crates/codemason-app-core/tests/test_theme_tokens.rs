@@ -165,3 +165,72 @@ fn test_load_dir_of_a_missing_directory_adds_nothing() {
     assert!(warnings.is_empty());
     assert_eq!(themes, ThemeCatalog::builtin());
 }
+
+#[test]
+fn test_theme_names_are_trimmed_lowercased_and_never_empty() {
+    let theme = ThemeTokens::from_json(&theme_json("  Ocean Mist ", "#ffffff")).expect("parse");
+    assert_eq!(theme.name, "ocean mist");
+    assert!(ThemeTokens::from_json(&theme_json("   ", "#ffffff")).is_err());
+
+    // A file that spells a built-in name in capitals replaces it.
+    let mut themes = ThemeCatalog::builtin();
+    let before = themes.names().count();
+    themes.insert(ThemeTokens::from_json(&theme_json("Nord", "#fefefe")).expect("parse"));
+    assert_eq!(themes.names().count(), before);
+    let selected = themes.parse("NORD").expect("nord");
+    assert_eq!(
+        themes.resolve(&selected, true).text.base,
+        Rgb(0xfe, 0xfe, 0xfe)
+    );
+}
+
+#[test]
+fn test_a_user_theme_name_wins_over_the_dark_and_light_aliases() {
+    let mut themes = ThemeCatalog::builtin();
+    assert_eq!(
+        themes.parse("dark"),
+        Some(ThemeSelection::Named(DARK_THEME.to_string()))
+    );
+    themes.insert(ThemeTokens::from_json(&theme_json("dark", "#ffffff")).expect("parse"));
+    assert_eq!(
+        themes.parse("Dark"),
+        Some(ThemeSelection::Named("dark".to_string()))
+    );
+    assert_eq!(themes.parse("ocean mist"), None);
+    themes.insert(ThemeTokens::from_json(&theme_json("Ocean Mist", "#ffffff")).expect("parse"));
+    assert_eq!(
+        themes.parse(" Ocean Mist "),
+        Some(ThemeSelection::Named("ocean mist".to_string()))
+    );
+    // `system` and `default` stay the system selection.
+    themes.insert(ThemeTokens::from_json(&theme_json("system", "#ffffff")).expect("parse"));
+    assert_eq!(themes.parse("system"), Some(ThemeSelection::System));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_load_dir_skips_fifos_and_devices_without_reading_them() {
+    let dir = scratch("special_files");
+    std::os::unix::fs::symlink("/dev/zero", dir.join("a-zero.json")).expect("symlink");
+    let fifo = dir.join("b-fifo.json");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("run mkfifo");
+    assert!(made.success(), "mkfifo failed");
+    std::fs::write(dir.join("c-ok.json"), theme_json("ok", "#ffffff")).expect("write");
+
+    let mut themes = ThemeCatalog::builtin();
+    let warnings = themes.load_dir(&dir);
+
+    assert!(themes.get("ok").is_some());
+    assert_eq!(warnings.len(), 2, "{warnings:?}");
+    for file in ["a-zero.json", "b-fifo.json"] {
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains(file) && w.contains("not a regular file")),
+            "{file}: {warnings:?}"
+        );
+    }
+}

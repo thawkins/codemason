@@ -62,10 +62,15 @@ impl App {
         let Some(entry) = picker.entries.get(index) else {
             return;
         };
+        // Row 0 is `system`; every other row is a catalog name, taken as is
+        // so a user theme called `dark` is not read as the `dark` alias.
+        let selection = if index == 0 {
+            crate::theme_tokens::ThemeSelection::System
+        } else {
+            crate::theme_tokens::ThemeSelection::Named(entry.clone())
+        };
         picker.selected = index;
-        if let Some(selection) = self.themes.parse(entry) {
-            self.theme = selection;
-        }
+        self.theme = selection;
         self.needs_redraw = true;
     }
 
