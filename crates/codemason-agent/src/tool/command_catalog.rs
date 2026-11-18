@@ -117,7 +117,7 @@ const BLUEPRINTS_SUBS: &[&str] = &["help", "list"];
 const OSINFO_SUBS: &[&str] = &["show", "help"];
 const DB_SUBS: &[&str] = &["prune", "help"];
 const DB_FLAGS: &[&str] = &["--days", "--dry-run"];
-const THEME_SUBS: &[&str] = &["default", "high-contrast", "help"];
+const THEME_SUBS: &[&str] = &["list", "system", "dark", "light", "high-contrast", "help"];
 const STATS_FLAGS: &[&str] = &["--days", "--project", "--json"];
 const ROUTER_SUBS: &[&str] = &[
     "help",
@@ -726,7 +726,7 @@ pub const COMMAND_CATALOG: &[CommandCatalogEntry] = &[
     },
     CommandCatalogEntry {
         trigger: "theme",
-        description: "Switch the colour theme: /theme default|high-contrast, /theme shows the current one (/theme help)",
+        description: "Switch the colour theme: /theme opens the picker, /theme <name>|system|dark|light switches (/theme help)",
         subcommands: THEME_SUBS,
         flags: EMPTY,
     },

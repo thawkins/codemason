@@ -288,7 +288,7 @@ fn draw(ctx: &egui::Context, id: &str, snap: &StoreSnapshot) -> Option<Click> {
         if let Some(footer) = &snap.footer {
             ui.weak(footer);
         }
-        ui.add_space(6.0);
+        ui.add_space(crate::metrics::space::SM);
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(!snap.results.is_empty(), egui::Button::new(INSTALL))

@@ -149,7 +149,7 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         if let Some(error) = dialog.error.as_deref() {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
-        ui.add_space(6.0);
+        ui.add_space(crate::metrics::space::SM);
         key_buttons(ui, &[(SAVE, plain(Key::Enter)), (CANCEL, plain(Key::Esc))]);
         ui.weak("Tab move  Left/Right change  Space list  Enter save  Esc cancel");
     });

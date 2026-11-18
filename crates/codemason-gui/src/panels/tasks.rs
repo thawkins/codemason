@@ -32,10 +32,10 @@ pub const EMPTY_TEXT: &str = "No tasks";
 /// The colour of a task in `status` (upper case), as in the TUI.
 fn status_color(status: &str, palette: &Palette) -> Color32 {
     match status {
-        "PENDING" => palette.color(ThemeColor::Yellow),
-        "IN_PROGRESS" => palette.color(ThemeColor::Cyan),
-        "COMPLETED" | "DONE" => palette.color(ThemeColor::Green),
-        "BLOCKED" => palette.color(ThemeColor::Red),
+        "PENDING" => palette.color(ThemeColor::Warning),
+        "IN_PROGRESS" => palette.color(ThemeColor::Info),
+        "COMPLETED" | "DONE" => palette.color(ThemeColor::Success),
+        "BLOCKED" => palette.color(ThemeColor::Error),
         _ => palette.muted,
     }
 }
@@ -47,7 +47,7 @@ fn lines(app: &App, palette: &Palette) -> Vec<Line> {
         return vec![Line::new().push(EMPTY_TEXT, palette.muted)];
     }
     let dag = codemason_storage::compute_task_dag(rows);
-    let red = palette.color(ThemeColor::Red);
+    let red = palette.color(ThemeColor::Error);
     let mut lines = Vec::with_capacity(rows.len());
     for row in rows {
         let status = row.status.to_uppercase();
@@ -72,7 +72,7 @@ fn lines(app: &App, palette: &Palette) -> Vec<Line> {
         if row.status == "in_progress"
             && let Some(active) = row.active_form.as_deref().filter(|a| !a.is_empty())
         {
-            lines.push(Line::new().push(format!("  -> {active}"), palette.color(ThemeColor::Cyan)));
+            lines.push(Line::new().push(format!("  -> {active}"), palette.color(ThemeColor::Info)));
         }
     }
     lines

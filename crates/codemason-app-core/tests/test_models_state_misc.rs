@@ -30,7 +30,7 @@ use codemason_app_core::app::{
     ResearchViewState, RoleMode, SelectionPane, StorePane, TextSelection, resolve_default_index,
 };
 use codemason_app_core::status::{StatusCategory, StatusHistory, StatusMessage};
-use codemason_app_core::theme_mode::ThemeMode;
+use codemason_app_core::theme_tokens::{ThemeCatalog, ThemeSelection};
 use codemason_connectors::CategoryFilter;
 use codemason_plugins::{ManifestMeta, ManifestUpdate, StoreEntry};
 
@@ -108,24 +108,20 @@ fn theme_mode_from_str_and_display_name() {
     // `XDG_CONFIG_HOME`, `PATH` and the token env vars, all process-global
     // under one-binary-per-crate (AGENTS.md "Test Layout").
     let _cwd_guard = crate::global_env_lock();
-    assert_eq!(ThemeMode::from_str("default"), Some(ThemeMode::Default));
-    assert_eq!(ThemeMode::from_str("DEFAULT"), Some(ThemeMode::Default));
+    let themes = ThemeCatalog::builtin();
+    let high_contrast = Some(ThemeSelection::Named("high-contrast".to_string()));
+    assert_eq!(themes.parse("default"), Some(ThemeSelection::System));
+    assert_eq!(themes.parse("SYSTEM"), Some(ThemeSelection::System));
+    assert_eq!(themes.parse("high-contrast"), high_contrast);
+    assert_eq!(themes.parse("high_contrast"), high_contrast);
+    assert_eq!(themes.parse("HighContrast"), high_contrast);
+    assert_eq!(themes.parse("nope"), None);
+    assert_eq!(ThemeSelection::default(), ThemeSelection::System);
+    assert_eq!(ThemeSelection::System.display_name(), "system");
     assert_eq!(
-        ThemeMode::from_str("high-contrast"),
-        Some(ThemeMode::HighContrast)
+        ThemeSelection::Named("nord".to_string()).display_name(),
+        "nord"
     );
-    assert_eq!(
-        ThemeMode::from_str("high_contrast"),
-        Some(ThemeMode::HighContrast)
-    );
-    assert_eq!(
-        ThemeMode::from_str("HighContrast"),
-        Some(ThemeMode::HighContrast)
-    );
-    assert_eq!(ThemeMode::from_str("nope"), None);
-    assert_eq!(ThemeMode::default(), ThemeMode::Default);
-    assert_eq!(ThemeMode::Default.display_name(), "default");
-    assert_eq!(ThemeMode::HighContrast.display_name(), "high-contrast");
 }
 
 #[test]

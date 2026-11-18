@@ -516,7 +516,7 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         if let Some(error) = view.error.as_ref() {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
-        ui.add_space(6.0);
+        ui.add_space(crate::metrics::space::SM);
         key_buttons(ui, &view.buttons);
         ui.weak(view.hint);
     });

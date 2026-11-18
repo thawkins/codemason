@@ -1233,6 +1233,7 @@ impl App {
             || self.research_view.is_some()
             || self.config_save_picker.is_some()
             || self.history_picker.is_some()
+            || self.theme_picker.is_some()
             || self.context_menu.is_some()
             || self.show_shortcuts
             || self.session.compact_in_progress
@@ -3680,7 +3681,7 @@ impl App {
             "quit" | "exit" => None,
             "clear" => None,
             "undo" => None,
-            "theme" => Some("[default|high-contrast|help]".to_string()),
+            "theme" => Some("[<name>|system|dark|light|list|help]".to_string()),
             "redo" => None,
             "compact" | "compress" => None,
             "halt" => None,

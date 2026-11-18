@@ -176,6 +176,10 @@ jobs:
         run: bash scripts/check-test-env-isolation.sh --self-test
       - name: Verify every mutating test takes shared crate-wide isolation
         run: bash scripts/check-test-env-isolation.sh
+      - name: Verify self-test fails on a seeded literal colour
+        run: bash scripts/check-theme-literals.sh --self-test
+      - name: Verify no literal colour outside the theme modules (OCGAPPLAN phase 1)
+        run: bash scripts/check-theme-literals.sh
       - name: Verify self-test fails on a seeded silent error drop
         run: bash scripts/check-silent-errors.sh --self-test
       - name: Verify no new silent error suppression (ANTIPAT M4)

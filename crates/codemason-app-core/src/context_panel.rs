@@ -77,12 +77,12 @@ impl Styles {
     /// The TUI's Context panel colours.
     const fn new() -> Self {
         Self {
-            header: TextStyle::new().fg(ThemeColor::LightCyan).bold(),
-            label: TextStyle::new().fg(ThemeColor::White),
-            value: TextStyle::new().fg(ThemeColor::LightCyan),
-            sub: TextStyle::new().fg(ThemeColor::DarkGray),
-            dim: TextStyle::new().fg(ThemeColor::Gray),
-            warn: TextStyle::new().fg(ThemeColor::LightYellow),
+            header: TextStyle::new().fg(ThemeColor::Accent).bold(),
+            label: TextStyle::new().fg(ThemeColor::Text),
+            value: TextStyle::new().fg(ThemeColor::Info),
+            sub: TextStyle::new().fg(ThemeColor::Subtle),
+            dim: TextStyle::new().fg(ThemeColor::Muted),
+            warn: TextStyle::new().fg(ThemeColor::Warning),
         }
     }
 }

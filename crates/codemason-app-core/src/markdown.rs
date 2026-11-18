@@ -105,13 +105,13 @@ pub fn markdown_to_styled(markdown: &str, base_dir: &Path, wrap_width: usize) ->
                         if is_mermaid && !code_buffer.trim().is_empty() {
                             lines.push(StyledLine::from(StyledSpan::styled(
                                 label.to_string(),
-                                TextStyle::new().fg(ThemeColor::Magenta).bold(),
+                                TextStyle::new().fg(ThemeColor::Accent).bold(),
                             )));
                         }
                         let mut code_style = if is_mermaid {
-                            TextStyle::new().fg(ThemeColor::Cyan)
+                            TextStyle::new().fg(ThemeColor::Info)
                         } else {
-                            TextStyle::new().fg(ThemeColor::DarkGray)
+                            TextStyle::new().fg(ThemeColor::Code)
                         };
                         code_style.monospace = true;
                         for raw in code_buffer.lines() {
@@ -136,15 +136,14 @@ pub fn markdown_to_styled(markdown: &str, base_dir: &Path, wrap_width: usize) ->
                     let idx = lines.len().saturating_sub(1);
                     if let Some(line) = lines.get_mut(idx) {
                         let style = match level {
-                            HeadingLevel::H1 => TextStyle::new()
-                                .fg(ThemeColor::White)
-                                .bg(ThemeColor::Blue)
-                                .bold(),
-                            HeadingLevel::H2 => TextStyle::new().fg(ThemeColor::Cyan).bold(),
+                            HeadingLevel::H1 => {
+                                TextStyle::new().fg(ThemeColor::Heading).bold().underline()
+                            }
+                            HeadingLevel::H2 => TextStyle::new().fg(ThemeColor::Heading).bold(),
                             HeadingLevel::H3
                             | HeadingLevel::H4
                             | HeadingLevel::H5
-                            | HeadingLevel::H6 => TextStyle::new().fg(ThemeColor::Yellow).bold(),
+                            | HeadingLevel::H6 => TextStyle::new().fg(ThemeColor::Text).bold(),
                         };
                         for span in &mut line.spans {
                             span.style = style;
@@ -164,11 +163,11 @@ pub fn markdown_to_styled(markdown: &str, base_dir: &Path, wrap_width: usize) ->
                         flush_text_spans(&mut pending_text, &mut current_spans);
                         current_spans.push(StyledSpan::styled(
                             format!("[{text}]"),
-                            TextStyle::new().fg(ThemeColor::White),
+                            TextStyle::new().fg(ThemeColor::Text),
                         ));
                         current_spans.push(StyledSpan::styled(
                             format!("({url})"),
-                            TextStyle::new().fg(ThemeColor::Cyan).underline(),
+                            TextStyle::new().fg(ThemeColor::Link).underline(),
                         ));
                     }
                 }
@@ -178,7 +177,7 @@ pub fn markdown_to_styled(markdown: &str, base_dir: &Path, wrap_width: usize) ->
                         let placeholder = image_dimensions_or_placeholder(&alt, &url, base_dir);
                         current_spans.push(StyledSpan::styled(
                             placeholder,
-                            TextStyle::new().fg(ThemeColor::Yellow).italic(),
+                            TextStyle::new().fg(ThemeColor::Muted).italic(),
                         ));
                     }
                 }
@@ -209,8 +208,8 @@ pub fn markdown_to_styled(markdown: &str, base_dir: &Path, wrap_width: usize) ->
                 if in_code_block.is_none() {
                     flush_text_spans(&mut pending_text, &mut current_spans);
                     let mut style = TextStyle::new()
-                        .fg(ThemeColor::Green)
-                        .bg(ThemeColor::Black)
+                        .fg(ThemeColor::Code)
+                        .bg(ThemeColor::Raised)
                         .bold();
                     style.monospace = true;
                     current_spans.push(StyledSpan::styled(format!(" `{code}` "), style));
@@ -236,7 +235,7 @@ pub fn markdown_to_styled(markdown: &str, base_dir: &Path, wrap_width: usize) ->
                 flush_line(&mut lines, &mut current_spans);
                 lines.push(StyledLine::from(StyledSpan::styled(
                     RULE_GLYPH.repeat(wrap_width.min(80)),
-                    TextStyle::new().fg(ThemeColor::DarkGray),
+                    TextStyle::new().fg(ThemeColor::Subtle),
                 )));
             }
             _ => {}
@@ -250,7 +249,7 @@ pub fn markdown_to_styled(markdown: &str, base_dir: &Path, wrap_width: usize) ->
     lines.push(StyledLine::raw(""));
     lines.push(StyledLine::from(StyledSpan::styled(
         "[Esc to close * images shown as placeholders * links are plain text]".to_string(),
-        TextStyle::new().fg(ThemeColor::DarkGray),
+        TextStyle::new().fg(ThemeColor::Subtle),
     )));
 
     lines

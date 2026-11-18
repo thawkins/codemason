@@ -1,62 +1,73 @@
 //! GUI colours for the frontend-neutral [`ThemeColor`]s.
 //!
-//! [`palette_for`] builds the [`Palette`] of a [`ThemeMode`] from the same
-//! values the terminal theme uses (`codemason-tui`'s `theme::colors`,
-//! `theme::status` and `theme::high_contrast`). ANSI colours, which a
-//! terminal takes from its own palette, use the standard xterm values, and
-//! [`ThemeColor::Indexed`] maps through the standard xterm-256 table.
+//! [`Palette::from_tokens`] converts a theme's
+//! [`ThemeTokens`](codemason_app_core::theme_tokens::ThemeTokens) to egui
+//! colours, and [`palette_for`] does it for the App's current theme. Every
+//! colour comes from the theme: the 16 ANSI names resolve to the theme's
+//! nearest semantic colour (red is the error colour, gray the muted text), so
+//! a pane that still asks for an ANSI name follows the theme. Only
+//! [`ThemeColor::Rgb`] and the upper 240 entries of [`ThemeColor::Indexed`]
+//! (the xterm-256 cube and grey ramp) are literal.
 //!
 //! Dependencies: `egui` ([`Color32`]) and `codemason-app-core`
-//! ([`ThemeColor`], [`ThemeMode`]).
+//! ([`ThemeColor`], the theme tokens).
 
+use codemason_app_core::app::App;
 use codemason_app_core::styled::ThemeColor;
-use codemason_app_core::theme_mode::ThemeMode;
+use codemason_app_core::theme_tokens::{Rgb, ThemeTokens};
 use egui::Color32;
-
-/// The standard xterm values of the 16 ANSI colours, in index order
-/// (black, red, green, yellow, blue, magenta, cyan, gray, then the bright
-/// variants dark gray .. white).
-const XTERM_ANSI: [Color32; 16] = [
-    Color32::from_rgb(0, 0, 0),
-    Color32::from_rgb(205, 0, 0),
-    Color32::from_rgb(0, 205, 0),
-    Color32::from_rgb(205, 205, 0),
-    Color32::from_rgb(0, 0, 238),
-    Color32::from_rgb(205, 0, 205),
-    Color32::from_rgb(0, 205, 205),
-    Color32::from_rgb(229, 229, 229),
-    Color32::from_rgb(127, 127, 127),
-    Color32::from_rgb(255, 0, 0),
-    Color32::from_rgb(0, 255, 0),
-    Color32::from_rgb(255, 255, 0),
-    Color32::from_rgb(92, 92, 255),
-    Color32::from_rgb(255, 0, 255),
-    Color32::from_rgb(0, 255, 255),
-    Color32::from_rgb(255, 255, 255),
-];
-
-/// The default mode's accent: xterm-256 colour 75 (`#5fafff`), 9.1:1 on
-/// black (WCAG AAA). The terminal theme's accent is ANSI blue, 2.2:1 on
-/// black, which the TUI only gets away with because it draws the accent as
-/// uncoloured bold.
-const DEFAULT_ACCENT: Color32 = Color32::from_rgb(95, 175, 255);
 
 /// Channel levels of the xterm-256 6x6x6 colour cube (indices 16..232).
 const CUBE_LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
 
-/// The resolved colours of one theme mode.
+/// How much of the accent is mixed into the background for a selection.
+const SELECTION_MIX: f32 = 0.35;
+
+/// The egui colour of a theme colour.
+#[must_use]
+pub const fn rgb(color: Rgb) -> Color32 {
+    Color32::from_rgb(color.0, color.1, color.2)
+}
+
+/// The theme colour of an egui colour (its alpha is dropped).
+#[must_use]
+pub const fn to_rgb(color: Color32) -> Rgb {
+    Rgb(color.r(), color.g(), color.b())
+}
+
+/// Mix `amount` (0.0 to 1.0) of `over` into `base`, per channel.
+#[must_use]
+pub fn mix(base: Color32, over: Color32, amount: f32) -> Color32 {
+    let channel = |a: u8, b: u8| {
+        let value = f32::from(a).mul_add(1.0 - amount, f32::from(b) * amount);
+        // The mix of two u8 values is within 0.0..=255.0.
+        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let value = value.round() as u8;
+        value
+    };
+    Color32::from_rgb(
+        channel(base.r(), over.r()),
+        channel(base.g(), over.g()),
+        channel(base.b(), over.b()),
+    )
+}
+
+/// The resolved colours of one theme.
 ///
-/// Semantic colours are fields; literal colours resolve through
-/// [`Palette::color`] (ANSI from [`Palette::ansi`], `Indexed` through the
-/// xterm-256 table, `Rgb` as given).
+/// Semantic colours are fields; [`Palette::color`] resolves any
+/// [`ThemeColor`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Palette {
+    /// Whether the theme is dark.
+    pub dark: bool,
     /// [`ThemeColor::Accent`]: the theme's primary colour.
     pub accent: Color32,
-    /// [`ThemeColor::Text`] and [`ThemeColor::Reset`]: default text.
+    /// [`ThemeColor::Text`] and [`ThemeColor::Reset`]: body text.
     pub text: Color32,
     /// [`ThemeColor::Muted`]: secondary text.
     pub muted: Color32,
+    /// [`ThemeColor::Subtle`]: de-emphasised text.
+    pub subtle: Color32,
     /// [`ThemeColor::Error`].
     pub error: Color32,
     /// [`ThemeColor::Warning`].
@@ -65,15 +76,70 @@ pub struct Palette {
     pub success: Color32,
     /// [`ThemeColor::Info`].
     pub info: Color32,
-    /// [`ThemeColor::Border`]: inactive borders.
+    /// [`ThemeColor::Border`]: resting outlines.
     pub border: Color32,
+    /// The outline of the focused or hovered widget.
+    pub border_focus: Color32,
     /// The panel background the text is drawn on.
     pub background: Color32,
-    /// The 16 ANSI colours, in xterm index order.
-    pub ansi: [Color32; 16],
+    /// [`ThemeColor::Raised`]: input fields, code blocks, resting widgets.
+    pub raised1: Color32,
+    /// Buttons and hovered rows.
+    pub raised2: Color32,
+    /// Dialogs, menus and popups.
+    pub overlay: Color32,
+    /// The background of selected text and rows: the accent mixed into the
+    /// background, so body text stays readable on it.
+    pub selection: Color32,
+    /// [`ThemeColor::DiffAdded`].
+    pub diff_added: Color32,
+    /// [`ThemeColor::DiffRemoved`].
+    pub diff_removed: Color32,
+    /// [`ThemeColor::Heading`].
+    pub heading: Color32,
+    /// [`ThemeColor::Link`].
+    pub link: Color32,
+    /// [`ThemeColor::Code`].
+    pub code: Color32,
+    /// [`ThemeColor::Blockquote`].
+    pub blockquote: Color32,
+    /// [`ThemeColor::Categorical`]: eight colours for telling agents apart.
+    pub categorical: [Color32; 8],
 }
 
 impl Palette {
+    /// The egui colours of `tokens`.
+    #[must_use]
+    pub fn from_tokens(tokens: &ThemeTokens) -> Self {
+        let background = rgb(tokens.bg.base);
+        let accent = rgb(tokens.accent);
+        Self {
+            dark: tokens.dark,
+            accent,
+            text: rgb(tokens.text.base),
+            muted: rgb(tokens.text.muted),
+            subtle: rgb(tokens.text.subtle),
+            error: rgb(tokens.state.error),
+            warning: rgb(tokens.state.warning),
+            success: rgb(tokens.state.success),
+            info: rgb(tokens.state.info),
+            border: rgb(tokens.border.base),
+            border_focus: rgb(tokens.border.focus),
+            background,
+            raised1: rgb(tokens.bg.raised1),
+            raised2: rgb(tokens.bg.raised2),
+            overlay: rgb(tokens.bg.overlay),
+            selection: mix(background, accent, SELECTION_MIX),
+            diff_added: rgb(tokens.diff.added),
+            diff_removed: rgb(tokens.diff.removed),
+            heading: rgb(tokens.markdown.heading),
+            link: rgb(tokens.markdown.link),
+            code: rgb(tokens.markdown.code),
+            blockquote: rgb(tokens.markdown.blockquote),
+            categorical: tokens.categorical.map(rgb),
+        }
+    }
+
     /// Resolve `color` to an egui colour.
     ///
     /// # Arguments
@@ -82,46 +148,64 @@ impl Palette {
     ///
     /// # Returns
     ///
-    /// The colour this palette draws `color` with.
+    /// The colour this palette draws `color` with. An ANSI name resolves to
+    /// the theme colour of the same meaning: black is the background, white
+    /// the body text, gray and dark gray the muted and subtle text, red,
+    /// green, yellow and cyan the error, success, warning and info colours,
+    /// blue the accent and magenta the fifth categorical colour. A bright
+    /// variant is the same colour as its normal one.
     #[must_use]
     pub fn color(&self, color: ThemeColor) -> Color32 {
         match color {
-            ThemeColor::Accent => self.accent,
-            ThemeColor::Text | ThemeColor::Reset => self.text,
-            ThemeColor::Muted => self.muted,
-            ThemeColor::Error => self.error,
-            ThemeColor::Warning => self.warning,
-            ThemeColor::Success => self.success,
-            ThemeColor::Info => self.info,
+            ThemeColor::Accent | ThemeColor::Blue | ThemeColor::LightBlue => self.accent,
+            ThemeColor::Text | ThemeColor::Reset | ThemeColor::White => self.text,
+            ThemeColor::Muted | ThemeColor::Gray => self.muted,
+            ThemeColor::Subtle | ThemeColor::DarkGray => self.subtle,
+            ThemeColor::Error | ThemeColor::Red | ThemeColor::LightRed => self.error,
+            ThemeColor::Warning | ThemeColor::Yellow | ThemeColor::LightYellow => self.warning,
+            ThemeColor::Success | ThemeColor::Green | ThemeColor::LightGreen => self.success,
+            ThemeColor::Info | ThemeColor::Cyan | ThemeColor::LightCyan => self.info,
             ThemeColor::Border => self.border,
+            ThemeColor::Raised => self.raised1,
+            ThemeColor::Black => self.background,
+            ThemeColor::DiffAdded => self.diff_added,
+            ThemeColor::DiffRemoved => self.diff_removed,
+            ThemeColor::Heading => self.heading,
+            ThemeColor::Link => self.link,
+            ThemeColor::Code => self.code,
+            ThemeColor::Blockquote => self.blockquote,
+            ThemeColor::Magenta | ThemeColor::LightMagenta => self.categorical[4],
+            ThemeColor::Categorical(index) => self.categorical[usize::from(index % 8)],
             ThemeColor::Rgb(r, g, b) => Color32::from_rgb(r, g, b),
-            ThemeColor::Black => self.ansi[0],
-            ThemeColor::Red => self.ansi[1],
-            ThemeColor::Green => self.ansi[2],
-            ThemeColor::Yellow => self.ansi[3],
-            ThemeColor::Blue => self.ansi[4],
-            ThemeColor::Magenta => self.ansi[5],
-            ThemeColor::Cyan => self.ansi[6],
-            ThemeColor::Gray => self.ansi[7],
-            ThemeColor::DarkGray => self.ansi[8],
-            ThemeColor::LightRed => self.ansi[9],
-            ThemeColor::LightGreen => self.ansi[10],
-            ThemeColor::LightYellow => self.ansi[11],
-            ThemeColor::LightBlue => self.ansi[12],
-            ThemeColor::LightMagenta => self.ansi[13],
-            ThemeColor::LightCyan => self.ansi[14],
-            ThemeColor::White => self.ansi[15],
             ThemeColor::Indexed(index) => self.indexed(index),
         }
     }
 
     /// Resolve an xterm-256 palette `index`.
     ///
-    /// 0..16 are [`Palette::ansi`], 16..232 the 6x6x6 colour cube and
-    /// 232..256 the 24-step grey ramp (8, 18, ..., 238).
+    /// 0..16 are the ANSI names (see [`Palette::color`]), 16..232 the 6x6x6
+    /// colour cube and 232..256 the 24-step grey ramp (8, 18, ..., 238).
     fn indexed(&self, index: u8) -> Color32 {
+        const ANSI: [ThemeColor; 16] = [
+            ThemeColor::Black,
+            ThemeColor::Red,
+            ThemeColor::Green,
+            ThemeColor::Yellow,
+            ThemeColor::Blue,
+            ThemeColor::Magenta,
+            ThemeColor::Cyan,
+            ThemeColor::Gray,
+            ThemeColor::DarkGray,
+            ThemeColor::LightRed,
+            ThemeColor::LightGreen,
+            ThemeColor::LightYellow,
+            ThemeColor::LightBlue,
+            ThemeColor::LightMagenta,
+            ThemeColor::LightCyan,
+            ThemeColor::White,
+        ];
         match index {
-            0..=15 => self.ansi[usize::from(index)],
+            0..=15 => self.color(ANSI[usize::from(index)]),
             16..=231 => {
                 let i = usize::from(index - 16);
                 Color32::from_rgb(
@@ -138,46 +222,17 @@ impl Palette {
     }
 }
 
-/// Build the palette of `mode`.
+/// The palette of the App's current theme.
 ///
 /// # Arguments
 ///
-/// * `mode` - the theme mode the app is in.
+/// * `app` - the App, for its theme selection and catalog.
+/// * `ctx` - the window's egui context, for the system's dark/light setting.
 ///
 /// # Returns
 ///
-/// The default palette mirrors the terminal theme's `colors`/`status`
-/// constants, except the accent: `colors::PRIMARY` is ANSI blue, unreadable
-/// on black, so the GUI uses `DEFAULT_ACCENT` (light blue). The high-contrast
-/// palette mirrors `high_contrast` (accent `Rgb(0, 150, 255)`, error
-/// `Rgb(255, 50, 50)`, ...). Both draw on black with the xterm ANSI colours.
+/// The palette of [`crate::theme::active_tokens`].
 #[must_use]
-pub fn palette_for(mode: ThemeMode) -> Palette {
-    let ansi = XTERM_ANSI;
-    match mode {
-        ThemeMode::Default => Palette {
-            accent: DEFAULT_ACCENT,
-            text: ansi[15],
-            muted: Color32::from_rgb(170, 170, 170),
-            error: ansi[1],
-            warning: ansi[3],
-            success: ansi[2],
-            info: ansi[6],
-            border: Color32::from_rgb(100, 100, 100),
-            background: ansi[0],
-            ansi,
-        },
-        ThemeMode::HighContrast => Palette {
-            accent: Color32::from_rgb(0, 150, 255),
-            text: ansi[15],
-            muted: Color32::from_rgb(128, 128, 128),
-            error: Color32::from_rgb(255, 50, 50),
-            warning: Color32::from_rgb(255, 255, 0),
-            success: Color32::from_rgb(50, 255, 50),
-            info: ansi[6],
-            border: Color32::from_rgb(128, 128, 128),
-            background: ansi[0],
-            ansi,
-        },
-    }
+pub fn palette_for(app: &App, ctx: &egui::Context) -> Palette {
+    Palette::from_tokens(&crate::theme::active_tokens(app, ctx))
 }

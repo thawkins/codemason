@@ -76,13 +76,13 @@ struct RowStyle {
 fn status_presentation(status: &TaskStatus, palette: &Palette) -> (RowStyle, &'static str) {
     let c = |color| palette.color(color);
     let (color, suffix) = match status {
-        TaskStatus::Running => (c(ThemeColor::Yellow), ""),
-        TaskStatus::Suspended => (c(ThemeColor::DarkGray), " [||]"),
-        TaskStatus::Terminating => (c(ThemeColor::Red), " ..."),
-        TaskStatus::Completed => (c(ThemeColor::Cyan), ""),
-        TaskStatus::Failed => (c(ThemeColor::Red), ""),
-        TaskStatus::Cancelled => (c(ThemeColor::DarkGray), ""),
-        TaskStatus::TimedOut => (c(ThemeColor::Yellow), " [timeout]"),
+        TaskStatus::Running => (c(ThemeColor::Warning), ""),
+        TaskStatus::Suspended => (c(ThemeColor::Subtle), " [||]"),
+        TaskStatus::Terminating => (c(ThemeColor::Error), " ..."),
+        TaskStatus::Completed => (c(ThemeColor::Info), ""),
+        TaskStatus::Failed => (c(ThemeColor::Error), ""),
+        TaskStatus::Cancelled => (c(ThemeColor::Subtle), ""),
+        TaskStatus::TimedOut => (c(ThemeColor::Warning), " [timeout]"),
     };
     (
         RowStyle {
@@ -145,12 +145,12 @@ fn fixed(
 /// The `[stop]`/`>` and `[x]` indicators of a live row.
 fn controls(line: Line, suspended: bool, palette: &Palette) -> Line {
     let (glyph, color) = if suspended {
-        (">", palette.color(ThemeColor::Green))
+        (">", palette.color(ThemeColor::Success))
     } else {
-        ("[stop]", palette.color(ThemeColor::Yellow))
+        ("[stop]", palette.color(ThemeColor::Warning))
     };
     line.push(format!("{glyph:<STOP_W$} "), color)
-        .push("[x]", palette.color(ThemeColor::Red))
+        .push("[x]", palette.color(ThemeColor::Error))
 }
 
 /// What the sub-agent tree rows read.
@@ -256,7 +256,7 @@ fn rows(app: &App, palette: &Palette) -> (Vec<(Line, String)>, std::ops::Range<u
     if custom.contains(&primary_label) {
         primary_label.push_str(" [C]");
     }
-    let green = palette.color(ThemeColor::Green);
+    let green = palette.color(ThemeColor::Success);
     out.push((
         fixed(
             "* ",
@@ -291,7 +291,7 @@ fn rows(app: &App, palette: &Palette) -> (Vec<(Line, String)>, std::ops::Range<u
     };
     tree_rows(&ctx, &primary_session, &[], &mut out);
     let tree = start..out.len();
-    let cyan = palette.color(ThemeColor::Cyan);
+    let cyan = palette.color(ThemeColor::Info);
     if !app.bg_tasks.is_empty() {
         out.push((
             Line::new().push(" Background shell tasks ", cyan),
@@ -299,10 +299,10 @@ fn rows(app: &App, palette: &Palette) -> (Vec<(Line, String)>, std::ops::Range<u
         ));
         for task in &app.bg_tasks {
             let color = match task.status.as_str() {
-                "running" => palette.color(ThemeColor::Yellow),
+                "running" => palette.color(ThemeColor::Warning),
                 "completed" => cyan,
-                "failed" | "cancelled" => palette.color(ThemeColor::Red),
-                _ => palette.color(ThemeColor::DarkGray),
+                "failed" | "cancelled" => palette.color(ThemeColor::Error),
+                _ => palette.color(ThemeColor::Subtle),
             };
             let style = RowStyle {
                 marker: color,
@@ -344,7 +344,7 @@ fn rows(app: &App, palette: &Palette) -> (Vec<(Line, String)>, std::ops::Range<u
                 palette,
             );
             if let Some(note) = row.durable_copy_absence() {
-                let yellow = palette.color(ThemeColor::Yellow);
+                let yellow = palette.color(ThemeColor::Warning);
                 line = line.push("[memory] ", yellow).push(note, yellow);
             }
             out.push((line, String::new()));

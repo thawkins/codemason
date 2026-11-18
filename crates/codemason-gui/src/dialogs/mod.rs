@@ -65,6 +65,8 @@ use crate::panels::prompt::prompt_id;
 pub enum ActiveDialog {
     /// The `/config list` save picker (`App::config_save_picker`).
     ConfigSavePicker,
+    /// The `/theme` picker (`App::theme_picker`).
+    ThemePicker,
     /// The input history picker (`App::history_picker`).
     HistoryPicker,
     /// The router configuration save confirmation
@@ -143,6 +145,9 @@ pub enum ActiveDialog {
 pub fn active(app: &App) -> Option<ActiveDialog> {
     if app.config_save_picker.is_some() {
         return Some(ActiveDialog::ConfigSavePicker);
+    }
+    if app.theme_picker.is_some() {
+        return Some(ActiveDialog::ThemePicker);
     }
     if app.history_picker.is_some() {
         return Some(ActiveDialog::HistoryPicker);
@@ -306,6 +311,7 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
     banner::show(ctx, app);
     match dialog {
         Some(ActiveDialog::ConfigSavePicker) => pickers::show_config_saves(ctx, app),
+        Some(ActiveDialog::ThemePicker) => pickers::show_theme(ctx, app),
         Some(ActiveDialog::HistoryPicker) => pickers::show_history(ctx, app),
         Some(ActiveDialog::RouterSave) => confirm::show_router_save(ctx, app),
         Some(ActiveDialog::PluginStore) => stores::show_plugin_store(ctx, app),
@@ -359,6 +365,7 @@ pub fn prepare(ctx: &egui::Context, app: &mut App) {
         Some(ActiveDialog::ContextMenu) => context_menu::prepare(ctx, app),
         Some(
             ActiveDialog::ConfigSavePicker
+            | ActiveDialog::ThemePicker
             | ActiveDialog::HistoryPicker
             | ActiveDialog::RouterSave
             | ActiveDialog::PluginStore
@@ -447,7 +454,7 @@ pub(crate) fn modal<R>(
         .show(ctx, |ui| {
             let inner = ui.vertical(|ui| {
                 ui.heading(title);
-                ui.add_space(4.0);
+                ui.add_space(crate::metrics::space::XS);
                 add_contents(ui)
             });
             inner

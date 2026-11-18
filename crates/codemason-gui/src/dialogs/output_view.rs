@@ -107,7 +107,7 @@ fn show_with(ctx: &egui::Context, app: &mut App, state: &mut OutputView) -> bool
     let offset_lines = app.output_view.as_ref().map_or(0, |v| v.scroll_offset);
     let key_scrolled = state.last_offset.is_some_and(|last| last != offset_lines);
     let follow_app = key_scrolled || std::mem::take(&mut state.force_scroll);
-    let palette = palette_for(app.theme_mode);
+    let palette = palette_for(app, ctx);
     let mut scroll = None;
     modal(ctx, "codemason_output_view", &content.title, |ui| {
         let size = ctx.content_rect().size();
@@ -147,7 +147,7 @@ fn show_with(ctx: &egui::Context, app: &mut App, state: &mut OutputView) -> bool
                 scroll = Some(geometry);
             });
         }
-        ui.add_space(6.0);
+        ui.add_space(crate::metrics::space::SM);
         key_buttons(ui, &[(CLOSE, plain(Key::Esc))]);
         ui.weak("PgUp/PgDn scroll * Ctrl+PgUp/PgDn jump * Esc close");
     });

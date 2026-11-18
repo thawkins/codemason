@@ -47,12 +47,12 @@ pub fn is_empty_session(app: &App) -> bool {
 /// * `palette` - the active palette.
 pub fn empty_state_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
     let group = ui.vertical(|ui| {
-        ui.add_space(24.0);
+        ui.add_space(crate::metrics::space::XL);
         ui.label(RichText::new(WORDMARK).heading().color(palette.accent));
         ui.label(
             RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(palette.muted),
         );
-        ui.add_space(12.0);
+        ui.add_space(crate::metrics::space::MD);
         ui.horizontal_wrapped(|ui| {
             for (label, text) in STARTERS {
                 // Click-only: a button that can hold the keyboard focus would
@@ -69,9 +69,9 @@ pub fn empty_state_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
                 }
             }
         });
-        ui.add_space(12.0);
+        ui.add_space(crate::metrics::space::MD);
         ui.label(RichText::new(TIP).color(palette.muted));
-        ui.add_space(12.0);
+        ui.add_space(crate::metrics::space::MD);
     });
     group
         .response

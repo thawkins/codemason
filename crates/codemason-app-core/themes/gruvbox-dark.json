@@ -1,0 +1,61 @@
+{
+  "name": "gruvbox-dark",
+  "dark": true,
+  "credit": "Palette: Gruvbox, (c) Pavel Pertsev, MIT/X11 licence",
+  "text": {
+    "base": "#ebdbb2",
+    "muted": "#bdae93",
+    "subtle": "#a89984"
+  },
+  "bg": {
+    "base": "#282828",
+    "raised1": "#1d2021",
+    "raised2": "#3c3836",
+    "overlay": "#32302f"
+  },
+  "border": {
+    "base": "#504945",
+    "focus": "#83a598"
+  },
+  "accent": "#83a598",
+  "state": {
+    "success": "#b8bb26",
+    "warning": "#fabd2f",
+    "error": "#fb4934",
+    "info": "#8ec07c"
+  },
+  "diff": {
+    "added": "#b8bb26",
+    "removed": "#fb4934",
+    "context": "#bdae93",
+    "added_bg": "#32361a",
+    "removed_bg": "#462726",
+    "line_number": "#928374"
+  },
+  "syntax": {
+    "keyword": "#fb4934",
+    "string": "#b8bb26",
+    "comment": "#928374",
+    "function": "#8ec07c",
+    "type": "#fabd2f",
+    "number": "#d3869b",
+    "operator": "#fe8019",
+    "punctuation": "#bdae93"
+  },
+  "markdown": {
+    "heading": "#fabd2f",
+    "link": "#83a598",
+    "code": "#fe8019",
+    "blockquote": "#bdae93"
+  },
+  "categorical": [
+    "#83a598",
+    "#b8bb26",
+    "#fabd2f",
+    "#fb4934",
+    "#d3869b",
+    "#8ec07c",
+    "#fe8019",
+    "#ebdbb2"
+  ]
+}

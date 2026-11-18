@@ -63,7 +63,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use crate::dialogs;
 use crate::dock::{self, HiddenPanes, PaneId};
 use crate::keys::{Focus, KeyRouter, default_keymap};
-use crate::palette::{Palette, palette_for};
+use crate::palette::Palette;
 use crate::panels::agents::agents_ui;
 use crate::panels::context::context_ui;
 use crate::panels::log::log_ui;
@@ -118,7 +118,7 @@ pub struct Shell {
     /// Toggle chords that close panes closed from the dock's chrome, run
     /// through `App::handle_key` after drawing.
     close_keys: Vec<KeyInput>,
-    /// Installs the visuals of the App's theme mode, again when it changes.
+    /// Installs the visuals of the App's theme, again when it changes.
     theme: ThemeApplier,
     /// The native file dialogs the File menu queues.
     files: FileDialogs,
@@ -407,11 +407,12 @@ impl Shell {
         // caller other than `draw_frame` cannot reach them outside it.
         let runtime = self.runtime();
         let _context = runtime.as_ref().map(Handle::enter);
-        // A changed theme mode restyles the window (a repaint is requested,
+        // A changed theme restyles the window (a repaint is requested,
         // so the next pass draws with the new visuals).
-        self.theme.sync(ui.ctx(), self.app.theme_mode);
+        let tokens = crate::theme::active_tokens(&self.app, ui.ctx());
+        self.theme.sync(ui.ctx(), &tokens);
         self.sync_dock(ui.ctx());
-        let palette = palette_for(self.app.theme_mode);
+        let palette = Palette::from_tokens(&tokens);
         let menus_enabled = !dialogs::locks_prompt(&self.app);
         egui::Panel::top("menu_bar").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {

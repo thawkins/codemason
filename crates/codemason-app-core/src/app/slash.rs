@@ -8623,52 +8623,60 @@ Changes are persisted immediately to `.codemason/codemason.json` and take effect
 
     /// Run the `/theme` slash command.
     ///
-    /// A bare `/theme` reports the current theme; a theme name switches to it
-    /// for the running window. The frontend restyles on its next frame from
-    /// `App::theme_mode`. The choice is not written to the config file: the
-    /// `theme` config key sets the theme used at startup.
+    /// A bare `/theme` opens the theme picker, `/theme list` reports the
+    /// current theme and lists the catalog, and a theme name (or `system`,
+    /// `dark`, `light`) switches to it for the running window. The frontend restyles on its next frame from `App::theme`. The
+    /// choice is not written to the config file: the `theme` config key sets
+    /// the theme used at startup.
     fn slash_theme(&mut self, args: &str) {
         use crate::app::helpers::from_cmd;
-        use crate::theme_mode::ThemeMode;
 
         let sub = args.split_whitespace().next().unwrap_or("").to_lowercase();
+        let names = std::iter::once("system")
+            .chain(self.themes.names())
+            .map(|name| format!("`{name}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
         match sub.as_str() {
             "" => {
-                self.append_assistant_text(&from_cmd(
-                    "theme",
-                    &format!(
-                        "Theme: **{}**. Available: `default`, `high-contrast`.",
-                        self.theme_mode.display_name()
-                    ),
-                ));
-                self.status = format!("theme: {}", self.theme_mode.display_name());
+                self.open_theme_picker();
+                self.status = format!("theme: {}", self.theme.display_name());
+            }
+            "list" => {
+                let text = format!(
+                    "Theme: **{}**. Available: {names}.",
+                    self.theme.display_name()
+                );
+                self.append_assistant_text(&from_cmd("theme", &text));
+                self.status = format!("theme: {}", self.theme.display_name());
             }
             "help" | "--help" | "-h" => {
                 self.append_assistant_text(&from_cmd(
                     "theme help",
                     "## /theme - Colour theme\n\n\
                      | Subcommand | Description |\n|---|---|\n\
-                     | `/theme` | Show the current theme |\n\
-                     | `/theme default` | The standard dark theme |\n\
-                     | `/theme high-contrast` | Brighter text and white outlines |\n\
+                     | `/theme` | Open the theme picker, which previews each theme |\n\
+                     | `/theme list` | Show the current theme and list the others |\n\
+                     | `/theme system` | Follow the operating system (dark or light) |\n\
+                     | `/theme dark` | The standard dark theme, `codemason-dark` |\n\
+                     | `/theme light` | The standard light theme, `codemason-light` |\n\
+                     | `/theme <name>` | Any listed theme, e.g. `high-contrast`, `nord` |\n\
                      | `/theme help` | Show this help |\n\n\
                      The switch applies to the running window. To start in a theme, set \
-                     `\"theme\": \"high-contrast\"` in `codemason.json`.",
+                     `\"theme\": \"<name>\"` in `codemason.json`. Your own themes are \
+                     `*.json` files in `~/.config/codemason/themes/` or the project's \
+                     `.codemason/themes/`.",
                 ));
                 self.status = "theme: help".to_string();
             }
-            name => match ThemeMode::from_str(name) {
-                Some(mode) => {
-                    self.theme_mode = mode;
-                    self.status = format!("theme: {}", mode.display_name());
+            name => match self.themes.parse(name) {
+                Some(selection) => {
+                    self.status = format!("theme: {}", selection.display_name());
+                    self.theme = selection;
                 }
                 None => {
-                    self.append_assistant_text(&from_cmd(
-                        "theme",
-                        &format!(
-                            "Unknown theme `{name}`. Usage: `/theme [default|high-contrast|help]`"
-                        ),
-                    ));
+                    let text = format!("Unknown theme `{name}`. Available: {names}.");
+                    self.append_assistant_text(&from_cmd("theme", &text));
                     self.status = "theme: usage".to_string();
                 }
             },

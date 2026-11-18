@@ -35,6 +35,40 @@ impl App {
         s
     }
 
+    /// Builds the theme catalog and the startup selection.
+    ///
+    /// Built-in themes come first, then the user's
+    /// `~/.config/codemason/themes/*.json`, then the project's
+    /// `.codemason/themes/*.json`; a later theme of the same name wins. The
+    /// selection is the launch configuration's `theme`, or `system`.
+    ///
+    /// Returns the catalog, the selection and one warning per skipped theme
+    /// file, contrast failure or unknown startup theme.
+    fn load_themes(
+        cwd_path: &std::path::Path,
+    ) -> (
+        crate::theme_tokens::ThemeCatalog,
+        crate::theme_tokens::ThemeSelection,
+        Vec<String>,
+    ) {
+        let mut themes = crate::theme_tokens::ThemeCatalog::builtin();
+        let mut warnings = Vec::new();
+        if let Some(dir) = codemason_config::Config::global_config_dir() {
+            warnings.extend(themes.load_dir(&dir.join("themes")));
+        }
+        warnings.extend(themes.load_dir(&cwd_path.join(".codemason").join("themes")));
+        let theme = match crate::theme_tokens::startup() {
+            None => crate::theme_tokens::ThemeSelection::System,
+            Some(name) => themes.parse(name).unwrap_or_else(|| {
+                warnings.push(format!(
+                    "config `theme`: unknown theme `{name}`, using system"
+                ));
+                crate::theme_tokens::ThemeSelection::System
+            }),
+        };
+        (themes, theme, warnings)
+    }
+
     /// Expand a leading `~` to `$HOME` and return the real filesystem path.
     ///
     /// Defensive guard for display-derived strings (restored sessions,
@@ -192,6 +226,7 @@ impl App {
         sub.record("App: settings load", t0.elapsed());
         let t0 = Instant::now();
         let sidebar = crate::sessions_sidebar_state::SidebarState::load(&storage);
+        let (themes, theme, theme_warnings) = Self::load_themes(&cwd_path);
         let mut app = Self {
             session: {
                 let mut session =
@@ -396,6 +431,7 @@ impl App {
             context_menu: None,
             history_file_path: None,
             history_picker: None,
+            theme_picker: None,
             config_save_picker: None,
             selected_agent_index: None,
             custom_agent_defs: custom_defs,
@@ -449,7 +485,8 @@ impl App {
             memory_entry_count: 0,
             memory_entry_count_pending: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             memory_stats_last_refresh: std::time::Instant::now(),
-            theme_mode: crate::theme_mode::startup(),
+            theme,
+            themes,
             mouse_enabled: true,
             status_history: StatusHistory::new(),
             needs_redraw: true,
@@ -482,6 +519,9 @@ impl App {
             skill_dirs_cache: Vec::new(),
             trigger_runtime: None,
         }; // end Self { ... }
+        for warning in theme_warnings {
+            app.push_log(crate::app::LogLevel::Warn, warning, None);
+        }
         if let Some(ref mut st) = app.startup_timings {
             st.record("App: struct init", t0.elapsed());
         }

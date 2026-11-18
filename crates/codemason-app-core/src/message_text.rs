@@ -30,9 +30,9 @@ pub fn is_agent_notice(text: &str) -> bool {
     text.trim_start().starts_with(AGENT_NOTICE_PREFIX)
 }
 
-/// Style of think-tool and reasoning text (lavender italics, readable on
-/// dark backgrounds); the terminal theme's `think()` style.
-pub const THINK_STYLE: TextStyle = TextStyle::new().fg(ThemeColor::Rgb(180, 180, 220)).italic();
+/// Style of think-tool and reasoning text (muted italics);
+/// the terminal theme's `think()` style.
+pub const THINK_STYLE: TextStyle = TextStyle::new().fg(ThemeColor::Muted).italic();
 
 /// Prefix of attachment chips in the input bar and image attachment lines.
 pub const ICON_ATTACHMENT: &str = "[attach]";
@@ -40,7 +40,7 @@ pub const ICON_ATTACHMENT: &str = "[attach]";
 /// Render an agent-notice bubble as bright-yellow lines, one item per line,
 /// followed by a trailing blank line to separate the bubble from following content.
 pub fn render_agent_notice_lines(text: &str) -> Vec<StyledLine> {
-    let style = TextStyle::new().fg(ThemeColor::Yellow).bold();
+    let style = TextStyle::new().fg(ThemeColor::Warning).bold();
     let mut lines = Vec::new();
     for (i, line) in text.lines().enumerate() {
         if i == 0 {

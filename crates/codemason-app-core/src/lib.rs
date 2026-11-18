@@ -3,7 +3,7 @@
 //! Holds styled text ([`styled`]), input events ([`input_event`]), geometry
 //! ([`geometry`]), the frontend-neutral application state ([`app::App`]) with
 //! its input handling ([`input`], [`input_field`]) and the supporting state
-//! modules (status, theme mode, sidebar and menu state, research progress,
+//! modules (status, theme tokens, sidebar and menu state, research progress,
 //! message text and line wrapping, markdown rendering, the log channel and
 //! its tracing layer). `codemason-gui` renders them.
 
@@ -34,7 +34,7 @@ pub mod shortcuts;
 pub mod status;
 pub mod styled;
 pub mod text_utils;
-pub mod theme_mode;
+pub mod theme_tokens;
 pub mod tracing_layer;
 pub mod usage_stats;
 

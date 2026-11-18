@@ -110,7 +110,7 @@ pub fn show_mcp_discover(ctx: &egui::Context, app: &mut App) -> bool {
         if let Some(feedback) = &feedback {
             ui.label(feedback);
         }
-        ui.add_space(6.0);
+        ui.add_space(crate::metrics::space::SM);
         ui.add_enabled_ui(!rows.is_empty(), |ui| {
             key_buttons(ui, &[(TOGGLE, plain(Key::Char(' ')))]);
         });
@@ -161,7 +161,7 @@ pub fn show_plugins_list(ctx: &egui::Context, app: &mut App) -> bool {
         if let Some(feedback) = &feedback {
             ui.label(feedback);
         }
-        ui.add_space(6.0);
+        ui.add_space(crate::metrics::space::SM);
         ui.add_enabled_ui(!rows.is_empty(), |ui| {
             key_buttons(ui, &[(TOGGLE, plain(Key::Char(' ')))]);
         });
@@ -220,7 +220,7 @@ pub fn show_backend_panel(ctx: &egui::Context, app: &mut App) -> bool {
     let mut clicked = None;
     modal(ctx, "codemason_backend_panel", &title, |ui| {
         clicked = entry_list(ui, BACKENDS_LABEL, &rows, cursor);
-        ui.add_space(6.0);
+        ui.add_space(crate::metrics::space::SM);
         ui.add_enabled_ui(selectable, |ui| {
             key_buttons(ui, &[(SWITCH, plain(Key::Enter))]);
         });

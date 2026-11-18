@@ -106,21 +106,17 @@ pub fn messages_to_lines<S1: BuildHasher, S2: BuildHasher>(
                     let text: &str = &text;
 
                     let (dot, dot_style, indent) = match msg.role {
-                        Role::User => ("You: ", TextStyle::new().fg(ThemeColor::Cyan).bold(), 5),
+                        Role::User => ("You: ", TextStyle::new().fg(ThemeColor::Accent).bold(), 5),
                         // Context-compaction summaries are internal
                         // bookkeeping, not the agent's own output: label them
                         // so a mid-run auto-compaction summary (which uses the
                         // same "## Objective / ## Work State" shape as a
                         // sub-agent's final report) is never mistaken for the
                         // completion report in the output overlay.
-                        Role::Compaction => (
-                            "[compaction] ",
-                            TextStyle::new().fg(ThemeColor::DarkGray),
-                            13,
-                        ),
-                        Role::Assistant => {
-                            ("* ", TextStyle::new().fg(ThemeColor::Magenta).bold(), 2)
+                        Role::Compaction => {
+                            ("[compaction] ", TextStyle::new().fg(ThemeColor::Subtle), 13)
                         }
+                        Role::Assistant => ("* ", TextStyle::new().fg(ThemeColor::Muted).bold(), 2),
                     };
                     for (i, line) in text.lines().enumerate() {
                         if i == 0 {
@@ -157,18 +153,18 @@ pub fn messages_to_lines<S1: BuildHasher, S2: BuildHasher>(
                     let (indicator, ind_style, name_style) = match state.status {
                         ToolCallStatus::Completed => (
                             "* ",
-                            TextStyle::new().fg(ThemeColor::Green),
-                            TextStyle::new().fg(ThemeColor::Green).bold(),
+                            TextStyle::new().fg(ThemeColor::Success),
+                            TextStyle::new().fg(ThemeColor::Success).bold(),
                         ),
                         ToolCallStatus::Error => (
                             "[x] ",
-                            TextStyle::new().fg(ThemeColor::Red),
-                            TextStyle::new().fg(ThemeColor::Red).bold(),
+                            TextStyle::new().fg(ThemeColor::Error),
+                            TextStyle::new().fg(ThemeColor::Error).bold(),
                         ),
                         ToolCallStatus::Running | ToolCallStatus::Pending => (
                             "* ",
-                            TextStyle::new().fg(ThemeColor::DarkGray),
-                            TextStyle::new().fg(ThemeColor::DarkGray),
+                            TextStyle::new().fg(ThemeColor::Subtle),
+                            TextStyle::new().fg(ThemeColor::Subtle),
                         ),
                     };
 
@@ -185,7 +181,7 @@ pub fn messages_to_lines<S1: BuildHasher, S2: BuildHasher>(
                         StyledSpan::styled(indicator, ind_style),
                         StyledSpan::styled(
                             step_tag,
-                            TextStyle::new().fg(ThemeColor::Yellow).bold(),
+                            TextStyle::new().fg(ThemeColor::Warning).bold(),
                         ),
                     ];
                     // The tool name always comes immediately after the step
@@ -205,7 +201,7 @@ pub fn messages_to_lines<S1: BuildHasher, S2: BuildHasher>(
                             format!("{} ", display_name),
                             Some(StyledSpan::styled(
                                 summary,
-                                TextStyle::new().fg(ThemeColor::DarkGray),
+                                TextStyle::new().fg(ThemeColor::Subtle),
                             )),
                         )
                     };
@@ -217,30 +213,30 @@ pub fn messages_to_lines<S1: BuildHasher, S2: BuildHasher>(
                         if let Some(range) = read_line_range(&state.output) {
                             spans.push(StyledSpan::styled(
                                 format!(" {}", range),
-                                TextStyle::new().fg(ThemeColor::White).bold(),
+                                TextStyle::new().fg(ThemeColor::Text).bold(),
                             ));
                         }
                     }
                     if let Some((added, removed)) = inline_diff {
                         spans.push(StyledSpan::styled(
                             " (",
-                            TextStyle::new().fg(ThemeColor::DarkGray),
+                            TextStyle::new().fg(ThemeColor::Subtle),
                         ));
                         spans.push(StyledSpan::styled(
                             format!("+{}", added),
-                            TextStyle::new().fg(ThemeColor::Green),
+                            TextStyle::new().fg(ThemeColor::DiffAdded),
                         ));
                         spans.push(StyledSpan::styled(
                             " ",
-                            TextStyle::new().fg(ThemeColor::DarkGray),
+                            TextStyle::new().fg(ThemeColor::Subtle),
                         ));
                         spans.push(StyledSpan::styled(
                             format!("-{}", removed),
-                            TextStyle::new().fg(ThemeColor::Red),
+                            TextStyle::new().fg(ThemeColor::DiffRemoved),
                         ));
                         spans.push(StyledSpan::styled(
                             ")",
-                            TextStyle::new().fg(ThemeColor::DarkGray),
+                            TextStyle::new().fg(ThemeColor::Subtle),
                         ));
                     }
                     // Add duration_ms display for completed tool calls
@@ -253,7 +249,7 @@ pub fn messages_to_lines<S1: BuildHasher, S2: BuildHasher>(
                             };
                             spans.push(StyledSpan::styled(
                                 duration_str,
-                                TextStyle::new().fg(ThemeColor::DarkGray),
+                                TextStyle::new().fg(ThemeColor::Subtle),
                             ));
                         }
                     }
@@ -332,16 +328,16 @@ pub fn messages_to_lines<S1: BuildHasher, S2: BuildHasher>(
                                     lines.push(StyledLine::from(vec![
                                         StyledSpan::styled(
                                             format!("  └ {}{} ", rel_path, padding),
-                                            TextStyle::new().fg(ThemeColor::DarkGray),
+                                            TextStyle::new().fg(ThemeColor::Subtle),
                                         ),
                                         StyledSpan::styled(
                                             format!("+{}", added),
-                                            TextStyle::new().fg(ThemeColor::Green),
+                                            TextStyle::new().fg(ThemeColor::DiffAdded),
                                         ),
                                         StyledSpan::styled(" ", TextStyle::new()),
                                         StyledSpan::styled(
                                             format!("-{}", removed),
-                                            TextStyle::new().fg(ThemeColor::Red),
+                                            TextStyle::new().fg(ThemeColor::DiffRemoved),
                                         ),
                                     ]));
                                 }
@@ -353,7 +349,7 @@ pub fn messages_to_lines<S1: BuildHasher, S2: BuildHasher>(
                                 let result = sanitize_terminal(&result);
                                 lines.push(StyledLine::from(StyledSpan::styled(
                                     format!("  └ {}", result),
-                                    TextStyle::new().fg(ThemeColor::DarkGray),
+                                    TextStyle::new().fg(ThemeColor::Subtle),
                                 )));
                             }
                         } else if tool == "agent_complete" {
@@ -374,13 +370,13 @@ pub fn messages_to_lines<S1: BuildHasher, S2: BuildHasher>(
                             if summary.is_empty() {
                                 lines.push(StyledLine::from(StyledSpan::styled(
                                     "  \\- Task complete",
-                                    TextStyle::new().fg(ThemeColor::Green),
+                                    TextStyle::new().fg(ThemeColor::Success),
                                 )));
                             } else {
                                 for line in summary.lines() {
                                     lines.push(StyledLine::from(StyledSpan::styled(
                                         format!("  \\- {line}"),
-                                        TextStyle::new().fg(ThemeColor::Green),
+                                        TextStyle::new().fg(ThemeColor::Success),
                                     )));
                                 }
                             }
@@ -392,7 +388,7 @@ pub fn messages_to_lines<S1: BuildHasher, S2: BuildHasher>(
                             let result = sanitize_terminal(&result);
                             lines.push(StyledLine::from(StyledSpan::styled(
                                 format!("  └ {}", result),
-                                TextStyle::new().fg(ThemeColor::DarkGray),
+                                TextStyle::new().fg(ThemeColor::Subtle),
                             )));
                         }
                     }
@@ -402,7 +398,7 @@ pub fn messages_to_lines<S1: BuildHasher, S2: BuildHasher>(
                             let err = sanitize_terminal(err);
                             lines.push(StyledLine::from(StyledSpan::styled(
                                 format!("  └ {}", err),
-                                TextStyle::new().fg(ThemeColor::Red),
+                                TextStyle::new().fg(ThemeColor::Error),
                             )));
                         }
                     }
@@ -430,7 +426,7 @@ pub fn messages_to_lines<S1: BuildHasher, S2: BuildHasher>(
                         .unwrap_or("image");
                     lines.push(StyledLine::from(StyledSpan::styled(
                         format!("  {} [image: {}]", ICON_ATTACHMENT, name),
-                        TextStyle::new().fg(ThemeColor::Yellow),
+                        TextStyle::new().fg(ThemeColor::Info),
                     )));
                 }
             }

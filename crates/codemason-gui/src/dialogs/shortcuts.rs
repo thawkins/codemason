@@ -49,7 +49,7 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
                         }
                     });
             });
-        ui.add_space(6.0);
+        ui.add_space(crate::metrics::space::SM);
         key_buttons(ui, &[(CLOSE, plain(Key::Esc))]);
         ui.weak("Press Esc or ? to close");
     });

@@ -123,7 +123,7 @@ pub fn show_rollback(ctx: &egui::Context, app: &mut App) -> bool {
                     ui.monospace(file.as_str());
                 }
             });
-        ui.add_space(6.0);
+        ui.add_space(crate::metrics::space::SM);
         key_buttons(ui, &[(ROLL_BACK, ENTER), (KEEP_CHANGES, ESC)]);
         ui.weak("Enter rolls back to the pre-loop snapshot  Esc keeps the changes");
     });
@@ -158,7 +158,7 @@ pub fn show_plan_approval(ctx: &egui::Context, app: &mut App) -> bool {
             .show(ui, |ui| {
                 ui.label(state.plan_text.as_str());
             });
-        ui.add_space(6.0);
+        ui.add_space(crate::metrics::space::SM);
         let cursor = if state.cursor_approve {
             APPROVE
         } else {
@@ -207,7 +207,7 @@ pub fn show_force_cleanup(ctx: &egui::Context, app: &mut App) -> bool {
                     ui.label(format!("  - {member}"));
                 }
             }
-            ui.add_space(6.0);
+            ui.add_space(crate::metrics::space::SM);
             key_buttons(ui, &[(CONFIRM, ENTER), (CANCEL, ESC)]);
             ui.weak("Enter confirm  Esc cancel");
         },
@@ -238,7 +238,7 @@ pub fn show_router_save(ctx: &egui::Context, app: &mut App) -> bool {
         |ui| {
             ui.label("This will overwrite your current Model Router cluster in codemason.json.");
             ui.label(format!("Tier entries to save: {total}"));
-            ui.add_space(6.0);
+            ui.add_space(crate::metrics::space::SM);
             key_buttons(ui, &[(SAVE, ENTER), (CANCEL, ESC)]);
             ui.weak("Enter save  Esc cancel");
         },
@@ -268,7 +268,7 @@ pub fn show_notice(ctx: &egui::Context, app: &mut App) -> bool {
         if let Some(detail) = app.notice_detail.as_deref() {
             ui.monospace(detail);
         }
-        ui.add_space(6.0);
+        ui.add_space(crate::metrics::space::SM);
         key_buttons(ui, &[(NOTICE_OK, ENTER)]);
         ui.weak("Enter or Esc closes");
     });
@@ -406,7 +406,7 @@ pub fn show_memory_delete(ctx: &egui::Context, app: &mut App) -> bool {
         |ui| {
             ui.label(format!("Memory ID: {}", pending.id));
             ui.weak(format!("Preview: {}", pending.preview));
-            ui.add_space(6.0);
+            ui.add_space(crate::metrics::space::SM);
             key_buttons(ui, &[(CONFIRM, ENTER), (CANCEL, ESC)]);
             ui.weak("Enter confirm  Esc cancel");
         },
@@ -436,7 +436,7 @@ pub fn show_row_action(ctx: &egui::Context, app: &mut App) -> bool {
     let yes = app.row_action_confirm_is_yes();
     modal(ctx, "codemason_row_action_dialog", &title, |ui| {
         ui.label(body);
-        ui.add_space(6.0);
+        ui.add_space(crate::metrics::space::SM);
         yes_no_buttons(ui, yes);
         ui.weak(codemason_app_core::app::ROW_ACTION_TOGGLE_HINT);
         ui.weak(codemason_app_core::app::ROW_ACTION_OUTCOME_HINT);
@@ -484,14 +484,14 @@ pub fn show_memory_view(ctx: &egui::Context, app: &mut App) -> bool {
         ui.label(format!("Confidence: {:.2}", row.confidence));
         ui.label(format!("Source: {}", row.source));
         ui.label(format!("Updated: {}", row.updated_at));
-        ui.add_space(4.0);
+        ui.add_space(crate::metrics::space::XS);
         ui.weak("Content:");
         egui::ScrollArea::vertical()
             .max_height((ctx.content_rect().height() * 0.6).max(120.0))
             .show(ui, |ui| {
                 ui.label(row.content.as_str());
             });
-        ui.add_space(6.0);
+        ui.add_space(crate::metrics::space::SM);
         key_buttons(ui, &[(super::output_view::CLOSE, ESC)]);
         ui.weak("Esc close");
     });

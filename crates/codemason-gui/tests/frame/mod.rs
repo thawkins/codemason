@@ -16,8 +16,8 @@
 #![allow(dead_code)]
 
 use codemason_app_core::app::App;
-use codemason_app_core::theme_mode::ThemeMode;
-use codemason_gui::palette::palette_for;
+use codemason_app_core::theme_tokens::{ThemeCatalog, ThemeSelection};
+use codemason_gui::palette::Palette;
 use codemason_gui::panels::agents::agents_ui;
 use codemason_gui::panels::context::context_ui;
 use codemason_gui::panels::memory::memory_ui;
@@ -44,7 +44,8 @@ fn frame(app: &mut App, mut draw: impl FnMut(&mut egui::Ui, &mut App)) {
 /// * `app` - the App to draw; its sidebar, Agents/Teams window, Memory and
 ///   Context panel flags pick the panels.
 pub fn publish(app: &mut App) {
-    let palette = palette_for(ThemeMode::Default);
+    let palette =
+        Palette::from_tokens(&ThemeCatalog::builtin().resolve(&ThemeSelection::System, true));
     if app.sidebar.visible {
         let mut view = SessionsView::default();
         frame(app, |ui, app| view.show(ui, app, &palette));
@@ -75,7 +76,8 @@ pub fn publish(app: &mut App) {
 /// the frame, one per line: each drawn row's text, and the panel's own
 /// `Context` label.
 pub fn context_text(app: &mut App) -> String {
-    let palette = palette_for(ThemeMode::Default);
+    let palette =
+        Palette::from_tokens(&ThemeCatalog::builtin().resolve(&ThemeSelection::System, true));
     let mut harness = Harness::builder()
         .with_size(SIZE)
         .build_ui(|ui| context_ui(ui, app, &palette));

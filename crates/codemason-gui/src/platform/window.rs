@@ -356,9 +356,9 @@ impl CloseGuard {
             egui::Modal::new(egui::Id::unique("codemason_quit_confirmation")).show(ctx, |ui| {
                 let inner = ui.vertical(|ui| {
                     ui.heading(QUIT_TITLE);
-                    ui.add_space(4.0);
+                    ui.add_space(crate::metrics::space::XS);
                     ui.label("An agent turn is running. Quitting cancels it.");
-                    ui.add_space(8.0);
+                    ui.add_space(crate::metrics::space::SM);
                     ui.horizontal(|ui| {
                         let quit = ui.button(CONFIRM_QUIT).clicked();
                         let cancel = ui.button(CANCEL_QUIT).clicked();

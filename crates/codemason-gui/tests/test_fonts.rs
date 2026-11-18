@@ -6,12 +6,12 @@
 //! fonts installed on the host.
 
 use codemason_app_core::styled::{StyledLine, StyledSpan, TextStyle};
-use codemason_app_core::theme_mode::ThemeMode;
+use codemason_app_core::theme_tokens::{ThemeCatalog, ThemeSelection};
 use codemason_gui::fonts::{
     BOLD_FACE, BOLD_FAMILY, BOLD_MONO_FAMILY, SYMBOL_FACE, UI_BOLD_FACE, UI_FACE, font_stack,
     install,
 };
-use codemason_gui::palette::palette_for;
+use codemason_gui::palette::Palette;
 use codemason_gui::styled_text::{Bold, FONT_SIZE, drawable, styled_to_layout_job};
 use craft_ui::fonts::SystemFonts;
 use egui::{FontFamily, FontId};
@@ -138,7 +138,8 @@ fn test_fonts_bold_spans_use_the_bold_face() {
             StyledSpan::raw(" body"),
         ],
     }];
-    let palette = palette_for(ThemeMode::Default);
+    let palette =
+        Palette::from_tokens(&ThemeCatalog::builtin().resolve(&ThemeSelection::System, true));
     let job = styled_to_layout_job(&lines, &palette, 400.0, Bold::Face);
     let families: Vec<FontFamily> = job
         .sections

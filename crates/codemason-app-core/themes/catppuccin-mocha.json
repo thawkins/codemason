@@ -1,0 +1,61 @@
+{
+  "name": "catppuccin-mocha",
+  "dark": true,
+  "credit": "Palette: Catppuccin Mocha, (c) Catppuccin, MIT licence",
+  "text": {
+    "base": "#cdd6f4",
+    "muted": "#a6adc8",
+    "subtle": "#9399b2"
+  },
+  "bg": {
+    "base": "#1e1e2e",
+    "raised1": "#181825",
+    "raised2": "#313244",
+    "overlay": "#11111b"
+  },
+  "border": {
+    "base": "#45475a",
+    "focus": "#89b4fa"
+  },
+  "accent": "#89b4fa",
+  "state": {
+    "success": "#a6e3a1",
+    "warning": "#f9e2af",
+    "error": "#f38ba8",
+    "info": "#94e2d5"
+  },
+  "diff": {
+    "added": "#a6e3a1",
+    "removed": "#f38ba8",
+    "context": "#a6adc8",
+    "added_bg": "#26382f",
+    "removed_bg": "#3d2533",
+    "line_number": "#7f849c"
+  },
+  "syntax": {
+    "keyword": "#cba6f7",
+    "string": "#a6e3a1",
+    "comment": "#7f849c",
+    "function": "#89b4fa",
+    "type": "#f9e2af",
+    "number": "#fab387",
+    "operator": "#89dceb",
+    "punctuation": "#9399b2"
+  },
+  "markdown": {
+    "heading": "#89b4fa",
+    "link": "#89dceb",
+    "code": "#fab387",
+    "blockquote": "#a6adc8"
+  },
+  "categorical": [
+    "#89b4fa",
+    "#a6e3a1",
+    "#f9e2af",
+    "#f38ba8",
+    "#cba6f7",
+    "#94e2d5",
+    "#fab387",
+    "#f5c2e7"
+  ]
+}

@@ -89,7 +89,7 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
             list.response
                 .widget_info(|| egui::WidgetInfo::labeled(egui::Role::List, true, SUBMENU_LABEL));
         }
-        ui.add_space(6.0);
+        ui.add_space(crate::metrics::space::SM);
         key_buttons(ui, &[(CLOSE, plain(Key::Esc))]);
         ui.weak("Up/Down move  Enter run  Right open  Left/Esc close  letter runs its item");
     });
