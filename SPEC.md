@@ -2056,8 +2056,8 @@ format (FR-006).
 Toggle at runtime with `/gcf on` / `/gcf off` (persists to the loaded config
 source), inspect with `/gcf show`, and view usage with `/gcf help` (FR-002,
 FR-003). `Alt+G` toggles GCF with the same persist semantics, and a status-bar
-indicator on line 2 (compression-clamp icon, left of the codeindex icon) shows
-the enabled/disabled state.
+indicator in the status bar's `Details` popup (the text tag `GCF [ok]` or
+`GCF [x]`) shows the enabled/disabled state.
 
 ---
 
@@ -2127,8 +2127,11 @@ modes (`cdmn run`, `serve`, ACP) are unchanged, and `--no-tui` keeps the plain
 stdin/stdout mode. The window opens maximized the first time and then restores
 its size, position and maximized state (`gui-window.json`); the dock layout is
 persisted in `gui-layout.json` and shortcut overrides in `gui-keys.json`, all in
-the codemason config directory. The font stack bundles Hack Bold (MIT and
-Bitstream Vera licences, `crates/codemason-gui/assets/fonts/Hack-LICENSE.txt`).
+the codemason config directory. The font stack bundles Inter Regular and Inter
+SemiBold for proportional text and its bold weight (SIL Open Font License 1.1,
+`crates/codemason-gui/assets/fonts/Inter-LICENSE.txt`) and Hack Bold for bold
+code (MIT and Bitstream Vera licences,
+`crates/codemason-gui/assets/fonts/Hack-LICENSE.txt`).
 
 Keyboard shortcuts for the window are craft-keymap commands: `panel.log`
 (`Alt+L` | `Cmd+Shift+L`), `panel.profile` (`Alt+P` | `Cmd+Shift+P`),
@@ -2150,15 +2153,16 @@ modal dialogs:
 
 | Panel | Purpose |
 |-------|---------|
-| Chat | Conversation stream with markdown and syntax highlighting |
+| Messages | Conversation stream drawn as styled text. Markdown is not rendered and code is not syntax-highlighted; slash-command output written in Markdown is flattened to plain text. A session with no messages shows an empty state instead: the product name, the version, three starter actions that fill the prompt, and one tip (`panels/empty_state.rs`) |
 | Log | Step-numbered tool calls with pretty-printed JSON |
 | Context (`Alt+C`) | What the next request sends to the model: the selected model's context window, the tokens sent on the last turn, each partition (system prompt with its skills/memory/`agents.md` breakdown, tool catalog, tool metadata, history with its message count) with its token estimate and share of the window, the total, the free headroom and the bytes streamed to and from the model. Display-only: `codemason_app_core::context_panel` builds the lines and `crates/codemason-gui/src/panels/context.rs` draws them; percentages read `unknown` when the provider advertises no context window |
-| Status bar | Provider/model, context usage, compression indicator, YOLO state; service states use plain ASCII text tags (`CDX:`, `LOG:`, `AUTO:`, `EDIT:`, `TELE:`, `YOLO:`, `GCF:`, `BUSY: `), and message-window tool categories use ASCII marker prefixes (`[file]`, `[dir]`, `[search]`, `[exec]`, `[git]`, `[team]`, ...) |
-| Teammate strip | One row of pills under the status bar, one per active teammate (status glyph, clipped name, focused highlight, `Alt+^v:cycle` hint); omitted when no team is active (spec `agentui` FR-027) |
-| Agents window | `Agents`-button popup listing the primary agent and an ancestor-indented sub-agent tree with status, elapsed time, step count, `[stop]`/`[x]` status glyphs, and a background-shell section; openable from the keyboard with `Alt+A` (the chord resolves to `InputAction::ToggleAgentsWindow` and calls the same `App::toggle_agents_window` the button click does, so both share one visibility path, one no-subject no-op and one redraw flag - spec `agentssetup` FR-022); keyboard-first: a block cursor (`Up`/`Down`/`PgUp`/`PgDn`) selects a row, `Space` toggles suspend/resume, `Del` arms the kill confirmation, `Enter` opens the row's output view, and clicking a row selects it; the FR-077 key legend sits in the footer (spec `agentui` FR-006..FR-016) |
-| Teams window | `Teams`-button popup listing the lead plus every teammate with focus markers, status words from `MemberStatus::display_label()`, model column (inherited global model suppressed), and claimed/done/sent/recv counters; the block cursor plus `Enter`/`Space`/`Del` drive focus, suspend and shutdown; clicking a teammate selects it (spec `agentui` FR-017..FR-026) |
+| Status bar | One row (it wraps only when the window is too narrow). In the bar: a spinner while the focused session's turn is running, the status text, the Auto-fix summary, compaction state, provider health dot, model, thinking level, agent, and the share of the context window the last request used. Shown only while they apply: the quota from 80%, a non-default execution backend, `AUTO [ok]` with its countdown, a `YOLO` chip, `BUSY:cdx-idx` / `BUSY:cdx-graph`, and the `N need you` badge. A `Details` button opens a popup with the version, project directory, branch, last prompt, backend, quota, and one tag per service drawn as `<NAME> [ok]` or `<NAME> [x]` (`GCF`, `CDX`, `LOG`, `AUTO`, `EDIT`, `TELE`, `YOLO`). Message-window tool categories use ASCII marker prefixes (`[file]`, `[dir]`, `[search]`, `[exec]`, `[git]`, `[team]`, ...) |
+| Teammate strip | Not implemented in the GUI. Teammates are listed in the Teams pane (spec `agentui` FR-027 described a row of pills under the status bar) |
+| Agents window | The `Active agents` dock pane, listing the primary agent and an ancestor-indented sub-agent tree with status, elapsed time, step count, `[stop]`/`[x]` status glyphs, and a background-shell section; openable from the keyboard with `Alt+A` (the chord resolves to `InputAction::ToggleAgentsWindow` and calls the same `App::toggle_agents_window` the button click does, so both share one visibility path, one no-subject no-op and one redraw flag - spec `agentssetup` FR-022); keyboard-first: a block cursor (`Up`/`Down`/`PgUp`/`PgDn`) selects a row, `Space` toggles suspend/resume, `Del` arms the kill confirmation, `Enter` opens the row's output view, and clicking a row selects it; the FR-077 key legend sits in the footer (spec `agentui` FR-006..FR-016) |
+| Teams window | The `Teams` dock pane, listing the lead plus every teammate with focus markers, status words from `MemberStatus::display_label()`, model column (inherited global model suppressed), and claimed/done/sent/recv counters; the block cursor plus `Enter`/`Space`/`Del` drive focus, suspend and shutdown; clicking a teammate selects it (spec `agentui` FR-017..FR-026) |
 | Session sidebar | Left-hand list of every session: `+ New session`, `/ Search`, `Pinned`, then one section per project (launch project first; projects with no sessions are listed too). A project heading shows the project name, a chevron (`v` open, `>` collapsed) and `[github]` / `[gitlab]` when the remote is known. `Pinned` is always listed, even when nothing is pinned, and dragging a session row onto it pins that session. A blank, non-selectable line sits above `Pinned` and above each project heading (the cursor skips it). User sections (by name) follow `Pinned`. A session row shows the title, relative age, `#N` with the number of pull/merge requests the session has had (blue while one is bound, grey after unbinding; `#!N` when Auto-fix is paused waiting on the user; history in `session_request_history`, schema 12; a request still recorded as open is re-read from the forge at most once per 5 minutes, so the `PR/MRs` submenu shows `[merged]`/`[closed]` without Auto-fix), a branch marker `Y` with the count of pull/merge requests for the session's branch, and a right-aligned attention marker (`!` waiting, `*` running, `x` failed, `o` unread, including a persisted unread mark). Filter, per-project collapse, drag resize, `Alt+S` toggle, per-session, project-heading and multi-selection context menus (`m`, `Shift+F10`, right-click; section 6.1c); `v` or `Ctrl`+click selects sessions (marked `*`), `Esc` clears the selection; a project with no sessions whose directory no longer exists is not listed, nor is a parent folder (not a git repository, containing another project) with no open session unless codemason was launched in it; a project's remote is detected in the background the first time the sidebar is shown, without a session being opened in it(specs `MULTISESSION` M5, `projects`, `SESSIONMENU`) |
-| Input | Command-line with slash-command autocomplete |
+| Prompt | Multi-line editor with slash-command and `@` file completion. It has no visible label; it starts one row tall, grows with its text, and scrolls once the text is taller than eight rows or the pane. `Enter` sends; `Shift+Enter` or `Alt+Enter` inserts a new line. The input queue is listed above it |
+| Queue | Not shown. The `Queue` dock pane is always closed (`dock::pane_wanted`); the input queue is listed above the prompt and `Alt+Q` opens queue control |
 | Permission dialog | Modal approval dialog with live countdown (120 s) |
 | Question dialog | Modal user question (free-text or multiple-choice) |
 | Row-action dialog | Yes/No confirmation for destructive row actions (sub-agent kill, background-shell cancel, teammate suspend/shutdown) drawn over the windows, keyboard and mouse answered (spec `agentui` T-009) |
@@ -2416,6 +2420,7 @@ repository and does not use ETags.
 | `/compact` | Summarise and compact the conversation history (one-shot LLM summarisation; FR-009). `/compress` is a deprecated alias |
 | `/memory` | Structured-memory panel and summary: `/memory` / `/memory show` (same), `/memory clear` (a `Yes`/`No` dialog clears this project's memories), `/memory help` |
 | `/db` | Session database: `/db prune [--days N] [--dry-run]` deletes messages older than the retention window (the session row is kept; a real prune arms a `Yes`/`No` dialog that opens on `No`), `/db help` (also the bare form) |
+| `/theme` | Switch the window's colour theme while it runs: `/theme default\|high-contrast`, a bare `/theme` reports the current one. The `theme` config key (`"default"` or `"high-contrast"`) sets the theme at startup; `/theme` does not write it |
 | `/undo` / `/redo` | `/undo` removes the last turn from the conversation and the session database and restores the work tree to the snapshot taken before that turn's first tool call; `/redo` puts the messages and files back while nothing has been sent since (section 3.10) |
 | `/stats` | Usage and cost per model across sessions, from the persisted run-cost summaries: `/stats [--days N] [--project] [--json]`, `/stats help`; `/cost` covers the current session only. CLI parity via `cdmn stats` |
 | `/yolo` | Toggle YOLO mode (`on`/`off` set and persist the state, `status` reports it, a bare `/yolo` toggles; the toggle writes the user-global config, or the `--config` file when one was loaded) |

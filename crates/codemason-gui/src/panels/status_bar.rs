@@ -1,26 +1,27 @@
 //! The status bar along the bottom of the window.
 //!
-//! It shows the fields the TUI's status bar (`layout_statusbar.rs` in
-//! codemason-tui) shows, read from the App, in the same two lines:
+//! One row, kept to what the user needs while working:
 //!
-//! - Line 1: the application name and version, `Project:` with the working
-//!   directory, `Branch:` with the git branch, the last-prompt tag, the
-//!   status text (or `Ready`), the focused session's Auto-fix state, the
-//!   `/research` web-phase countdown, and the `N need you` badge for
-//!   background sessions waiting on the user.
-//! - Line 2: the execution backend, the compaction/compression activity,
-//!   the provider health dot with `Model:` and the model label, the thinking
-//!   level, the rate-limit quota, the service indicators (GCF, code index,
-//!   activity log, autopilot with its countdown, edit log, telemetry, YOLO)
-//!   and the code-index busy tags.
+//! - a spinner while the focused session's turn is running, then the status
+//!   text (or `Ready`), the focused session's Auto-fix state and the
+//!   `/research` web-phase countdown;
+//! - the compaction/compression activity, the provider health dot with
+//!   `Model:` and the model label, the thinking level, the agent, and the
+//!   share of the context window the last request used;
+//! - states that need attention, shown only while they apply: the quota from
+//!   80%, a non-default execution backend, `AUTO [ok]` with its countdown,
+//!   the `YOLO` chip, the code-index busy tags, and the `N need you` badge
+//!   for background sessions waiting on the user;
+//! - a `Details` button whose popup holds the rest: the application name and
+//!   version, `Project:`, `Branch:`, the last-prompt tag, the backend, the
+//!   quota, and the on/off state of every service (GCF, code index, activity
+//!   log, autopilot, edit log, telemetry, YOLO).
 //!
-//! The TUI status bar has no cost or token field: a run's cost and tokens
-//! appear in the run-cost banner (`crate::dialogs::banner`) and the log, as
-//! in the TUI. The labels are app-core's i18n strings; the TUI's
-//! responsive narrowing is not needed in a resizable window, so every field
-//! is shown and the line wraps when the window is narrow. Characters the
-//! window's fonts cannot draw (the status text's icons) are drawn as ASCII
-//! stand-ins ([`drawable`]).
+//! A run's cost and tokens appear in the run-cost banner
+//! (`crate::dialogs::banner`) and the log, not here. The labels are app-core's
+//! i18n strings. The row wraps when the window is too narrow for it.
+//! Characters the window's fonts cannot draw (the status text's icons) are
+//! drawn as ASCII stand-ins ([`drawable`]).
 //!
 //! Dependencies: `codemason-app-core` (the App), `codemason-config` (i18n
 //! labels and the GCF, activity-log and YOLO switches),
@@ -37,6 +38,38 @@ use crate::styled_text::drawable;
 
 /// Accessible label of the status bar.
 pub const STATUS_BAR_LABEL: &str = "Status bar";
+
+/// Accessible label of the spinner shown while a turn is running.
+pub const BUSY_LABEL: &str = "Working";
+
+/// How often the busy spinner asks for a new frame.
+const SPINNER_FRAME: std::time::Duration = std::time::Duration::from_millis(60);
+
+/// The turn-in-progress spinner: a three-quarter arc that turns once a second.
+///
+/// It asks for its next frame after [`SPINNER_FRAME`] instead of at once, so
+/// an idle window still sleeps between frames.
+fn busy_spinner(ui: &mut egui::Ui, palette: &Palette) {
+    let size = ui.text_style_height(&egui::TextStyle::Body);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let radius = size.mul_add(0.5, -2.0);
+        let start = (ui.input(|i| i.time) * std::f64::consts::TAU) as f32;
+        let points: Vec<egui::Pos2> = (0..=24)
+            .map(|step| {
+                let sweep = step as f32 / 24.0 * std::f32::consts::TAU;
+                let angle = sweep.mul_add(0.75, start);
+                rect.center() + radius * egui::vec2(angle.cos(), angle.sin())
+            })
+            .collect();
+        ui.painter().add(egui::Shape::line(
+            points,
+            egui::Stroke::new(2.0, palette.accent),
+        ));
+    }
+    ui.ctx().request_repaint_after(SPINNER_FRAME);
+    response.widget_info(|| WidgetInfo::labeled(Role::ProgressIndicator, true, BUSY_LABEL));
+}
 
 /// Characters of the last prompt shown in its tag, as in the TUI.
 const PROMPT_TAG_CHARS: usize = 48;
@@ -95,31 +128,33 @@ fn indicator(ui: &mut egui::Ui, name: &str, enabled: bool, palette: &Palette) {
     item(ui, format!("{name} {mark}"), color, false);
 }
 
-/// Line 1: identity, place, prompt and status.
-fn line1(ui: &mut egui::Ui, app: &App, palette: &Palette) {
-    item(
-        ui,
-        format!("codemason v{}", env!("CARGO_PKG_VERSION")),
-        palette.success,
-        true,
-    );
-    item(
-        ui,
-        format!("{}{}", t(MessageKey::StatusProject), app.cwd),
-        palette.text,
-        false,
-    );
-    if let Some(branch) = &app.git_branch {
-        item(
-            ui,
-            format!("{}{branch}", t(MessageKey::StatusBranch)),
-            palette.text,
-            false,
-        );
+/// Accessible label of the button that opens the details popup.
+pub const DETAILS_LABEL: &str = "Details";
+
+/// The quota percentage from which the quota is shown in the bar itself.
+const QUOTA_WARN_PERCENT: u32 = 80;
+
+/// The colour a quota percentage is drawn in.
+fn quota_color(percent: u32, palette: &Palette) -> Color32 {
+    match percent {
+        95.. => palette.error,
+        QUOTA_WARN_PERCENT..=94 => palette.warning,
+        _ => palette.success,
     }
-    let tag = prompt_tag(&app.session.last_prompt);
-    if !tag.is_empty() {
-        item(ui, tag, palette.color(ThemeColor::Cyan), true);
+}
+
+/// The share of the model's context window the last request used, in percent.
+fn context_percent(app: &App) -> Option<u64> {
+    let window = app.active_context_window_tokens()? as u64;
+    let used = app.session.last_input_tokens;
+    (window > 0 && used > 0).then(|| (used.saturating_mul(100) / window).min(100))
+}
+
+/// The bar: what the turn is doing, which model and agent it uses, and the
+/// states that need attention. Everything else is in [`details`].
+fn summary(ui: &mut egui::Ui, app: &App, palette: &Palette) {
+    if app.session.is_processing {
+        busy_spinner(ui, palette);
     }
     if !app.status.is_empty() && !app.status.eq_ignore_ascii_case("Ready") {
         item(ui, app.status.as_str(), palette.warning, true);
@@ -156,26 +191,6 @@ fn line1(ui: &mut egui::Ui, app: &App, palette: &Palette) {
                 true,
             );
         }
-    }
-    let waiting = app.background.waiting_count();
-    if waiting > 0 {
-        let badge = RichText::new(format!(" {waiting} need you "))
-            .color(palette.ansi[0])
-            .background_color(palette.warning)
-            .strong();
-        ui.label(badge);
-    }
-}
-
-/// Line 2: backend, model and services.
-fn line2(ui: &mut egui::Ui, app: &App, palette: &Palette) {
-    if !app.session.active_backend.is_empty() {
-        item(
-            ui,
-            format!("Backend:{}", app.session.active_backend),
-            palette.color(ThemeColor::Cyan),
-            false,
-        );
     }
     let (compact, compress) = (
         app.session.compact_in_progress,
@@ -215,15 +230,118 @@ fn line2(ui: &mut egui::Ui, app: &App, palette: &Palette) {
             false,
         );
     }
-    if let Some(quota) = app.quota_percent {
-        let percent = quota as u32;
-        let color = match percent {
-            95.. => palette.error,
-            80..=94 => palette.warning,
-            _ => palette.success,
-        };
-        item(ui, format!("quota: {percent}%"), color, true);
+    if !app.session.agent_name.is_empty() {
+        item(
+            ui,
+            format!("Agent: {}", app.session.agent_name),
+            palette.muted,
+            false,
+        );
     }
+    if let Some(percent) = context_percent(app) {
+        item(ui, format!("Context: {percent}%"), palette.muted, false);
+    }
+    if let Some(percent) = app.quota_percent.map(|quota| quota as u32)
+        && percent >= QUOTA_WARN_PERCENT
+    {
+        item(
+            ui,
+            format!("quota: {percent}%"),
+            quota_color(percent, palette),
+            true,
+        );
+    }
+    // A non-default backend changes where commands run, so it stays in view.
+    if !app.session.active_backend.is_empty() && app.session.active_backend != "local" {
+        item(
+            ui,
+            format!("Backend:{}", app.session.active_backend),
+            palette.color(ThemeColor::Cyan),
+            false,
+        );
+    }
+    if app.session.autopilot_enabled {
+        indicator(ui, "AUTO", true, palette);
+        if let Some(remaining) = autopilot_remaining_secs(app) {
+            item(
+                ui,
+                format!("[{}]", format_countdown(remaining)),
+                palette.muted,
+                true,
+            );
+        }
+    }
+    if codemason_config::yolo::is_enabled() {
+        let chip = RichText::new(" YOLO ")
+            .color(palette.ansi[0])
+            .background_color(palette.warning)
+            .strong();
+        ui.label(chip);
+    }
+    if app.code_index_busy {
+        item(ui, "BUSY:cdx-idx", palette.warning, true);
+    }
+    if app.code_index_graph_busy {
+        item(ui, "BUSY:cdx-graph", palette.color(ThemeColor::Cyan), true);
+    }
+    let waiting = app.background.waiting_count();
+    if waiting > 0 {
+        let badge = RichText::new(format!(" {waiting} need you "))
+            .color(palette.ansi[0])
+            .background_color(palette.warning)
+            .strong();
+        ui.label(badge);
+    }
+    // Click-only: a button that can hold the keyboard focus would share Enter
+    // with the prompt, which sends the draft.
+    let button = egui::Button::new(DETAILS_LABEL).sense(egui::Sense::CLICK);
+    egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| details(ui, app, palette));
+}
+
+/// The details popup: identity, place, the last prompt, the backend, the
+/// quota and the state of every service.
+fn details(ui: &mut egui::Ui, app: &App, palette: &Palette) {
+    item(
+        ui,
+        format!("codemason v{}", env!("CARGO_PKG_VERSION")),
+        palette.success,
+        true,
+    );
+    item(
+        ui,
+        format!("{}{}", t(MessageKey::StatusProject), app.cwd),
+        palette.text,
+        false,
+    );
+    if let Some(branch) = &app.git_branch {
+        item(
+            ui,
+            format!("{}{branch}", t(MessageKey::StatusBranch)),
+            palette.text,
+            false,
+        );
+    }
+    let tag = prompt_tag(&app.session.last_prompt);
+    if !tag.is_empty() {
+        item(ui, tag, palette.color(ThemeColor::Cyan), true);
+    }
+    if !app.session.active_backend.is_empty() {
+        item(
+            ui,
+            format!("Backend:{}", app.session.active_backend),
+            palette.color(ThemeColor::Cyan),
+            false,
+        );
+    }
+    if let Some(percent) = app.quota_percent.map(|quota| quota as u32) {
+        item(
+            ui,
+            format!("quota: {percent}%"),
+            quota_color(percent, palette),
+            true,
+        );
+    }
+    ui.separator();
     indicator(ui, "GCF", codemason_config::gcf::is_enabled(), palette);
     indicator(ui, "CDX", app.code_index_enabled, palette);
     indicator(
@@ -233,14 +351,6 @@ fn line2(ui: &mut egui::Ui, app: &App, palette: &Palette) {
         palette,
     );
     indicator(ui, "AUTO", app.session.autopilot_enabled, palette);
-    if let Some(remaining) = autopilot_remaining_secs(app) {
-        item(
-            ui,
-            format!("[{}]", format_countdown(remaining)),
-            palette.muted,
-            true,
-        );
-    }
     indicator(
         ui,
         "EDIT",
@@ -254,12 +364,6 @@ fn line2(ui: &mut egui::Ui, app: &App, palette: &Palette) {
         palette,
     );
     indicator(ui, "YOLO", codemason_config::yolo::is_enabled(), palette);
-    if app.code_index_busy {
-        item(ui, "BUSY:cdx-idx", palette.warning, true);
-    }
-    if app.code_index_graph_busy {
-        item(ui, "BUSY:cdx-graph", palette.color(ThemeColor::Cyan), true);
-    }
 }
 
 /// Draw the status bar into `ui`.
@@ -275,10 +379,7 @@ fn line2(ui: &mut egui::Ui, app: &App, palette: &Palette) {
 pub fn status_bar_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
     app.update_cached_provider_model_label(app.compute_provider_model_label());
     let rect = ui
-        .vertical(|ui| {
-            ui.horizontal_wrapped(|ui| line1(ui, app, palette));
-            ui.horizontal_wrapped(|ui| line2(ui, app, palette));
-        })
+        .horizontal_wrapped(|ui| summary(ui, app, palette))
         .response
         .rect;
     let bar = ui.interact(rect, ui.scope_id().with("status_bar"), egui::Sense::hover());

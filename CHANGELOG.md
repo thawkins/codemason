@@ -9,9 +9,14 @@
 - Added: formatters after edits. With `"formatter": { "enabled": true }` in the user-global config, `rustfmt`, `gofmt`, `ruff` or `prettier` (or a custom command) runs on each file a file-writing tool writes. Off by default; a project config cannot set it.
 - Added: `/redo` puts back the turn the last `/undo` removed, messages and files, while nothing has been sent since.
 - Added: `docs/OCGAP.md`, a feature gap analysis against opencode v2.
+- Added: `/theme default|high-contrast` switches the window's colour theme while it runs; the `theme` key in `codemason.json` sets it at startup. The high-contrast theme existed before but nothing could select it.
+- Added: a new session shows an empty state in the Messages pane (the product name, the version, three starter actions that fill the prompt, and one tip) instead of a blank transcript.
+- Added: a spinner at the start of the status bar while the focused session's turn is running.
+- Added: the GUI bundles the Inter font (Regular and SemiBold, SIL Open Font License 1.1) for UI text and bold prose.
 
 ### Removed
 
+- Removed: the block-character startup logo and banner, from new sessions' transcripts and from the terminal output printed before the window opens.
 - Removed: the unfinished `codemason-hyperresearch` draft crate and its `hyperresearch` binary (no dependents). The research features it described live in `codemason-research` and `/research`, which are unchanged.
 
 ### Performance
@@ -54,6 +59,10 @@
 
 ### Changed
 
+- Changed: the status bar is one row. It shows the turn state, model, thinking level, agent and context-window use, plus the states that need attention while they apply (quota from 80%, a non-default backend, `AUTO [ok]` with its countdown, `YOLO`, code-index busy tags, the "N need you" badge). The version, project, branch, last prompt, backend, quota and every service tag (`GCF`, `CDX`, `LOG`, `AUTO`, `EDIT`, `TELE`, `YOLO`) moved to a `Details` popup opened from the bar.
+- Changed: a new session's transcript starts empty. The session id, the config files in use and the instruction-file discovery report are written to the Log pane instead.
+- Changed: the prompt editor has no "Prompt" label, grows with its text, and scrolls once the text is taller than eight rows.
+- Changed: bold prose is drawn in Inter SemiBold, not in the monospace Hack Bold.
 - Changed: `/undo` now deletes the last turn from the session database and restores the work tree to a snapshot taken before that turn's first tool call. Before, it only removed the turn from the view, and the model still received it. Snapshots are kept in a private git repository under `~/.config/codemason/snapshots/`; the project's own `.git` is not touched. Hand edits made after the turn started are reverted with it and return on `/redo`.
 - Changed: `execute_slash_command_inner` in `crates/codemason-app-core/src/app/slash.rs` is decomposed in place (8,690 to 347 lines): 55 command arms of 8+ lines move verbatim into `slash_<command>` methods on `App`, leaving the function as the command dispatcher. The 30 arms that return early return `std::ops::ControlFlow<()>`, and the dispatcher turns `Break` back into `return`, so those commands still skip the trailing `assert_ui_invariants()` exactly as before. Patterns, guards and every string literal are unchanged (literal multiset diff is empty).
 

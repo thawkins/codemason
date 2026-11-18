@@ -109,6 +109,9 @@ impl App {
             // Check for completed /bench background runs.
             self.poll_pending_bench();
 
+            // Write startup notices produced off the event loop to the log.
+            self.poll_startup_notices();
+
             // Drain any completed shared sub-agent launch (D3).
             self.poll_subagent_launch_results();
 

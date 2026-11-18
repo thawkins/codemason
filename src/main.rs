@@ -420,17 +420,6 @@ fn working_dir() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-/// Print the codemason ASCII art startup banner to stdout.
-fn print_banner() {
-    for line in codemason_app_core::logo::LOGO {
-        cliprintln!("{line}");
-    }
-    cliprintln!(
-        "  v{}  -  Rust AI coding agent\n",
-        env!("CARGO_PKG_VERSION")
-    );
-}
-
 /// Run the dry-run readiness check and exit the process.
 ///
 /// This helper is intentionally terminal: it prints the report and calls
@@ -542,6 +531,14 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
     // global file that lost the key). Logging the effective flag state at
     // startup makes such a fallback attributable instead of invisible.
     codemason_config::sync_runtime_flags(&config);
+    // The window starts in the theme this configuration names.
+    if let Some(mode) = config
+        .theme
+        .as_deref()
+        .and_then(codemason_app_core::theme_mode::ThemeMode::from_str)
+    {
+        codemason_app_core::theme_mode::set_startup(mode);
+    }
     tracing::info!(
         yolo = config.yolo,
         edit_log = config.edit_log,
@@ -1696,7 +1693,6 @@ async fn launch_gui(
     timings: StartupTimings,
     launcher: codemason_gui::GuiLauncher,
 ) -> Result<()> {
-    print_banner();
     // `run_gui`'s future is large; box it so it is heap-allocated
     // rather than inlined into this caller's future
     // (clippy::large_futures).

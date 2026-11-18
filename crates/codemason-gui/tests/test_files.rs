@@ -68,8 +68,8 @@ fn rig(
     let harness = Harness::builder()
         .with_size(egui::vec2(1000.0, 800.0))
         .build_ui_state(|ui, shell: &mut Shell| shell.update(ui), shell);
-    // The window's fonts: a new session's startup banner draws the
-    // block-character logo, which egui's default fonts lack.
+    // The window's fonts: the core draws glyphs (status icons, box drawing)
+    // that egui's default fonts lack.
     codemason_gui::fonts::install(&harness.ctx, craft_ui::fonts::SystemFonts::Off);
     (runtime, harness, requests)
 }

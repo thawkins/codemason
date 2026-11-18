@@ -29,8 +29,8 @@ fn harness(configure: impl FnOnce(&mut App)) -> (tokio::runtime::Runtime, Harnes
         support::make_app()
     };
     configure(&mut app);
-    // A new session's transcript starts with the block-character logo; the
-    // harness does not install the window's fonts.
+    // The core draws glyphs (status icons, box drawing) that egui's bundled
+    // fonts lack; the harness does not install the window's fonts.
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1200.0, 800.0))
         .allow_missing_glyphs()

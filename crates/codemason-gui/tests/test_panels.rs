@@ -71,9 +71,9 @@ fn rig_with(
     if let Some(path) = layout_file {
         shell = shell.with_layout_file(path);
     }
-    // A new session's transcript starts with the block-character logo
-    // (`announce_session_startup`), which egui's bundled fonts cannot draw;
-    // these tests are about the panels, so the logo may draw as tofu.
+    // The core draws glyphs (status icons, box drawing) that egui's bundled
+    // fonts lack; these tests are about the panels, so they may draw as
+    // tofu.
     let harness = Harness::builder()
         .with_size(egui::vec2(1200.0, 800.0))
         .allow_missing_glyphs()

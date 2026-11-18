@@ -299,3 +299,20 @@ fn test_theme_switches_live_with_app_mode() {
         visuals_for(ThemeMode::Default)
     );
 }
+
+/// `/theme high-contrast` changes the palette the window is drawn with.
+#[tokio::test]
+async fn test_theme_command_changes_the_palette() {
+    let mut app = support::make_app();
+    app.theme_mode = ThemeMode::Default;
+    let before = visuals_for(app.theme_mode);
+
+    app.execute_slash_command("/theme high-contrast").await;
+
+    assert_eq!(app.theme_mode, ThemeMode::HighContrast);
+    let after = visuals_for(app.theme_mode);
+    assert_ne!(
+        before.window_stroke, after.window_stroke,
+        "high contrast draws different outlines"
+    );
+}

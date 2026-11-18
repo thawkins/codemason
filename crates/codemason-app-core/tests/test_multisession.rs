@@ -536,14 +536,21 @@ async fn test_multisession_bench_output_lands_in_the_session_that_started_it() {
 async fn test_multisession_new_session_prints_startup_block_but_children_do_not() {
     let (app, a, b) = app_with_two_sessions().await;
 
+    // The startup block goes to the log; a new session's transcript starts
+    // empty so the frontend can show its empty state.
     let created = transcript(&app.session);
     assert!(
-        created.contains(&format!("Version {}", env!("CARGO_PKG_VERSION"))),
-        "the new session shows the banner: {created}"
+        created.is_empty(),
+        "a new session's transcript carries no banner: {created}"
     );
-    assert!(created.contains("[ok] Session created:"));
+    let logged = app
+        .log_entries
+        .iter()
+        .filter(|entry| entry.message.starts_with("Session created: "))
+        .count();
+    assert_eq!(logged, 1, "the created session logs its startup notice");
     assert!(
-        !transcript(background(&app, &a)).contains("[ok] Session created:"),
+        !transcript(background(&app, &a)).contains("Session created"),
         "the earlier session's transcript is untouched"
     );
 
@@ -564,4 +571,25 @@ async fn test_multisession_new_session_prints_startup_block_but_children_do_not(
             .is_empty(),
         "sub-agent sessions get no startup block"
     );
+}
+
+#[tokio::test]
+async fn test_startup_notice_is_logged_against_its_own_session() {
+    let (mut app, a, b) = app_with_two_sessions().await;
+    assert_eq!(app.session.session_id.as_deref(), Some(b.as_str()));
+
+    // Session A's discovery finishes after the user moved to session B.
+    app.startup_notices
+        .lock()
+        .expect("notices")
+        .push((a.clone(), "Instruction File Discovery for A".to_string()));
+    app.poll_startup_notices();
+
+    let entry = app
+        .log_entries
+        .iter()
+        .find(|entry| entry.message == "Instruction File Discovery for A")
+        .expect("the notice is logged");
+    assert_eq!(entry.session_id.as_deref(), Some(a.as_str()));
+    assert!(app.startup_notices.lock().expect("notices").is_empty());
 }

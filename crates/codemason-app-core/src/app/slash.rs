@@ -992,6 +992,11 @@ impl App {
                     "help".to_string(),
                 ]
             }
+            "theme" => vec![
+                "default".to_string(),
+                "high-contrast".to_string(),
+                "help".to_string(),
+            ],
             "yolo" => {
                 vec![
                     "on".to_string(),
@@ -4394,6 +4399,7 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                     return;
                 }
             }
+            "theme" => self.slash_theme(args),
             "yolo" => self.slash_yolo(args),
             // -- /undo ------------------------------------------------------
             // FR-014: Remove the last user/assistant turn pair from the conversation.
@@ -8613,6 +8619,61 @@ Changes are persisted immediately to `.codemason/codemason.json` and take effect
             }
         }
         std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/theme` slash command.
+    ///
+    /// A bare `/theme` reports the current theme; a theme name switches to it
+    /// for the running window. The frontend restyles on its next frame from
+    /// `App::theme_mode`. The choice is not written to the config file: the
+    /// `theme` config key sets the theme used at startup.
+    fn slash_theme(&mut self, args: &str) {
+        use crate::app::helpers::from_cmd;
+        use crate::theme_mode::ThemeMode;
+
+        let sub = args.split_whitespace().next().unwrap_or("").to_lowercase();
+        match sub.as_str() {
+            "" => {
+                self.append_assistant_text(&from_cmd(
+                    "theme",
+                    &format!(
+                        "Theme: **{}**. Available: `default`, `high-contrast`.",
+                        self.theme_mode.display_name()
+                    ),
+                ));
+                self.status = format!("theme: {}", self.theme_mode.display_name());
+            }
+            "help" | "--help" | "-h" => {
+                self.append_assistant_text(&from_cmd(
+                    "theme help",
+                    "## /theme - Colour theme\n\n\
+                     | Subcommand | Description |\n|---|---|\n\
+                     | `/theme` | Show the current theme |\n\
+                     | `/theme default` | The standard dark theme |\n\
+                     | `/theme high-contrast` | Brighter text and white outlines |\n\
+                     | `/theme help` | Show this help |\n\n\
+                     The switch applies to the running window. To start in a theme, set \
+                     `\"theme\": \"high-contrast\"` in `codemason.json`.",
+                ));
+                self.status = "theme: help".to_string();
+            }
+            name => match ThemeMode::from_str(name) {
+                Some(mode) => {
+                    self.theme_mode = mode;
+                    self.status = format!("theme: {}", mode.display_name());
+                }
+                None => {
+                    self.append_assistant_text(&from_cmd(
+                        "theme",
+                        &format!(
+                            "Unknown theme `{name}`. Usage: `/theme [default|high-contrast|help]`"
+                        ),
+                    ));
+                    self.status = "theme: usage".to_string();
+                }
+            },
+        }
+        self.needs_redraw = true;
     }
 
     /// Run the `/yolo` slash command.

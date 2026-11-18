@@ -1047,6 +1047,10 @@ pub const SLASH_COMMANDS: &[SlashCommandDef] = &[
         description: "Manage directory/file permission lists: /dirs add|remove allow|deny <pattern> [--global] | show | help",
     },
     SlashCommandDef {
+        trigger: "theme",
+        description: "Switch the colour theme: /theme default|high-contrast, /theme shows the current one (/theme help)",
+    },
+    SlashCommandDef {
         trigger: "yolo",
         description: "Toggle YOLO mode - bypass all command validation and tool restrictions (/yolo help)",
     },
@@ -3881,6 +3885,11 @@ pub struct App {
     /// [`SubagentLaunch`] id, so the shared queue is behind a mutex rather than
     /// owned by the event loop; [`App::poll_subagent_launch_results`] drains it.
     pub subagent_launch_results: Arc<std::sync::Mutex<Vec<SubagentLaunchOutcome>>>,
+    /// Startup notices produced off the event loop (a new session's
+    /// instruction-file discovery), each with the id of the session it is
+    /// about, waiting for [`App::poll_startup_notices`] to write them to the
+    /// log.
+    pub startup_notices: Arc<std::sync::Mutex<Vec<(String, String)>>>,
     /// Cap on concurrently in-flight launches, from
     /// `Config::effective_agents_max_launching` (D3).
     pub subagent_launch_cap: usize,
