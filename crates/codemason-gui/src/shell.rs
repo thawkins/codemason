@@ -426,6 +426,9 @@ impl Shell {
         egui::CentralPanel::default().show(ui, |ui| {
             sessions_rect = self.show_dock(ui, &palette);
         });
+        if self.app.palette.is_some() {
+            dialogs::palette::set_action_keys(ui.ctx(), self.keys.action_keys());
+        }
         dialogs::show(ui.ctx(), &mut self.app);
         dialogs::image_view::show(ui.ctx());
         self.close.show(ui.ctx(), &mut self.app);
@@ -887,6 +890,10 @@ impl Shell {
             sources.runtime.block_on(self.app.handle_key(key));
         }
         for action in self.keys.take_actions() {
+            self.run_action(ctx, &action);
+        }
+        // An action a palette row handed to the frontend.
+        while let Some(action) = self.app.take_frontend_action() {
             self.run_action(ctx, &action);
         }
     }

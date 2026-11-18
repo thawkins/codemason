@@ -3863,6 +3863,10 @@ pub struct App {
     pub history_picker: Option<HistoryPickerState>,
     /// The `/theme` picker overlay, while it is open.
     pub theme_picker: Option<ThemePickerState>,
+    /// The command palette, while it is open.
+    pub palette: Option<crate::palette::PaletteState>,
+    /// An action a palette row asked the frontend to run.
+    pub frontend_action: Option<String>,
     /// Active config-save picker dialog (`/config list`), if any.
     pub config_save_picker: Option<ConfigSavePickerState>,
     /// Index of the selected agent in the agents panel (for keyboard/mouse navigation).

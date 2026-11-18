@@ -191,6 +191,13 @@ const ACTIONS: &[ActionSpec] = &[
         chord('d', Modifiers::CTRL),
     ),
     ActionSpec {
+        id: "palette.show",
+        title: "Command Palette",
+        default_key: Some("Ctrl+P"),
+        mac_key: Some("Cmd+P"),
+        key: None,
+    },
+    ActionSpec {
         id: "help.shortcuts",
         title: "Show Keyboard Shortcuts",
         default_key: None,

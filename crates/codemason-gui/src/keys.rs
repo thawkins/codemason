@@ -514,6 +514,22 @@ impl KeyRouter {
         }
     }
 
+    /// The key each catalog action is bound to now (its first binding, a
+    /// user override included), as text, by action id; unbound actions are
+    /// left out.
+    #[must_use]
+    pub fn action_keys(&self) -> std::collections::BTreeMap<String, String> {
+        action_catalog()
+            .iter()
+            .filter_map(|action| {
+                self.keymap
+                    .bindings(&CommandRef::new(action.id))
+                    .first()
+                    .map(|binding| (action.id.to_string(), binding.text(&Scope::app())))
+            })
+            .collect()
+    }
+
     /// The ids of the actions with no terminal key press that the keymap
     /// ran since the last call, oldest first. The shell runs each through
     /// `App::run_action`, or itself when app-core does not know it.

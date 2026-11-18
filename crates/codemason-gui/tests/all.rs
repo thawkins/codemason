@@ -96,6 +96,8 @@ mod test_activity_rows;
 mod test_bridge;
 #[path = "test_clipboard.rs"]
 mod test_clipboard;
+#[path = "test_command_palette.rs"]
+mod test_command_palette;
 #[path = "test_dialogs.rs"]
 mod test_dialogs;
 #[path = "test_dialogs_more.rs"]

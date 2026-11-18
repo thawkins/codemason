@@ -2274,8 +2274,8 @@ key press that runs it, if any). The actions and their default keys
 `mode.edit_log` (`Alt+E` | `Cmd+Shift+E`), `mode.gcf` (`Alt+G` |
 `Cmd+Shift+G`), `attach.image` (`Alt+V` | `Cmd+Shift+V`), `session.new`
 (`Ctrl+N` | `Cmd+N`), `teammate.next` (`Alt+Down` | `Cmd+Alt+Down`),
-`teammate.prev` (`Alt+Up` | `Cmd+Alt+Up`), `app.quit` (`Ctrl+D` | `Cmd+Q`) and
-`help.shortcuts` (no default key). An action with a terminal key press runs as
+`teammate.prev` (`Alt+Up` | `Cmd+Alt+Up`), `app.quit` (`Ctrl+D` | `Cmd+Q`),
+`palette.show` (`Ctrl+P` | `Cmd+P`) and `help.shortcuts` (no default key). An action with a terminal key press runs as
 that press through `App::handle_key`, so the GUI and the terminal handler
 cannot drift; one without is queued by the router (`KeyRouter::take_actions`)
 and run by `App::run_action` or the shell. `gui-keys.json` maps action ids to
@@ -2288,6 +2288,25 @@ binding runs; the warning names both ids). Every other key is forwarded to
 `App::handle_key`; an Alt+character chord with no binding is ignored and never
 typed, `Esc` stops a running agent (the `Alt+X` binding was removed), and `Tab`
 completes the slash-command menu.
+
+**Command palette.** `palette.show` opens `App::palette`
+(`crates/codemason-app-core/src/palette.rs`), which lists every catalog action
+(`action:<id>`, with its key), every slash command (`slash:<trigger>`), every
+theme (`theme:<name>`), every cycleable agent (`agent:<name>`) and every
+session in the sidebar (`session:<id>`, hinted with its project). The rows are
+the entries ranked against the query by `fuzzy::fuzzy_rank` on their title (a
+case-insensitive subsequence match scoring each matched character, more at a
+word start and after the previous match; equal scores keep catalog order), at
+most 50. app-core owns the palette's keys: Up/Down move the highlight, Enter
+runs the highlighted row and closes, Esc closes. Running a row: an action runs
+as its terminal key press or through `App::run_action`, else the frontend runs
+it (`App::take_frontend_action`); a slash command that takes arguments
+(`get_parameter_hint`) is put in the prompt as `/<trigger> `, one that does not
+runs; a theme is selected; an agent runs `/agent <name>`; a session is switched
+to. The GUI dialog (`dialogs::palette`) draws a focused search field that edits
+the query in place and the rows with their hint and, for an action, the key the
+keymap binds it to now (`KeyRouter::action_keys`); a click highlights a row, a
+double click runs it.
 
 ### 6.1 GUI Layout
 

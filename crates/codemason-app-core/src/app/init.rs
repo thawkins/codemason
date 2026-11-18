@@ -433,6 +433,8 @@ impl App {
             history_file_path: None,
             history_picker: None,
             theme_picker: None,
+            palette: None,
+            frontend_action: None,
             config_save_picker: None,
             selected_agent_index: None,
             custom_agent_defs: custom_defs,

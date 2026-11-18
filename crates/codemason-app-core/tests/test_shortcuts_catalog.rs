@@ -24,6 +24,7 @@ fn test_run_action_shows_the_shortcuts_panel() {
     app.show_shortcuts = false;
     assert!(app.run_action("help.shortcuts"));
     assert!(app.show_shortcuts);
-    assert!(!app.run_action("palette.show"), "a frontend action");
+    assert!(app.run_action("palette.show"));
+    assert!(app.palette.is_some());
     assert!(!app.run_action("no.such"));
 }

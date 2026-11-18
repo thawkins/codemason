@@ -1197,6 +1197,7 @@ reopens maximized.
 | `@`                             | `@`                   | Open file mention picker                    |
 | `/`                             | `/`                   | Open slash-command menu                     |
 | `?`                             | `?`                   | Show keybindings help (when prompt is empty)|
+| `Ctrl+P`                        | `Cmd+P`               | Command palette: search actions, commands, themes, agents and sessions |
 
 The `-` rows are not in the GUI keymap: they are the app-core chords sent as
 typed. Every other row is an action you can rebind in `gui-keys.json` in the
@@ -1209,8 +1210,8 @@ codemason config directory, by its id, for example:
 The ids are `panel.log`, `panel.profile`, `panel.tasks`, `panel.memory`,
 `panel.context`, `panel.sessions`, `panel.agents`, `panel.teams`, `queue.menu`,
 `mode.autopilot`, `mode.yolo`, `mode.edit_log`, `mode.gcf`, `attach.image`,
-`session.new`, `teammate.next`, `teammate.prev`, `app.quit` and
-`help.shortcuts`. A key another action uses by default moves to yours; the Log
+`session.new`, `teammate.next`, `teammate.prev`, `app.quit`, `palette.show`
+and `help.shortcuts`. A key another action uses by default moves to yours; the Log
 pane says so at startup, and lists any id or key it could not use. The `?`
 panel lists every chord the window understands.
 

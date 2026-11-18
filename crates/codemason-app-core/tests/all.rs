@@ -227,6 +227,8 @@ mod test_force_cleanup_modal;
 mod test_fr030_surface_agreement;
 #[path = "test_fr033_completion_surfaces.rs"]
 mod test_fr033_completion_surfaces;
+#[path = "test_fuzzy.rs"]
+mod test_fuzzy;
 #[path = "test_gcf_command.rs"]
 mod test_gcf_command;
 #[path = "test_gcf_indicator.rs"]
@@ -371,6 +373,8 @@ mod test_osinfo_registration;
 mod test_output_view_footer;
 #[path = "test_output_view_live_steps.rs"]
 mod test_output_view_live_steps;
+#[path = "test_palette_command.rs"]
+mod test_palette_command;
 #[path = "test_perf_render_idle.rs"]
 mod test_perf_render_idle;
 #[path = "test_permission_answer_guard.rs"]

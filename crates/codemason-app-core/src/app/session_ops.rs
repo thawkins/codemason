@@ -1234,6 +1234,7 @@ impl App {
             || self.config_save_picker.is_some()
             || self.history_picker.is_some()
             || self.theme_picker.is_some()
+            || self.palette.is_some()
             || self.context_menu.is_some()
             || self.show_shortcuts
             || self.session.compact_in_progress
@@ -5433,6 +5434,10 @@ impl App {
             "help.shortcuts" => {
                 self.show_shortcuts = true;
                 self.needs_redraw = true;
+                true
+            }
+            "palette.show" => {
+                self.open_palette();
                 true
             }
             _ => false,
