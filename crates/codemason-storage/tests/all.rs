@@ -52,6 +52,8 @@ mod test_cron_events_table;
 mod test_cron_storage_round_trip;
 #[path = "test_dead_tables_dropped.rs"]
 mod test_dead_tables_dropped;
+#[path = "test_delete_messages_by_id.rs"]
+mod test_delete_messages_by_id;
 #[path = "test_discovered_models.rs"]
 mod test_discovered_models;
 #[path = "test_format_version_cache.rs"]
@@ -114,6 +116,8 @@ mod test_task_delete_and_snapshot_bounds;
 mod test_tasks_list_plan;
 #[path = "test_todos_migration.rs"]
 mod test_todos_migration;
+#[path = "test_usage_stats.rs"]
+mod test_usage_stats;
 #[path = "test_wal_warmup.rs"]
 mod test_wal_warmup;
 #[path = "test_warm_index_scan.rs"]

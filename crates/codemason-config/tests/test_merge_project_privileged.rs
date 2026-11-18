@@ -147,6 +147,11 @@ fn project_overlay_cannot_set_privileged_sections() {
         ),
         ("sandbox downgrade", r#"{ "execution_backend": "local" }"#),
         (
+            "formatter running a project-chosen command",
+            r#"{ "formatter": { "enabled": true, "formatters": {
+                 "x": { "command": ["sh", "-c", "id"], "extensions": [".rs"] } } } }"#,
+        ),
+        (
             "backend image swap",
             r#"{ "backends": [ { "id": "sandbox", "kind": "docker", "image": "attacker/img" } ] }"#,
         ),

@@ -117,6 +117,7 @@ const BLUEPRINTS_SUBS: &[&str] = &["help", "list"];
 const OSINFO_SUBS: &[&str] = &["show", "help"];
 const DB_SUBS: &[&str] = &["prune", "help"];
 const DB_FLAGS: &[&str] = &["--days", "--dry-run"];
+const STATS_FLAGS: &[&str] = &["--days", "--project", "--json"];
 const ROUTER_SUBS: &[&str] = &[
     "help",
     "on",
@@ -405,6 +406,12 @@ pub const COMMAND_CATALOG: &[CommandCatalogEntry] = &[
         flags: EMPTY,
     },
     CommandCatalogEntry {
+        trigger: "stats",
+        description: "Usage and cost across sessions: /stats [--days N] [--project] [--json] | /stats help",
+        subcommands: HELP_ONLY,
+        flags: STATS_FLAGS,
+    },
+    CommandCatalogEntry {
         trigger: "llmstats",
         description: "Show average LLM response time and token throughput",
         subcommands: EMPTY,
@@ -688,7 +695,13 @@ pub const COMMAND_CATALOG: &[CommandCatalogEntry] = &[
     },
     CommandCatalogEntry {
         trigger: "undo",
-        description: "Remove the last user/assistant turn pair from the conversation (/undo help)",
+        description: "Remove the last turn and restore the files it changed; /redo puts it back (/undo help)",
+        subcommands: EMPTY,
+        flags: EMPTY,
+    },
+    CommandCatalogEntry {
+        trigger: "redo",
+        description: "Restore the turn the last /undo removed (/redo help)",
         subcommands: EMPTY,
         flags: EMPTY,
     },

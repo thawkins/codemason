@@ -1083,6 +1083,45 @@ the GUI leaves stderr attached to the terminal that launched it.
 
 ---
 
+### 3.10 Per-Turn Workspace Snapshots (`/undo`, `/redo`)
+
+Immediately before a turn's first tool call, the session processor records the
+state of the session's git work tree
+(`codemason-agent/src/session/turn_snapshot.rs`). `/undo` restores that state
+and removes the turn's messages; `/redo` reverses it
+(`codemason-app-core/src/app/undo.rs`).
+
+- **Store.** One private ("shadow") git repository per project under
+  `~/.config/codemason/snapshots/<hash of the work-tree root>/`. It has its own
+  object database and index and uses the project only as its work tree, so the
+  project's `.git` is never read or written. A snapshot is a tree object
+  (`git add --all` + `git write-tree`) kept alive by the ref
+  `refs/codemason/<session>/<user message id>`. The project's `.gitignore` is
+  honoured.
+- **When.** Once per turn, for a top-level run on the `local` backend whose
+  working directory is inside a git work tree. A sub-agent's own session is not
+  recorded; its file changes fall inside the parent turn's snapshot. A snapshot
+  failure is logged at `warn!` and the turn proceeds.
+- **Undo.** The transcript and the session database hold separate copies of a
+  turn under different message ids, so the turn is resolved on both sides: the
+  transcript loses its last user message and everything after it, and storage
+  loses its last user message and everything after it
+  (`Storage::delete_messages_by_id`) when that stored turn is the same turn
+  (same id, or not older than the transcript's). The snapshot is looked up by
+  the stored user message id. The work tree is then restored with
+  `git read-tree --reset -u <tree>`, which rewrites only the paths that differ
+  and deletes files the snapshot does not contain. The state being replaced is
+  recorded first and kept for redo.
+- **Redo.** Re-creates the stored messages in one transaction
+  (`Storage::create_messages`), returns the transcript messages and restores
+  the replaced state. The undo stack is per session, in memory, and is cleared
+  when the last stored message is no longer the one the undo left.
+- **Other sessions.** A restore rewrites the whole work tree, so both commands
+  refuse while another open session is running a turn in the same git work
+  tree.
+- **Limits.** Both commands refuse while the agent is running. Changes outside
+  the work tree, ignored files and external side effects are not undone.
+
 ## 4. Security & Permissions
 
 ### 4.1 Permission Security Layers
@@ -1553,6 +1592,7 @@ privileged keys before the merge and logs each rejected key at `warn!`:
 | `yolo`, `permission` allow-rules, bash/dirs lists | would auto-approve or widen the sandbox |
 | `telemetry` | could point the OTLP endpoint at an attacker host |
 | `hooks` | runs `sh -c` outside the permission system |
+| `formatter` | runs formatter subprocesses outside the permission system (section 5.9) |
 | `openai` | enables the inbound OpenAI-compatible surface |
 | `mcp` | a stdio server spawns a subprocess with no prompt (RCE) |
 | `acp` | an ACP agent spawns verbatim, and the section controls the editor-facing server (RCE) |
@@ -2021,6 +2061,61 @@ the enabled/disabled state.
 
 ---
 
+### 5.9 Formatters After Edits (`formatter`)
+
+When `formatter.enabled` is `true`, a code formatter runs on each file a
+file-writing tool has just written (`codemason-agent/src/formatter.rs`). The
+default is off.
+
+```json
+{
+  "formatter": {
+    "enabled": true,
+    "formatters": {
+      "prettier": { "disabled": true },
+      "rustfmt": { "command": ["rustfmt", "--edition", "2024", "$FILE"] },
+      "shfmt": { "command": ["shfmt", "-w", "$FILE"], "extensions": [".sh"] }
+    }
+  }
+}
+```
+
+| Built-in | Extensions | Command |
+|---|---|---|
+| `rustfmt` | `.rs` | `rustfmt $FILE` (the edition comes from `rustfmt.toml`) |
+| `gofmt` | `.go` | `gofmt -w $FILE` |
+| `ruff` | `.py`, `.pyi` | `ruff format $FILE` |
+| `prettier` | `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`, `.json`, `.css`, `.scss`, `.less`, `.html`, `.vue`, `.yaml`, `.yml` | `prettier --write $FILE` |
+
+- **Selection.** The file name's extension picks the formatter, compared
+  without regard to case. A `formatters` key that is not a built-in name
+  defines a custom formatter (`command` and `extensions` are both required)
+  and wins over a built-in for the same extension. A key that is a built-in
+  name overrides that built-in's `command` or `extensions`, or removes it with
+  `disabled`.
+- **When it runs.** After a successful `Write`, `create`, `Edit`,
+  `multi_edit`, `apply_patch` or `append_to_file` call (and their aliases), on
+  the files named in the tool's result. `patch` reports no paths and is not
+  formatted. Formatting runs only on the `local` execution backend.
+- **Effect on the result.** When a formatter changes a file, the tool result
+  gains a line `[formatter] <name> reformatted <path>; re-read it before
+  editing it again.` and the session's read baseline for the file is refreshed
+  so the next edit is not rejected as stale.
+- **Failure.** A formatter that is not installed is skipped. One that exits
+  non-zero or runs longer than 10 seconds is logged at `debug!` and the tool
+  call still succeeds; if it rewrote the file before failing, the change is
+  reported like any other, with the failure reason appended.
+- **Dry runs and locking.** A `dry_run` result names files it did not write and
+  is never formatted. The formatter runs while holding the same per-file lock
+  the edit tools take, and the read baseline is refreshed only when it still
+  described the file as the formatter found it, so a write by another session
+  between the tool's write and the formatter stays visible to the stale-file
+  check.
+- **Trust.** The section is honoured only from the user-global config; a
+  project overlay's `formatter` section is rejected (section 5.1). The
+  formatter runs as a direct subprocess (no shell) in the session's working
+  directory, outside the permission system.
+
 ## 6. Graphical User Interface (GUI)
 
 The frontend is the `codemason-gui` crate: an egui window (eframe) over the
@@ -2321,6 +2416,8 @@ repository and does not use ETags.
 | `/compact` | Summarise and compact the conversation history (one-shot LLM summarisation; FR-009). `/compress` is a deprecated alias |
 | `/memory` | Structured-memory panel and summary: `/memory` / `/memory show` (same), `/memory clear` (a `Yes`/`No` dialog clears this project's memories), `/memory help` |
 | `/db` | Session database: `/db prune [--days N] [--dry-run]` deletes messages older than the retention window (the session row is kept; a real prune arms a `Yes`/`No` dialog that opens on `No`), `/db help` (also the bare form) |
+| `/undo` / `/redo` | `/undo` removes the last turn from the conversation and the session database and restores the work tree to the snapshot taken before that turn's first tool call; `/redo` puts the messages and files back while nothing has been sent since (section 3.10) |
+| `/stats` | Usage and cost per model across sessions, from the persisted run-cost summaries: `/stats [--days N] [--project] [--json]`, `/stats help`; `/cost` covers the current session only. CLI parity via `cdmn stats` |
 | `/yolo` | Toggle YOLO mode (`on`/`off` set and persist the state, `status` reports it, a bare `/yolo` toggles; the toggle writes the user-global config, or the `--config` file when one was loaded) |
 | `/task` | Toggle the TASKS side panel (also Alt+T); `/task list`, `/task help` |
 | `/team create <name>` | Create a team |
@@ -3576,6 +3673,42 @@ profiles are parsed correctly. Custom agents display a `[custom]` badge in the
 agent picker.
 
 ---
+
+## 11B. User-Defined Slash Commands
+
+A Markdown file `<name>.md` defines the slash command `/<name>`
+(`codemason-agent/src/user_command.rs`). Files are read from two directories,
+and a project file replaces a user-global file of the same name:
+
+| Location | Scope |
+|---|---|
+| `~/.config/codemason/commands/` | Every project |
+| `.codemason/commands/` (nearest, walking up from the working directory) | That project |
+
+The file body is a prompt template. Running the command substitutes the
+placeholders and sends the result to the active agent as an ordinary user turn;
+the transcript shows the command as typed. An optional `---` frontmatter block
+may carry `description`, shown in the slash menu and `/help`; other frontmatter
+keys are ignored.
+
+| Placeholder | Replacement |
+|---|---|
+| `$ARGUMENTS` | Everything typed after the command |
+| `$1` .. `$9` | The Nth argument, 1-based; single or double quotes group words; empty when absent |
+
+Rules:
+
+- The name must start with a lowercase letter or digit and contain only
+  lowercase letters, digits, `-` and `_`. Subdirectories are not scanned.
+- A file whose name is already a built-in command or a user-invocable skill is
+  skipped and logged at `warn!`; it never shadows the existing command. A
+  plugin command with the same name registers under its namespaced
+  `plugin:<id>:<name>` trigger instead.
+- A file with an empty body is skipped.
+- Commands are loaded at startup and when the focused project changes. The
+  `commands_info` tool reports them under `user_commands`.
+- The template is prompt text only: it runs no shell command and grants no
+  permission, so a project-local command file needs no trust gate.
 
 ## 12. Skills System
 

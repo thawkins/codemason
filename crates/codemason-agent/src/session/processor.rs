@@ -2347,6 +2347,7 @@ impl SessionProcessor {
         let run_id = codemason_types::id::RunId::new();
         let user_content = user_msg.text_content();
         let user_msg_id = user_msg.id.clone();
+        let turn_user_msg_id = user_msg.id.clone();
         let run_id_for_user = run_id.clone();
         self.record_activity_event(move |log| {
             log.record_model_message(&run_id_for_user, "user", &user_content, Some(user_msg_id))
@@ -2479,6 +2480,9 @@ impl SessionProcessor {
         // with the run and the TUI output-view overlay can render steps live.
         let mut last_interim_parts_count: Option<usize> = None;
         let total_start = Instant::now();
+        // `/undo`: the pre-turn workspace snapshot is taken once, before the
+        // turn's first tool call.
+        let mut turn_snapshot_taken = false;
         let mut cumulative_model_wait_ms: u64 = 0;
         let mut compaction_attempted_this_turn = false;
         // Finish reason observed by the inner loop for the most recent
@@ -3504,6 +3508,28 @@ impl SessionProcessor {
                             || u64::from(self.load_config_cached().r#loop.checkpoint_timeout_secs),
                             u64::from,
                         );
+                    // `/undo`: record the workspace as this turn found it, before
+                    // its first tool call can change anything. Only a top-level
+                    // run on the local backend is recorded; a failure costs the
+                    // turn its file undo and nothing else.
+                    if !turn_snapshot_taken {
+                        turn_snapshot_taken = true;
+                        if agent.mode != crate::agent::AgentMode::Subagent
+                            && turn.session_config.effective_execution_backend()
+                                == codemason_config::ExecutionBackendKind::Local
+                            && let Some(repo) =
+                                crate::session::turn_snapshot::SnapshotRepo::for_working_dir(
+                                    &turn.working_dir,
+                                )
+                            && let Err(e) = repo.record_turn(session_id, &turn_user_msg_id).await
+                        {
+                            tracing::warn!(
+                                session_id = %session_id,
+                                error = %e,
+                                "pre-turn workspace snapshot failed; /undo will not restore files"
+                            );
+                        }
+                    }
                     // T-012 (FR-018): capture the workspace BEFORE the first
                     // write action executes. The check is cheap when already
                     // captured (a map read); when armed, the storage-backed

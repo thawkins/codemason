@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added: `/stats` and `cdmn stats` report tokens, estimated cost and run time per model across all sessions, with `--days N`, `--project` and `--json`. `/cost` still covers the current session only.
+- Added: user-defined slash commands. A Markdown file in `.codemason/commands/` (project) or `~/.config/codemason/commands/` (every project) defines `/<name>`; the body is a prompt template with `$ARGUMENTS` and `$1`..`$9`. A file cannot replace a built-in command or a skill.
+- Added: formatters after edits. With `"formatter": { "enabled": true }` in the user-global config, `rustfmt`, `gofmt`, `ruff` or `prettier` (or a custom command) runs on each file a file-writing tool writes. Off by default; a project config cannot set it.
+- Added: `/redo` puts back the turn the last `/undo` removed, messages and files, while nothing has been sent since.
+- Added: `docs/OCGAP.md`, a feature gap analysis against opencode v2.
+
 ### Removed
 
 - Removed: the unfinished `codemason-hyperresearch` draft crate and its `hyperresearch` binary (no dependents). The research features it described live in `codemason-research` and `/research`, which are unchanged.
@@ -46,6 +54,7 @@
 
 ### Changed
 
+- Changed: `/undo` now deletes the last turn from the session database and restores the work tree to a snapshot taken before that turn's first tool call. Before, it only removed the turn from the view, and the model still received it. Snapshots are kept in a private git repository under `~/.config/codemason/snapshots/`; the project's own `.git` is not touched. Hand edits made after the turn started are reverted with it and return on `/redo`.
 - Changed: `execute_slash_command_inner` in `crates/codemason-app-core/src/app/slash.rs` is decomposed in place (8,690 to 347 lines): 55 command arms of 8+ lines move verbatim into `slash_<command>` methods on `App`, leaving the function as the command dispatcher. The 30 arms that return early return `std::ops::ControlFlow<()>`, and the dispatcher turns `Break` back into `return`, so those commands still skip the trailing `assert_ui_invariants()` exactly as before. Patterns, guards and every string literal are unchanged (literal multiset diff is empty).
 
 - Changed: `process_user_message` in `crates/codemason-agent/src/session/processor.rs` is decomposed in place (2,285 to 1,700 lines): the usage listener, run-cost publisher, turn tool surface, pre-send compaction, loop suspension and budget gates, sub-agent summary nudge, verification gate, step tool-result logging, step-failure classification, spec task auto-completion, background task/shell injection, interim save and turn-end publication move into private `SessionProcessor` methods. The tool-dispatch phase stays inline because source-text tests pin its order and indentation. Every string literal is unchanged (literal multiset diff is empty).

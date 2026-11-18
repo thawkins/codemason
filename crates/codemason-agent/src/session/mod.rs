@@ -43,6 +43,7 @@ pub mod tool_input_error;
 /// The one did-you-mean candidate pool for an unregistered tool name (spec
 /// `uniformtools` FR-021, FR-033).
 pub mod tool_suggestion;
+pub mod turn_snapshot;
 pub mod verification;
 
 use crate::event::FinishReason;

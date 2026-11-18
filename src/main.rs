@@ -163,6 +163,19 @@ enum Commands {
         command: DbCommands,
     },
 
+    /// Show usage and cost per model across sessions (the `/stats` command)
+    Stats {
+        /// Only count runs from the last N days (default: all time)
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+        days: Option<u32>,
+        /// Only count sessions of the current directory's project
+        #[arg(long)]
+        project: bool,
+        /// Emit JSON instead of a table
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Manage persistent memory (list)
     Memory {
         #[command(subcommand)]
@@ -827,6 +840,21 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
                 run_db_prune(days, dry_run, &config, &storage).await?;
             }
         },
+        Some(Commands::Stats {
+            days,
+            project,
+            json,
+        }) => {
+            let args = codemason_app_core::usage_stats::StatsArgs {
+                days,
+                project,
+                json,
+            };
+            let cwd = std::env::current_dir()?;
+            let report =
+                codemason_app_core::usage_stats::usage_stats_report(&storage, &args, &cwd)?;
+            writeln!(std::io::stdout(), "{report}")?;
+        }
         Some(Commands::Auth { provider, key }) => {
             storage.set_provider_auth(&provider, &key)?;
             tracing::info!(provider = %provider, "Stored API key");
@@ -1027,6 +1055,7 @@ fn init_tracing(
                 | Commands::Session { .. }
                 | Commands::Project { .. }
                 | Commands::Db { .. }
+                | Commands::Stats { .. }
                 | Commands::Config { .. }
                 | Commands::Research { .. }
         )
@@ -1369,6 +1398,9 @@ fn build_session_processor(
     stream_config: codemason_agent::StreamConfig,
     telemetry: Arc<TelemetrySubsystem>,
 ) -> (Arc<SessionManager>, Arc<SessionProcessor>) {
+    // Per-turn workspace snapshots for `/undo` and `/redo`.
+    codemason_agent::session::turn_snapshot::enable(data_dir().join("snapshots"));
+
     let session_manager = Arc::new(SessionManager::new(storage.clone(), event_bus.clone()));
     tracing::debug!("Session manager created");
     let session_processor = Arc::new(SessionProcessor {

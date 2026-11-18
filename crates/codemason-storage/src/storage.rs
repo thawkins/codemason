@@ -3058,14 +3058,58 @@ impl Storage {
     /// ```
     pub fn create_message(&self, msg: &Message) -> Result<()> {
         let mut conn = lock_conn!(self)?;
-        let parts_json = serde_json::to_string(&msg.parts)?;
-        let role_str = msg.role.to_string();
-        let created = msg.created_at.to_rfc3339();
-        let updated = msg.updated_at.to_rfc3339();
         // H-008: wrap the multi-statement write in a single transaction so the
         // message insert + FTS sync + session-touch commit once instead of
         // three implicit autocommits (three fsyncs per message in WAL mode).
         let tx = conn.transaction()?;
+        Self::insert_message_tx(&tx, msg)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Creates several messages in one transaction: all are stored, with
+    /// their search-index rows, or none is.
+    ///
+    /// Used by `/redo` to put an undone turn back, so a failure part-way
+    /// cannot leave half a turn in the history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any insert fails (for example an id that already
+    /// exists); nothing is stored in that case.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use codemason_storage::storage::Storage;
+    /// use codemason_types::message::Message;
+    ///
+    /// let storage = Storage::open_in_memory().unwrap();
+    /// storage.create_session("sess-1", "/tmp/project").unwrap();
+    /// let turn = [
+    ///     Message::user_text("sess-1", "question"),
+    ///     Message::user_text("sess-1", "follow-up"),
+    /// ];
+    /// storage.create_messages(&turn).unwrap();
+    /// assert_eq!(storage.get_messages("sess-1").unwrap().len(), 2);
+    /// ```
+    pub fn create_messages(&self, messages: &[Message]) -> Result<()> {
+        let mut conn = lock_conn!(self)?;
+        let tx = conn.transaction()?;
+        for msg in messages {
+            Self::insert_message_tx(&tx, msg)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Inserts one message, its search-index row and the session touch inside
+    /// `tx`.
+    fn insert_message_tx(tx: &rusqlite::Transaction<'_>, msg: &Message) -> Result<()> {
+        let parts_json = serde_json::to_string(&msg.parts)?;
+        let role_str = msg.role.to_string();
+        let created = msg.created_at.to_rfc3339();
+        let updated = msg.updated_at.to_rfc3339();
         tx.execute(
             "INSERT INTO messages (id, session_id, role, parts, created_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -3079,14 +3123,13 @@ impl Storage {
             ],
         )?;
         // M5 / SQLITE T-01: sync the contentless FTS index and its key row.
-        Self::upsert_fts_row(&tx, &msg.id, &msg.session_id, &role_str, &msg.parts)?;
+        Self::upsert_fts_row(tx, &msg.id, &msg.session_id, &role_str, &msg.parts)?;
         // Touch session updated_at
         let now = Utc::now().to_rfc3339();
         tx.execute(
             "UPDATE sessions SET updated_at = ?1 WHERE id = ?2",
             params![now, msg.session_id],
         )?;
-        tx.commit()?;
         Ok(())
     }
 
@@ -3283,6 +3326,60 @@ impl Storage {
         )?;
         tx.commit()?;
         Ok(n)
+    }
+
+    /// Deletes the named messages of one session.
+    ///
+    /// The same three-table cascade as [`Storage::delete_messages`] (FTS rowid,
+    /// `message_fts_keys`, `messages`) in one transaction, scoped to `ids`. An
+    /// id that does not belong to `session_id` is left alone. Returns the
+    /// number of messages deleted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a delete fails; nothing is deleted in that case.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use codemason_storage::storage::Storage;
+    /// use codemason_types::message::Message;
+    ///
+    /// let storage = Storage::open_in_memory().unwrap();
+    /// storage.create_session("sess-1", "/tmp/project").unwrap();
+    /// let keep = Message::user_text("sess-1", "keep");
+    /// let drop = Message::user_text("sess-1", "drop");
+    /// storage.create_message(&keep).unwrap();
+    /// storage.create_message(&drop).unwrap();
+    /// assert_eq!(storage.delete_messages_by_id("sess-1", &[drop.id]).unwrap(), 1);
+    /// assert_eq!(storage.get_messages("sess-1").unwrap()[0].id, keep.id);
+    /// ```
+    pub fn delete_messages_by_id(&self, session_id: &str, ids: &[String]) -> Result<usize> {
+        let mut conn = lock_conn!(self)?;
+        let tx = conn.transaction()?;
+        let mut deleted = 0;
+        for id in ids {
+            let rowids: Vec<i64> = {
+                let mut stmt = tx.prepare_cached(
+                    "SELECT rowid FROM message_fts_keys WHERE session_id = ?1 AND message_id = ?2",
+                )?;
+                stmt.query_map(params![session_id, id], |r| r.get(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            for rowid in rowids {
+                tx.execute("DELETE FROM messages_fts WHERE rowid = ?1", params![rowid])?;
+            }
+            tx.execute(
+                "DELETE FROM message_fts_keys WHERE session_id = ?1 AND message_id = ?2",
+                params![session_id, id],
+            )?;
+            deleted += tx.execute(
+                "DELETE FROM messages WHERE session_id = ?1 AND id = ?2",
+                params![session_id, id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(deleted)
     }
 
     /// Deletes every message whose `created_at` is older than `max_age`.
@@ -3506,6 +3603,87 @@ impl Storage {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// Aggregates run-cost summaries per model across sessions.
+    ///
+    /// `since` is an inclusive RFC 3339 lower bound on `created_at` (`None`
+    /// means all time). `directory` restricts the result to sessions whose
+    /// working directory equals it (`None` means every project). Rows are
+    /// ordered by total cost, highest first, then by model id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query or row mapping fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use codemason_storage::storage::Storage;
+    ///
+    /// let storage = Storage::open_in_memory().unwrap();
+    /// assert!(storage.usage_stats(None, None).unwrap().is_empty());
+    /// ```
+    pub fn usage_stats(
+        &self,
+        since: Option<&str>,
+        directory: Option<&str>,
+    ) -> Result<Vec<UsageStatsRow>> {
+        let conn = lock_conn_read!(self)?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT r.model_id, COUNT(*), COUNT(DISTINCT r.session_id), \
+             SUM(r.input_tokens), SUM(r.output_tokens), SUM(r.total_cost_usd), \
+             SUM(r.duration_ms) \
+             FROM run_cost_summaries r LEFT JOIN sessions s ON s.id = r.session_id \
+             WHERE (?1 IS NULL OR r.created_at >= ?1) \
+             AND (?2 IS NULL OR s.directory = ?2) \
+             GROUP BY r.model_id \
+             ORDER BY SUM(r.total_cost_usd) DESC, r.model_id ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![since, directory], |row| {
+                Ok(UsageStatsRow {
+                    model_id: row.get(0)?,
+                    runs: row.get::<_, i64>(1)? as u64,
+                    sessions: row.get::<_, i64>(2)? as u64,
+                    input_tokens: row.get::<_, i64>(3)? as u64,
+                    output_tokens: row.get::<_, i64>(4)? as u64,
+                    total_cost_usd: row.get(5)?,
+                    duration_ms: row.get::<_, i64>(6)? as u64,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Counts the distinct sessions that have a run-cost summary.
+    ///
+    /// Takes the same `since` and `directory` filters as
+    /// [`Self::usage_stats`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use codemason_storage::storage::Storage;
+    ///
+    /// let storage = Storage::open_in_memory().unwrap();
+    /// assert_eq!(storage.usage_session_count(None, None).unwrap(), 0);
+    /// ```
+    pub fn usage_session_count(&self, since: Option<&str>, directory: Option<&str>) -> Result<u64> {
+        let conn = lock_conn_read!(self)?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(DISTINCT r.session_id) \
+             FROM run_cost_summaries r LEFT JOIN sessions s ON s.id = r.session_id \
+             WHERE (?1 IS NULL OR r.created_at >= ?1) \
+             AND (?2 IS NULL OR s.directory = ?2)",
+            params![since, directory],
+            |row| row.get(0),
+        )?;
+        Ok(count as u64)
     }
 
     // -- Provider Auth ---------------------------------------------
@@ -6978,6 +7156,27 @@ fn map_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRow> {
         metadata: metadata_str,
         blocked_by,
     })
+}
+
+/// Per-model usage totals aggregated from `run_cost_summaries`.
+///
+/// Returned by [`Storage::usage_stats`].
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UsageStatsRow {
+    /// Model identifier the totals belong to.
+    pub model_id: String,
+    /// Number of agent runs recorded for the model.
+    pub runs: u64,
+    /// Number of distinct sessions that used the model.
+    pub sessions: u64,
+    /// Total input (prompt) tokens.
+    pub input_tokens: u64,
+    /// Total output (completion) tokens.
+    pub output_tokens: u64,
+    /// Estimated total cost in USD.
+    pub total_cost_usd: f64,
+    /// Total wall-clock run time in milliseconds.
+    pub duration_ms: u64,
 }
 
 /// Row representation of a persisted run-cost summary (FR-018).

@@ -376,6 +376,14 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   during derivation; status-bar `idx`/`graph` busy indicators show progress)
 - **Memory system** — structured SQLite store with full-text (FTS5) recall,
   automatic extraction, decay, compression, and knowledge graph support
+- **Undo and redo** — `/undo` removes the last turn and restores the files it
+  changed from a per-turn workspace snapshot; `/redo` puts both back
+- **Usage statistics** — `/stats` and `cdmn stats` report tokens, cost and run
+  time per model across sessions (`--days N`, `--project`, `--json`)
+- **Your own slash commands** — a Markdown prompt template in
+  `.codemason/commands/` or `~/.config/codemason/commands/` becomes `/<name>`
+- **Formatters after edits** — opt-in `formatter` config section runs `rustfmt`,
+  `gofmt`, `ruff`, `prettier` or a custom command on files the agent writes
 - **Spec management** — `/spec` slash commands for creating, listing, searching,
   validating, and tracking specification lifecycles. The `SPEC.md`/`PLAN.md`
   round-trip is lossless for everything the lifecycle writer does not own: blank
@@ -735,6 +743,7 @@ cdmn [OPTIONS] [COMMAND]
   models       List available models
   config       Show resolved configuration
   research     Manage research items under `research/`
+  stats        Show usage and cost per model across sessions (the `/stats` command)
   spec         Run spec commands from the CLI (the `/spec` slash-command parity surface)
   new          Scaffold a new project in the current directory (the `/new` command)
 ```
