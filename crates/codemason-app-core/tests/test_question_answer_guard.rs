@@ -168,6 +168,7 @@ async fn test_question_highlight_survives_a_queued_question() {
         permission: "bash".to_string(),
         description: "ls".to_string(),
         options: Vec::new(),
+        tool_call: None,
     })
     .await;
     assert_eq!(app.session.question_selected_index, 1);

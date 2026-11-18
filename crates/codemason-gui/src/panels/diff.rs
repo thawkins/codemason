@@ -70,10 +70,19 @@ fn button(text: &str) -> egui::Button<'_> {
     egui::Button::new(RichText::new(text).size(text_size::SMALL)).sense(Sense::CLICK)
 }
 
-/// `+a -r` counts, in the diff colours.
+/// What a whole-file write shows instead of a removed count: the file's
+/// earlier contents are not known.
+pub const WHOLE_FILE_NOTE: &str = "replaces the whole file; earlier contents not shown";
+
+/// `+a -r` counts, in the diff colours; for a whole-file write, `+a` and
+/// [`WHOLE_FILE_NOTE`].
 fn counts(ui: &mut egui::Ui, diff: &FileDiff, palette: &Palette) {
     ui.label(RichText::new(format!("+{}", diff.added)).color(palette.diff_added));
-    ui.label(RichText::new(format!("-{}", diff.removed)).color(palette.diff_removed));
+    if diff.whole_file {
+        ui.label(RichText::new(WHOLE_FILE_NOTE).color(palette.muted));
+    } else {
+        ui.label(RichText::new(format!("-{}", diff.removed)).color(palette.diff_removed));
+    }
 }
 
 /// A line number, blank when the line has none on that side.
@@ -246,6 +255,32 @@ pub fn inline_diff_ui(ui: &mut egui::Ui, diff: &FileDiff, palette: &Palette) -> 
     open
 }
 
+/// Draw all of `diff`, every hunk unified, with its path and counts: for a
+/// place that cannot open the Diff pane (the permission dialog, a modal).
+pub fn full_diff_ui(ui: &mut egui::Ui, diff: &FileDiff, palette: &Palette) {
+    egui::Frame::NONE
+        .fill(palette.raised1)
+        .stroke(egui::Stroke::new(1.0, palette.border))
+        .corner_radius(radius::SM)
+        .inner_margin(space::SM)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(&diff.path).monospace().color(palette.text));
+                counts(ui, diff, palette);
+            });
+            for hunk in &diff.hunks {
+                unified_hunk_ui(ui, hunk, palette, usize::MAX);
+            }
+            if diff.truncated {
+                ui.label(RichText::new(TRUNCATED_NOTE).color(palette.warning));
+            }
+        });
+}
+
+/// What a diff cut short at the line limit says.
+pub const TRUNCATED_NOTE: &str = "The diff is cut short; it is too long to show whole.";
+
 /// What a Diff pane key does to the pane state.
 type PaneAction = fn(&mut codemason_app_core::diff_view::DiffPaneState);
 
@@ -345,14 +380,14 @@ pub fn diff_pane_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
         if ui.add(button(SPLIT).selected(split)).clicked() {
             pane.toggle_layout();
         }
-        let reviewed = pane.reviewed.contains(&file.path);
+        let reviewed = pane.is_reviewed(&file);
         if ui.add(button(MARK_REVIEWED).selected(reviewed)).clicked() {
             pane.toggle_reviewed();
         }
     });
     ui.weak("] [ hunk * n p file * v layout * m reviewed (click the pane first)");
     ui.add_space(space::XS);
-    if pane.reviewed.contains(&file.path) {
+    if pane.is_reviewed(&file) {
         ui.label(RichText::new(REVIEWED_NOTE).color(palette.muted));
         return;
     }

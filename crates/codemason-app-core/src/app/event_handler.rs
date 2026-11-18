@@ -296,6 +296,7 @@ impl App {
                 ref permission,
                 ref description,
                 ref options,
+                ref tool_call,
             } => {
                 self.on_permission_requested(
                     session_id,
@@ -303,6 +304,7 @@ impl App {
                     permission,
                     description,
                     options,
+                    tool_call.as_ref(),
                 );
             }
             Event::QuestionRequested {
@@ -1350,6 +1352,7 @@ impl App {
         permission: &str,
         description: &str,
         options: &[String],
+        tool_call: Option<&codemason_types::event::PermissionToolCall>,
     ) {
         if self.is_current_session(session_id) {
             // Deduplicate: skip if this request_id is already queued.
@@ -1383,8 +1386,11 @@ impl App {
                         "created_at": created_at,
                         "timeout_secs": 120u64,
                         "options": options,
+                        // The call the request is about, with the input it
+                        // will run with, for the dialog's preview.
+                        "tool_call": tool_call,
                     }),
-                    tool_call_id: None,
+                    tool_call_id: tool_call.map(|call| call.id.clone()),
                 });
                 self.note_permission_front();
                 self.status = "awaiting permission".to_string();

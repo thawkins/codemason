@@ -6,7 +6,11 @@
 //! the diffs of an `Edit`, `multi_edit`, `Write` or `create` call from its
 //! input. For `Edit` and `multi_edit` the input holds only the replaced
 //! text, so the line numbers count from that snippet, not the file; for
-//! `Write` and `create` every line is added.
+//! `Write` and `create` every line is added and [`FileDiff::whole_file`] is
+//! set: the call replaces the file, whose earlier contents (and so the
+//! removed lines) are not in the input. A finished `Edit` or `multi_edit`
+//! run with `dry_run: true` changed nothing, so
+//! [`diffs_from_tool_input`] is not asked for one ([`is_dry_run`]).
 //!
 //! A diff stops after [`DIFF_MAX_LINES`] lines and says so
 //! ([`FileDiff::truncated`]), so a rewrite of a large file stays cheap to
@@ -72,6 +76,29 @@ pub struct FileDiff {
     pub removed: u32,
     /// Whether lines were left out after [`DIFF_MAX_LINES`].
     pub truncated: bool,
+    /// Whether the call replaces the whole file with these lines and the
+    /// file's earlier contents are unknown (so are its removed lines).
+    pub whole_file: bool,
+}
+
+impl FileDiff {
+    /// A key for this change: its path and lines, so two different changes
+    /// to one path are told apart.
+    #[must_use]
+    pub fn identity(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.path.hash(&mut hasher);
+        self.whole_file.hash(&mut hasher);
+        for hunk in &self.hunks {
+            hunk.header.hash(&mut hasher);
+            for line in &hunk.lines {
+                (line.kind as u8).hash(&mut hasher);
+                line.text.hash(&mut hasher);
+            }
+        }
+        hasher.finish()
+    }
 }
 
 /// A 1-based line number from `similar`'s 0-based index.
@@ -92,6 +119,7 @@ pub fn file_diff(path: &str, old: &str, new: &str) -> FileDiff {
         added: 0,
         removed: 0,
         truncated: false,
+        whole_file: false,
     };
     let mut kept = 0usize;
     for hunk in diff
@@ -134,6 +162,13 @@ pub fn file_diff(path: &str, old: &str, new: &str) -> FileDiff {
     out
 }
 
+/// Whether a call's input asks only to preview its change (`dry_run: true`),
+/// so a finished call changed nothing.
+#[must_use]
+pub fn is_dry_run(input: &Value) -> bool {
+    input.get("dry_run").and_then(Value::as_bool) == Some(true)
+}
+
 /// The first of `keys` that `value` holds as a string.
 fn string_field<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
     keys.iter()
@@ -152,7 +187,8 @@ fn edit_diff(edit: &Value) -> Option<FileDiff> {
 ///
 /// `Edit` gives one diff of its `old_string` to `new_string`; `multi_edit`
 /// one per entry of `edits`; `Write` and `create` the whole `content` as
-/// added lines. Any other tool, or input without a path, gives none.
+/// added lines, marked [`FileDiff::whole_file`]. Any other tool, or input
+/// without a path, gives none.
 #[must_use]
 pub fn diffs_from_tool_input(tool: &str, input: &Value) -> Vec<FileDiff> {
     match canonical_tool_name(tool) {
@@ -165,7 +201,9 @@ pub fn diffs_from_tool_input(tool: &str, input: &Value) -> Vec<FileDiff> {
         "Write" | "create" => string_field(input, &["path", "file_path"])
             .map(|path| {
                 let content = string_field(input, &["content"]).unwrap_or_default();
-                vec![file_diff(path, "", content)]
+                let mut diff = file_diff(path, "", content);
+                diff.whole_file = true;
+                vec![diff]
             })
             .unwrap_or_default(),
         _ => Vec::new(),
@@ -184,8 +222,9 @@ pub enum DiffLayout {
 
 /// The Diff pane: the files it shows and where the reader is.
 ///
-/// Opening the pane replaces its files but keeps which paths are marked
-/// reviewed, so closing and reopening it does not lose the marks.
+/// Opening the pane replaces its files but keeps which changes are marked
+/// reviewed, so closing and reopening it does not lose the marks. A mark is
+/// for one change (its path and lines), not for every change to the path.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DiffPaneState {
     /// Whether the pane is shown.
@@ -198,8 +237,9 @@ pub struct DiffPaneState {
     pub hunk: usize,
     /// Unified or split.
     pub layout: DiffLayout,
-    /// The paths marked reviewed (drawn collapsed).
-    pub reviewed: std::collections::HashSet<String>,
+    /// The changes marked reviewed ([`FileDiff::identity`]), drawn
+    /// collapsed. A later, different change to the same path is not.
+    pub reviewed: std::collections::HashSet<u64>,
 }
 
 impl DiffPaneState {
@@ -256,11 +296,17 @@ impl DiffPaneState {
 
     /// Mark the file shown reviewed, or unmark it.
     pub fn toggle_reviewed(&mut self) {
-        let Some(path) = self.current().map(|f| f.path.clone()) else {
+        let Some(id) = self.current().map(FileDiff::identity) else {
             return;
         };
-        if !self.reviewed.remove(&path) {
-            self.reviewed.insert(path);
+        if !self.reviewed.remove(&id) {
+            self.reviewed.insert(id);
         }
+    }
+
+    /// Whether `diff` is marked reviewed.
+    #[must_use]
+    pub fn is_reviewed(&self, diff: &FileDiff) -> bool {
+        self.reviewed.contains(&diff.identity())
     }
 }

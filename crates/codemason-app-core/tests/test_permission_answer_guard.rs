@@ -27,6 +27,7 @@ async fn request(app: &mut App, id: &str) {
         permission: "bash".to_string(),
         description: "ls".to_string(),
         options: Vec::new(),
+        tool_call: None,
     })
     .await;
 }

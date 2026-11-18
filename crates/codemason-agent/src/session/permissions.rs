@@ -549,6 +549,30 @@ pub fn is_hardwired_auto_approved_tool_for_test(tool_name: &str) -> bool {
     is_hardwired_auto_approved_tool(tool_name)
 }
 
+tokio::task_local! {
+    /// The tool call the permission checks of the current dispatch are for
+    /// (see [`check_permission_for_call`]); a prompt attaches it to its
+    /// `PermissionRequested` event so a frontend can preview the call.
+    static PERMISSION_CALL: codemason_types::event::PermissionToolCall;
+}
+
+/// Run `check` (a [`check_permission_with_prompt`] call) for the tool call
+/// `call`: any prompt it raises carries `call`, the call's id, name and the
+/// input it will run with, in its `PermissionRequested` event.
+///
+/// # Errors
+///
+/// Returns what `check` returns.
+pub async fn check_permission_for_call<F>(
+    call: codemason_types::event::PermissionToolCall,
+    check: F,
+) -> Result<PermissionAction>
+where
+    F: std::future::Future<Output = Result<PermissionAction>>,
+{
+    PERMISSION_CALL.scope(call, check).await
+}
+
 /// Drive one interactive permission prompt: publish a
 /// `PermissionRequested` event and wait for the matching
 /// `PermissionReplied` event up to `timeout_secs`; a timeout counts as
@@ -575,6 +599,9 @@ async fn prompt_for_permission(
         permission: permission.to_string(),
         description: format!("{tool_name}: {resource}"),
         options: vec![],
+        // The call this check runs for, when the dispatch said
+        // (`check_permission_for_call`).
+        tool_call: PERMISSION_CALL.try_with(Clone::clone).ok(),
     });
 
     let timeout = tokio::time::Duration::from_secs(timeout_secs);
@@ -988,6 +1015,7 @@ pub async fn check_tool_repeat_guard(
         permission: "tool:repeat".to_string(),
         description: format!("{tool_name}: {reason}. Continue?"),
         options: vec![],
+        tool_call: None,
     });
 
     let timeout = tokio::time::Duration::from_secs(timeout_secs);

@@ -1,75 +1,132 @@
-//! Tests for `codemason_app_core::permission_preview`: finding the call a
-//! permission request is about and previewing it.
+//! Tests for `codemason_app_core::permission_preview`: a permission request
+//! that carries its tool call is previewed from exactly that call's input.
 
-use codemason_agent::message::{Message, MessagePart, Role, ToolCallState, ToolCallStatus};
+use std::path::PathBuf;
+
+use codemason_agent::event::Event;
 use codemason_app_core::permission_preview::{PermissionPreview, permission_preview};
+use codemason_types::event::PermissionToolCall;
 use serde_json::{Value, json};
 
-fn call(tool: &str, status: ToolCallStatus, input: Value) -> MessagePart {
-    MessagePart::ToolCall {
-        tool: tool.to_string(),
-        call_id: format!("c-{tool}"),
-        state: Box::new(ToolCallState {
-            status,
+mod support;
+
+/// A fresh, empty scratch directory under the git-ignored `target/temp`.
+fn scratch(name: &str) -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/temp/test_permission_preview")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create scratch dir");
+    dir
+}
+
+/// The request the App queues for a `PermissionRequested` carrying `call`.
+async fn request(
+    description: &str,
+    call: Option<(&str, Value)>,
+) -> codemason_config::permission::PermissionRequest {
+    let mut app = support::make_app();
+    let session = app
+        .session
+        .session_id
+        .clone()
+        .unwrap_or_else(|| "s".to_string());
+    app.session.session_id = Some(session.clone());
+    app.handle_event(Event::PermissionRequested {
+        session_id: session,
+        request_id: "req".to_string(),
+        permission: "edit".to_string(),
+        description: description.to_string(),
+        options: Vec::new(),
+        tool_call: call.map(|(name, input)| PermissionToolCall {
+            id: "call-1".to_string(),
+            name: name.to_string(),
             input,
-            output: None,
-            error: None,
-            duration_ms: None,
         }),
-    }
+    })
+    .await;
+    let queued = app
+        .session
+        .permission_queue
+        .front()
+        .cloned()
+        .expect("request queued");
+    assert_eq!(
+        queued.tool_call_id.is_some(),
+        queued
+            .metadata
+            .get("tool_call")
+            .is_some_and(|v| !v.is_null())
+    );
+    queued
 }
 
-fn messages(parts: Vec<MessagePart>) -> Vec<Message> {
-    vec![Message::new("s", Role::Assistant, parts)]
-}
-
-#[test]
-fn test_permission_preview_edit_shows_its_diff() {
-    let msgs = messages(vec![call(
-        "Edit",
-        ToolCallStatus::Running,
-        json!({"file_path": "a.rs", "old_string": "x\n", "new_string": "y\n"}),
-    )]);
-    // `Edit` has no `path`, so its resource is `tool:Edit`.
-    let Some(PermissionPreview::Diffs(diffs)) = permission_preview(&msgs, "Edit: tool:Edit") else {
+#[tokio::test]
+async fn test_permission_preview_edit_shows_the_effective_diff() {
+    // The request carries the input the call will run with (after hooks),
+    // whatever the transcript says.
+    let req = request(
+        "Edit: tool:Edit",
+        Some((
+            "Edit",
+            json!({"file_path": "a.rs", "old_string": "x\n", "new_string": "y\n"}),
+        )),
+    )
+    .await;
+    assert_eq!(req.tool_call_id.as_deref(), Some("call-1"));
+    let Some(PermissionPreview::Diffs(diffs)) = permission_preview(&req, &scratch("edit")) else {
         panic!("diff preview expected");
     };
     assert_eq!(diffs[0].path, "a.rs");
     assert_eq!((diffs[0].added, diffs[0].removed), (1, 1));
 }
 
-#[test]
-fn test_permission_preview_bash_shows_the_full_command() {
-    let command = "cargo build && \\\n  cargo test --workspace";
-    let msgs = messages(vec![call(
-        "Bash",
-        ToolCallStatus::Pending,
-        json!({ "command": command }),
-    )]);
+#[tokio::test]
+async fn test_permission_preview_bash_shows_the_full_command() {
+    // The resource of a Bash prompt is only the command name.
+    let command = "cargo build --release && cargo nextest run --workspace";
+    let req = request("Bash: cargo", Some(("Bash", json!({ "command": command })))).await;
     assert_eq!(
-        permission_preview(&msgs, &format!("Bash: {command}")),
+        permission_preview(&req, &scratch("bash")),
         Some(PermissionPreview::Command(command.to_string()))
     );
-    // A different command is a different request.
-    assert_eq!(permission_preview(&msgs, "Bash: ls"), None);
 }
 
-#[test]
-fn test_permission_preview_needs_one_unfinished_match() {
-    let input = json!({"command": "ls"});
-    // A finished call is not what is being asked about.
-    let done = messages(vec![call("Bash", ToolCallStatus::Completed, input.clone())]);
-    assert_eq!(permission_preview(&done, "Bash: ls"), None);
-    // Two unfinished calls that fit: ambiguous, so no preview.
-    let mut both = messages(vec![call("Bash", ToolCallStatus::Running, input.clone())]);
-    both.extend(messages(vec![call("Bash", ToolCallStatus::Running, input)]));
-    assert_eq!(permission_preview(&both, "Bash: ls"), None);
-    // Other tools, and a description without a resource, have none.
-    let read = messages(vec![call(
-        "read",
-        ToolCallStatus::Running,
-        json!({"path": "a"}),
-    )]);
-    assert_eq!(permission_preview(&read, "read: a"), None);
-    assert_eq!(permission_preview(&read, "read"), None);
+#[tokio::test]
+async fn test_permission_preview_write_is_diffed_against_the_current_file() {
+    let dir = scratch("write");
+    std::fs::write(dir.join("old.txt"), "keep\ndrop\n").expect("write");
+    let req = request(
+        "Write: old.txt",
+        Some(("Write", json!({"path": "old.txt", "content": "keep\n"}))),
+    )
+    .await;
+    let Some(PermissionPreview::Diffs(diffs)) = permission_preview(&req, &dir) else {
+        panic!("diff preview expected");
+    };
+    assert_eq!((diffs[0].added, diffs[0].removed), (0, 1));
+    assert!(!diffs[0].whole_file);
+
+    // A new file: every line is added, and that is the whole change.
+    let req = request(
+        "Write: new.txt",
+        Some(("Write", json!({"path": "new.txt", "content": "a\nb\n"}))),
+    )
+    .await;
+    let Some(PermissionPreview::Diffs(diffs)) = permission_preview(&req, &dir) else {
+        panic!("diff preview expected");
+    };
+    assert_eq!((diffs[0].added, diffs[0].removed), (2, 0));
+    assert!(!diffs[0].whole_file);
+}
+
+#[tokio::test]
+async fn test_permission_preview_needs_the_call() {
+    let dir = scratch("none");
+    assert_eq!(
+        permission_preview(&request("Bash: ls", None).await, &dir),
+        None
+    );
+    let read = request("read: a", Some(("read", json!({"path": "a"})))).await;
+    assert_eq!(permission_preview(&read, &dir), None);
 }

@@ -909,6 +909,7 @@ async fn permission_requested_for_other_session_is_ignored() {
         permission: "bash".to_string(),
         description: "run".to_string(),
         options: Vec::new(),
+        tool_call: None,
     })
     .await;
     assert!(

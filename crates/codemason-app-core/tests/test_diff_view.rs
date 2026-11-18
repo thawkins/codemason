@@ -147,3 +147,49 @@ fn test_diff_view_blocks_follow_finished_edits() {
         done[1].plain_text()
     );
 }
+
+#[test]
+fn test_diff_view_whole_file_writes_are_marked() {
+    let write = diffs_from_tool_input("Write", &json!({"path": "c.txt", "content": ""}));
+    assert!(
+        write[0].whole_file,
+        "a write's earlier contents are unknown"
+    );
+    let edit = diffs_from_tool_input(
+        "Edit",
+        &json!({"file_path": "a.rs", "old_string": "x", "new_string": "y"}),
+    );
+    assert!(!edit[0].whole_file);
+}
+
+#[test]
+fn test_diff_view_dry_runs_make_no_diff_block() {
+    let map = HashMap::<String, (String, u32, u32)>::new();
+    let mut msg = edit_message(ToolCallStatus::Completed);
+    if let MessagePart::ToolCall { state, .. } = &mut msg.parts[0] {
+        state.input["dry_run"] = json!(true);
+    }
+    let blocks = message_to_blocks(&msg, &map, "/p");
+    assert!(
+        matches!(blocks.as_slice(), [TranscriptBlock::Tool { .. }]),
+        "{blocks:?}"
+    );
+}
+
+#[test]
+fn test_diff_view_reviewed_marks_are_per_change() {
+    use codemason_app_core::diff_view::DiffPaneState;
+
+    let first = file_diff("a.rs", "x\n", "y\n");
+    let later = file_diff("a.rs", "y\n", "z\n");
+    let mut pane = DiffPaneState::default();
+    pane.open(vec![first.clone()], 0);
+    pane.toggle_reviewed();
+    assert!(pane.is_reviewed(&first));
+    // A later, different change to the same path is not reviewed.
+    pane.open(vec![later.clone()], 0);
+    assert!(!pane.is_reviewed(&later));
+    // Reopening the reviewed change keeps its mark.
+    pane.open(vec![first.clone()], 0);
+    assert!(pane.is_reviewed(&first));
+}

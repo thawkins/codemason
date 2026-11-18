@@ -680,12 +680,14 @@ fn convert_extracted_event(event: codemason_tools_core::event::Event) -> Option<
             permission,
             description,
             options,
+            tool_call,
         } => Some(Event::PermissionRequested {
             session_id,
             request_id,
             permission,
             description,
             options,
+            tool_call,
         }),
         codemason_tools_core::event::Event::ShellCwdChanged { session_id, cwd } => {
             Some(Event::ShellCwdChanged { session_id, cwd })
@@ -1197,12 +1199,14 @@ fn convert_extracted_extended_event(
             permission,
             description,
             options,
+            tool_call,
         } => Some(Event::PermissionRequested {
             session_id,
             request_id,
             permission,
             description,
             options,
+            tool_call,
         }),
         codemason_tools_extended::event::Event::ShellCwdChanged { session_id, cwd } => {
             Some(Event::ShellCwdChanged { session_id, cwd })

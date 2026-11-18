@@ -53,6 +53,7 @@ use codemason_app_core::activity::{ActivityGroup, group_activity};
 use codemason_app_core::app::App;
 use codemason_app_core::message_blocks::{ToolState, TranscriptBlock, message_to_blocks};
 use codemason_app_core::message_lines::MESSAGE_STREAM_MIN_INTERVAL;
+use codemason_app_core::message_text::canonical_tool_name;
 use codemason_app_core::styled::StyledLine;
 use codemason_app_core::transcript_prefs::{ThinkingDisplay, TranscriptPrefs, Verbosity};
 use codemason_types::sanitize_terminal::sanitize_terminal;
@@ -877,7 +878,18 @@ fn draw_blocks(
     ui.spacing_mut().item_spacing.y = space::XS;
     let mut drawn = 0;
     for (index, block) in entry.blocks.iter().enumerate() {
-        if thinking == ThinkingDisplay::Hidden && matches!(block, TranscriptBlock::Thinking(_)) {
+        let hidden_thinking = match block {
+            TranscriptBlock::Thinking(_) => true,
+            TranscriptBlock::Activity(group) => thinking_only(group).is_some(),
+            TranscriptBlock::Markdown(_)
+            | TranscriptBlock::Code { .. }
+            | TranscriptBlock::Plain(_)
+            | TranscriptBlock::Notice(_)
+            | TranscriptBlock::Tool { .. }
+            | TranscriptBlock::Image { .. }
+            | TranscriptBlock::Diff(_) => false,
+        };
+        if thinking == ThinkingDisplay::Hidden && hidden_thinking {
             continue;
         }
         if drawn > 0 {
@@ -913,8 +925,9 @@ fn draw_blocks(
                 lines,
                 status_label,
                 state,
+                name,
                 ..
-            } => tool_ui(ui, lines, status_label, *state, style),
+            } => tool_ui(ui, id, name, lines, status_label, *state, style),
             TranscriptBlock::Image { name, path } => {
                 let uri = format!("file://{}", path.display());
                 let alt = format!("Image: {name}");
@@ -962,15 +975,27 @@ pub const ACTIVITY_RUNNING_LABEL: &str = "Running";
 pub const THINKING_LABEL: &str = "Thinking";
 
 /// A tool call's lines, labelled with its status for assistive technology.
-/// A finished call's leading marker (`* ` or `[x] `) is drawn as a check or
+/// A `think` call's thought is drawn as thinking. A finished call's leading
+/// marker (`* ` or `[x] `) is drawn as a check or
 /// a cross icon beside the lines instead.
+#[allow(clippy::too_many_arguments)]
 fn tool_ui(
     ui: &mut egui::Ui,
+    id: egui::Id,
+    name: &str,
     lines: &[StyledLine],
     status_label: &str,
     state: ToolState,
     style: BlockStyle<'_>,
 ) {
+    // A `think` call's reasoning follows the thinking display, like the
+    // model's own reasoning: its header is the call, the lines under it the
+    // thought.
+    if canonical_tool_name(name) == "think" && lines.len() > 1 {
+        tool_ui(ui, id, "", &lines[..1], status_label, state, style);
+        thinking_ui(ui, id.with("thought"), &lines[1..], style);
+        return;
+    }
     let icon = match state {
         ToolState::Done => Some((Icon::Check, style.palette.success)),
         ToolState::Failed => Some((Icon::Cross, style.palette.error)),
@@ -1113,6 +1138,14 @@ fn activity_ui(
     style: BlockStyle<'_>,
     actions: &mut Vec<BlockAction>,
 ) {
+    // A group of reasoning only is drawn as its thinking blocks, so the
+    // thinking display alone decides whether and how it shows.
+    if let Some(thoughts) = thinking_only(group) {
+        for (index, lines) in thoughts.into_iter().enumerate() {
+            thinking_ui(ui, id.with(index), lines, style);
+        }
+        return;
+    }
     let palette = style.palette;
     let label = group.summary.label();
     let errors = group.summary.errors;
@@ -1153,8 +1186,9 @@ fn activity_ui(
                         lines,
                         status_label,
                         state,
+                        name,
                         ..
-                    } => tool_ui(ui, lines, status_label, *state, style),
+                    } => tool_ui(ui, id.with(index), name, lines, status_label, *state, style),
                     TranscriptBlock::Thinking(lines) => {
                         thinking_ui(ui, id.with(index), lines, style);
                     }
@@ -1219,4 +1253,23 @@ fn diff_ui(
         let files = diffs.into_iter().cloned().collect();
         actions.push(BlockAction::OpenDiff(files, selected));
     }
+}
+
+/// The thinking blocks of `group` when it holds nothing else.
+fn thinking_only(group: &ActivityGroup) -> Option<Vec<&[StyledLine]>> {
+    group
+        .items
+        .iter()
+        .map(|item| match item {
+            TranscriptBlock::Thinking(lines) => Some(lines.as_slice()),
+            TranscriptBlock::Markdown(_)
+            | TranscriptBlock::Code { .. }
+            | TranscriptBlock::Plain(_)
+            | TranscriptBlock::Notice(_)
+            | TranscriptBlock::Tool { .. }
+            | TranscriptBlock::Image { .. }
+            | TranscriptBlock::Activity(_)
+            | TranscriptBlock::Diff(_) => None,
+        })
+        .collect()
 }

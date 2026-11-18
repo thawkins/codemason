@@ -149,8 +149,10 @@ pub fn message_to_blocks<S: BuildHasher>(
         .flat_map(|part| {
             let block = part_block(&msg.role, part, tool_step_map, cwd);
             let diffs = match part {
+                // A dry run reports the change without making it.
                 MessagePart::ToolCall { tool, state, .. }
-                    if state.status == ToolCallStatus::Completed =>
+                    if state.status == ToolCallStatus::Completed
+                        && !crate::diff_view::is_dry_run(&state.input) =>
                 {
                     crate::diff_view::diffs_from_tool_input(tool, &state.input)
                 }

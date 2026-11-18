@@ -126,6 +126,7 @@ fn publish_update(bus: &EventBus, session_id: &str, update: RemoteUpdate) {
                 permission,
                 description,
                 options,
+                tool_call: None,
             });
         }
         RemoteUpdate::QuestionRequested {

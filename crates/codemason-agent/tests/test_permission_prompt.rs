@@ -350,3 +350,78 @@ async fn test_auto_approve_is_suppressed_by_a_forced_checkpoint() {
     }
     assert!(prompted, "the forced checkpoint must raise a prompt");
 }
+
+#[tokio::test]
+async fn test_prompt_for_a_call_carries_the_call_and_its_input() {
+    use codemason_agent::session::permissions::check_permission_for_call;
+    use codemason_types::event::PermissionToolCall;
+
+    let (checker, event_bus) = harness();
+    let mut rx = event_bus.subscribe();
+    let call = PermissionToolCall {
+        id: "call-7".to_string(),
+        name: "Bash".to_string(),
+        input: serde_json::json!({"command": "cargo build --release"}),
+    };
+    let asking = {
+        let (checker, event_bus) = (checker.clone(), event_bus.clone());
+        let call = call.clone();
+        tokio::spawn(async move {
+            check_permission_for_call(
+                call,
+                check_permission_with_prompt(
+                    &checker,
+                    &event_bus,
+                    "s-call",
+                    "tool:execute",
+                    "cargo",
+                    "Bash",
+                    None,
+                    None,
+                    true,
+                    1,
+                    false,
+                    false,
+                    &std::env::current_dir().expect("cwd"),
+                ),
+            )
+            .await
+        })
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let carried = loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Ok(Event::PermissionRequested {
+                session_id,
+                tool_call,
+                ..
+            })) if session_id == "s-call" => break tool_call,
+            Ok(Ok(_)) => continue,
+            other => panic!("no PermissionRequested: {other:?}"),
+        }
+    };
+    assert_eq!(carried, Some(call));
+    // Unanswered, the forced checkpoint times out to deny.
+    let _ = asking.await;
+
+    // A check outside a call carries none.
+    let mut rx = event_bus.subscribe();
+    let plain = tokio::spawn({
+        let (checker, event_bus) = (checker.clone(), event_bus.clone());
+        async move { ask(&checker, &event_bus, "s-plain", true, 1).await }
+    });
+    let carried = loop {
+        match tokio::time::timeout(Duration::from_secs(5), rx.recv()).await {
+            Ok(Ok(Event::PermissionRequested {
+                session_id,
+                tool_call,
+                ..
+            })) if session_id == "s-plain" => break tool_call,
+            Ok(Ok(_)) => continue,
+            other => panic!("no PermissionRequested: {other:?}"),
+        }
+    };
+    assert_eq!(carried, None);
+    let _ = plain.await;
+}

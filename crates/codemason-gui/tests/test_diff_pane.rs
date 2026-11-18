@@ -56,6 +56,15 @@ fn edits() -> Message {
     )
 }
 
+/// Whether the Diff pane marks the diff of `a.rs` reviewed.
+fn reviewed_a(harness: &Harness<'static, Shell>) -> bool {
+    let pane = &harness.state().app().diff_pane;
+    pane.files
+        .iter()
+        .find(|f| f.path == "a.rs")
+        .is_some_and(|f| pane.is_reviewed(f))
+}
+
 fn shell() -> (tokio::runtime::Runtime, Harness<'static, Shell>) {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     let mut app = {
@@ -152,7 +161,7 @@ fn test_reviewed_mark_collapses_the_file_and_survives_reopening() {
         .click();
     harness.run();
     press_in_pane(&mut harness, egui::Key::M);
-    assert!(harness.state().app().diff_pane.reviewed.contains("a.rs"));
+    assert!(reviewed_a(&harness));
     harness.get_by_label(REVIEWED_NOTE);
 
     // Close the pane, then open the diff again: the mark is kept.
@@ -169,7 +178,7 @@ fn test_reviewed_mark_collapses_the_file_and_survives_reopening() {
         .expect("an Open diff button")
         .click();
     harness.run();
-    assert!(harness.state().app().diff_pane.reviewed.contains("a.rs"));
+    assert!(reviewed_a(&harness));
     harness.get_by_label(REVIEWED_NOTE);
     harness.get_by_role_and_label(A11yRole::Button, MARK_REVIEWED);
 }

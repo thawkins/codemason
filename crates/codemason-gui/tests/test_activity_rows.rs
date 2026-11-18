@@ -186,3 +186,75 @@ async fn test_thinking_block_follows_the_display_setting() {
     assert!(harness.query_by_label(THINKING_LABEL).is_none());
     harness.get_by_label("Answer.");
 }
+
+/// A finished `think` call whose thought is `thought`.
+fn think_call(thought: &str) -> MessagePart {
+    MessagePart::ToolCall {
+        tool: "think".to_string(),
+        call_id: "t1".to_string(),
+        state: Box::new(ToolCallState {
+            status: ToolCallStatus::Completed,
+            input: serde_json::json!({ "thought": thought }),
+            output: Some(serde_json::json!({ "thought": thought })),
+            error: None,
+            duration_ms: Some(1),
+        }),
+    }
+}
+
+#[tokio::test]
+async fn test_think_call_follows_the_thinking_display() {
+    let mut app = support::make_app();
+    app.transcript_prefs.verbosity = Verbosity::High;
+    app.transcript_prefs.thinking = ThinkingDisplay::Expanded;
+    app.session.messages = vec![reply(vec![think_call("compare both paths")])];
+    let mut harness = harness(app);
+    harness.run();
+    harness.get_by_label_contains("compare both paths");
+
+    harness.state_mut().app.transcript_prefs.thinking = ThinkingDisplay::Hidden;
+    harness.run();
+    assert!(
+        harness
+            .query_by_label_contains("compare both paths")
+            .is_none()
+    );
+    // The call itself is still shown.
+    harness.get_by_label_contains("Think: completed");
+
+    harness.state_mut().app.transcript_prefs.thinking = ThinkingDisplay::Collapsed;
+    harness.run();
+    assert_eq!(expanded(&harness, THINKING_LABEL), Some(false));
+}
+
+#[tokio::test]
+async fn test_reasoning_only_groups_follow_the_thinking_display() {
+    let mut app = support::make_app();
+    // Medium folds reasoning into its own group.
+    app.transcript_prefs.verbosity = Verbosity::Medium;
+    app.transcript_prefs.thinking = ThinkingDisplay::Expanded;
+    app.session.messages = vec![thinking_reply()];
+    let mut harness = harness(app);
+    harness.run();
+    // Shown at once, with no closed "Thought" row in front of it.
+    harness.get_by_label_contains("weighing options");
+    assert!(
+        harness
+            .query_by_role_and_label(A11yRole::Button, "Thought")
+            .is_none()
+    );
+
+    harness.state_mut().app.transcript_prefs.thinking = ThinkingDisplay::Hidden;
+    harness.run();
+    assert!(
+        harness
+            .query_by_label_contains("weighing options")
+            .is_none()
+    );
+    assert!(
+        harness
+            .query_by_role_and_label(A11yRole::Button, "Thought")
+            .is_none()
+    );
+    harness.get_by_label("Answer.");
+}

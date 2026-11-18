@@ -77,6 +77,7 @@ fn request_permission(events: &UnboundedSender<Event>, id: &str) {
             permission: "bash".to_string(),
             description: "rm -rf target/temp/x".to_string(),
             options: Vec::new(),
+            tool_call: None,
         })
         .expect("send permission request");
 }
@@ -794,67 +795,67 @@ fn test_permission_late_reply_keeps_the_next_request() {
     );
 }
 
-/// The agent asks for permission with `description`, as the session's
-/// permission check does (`"<tool>: <resource>"`).
-fn request_with(events: &UnboundedSender<Event>, id: &str, permission: &str, description: &str) {
+/// The agent asks for permission for the call of `tool` with `input`, as
+/// the session's permission check does.
+fn request_for_call(
+    events: &UnboundedSender<Event>,
+    id: &str,
+    description: &str,
+    tool: &str,
+    input: serde_json::Value,
+) {
     events
         .send(Event::PermissionRequested {
             session_id: SESSION.to_string(),
             request_id: id.to_string(),
-            permission: permission.to_string(),
+            permission: "edit".to_string(),
             description: description.to_string(),
             options: Vec::new(),
+            tool_call: Some(codemason_types::event::PermissionToolCall {
+                id: "call-1".to_string(),
+                name: tool.to_string(),
+                input,
+            }),
         })
         .expect("send permission request");
 }
 
-/// An assistant message with one unfinished call of `tool` with `input`.
-fn pending_call(tool: &str, input: serde_json::Value) -> codemason_agent::message::Message {
-    use codemason_agent::message::{Message, MessagePart, Role, ToolCallState, ToolCallStatus};
-    Message::new(
-        SESSION,
-        Role::Assistant,
-        vec![MessagePart::ToolCall {
-            tool: tool.to_string(),
-            call_id: "call-1".to_string(),
-            state: Box::new(ToolCallState {
-                status: ToolCallStatus::Running,
-                input,
-                output: None,
-                error: None,
-                duration_ms: None,
-            }),
-        }],
-    )
-}
-
 #[test]
-fn test_permission_dialog_previews_an_edit_as_a_diff() {
-    let (_rt, events, mut harness) = rig(|app| {
-        app.session.messages = vec![pending_call(
-            "Edit",
-            serde_json::json!({"file_path": "src/a.rs", "old_string": "old\n", "new_string": "new\n"}),
-        )];
-    });
-    request_with(&events, "req-edit", "edit", "Edit: tool:Edit");
+fn test_permission_dialog_shows_the_whole_diff_of_an_edit() {
+    let old: String = (1..=20).map(|i| format!("line {i}\n")).collect();
+    let new = old
+        .replace("line 2\n", "line two\n")
+        .replace("line 18\n", "line eighteen\n");
+    let (_rt, events, mut harness) = rig(|_| {});
+    request_for_call(
+        &events,
+        "req-edit",
+        "Edit: tool:Edit",
+        "Edit",
+        serde_json::json!({"file_path": "src/a.rs", "old_string": old, "new_string": new}),
+    );
     harness.run();
     wait_shown(&mut harness);
     harness.get_by_label(CHANGES_LABEL);
-    harness.get_by_label(OPEN_DIFF);
-    harness.get_by_label_contains("- old");
-    harness.get_by_label_contains("+ new");
+    // Both hunks are in the dialog; it does not send the reader to the Diff
+    // pane, which would sit behind it.
+    harness.get_by_label_contains("+ line two");
+    harness.get_by_label_contains("+ line eighteen");
+    assert!(harness.query_by_label(OPEN_DIFF).is_none());
 }
 
 #[test]
 fn test_permission_dialog_shows_a_full_command() {
     let command = "cargo build --release && cargo nextest run --workspace";
-    let (_rt, events, mut harness) = rig(|app| {
-        app.session.messages = vec![pending_call(
-            "Bash",
-            serde_json::json!({ "command": command }),
-        )];
-    });
-    request_with(&events, "req-bash", "bash", &format!("Bash: {command}"));
+    let (_rt, events, mut harness) = rig(|_| {});
+    // A Bash prompt's description names only the command.
+    request_for_call(
+        &events,
+        "req-bash",
+        "Bash: cargo",
+        "Bash",
+        serde_json::json!({ "command": command }),
+    );
     harness.run();
     wait_shown(&mut harness);
     harness.get_by_label(COMMAND_LABEL);
@@ -862,7 +863,7 @@ fn test_permission_dialog_shows_a_full_command() {
 }
 
 #[test]
-fn test_permission_dialog_without_a_matching_call_shows_the_request() {
+fn test_permission_dialog_without_a_call_shows_the_request() {
     let (_rt, events, mut harness) = rig(|_| {});
     request_permission(&events, "req-plain");
     harness.run();

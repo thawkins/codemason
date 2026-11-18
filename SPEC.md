@@ -2212,13 +2212,18 @@ thinking. A tool block keeps its header and at most 20 result lines
 (`RESULT_PREVIEW_MAX_LINES`) plus "... N more lines". Reasoning follows
 `transcript_prefs.thinking`: `collapsed` shows a `Thinking` disclosure that is
 open while the reply streams and closed after, `expanded` shows it in full,
-`hidden` omits it. Whether a row is open is kept per block
+`hidden` omits it. The same applies to a `think` tool call's thought (its
+header line stays) and to an activity group that holds only reasoning, which
+is drawn as its thinking blocks with no row of its own. Whether a row is open is kept per block
 (`messages::block_id`, from the message id and block index) and survives
 streaming and scrolling. A completed `Edit`, `multi_edit`, `Write` or `create` call
 is followed by one `Diff` block per file (`diff_view::diffs_from_tool_input`:
 `Edit`/`multi_edit` diff `old_string` against `new_string`, so their line
-numbers count from that snippet; `Write`/`create` add every line of
-`content`), folded into the activity row at `low`. `diff_view::file_diff`
+numbers count from that snippet; `Write`/`create` add every line of `content`
+and are marked `whole_file`, shown as "replaces the whole file; earlier
+contents not shown" instead of a removed count), folded into the activity row
+at `low`. A call run with `dry_run: true` changed nothing and gets no `Diff`
+block. `diff_view::file_diff`
 builds unified hunks with three lines of context, old and new line numbers and
 the added/removed counts, and stops after 2,000 lines (`truncated`). The
 transcript draws a diff as a card with the path, `+added -removed`, the first
@@ -2231,15 +2236,21 @@ clicked one selected. The pane shows one file, unified or split (`Old` and
 with buttons for the previous/next file and hunk, `Split` and `Reviewed`;
 while it holds the keyboard focus (any press inside it) `]`/`[`, `n`/`p`, `v`
 and `m` do the same and are taken out of the input, so they neither type nor
-reach the App. A reviewed file is collapsed to a note; the reviewed paths
-survive closing and reopening the pane. The permission dialog previews the call a request is about
-(`permission_preview::permission_preview`): the request names only
-`"<tool>: <resource>"` (the resource is the input's `path`, `command`, `url`,
-`pattern` or `query`, else `tool:<tool>`), so the dialog looks for exactly one
-pending or running tool call in the transcript with that tool and resource. An
-edit call is shown as its diffs under `Changes:` (each with `Open diff`), a
-`Bash` call as its full command under `Command:`; with no match, or two, the
-dialog shows the request text under `Details:` as before. All transcript
+reach the App. A reviewed file is collapsed to a note; a mark is for one
+change (`FileDiff::identity`, its path and lines), so a later change to the
+same path is not reviewed, and the marks survive closing and reopening the
+pane. A `PermissionRequested` event raised for a tool call
+carries that call (`tool_call`: id, name and the input it will run with, after
+any `pre_tool_use` hook; `dispatch_tool_with_permissions` sets it through
+`check_permission_for_call`, a task-local around its permission checks, and the
+SSE payload leaves it out). The App keeps it in the queued request's metadata
+and `tool_call_id`, and the permission dialog previews exactly that input
+(`permission_preview::permission_preview`): an edit as every hunk of each file
+it will change, drawn in the dialog (which scrolls) since the Diff pane would
+sit behind it; a `Write` or `create` of an existing file (up to 1 MiB) diffed
+against its current contents; a `Bash` call as its full command under
+`Command:`. A request without a call shows its text under `Details:` as
+before. All transcript
 text is selectable; right-clicking the transcript opens a menu with `Copy`
 (egui's text selection; a press on text places an empty selection, so it is
 enabled there and copies nothing), `Copy as Markdown` and `Quote in reply`
