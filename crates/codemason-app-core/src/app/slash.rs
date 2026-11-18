@@ -13198,21 +13198,17 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
         // Busy from now, not from the first `MessageStart`: a queued command
         // must not be followed by the next queued entry while its turn starts.
         self.session.is_processing = true;
-        let processor = self.session_processor.clone();
-        let event_bus = self.event_bus.clone();
-        tokio::spawn(async move {
-            if let Err(e) = processor
-                .process_message(&sid, &rendered, &agent, flag)
-                .await
-            {
-                tracing::warn!(error = %e, "Failed to process user command prompt");
-                // Ends the busy state set above when the turn never started.
-                event_bus.publish(codemason_agent::event::Event::AgentError {
-                    session_id: sid,
-                    error: format!("user command failed: {e}"),
-                });
-            }
-        });
+        // A failed turn ends the busy state set above through exactly one
+        // `AgentError`, whether or not the processor reported it itself.
+        tokio::spawn(crate::app::command_turn::run_command_turn(
+            self.session_processor.clone(),
+            self.event_bus.clone(),
+            sid,
+            rendered,
+            agent,
+            flag,
+            "user command",
+        ));
         true
     }
 

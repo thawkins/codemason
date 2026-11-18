@@ -79,3 +79,34 @@ async fn test_help_lists_user_commands() {
     assert!(text.contains("User commands:"), "{text}");
     assert!(text.contains("/greet"), "{text}");
 }
+
+#[tokio::test]
+async fn test_user_command_reports_a_failed_turn_exactly_once() {
+    let mut app = make_app();
+    // The session exists, so the turn gets as far as preparing the model
+    // client, which fails here (no usable provider) and reports that itself.
+    app.session.session_id = Some("s-once".to_string());
+    app.storage
+        .create_session("s-once", "/tmp/user-command-once")
+        .expect("create_session");
+    app.user_commands = vec![greet()];
+    let mut events = app.event_bus.subscribe();
+
+    app.execute_slash_command("/greet world").await;
+
+    // A second terminal error would clear the busy state of whatever turn the
+    // first one let the queue start.
+    // Wait for the first report however long the turn takes to fail, then
+    // give a duplicate a moment to arrive.
+    let mut errors = 0;
+    let mut deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
+    while let Ok(event) = tokio::time::timeout_at(deadline, events.recv()).await {
+        if let Ok(codemason_agent::event::Event::AgentError { session_id, .. }) = event
+            && session_id == "s-once"
+        {
+            errors += 1;
+            deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+        }
+    }
+    assert_eq!(errors, 1, "the failed turn must be reported once");
+}
