@@ -89,352 +89,362 @@ pub fn messages_to_lines<S1: BuildHasher, S2: BuildHasher>(
 
     for msg in messages {
         for part in &msg.parts {
-            match part {
-                MessagePart::Text { text } => {
-                    // Agent notices are rendered in bright yellow, one item per line.
-                    if msg.role == Role::Assistant && is_agent_notice(text) {
-                        lines.extend(render_agent_notice_lines(text));
-                        continue;
-                    }
-
-                    // SEC-080: this is the LIVE transcript renderer, which
-                    // previously emitted model/tool text via `Span::raw` with no
-                    // neutralisation (only the log panel sanitised). Assistant
-                    // text can carry an escape sequence copied from a tool result
-                    // or fetched page, so neutralise it here as well.
-                    let text = sanitize_terminal(text);
-                    let text: &str = &text;
-
-                    let (dot, dot_style, indent) = match msg.role {
-                        Role::User => ("You: ", TextStyle::new().fg(ThemeColor::Accent).bold(), 5),
-                        // Context-compaction summaries are internal
-                        // bookkeeping, not the agent's own output: label them
-                        // so a mid-run auto-compaction summary (which uses the
-                        // same "## Objective / ## Work State" shape as a
-                        // sub-agent's final report) is never mistaken for the
-                        // completion report in the output overlay.
-                        Role::Compaction => {
-                            ("[compaction] ", TextStyle::new().fg(ThemeColor::Subtle), 13)
-                        }
-                        Role::Assistant => ("* ", TextStyle::new().fg(ThemeColor::Muted).bold(), 2),
-                    };
-                    for (i, line) in text.lines().enumerate() {
-                        if i == 0 {
-                            // Blank line before the "You:" prompt for visual separation.
-                            if msg.role == Role::User {
-                                lines.push(StyledLine::default());
-                            }
-                            lines.push(StyledLine::from(vec![
-                                StyledSpan::styled(dot, dot_style),
-                                StyledSpan::raw(line.to_owned()),
-                            ]));
-                        } else {
-                            // PERF-047: indentation is emitted as its own
-                            // borrowed span instead of `format!`-ing a fresh
-                            // String with `repeat()` per line (two allocations
-                            // saved per continuation line).
-                            lines.push(StyledLine::from(vec![
-                                StyledSpan::raw(&INDENT_SPACES[..indent]),
-                                StyledSpan::raw(line.to_string()),
-                            ]));
-                        }
-                    }
-                }
-                MessagePart::ToolCall {
-                    tool,
-                    call_id,
-                    state,
-                } => {
-                    let step_tag = if let Some((_sid, step, substep)) = tool_step_map.get(call_id) {
-                        format!("[{step}.{substep}] ")
-                    } else {
-                        String::new()
-                    };
-                    let (indicator, ind_style, name_style) = match state.status {
-                        ToolCallStatus::Completed => (
-                            "* ",
-                            TextStyle::new().fg(ThemeColor::Success),
-                            TextStyle::new().fg(ThemeColor::Success).bold(),
-                        ),
-                        ToolCallStatus::Error => (
-                            "[x] ",
-                            TextStyle::new().fg(ThemeColor::Error),
-                            TextStyle::new().fg(ThemeColor::Error).bold(),
-                        ),
-                        ToolCallStatus::Running | ToolCallStatus::Pending => (
-                            "* ",
-                            TextStyle::new().fg(ThemeColor::Subtle),
-                            TextStyle::new().fg(ThemeColor::Subtle),
-                        ),
-                    };
-
-                    let display_name = capitalize_tool_name(tool);
-                    let summary = tool_input_summary(tool, &state.input, cwd);
-
-                    let inline_diff = if state.status == ToolCallStatus::Completed {
-                        tool_inline_diff(tool, &state.output)
-                    } else {
-                        None
-                    };
-
-                    let mut spans = vec![
-                        StyledSpan::styled(indicator, ind_style),
-                        StyledSpan::styled(
-                            step_tag,
-                            TextStyle::new().fg(ThemeColor::Warning).bold(),
-                        ),
-                    ];
-                    // The tool name always comes immediately after the step
-                    // counter, with every other parameter rendered after it.
-                    //
-                    // A `think` call renders its own thought under the header
-                    // from its tool state, so the header keeps the name only -
-                    // unlike the other tools there is no input summary to
-                    // print, and printing the model's full argument inline
-                    // would duplicate the lines that follow.
-                    let (name_span, argument_span) = if canonical_tool_name(tool) == "think" {
-                        (display_name, None)
-                    } else if summary.is_empty() {
-                        (display_name, None)
-                    } else {
-                        (
-                            format!("{} ", display_name),
-                            Some(StyledSpan::styled(
-                                summary,
-                                TextStyle::new().fg(ThemeColor::Subtle),
-                            )),
-                        )
-                    };
-                    spans.push(StyledSpan::styled(name_span, name_style));
-                    if let Some(argument) = argument_span {
-                        spans.push(argument);
-                    }
-                    if tool == "read" {
-                        if let Some(range) = read_line_range(&state.output) {
-                            spans.push(StyledSpan::styled(
-                                format!(" {}", range),
-                                TextStyle::new().fg(ThemeColor::Text).bold(),
-                            ));
-                        }
-                    }
-                    if let Some((added, removed)) = inline_diff {
-                        spans.push(StyledSpan::styled(
-                            " (",
-                            TextStyle::new().fg(ThemeColor::Subtle),
-                        ));
-                        spans.push(StyledSpan::styled(
-                            format!("+{}", added),
-                            TextStyle::new().fg(ThemeColor::DiffAdded),
-                        ));
-                        spans.push(StyledSpan::styled(
-                            " ",
-                            TextStyle::new().fg(ThemeColor::Subtle),
-                        ));
-                        spans.push(StyledSpan::styled(
-                            format!("-{}", removed),
-                            TextStyle::new().fg(ThemeColor::DiffRemoved),
-                        ));
-                        spans.push(StyledSpan::styled(
-                            ")",
-                            TextStyle::new().fg(ThemeColor::Subtle),
-                        ));
-                    }
-                    // Add duration_ms display for completed tool calls
-                    if state.status == ToolCallStatus::Completed {
-                        if let Some(duration_ms) = state.duration_ms {
-                            let duration_str = if duration_ms < 1000 {
-                                format!(" ({}ms)", duration_ms)
-                            } else {
-                                format!(" ({:.1}s)", duration_ms as f64 / 1000.0)
-                            };
-                            spans.push(StyledSpan::styled(
-                                duration_str,
-                                TextStyle::new().fg(ThemeColor::Subtle),
-                            ));
-                        }
-                    }
-                    lines.push(StyledLine::from(spans));
-
-                    if state.status == ToolCallStatus::Completed {
-                        if tool == "think" {
-                            if let Some(thought) = state
-                                .output
-                                .as_ref()
-                                .and_then(|out| out.get("thought"))
-                                .and_then(|v| v.as_str())
-                                .or_else(|| {
-                                    state
-                                        .output
-                                        .as_ref()
-                                        .and_then(|out| out.get("thinking"))
-                                        .and_then(|v| v.as_str())
-                                })
-                                .or_else(|| {
-                                    state
-                                        .output
-                                        .as_ref()
-                                        .and_then(|out| out.get("text"))
-                                        .and_then(|v| v.as_str())
-                                })
-                                .or_else(|| {
-                                    state
-                                        .input
-                                        .get("thought")
-                                        .and_then(|v| v.as_str())
-                                        .filter(|_| state.output.is_none())
-                                })
-                            {
-                                // SEC-080: `thought` is tool output; neutralise
-                                // any embedded terminal escapes before rendering.
-                                let thought = sanitize_terminal(thought);
-                                let mut thought_lines = Vec::new();
-                                for line in thought.as_ref().lines() {
-                                    thought_lines.push(StyledLine::from(StyledSpan::styled(
-                                        format!("  {}", line),
-                                        THINK_STYLE,
-                                    )));
-                                }
-                                // A model may narrate its next tool call as
-                                // markup INSIDE the thought; the loop recovers
-                                // and executes that call, so the transcript
-                                // shows the executed call instead of the raw
-                                // narration.
-                                lines.extend(scrub_narrated_toolcalls(thought_lines));
-                            }
-                        } else if tool == "multiedit" || tool == "multi_edit" {
-                            if let Some(file_stats) = state
-                                .output
-                                .as_ref()
-                                .and_then(|out| out.get("file_stats"))
-                                .and_then(|v| v.as_array())
-                            {
-                                let rel_paths: Vec<String> = file_stats
-                                    .iter()
-                                    .map(|fs| {
-                                        fs.get("path")
-                                            .and_then(|p| p.as_str())
-                                            .map(|p| make_relative_path(p, cwd))
-                                            .unwrap_or_default()
-                                    })
-                                    .collect();
-                                let max_len = rel_paths.iter().map(|p| p.len()).max().unwrap_or(0);
-                                for (fs, rel_path) in file_stats.iter().zip(rel_paths.iter()) {
-                                    let added =
-                                        fs.get("added").and_then(|v| v.as_u64()).unwrap_or(0);
-                                    let removed =
-                                        fs.get("removed").and_then(|v| v.as_u64()).unwrap_or(0);
-                                    let padding =
-                                        " ".repeat(max_len.saturating_sub(rel_path.len()));
-                                    lines.push(StyledLine::from(vec![
-                                        StyledSpan::styled(
-                                            format!("  └ {}{} ", rel_path, padding),
-                                            TextStyle::new().fg(ThemeColor::Subtle),
-                                        ),
-                                        StyledSpan::styled(
-                                            format!("+{}", added),
-                                            TextStyle::new().fg(ThemeColor::DiffAdded),
-                                        ),
-                                        StyledSpan::styled(" ", TextStyle::new()),
-                                        StyledSpan::styled(
-                                            format!("-{}", removed),
-                                            TextStyle::new().fg(ThemeColor::DiffRemoved),
-                                        ),
-                                    ]));
-                                }
-                            } else if let Some(result) =
-                                tool_result_summary(tool, &state.output, &state.input, cwd)
-                            {
-                                // SEC-080: tool output is untrusted; neutralise
-                                // any terminal escapes before rendering.
-                                let result = sanitize_terminal(&result);
-                                lines.push(StyledLine::from(StyledSpan::styled(
-                                    format!("  └ {}", result),
-                                    TextStyle::new().fg(ThemeColor::Subtle),
-                                )));
-                            }
-                        } else if tool == "agent_complete" {
-                            // Render the full task-completion summary one output line
-                            // per rendered line. Embedding a multi-line summary in a
-                            // single Line does not work: the renderer strips '\n'
-                            // graphemes inside a Span, so the summary would render
-                            // as one continuous paragraph.
-                            let summary = state
-                                .output
-                                .as_ref()
-                                .and_then(|out| out.get("summary"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or_default();
-                            // SEC-080: summary is tool output; neutralise escapes.
-                            let summary = sanitize_terminal(summary);
-                            let summary: &str = &summary;
-                            if summary.is_empty() {
-                                lines.push(StyledLine::from(StyledSpan::styled(
-                                    "  \\- Task complete",
-                                    TextStyle::new().fg(ThemeColor::Success),
-                                )));
-                            } else {
-                                for line in summary.lines() {
-                                    lines.push(StyledLine::from(StyledSpan::styled(
-                                        format!("  \\- {line}"),
-                                        TextStyle::new().fg(ThemeColor::Success),
-                                    )));
-                                }
-                            }
-                        } else if tool != "Edit"
-                            && let Some(result) =
-                                tool_result_summary(tool, &state.output, &state.input, cwd)
-                        {
-                            // SEC-080: tool output is untrusted; neutralise escapes.
-                            let result = sanitize_terminal(&result);
-                            lines.push(StyledLine::from(StyledSpan::styled(
-                                format!("  └ {}", result),
-                                TextStyle::new().fg(ThemeColor::Subtle),
-                            )));
-                        }
-                    }
-                    if state.status == ToolCallStatus::Error {
-                        if let Some(ref err) = state.error {
-                            // SEC-080: tool error text is untrusted; neutralise.
-                            let err = sanitize_terminal(err);
-                            lines.push(StyledLine::from(StyledSpan::styled(
-                                format!("  └ {}", err),
-                                TextStyle::new().fg(ThemeColor::Error),
-                            )));
-                        }
-                    }
-                }
-                MessagePart::Reasoning { text, .. } => {
-                    // SEC-080: reasoning text is model output and may embed an
-                    // escape sequence; neutralise before rendering.
-                    let text = sanitize_terminal(text);
-                    let mut reasoning_lines = Vec::new();
-                    for line in text.as_ref().lines() {
-                        reasoning_lines.push(StyledLine::from(StyledSpan::styled(
-                            format!("  {}", line),
-                            THINK_STYLE,
-                        )));
-                    }
-                    // Reasoning text is also a place models narrate tool-call
-                    // markup into; scrub it the same way as think outputs.
-                    lines.extend(scrub_narrated_toolcalls(reasoning_lines));
-                }
-                MessagePart::Image(img) => {
-                    let name = img
-                        .path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("image");
-                    lines.push(StyledLine::from(StyledSpan::styled(
-                        format!("  {} [image: {}]", ICON_ATTACHMENT, name),
-                        TextStyle::new().fg(ThemeColor::Info),
-                    )));
-                }
-            }
-
-            lines.push(StyledLine::default());
+            lines.extend(part_lines(&msg.role, part, tool_step_map, cwd));
         }
     }
 
+    lines
+}
+
+/// Render one part of a message whose author is `role` into formatted lines.
+///
+/// The lines end with a blank separator line, except for an agent notice,
+/// whose own rendering already ends with one. [`messages_to_lines`] is these
+/// lines for every part in order; the GUI's block model
+/// ([`crate::message_blocks`]) uses them for the parts it does not render
+/// itself (tool calls, notices).
+pub fn part_lines<S: BuildHasher>(
+    role: &Role,
+    part: &MessagePart,
+    tool_step_map: &HashMap<String, (String, u32, u32), S>,
+    cwd: &str,
+) -> Vec<StyledLine> {
+    let mut lines: Vec<StyledLine> = Vec::new();
+    match part {
+        MessagePart::Text { text } => {
+            // Agent notices are rendered in bright yellow, one item per line.
+            if *role == Role::Assistant && is_agent_notice(text) {
+                lines.extend(render_agent_notice_lines(text));
+                return lines;
+            }
+
+            // SEC-080: this is the LIVE transcript renderer, which
+            // previously emitted model/tool text via `Span::raw` with no
+            // neutralisation (only the log panel sanitised). Assistant
+            // text can carry an escape sequence copied from a tool result
+            // or fetched page, so neutralise it here as well.
+            let text = sanitize_terminal(text);
+            let text: &str = &text;
+
+            let (dot, dot_style, indent) = match role {
+                Role::User => ("You: ", TextStyle::new().fg(ThemeColor::Accent).bold(), 5),
+                // Context-compaction summaries are internal
+                // bookkeeping, not the agent's own output: label them
+                // so a mid-run auto-compaction summary (which uses the
+                // same "## Objective / ## Work State" shape as a
+                // sub-agent's final report) is never mistaken for the
+                // completion report in the output overlay.
+                Role::Compaction => ("[compaction] ", TextStyle::new().fg(ThemeColor::Subtle), 13),
+                Role::Assistant => ("* ", TextStyle::new().fg(ThemeColor::Muted).bold(), 2),
+            };
+            for (i, line) in text.lines().enumerate() {
+                if i == 0 {
+                    // Blank line before the "You:" prompt for visual separation.
+                    if *role == Role::User {
+                        lines.push(StyledLine::default());
+                    }
+                    lines.push(StyledLine::from(vec![
+                        StyledSpan::styled(dot, dot_style),
+                        StyledSpan::raw(line.to_owned()),
+                    ]));
+                } else {
+                    // PERF-047: indentation is emitted as its own
+                    // borrowed span instead of `format!`-ing a fresh
+                    // String with `repeat()` per line (two allocations
+                    // saved per continuation line).
+                    lines.push(StyledLine::from(vec![
+                        StyledSpan::raw(&INDENT_SPACES[..indent]),
+                        StyledSpan::raw(line.to_string()),
+                    ]));
+                }
+            }
+        }
+        MessagePart::ToolCall {
+            tool,
+            call_id,
+            state,
+        } => {
+            let step_tag = if let Some((_sid, step, substep)) = tool_step_map.get(call_id) {
+                format!("[{step}.{substep}] ")
+            } else {
+                String::new()
+            };
+            let (indicator, ind_style, name_style) = match state.status {
+                ToolCallStatus::Completed => (
+                    "* ",
+                    TextStyle::new().fg(ThemeColor::Success),
+                    TextStyle::new().fg(ThemeColor::Success).bold(),
+                ),
+                ToolCallStatus::Error => (
+                    "[x] ",
+                    TextStyle::new().fg(ThemeColor::Error),
+                    TextStyle::new().fg(ThemeColor::Error).bold(),
+                ),
+                ToolCallStatus::Running | ToolCallStatus::Pending => (
+                    "* ",
+                    TextStyle::new().fg(ThemeColor::Subtle),
+                    TextStyle::new().fg(ThemeColor::Subtle),
+                ),
+            };
+
+            let display_name = capitalize_tool_name(tool);
+            let summary = tool_input_summary(tool, &state.input, cwd);
+
+            let inline_diff = if state.status == ToolCallStatus::Completed {
+                tool_inline_diff(tool, &state.output)
+            } else {
+                None
+            };
+
+            let mut spans = vec![
+                StyledSpan::styled(indicator, ind_style),
+                StyledSpan::styled(step_tag, TextStyle::new().fg(ThemeColor::Warning).bold()),
+            ];
+            // The tool name always comes immediately after the step
+            // counter, with every other parameter rendered after it.
+            //
+            // A `think` call renders its own thought under the header
+            // from its tool state, so the header keeps the name only -
+            // unlike the other tools there is no input summary to
+            // print, and printing the model's full argument inline
+            // would duplicate the lines that follow.
+            let (name_span, argument_span) = if canonical_tool_name(tool) == "think" {
+                (display_name, None)
+            } else if summary.is_empty() {
+                (display_name, None)
+            } else {
+                (
+                    format!("{} ", display_name),
+                    Some(StyledSpan::styled(
+                        summary,
+                        TextStyle::new().fg(ThemeColor::Subtle),
+                    )),
+                )
+            };
+            spans.push(StyledSpan::styled(name_span, name_style));
+            if let Some(argument) = argument_span {
+                spans.push(argument);
+            }
+            if tool == "read" {
+                if let Some(range) = read_line_range(&state.output) {
+                    spans.push(StyledSpan::styled(
+                        format!(" {}", range),
+                        TextStyle::new().fg(ThemeColor::Text).bold(),
+                    ));
+                }
+            }
+            if let Some((added, removed)) = inline_diff {
+                spans.push(StyledSpan::styled(
+                    " (",
+                    TextStyle::new().fg(ThemeColor::Subtle),
+                ));
+                spans.push(StyledSpan::styled(
+                    format!("+{}", added),
+                    TextStyle::new().fg(ThemeColor::DiffAdded),
+                ));
+                spans.push(StyledSpan::styled(
+                    " ",
+                    TextStyle::new().fg(ThemeColor::Subtle),
+                ));
+                spans.push(StyledSpan::styled(
+                    format!("-{}", removed),
+                    TextStyle::new().fg(ThemeColor::DiffRemoved),
+                ));
+                spans.push(StyledSpan::styled(
+                    ")",
+                    TextStyle::new().fg(ThemeColor::Subtle),
+                ));
+            }
+            // Add duration_ms display for completed tool calls
+            if state.status == ToolCallStatus::Completed {
+                if let Some(duration_ms) = state.duration_ms {
+                    let duration_str = if duration_ms < 1000 {
+                        format!(" ({}ms)", duration_ms)
+                    } else {
+                        format!(" ({:.1}s)", duration_ms as f64 / 1000.0)
+                    };
+                    spans.push(StyledSpan::styled(
+                        duration_str,
+                        TextStyle::new().fg(ThemeColor::Subtle),
+                    ));
+                }
+            }
+            lines.push(StyledLine::from(spans));
+
+            if state.status == ToolCallStatus::Completed {
+                if tool == "think" {
+                    if let Some(thought) = state
+                        .output
+                        .as_ref()
+                        .and_then(|out| out.get("thought"))
+                        .and_then(|v| v.as_str())
+                        .or_else(|| {
+                            state
+                                .output
+                                .as_ref()
+                                .and_then(|out| out.get("thinking"))
+                                .and_then(|v| v.as_str())
+                        })
+                        .or_else(|| {
+                            state
+                                .output
+                                .as_ref()
+                                .and_then(|out| out.get("text"))
+                                .and_then(|v| v.as_str())
+                        })
+                        .or_else(|| {
+                            state
+                                .input
+                                .get("thought")
+                                .and_then(|v| v.as_str())
+                                .filter(|_| state.output.is_none())
+                        })
+                    {
+                        // SEC-080: `thought` is tool output; neutralise
+                        // any embedded terminal escapes before rendering.
+                        let thought = sanitize_terminal(thought);
+                        let mut thought_lines = Vec::new();
+                        for line in thought.as_ref().lines() {
+                            thought_lines.push(StyledLine::from(StyledSpan::styled(
+                                format!("  {}", line),
+                                THINK_STYLE,
+                            )));
+                        }
+                        // A model may narrate its next tool call as
+                        // markup INSIDE the thought; the loop recovers
+                        // and executes that call, so the transcript
+                        // shows the executed call instead of the raw
+                        // narration.
+                        lines.extend(scrub_narrated_toolcalls(thought_lines));
+                    }
+                } else if tool == "multiedit" || tool == "multi_edit" {
+                    if let Some(file_stats) = state
+                        .output
+                        .as_ref()
+                        .and_then(|out| out.get("file_stats"))
+                        .and_then(|v| v.as_array())
+                    {
+                        let rel_paths: Vec<String> = file_stats
+                            .iter()
+                            .map(|fs| {
+                                fs.get("path")
+                                    .and_then(|p| p.as_str())
+                                    .map(|p| make_relative_path(p, cwd))
+                                    .unwrap_or_default()
+                            })
+                            .collect();
+                        let max_len = rel_paths.iter().map(|p| p.len()).max().unwrap_or(0);
+                        for (fs, rel_path) in file_stats.iter().zip(rel_paths.iter()) {
+                            let added = fs.get("added").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let removed = fs.get("removed").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let padding = " ".repeat(max_len.saturating_sub(rel_path.len()));
+                            lines.push(StyledLine::from(vec![
+                                StyledSpan::styled(
+                                    format!("  └ {}{} ", rel_path, padding),
+                                    TextStyle::new().fg(ThemeColor::Subtle),
+                                ),
+                                StyledSpan::styled(
+                                    format!("+{}", added),
+                                    TextStyle::new().fg(ThemeColor::DiffAdded),
+                                ),
+                                StyledSpan::styled(" ", TextStyle::new()),
+                                StyledSpan::styled(
+                                    format!("-{}", removed),
+                                    TextStyle::new().fg(ThemeColor::DiffRemoved),
+                                ),
+                            ]));
+                        }
+                    } else if let Some(result) =
+                        tool_result_summary(tool, &state.output, &state.input, cwd)
+                    {
+                        // SEC-080: tool output is untrusted; neutralise
+                        // any terminal escapes before rendering.
+                        let result = sanitize_terminal(&result);
+                        lines.push(StyledLine::from(StyledSpan::styled(
+                            format!("  └ {}", result),
+                            TextStyle::new().fg(ThemeColor::Subtle),
+                        )));
+                    }
+                } else if tool == "agent_complete" {
+                    // Render the full task-completion summary one output line
+                    // per rendered line. Embedding a multi-line summary in a
+                    // single Line does not work: the renderer strips '\n'
+                    // graphemes inside a Span, so the summary would render
+                    // as one continuous paragraph.
+                    let summary = state
+                        .output
+                        .as_ref()
+                        .and_then(|out| out.get("summary"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+                    // SEC-080: summary is tool output; neutralise escapes.
+                    let summary = sanitize_terminal(summary);
+                    let summary: &str = &summary;
+                    if summary.is_empty() {
+                        lines.push(StyledLine::from(StyledSpan::styled(
+                            "  \\- Task complete",
+                            TextStyle::new().fg(ThemeColor::Success),
+                        )));
+                    } else {
+                        for line in summary.lines() {
+                            lines.push(StyledLine::from(StyledSpan::styled(
+                                format!("  \\- {line}"),
+                                TextStyle::new().fg(ThemeColor::Success),
+                            )));
+                        }
+                    }
+                } else if tool != "Edit"
+                    && let Some(result) =
+                        tool_result_summary(tool, &state.output, &state.input, cwd)
+                {
+                    // SEC-080: tool output is untrusted; neutralise escapes.
+                    let result = sanitize_terminal(&result);
+                    lines.push(StyledLine::from(StyledSpan::styled(
+                        format!("  └ {}", result),
+                        TextStyle::new().fg(ThemeColor::Subtle),
+                    )));
+                }
+            }
+            if state.status == ToolCallStatus::Error {
+                if let Some(ref err) = state.error {
+                    // SEC-080: tool error text is untrusted; neutralise.
+                    let err = sanitize_terminal(err);
+                    lines.push(StyledLine::from(StyledSpan::styled(
+                        format!("  └ {}", err),
+                        TextStyle::new().fg(ThemeColor::Error),
+                    )));
+                }
+            }
+        }
+        MessagePart::Reasoning { text, .. } => {
+            // SEC-080: reasoning text is model output and may embed an
+            // escape sequence; neutralise before rendering.
+            let text = sanitize_terminal(text);
+            let mut reasoning_lines = Vec::new();
+            for line in text.as_ref().lines() {
+                reasoning_lines.push(StyledLine::from(StyledSpan::styled(
+                    format!("  {}", line),
+                    THINK_STYLE,
+                )));
+            }
+            // Reasoning text is also a place models narrate tool-call
+            // markup into; scrub it the same way as think outputs.
+            lines.extend(scrub_narrated_toolcalls(reasoning_lines));
+        }
+        MessagePart::Image(img) => {
+            let name = img
+                .path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("image");
+            lines.push(StyledLine::from(StyledSpan::styled(
+                format!("  {} [image: {}]", ICON_ATTACHMENT, name),
+                TextStyle::new().fg(ThemeColor::Info),
+            )));
+        }
+    }
+
+    lines.push(StyledLine::default());
     lines
 }
 

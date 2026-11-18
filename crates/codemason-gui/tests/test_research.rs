@@ -16,6 +16,7 @@ use codemason_app_core::research_progress::{
     ResearchProgress, SessionPhase, StepStatus, encode_cluster_progress_event,
 };
 use codemason_gui::Shell;
+use codemason_gui::panels::messages::MESSAGES_LABEL;
 use codemason_gui::panels::research::{DECK_PROGRESS_LABEL, RESEARCH_PROGRESS_LABEL};
 use egui::accesskit::Role;
 use egui_kittest::Harness;
@@ -67,9 +68,15 @@ fn shown(harness: &Harness<'_, Shell>, role: Role, label: &str) -> bool {
 /// App has a session; its text starts with the `[research]` header.
 fn has_text(harness: &Harness<'_, Shell>, text: &str) -> bool {
     harness.query_all_by_label_contains(text).any(|node| {
-        let node = node.accesskit_node();
-        let label = node.value().or_else(|| node.label()).unwrap_or_default();
-        !label.contains("[research] Research Progress")
+        // The transcript's own research message is not the progress view.
+        let mut ancestor = node.accesskit_node().parent();
+        while let Some(parent) = ancestor {
+            if parent.label().as_deref() == Some(MESSAGES_LABEL) {
+                return false;
+            }
+            ancestor = parent.parent();
+        }
+        true
     })
 }
 

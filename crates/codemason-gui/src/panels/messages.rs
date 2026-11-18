@@ -1,11 +1,20 @@
 //! The message transcript view (the Messages pane).
 //!
-//! [`MessagesView`] draws `App::session.messages` as the core renders them:
-//! each message becomes styled lines through
-//! [`codemason_app_core::message_lines::message_to_lines`] (role prefixes,
-//! tool-call headers and summaries, reasoning), laid out with
-//! [`crate::styled_text::styled_to_layout_job`]. The GUI adds no message
-//! formatting of its own.
+//! [`MessagesView`] draws `App::session.messages` as blocks: each message is
+//! split by [`codemason_app_core::message_blocks::message_to_blocks`], and
+//! each block is drawn with its own widget. The assistant's Markdown goes
+//! through `egui_commonmark` (headings, lists, tables, links that open in the
+//! browser, code blocks with a Copy button); the user's text is plain; tool
+//! calls, notices and reasoning are the core's styled lines, laid out with
+//! [`crate::styled_text::styled_to_layout_job`]. Every block's text is
+//! selectable.
+//!
+//! # Framing
+//!
+//! A user turn is a raised card with a `You` chip; an assistant turn has a
+//! thin accent rule down its left edge and no frame; a compaction summary is
+//! a card with a `Compaction` chip. Turns are separated by the spacing
+//! scale's medium gap.
 //!
 //! # Virtualisation
 //!
@@ -15,7 +24,7 @@
 //! `i`), and draws through `ScrollArea::show_viewport`: a binary search finds
 //! the first message intersecting the viewport, and messages are laid out
 //! from there until the viewport's bottom. A message never laid out has an
-//! estimated height (its line count times the row height). Every message
+//! estimated height (its text's line count times the row height). Every message
 //! that is laid out records its real height at the current width, so after
 //! a resize the visible messages are corrected on the next frame and the
 //! rest as they scroll into view. Only visible messages are ever laid out,
@@ -32,22 +41,59 @@
 //! a repaint scheduled for the end of the window; once processing ends it
 //! re-renders at once.
 //!
-//! Dependencies: `egui`, `codemason-app-core` (messages, line rendering,
-//! tool-call status labels), [`crate::palette`] and [`crate::styled_text`].
+//! Dependencies: `egui`, `egui_commonmark`, `codemason-app-core` (messages,
+//! blocks), [`crate::palette`], [`crate::metrics`] and
+//! [`crate::styled_text`].
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use codemason_agent::message::Message;
+use codemason_agent::message::{Message, Role as MessageRole};
 use codemason_app_core::app::App;
-use codemason_app_core::message_lines::{
-    MESSAGE_STREAM_MIN_INTERVAL, message_to_lines, tool_call_status_labels,
-};
-use codemason_app_core::styled::StyledLine;
+use codemason_app_core::message_blocks::{TranscriptBlock, message_to_blocks};
+use codemason_app_core::message_lines::MESSAGE_STREAM_MIN_INTERVAL;
+use codemason_types::sanitize_terminal::sanitize_terminal;
 use egui::{FontId, Rect, Role, ScrollArea, Sense, WidgetInfo, pos2, vec2};
+use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
+use crate::metrics::{radius, space, text_size};
 use crate::palette::Palette;
+use crate::panels::code_block::{CodeAction, code_block_ui};
 use crate::styled_text::{Bold, FONT_SIZE, styled_to_layout_job};
+
+/// The chip on a user turn.
+pub const USER_CHIP: &str = "You";
+
+/// The chip on a compaction summary.
+pub const COMPACTION_CHIP: &str = "Compaction";
+
+/// Width of the accent rule down an assistant turn's left edge, in points.
+const RULE_WIDTH: f32 = 2.0;
+
+/// Width of a card's outline, in points.
+const CARD_STROKE: f32 = 1.0;
+
+/// A card's inner margin, top and bottom together.
+const CARD_PADDING: f32 = space::SM + space::SM;
+
+/// The largest side of an image thumbnail, in points.
+pub const THUMBNAIL_SIZE: f32 = 160.0;
+
+/// Width of the caret after a reply that is still streaming, in points.
+const CARET_WIDTH: f32 = 7.0;
+
+/// What a block asked the caller to do this frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BlockAction {
+    /// Put this code into the prompt.
+    Insert(String),
+    /// Show this image at full size.
+    Enlarge(std::path::PathBuf),
+}
+
+/// The space between two blocks of one message: the added gap plus the
+/// item spacing.
+const BLOCK_GAP: f32 = 2.0 * space::XS;
 
 /// Accessible label of the transcript.
 pub const MESSAGES_LABEL: &str = "Messages";
@@ -59,33 +105,105 @@ const MARGIN: f32 = 4.0;
 const HEIGHT_EPSILON: f32 = 0.5;
 
 /// One message's cached rendering.
-#[derive(Debug)]
 struct Entry {
     /// The message's id, to tell a replaced message from an edited one.
     id: String,
-    /// The message's `edit_seq` when `lines` were rendered.
+    /// The message's `edit_seq` when `blocks` were made.
     edit_seq: u64,
-    /// The core's rendering of the message.
-    lines: Vec<StyledLine>,
-    /// `"<Tool>: <status>"` for each tool call, from the core.
-    status_labels: Vec<String>,
+    /// Who wrote the message.
+    role: MessageRole,
+    /// The core's blocks of the message.
+    blocks: Vec<TranscriptBlock>,
+    /// The message's text as written (Markdown for the assistant), for Copy
+    /// as Markdown and Quote in reply; terminal escapes removed.
+    source: String,
     /// Height in points: the last laid-out height, or an estimate for a
     /// message never laid out.
     height: f32,
 }
 
 impl Entry {
-    /// Render `msg` through the core and estimate its height.
-    fn render(msg: &Message, app: &App, row_height: f32) -> Self {
-        let lines = message_to_lines(msg, &app.tool_step_map, &app.sid_to_display_name, &app.cwd);
-        let height = lines.len().max(1) as f32 * row_height;
-        Self {
+    /// Split `msg` into blocks through the core and estimate its height.
+    fn render(msg: &Message, app: &App, rows: RowHeights) -> Self {
+        let blocks = message_to_blocks(msg, &app.tool_step_map, &app.cwd);
+        let mut entry = Self {
             id: msg.id.clone(),
             edit_seq: msg.edit_seq,
-            status_labels: tool_call_status_labels(msg),
-            lines,
-            height,
-        }
+            role: msg.role.clone(),
+            blocks,
+            source: sanitize_terminal(&msg.text_content()).into_owned(),
+            height: 0.0,
+        };
+        entry.height = entry.estimate(rows);
+        entry
+    }
+
+    /// The height this entry is drawn at before it is measured: each block's
+    /// text rows, the gaps between blocks, a card's chip and margins, and the
+    /// gap after the message. Exact for plain one-paragraph blocks, so a
+    /// transcript of short messages settles in one frame.
+    fn estimate(&self, rows: RowHeights) -> f32 {
+        let text: f32 = self
+            .blocks
+            .iter()
+            .map(|block| {
+                let lines = block.plain_text().lines().count().max(1) as f32;
+                match block {
+                    TranscriptBlock::Markdown(_)
+                    | TranscriptBlock::Plain(_)
+                    | TranscriptBlock::Image { .. } => lines * rows.label,
+                    TranscriptBlock::Code { .. } => lines.mul_add(
+                        rows.code,
+                        rows.header + space::XS + CARD_PADDING + CARD_STROKE,
+                    ),
+                    TranscriptBlock::Notice(_)
+                    | TranscriptBlock::Thinking(_)
+                    | TranscriptBlock::Tool { .. } => lines * rows.styled,
+                }
+            })
+            .sum();
+        let gaps = self.blocks.len().saturating_sub(1) as f32 * BLOCK_GAP;
+        let card = match self.role {
+            // egui grows a stroked frame by one stroke width in all.
+            MessageRole::User | MessageRole::Compaction => {
+                rows.chip + space::XS + CARD_PADDING + CARD_STROKE
+            }
+            MessageRole::Assistant => 0.0,
+        };
+        text.max(rows.label) + gaps + card + space::MD
+    }
+}
+
+/// The row heights a message estimate is built from.
+#[derive(Debug, Clone, Copy)]
+struct RowHeights {
+    /// A row of label text (Markdown, plain text).
+    label: f32,
+    /// A row of the core's styled lines.
+    styled: f32,
+    /// The role chip's row.
+    chip: f32,
+    /// A row of code.
+    code: f32,
+    /// A code block's header row (its buttons).
+    header: f32,
+}
+
+impl RowHeights {
+    /// The row heights of `ui`'s current style, rounded to whole points as
+    /// egui places rows.
+    fn of(ui: &egui::Ui) -> Self {
+        let body = egui::TextStyle::Body.resolve(ui.style());
+        let header = ui.spacing().interact_size.y.round();
+        ui.ctx().fonts_mut(|fonts| Self {
+            label: fonts.row_height(&body).round(),
+            styled: fonts.row_height(&FontId::proportional(FONT_SIZE)).round(),
+            chip: fonts
+                .row_height(&FontId::proportional(text_size::SMALL))
+                .round(),
+            code: fonts.row_height(&FontId::monospace(FONT_SIZE)).round(),
+            header,
+        })
     }
 }
 
@@ -113,6 +231,28 @@ pub struct MessagesView {
     at_bottom: bool,
     /// The scroll offset at the end of the last frame.
     scroll_offset: f32,
+    /// `egui_commonmark`'s cache (parsed images, link hooks).
+    markdown: CommonMarkCache,
+    /// Code a code block's Insert button asked to put in the prompt, for
+    /// the caller to take with [`MessagesView::take_insert`].
+    pending_insert: Option<String>,
+    /// The index of the message under the pointer in the last frame.
+    under_pointer: Option<usize>,
+    /// An image a thumbnail click asked to show at full size, for the caller
+    /// to take with [`MessagesView::take_enlarge`].
+    pending_enlarge: Option<std::path::PathBuf>,
+}
+
+impl std::fmt::Debug for Entry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Entry")
+            .field("id", &self.id)
+            .field("edit_seq", &self.edit_seq)
+            .field("blocks", &self.blocks.len())
+            .field("source", &self.source.len())
+            .field("height", &self.height)
+            .finish()
+    }
 }
 
 /// The messages a [`MessagesView`] shows.
@@ -171,6 +311,10 @@ impl Default for MessagesView {
             last_stream_render: None,
             at_bottom: true,
             scroll_offset: 0.0,
+            markdown: CommonMarkCache::default(),
+            pending_insert: None,
+            under_pointer: None,
+            pending_enlarge: None,
         }
     }
 }
@@ -195,16 +339,16 @@ impl MessagesView {
             messages: &app.session.messages,
             processing: app.session.is_processing,
         };
-        let frame = self.show_messages(ui, app, source, palette, None);
+        // The transcript's node is made before its contents, so egui can
+        // place every message's widgets under it.
+        //
         // Hover only (a click sense would make the transcript a Tab stop);
         // the shell reads a right-click over it from the pointer to open
         // the context menu, as it holds the App mutably.
-        let response = ui.interact(
-            frame.rect,
-            ui.scope_id().with("messages_transcript"),
-            Sense::hover(),
-        );
+        let id = ui.scope_id().with("messages_transcript");
+        let response = ui.interact(ui.available_rect_before_wrap(), id, Sense::hover());
         response.widget_info(|| WidgetInfo::labeled(Role::Log, true, MESSAGES_LABEL));
+        self.show_messages(ui, app, source, palette, None, id);
         response
     }
 
@@ -220,6 +364,9 @@ impl MessagesView {
     /// * `palette` - the colours of the current theme.
     /// * `scroll_to` - where to move this frame (a keyboard scroll, or
     ///   keeping a rebuilt view in place); `None` keeps the user's scrolling.
+    /// * `node` - the id of the caller's accessibility node for the
+    ///   transcript (the `Log` it labels), made before this call; every
+    ///   message's widgets are placed under it.
     ///
     /// # Returns
     ///
@@ -232,18 +379,20 @@ impl MessagesView {
         source: MessageSource<'_>,
         palette: &Palette,
         scroll_to: Option<ScrollTo>,
+        node: egui::Id,
     ) -> ViewScroll {
         self.laid_out = 0;
-        let row_height = ui
-            .ctx()
-            .fonts_mut(|fonts| fonts.row_height(&FontId::proportional(FONT_SIZE)));
+        let rows = RowHeights::of(ui);
         let now = self.clock.unwrap_or_else(Instant::now);
-        let outcome = self.sync(app, source, row_height, now);
+        let outcome = self.sync(app, source, rows, now);
         if let Some(delay) = outcome.retry_in {
             // A streamed edit is waiting out the throttle; draw it then.
             ui.ctx().request_repaint_after(delay);
         }
 
+        let row_height = ui
+            .ctx()
+            .fonts_mut(|fonts| fonts.row_height(&FontId::proportional(FONT_SIZE)));
         let mut max_offset = 0.0;
         let frame = egui::Frame::NONE
             .fill(palette.background)
@@ -271,7 +420,7 @@ impl MessagesView {
                 }
                 let to_bottom = matches!(scroll_to, Some(ScrollTo::Bottom));
                 let output = scroll.show_viewport(ui, |ui, viewport| {
-                    self.show_visible(ui, viewport, palette);
+                    self.show_visible(ui, viewport, palette, node, source.processing);
                     if to_bottom {
                         // Scroll to the end of the content; once there, the
                         // area sticks to the bottom as more arrives.
@@ -296,6 +445,50 @@ impl MessagesView {
             max_offset,
             row_height,
         }
+    }
+
+    /// The code a code block's Insert button asked for since the last call,
+    /// if any. The caller puts it in the prompt (the view only reads the App).
+    pub fn take_insert(&mut self) -> Option<String> {
+        self.pending_insert.take()
+    }
+
+    /// Carry out what the view's blocks asked for this frame: Insert puts
+    /// the code at the end of the prompt, on a line of its own, and focuses
+    /// it; a thumbnail click opens the image view. Every caller of
+    /// [`Self::show_messages`] calls this after it, with the App it may now
+    /// change.
+    pub fn apply_actions(&mut self, ctx: &egui::Context, app: &mut App) {
+        if let Some(code) = self.take_insert() {
+            let input = &mut app.session.input;
+            if !input.is_empty() && !input.ends_with('\n') {
+                input.push('\n');
+            }
+            input.push_str(&code);
+            let end = app.session.input.chars().count();
+            // Moves the cursor to the end and refreshes the completion menus.
+            app.input_edited(end);
+            ctx.memory_mut(|m| m.request_focus(crate::panels::prompt::prompt_id()));
+        }
+        if let Some(path) = self.take_enlarge() {
+            crate::dialogs::image_view::open(ctx, path);
+        }
+    }
+
+    /// The image a thumbnail click asked to show at full size since the last
+    /// call, if any.
+    pub fn take_enlarge(&mut self) -> Option<std::path::PathBuf> {
+        self.pending_enlarge.take()
+    }
+
+    /// The text of the message under the pointer in the last frame, if it
+    /// has any: its Markdown for an assistant message, as typed for a user's.
+    #[must_use]
+    pub fn message_at_pointer(&self) -> Option<&str> {
+        self.under_pointer
+            .and_then(|i| self.entries.get(i))
+            .map(|e| e.source.as_str())
+            .filter(|source| !source.trim().is_empty())
     }
 
     /// How many messages the last frame laid out.
@@ -362,7 +555,7 @@ impl MessagesView {
         &mut self,
         app: &App,
         source: MessageSource<'_>,
-        row_height: f32,
+        rows: RowHeights,
         now: Instant,
     ) -> SyncOutcome {
         let messages = source.messages;
@@ -381,14 +574,14 @@ impl MessagesView {
                 Some(_) if throttled => held_back = true,
                 Some(entry) => {
                     let height = entry.height;
-                    *entry = Entry::render(msg, app, row_height);
+                    *entry = Entry::render(msg, app, rows);
                     entry.height = height;
                     self.rendered += 1;
                     rendered_edit = true;
                     self.offsets_dirty = true;
                 }
                 None => {
-                    self.entries.push(Entry::render(msg, app, row_height));
+                    self.entries.push(Entry::render(msg, app, rows));
                     self.rendered += 1;
                     self.offsets_dirty = true;
                 }
@@ -476,10 +669,20 @@ impl MessagesView {
         self.offsets_dirty = false;
     }
 
-    /// Lay out and paint the messages intersecting `viewport`.
+    /// Lay out and draw the messages intersecting `viewport`.
     ///
-    /// `viewport` is relative to the top of the scrolled content.
-    fn show_visible(&mut self, ui: &mut egui::Ui, viewport: Rect, palette: &Palette) {
+    /// `viewport` is relative to the top of the scrolled content; each
+    /// message's widgets are placed under the accessibility node `node`.
+    /// While `processing`, the last message, if it is the assistant's, ends
+    /// with a caret.
+    fn show_visible(
+        &mut self,
+        ui: &mut egui::Ui,
+        viewport: Rect,
+        palette: &Palette,
+        node: egui::Id,
+        processing: bool,
+    ) {
         let width = ui.available_width().max(1.0);
         if self.offsets_dirty {
             self.rebuild_offsets();
@@ -496,29 +699,44 @@ impl MessagesView {
         self.first_visible = (first < self.entries.len()).then_some(first);
         let mut height_changed = false;
         let bold = Bold::of(ui.ctx());
-        for entry in self.entries.iter_mut().skip(first) {
+        let pointer = ui.input(|i| i.pointer.hover_pos());
+        self.under_pointer = None;
+        let last = self.entries.len().saturating_sub(1);
+        for (index, entry) in self.entries.iter_mut().enumerate().skip(first) {
             if y >= viewport.max.y {
                 break;
             }
-            let job = styled_to_layout_job(&entry.lines, palette, width, bold);
-            let galley = ui.painter().layout_job(job);
+            let top = pos2(origin.x, origin.y + y);
+            let mut child = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt(("message", &entry.id))
+                    .accessibility_parent(node)
+                    .max_rect(Rect::from_min_size(top, vec2(width, f32::INFINITY)))
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            let mut actions = Vec::new();
+            let style = BlockStyle {
+                palette,
+                bold,
+                streaming: processing && index == last,
+            };
+            draw_message(&mut child, entry, style, &mut self.markdown, &mut actions);
+            for action in actions {
+                match action {
+                    BlockAction::Insert(code) => self.pending_insert = Some(code),
+                    BlockAction::Enlarge(path) => self.pending_enlarge = Some(path),
+                }
+            }
             self.laid_out += 1;
 
-            let height = galley.size().y;
+            if pointer.is_some_and(|p| child.min_rect().contains(p) && ui.clip_rect().contains(p)) {
+                self.under_pointer = Some(index);
+            }
+            let height = child.min_rect().height() + space::MD;
             if (entry.height - height).abs() > HEIGHT_EPSILON {
                 height_changed = true;
             }
             entry.height = height;
-
-            let rect = Rect::from_min_size(pos2(origin.x, origin.y + y), vec2(width, height));
-            let response = ui.interact(rect, ui.scope_id().with(&entry.id), Sense::hover());
-            let mut label = galley.text().to_owned();
-            for status in &entry.status_labels {
-                label.push('\n');
-                label.push_str(status);
-            }
-            ui.painter().galley(rect.min, galley, palette.text);
-            response.widget_info(|| WidgetInfo::labeled(Role::Label, true, &label));
             y += height;
         }
         if height_changed {
@@ -527,5 +745,154 @@ impl MessagesView {
             self.offsets_dirty = true;
             ui.ctx().request_repaint();
         }
+    }
+}
+
+/// How a message's blocks are drawn.
+#[derive(Clone, Copy)]
+struct BlockStyle<'a> {
+    /// The active palette.
+    palette: &'a Palette,
+    /// How bold text is drawn.
+    bold: Bold,
+    /// Whether the message is the reply still streaming (it ends with a
+    /// caret).
+    streaming: bool,
+}
+
+/// Draw one message: its frame for the role, then its blocks.
+fn draw_message(
+    ui: &mut egui::Ui,
+    entry: &Entry,
+    style: BlockStyle<'_>,
+    markdown: &mut CommonMarkCache,
+    actions: &mut Vec<BlockAction>,
+) {
+    let palette = style.palette;
+    match entry.role {
+        MessageRole::User | MessageRole::Compaction => {
+            let chip = if entry.role == MessageRole::User {
+                USER_CHIP
+            } else {
+                COMPACTION_CHIP
+            };
+            egui::Frame::NONE
+                .fill(palette.raised1)
+                .stroke(egui::Stroke::new(CARD_STROKE, palette.border))
+                .corner_radius(radius::MD)
+                .inner_margin(space::SM)
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(
+                        egui::RichText::new(chip)
+                            .size(text_size::SMALL)
+                            .color(palette.muted)
+                            .strong(),
+                    );
+                    draw_blocks(ui, entry, style, markdown, actions);
+                });
+        }
+        MessageRole::Assistant => {
+            let response = egui::Frame::NONE
+                .inner_margin(egui::Margin {
+                    left: (space::MD) as i8,
+                    ..egui::Margin::ZERO
+                })
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    draw_blocks(ui, entry, style, markdown, actions);
+                })
+                .response;
+            let rect = response.rect;
+            ui.painter().rect_filled(
+                Rect::from_min_size(rect.left_top(), vec2(RULE_WIDTH, rect.height())),
+                0.0,
+                palette.accent,
+            );
+        }
+    }
+}
+
+/// Draw `entry`'s blocks, top to bottom, separated by the small gap, and
+/// collect what their code blocks asked for into `actions`.
+fn draw_blocks(
+    ui: &mut egui::Ui,
+    entry: &Entry,
+    style: BlockStyle<'_>,
+    markdown: &mut CommonMarkCache,
+    actions: &mut Vec<BlockAction>,
+) {
+    let BlockStyle {
+        palette,
+        bold,
+        streaming,
+    } = style;
+    ui.spacing_mut().item_spacing.y = space::XS;
+    for (index, block) in entry.blocks.iter().enumerate() {
+        if index > 0 {
+            ui.add_space(space::XS);
+        }
+        match block {
+            TranscriptBlock::Markdown(text) => {
+                ui.push_id(index, |ui| {
+                    CommonMarkViewer::new().show(ui, markdown, text);
+                });
+            }
+            TranscriptBlock::Code { lang, text } => {
+                let id = ui.scope_id().with(("code", index));
+                if let Some(CodeAction::Insert(code)) =
+                    code_block_ui(ui, id, lang.as_deref(), text, palette)
+                {
+                    actions.push(BlockAction::Insert(code));
+                }
+            }
+            TranscriptBlock::Plain(text) => {
+                ui.add(egui::Label::new(egui::RichText::new(text).color(palette.text)).wrap());
+            }
+            TranscriptBlock::Notice(lines) | TranscriptBlock::Thinking(lines) => {
+                let job = styled_to_layout_job(lines, palette, ui.available_width(), bold);
+                ui.add(egui::Label::new(job).wrap());
+            }
+            TranscriptBlock::Tool {
+                lines,
+                status_label,
+            } => {
+                let job = styled_to_layout_job(lines, palette, ui.available_width(), bold);
+                let text = job.text.clone();
+                let response = ui.add(egui::Label::new(job).wrap());
+                response.widget_info(|| {
+                    WidgetInfo::labeled(Role::Label, true, format!("{text}\n{status_label}"))
+                });
+            }
+            TranscriptBlock::Image { name, path } => {
+                let uri = format!("file://{}", path.display());
+                let alt = format!("Image: {name}");
+                // A file that cannot be loaded (gone, or a format the
+                // window cannot decode) is named instead of drawn.
+                let loadable = ui
+                    .ctx()
+                    .try_load_image(&uri, egui::load::SizeHint::default())
+                    .is_ok();
+                let response = if loadable {
+                    let image = egui::Image::new(uri)
+                        .max_size(vec2(THUMBNAIL_SIZE, THUMBNAIL_SIZE))
+                        .corner_radius(radius::SM)
+                        .alt_text(alt)
+                        .sense(Sense::CLICK);
+                    ui.add(image).on_hover_text(name.as_str())
+                } else {
+                    ui.label(egui::RichText::new(block.plain_text()).color(palette.info))
+                };
+                if loadable && response.clicked() {
+                    actions.push(BlockAction::Enlarge(path.clone()));
+                }
+            }
+        }
+    }
+    if streaming && entry.role == MessageRole::Assistant {
+        // A caret where the reply will continue.
+        let height = ui.text_style_height(&egui::TextStyle::Body);
+        let (rect, _) = ui.allocate_exact_size(vec2(CARET_WIDTH, height), Sense::hover());
+        ui.painter().rect_filled(rect, 1.0, palette.accent);
     }
 }

@@ -429,6 +429,7 @@ impl App {
             quit_armed: false,
             permission_clock: None,
             context_menu: None,
+            context_menu_message: None,
             history_file_path: None,
             history_picker: None,
             theme_picker: None,

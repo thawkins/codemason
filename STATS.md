@@ -33,6 +33,14 @@
 > removed. The tables below are not re-measured; a full
 > `cargo nextest run --workspace` on this tree ran 15,866 tests, all passing.
 >
+> **GUI phase 2 (unreleased, branch `feat/ui-phase2`).** Transcript block
+> model, Markdown rendering through `egui_commonmark`, tree-sitter code
+> highlighting with Copy/Wrap/Insert, selectable text with Copy as Markdown and
+> Quote in reply, image thumbnails and a streaming caret. No crate is added or
+> removed. The tables below are not re-measured; a full
+> `cargo nextest run --workspace` on this tree ran 15,910 tests, all passing
+> once the tool-rename guard exempted the code-fence language names.
+>
 > **GUI phase 1 (unreleased, branch `feat/ui-phase1`).** Theme tokens, seven
 > built-in JSON themes, a `system` default that follows the operating system,
 > user themes, the `/theme` picker, spacing/radius/text-size scales and the

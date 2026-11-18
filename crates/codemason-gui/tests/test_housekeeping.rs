@@ -55,7 +55,7 @@ fn test_shell_applies_a_finished_compaction_without_input() {
         app.session.messages = vec![Message::user_text(SESSION, "before compaction")];
     });
     harness.run();
-    harness.get_by_label_contains("You: before compaction");
+    harness.get_by_label("before compaction");
 
     // A compaction task finishes in the background: it only fills the slot.
     {
@@ -68,12 +68,8 @@ fn test_shell_applies_a_finished_compaction_without_input() {
     // No key, click or event: just the next frame.
     harness.run();
 
-    harness.get_by_label_contains("You: compacted history");
-    assert!(
-        harness
-            .query_by_label_contains("You: before compaction")
-            .is_none()
-    );
+    harness.get_by_label("compacted history");
+    assert!(harness.query_by_label("before compaction").is_none());
     let app = harness.state().app();
     assert!(!app.session.compact_in_progress);
     assert!(app.session.compact_result.lock().expect("slot").is_none());
@@ -150,7 +146,7 @@ fn test_pending_job_keeps_waking_and_its_result_lands_without_input() {
     drop(slot);
     make_housekeeping_due(harness.state_mut().app_mut());
     harness.step();
-    harness.get_by_label_contains("You: compacted history");
+    harness.get_by_label("compacted history");
     harness.run();
     assert!(!harness.state().app().has_pending_work());
     assert_eq!(repaint_delay(&harness), Duration::MAX);

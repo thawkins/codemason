@@ -329,6 +329,8 @@ mod test_mcp_remove;
 mod test_memory_clear_confirm;
 #[path = "test_memory_panel.rs"]
 mod test_memory_panel;
+#[path = "test_message_blocks.rs"]
+mod test_message_blocks;
 #[path = "test_message_edit_seq_cache.rs"]
 mod test_message_edit_seq_cache;
 #[path = "test_message_widget_duration_tests.rs"]
@@ -561,6 +563,8 @@ mod test_subagent_step_log;
 mod test_swarm_more;
 #[path = "test_swarm_offload.rs"]
 mod test_swarm_offload;
+#[path = "test_syntax_highlight.rs"]
+mod test_syntax_highlight;
 #[path = "test_tasks_panel.rs"]
 mod test_tasks_panel;
 #[path = "test_teams_message_counts.rs"]
@@ -589,6 +593,8 @@ mod test_thinking_selector;
 mod test_tool_display;
 #[path = "test_tool_event_state.rs"]
 mod test_tool_event_state;
+#[path = "test_transcript_context_menu.rs"]
+mod test_transcript_context_menu;
 #[path = "test_undo_redo.rs"]
 mod test_undo_redo;
 #[path = "test_user_commands.rs"]

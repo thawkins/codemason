@@ -1,12 +1,21 @@
-//! The right-click context menu (Cut / Copy / Paste), over
-//! `App::context_menu`.
+//! The right-click context menu, over `App::context_menu`: Cut / Copy /
+//! Paste on the prompt, Copy / Copy as Markdown / Quote in reply on the
+//! transcript.
 //!
 //! A right-click on the prompt or the transcript opens it through app-core
 //! ([`open`] calls `App::open_context_menu`), which decides, as in the TUI,
 //! which items are enabled: Cut with a selection in the input, Copy with a
-//! selection in the pane, Paste in the input with text on the clipboard. The
-//! transcript has no text selection in the GUI, so its menu has nothing
-//! enabled, as the TUI's has without a selection.
+//! selection in the pane, Paste in the input with text on the clipboard. On
+//! the transcript ([`open_transcript`]), Copy is enabled with a text
+//! selection in it, and Copy as Markdown and Quote in reply when the menu
+//! opened over a message; app-core runs those two itself.
+//!
+//! Copy on the transcript copies egui's label selection. egui drops that
+//! selection at the end of a frame in which the pointer is pressed off the
+//! text, so the item asks egui to copy in the same frame it is chosen. egui
+//! also places an empty selection wherever a press lands on text and does
+//! not say whether a selection is empty, so a right-click on text enables
+//! Copy, which then copies nothing.
 //!
 //! While it is open app-core owns the keyboard (the menu is an input lock):
 //! Up/Down move the highlight past disabled items and Esc closes, through
@@ -46,6 +55,8 @@ pub fn item_label(action: ContextAction) -> &'static str {
         ContextAction::Cut => "Cut",
         ContextAction::Copy => "Copy",
         ContextAction::Paste => "Paste",
+        ContextAction::CopyMarkdown => "Copy as Markdown",
+        ContextAction::QuoteReply => "Quote in reply",
     }
 }
 
@@ -91,6 +102,35 @@ pub fn open(ctx: &egui::Context, app: &mut App, pane: SelectionPane, has_selecti
     app.open_context_menu(0, 0, pane, has_selection);
 }
 
+/// Open the context menu over the transcript at the pointer.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context.
+/// * `app` - the App whose `open_transcript_context_menu` builds the items.
+/// * `message` - the text of the message under the pointer, if any.
+pub fn open_transcript(ctx: &egui::Context, app: &mut App, message: Option<String>) {
+    let at = ctx
+        .input(|i| i.pointer.interact_pos())
+        .unwrap_or_else(|| ctx.content_rect().center());
+    ctx.data_mut(|d| {
+        d.insert_temp(anchor_id(), at);
+        d.remove::<egui::text_edit::TextEditState>(saved_state_id());
+    });
+    let has_selection = ctx
+        .with_plugin::<egui::text_selection::LabelSelectionState, _>(|s| s.has_selection())
+        .unwrap_or(false);
+    app.open_transcript_context_menu(has_selection, message);
+}
+
+/// Copy the transcript's selected text now: hand egui a Copy event this
+/// frame, after the prompt has read its input, and close the menu.
+fn copy_transcript_selection(ctx: &egui::Context) {
+    ctx.memory_mut(|m| m.surrender_focus(prompt_id()));
+    ctx.input_mut(|input| input.events.push(egui::Event::Copy));
+    send_key(ctx, plain(Key::Esc));
+}
+
 /// Close the menu through app-core (Esc) and queue `action` for the next
 /// frame when it is enabled.
 fn choose(ctx: &egui::Context, action: ContextAction, enabled: bool) {
@@ -111,6 +151,16 @@ pub fn prepare(ctx: &egui::Context, app: &App) {
     let Some(menu) = app.context_menu.as_ref() else {
         return;
     };
+    let Some(&(action, enabled)) = menu.items.get(menu.selected) else {
+        return;
+    };
+    // app-core runs Copy as Markdown and Quote in reply on its own Enter.
+    if matches!(
+        action,
+        ContextAction::CopyMarkdown | ContextAction::QuoteReply
+    ) {
+        return;
+    }
     let enter = ctx.input_mut(|input| {
         let before = input.events.len();
         input.events.retain(|event| {
@@ -125,7 +175,12 @@ pub fn prepare(ctx: &egui::Context, app: &App) {
         });
         input.events.len() != before
     });
-    if enter && let Some(&(action, enabled)) = menu.items.get(menu.selected) {
+    if !enter {
+        return;
+    }
+    if enabled && action == ContextAction::Copy && menu.pane == SelectionPane::Messages {
+        copy_transcript_selection(ctx);
+    } else {
         choose(ctx, action, enabled);
     }
 }
@@ -151,6 +206,8 @@ pub fn apply_pending(ctx: &egui::Context) {
         ContextAction::Paste => {
             codemason_app_core::clipboard::get_clipboard_text().map(egui::Event::Paste)
         }
+        // Never queued: app-core runs these at once.
+        ContextAction::CopyMarkdown | ContextAction::QuoteReply => None,
     };
     let Some(event) = event else {
         return;
@@ -209,8 +266,20 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
                 .interact_pos()
                 .is_some_and(|pos| !area.response.rect.contains(pos))
     });
+    let pane = menu.pane;
     if let Some((action, enabled)) = chosen {
-        choose(ctx, action, enabled);
+        match action {
+            ContextAction::CopyMarkdown | ContextAction::QuoteReply if enabled => {
+                app.execute_context_action(action);
+                if action == ContextAction::QuoteReply {
+                    ctx.memory_mut(|m| m.request_focus(prompt_id()));
+                }
+            }
+            ContextAction::Copy if enabled && pane == SelectionPane::Messages => {
+                copy_transcript_selection(ctx);
+            }
+            _ => choose(ctx, action, enabled),
+        }
     } else if outside_click {
         send_key(ctx, plain(Key::Esc));
     }

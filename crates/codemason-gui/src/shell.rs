@@ -52,7 +52,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use codemason_agent::event::Event;
-use codemason_app_core::app::{App, LogLevel, SelectionPane};
+use codemason_app_core::app::{App, LogLevel};
 use codemason_app_core::input_event::KeyInput;
 use codemason_app_core::log_channel::TuiLogReceiver;
 use codemason_app_core::sessions_sidebar_state;
@@ -427,6 +427,7 @@ impl Shell {
             sessions_rect = self.show_dock(ui, &palette);
         });
         dialogs::show(ui.ctx(), &mut self.app);
+        dialogs::image_view::show(ui.ctx());
         self.close.show(ui.ctx(), &mut self.app);
         self.unfocus_sidebar_on_press_outside(ui.ctx(), sessions_rect);
         self.run_close_keys(ui.ctx());
@@ -864,6 +865,10 @@ impl Shell {
         let Some(sources) = self.sources.as_ref() else {
             return;
         };
+        let label_selection = ctx
+            .with_plugin::<egui::text_selection::LabelSelectionState, _>(|s| s.has_selection())
+            .unwrap_or(false);
+        self.keys.set_label_selection(label_selection);
         let keys = ctx.input_mut(|input| self.keys.route(input, focus));
         // egui chose where Tab or an arrow moves its focus when the frame
         // began, before the router took the press for the App; with the
@@ -967,11 +972,13 @@ fn messages_body(ui: &mut egui::Ui, app: &mut App, messages: &mut MessagesView, 
         crate::panels::empty_state::empty_state_ui(ui, app, palette);
     }
     let transcript = messages.show(ui, app, palette);
+    messages.apply_actions(ui.ctx(), app);
     let right_click = ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Secondary));
-    if right_click && transcript.hovered() && !dialogs::locks_prompt(app) {
-        // The transcript has no text selection in the GUI, so its menu has
-        // nothing enabled, as the TUI's without one.
-        dialogs::context_menu::open(ui.ctx(), app, SelectionPane::Messages, false);
+    // `contains_pointer`, not `hovered`: the transcript's selectable text
+    // sits on top of its hover-only node.
+    if right_click && transcript.contains_pointer() && !dialogs::locks_prompt(app) {
+        let message = messages.message_at_pointer().map(str::to_string);
+        dialogs::context_menu::open_transcript(ui.ctx(), app, message);
     }
 }
 

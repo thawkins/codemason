@@ -542,6 +542,9 @@ pub enum Focus {
 pub struct KeyRouter {
     keymap: Keymap,
     dispatcher: Dispatcher,
+    /// Whether the transcript holds a text selection this frame (see
+    /// [`KeyRouter::set_label_selection`]).
+    label_selection: bool,
 }
 
 impl KeyRouter {
@@ -559,7 +562,18 @@ impl KeyRouter {
         Self {
             keymap,
             dispatcher: Dispatcher::new(),
+            label_selection: false,
         }
+    }
+
+    /// Say whether selectable text outside any text field (the transcript)
+    /// holds a selection this frame. While it does, Ctrl+C and Ctrl+X stay
+    /// with egui, which copies that selection, instead of reaching the App
+    /// (where Ctrl+C would arm quit). egui places an empty selection where a
+    /// press lands on text, so after a click on the transcript Ctrl+C copies
+    /// nothing until the selection is cleared (Esc or a click elsewhere).
+    pub fn set_label_selection(&mut self, on: bool) {
+        self.label_selection = on;
     }
 
     /// Turn this frame's key events into the key presses to send to
@@ -596,7 +610,9 @@ impl KeyRouter {
     ///   below) are left to the prompt when it has a non-empty selection, so
     ///   they only copy or cut it, matching the TUI's "copy if a selection is
     ///   active". Without a selection they are forwarded: Ctrl+C arms quit
-    ///   and Ctrl+X cancels a running agent, as in the TUI.
+    ///   and Ctrl+X cancels a running agent, as in the TUI. A transcript
+    ///   selection ([`KeyRouter::set_label_selection`]) keeps them too, under
+    ///   any focus.
     /// - Other presses are forwarded only when they typed no text and the
     ///   prompt ignores them: Esc, function keys, PageUp and PageDown.
     ///
@@ -654,9 +670,11 @@ impl KeyRouter {
         let mut drop = vec![false; events.len()];
         for (i, event) in events.iter().enumerate() {
             if let Some(key) = clipboard_key_input(event, platform, &input.modifiers) {
-                // A selection in the prompt, another text field or a
-                // dialog's text field takes Ctrl+C and Ctrl+X for itself.
-                let keeps_clipboard = (typing && has_selection) || field_selection;
+                // A selection in the prompt, another text field, a dialog's
+                // text field or the transcript's text takes Ctrl+C and
+                // Ctrl+X for itself.
+                let keeps_clipboard =
+                    (typing && has_selection) || field_selection || self.label_selection;
                 if !keeps_clipboard {
                     keys.push(key);
                 }

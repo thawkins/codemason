@@ -740,6 +740,31 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         "this entry silences nothing and the run still fails on it",
         (),
     ),
+    # --- Language names of code fences (syntax highlighting) ---
+    # `syntax_highlight` picks a tree-sitter grammar by the language written
+    # after a Markdown code fence; "bash" there names the shell language, not
+    # the Bash tool.
+    Exemption(
+        "crates/codemason-app-core/src/syntax_highlight.rs",
+        ("bash",),
+        '"bash" | "sh" | "shell" | "zsh" | "console" => "bash",',
+        1,
+        "code-fence language aliases of the Bash grammar -- a language name, not a tool name",
+    ),
+    Exemption(
+        "crates/codemason-app-core/src/syntax_highlight.rs",
+        ("bash",),
+        '"bash" => (',
+        1,
+        "the Bash grammar's highlight configuration arm -- a language name, not a tool name",
+    ),
+    Exemption(
+        "crates/codemason-app-core/src/syntax_highlight.rs",
+        ("bash",),
+        '"bash",',
+        1,
+        "the Bash grammar in the list of highlighted languages -- a language name, not a tool name",
+    ),
 )
 
 
