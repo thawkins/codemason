@@ -47,6 +47,12 @@ pub struct Config {
     /// Display name of the user.
     #[serde(default)]
     pub username: Option<String>,
+    /// GUI colour theme at startup: `"default"` or `"high-contrast"`.
+    ///
+    /// Unset or unrecognised means the default theme. `/theme` switches the
+    /// theme for the running window without writing this key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
     /// Name of the agent to use when none is specified.
     #[serde(default = "default_agent_name", alias = "defaultAgent")]
     pub default_agent: String,
@@ -392,6 +398,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             username: None,
+            theme: None,
             default_agent: default_agent_name(),
             specified_default_agent: false,
             provider: HashMap::new(),
@@ -3385,6 +3392,9 @@ impl Config {
     fn merge_inner(mut base: Self, overlay: Self) -> Self {
         if overlay.username.is_some() {
             base.username = overlay.username;
+        }
+        if overlay.theme.is_some() {
+            base.theme = overlay.theme;
         }
         if overlay.specified_default_agent {
             base.default_agent = overlay.default_agent;

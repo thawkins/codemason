@@ -448,7 +448,11 @@ impl App {
             memory_entry_count: 0,
             memory_entry_count_pending: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             memory_stats_last_refresh: std::time::Instant::now(),
-            theme_mode: crate::theme_mode::ThemeMode::Default,
+            theme_mode: codemason_config::Config::load_for(&cwd_path)
+                .ok()
+                .and_then(|config| config.theme)
+                .and_then(|name| crate::theme_mode::ThemeMode::from_str(&name))
+                .unwrap_or_default(),
             mouse_enabled: true,
             status_history: StatusHistory::new(),
             needs_redraw: true,

@@ -3680,6 +3680,7 @@ impl App {
             "quit" | "exit" => None,
             "clear" => None,
             "undo" => None,
+            "theme" => Some("[default|high-contrast|help]".to_string()),
             "redo" => None,
             "compact" | "compress" => None,
             "halt" => None,

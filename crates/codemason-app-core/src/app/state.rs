@@ -1047,6 +1047,10 @@ pub const SLASH_COMMANDS: &[SlashCommandDef] = &[
         description: "Manage directory/file permission lists: /dirs add|remove allow|deny <pattern> [--global] | show | help",
     },
     SlashCommandDef {
+        trigger: "theme",
+        description: "Switch the colour theme: /theme default|high-contrast, /theme shows the current one (/theme help)",
+    },
+    SlashCommandDef {
         trigger: "yolo",
         description: "Toggle YOLO mode - bypass all command validation and tool restrictions (/yolo help)",
     },

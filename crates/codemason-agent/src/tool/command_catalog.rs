@@ -117,6 +117,7 @@ const BLUEPRINTS_SUBS: &[&str] = &["help", "list"];
 const OSINFO_SUBS: &[&str] = &["show", "help"];
 const DB_SUBS: &[&str] = &["prune", "help"];
 const DB_FLAGS: &[&str] = &["--days", "--dry-run"];
+const THEME_SUBS: &[&str] = &["default", "high-contrast", "help"];
 const STATS_FLAGS: &[&str] = &["--days", "--project", "--json"];
 const ROUTER_SUBS: &[&str] = &[
     "help",
@@ -721,6 +722,12 @@ pub const COMMAND_CATALOG: &[CommandCatalogEntry] = &[
         trigger: "websearch",
         description: "Web search engine diagnostics: /websearch show | test | help",
         subcommands: WEBSEARCH_SUBS,
+        flags: EMPTY,
+    },
+    CommandCatalogEntry {
+        trigger: "theme",
+        description: "Switch the colour theme: /theme default|high-contrast, /theme shows the current one (/theme help)",
+        subcommands: THEME_SUBS,
         flags: EMPTY,
     },
     CommandCatalogEntry {
