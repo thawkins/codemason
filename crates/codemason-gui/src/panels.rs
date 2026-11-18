@@ -19,6 +19,7 @@
 //! - [`rows`] is the line list the side panels draw with.
 
 pub mod agents;
+pub mod code_block;
 pub mod context;
 pub mod empty_state;
 pub mod log;

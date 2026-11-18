@@ -160,6 +160,8 @@ fn run_window(launch: GuiLaunch) -> Result<(), GuiLaunchError> {
             // Bundled block/status glyphs and a bold face, then installed
             // system fonts for CJK and every other script.
             crate::fonts::install(&cc.egui_ctx, craft_ui::fonts::SystemFonts::AfterCraft);
+            // `file://` image loading, for the transcript's image thumbnails.
+            egui_extras::install_image_loaders(&cc.egui_ctx);
             let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
             let _enter = runtime.enter();
             // The bridge adds broadcast lags to the App's counter, so the

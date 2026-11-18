@@ -135,15 +135,14 @@ fn show_with(ctx: &egui::Context, app: &mut App, state: &mut OutputView) -> bool
                     messages: &content.messages,
                     processing: content.focused && app.session.is_processing,
                 };
+                // The node is made before the transcript, so its messages
+                // are placed under it.
+                let node = ui.scope_id().with("output_transcript");
+                ui.interact(ui.available_rect_before_wrap(), node, egui::Sense::hover())
+                    .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Log, true, OUTPUT_LABEL));
                 let geometry = state
                     .view
-                    .show_messages(ui, app, source, &palette, scroll_to);
-                ui.interact(
-                    geometry.rect,
-                    ui.scope_id().with("output_transcript"),
-                    egui::Sense::hover(),
-                )
-                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Log, true, OUTPUT_LABEL));
+                    .show_messages(ui, app, source, &palette, scroll_to, node);
                 scroll = Some(geometry);
             });
         }
@@ -159,6 +158,8 @@ fn show_with(ctx: &egui::Context, app: &mut App, state: &mut OutputView) -> bool
         view.scroll_offset = from_bottom.min(max_lines);
         state.last_offset = Some(view.scroll_offset);
     }
+    // A code block's Insert or an image thumbnail clicked in the overlay.
+    state.view.apply_actions(ctx, app);
     true
 }
 

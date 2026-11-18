@@ -166,6 +166,10 @@ project, branch, backend, and the on/off state of every service.
 A new session starts with an empty Messages pane that shows three starter
 actions; clicking one fills the prompt.
 
+Replies render as Markdown: headings, lists, tables, links (open in your
+browser) and highlighted code blocks. Your own turns appear in a card marked
+`You`. Attached images show as thumbnails; click one to see it full size.
+
 The window follows the operating system's dark or light setting. `/theme`
 opens a picker that previews each theme as you move through the list: Enter
 keeps it, Esc goes back. `/theme <name>` switches directly, for example
@@ -342,10 +346,14 @@ window's own File menu.
 - **`Ctrl+V` | `Cmd+V`** — paste at the cursor, replacing any active selection.
 - **Right-click** in the prompt — opens a context menu with **Copy**, **Cut**
   and **Paste**.
+- **Drag over transcript text** to select it, then `Ctrl+C` | `Cmd+C`.
+- **Right-click** a message — **Copy** (the selected text), **Copy as
+  Markdown** (the whole message's source) or **Quote in reply** (puts the
+  message in the prompt as a `>` quote).
+- **Code blocks** have **Copy**, **Wrap** and **Insert** buttons; Insert puts
+  the code at the end of the prompt.
 - **`/clip`** — copies the entire rendered contents of the message window (the
   plain-text transcript) to the system clipboard in one step.
-
-Transcript text in the message pane is not selectable; use `/clip` to copy it.
 
 ### Permission prompts
 

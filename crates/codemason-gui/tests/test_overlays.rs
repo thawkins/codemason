@@ -432,9 +432,7 @@ fn test_output_view_renders_scrolls_with_keys_and_esc_closes() {
         2
     );
     assert!(
-        harness
-            .query_by_label_contains("You: output line 0")
-            .is_none(),
+        harness.query_by_label("output line 0").is_none(),
         "only the messages in view are laid out"
     );
     let max_scroll = harness
@@ -466,7 +464,7 @@ fn test_output_view_renders_scrolls_with_keys_and_esc_closes() {
     );
     // Only the overlay shows the oldest line; the transcript behind stays
     // at its bottom.
-    harness.get_by_label_contains("You: output line 0");
+    harness.get_by_label("output line 0");
 
     type_key(&mut harness, egui::Key::Escape, None);
     assert!(harness.state().app().output_view.is_none());
@@ -595,7 +593,7 @@ fn test_output_view_follows_the_tail_of_a_growing_stored_session() {
     let (_rt, _events, mut harness) = stored_output_rig(80);
     harness.run();
     assert!(dialog_shown(&harness, "Output: sub-agent"));
-    harness.get_by_label_contains("You: stored line 79");
+    harness.get_by_label("stored line 79");
     assert!(output_offsets(&harness).is_some_and(|(offset, max)| offset == 0 && max > 0));
 
     // The running agent stores more output: the pinned view shows it.
@@ -603,7 +601,7 @@ fn test_output_view_follows_the_tail_of_a_growing_stored_session() {
         store_line(harness.state().app(), i);
     }
     harness.run();
-    harness.get_by_label_contains("You: stored line 82");
+    harness.get_by_label("stored line 82");
     assert_eq!(output_offsets(&harness).map(|(offset, _)| offset), Some(0));
 }
 
@@ -620,9 +618,5 @@ fn test_output_view_scrolled_up_keeps_its_offset_as_a_stored_session_grows() {
     // As in the TUI: the offset from the bottom is kept, the view is not
     // pulled to the tail, so the new line is not shown.
     assert_eq!(output_offsets(&harness).map(|(offset, _)| offset), scrolled);
-    assert!(
-        harness
-            .query_by_label_contains("You: stored line 80")
-            .is_none()
-    );
+    assert!(harness.query_by_label("stored line 80").is_none());
 }

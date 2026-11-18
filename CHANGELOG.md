@@ -4,6 +4,11 @@
 
 ### Added
 
+- Added: the Messages pane renders replies as Markdown: headings, lists, tables, block quotes, and links that open in the browser.
+- Added: code blocks in replies are highlighted in the theme's syntax colours (Rust, Python, JavaScript, TypeScript, Go, C, C++, Java, Bash, JSON) and have Copy, Wrap and Insert buttons; Insert puts the code into the prompt.
+- Added: transcript text is selectable. Right-clicking a message offers Copy, Copy as Markdown and Quote in reply.
+- Added: attached images show as thumbnails in the transcript; a click opens them full size.
+- Added: a caret at the end of the reply that is still streaming.
 - Added: `/stats` and `cdmn stats` report tokens, estimated cost and run time per model across all sessions, with `--days N`, `--project` and `--json`. `/cost` still covers the current session only.
 - Added: user-defined slash commands. A Markdown file in `.codemason/commands/` (project) or `~/.config/codemason/commands/` (every project) defines `/<name>`; the body is a prompt template with `$ARGUMENTS` and `$1`..`$9`. A file cannot replace a built-in command or a skill.
 - Added: formatters after edits. With `"formatter": { "enabled": true }` in the user-global config, `rustfmt`, `gofmt`, `ruff` or `prettier` (or a custom command) runs on each file a file-writing tool writes. Off by default; a project config cannot set it.
@@ -64,6 +69,7 @@
 
 - Changed: `slash_team` in `crates/codemason-app-core/src/app/slash.rs` is decomposed in place (1,189 to 100 lines): the 13 `/team` sub-command arms of 30+ lines move verbatim into `team_<sub>` methods in the same `impl App`, taking the `sub`/`rest` locals they read as `&str` parameters. Arms that returned early keep their `ControlFlow::Break` returns and `slash_team` forwards them. Every string literal and pattern is unchanged (#9, car 11c).
 
+- Changed: a user turn is a card marked `You` instead of a `You:` prefix, and an assistant turn has an accent rule down its left edge instead of a `*` prefix.
 - Changed: every colour in the window comes from the theme's tokens. Widget greys, the selection blue and the xterm ANSI colours are gone; a pane that asks for an ANSI name gets the theme colour of the same meaning (red is the error colour).
 - Changed: the default dark theme draws on an off-black background (`#0f1115`) with raised surfaces for fields, buttons and dialogs, and thin outlines around widgets. Before, panels were pure black.
 - Changed: the window no longer forces dark mode. With no `theme` set it follows the operating system, so a system in light mode now gets the light theme. Set `"theme": "dark"` to keep the dark one.

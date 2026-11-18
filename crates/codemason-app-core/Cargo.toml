@@ -45,6 +45,20 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 html2text = { workspace = true }
 pulldown-cmark = "0.13"
+# Code-block syntax highlighting (`syntax_highlight`): the grammars
+# `codemason-codeindex` already builds, plus Bash and JSON.
+tree-sitter = "0.27"
+tree-sitter-highlight = "0.27"
+tree-sitter-bash = "0.25"
+tree-sitter-c = "0.24"
+tree-sitter-cpp = "0.23"
+tree-sitter-go = "0.25"
+tree-sitter-java = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-json = "0.24"
+tree-sitter-python = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23"
 tempfile = "3.5"
 # Width/grapheme handling for the message/log line caches (the word wrapper
 # in `line_wrap` measures graphemes with these).

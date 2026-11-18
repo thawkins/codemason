@@ -40,6 +40,7 @@
 pub mod banner;
 pub mod confirm;
 pub mod context_menu;
+pub mod image_view;
 pub mod lists;
 pub mod loop_setup;
 pub mod model_picker;
