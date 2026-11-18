@@ -120,3 +120,53 @@ async fn help_lists_plugin_commands() {
     );
     assert!(text.contains("/commit"), "/help must list the command");
 }
+
+#[tokio::test]
+async fn prompt_plugin_command_marks_the_session_busy_at_dispatch() {
+    let mut app = make_app();
+    app.session.session_id = Some("s".to_string());
+    app.plugin_commands = vec![prompt_command("commit", "commit", "Commit.")];
+
+    app.execute_slash_command("/commit").await;
+
+    // Busy from dispatch, not from the first `MessageStart`: otherwise the
+    // input queue dispatches the next queued entry over the starting turn.
+    assert!(app.session.is_processing);
+}
+
+#[tokio::test]
+async fn inline_plugin_command_leaves_the_session_idle() {
+    let mut app = make_app();
+    app.session.session_id = Some("s".to_string());
+    app.plugin_commands = vec![inline_command("clean_gone", "clean_gone")];
+
+    app.execute_slash_command("/clean_gone").await;
+
+    assert!(!app.session.is_processing);
+}
+
+#[tokio::test]
+async fn prompt_plugin_command_reports_a_turn_that_fails_to_start() {
+    let mut app = make_app();
+    // No such session in storage, so the turn cannot start.
+    app.session.session_id = Some("missing-session".to_string());
+    app.plugin_commands = vec![prompt_command("commit", "commit", "Commit.")];
+    let mut events = app.event_bus.subscribe();
+
+    app.execute_slash_command("/commit").await;
+
+    // The failure must end the busy state through the ordinary error event.
+    let error = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if let Ok(codemason_agent::event::Event::AgentError { session_id, error }) =
+                events.recv().await
+            {
+                break (session_id, error);
+            }
+        }
+    })
+    .await
+    .expect("an AgentError event for the failed turn");
+    assert_eq!(error.0, "missing-session");
+    assert!(error.1.contains("plugin command failed"), "{}", error.1);
+}
