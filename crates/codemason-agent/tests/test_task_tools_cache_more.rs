@@ -372,7 +372,7 @@ async fn team_create_seeds_survive_a_concurrent_task_creator() {
         for i in 0..RIVALS {
             store
                 .add_task_with_next_id(|id| {
-                    codemason_agent::team::Task::new(&id, &format!("rival-{i}"))
+                    codemason_agent::team::Task::new(&id, format!("rival-{i}"))
                 })
                 .await
                 .expect("rival add");

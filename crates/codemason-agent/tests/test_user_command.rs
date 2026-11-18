@@ -33,7 +33,8 @@ fn test_user_command_loads_description_and_body() {
     write(&dir, "plain.md", "Just a prompt.\n");
     write(&dir, "notes.txt", "not a command");
 
-    let (commands, diagnostics) = load_user_commands_from(&[dir.clone()], &BTreeSet::new());
+    let (commands, diagnostics) =
+        load_user_commands_from(std::slice::from_ref(&dir), &BTreeSet::new());
 
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let names: Vec<&str> = commands.iter().map(|c| c.name.as_str()).collect();
@@ -87,8 +88,11 @@ fn test_user_command_skips_collisions_bad_names_and_empty_bodies() {
 fn test_user_command_missing_directory_is_empty() {
     let missing = scratch("missing").join("nope");
     let (commands, diagnostics) = load_user_commands_from(&[missing], &BTreeSet::new());
-    assert!(commands.is_empty());
-    assert!(diagnostics.is_empty());
+    assert_eq!(
+        commands,
+        [] as [codemason_agent::user_command::UserCommand; 0]
+    );
+    assert_eq!(diagnostics, [] as [std::string::String; 0]);
 }
 
 #[test]
