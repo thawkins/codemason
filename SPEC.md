@@ -1102,14 +1102,23 @@ and removes the turn's messages; `/redo` reverses it
   working directory is inside a git work tree. A sub-agent's own session is not
   recorded; its file changes fall inside the parent turn's snapshot. A snapshot
   failure is logged at `warn!` and the turn proceeds.
-- **Undo.** Deletes the last user message and every later message from memory
-  and from storage (`Storage::delete_messages_by_id`), then restores the work
-  tree with `git read-tree --reset -u <tree>`, which rewrites only the paths
-  that differ and deletes files the snapshot does not contain. The state being
-  replaced is recorded first and kept for redo.
-- **Redo.** Re-creates the messages and restores the replaced state. The undo
-  stack is per session, in memory, and is cleared when the conversation's last
-  message is no longer the one the undo left.
+- **Undo.** The transcript and the session database hold separate copies of a
+  turn under different message ids, so the turn is resolved on both sides: the
+  transcript loses its last user message and everything after it, and storage
+  loses its last user message and everything after it
+  (`Storage::delete_messages_by_id`) when that stored turn is the same turn
+  (same id, or not older than the transcript's). The snapshot is looked up by
+  the stored user message id. The work tree is then restored with
+  `git read-tree --reset -u <tree>`, which rewrites only the paths that differ
+  and deletes files the snapshot does not contain. The state being replaced is
+  recorded first and kept for redo.
+- **Redo.** Re-creates the stored messages in one transaction
+  (`Storage::create_messages`), returns the transcript messages and restores
+  the replaced state. The undo stack is per session, in memory, and is cleared
+  when the last stored message is no longer the one the undo left.
+- **Other sessions.** A restore rewrites the whole work tree, so both commands
+  refuse while another open session is running a turn in the same git work
+  tree.
 - **Limits.** Both commands refuse while the agent is running. Changes outside
   the work tree, ignored files and external side effects are not undone.
 
@@ -2092,9 +2101,16 @@ default is off.
   gains a line `[formatter] <name> reformatted <path>; re-read it before
   editing it again.` and the session's read baseline for the file is refreshed
   so the next edit is not rejected as stale.
-- **Failure.** A formatter that is not installed, exits non-zero or runs longer
-  than 10 seconds is logged at `debug!`; the file stays as the tool wrote it
-  and the tool call still succeeds.
+- **Failure.** A formatter that is not installed is skipped. One that exits
+  non-zero or runs longer than 10 seconds is logged at `debug!` and the tool
+  call still succeeds; if it rewrote the file before failing, the change is
+  reported like any other, with the failure reason appended.
+- **Dry runs and locking.** A `dry_run` result names files it did not write and
+  is never formatted. The formatter runs while holding the same per-file lock
+  the edit tools take, and the read baseline is refreshed only when it still
+  described the file as the formatter found it, so a write by another session
+  between the tool's write and the formatter stays visible to the stale-file
+  check.
 - **Trust.** The section is honoured only from the user-global config; a
   project overlay's `formatter` section is rejected (section 5.1). The
   formatter runs as a direct subprocess (no shell) in the session's working

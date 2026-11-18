@@ -197,3 +197,107 @@ async fn test_redo_help() {
     assert!(text.starts_with("From: /redo help"), "{text}");
     assert_eq!(app.status, "redo: help");
 }
+
+/// A live turn: the transcript holds its own copy of the user message, under
+/// a different id, created just before the processor stores its copy.
+#[tokio::test]
+async fn test_undo_resolves_the_stored_turn_when_ids_differ() {
+    let (mut app, project) = app_in_project("undo_live_ids");
+    push(&mut app, Role::User, "first question");
+    push(&mut app, Role::Assistant, "first answer");
+    std::fs::write(project.join("a.txt"), "before").expect("write");
+
+    let mut view_user = Message::user_text(SID, "/review a.txt");
+    view_user.created_at = chrono::Utc::now() + chrono::Duration::seconds(10);
+    let mut stored_user = Message::user_text(SID, "Review a.txt for bugs.");
+    stored_user.created_at = view_user.created_at + chrono::Duration::milliseconds(5);
+    stored_user.updated_at = stored_user.created_at;
+    let mut stored_reply = Message::user_text(SID, "edited it");
+    stored_reply.role = Role::Assistant;
+    stored_reply.created_at = stored_user.created_at + chrono::Duration::seconds(1);
+    stored_reply.updated_at = stored_reply.created_at;
+    app.storage.create_message(&stored_user).expect("store");
+    app.storage.create_message(&stored_reply).expect("store");
+    app.session.messages.push(view_user);
+    let mut view_reply = Message::user_text(SID, "edited it");
+    view_reply.role = Role::Assistant;
+    app.session.messages.push(view_reply);
+    SnapshotRepo::for_working_dir(&project)
+        .expect("snapshot repo")
+        .record_turn(SID, &stored_user.id)
+        .await
+        .expect("record_turn");
+    std::fs::write(project.join("a.txt"), "after").expect("write");
+
+    app.execute_slash_command("/undo").await;
+
+    assert_eq!(stored_texts(&app), ["first question", "first answer"]);
+    assert_eq!(app.session.messages.len(), 2);
+    assert_eq!(read(&project, "a.txt").as_deref(), Some("before"));
+
+    app.execute_slash_command("/redo").await;
+
+    assert_eq!(
+        stored_texts(&app),
+        [
+            "first question",
+            "first answer",
+            "Review a.txt for bugs.",
+            "edited it"
+        ]
+    );
+    assert_eq!(app.session.messages.len(), 4);
+    assert_eq!(app.session.messages[2].text_content(), "/review a.txt");
+    assert_eq!(read(&project, "a.txt").as_deref(), Some("after"));
+}
+
+/// A transcript-only user message newer than every stored turn (its turn
+/// never reached storage) must not take an older stored turn with it.
+#[tokio::test]
+async fn test_undo_of_an_unstored_turn_leaves_storage_alone() {
+    let (mut app, _project) = app_in_project("undo_unstored");
+    push(&mut app, Role::User, "stored question");
+    push(&mut app, Role::Assistant, "stored answer");
+    let mut unstored = Message::user_text(SID, "/failed-command");
+    unstored.created_at = chrono::Utc::now() + chrono::Duration::seconds(60);
+    app.session.messages.push(unstored);
+
+    app.execute_slash_command("/undo").await;
+
+    assert_eq!(app.session.messages.len(), 2);
+    assert_eq!(stored_texts(&app), ["stored question", "stored answer"]);
+    assert!(
+        app.status.contains("removed 1 message(s)"),
+        "{}",
+        app.status
+    );
+
+    app.execute_slash_command("/redo").await;
+    assert_eq!(app.session.messages.len(), 3);
+    assert_eq!(stored_texts(&app).len(), 2);
+}
+
+#[tokio::test]
+async fn test_undo_refuses_while_another_session_runs_in_the_work_tree() {
+    let (mut app, project) = app_in_project("undo_other_session");
+    push(&mut app, Role::User, "q1");
+    push(&mut app, Role::Assistant, "a1");
+    let mut other = codemason_app_core::app::SessionView::new(
+        app.session.agent_name.clone(),
+        app.session.agent_info.clone(),
+        app.session.current_agent_index,
+    );
+    other.session_id = Some("other-session".to_string());
+    other.directory = project.join("sub");
+    other.is_processing = true;
+    app.background.insert_front(other);
+
+    app.execute_slash_command("/undo").await;
+
+    assert_eq!(
+        app.status,
+        "[warn] Cannot undo while another session is running in this work tree"
+    );
+    assert_eq!(stored_texts(&app), ["q1", "a1"]);
+    assert_eq!(app.session.messages.len(), 2);
+}

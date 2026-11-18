@@ -71,6 +71,7 @@ earlier turns one at a time.
 |---|---|
 | `[warn] No active session to undo` | No session is focused |
 | `[warn] Cannot undo while the agent is running` | Stop the agent (`Esc`) first |
+| `[warn] Cannot undo while another session is running in this work tree` | Another open session's agent is working in the same git work tree; wait for it or stop it |
 | `[warn] No messages to undo` | The conversation is empty |
 | `[warn] No user message found to undo` | The conversation has no user turn |
 | `... files NOT restored - see log` | The messages were removed but git could not restore the files; the log has the reason |

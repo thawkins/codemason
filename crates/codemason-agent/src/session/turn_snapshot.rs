@@ -38,6 +38,18 @@ pub fn enable(store_root: PathBuf) {
     let _ = STORE_ROOT.set(store_root);
 }
 
+/// The root of the git work tree containing `working_dir`, if any.
+///
+/// This is the directory a snapshot covers and a restore rewrites, whether or
+/// not snapshots are enabled.
+#[must_use]
+pub fn work_tree_root(working_dir: &Path) -> Option<PathBuf> {
+    working_dir
+        .ancestors()
+        .find(|dir| dir.join(".git").exists())
+        .map(Path::to_path_buf)
+}
+
 /// One project's shadow repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotRepo {
@@ -64,10 +76,7 @@ impl SnapshotRepo {
     /// `None` when `working_dir` is not inside a git work tree.
     #[must_use]
     pub fn in_store(store_root: &Path, working_dir: &Path) -> Option<Self> {
-        let root = working_dir
-            .ancestors()
-            .find(|dir| dir.join(".git").exists())?
-            .to_path_buf();
+        let root = work_tree_root(working_dir)?;
         // FNV-1a over the root path: a stable directory name per project.
         let hash = root
             .to_string_lossy()

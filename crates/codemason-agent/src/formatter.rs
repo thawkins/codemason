@@ -4,8 +4,8 @@
 //! file-writing tool call on the local backend. Each written file is matched
 //! to a formatter by extension (custom formatters from the `formatter` config
 //! section first, then the built-ins), the formatter runs as a subprocess with
-//! a timeout, and the caller is told which files changed so the model knows
-//! its view of them is stale.
+//! a timeout while the shared per-file edit lock is held, and the caller is
+//! told which files changed so the model knows its view of them is stale.
 //!
 //! Depends on `codemason_config` for [`FormatterConfig`] and on `tokio` for
 //! the subprocess and the timeout.
@@ -176,41 +176,81 @@ pub fn written_paths(tool_name: &str, metadata: &Value, working_dir: &Path) -> V
     paths
 }
 
-/// Runs the matching formatter on each of `paths`.
+/// What a formatter did to one file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormatReport {
+    /// The file the formatter rewrote.
+    pub path: PathBuf,
+    /// The formatter's name.
+    pub formatter: String,
+    /// Why the run did not end cleanly (non-zero exit or timeout), when it
+    /// still changed the file.
+    pub failure: Option<String>,
+}
+
+/// The file's modification time in milliseconds since the Unix epoch.
+fn mtime_ms(path: &Path) -> Option<u64> {
+    std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|mtime| mtime.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+}
+
+/// Runs the matching formatter on `path` and reports a change.
 ///
-/// Returns `(path, formatter name)` for every file whose content the formatter
-/// changed. A formatter that is not installed, fails, or times out is logged
-/// at `debug!` and leaves the file as the tool wrote it.
-pub async fn format_written_files(
+/// The shared per-file edit lock is held from before the formatter starts
+/// until the session's read baseline has been refreshed, so no other tool call
+/// can write the file in between. The baseline is refreshed only when it still
+/// described the file as the formatter found it: a write by someone else since
+/// the tool's own write stays visible to the stale-file check.
+///
+/// A formatter that fails or times out may still have rewritten the file, so
+/// the change is detected and reported whatever the exit status. A formatter
+/// that is not installed, or one that leaves the file as it was, reports
+/// nothing.
+pub async fn format_file(
     config: &FormatterConfig,
-    paths: &[PathBuf],
-    working_dir: &Path,
-) -> Vec<(PathBuf, String)> {
-    let mut changed = Vec::new();
-    for path in paths {
-        let Some(formatter) = resolve_formatter(config, path) else {
-            continue;
-        };
-        let Ok(before) = tokio::fs::read(path).await else {
-            continue;
-        };
-        if let Err(reason) = run_formatter(&formatter, working_dir).await {
-            tracing::debug!(
-                formatter = %formatter.name,
-                path = %path.display(),
-                %reason,
-                "formatter did not run cleanly"
-            );
-            continue;
-        }
-        if tokio::fs::read(path)
-            .await
-            .is_ok_and(|after| after != before)
+    path: &Path,
+    tool_ctx: &crate::tool::ToolContext,
+) -> Option<FormatReport> {
+    let formatter = resolve_formatter(config, path)?;
+    let _file_lock = codemason_tools_core::file_lock::lock_file(path).await;
+    let before = tokio::fs::read(path).await.ok()?;
+    let mtime_before = mtime_ms(path);
+
+    let failure = run_formatter(&formatter, &tool_ctx.working_dir).await.err();
+    if let Some(reason) = &failure {
+        tracing::debug!(
+            formatter = %formatter.name,
+            path = %path.display(),
+            %reason,
+            "formatter did not run cleanly"
+        );
+    }
+    if tokio::fs::read(path)
+        .await
+        .is_ok_and(|after| after == before)
+    {
+        return None;
+    }
+
+    if let Some(mtime_after) = mtime_ms(path) {
+        let mut baselines = tool_ctx
+            .read_timestamps
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(baseline) = baselines.get_mut(path)
+            && mtime_before.is_some_and(|before| before <= baseline.saturating_add(1))
         {
-            changed.push((path.clone(), formatter.name));
+            *baseline = mtime_after;
         }
     }
-    changed
+    Some(FormatReport {
+        path: path.to_path_buf(),
+        formatter: formatter.name,
+        failure,
+    })
 }
 
 /// Runs one formatter to completion, killing it at [`FORMAT_TIMEOUT`].
@@ -248,10 +288,10 @@ async fn run_formatter(formatter: &ResolvedFormatter, working_dir: &Path) -> Res
 /// Runs the configured formatter on the files a successful tool call wrote.
 ///
 /// Does nothing unless the `formatter` section is enabled and the call ran on
-/// the local backend (a container backend writes inside the sandbox). For each
-/// file a formatter changed, the session's read baseline is refreshed so the
-/// next edit is not rejected as stale, and a line is appended to the output
-/// telling the model to re-read the file.
+/// the local backend (a container backend writes inside the sandbox). A
+/// dry-run result names files it did not write and is left alone. For each
+/// file a formatter changed, a line is appended to the output telling the
+/// model to re-read the file.
 pub async fn format_after_write(
     tool_name: &str,
     mut output: crate::tool::ToolOutput,
@@ -268,26 +308,21 @@ pub async fn format_after_write(
     let Some(metadata) = output.metadata.as_ref() else {
         return output;
     };
-    let paths = written_paths(tool_name, metadata, &tool_ctx.working_dir);
-    let changed = format_written_files(&config.formatter, &paths, &tool_ctx.working_dir).await;
-    for (path, formatter) in changed {
-        let mtime_ms = std::fs::metadata(&path)
-            .and_then(|meta| meta.modified())
-            .ok()
-            .and_then(|mtime| mtime.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_millis() as u64);
-        if let Some(mtime_ms) = mtime_ms {
-            let mut baselines = tool_ctx
-                .read_timestamps
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(baseline) = baselines.get_mut(&path) {
-                *baseline = mtime_ms;
-            }
-        }
+    if metadata["dry_run"].as_bool() == Some(true) {
+        return output;
+    }
+    for path in written_paths(tool_name, metadata, &tool_ctx.working_dir) {
+        let Some(report) = format_file(&config.formatter, &path, tool_ctx).await else {
+            continue;
+        };
+        let failure = report
+            .failure
+            .map(|reason| format!(" (the formatter then failed: {reason})"))
+            .unwrap_or_default();
         output.content.push_str(&format!(
-            "\n[formatter] {formatter} reformatted {}; re-read it before editing it again.",
-            path.display()
+            "\n[formatter] {} reformatted {}{failure}; re-read it before editing it again.",
+            report.formatter,
+            report.path.display()
         ));
     }
     output

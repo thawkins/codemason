@@ -65,6 +65,15 @@ fn ctx(working_dir: &Path, formatter: FormatterConfig) -> ToolContext {
     }
 }
 
+fn mtime_ms(path: &Path) -> u64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .expect("mtime")
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("epoch")
+        .as_millis() as u64
+}
+
 fn output(path: &Path) -> ToolOutput {
     ToolOutput {
         content: "Wrote file".to_string(),
@@ -166,12 +175,15 @@ async fn test_format_after_write_runs_formatter_and_reports_change() {
         ),
     )]);
     let tool_ctx = ctx(&dir, config);
-    // The session read this file earlier, at a stale mtime.
+    // The tool recorded the file's mtime as the session's baseline.
+    let written = mtime_ms(&file);
     tool_ctx
         .read_timestamps
         .write()
         .expect("lock")
-        .insert(file.clone(), 1);
+        .insert(file.clone(), written);
+    // Make the formatter's write land on a later mtime.
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
     let out = format_after_write("Write", output(&file), &tool_ctx).await;
 
@@ -183,7 +195,7 @@ async fn test_format_after_write_runs_formatter_and_reports_change() {
     );
     let baseline = tool_ctx.read_timestamps.read().expect("lock")[&file];
     assert!(
-        baseline > 1,
+        baseline > written,
         "read baseline must follow the formatter's write"
     );
 }
@@ -237,4 +249,92 @@ async fn test_format_after_write_does_nothing_when_disabled_or_not_a_writer() {
     let on = enabled(&[("demo", entry)]);
     format_after_write("read", output(&file), &ctx(&dir, on)).await;
     assert_eq!(std::fs::read_to_string(&file).expect("read"), "kept");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_format_after_write_skips_dry_run_results() {
+    let dir = scratch("dry_run");
+    let file = dir.join("a.demo");
+    std::fs::write(&file, "kept").expect("write");
+    let config = enabled(&[(
+        "demo",
+        custom(
+            &["sh", "-c", "printf formatted > \"$0\"", "$FILE"],
+            &[".demo"],
+        ),
+    )]);
+    let preview = ToolOutput {
+        content: "preview".to_string(),
+        metadata: Some(json!({ "path": file.display().to_string(), "dry_run": true })),
+    };
+
+    let out = format_after_write("Edit", preview, &ctx(&dir, config)).await;
+
+    assert_eq!(out.content, "preview");
+    assert_eq!(std::fs::read_to_string(&file).expect("read"), "kept");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_format_after_write_reports_a_change_made_by_a_failing_formatter() {
+    let dir = scratch("failing_but_changed");
+    let file = dir.join("a.demo");
+    std::fs::write(&file, "unformatted").expect("write");
+    let config = enabled(&[(
+        "demo",
+        custom(
+            &["sh", "-c", "printf half > \"$0\"; exit 3", "$FILE"],
+            &[".demo"],
+        ),
+    )]);
+    let tool_ctx = ctx(&dir, config);
+    let written = mtime_ms(&file);
+    tool_ctx
+        .read_timestamps
+        .write()
+        .expect("lock")
+        .insert(file.clone(), written);
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+    let out = format_after_write("Write", output(&file), &tool_ctx).await;
+
+    assert!(
+        out.content.contains("[formatter] demo reformatted")
+            && out.content.contains("the formatter then failed"),
+        "{}",
+        out.content
+    );
+    let baseline = tool_ctx.read_timestamps.read().expect("lock")[&file];
+    assert!(
+        baseline > written,
+        "the baseline follows the formatter's write"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_format_after_write_keeps_a_stale_baseline_stale() {
+    let dir = scratch("foreign_write");
+    let file = dir.join("a.demo");
+    std::fs::write(&file, "written by someone else").expect("write");
+    let config = enabled(&[(
+        "demo",
+        custom(
+            &["sh", "-c", "printf formatted > \"$0\"", "$FILE"],
+            &[".demo"],
+        ),
+    )]);
+    let tool_ctx = ctx(&dir, config);
+    // The session's baseline predates the file's current content: another
+    // writer got in after this session's own write.
+    tool_ctx
+        .read_timestamps
+        .write()
+        .expect("lock")
+        .insert(file.clone(), 1);
+
+    format_after_write("Write", output(&file), &tool_ctx).await;
+
+    assert_eq!(tool_ctx.read_timestamps.read().expect("lock")[&file], 1);
 }

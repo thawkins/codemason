@@ -29,6 +29,10 @@ async fn test_user_command_is_sent_as_a_user_turn() {
     assert_eq!(last.role, codemason_types::message::Role::User);
     assert_eq!(last.text_content(), "/greet world");
     assert_eq!(app.status, "user command /greet");
+    assert!(
+        app.session.is_processing,
+        "the session is busy from dispatch, so the input queue cannot overlap the turn"
+    );
 }
 
 #[tokio::test]

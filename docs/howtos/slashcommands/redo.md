@@ -38,6 +38,7 @@ Redid last turn (restored 2 message(s), 3 file(s) changed)
 |---|---|
 | `[warn] Nothing to redo` | No turn has been undone, or a message was sent since the undo |
 | `[warn] Cannot redo while the agent is running` | Stop the agent (`Esc`) first |
+| `[warn] Cannot redo while another session is running in this work tree` | Another open session's agent is working in the same git work tree |
 
 ## Notes
 

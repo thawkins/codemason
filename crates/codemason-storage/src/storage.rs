@@ -3058,14 +3058,58 @@ impl Storage {
     /// ```
     pub fn create_message(&self, msg: &Message) -> Result<()> {
         let mut conn = lock_conn!(self)?;
-        let parts_json = serde_json::to_string(&msg.parts)?;
-        let role_str = msg.role.to_string();
-        let created = msg.created_at.to_rfc3339();
-        let updated = msg.updated_at.to_rfc3339();
         // H-008: wrap the multi-statement write in a single transaction so the
         // message insert + FTS sync + session-touch commit once instead of
         // three implicit autocommits (three fsyncs per message in WAL mode).
         let tx = conn.transaction()?;
+        Self::insert_message_tx(&tx, msg)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Creates several messages in one transaction: all are stored, with
+    /// their search-index rows, or none is.
+    ///
+    /// Used by `/redo` to put an undone turn back, so a failure part-way
+    /// cannot leave half a turn in the history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any insert fails (for example an id that already
+    /// exists); nothing is stored in that case.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use codemason_storage::storage::Storage;
+    /// use codemason_types::message::Message;
+    ///
+    /// let storage = Storage::open_in_memory().unwrap();
+    /// storage.create_session("sess-1", "/tmp/project").unwrap();
+    /// let turn = [
+    ///     Message::user_text("sess-1", "question"),
+    ///     Message::user_text("sess-1", "follow-up"),
+    /// ];
+    /// storage.create_messages(&turn).unwrap();
+    /// assert_eq!(storage.get_messages("sess-1").unwrap().len(), 2);
+    /// ```
+    pub fn create_messages(&self, messages: &[Message]) -> Result<()> {
+        let mut conn = lock_conn!(self)?;
+        let tx = conn.transaction()?;
+        for msg in messages {
+            Self::insert_message_tx(&tx, msg)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Inserts one message, its search-index row and the session touch inside
+    /// `tx`.
+    fn insert_message_tx(tx: &rusqlite::Transaction<'_>, msg: &Message) -> Result<()> {
+        let parts_json = serde_json::to_string(&msg.parts)?;
+        let role_str = msg.role.to_string();
+        let created = msg.created_at.to_rfc3339();
+        let updated = msg.updated_at.to_rfc3339();
         tx.execute(
             "INSERT INTO messages (id, session_id, role, parts, created_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -3079,14 +3123,13 @@ impl Storage {
             ],
         )?;
         // M5 / SQLITE T-01: sync the contentless FTS index and its key row.
-        Self::upsert_fts_row(&tx, &msg.id, &msg.session_id, &role_str, &msg.parts)?;
+        Self::upsert_fts_row(tx, &msg.id, &msg.session_id, &role_str, &msg.parts)?;
         // Touch session updated_at
         let now = Utc::now().to_rfc3339();
         tx.execute(
             "UPDATE sessions SET updated_at = ?1 WHERE id = ?2",
             params![now, msg.session_id],
         )?;
-        tx.commit()?;
         Ok(())
     }
 
