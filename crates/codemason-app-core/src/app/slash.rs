@@ -6878,7 +6878,102 @@ Tools: `TaskCreate`, `TaskUpdate`, `TaskGet`, `TaskList`.\n";
         let sub = if sub.is_empty() { "status" } else { sub };
         match sub {
             "help" | "--help" | "-h" => {
-                let output = "From: /team help
+                self.team_help();
+            }
+            "status" | "" => {
+                self.team_status();
+            }
+            "create" => {
+                if self.team_create(rest).await.is_break() {
+                    return std::ops::ControlFlow::Break(());
+                }
+            }
+
+            "show" => {
+                if self.team_show(rest).is_break() {
+                    return std::ops::ControlFlow::Break(());
+                }
+            }
+            "close" => {
+                self.team_close().await;
+            }
+            "delete" => {
+                if self.team_delete(rest).await.is_break() {
+                    return std::ops::ControlFlow::Break(());
+                }
+            }
+            "blueprint" | "blueprints" => {
+                let working_dir = self.cwd_path.clone();
+                let blueprint_dirs = blueprints::list_installed_blueprints(&working_dir);
+
+                if rest.is_empty() {
+                    let output =
+                        blueprints::render_blueprint_list(&blueprint_dirs, "/team blueprint");
+                    self.append_assistant_text(&output);
+                    self.status = "team: blueprints".to_string();
+                } else if let Some(output) = blueprints::render_blueprint_detail(
+                    &blueprint_dirs,
+                    rest.trim(),
+                    "/team blueprint",
+                ) {
+                    self.append_assistant_text(&output);
+                    self.status = format!("team: blueprint {}", rest.trim());
+                } else {
+                    self.status = format!("Blueprint '{}' not found", rest.trim());
+                }
+            }
+            "message" => {
+                if self.team_message(rest).is_break() {
+                    return std::ops::ControlFlow::Break(());
+                }
+            }
+            "tasks" => {
+                self.team_tasks();
+            }
+            "clear" => {
+                self.team_clear().await;
+            }
+            "cleanup" => {
+                if self.team_cleanup().await.is_break() {
+                    return std::ops::ControlFlow::Break(());
+                }
+            }
+            "forcecleanup" | "force-cleanup" => {
+                if self.team_forcecleanup(args).await.is_break() {
+                    return std::ops::ControlFlow::Break(());
+                }
+            }
+            // FR-034: the approve/reject action a `plan_pending` row
+            // names must be runnable from the same surface that names
+            // it. `approve` takes the teammate; `reject` takes the
+            // teammate and the feedback the tool requires.
+            "approve" | "reject" => {
+                if self.team_approve(sub, rest).is_break() {
+                    return std::ops::ControlFlow::Break(());
+                }
+            }
+            "focus" => {
+                if self.team_focus(rest).is_break() {
+                    return std::ops::ControlFlow::Break(());
+                }
+            }
+            _ => {
+                self.status = format!(
+                    "Unknown /team subcommand '{}'. Usage: /team [help|status|show|create|close|delete|message|tasks|clear|cleanup|focus|approve|reject]",
+                    sub
+                );
+                self.push_log_no_agent(
+                    LogLevel::Warn,
+                    format!("unknown /team subcommand: {}", sub),
+                );
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/team help`, `/team --help`, `/team -h` sub-command.
+    fn team_help(&mut self) {
+        let output = "From: /team help
 ## /team command reference
 
 | Command | Arguments | Description |
@@ -6946,778 +7041,938 @@ than assumed.
 | `auto_claim_tasks` | `true` | Idle teammates claim the next available task. |
 | `watchdog_timeout_secs` | `300` | Seconds a live teammate may go without progress before the watchdog fails it. Widen it for a long build; `0` means the default. |
 | `hooks` | none | Quality-gate hooks; a hook that cannot run is recorded in `hook-failures.jsonl` and reported by `/team show` and `team_status`. |";
-                self.append_assistant_text(output);
-                self.status = "team: help".to_string();
+        self.append_assistant_text(output);
+        self.status = "team: help".to_string();
+    }
+
+    /// Run the `/team status` sub-command.
+    fn team_status(&mut self) {
+        let mut output = String::from("From: /team status\n");
+        if let Some(team) = self.session.active_team.clone() {
+            self.ensure_team_manager_for_team(&team.name, None);
+            output.push_str(&format!(
+                "## Team: {} ({})\n\n",
+                team.name,
+                format!("{:?}", team.status).to_lowercase()
+            ));
+            output.push_str(&format!(
+                "  * lead (you)  session: {}\n",
+                team.lead_session_id
+            ));
+            if self.session.team_members.is_empty() {
+                output.push_str("  (no teammates yet - use team_spawn tool or /team create)\n");
+            } else {
+                for m in &self.session.team_members {
+                    // FR-033: the status word comes from the
+                    // canonical mapping, never from a Debug
+                    // spelling of the variant name.
+                    let status = status_label(m.status);
+                    let task = m.current_task_id.as_deref().unwrap_or("-").to_string();
+                    let model_str = m
+                        .model_override
+                        .as_ref()
+                        .map(|mr| format!("{}/{}", mr.provider_id, mr.model_id))
+                        .unwrap_or_else(|| "(inherited)".to_string());
+                    output.push_str(&format!(
+                        "  └ {:<18} {:<10} model:{:<30} task:{}\n",
+                        m.name, status, model_str, task
+                    ));
+                }
             }
-            "status" | "" => {
-                let mut output = String::from("From: /team status\n");
-                if let Some(team) = self.session.active_team.clone() {
-                    self.ensure_team_manager_for_team(&team.name, None);
-                    output.push_str(&format!(
-                        "## Team: {} ({})\n\n",
-                        team.name,
-                        format!("{:?}", team.status).to_lowercase()
-                    ));
-                    output.push_str(&format!(
-                        "  * lead (you)  session: {}\n",
-                        team.lead_session_id
-                    ));
-                    if self.session.team_members.is_empty() {
-                        output.push_str(
-                            "  (no teammates yet - use team_spawn tool or /team create)\n",
-                        );
-                    } else {
-                        for m in &self.session.team_members {
-                            // FR-033: the status word comes from the
-                            // canonical mapping, never from a Debug
-                            // spelling of the variant name.
-                            let status = status_label(m.status);
-                            let task = m.current_task_id.as_deref().unwrap_or("-").to_string();
-                            let model_str = m
-                                .model_override
-                                .as_ref()
-                                .map(|mr| format!("{}/{}", mr.provider_id, mr.model_id))
-                                .unwrap_or_else(|| "(inherited)".to_string());
+            output.push_str(&format!(
+                "\n{} teammate(s)\n",
+                self.session.team_members.len()
+            ));
+            // FR-020: report messages stranded with a terminated
+            // teammate rather than leaving them silently unread.
+            let working_dir = self.cwd_path.clone();
+            if let Some(store) = TeamStore::load_by_name(&team.name, &working_dir)
+                .ok()
+                .or_else(|| {
+                    codemason_agent::team::find_team_dir(&working_dir, &team.name)
+                        .and_then(|dir| TeamStore::load(&dir).ok())
+                })
+            {
+                let undelivered = undelivered_messages(&store);
+                let block = render_undelivered(&team.name, &undelivered, 2);
+                if !block.is_empty() {
+                    output.push('\n');
+                    output.push_str(&block);
+                }
+                // FR-034: name the plan a parked teammate is
+                // waiting on, and the action that unblocks it.
+                let parked = pending_plans(&store);
+                let plans = render_pending_plans(&team.name, &parked, 2);
+                if !plans.is_empty() {
+                    output.push('\n');
+                    output.push_str(&plans);
+                }
+                // FR-019: a hook that could not be executed is
+                // an inert gate, not a passing one.
+                let hook_failures = read_hook_failures(&store.dir);
+                let hooks = render_hook_failures(&team.name, &hook_failures, 2);
+                if !hooks.is_empty() {
+                    output.push('\n');
+                    output.push_str(&hooks);
+                }
+            }
+        } else {
+            output.push_str("No active team.\n\nUse `/team create <blueprint> [name]` to start a team (blueprint required).");
+        }
+        self.append_assistant_text(&output);
+        self.status = "team: status".to_string();
+    }
+
+    /// Run the `/team create` sub-command.
+    ///
+    /// Returns `Break` where the arm returns early, so `slash_team`
+    /// forwards it to the dispatcher exactly as before.
+    async fn team_create(&mut self, rest: &str) -> std::ops::ControlFlow<()> {
+        if rest.is_empty() {
+            self.status = "Usage: /team create <blueprint> [name]".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+
+        // Parse blueprint (mandatory) then optional name
+        let mut parts = rest.split_whitespace();
+        let blueprint = parts.next().unwrap_or("").to_string();
+        let name = parts.next().map(|s| s.to_string());
+
+        if blueprint.is_empty() {
+            self.status = "Usage: /team create <blueprint> [name]".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+
+        // Use the supplied name, or generate one from the
+        // blueprint and a timestamp when none was given.
+        // SEC-codemason-tui-004: slugify the blueprint segment so
+        // the generated name is always a valid team name.
+        let name = name.unwrap_or_else(|| {
+            format!(
+                "{}-{}",
+                codemason_agent::team::slugify_team_name(&blueprint),
+                chrono::Utc::now().format("%Y%m%d-%H-%M-%S")
+            )
+        });
+
+        // SEC-codemason-tui-004: reject a name that is not a single
+        // safe path component before it reaches the store.
+        if let Err(e) = codemason_agent::team::validate_team_name(&name) {
+            self.status = format!("{e}");
+            return std::ops::ControlFlow::Break(());
+        }
+
+        let working_dir = self.cwd_path.clone();
+        let sid = self.session.session_id.clone().unwrap_or_default();
+        match TeamStore::create(&name, &sid, &working_dir, true) {
+            Ok(store) => {
+                let name = store.config.name.clone();
+                let team_dir = store.dir.clone();
+                self.session.active_team = Some(store.config);
+                self.session.team_members.clear();
+                self.session.team_message_counts.clear();
+                self.session.team_task_counts.clear();
+                self.session.team_task_counts_dirty = true;
+                self.show_teams = true;
+                self.ensure_team_manager_for_team(&name, Some(team_dir));
+                self.push_log_no_agent(LogLevel::Info, format!("[team] Team '{}' created", name));
+                self.append_assistant_text(&format!(
+                                    "From: /team create\nTeam '{}' created.\n\nUse the `team_spawn` tool to add teammates.",
+                                    name
+                                ));
+                self.status = format!("team: {}", name);
+
+                // If the blueprint is installed, invoke the
+                // `team_create` tool to apply its seeding.
+                //
+                // `/team create` has already created the team
+                // above, so the seeding call is issued with
+                // `seed_only`: it applies the blueprint to the
+                // existing team instead of re-creating it. A
+                // re-creating call that ran after the team
+                // directory was removed (a `/team clear` or
+                // `/team forcecleanup` racing this detached
+                // thread) resurrected the tree, so the removal
+                // failed with ENOTEMPTY or the directory came
+                // back (CI flake in
+                // `test_slash_arms_deep::team_clear_removes_ta`
+                // and
+                // `test_slash_teams_deep::forcecleanup_confirm_removes_team`).
+                // A blueprint that is not installed has nothing
+                // to seed, so the thread is not started at all.
+                let bp = blueprint.clone();
+                let blueprint_installed = blueprints::list_installed_blueprints(&working_dir)
+                    .iter()
+                    .any(|installed| installed.name == bp);
+                if !bp.is_empty() && blueprint_installed {
+                    let session_processor = self.session_processor.clone();
+                    let event_bus = self.event_bus.clone();
+                    let storage = self.storage.clone();
+                    let working_dir_clone = working_dir.clone();
+                    let sid_clone = sid.clone();
+                    let name_clone = name.clone();
+                    // Capture the currently selected model so teammates inherit it.
+                    let active_model_clone: Option<codemason_agent::agent::ModelRef> =
+                        self.session.selected_model.as_deref().and_then(|s| {
+                            s.split_once('/')
+                                .map(|(pid, mid)| codemason_agent::agent::ModelRef {
+                                    provider_id: pid.to_string(),
+                                    model_id: mid.to_string(),
+                                })
+                        });
+                    std::thread::spawn(move || {
+                        // Create a small runtime for seeding if there is no existing Tokio runtime
+                        let rt = match tokio::runtime::Runtime::new() {
+                            Ok(rt) => rt,
+                            Err(e) => {
+                                tracing::error!(
+                                    "Failed to create tokio runtime for team seed: {e}"
+                                );
+                                return;
+                            }
+                        };
+                        rt.block_on(async move {
+                            let registry = codemason_agent::tool::create_default_registry();
+                            if let Some(tool) = registry.get("team_create") {
+                                let input = serde_json::json!({
+                                    "name": name_clone,
+                                    "project_local": true,
+                                    "seed_only": true,
+                                    "blueprint": bp,
+                                });
+                                let ctx = codemason_agent::tool::ToolContext {
+                                    session_id: sid_clone.clone(),
+                                    working_dir: working_dir_clone.clone(),
+                                    event_bus: event_bus.clone(),
+                                    storage: Some(storage.clone()),
+                                    agent_manager: None,
+                                    active_model: active_model_clone,
+                                    provider_registry: Some(Arc::clone(
+                                        &session_processor.provider_registry,
+                                    )),
+                                    team_context: None,
+                                    team_manager: session_processor.team_manager.get().map(|tm| {
+                                        tm as Arc<dyn codemason_agent::tool::TeamManagerInterface>
+                                    }),
+                                    code_index: None,
+                                    bg_service: None,
+                                    spec_manager: session_processor.spec_manager.get().cloned(),
+                                    active_spec_id: session_processor
+                                        .active_spec
+                                        .read()
+                                        .await
+                                        .clone(),
+                                    config: Some(Arc::new(
+                                        codemason_agent::Config::load_for(&working_dir_clone)
+                                            .unwrap_or_default(),
+                                    )),
+                                    allowed_roots: vec![working_dir_clone.clone()],
+                                    cached_team_dir: Arc::new(std::sync::Mutex::new(None)),
+                                    // SEC-codemason-team-001: hand the nested team_create
+                                    // call the session's checker so a blueprint seed
+                                    // cannot execute tools without approval.
+                                    permission_checker: Some(
+                                        session_processor.permission_checker.clone(),
+                                    ),
+                                    tool_registry:
+                                        codemason_agent::tool::ToolContext::default_tool_registry(),
+                                    read_timestamps: session_processor.read_timestamps.clone(),
+                                    canonical_cache: Arc::new(
+                                        codemason_tools_core::CanonicalPathCache::new(),
+                                    ),
+                                };
+                                if let Err(e) = tool.execute(input, &ctx).await {
+                                    tracing::error!("team create tool failed: {e}");
+                                }
+                            }
+                        });
+                    });
+                }
+            }
+            Err(e) => {
+                self.status = format!("Failed to create team: {}", e);
+                self.push_log_no_agent(LogLevel::Error, format!("team create failed: {}", e));
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/team show` sub-command.
+    ///
+    /// Returns `Break` where the arm returns early, so `slash_team`
+    /// forwards it to the dispatcher exactly as before.
+    fn team_show(&mut self, rest: &str) -> std::ops::ControlFlow<()> {
+        let working_dir = self.cwd_path.clone();
+        if rest.is_empty() {
+            let teams = TeamStore::list_teams(&working_dir);
+            let mut output = String::from("From: /team show\n");
+            if teams.is_empty() {
+                output.push_str("No registered teams found.");
+                self.status = "team: show all (0)".to_string();
+            } else {
+                output.push_str("## Registered teams\n\n");
+                for (name, dir, is_project_local) in teams {
+                    match TeamStore::load(&dir) {
+                        Ok(store) => {
+                            let team = store.config;
+                            let scope = if is_project_local {
+                                "project"
+                            } else {
+                                "global"
+                            };
                             output.push_str(&format!(
-                                "  └ {:<18} {:<10} model:{:<30} task:{}\n",
-                                m.name, status, model_str, task
+                                "  * {:<18} {:<10} lead:{} teammates:{}\n",
+                                team.name,
+                                format!("{:?}", team.status).to_lowercase(),
+                                team.lead_session_id,
+                                team.members.len()
+                            ));
+                            output.push_str(&format!(
+                                "    scope:{} path:{}\n",
+                                scope,
+                                dir.display()
                             ));
                         }
-                    }
-                    output.push_str(&format!(
-                        "\n{} teammate(s)\n",
-                        self.session.team_members.len()
-                    ));
-                    // FR-020: report messages stranded with a terminated
-                    // teammate rather than leaving them silently unread.
-                    let working_dir = self.cwd_path.clone();
-                    if let Some(store) = TeamStore::load_by_name(&team.name, &working_dir)
-                        .ok()
-                        .or_else(|| {
-                            codemason_agent::team::find_team_dir(&working_dir, &team.name)
-                                .and_then(|dir| TeamStore::load(&dir).ok())
-                        })
-                    {
-                        let undelivered = undelivered_messages(&store);
-                        let block = render_undelivered(&team.name, &undelivered, 2);
-                        if !block.is_empty() {
-                            output.push('\n');
-                            output.push_str(&block);
-                        }
-                        // FR-034: name the plan a parked teammate is
-                        // waiting on, and the action that unblocks it.
-                        let parked = pending_plans(&store);
-                        let plans = render_pending_plans(&team.name, &parked, 2);
-                        if !plans.is_empty() {
-                            output.push('\n');
-                            output.push_str(&plans);
-                        }
-                        // FR-019: a hook that could not be executed is
-                        // an inert gate, not a passing one.
-                        let hook_failures = read_hook_failures(&store.dir);
-                        let hooks = render_hook_failures(&team.name, &hook_failures, 2);
-                        if !hooks.is_empty() {
-                            output.push('\n');
-                            output.push_str(&hooks);
+                        Err(e) => {
+                            output.push_str(&format!("  * {} (failed to load: {})\n", name, e));
                         }
                     }
+                }
+                self.status = "team: show all".to_string();
+            }
+            self.append_assistant_text(&output);
+            return std::ops::ControlFlow::Break(());
+        }
+        match TeamStore::load_by_name(rest, &working_dir) {
+            Ok(store) => {
+                let team = store.config.clone();
+                self.ensure_team_manager_for_team(&team.name, Some(store.dir.clone()));
+
+                let mut output = String::from("From: /team show\n");
+                output.push_str(&format!(
+                    "## Team: {} ({})\n\n",
+                    team.name,
+                    format!("{:?}", team.status).to_lowercase()
+                ));
+                output.push_str(&format!("  * lead-session: {}\n", team.lead_session_id));
+                if team.members.is_empty() {
+                    output.push_str("  (no teammates yet)\n");
                 } else {
-                    output.push_str("No active team.\n\nUse `/team create <blueprint> [name]` to start a team (blueprint required).");
+                    for m in &team.members {
+                        // FR-033: one status-word mapping.
+                        let status = status_label(m.status);
+                        let task = m.current_task_id.as_deref().unwrap_or("-").to_string();
+                        let sid = m.session_id.as_deref().unwrap_or("-");
+                        output.push_str(&format!(
+                            "  └ {:<18} {:<10} agent:{} session:{} task:{}\n",
+                            m.name, status, m.agent_id, sid, task
+                        ));
+                    }
+                }
+                output.push_str(&format!("\n{} teammate(s)\n", team.members.len()));
+                // FR-020: a message whose recipient terminated before
+                // reading it is reported here rather than dropped -
+                // nothing else will ever drain that mailbox.
+                let undelivered = undelivered_messages(&store);
+                let block = render_undelivered(&team.name, &undelivered, 2);
+                if !block.is_empty() {
+                    output.push('\n');
+                    output.push_str(&block);
+                }
+                // FR-034: a `plan_pending` row is reported with
+                // its plan and the verdict that resolves it.
+                let parked = pending_plans(&store);
+                let plans = render_pending_plans(&team.name, &parked, 2);
+                if !plans.is_empty() {
+                    output.push('\n');
+                    output.push_str(&plans);
+                }
+                // FR-019: an inert hook is reported, with the
+                // ledger it was recorded in, so it is never
+                // mistaken for a gate that passed.
+                let hook_failures = read_hook_failures(&store.dir);
+                let hooks = render_hook_failures(&team.name, &hook_failures, 2);
+                if !hooks.is_empty() {
+                    output.push('\n');
+                    output.push_str(&hooks);
                 }
                 self.append_assistant_text(&output);
-                self.status = "team: status".to_string();
+                self.status = format!("team: show {}", team.name);
             }
-            "create" => {
-                if rest.is_empty() {
-                    self.status = "Usage: /team create <blueprint> [name]".to_string();
-                    return std::ops::ControlFlow::Break(());
-                }
+            Err(e) => {
+                self.status = format!("Failed to load team: {e}");
+                self.push_log_no_agent(
+                    LogLevel::Error,
+                    format!("team show failed for '{}': {}", rest, e),
+                );
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
 
-                // Parse blueprint (mandatory) then optional name
-                let mut parts = rest.split_whitespace();
-                let blueprint = parts.next().unwrap_or("").to_string();
-                let name = parts.next().map(|s| s.to_string());
+    /// Run the `/team close` sub-command.
+    async fn team_close(&mut self) {
+        if let Some(team) = self.session.active_team.as_ref() {
+            let team_name = team.name.clone();
+            // Closing cancels the team's swarm: stop its
+            // finalising job first.
+            self.stop_swarm_autocomplete(&team_name).await;
+            self.session.active_team = None;
+            self.session.team_members.clear();
+            self.session.team_message_counts.clear();
+            self.session.team_task_counts.clear();
+            self.session.team_task_counts_dirty = true;
+            self.show_teams = false;
+            self.session.focused_teammate = None;
+            if self
+                .session
+                .swarm_state
+                .as_ref()
+                .is_some_and(|s| s.team_name == team_name)
+            {
+                self.session.swarm_state = None;
+            }
+            self.push_log_no_agent(
+                LogLevel::Info,
+                format!("[team] Team '{}' closed for this session", team_name),
+            );
+            self.append_assistant_text(&format!(
+                "From: /team close\nTeam '{}' closed for this session.",
+                team_name
+            ));
+            self.status = "team closed".to_string();
+        } else {
+            self.status = "No active team to close".to_string();
+        }
+    }
 
-                if blueprint.is_empty() {
-                    self.status = "Usage: /team create <blueprint> [name]".to_string();
-                    return std::ops::ControlFlow::Break(());
-                }
-
-                // Use the supplied name, or generate one from the
-                // blueprint and a timestamp when none was given.
-                // SEC-codemason-tui-004: slugify the blueprint segment so
-                // the generated name is always a valid team name.
-                let name = name.unwrap_or_else(|| {
-                    format!(
-                        "{}-{}",
-                        codemason_agent::team::slugify_team_name(&blueprint),
-                        chrono::Utc::now().format("%Y%m%d-%H-%M-%S")
-                    )
-                });
-
-                // SEC-codemason-tui-004: reject a name that is not a single
-                // safe path component before it reaches the store.
-                if let Err(e) = codemason_agent::team::validate_team_name(&name) {
-                    self.status = format!("{e}");
-                    return std::ops::ControlFlow::Break(());
-                }
-
-                let working_dir = self.cwd_path.clone();
-                let sid = self.session.session_id.clone().unwrap_or_default();
-                match TeamStore::create(&name, &sid, &working_dir, true) {
-                    Ok(store) => {
-                        let name = store.config.name.clone();
-                        let team_dir = store.dir.clone();
-                        self.session.active_team = Some(store.config);
+    /// Run the `/team delete` sub-command.
+    ///
+    /// Returns `Break` where the arm returns early, so `slash_team`
+    /// forwards it to the dispatcher exactly as before.
+    async fn team_delete(&mut self, rest: &str) -> std::ops::ControlFlow<()> {
+        // T-043/FR-045: the explicit `--force` is the
+        // confirmation for EVERY named team, not only the
+        // session's active one. The flag is split off the name
+        // first, so a confirmed delete never reaches the store
+        // with `--force` glued onto it.
+        let (team_name, force) = split_delete_args(rest);
+        if team_name.is_empty() {
+            self.status = "Usage: /team delete <name> [--force]".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+        // SEC-codemason-tui-004: the name reaches `remove_dir_all`
+        // via the resolved store directory, so it is validated
+        // first.
+        if let Err(e) = codemason_agent::team::validate_team_name(team_name) {
+            self.status = format!("{e}");
+            return std::ops::ControlFlow::Break(());
+        }
+        let name_owned = team_name.to_string();
+        let deleting_active = self
+            .session
+            .active_team
+            .as_ref()
+            .is_some_and(|team| team.name == name_owned);
+        let working_dir = self.cwd_path.clone();
+        // FR-022/FR-045: the live-roster guard is the shared
+        // `cleanup_refusal` the `team_cleanup` tool uses, so the
+        // two surfaces cannot disagree. An unforced delete of a
+        // team whose roster has a live member is refused with the
+        // next actions named; `--force` is the deliberate override
+        // and removes it in this one step.
+        let roster: Vec<(String, codemason_agent::team::MemberStatus)> = if deleting_active {
+            self.session
+                .team_members
+                .iter()
+                .map(|m| (m.name.clone(), m.status))
+                .collect()
+        } else {
+            TeamStore::load_by_name(team_name, &working_dir)
+                .map(|store| {
+                    store
+                        .config
+                        .members
+                        .iter()
+                        .map(|m| (m.name.clone(), m.status))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let forced_live_count = roster.iter().filter(|(_, status)| status.is_live()).count();
+        if let Some(refusal) = codemason_agent::team::cleanup_refusal(
+            team_name,
+            roster.iter().map(|(name, status)| (name.as_str(), *status)),
+        )
+        .filter(|_| !force)
+        {
+            // FR-032: the refusal names the team, the live
+            // members with their status words, and the commands
+            // that clear them.
+            self.status = format!("team delete {team_name}: {refusal}");
+            self.push_log_no_agent(LogLevel::Warn, refusal);
+            return std::ops::ControlFlow::Break(());
+        }
+        let rest = team_name;
+        // Nothing of a finalising job may write into the
+        // directory while it is removed (ENOTEMPTY).
+        self.stop_swarm_autocomplete(&name_owned).await;
+        match TeamStore::load_by_name(rest, &working_dir) {
+            Ok(store) => match std::fs::remove_dir_all(&store.dir) {
+                Ok(_) => {
+                    if deleting_active {
+                        self.session.active_team = None;
                         self.session.team_members.clear();
                         self.session.team_message_counts.clear();
                         self.session.team_task_counts.clear();
                         self.session.team_task_counts_dirty = true;
-                        self.show_teams = true;
-                        self.ensure_team_manager_for_team(&name, Some(team_dir));
-                        self.push_log_no_agent(
-                            LogLevel::Info,
-                            format!("[team] Team '{}' created", name),
-                        );
-                        self.append_assistant_text(&format!(
-                                    "From: /team create\nTeam '{}' created.\n\nUse the `team_spawn` tool to add teammates.",
-                                    name
-                                ));
-                        self.status = format!("team: {}", name);
-
-                        // If the blueprint is installed, invoke the
-                        // `team_create` tool to apply its seeding.
-                        //
-                        // `/team create` has already created the team
-                        // above, so the seeding call is issued with
-                        // `seed_only`: it applies the blueprint to the
-                        // existing team instead of re-creating it. A
-                        // re-creating call that ran after the team
-                        // directory was removed (a `/team clear` or
-                        // `/team forcecleanup` racing this detached
-                        // thread) resurrected the tree, so the removal
-                        // failed with ENOTEMPTY or the directory came
-                        // back (CI flake in
-                        // `test_slash_arms_deep::team_clear_removes_ta`
-                        // and
-                        // `test_slash_teams_deep::forcecleanup_confirm_removes_team`).
-                        // A blueprint that is not installed has nothing
-                        // to seed, so the thread is not started at all.
-                        let bp = blueprint.clone();
-                        let blueprint_installed =
-                            blueprints::list_installed_blueprints(&working_dir)
-                                .iter()
-                                .any(|installed| installed.name == bp);
-                        if !bp.is_empty() && blueprint_installed {
-                            let session_processor = self.session_processor.clone();
-                            let event_bus = self.event_bus.clone();
-                            let storage = self.storage.clone();
-                            let working_dir_clone = working_dir.clone();
-                            let sid_clone = sid.clone();
-                            let name_clone = name.clone();
-                            // Capture the currently selected model so teammates inherit it.
-                            let active_model_clone: Option<codemason_agent::agent::ModelRef> =
-                                self.session.selected_model.as_deref().and_then(|s| {
-                                    s.split_once('/').map(|(pid, mid)| {
-                                        codemason_agent::agent::ModelRef {
-                                            provider_id: pid.to_string(),
-                                            model_id: mid.to_string(),
-                                        }
-                                    })
-                                });
-                            std::thread::spawn(move || {
-                                // Create a small runtime for seeding if there is no existing Tokio runtime
-                                let rt = match tokio::runtime::Runtime::new() {
-                                    Ok(rt) => rt,
-                                    Err(e) => {
-                                        tracing::error!(
-                                            "Failed to create tokio runtime for team seed: {e}"
-                                        );
-                                        return;
-                                    }
-                                };
-                                rt.block_on(async move {                                                    let registry = codemason_agent::tool::create_default_registry();
-                                                    if let Some(tool) = registry.get("team_create") {
-                                                        let input = serde_json::json!({
-                                                            "name": name_clone,
-                                                            "project_local": true,
-                                                            "seed_only": true,
-                                                            "blueprint": bp,
-                                                        });
-                                                        let ctx = codemason_agent::tool::ToolContext {
-                                                            session_id: sid_clone.clone(),
-                                                            working_dir: working_dir_clone.clone(),
-                                                            event_bus: event_bus.clone(),
-                                                            storage: Some(storage.clone()),
-                                                            agent_manager: None,
-                                                            active_model: active_model_clone,
-                                                            provider_registry: Some(Arc::clone(
-                                                                &session_processor.provider_registry,
-                                                            )),
-                                                            team_context: None,
-                                                            team_manager: session_processor.team_manager.get().map(|tm| tm as Arc<dyn codemason_agent::tool::TeamManagerInterface>),
-                                                            code_index: None,
-                                                            bg_service: None,
-                                                            spec_manager: session_processor.spec_manager.get().cloned(),
-                                                            active_spec_id: session_processor.active_spec.read().await.clone(),
-                                                            config: Some(Arc::new(
-                                                                codemason_agent::Config::load_for(&working_dir_clone)
-                                                                    .unwrap_or_default(),
-                                                            )),
-                                                            allowed_roots: vec![working_dir_clone.clone()],
-                                                            cached_team_dir: Arc::new(std::sync::Mutex::new(None)),
-                                                            // SEC-codemason-team-001: hand the nested team_create
-                                                            // call the session's checker so a blueprint seed
-                                                            // cannot execute tools without approval.
-                                                            permission_checker: Some(
-                                                                session_processor.permission_checker.clone(),
-                                                            ),
-                                                            tool_registry: codemason_agent::tool::ToolContext::default_tool_registry(),
-                                                            read_timestamps: session_processor.read_timestamps.clone(),
-                                                            canonical_cache: Arc::new(codemason_tools_core::CanonicalPathCache::new()),
-                                                        };
-                                                        if let Err(e) = tool.execute(input, &ctx).await {
-                                                            tracing::error!("team create tool failed: {e}");
-                                                        }
-                                                    }
-                                                });
-                            });
+                        self.show_teams = false;
+                        self.session.focused_teammate = None;
+                        if self
+                            .session
+                            .swarm_state
+                            .as_ref()
+                            .is_some_and(|s| s.team_name == rest)
+                        {
+                            self.session.swarm_state = None;
                         }
-                    }
-                    Err(e) => {
-                        self.status = format!("Failed to create team: {}", e);
-                        self.push_log_no_agent(
-                            LogLevel::Error,
-                            format!("team create failed: {}", e),
-                        );
-                    }
-                }
-            }
-
-            "show" => {
-                let working_dir = self.cwd_path.clone();
-                if rest.is_empty() {
-                    let teams = TeamStore::list_teams(&working_dir);
-                    let mut output = String::from("From: /team show\n");
-                    if teams.is_empty() {
-                        output.push_str("No registered teams found.");
-                        self.status = "team: show all (0)".to_string();
-                    } else {
-                        output.push_str("## Registered teams\n\n");
-                        for (name, dir, is_project_local) in teams {
-                            match TeamStore::load(&dir) {
-                                Ok(store) => {
-                                    let team = store.config;
-                                    let scope = if is_project_local {
-                                        "project"
-                                    } else {
-                                        "global"
-                                    };
-                                    output.push_str(&format!(
-                                        "  * {:<18} {:<10} lead:{} teammates:{}\n",
-                                        team.name,
-                                        format!("{:?}", team.status).to_lowercase(),
-                                        team.lead_session_id,
-                                        team.members.len()
-                                    ));
-                                    output.push_str(&format!(
-                                        "    scope:{} path:{}\n",
-                                        scope,
-                                        dir.display()
-                                    ));
-                                }
-                                Err(e) => {
-                                    output.push_str(&format!(
-                                        "  * {} (failed to load: {})\n",
-                                        name, e
-                                    ));
-                                }
-                            }
-                        }
-                        self.status = "team: show all".to_string();
-                    }
-                    self.append_assistant_text(&output);
-                    return std::ops::ControlFlow::Break(());
-                }
-                match TeamStore::load_by_name(rest, &working_dir) {
-                    Ok(store) => {
-                        let team = store.config.clone();
-                        self.ensure_team_manager_for_team(&team.name, Some(store.dir.clone()));
-
-                        let mut output = String::from("From: /team show\n");
-                        output.push_str(&format!(
-                            "## Team: {} ({})\n\n",
-                            team.name,
-                            format!("{:?}", team.status).to_lowercase()
-                        ));
-                        output.push_str(&format!("  * lead-session: {}\n", team.lead_session_id));
-                        if team.members.is_empty() {
-                            output.push_str("  (no teammates yet)\n");
-                        } else {
-                            for m in &team.members {
-                                // FR-033: one status-word mapping.
-                                let status = status_label(m.status);
-                                let task = m.current_task_id.as_deref().unwrap_or("-").to_string();
-                                let sid = m.session_id.as_deref().unwrap_or("-");
-                                output.push_str(&format!(
-                                    "  └ {:<18} {:<10} agent:{} session:{} task:{}\n",
-                                    m.name, status, m.agent_id, sid, task
-                                ));
-                            }
-                        }
-                        output.push_str(&format!("\n{} teammate(s)\n", team.members.len()));
-                        // FR-020: a message whose recipient terminated before
-                        // reading it is reported here rather than dropped -
-                        // nothing else will ever drain that mailbox.
-                        let undelivered = undelivered_messages(&store);
-                        let block = render_undelivered(&team.name, &undelivered, 2);
-                        if !block.is_empty() {
-                            output.push('\n');
-                            output.push_str(&block);
-                        }
-                        // FR-034: a `plan_pending` row is reported with
-                        // its plan and the verdict that resolves it.
-                        let parked = pending_plans(&store);
-                        let plans = render_pending_plans(&team.name, &parked, 2);
-                        if !plans.is_empty() {
-                            output.push('\n');
-                            output.push_str(&plans);
-                        }
-                        // FR-019: an inert hook is reported, with the
-                        // ledger it was recorded in, so it is never
-                        // mistaken for a gate that passed.
-                        let hook_failures = read_hook_failures(&store.dir);
-                        let hooks = render_hook_failures(&team.name, &hook_failures, 2);
-                        if !hooks.is_empty() {
-                            output.push('\n');
-                            output.push_str(&hooks);
-                        }
-                        self.append_assistant_text(&output);
-                        self.status = format!("team: show {}", team.name);
-                    }
-                    Err(e) => {
-                        self.status = format!("Failed to load team: {e}");
-                        self.push_log_no_agent(
-                            LogLevel::Error,
-                            format!("team show failed for '{}': {}", rest, e),
-                        );
-                    }
-                }
-            }
-            "close" => {
-                if let Some(team) = self.session.active_team.as_ref() {
-                    let team_name = team.name.clone();
-                    // Closing cancels the team's swarm: stop its
-                    // finalising job first.
-                    self.stop_swarm_autocomplete(&team_name).await;
-                    self.session.active_team = None;
-                    self.session.team_members.clear();
-                    self.session.team_message_counts.clear();
-                    self.session.team_task_counts.clear();
-                    self.session.team_task_counts_dirty = true;
-                    self.show_teams = false;
-                    self.session.focused_teammate = None;
-                    if self
-                        .session
-                        .swarm_state
-                        .as_ref()
-                        .is_some_and(|s| s.team_name == team_name)
-                    {
-                        self.session.swarm_state = None;
                     }
                     self.push_log_no_agent(
                         LogLevel::Info,
-                        format!("[team] Team '{}' closed for this session", team_name),
+                        format!("[clr]  Team '{}' deleted", rest),
                     );
+                    // FR-032: say what the confirmed delete
+                    // removed, and whether it overrode a live
+                    // roster, so "nothing was forced" is never
+                    // guessed from silence.
+                    let forced = if force { forced_live_count } else { 0 };
+                    let detail = if forced == 0 {
+                        "Nothing was forced.".to_string()
+                    } else {
+                        format!("{forced} live teammate(s) forced.")
+                    };
                     self.append_assistant_text(&format!(
-                        "From: /team close\nTeam '{}' closed for this session.",
-                        team_name
+                        "From: /team delete\nTeam '{}' deleted.\n{detail}",
+                        rest
                     ));
-                    self.status = "team closed".to_string();
-                } else {
-                    self.status = "No active team to close".to_string();
+                    self.status = "team deleted".to_string();
                 }
+                Err(e) => {
+                    self.status = format!("Failed to delete team: {e}");
+                    self.push_log_no_agent(
+                        LogLevel::Error,
+                        format!("team delete failed for '{}': {}", rest, e),
+                    );
+                }
+            },
+            Err(e) => {
+                self.status = format!("Failed to load team: {e}");
+                self.push_log_no_agent(
+                    LogLevel::Error,
+                    format!("team delete failed for '{}': {}", rest, e),
+                );
             }
-            "delete" => {
-                // T-043/FR-045: the explicit `--force` is the
-                // confirmation for EVERY named team, not only the
-                // session's active one. The flag is split off the name
-                // first, so a confirmed delete never reaches the store
-                // with `--force` glued onto it.
-                let (team_name, force) = split_delete_args(rest);
-                if team_name.is_empty() {
-                    self.status = "Usage: /team delete <name> [--force]".to_string();
-                    return std::ops::ControlFlow::Break(());
-                }
-                // SEC-codemason-tui-004: the name reaches `remove_dir_all`
-                // via the resolved store directory, so it is validated
-                // first.
-                if let Err(e) = codemason_agent::team::validate_team_name(team_name) {
-                    self.status = format!("{e}");
-                    return std::ops::ControlFlow::Break(());
-                }
-                let name_owned = team_name.to_string();
-                let deleting_active = self
-                    .session
-                    .active_team
-                    .as_ref()
-                    .is_some_and(|team| team.name == name_owned);
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/team message` sub-command.
+    ///
+    /// Returns `Break` where the arm returns early, so `slash_team`
+    /// forwards it to the dispatcher exactly as before.
+    fn team_message(&mut self, rest: &str) -> std::ops::ControlFlow<()> {
+        let (name, text) = rest
+            .split_once(char::is_whitespace)
+            .map_or((rest, ""), |(n, t)| (n.trim(), t.trim()));
+        if name.is_empty() || text.is_empty() {
+            self.status = "Usage: /team message <teammate-name> <text>".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+        let member = self
+            .session
+            .team_members
+            .iter()
+            .find(|m| m.name == name)
+            .cloned();
+        match (self.session.active_team.clone(), member) {
+            (Some(team), Some(member)) => {
                 let working_dir = self.cwd_path.clone();
-                // FR-022/FR-045: the live-roster guard is the shared
-                // `cleanup_refusal` the `team_cleanup` tool uses, so the
-                // two surfaces cannot disagree. An unforced delete of a
-                // team whose roster has a live member is refused with the
-                // next actions named; `--force` is the deliberate override
-                // and removes it in this one step.
-                let roster: Vec<(String, codemason_agent::team::MemberStatus)> = if deleting_active
-                {
-                    self.session
-                        .team_members
-                        .iter()
-                        .map(|m| (m.name.clone(), m.status))
-                        .collect()
-                } else {
-                    TeamStore::load_by_name(team_name, &working_dir)
-                        .map(|store| {
-                            store
-                                .config
-                                .members
-                                .iter()
-                                .map(|m| (m.name.clone(), m.status))
-                                .collect()
-                        })
-                        .unwrap_or_default()
-                };
-                let forced_live_count =
-                    roster.iter().filter(|(_, status)| status.is_live()).count();
-                if let Some(refusal) = codemason_agent::team::cleanup_refusal(
-                    team_name,
-                    roster.iter().map(|(name, status)| (name.as_str(), *status)),
-                )
-                .filter(|_| !force)
-                {
-                    // FR-032: the refusal names the team, the live
-                    // members with their status words, and the commands
-                    // that clear them.
-                    self.status = format!("team delete {team_name}: {refusal}");
-                    self.push_log_no_agent(LogLevel::Warn, refusal);
-                    return std::ops::ControlFlow::Break(());
-                }
-                let rest = team_name;
-                // Nothing of a finalising job may write into the
-                // directory while it is removed (ENOTEMPTY).
-                self.stop_swarm_autocomplete(&name_owned).await;
-                match TeamStore::load_by_name(rest, &working_dir) {
-                    Ok(store) => match std::fs::remove_dir_all(&store.dir) {
-                        Ok(_) => {
-                            if deleting_active {
-                                self.session.active_team = None;
-                                self.session.team_members.clear();
-                                self.session.team_message_counts.clear();
-                                self.session.team_task_counts.clear();
-                                self.session.team_task_counts_dirty = true;
-                                self.show_teams = false;
-                                self.session.focused_teammate = None;
-                                if self
-                                    .session
-                                    .swarm_state
-                                    .as_ref()
-                                    .is_some_and(|s| s.team_name == rest)
-                                {
-                                    self.session.swarm_state = None;
+                match TeamStore::load_by_name(&team.name, &working_dir) {
+                    Ok(store) => {
+                        match Mailbox::open(&store.dir, &member.agent_id) {
+                            Ok(mb) => {
+                                let msg = MailboxMessage::new(
+                                    "lead",
+                                    &member.agent_id,
+                                    MessageType::Message,
+                                    text,
+                                )
+                                // SEC-codemason-team-003: see
+                                // send_teammate_message.
+                                .with_sender_session(
+                                    &self.session.session_id.clone().unwrap_or_default(),
+                                );
+                                match mb.push(msg) {
+                                    Ok(_) => {
+                                        self.push_log_no_agent(
+                                            LogLevel::Info,
+                                            format!("[msg] lead -> {name}: {text}"),
+                                        );
+                                        self.status = format!("message sent to {name}");
+                                    }
+                                    Err(e) => {
+                                        self.status = format!("Failed to send message: {e}");
+                                    }
                                 }
                             }
-                            self.push_log_no_agent(
-                                LogLevel::Info,
-                                format!("[clr]  Team '{}' deleted", rest),
-                            );
-                            // FR-032: say what the confirmed delete
-                            // removed, and whether it overrode a live
-                            // roster, so "nothing was forced" is never
-                            // guessed from silence.
-                            let forced = if force { forced_live_count } else { 0 };
-                            let detail = if forced == 0 {
-                                "Nothing was forced.".to_string()
+                            Err(e) => {
+                                self.status = format!("Failed to open mailbox: {e}");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.status = format!("Failed to load team: {e}");
+                    }
+                }
+            }
+            (None, _) => {
+                self.status = "No active team".to_string();
+            }
+            (Some(_), None) => {
+                self.status = format!("Teammate '{name}' not found");
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/team tasks` sub-command.
+    fn team_tasks(&mut self) {
+        let team_opt = self.session.active_team.clone();
+        if let Some(team) = team_opt {
+            let working_dir = self.cwd_path.clone();
+            match TeamStore::load_by_name(&team.name, &working_dir) {
+                Ok(store) => match store.task_store() {
+                    Ok(task_store) => match task_store.read() {
+                        Ok(task_list) => {
+                            let mut output =
+                                format!("From: /team tasks\n## Tasks - team '{}'\n\n", team.name);
+                            if task_list.tasks.is_empty() {
+                                output.push_str("  (no tasks)\n");
                             } else {
-                                format!("{forced} live teammate(s) forced.")
-                            };
-                            self.append_assistant_text(&format!(
-                                "From: /team delete\nTeam '{}' deleted.\n{detail}",
-                                rest
-                            ));
-                            self.status = "team deleted".to_string();
+                                output.push_str(&format!(
+                                    "  {:<12}  {:<34}  {:<12}  {}\n",
+                                    "ID", "Title", "Status", "Assignee"
+                                ));
+                                output.push_str(&format!(
+                                    "  {:-<12}  {:-<34}  {:-<12}  {:-<16}\n",
+                                    "", "", "", ""
+                                ));
+                                for task in &task_list.tasks {
+                                    let status = match task.status {
+                                        TaskStatus::Pending => "pending",
+                                        TaskStatus::InProgress => "in-progress",
+                                        TaskStatus::Completed => "completed",
+                                        TaskStatus::Cancelled => "cancelled",
+                                    };
+                                    let assignee = task.assigned_to.as_deref().unwrap_or("-");
+                                    output.push_str(&format!(
+                                        "  {:<12}  {:<34}  {:<12}  {}\n",
+                                        task.id, task.title, status, assignee
+                                    ));
+                                }
+                            }
+                            self.append_assistant_text(&output);
+                            self.status = format!("{} task(s)", task_list.tasks.len());
                         }
                         Err(e) => {
-                            self.status = format!("Failed to delete team: {e}");
-                            self.push_log_no_agent(
-                                LogLevel::Error,
-                                format!("team delete failed for '{}': {}", rest, e),
-                            );
+                            self.status = format!("Failed to read tasks: {e}");
                         }
                     },
                     Err(e) => {
-                        self.status = format!("Failed to load team: {e}");
-                        self.push_log_no_agent(
-                            LogLevel::Error,
-                            format!("team delete failed for '{}': {}", rest, e),
-                        );
+                        self.status = format!("Failed to open task store: {e}");
+                    }
+                },
+                Err(e) => {
+                    self.status = format!("Failed to load team: {e}");
+                }
+            }
+        } else {
+            self.append_assistant_text("From: /team tasks\nNo active team.");
+            self.status = "no active team".to_string();
+        }
+    }
+
+    /// Run the `/team clear` sub-command.
+    async fn team_clear(&mut self) {
+        let team_opt = self.session.active_team.clone();
+        if let Some(team) = team_opt {
+            // A finalising job must not write tasks.json while
+            // it is removed.
+            self.stop_swarm_autocomplete(&team.name).await;
+            let working_dir = self.cwd_path.clone();
+            match TeamStore::load_by_name(&team.name, &working_dir) {
+                Ok(store) => {
+                    let tasks_path = store.dir.join("tasks.json");
+                    let cleared_count = store
+                        .task_store()
+                        .ok()
+                        .and_then(|s| s.read().ok())
+                        .map(|l| l.tasks.len())
+                        .unwrap_or(0);
+                    let clear_result = if tasks_path.exists() {
+                        std::fs::remove_file(&tasks_path)
+                    } else {
+                        Ok(())
+                    };
+                    match clear_result {
+                        Ok(_) => {
+                            self.append_assistant_text(&format!(
+                                "From: /team clear\nCleared {} task(s) for team '{}'.",
+                                cleared_count, team.name
+                            ));
+                            self.push_log_no_agent(
+                                LogLevel::Info,
+                                format!(
+                                    "[broom] Cleared {} task(s) from team '{}'",
+                                    cleared_count, team.name
+                                ),
+                            );
+                            self.status = "team tasks cleared".to_string();
+                        }
+                        Err(e) => {
+                            self.status = format!("Failed to clear tasks: {e}");
+                            self.push_log_no_agent(
+                                LogLevel::Error,
+                                format!("team clear failed for '{}': {}", team.name, e),
+                            );
+                        }
                     }
                 }
+                Err(e) => {
+                    self.status = format!("Failed to load team: {e}");
+                }
             }
-            "blueprint" | "blueprints" => {
-                let working_dir = self.cwd_path.clone();
-                let blueprint_dirs = blueprints::list_installed_blueprints(&working_dir);
+        } else {
+            self.append_assistant_text("From: /team clear\nNo active team.");
+            self.status = "no active team".to_string();
+        }
+    }
 
-                if rest.is_empty() {
-                    let output =
-                        blueprints::render_blueprint_list(&blueprint_dirs, "/team blueprint");
-                    self.append_assistant_text(&output);
-                    self.status = "team: blueprints".to_string();
-                } else if let Some(output) = blueprints::render_blueprint_detail(
-                    &blueprint_dirs,
-                    rest.trim(),
-                    "/team blueprint",
-                ) {
-                    self.append_assistant_text(&output);
-                    self.status = format!("team: blueprint {}", rest.trim());
-                } else {
-                    self.status = format!("Blueprint '{}' not found", rest.trim());
-                }
-            }
-            "message" => {
-                let (name, text) = rest
-                    .split_once(char::is_whitespace)
-                    .map_or((rest, ""), |(n, t)| (n.trim(), t.trim()));
-                if name.is_empty() || text.is_empty() {
-                    self.status = "Usage: /team message <teammate-name> <text>".to_string();
-                    return std::ops::ControlFlow::Break(());
-                }
-                let member = self
+    /// Run the `/team cleanup` sub-command.
+    ///
+    /// Returns `Break` where the arm returns early, so `slash_team`
+    /// forwards it to the dispatcher exactly as before.
+    async fn team_cleanup(&mut self) -> std::ops::ControlFlow<()> {
+        let team_opt = self.session.active_team.clone();
+        if let Some(team) = team_opt {
+            // Guard: ensure no teammates are still working.
+            let active_count = self
+                .session
+                .team_members
+                .iter()
+                .filter(|m| matches!(m.status, MemberStatus::Working))
+                .count();
+            if active_count > 0 {
+                // Build list of active teammate names
+                let active_names: Vec<String> = self
                     .session
                     .team_members
                     .iter()
-                    .find(|m| m.name == name)
-                    .cloned();
-                match (self.session.active_team.clone(), member) {
-                    (Some(team), Some(member)) => {
-                        let working_dir = self.cwd_path.clone();
-                        match TeamStore::load_by_name(&team.name, &working_dir) {
-                            Ok(store) => {
-                                match Mailbox::open(&store.dir, &member.agent_id) {
-                                    Ok(mb) => {
-                                        let msg = MailboxMessage::new(
-                                            "lead",
-                                            &member.agent_id,
-                                            MessageType::Message,
-                                            text,
-                                        )
-                                        // SEC-codemason-team-003: see
-                                        // send_teammate_message.
-                                        .with_sender_session(
-                                            &self.session.session_id.clone().unwrap_or_default(),
-                                        );
-                                        match mb.push(msg) {
-                                            Ok(_) => {
-                                                self.push_log_no_agent(
-                                                    LogLevel::Info,
-                                                    format!("[msg] lead -> {name}: {text}"),
-                                                );
-                                                self.status = format!("message sent to {name}");
-                                            }
-                                            Err(e) => {
-                                                self.status =
-                                                    format!("Failed to send message: {e}");
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        self.status = format!("Failed to open mailbox: {e}");
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                self.status = format!("Failed to load team: {e}");
-                            }
-                        }
-                    }
-                    (None, _) => {
-                        self.status = "No active team".to_string();
-                    }
-                    (Some(_), None) => {
-                        self.status = format!("Teammate '{name}' not found");
-                    }
-                }
-            }
-            "tasks" => {
-                let team_opt = self.session.active_team.clone();
-                if let Some(team) = team_opt {
-                    let working_dir = self.cwd_path.clone();
-                    match TeamStore::load_by_name(&team.name, &working_dir) {
-                        Ok(store) => match store.task_store() {
-                            Ok(task_store) => match task_store.read() {
-                                Ok(task_list) => {
-                                    let mut output = format!(
-                                        "From: /team tasks\n## Tasks - team '{}'\n\n",
-                                        team.name
-                                    );
-                                    if task_list.tasks.is_empty() {
-                                        output.push_str("  (no tasks)\n");
-                                    } else {
-                                        output.push_str(&format!(
-                                            "  {:<12}  {:<34}  {:<12}  {}\n",
-                                            "ID", "Title", "Status", "Assignee"
-                                        ));
-                                        output.push_str(&format!(
-                                            "  {:-<12}  {:-<34}  {:-<12}  {:-<16}\n",
-                                            "", "", "", ""
-                                        ));
-                                        for task in &task_list.tasks {
-                                            let status = match task.status {
-                                                TaskStatus::Pending => "pending",
-                                                TaskStatus::InProgress => "in-progress",
-                                                TaskStatus::Completed => "completed",
-                                                TaskStatus::Cancelled => "cancelled",
-                                            };
-                                            let assignee =
-                                                task.assigned_to.as_deref().unwrap_or("-");
-                                            output.push_str(&format!(
-                                                "  {:<12}  {:<34}  {:<12}  {}\n",
-                                                task.id, task.title, status, assignee
-                                            ));
-                                        }
-                                    }
-                                    self.append_assistant_text(&output);
-                                    self.status = format!("{} task(s)", task_list.tasks.len());
-                                }
-                                Err(e) => {
-                                    self.status = format!("Failed to read tasks: {e}");
-                                }
-                            },
-                            Err(e) => {
-                                self.status = format!("Failed to open task store: {e}");
-                            }
-                        },
-                        Err(e) => {
-                            self.status = format!("Failed to load team: {e}");
-                        }
-                    }
-                } else {
-                    self.append_assistant_text("From: /team tasks\nNo active team.");
-                    self.status = "no active team".to_string();
-                }
-            }
-            "clear" => {
-                let team_opt = self.session.active_team.clone();
-                if let Some(team) = team_opt {
-                    // A finalising job must not write tasks.json while
-                    // it is removed.
-                    self.stop_swarm_autocomplete(&team.name).await;
-                    let working_dir = self.cwd_path.clone();
-                    match TeamStore::load_by_name(&team.name, &working_dir) {
-                        Ok(store) => {
-                            let tasks_path = store.dir.join("tasks.json");
-                            let cleared_count = store
-                                .task_store()
-                                .ok()
-                                .and_then(|s| s.read().ok())
-                                .map(|l| l.tasks.len())
-                                .unwrap_or(0);
-                            let clear_result = if tasks_path.exists() {
-                                std::fs::remove_file(&tasks_path)
-                            } else {
-                                Ok(())
-                            };
-                            match clear_result {
-                                Ok(_) => {
-                                    self.append_assistant_text(&format!(
-                                        "From: /team clear\nCleared {} task(s) for team '{}'.",
-                                        cleared_count, team.name
-                                    ));
-                                    self.push_log_no_agent(
-                                        LogLevel::Info,
-                                        format!(
-                                            "[broom] Cleared {} task(s) from team '{}'",
-                                            cleared_count, team.name
-                                        ),
-                                    );
-                                    self.status = "team tasks cleared".to_string();
-                                }
-                                Err(e) => {
-                                    self.status = format!("Failed to clear tasks: {e}");
-                                    self.push_log_no_agent(
-                                        LogLevel::Error,
-                                        format!("team clear failed for '{}': {}", team.name, e),
-                                    );
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            self.status = format!("Failed to load team: {e}");
-                        }
-                    }
-                } else {
-                    self.append_assistant_text("From: /team clear\nNo active team.");
-                    self.status = "no active team".to_string();
-                }
-            }
-            "cleanup" => {
-                let team_opt = self.session.active_team.clone();
-                if let Some(team) = team_opt {
-                    // Guard: ensure no teammates are still working.
-                    let active_count = self
-                        .session
-                        .team_members
-                        .iter()
-                        .filter(|m| matches!(m.status, MemberStatus::Working))
-                        .count();
-                    if active_count > 0 {
-                        // Build list of active teammate names
-                        let active_names: Vec<String> = self
-                            .session
-                            .team_members
-                            .iter()
-                            .filter(|m| m.status != MemberStatus::Stopped)
-                            .map(|m| format!("{} ({})", m.name, m.agent_id))
-                            .collect();
+                    .filter(|m| m.status != MemberStatus::Stopped)
+                    .map(|m| format!("{} ({})", m.name, m.agent_id))
+                    .collect();
 
-                        // Log a warning with the list of active teammates
+                // Log a warning with the list of active teammates
+                self.push_log_no_agent(
+                    LogLevel::Warn,
+                    format!(
+                        "Cannot clean up team '{}': {} teammate(s) still active: {}",
+                        team.name,
+                        active_names.len(),
+                        active_names.join(", ")
+                    ),
+                );
+
+                // Also show a message in the chat window listing active teammates
+                let mut msg = format!(
+                    "From: /team cleanup\nCannot clean up team '{}' because the following teammate(s) are still active:\n\n",
+                    team.name
+                );
+                for name in &active_names {
+                    msg.push_str(&format!("  - {}\n", name));
+                }
+                msg.push_str("\nYou can shut them down individually with team_shutdown_teammate, or run `/team forcecleanup` to deactivate and remove them.");
+                self.append_assistant_text(&msg);
+
+                self.status = format!(
+                    "{} teammate(s) still active - shut them down first",
+                    active_count
+                );
+                return std::ops::ControlFlow::Break(());
+            }
+
+            let working_dir = self.cwd_path.clone();
+            let team_name = team.name.clone();
+            // Nothing of a finalising job may write into the
+            // directory while it is removed (ENOTEMPTY).
+            self.stop_swarm_autocomplete(&team_name).await;
+            let removed = match TeamStore::load_by_name(&team_name, &working_dir) {
+                Ok(store) => std::fs::remove_dir_all(&store.dir).is_ok(),
+                Err(_) => false,
+            };
+            self.session.active_team = None;
+            self.session.team_members.clear();
+            self.session.team_message_counts.clear();
+            self.session.team_task_counts.clear();
+            self.session.team_task_counts_dirty = true;
+            self.show_teams = false;
+            self.session.focused_teammate = None;
+            if self
+                .session
+                .swarm_state
+                .as_ref()
+                .is_some_and(|s| s.team_name == team_name)
+            {
+                self.session.swarm_state = None;
+            }
+            if removed {
+                self.push_log_no_agent(
+                    LogLevel::Info,
+                    format!("[clr]  Team '{team_name}' cleaned up"),
+                );
+                self.append_assistant_text(&format!(
+                    "From: /team cleanup\nTeam '{team_name}' cleaned up."
+                ));
+            } else {
+                self.push_log_no_agent(
+                    LogLevel::Warn,
+                    format!("Team '{team_name}' state cleared (dir not found)"),
+                );
+                self.append_assistant_text(&format!(
+                    "From: /team cleanup\nTeam '{team_name}' state cleared."
+                ));
+            }
+            self.status = "team cleaned up".to_string();
+        } else {
+            self.status = "No active team to clean up".to_string();
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/team forcecleanup`, `/team force-cleanup` sub-command.
+    ///
+    /// Returns `Break` where the arm returns early, so `slash_team`
+    /// forwards it to the dispatcher exactly as before.
+    async fn team_forcecleanup(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        // Confirm with the user before destructive operation.
+        let confirm_msg = "Are you sure you want to force-cleanup the active team (deactivate teammates and remove on-disk resources)? Press Enter to confirm or Esc to cancel.";
+        let args_lower = args.to_lowercase();
+        let confirmed = args_lower.split_whitespace().any(|s| s == "confirm");
+        if !confirmed {
+            // Show interactive confirmation modal state with active members listed.
+            // Build list of active teammate names for display in modal.
+            let active_names: Vec<String> = self
+                .session
+                .team_members
+                .iter()
+                .filter(|m| m.status != MemberStatus::Stopped)
+                .map(|m| format!("{} ({})", m.name, m.agent_id))
+                .collect();
+
+            let team_name = self
+                .session
+                .active_team
+                .as_ref()
+                .map(|t| t.name.clone())
+                .unwrap_or_else(|| "<unknown>".to_string());
+
+            self.session.pending_forcecleanup = Some(PendingForceCleanup {
+                team_name: team_name.clone(),
+                active_members: active_names.clone(),
+            });
+
+            // Append assistant text instructing user to press Enter/Esc
+            let mut msg = format!("From: /team forcecleanup\n{}\n\n", confirm_msg);
+            if !active_names.is_empty() {
+                msg.push_str("Active teammates:\n\n");
+                for n in &active_names {
+                    msg.push_str(&format!("  - {}\n", n));
+                }
+                msg.push_str("\n");
+            }
+            msg.push_str("Press Enter to confirm or Esc to cancel.");
+
+            self.append_assistant_text(&msg);
+            self.push_log_no_agent(
+                LogLevel::Info,
+                "forcecleanup confirmation required (modal)".to_string(),
+            );
+            self.status = "forcecleanup confirmation required".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+
+        // If confirmed, perform the force cleanup
+        let team_opt = self.session.active_team.clone();
+        if let Some(team) = team_opt {
+            let working_dir = self.cwd_path.clone();
+            let team_name = team.name.clone();
+            // Nothing of a finalising job may write into the
+            // directory while it is removed (ENOTEMPTY).
+            self.stop_swarm_autocomplete(&team_name).await;
+            match TeamStore::load_by_name(&team_name, &working_dir) {
+                Ok(mut store) => {
+                    // Attempt shutdown of active teammate sessions first.
+                    //
+                    // This used to fire-and-forget a `tokio::spawn`
+                    // of `spawn_teammate(.., "shutdown", ..)`, which
+                    // does not shut a teammate down at all: it
+                    // starts a NEW agent loop with the prompt
+                    // "shutdown" (one wasted LLM turn), reloads and
+                    // re-saves `config.json`, and re-creates the
+                    // companion lock file inside the team directory
+                    // while `remove_dir_all` below was deleting that
+                    // same tree. The racing writes made the removal
+                    // fail with ENOTEMPTY and left the team
+                    // directory behind (CI flake in
+                    // `team_forcecleanup_deactivates_persisted_members`).
+                    // The unified immediate-shutdown path is awaited
+                    // here instead: every write into the directory is
+                    // serialised before it is removed, any live
+                    // agent/poll loop is aborted so it cannot recreate
+                    // the tree after removal, and the member is marked
+                    // Stopped on disk.
+                    let manager = self.session_processor.team_manager.get();
+                    let mut deactivated: Vec<String> = Vec::new();
+                    for m in &mut store.config.members {
+                        if m.status != MemberStatus::Stopped {
+                            if let Some(tm) = manager.as_ref() {
+                                let agent_id = m.agent_id.clone();
+                                // The directory removal below is the authoritative
+                                // teardown, and a member with no live handle is
+                                // still marked Stopped on disk by the call.
+                                // INTENTIONAL: fallible best-effort shutdown
+                                let _ = tm.shutdown_teammate(&agent_id, false).await;
+                            }
+                            let desc = format!("{} ({})", m.name, m.agent_id);
+                            m.status = MemberStatus::Stopped;
+                            deactivated.push(desc);
+                        }
+                    }
+                    // Persist best-effort
+                    if let Err(e) = store.save() {
                         self.push_log_no_agent(
                             LogLevel::Warn,
                             format!(
-                                "Cannot clean up team '{}': {} teammate(s) still active: {}",
-                                team.name,
-                                active_names.len(),
-                                active_names.join(", ")
+                                "Failed to persist team member status before force cleanup: {}",
+                                e
                             ),
                         );
-
-                        // Also show a message in the chat window listing active teammates
-                        let mut msg = format!(
-                            "From: /team cleanup\nCannot clean up team '{}' because the following teammate(s) are still active:\n\n",
-                            team.name
-                        );
-                        for name in &active_names {
-                            msg.push_str(&format!("  - {}\n", name));
-                        }
-                        msg.push_str("\nYou can shut them down individually with team_shutdown_teammate, or run `/team forcecleanup` to deactivate and remove them.");
-                        self.append_assistant_text(&msg);
-
-                        self.status = format!(
-                            "{} teammate(s) still active - shut them down first",
-                            active_count
-                        );
-                        return std::ops::ControlFlow::Break(());
                     }
 
-                    let working_dir = self.cwd_path.clone();
-                    let team_name = team.name.clone();
-                    // Nothing of a finalising job may write into the
-                    // directory while it is removed (ENOTEMPTY).
-                    self.stop_swarm_autocomplete(&team_name).await;
-                    let removed = match TeamStore::load_by_name(&team_name, &working_dir) {
-                        Ok(store) => std::fs::remove_dir_all(&store.dir).is_ok(),
-                        Err(_) => false,
-                    };
+                    // Remove directory
+                    let removed = std::fs::remove_dir_all(&store.dir).is_ok();
+
+                    // Update TUI state
                     self.session.active_team = None;
                     self.session.team_members.clear();
                     self.session.team_message_counts.clear();
@@ -7733,253 +7988,111 @@ than assumed.
                     {
                         self.session.swarm_state = None;
                     }
+
+                    if !deactivated.is_empty() {
+                        self.push_log_no_agent(
+                            LogLevel::Info,
+                            format!("Deactivated teammates: {}", deactivated.join(", ")),
+                        );
+                    }
+
                     if removed {
                         self.push_log_no_agent(
                             LogLevel::Info,
-                            format!("[clr]  Team '{team_name}' cleaned up"),
+                            format!("[clr]  Team '{team_name}' force cleaned up"),
                         );
-                        self.append_assistant_text(&format!(
-                            "From: /team cleanup\nTeam '{team_name}' cleaned up."
-                        ));
+                        let mut msg = format!(
+                            "From: /team forcecleanup\nTeam '{team_name}' force cleaned up. The following teammate(s) were deactivated and removed:\n\n"
+                        );
+                        for d in &deactivated {
+                            msg.push_str(&format!("  - {}\n", d));
+                        }
+                        self.append_assistant_text(&msg);
                     } else {
                         self.push_log_no_agent(
                             LogLevel::Warn,
                             format!("Team '{team_name}' state cleared (dir not found)"),
                         );
-                        self.append_assistant_text(&format!(
-                            "From: /team cleanup\nTeam '{team_name}' state cleared."
-                        ));
-                    }
-                    self.status = "team cleaned up".to_string();
-                } else {
-                    self.status = "No active team to clean up".to_string();
-                }
-            }
-            "forcecleanup" | "force-cleanup" => {
-                // Confirm with the user before destructive operation.
-                let confirm_msg = "Are you sure you want to force-cleanup the active team (deactivate teammates and remove on-disk resources)? Press Enter to confirm or Esc to cancel.";
-                let args_lower = args.to_lowercase();
-                let confirmed = args_lower.split_whitespace().any(|s| s == "confirm");
-                if !confirmed {
-                    // Show interactive confirmation modal state with active members listed.
-                    // Build list of active teammate names for display in modal.
-                    let active_names: Vec<String> = self
-                        .session
-                        .team_members
-                        .iter()
-                        .filter(|m| m.status != MemberStatus::Stopped)
-                        .map(|m| format!("{} ({})", m.name, m.agent_id))
-                        .collect();
-
-                    let team_name = self
-                        .session
-                        .active_team
-                        .as_ref()
-                        .map(|t| t.name.clone())
-                        .unwrap_or_else(|| "<unknown>".to_string());
-
-                    self.session.pending_forcecleanup = Some(PendingForceCleanup {
-                        team_name: team_name.clone(),
-                        active_members: active_names.clone(),
-                    });
-
-                    // Append assistant text instructing user to press Enter/Esc
-                    let mut msg = format!("From: /team forcecleanup\n{}\n\n", confirm_msg);
-                    if !active_names.is_empty() {
-                        msg.push_str("Active teammates:\n\n");
-                        for n in &active_names {
-                            msg.push_str(&format!("  - {}\n", n));
+                        let mut msg = format!(
+                            "From: /team forcecleanup\nTeam '{team_name}' state cleared. The following teammate(s) were deactivated:\n\n"
+                        );
+                        for d in &deactivated {
+                            msg.push_str(&format!("  - {}\n", d));
                         }
-                        msg.push_str("\n");
+                        self.append_assistant_text(&msg);
                     }
-                    msg.push_str("Press Enter to confirm or Esc to cancel.");
 
-                    self.append_assistant_text(&msg);
+                    self.status = "team force cleaned up".to_string();
+                }
+                Err(e) => {
+                    self.status = format!("Failed to force cleanup team: {}", e);
                     self.push_log_no_agent(
-                        LogLevel::Info,
-                        "forcecleanup confirmation required (modal)".to_string(),
+                        LogLevel::Error,
+                        format!("forcecleanup failed for '{}': {}", team_name, e),
                     );
-                    self.status = "forcecleanup confirmation required".to_string();
-                    return std::ops::ControlFlow::Break(());
-                }
-
-                // If confirmed, perform the force cleanup
-                let team_opt = self.session.active_team.clone();
-                if let Some(team) = team_opt {
-                    let working_dir = self.cwd_path.clone();
-                    let team_name = team.name.clone();
-                    // Nothing of a finalising job may write into the
-                    // directory while it is removed (ENOTEMPTY).
-                    self.stop_swarm_autocomplete(&team_name).await;
-                    match TeamStore::load_by_name(&team_name, &working_dir) {
-                        Ok(mut store) => {
-                            // Attempt shutdown of active teammate sessions first.
-                            //
-                            // This used to fire-and-forget a `tokio::spawn`
-                            // of `spawn_teammate(.., "shutdown", ..)`, which
-                            // does not shut a teammate down at all: it
-                            // starts a NEW agent loop with the prompt
-                            // "shutdown" (one wasted LLM turn), reloads and
-                            // re-saves `config.json`, and re-creates the
-                            // companion lock file inside the team directory
-                            // while `remove_dir_all` below was deleting that
-                            // same tree. The racing writes made the removal
-                            // fail with ENOTEMPTY and left the team
-                            // directory behind (CI flake in
-                            // `team_forcecleanup_deactivates_persisted_members`).
-                            // The unified immediate-shutdown path is awaited
-                            // here instead: every write into the directory is
-                            // serialised before it is removed, any live
-                            // agent/poll loop is aborted so it cannot recreate
-                            // the tree after removal, and the member is marked
-                            // Stopped on disk.
-                            let manager = self.session_processor.team_manager.get();
-                            let mut deactivated: Vec<String> = Vec::new();
-                            for m in &mut store.config.members {
-                                if m.status != MemberStatus::Stopped {
-                                    if let Some(tm) = manager.as_ref() {
-                                        let agent_id = m.agent_id.clone();
-                                        // The directory removal below is the authoritative
-                                        // teardown, and a member with no live handle is
-                                        // still marked Stopped on disk by the call.
-                                        // INTENTIONAL: fallible best-effort shutdown
-                                        let _ = tm.shutdown_teammate(&agent_id, false).await;
-                                    }
-                                    let desc = format!("{} ({})", m.name, m.agent_id);
-                                    m.status = MemberStatus::Stopped;
-                                    deactivated.push(desc);
-                                }
-                            }
-                            // Persist best-effort
-                            if let Err(e) = store.save() {
-                                self.push_log_no_agent(
-                                            LogLevel::Warn,
-                                            format!("Failed to persist team member status before force cleanup: {}", e),
-                                        );
-                            }
-
-                            // Remove directory
-                            let removed = std::fs::remove_dir_all(&store.dir).is_ok();
-
-                            // Update TUI state
-                            self.session.active_team = None;
-                            self.session.team_members.clear();
-                            self.session.team_message_counts.clear();
-                            self.session.team_task_counts.clear();
-                            self.session.team_task_counts_dirty = true;
-                            self.show_teams = false;
-                            self.session.focused_teammate = None;
-                            if self
-                                .session
-                                .swarm_state
-                                .as_ref()
-                                .is_some_and(|s| s.team_name == team_name)
-                            {
-                                self.session.swarm_state = None;
-                            }
-
-                            if !deactivated.is_empty() {
-                                self.push_log_no_agent(
-                                    LogLevel::Info,
-                                    format!("Deactivated teammates: {}", deactivated.join(", ")),
-                                );
-                            }
-
-                            if removed {
-                                self.push_log_no_agent(
-                                    LogLevel::Info,
-                                    format!("[clr]  Team '{team_name}' force cleaned up"),
-                                );
-                                let mut msg = format!(
-                                    "From: /team forcecleanup\nTeam '{team_name}' force cleaned up. The following teammate(s) were deactivated and removed:\n\n"
-                                );
-                                for d in &deactivated {
-                                    msg.push_str(&format!("  - {}\n", d));
-                                }
-                                self.append_assistant_text(&msg);
-                            } else {
-                                self.push_log_no_agent(
-                                    LogLevel::Warn,
-                                    format!("Team '{team_name}' state cleared (dir not found)"),
-                                );
-                                let mut msg = format!(
-                                    "From: /team forcecleanup\nTeam '{team_name}' state cleared. The following teammate(s) were deactivated:\n\n"
-                                );
-                                for d in &deactivated {
-                                    msg.push_str(&format!("  - {}\n", d));
-                                }
-                                self.append_assistant_text(&msg);
-                            }
-
-                            self.status = "team force cleaned up".to_string();
-                        }
-                        Err(e) => {
-                            self.status = format!("Failed to force cleanup team: {}", e);
-                            self.push_log_no_agent(
-                                LogLevel::Error,
-                                format!("forcecleanup failed for '{}': {}", team_name, e),
-                            );
-                        }
-                    }
-                } else {
-                    self.status = "No active team to clean up".to_string();
                 }
             }
-            // FR-034: the approve/reject action a `plan_pending` row
-            // names must be runnable from the same surface that names
-            // it. `approve` takes the teammate; `reject` takes the
-            // teammate and the feedback the tool requires.
-            "approve" | "reject" => {
-                let approve = sub == "approve";
-                let (who, feedback) = rest
-                    .split_once(char::is_whitespace)
-                    .map_or((rest.trim(), ""), |(n, f)| (n.trim(), f.trim()));
-                if who.is_empty() {
-                    self.status = format!(
-                        "Usage: /team {sub} <teammate-name>{}{}",
-                        if approve { "" } else { " <feedback>" },
-                        ""
-                    );
-                    return std::ops::ControlFlow::Break(());
-                }
-                if !approve && feedback.is_empty() {
-                    // The tool refuses a rejection without feedback, so
-                    // the surface refuses it before the round trip.
-                    self.status = "Usage: /team reject <teammate-name> <feedback>".to_string();
-                    return std::ops::ControlFlow::Break(());
-                }
-                let Some(_team) = self.session.active_team.clone() else {
-                    self.status = "No active team".to_string();
-                    return std::ops::ControlFlow::Break(());
-                };
-                let member = self
-                    .session
-                    .team_members
-                    .iter()
-                    .find(|m| m.name == who || m.agent_id == who)
-                    .cloned();
-                let Some(member) = member else {
-                    self.status = format!("team {sub}: no teammate named '{who}'");
-                    return std::ops::ControlFlow::Break(());
-                };
-                if member.status != MemberStatus::PlanPending {
-                    self.status = format!(
-                        "team {sub}: {} ({}) is {} - a plan verdict needs a teammate in plan_pending",
-                        member.name,
-                        member.agent_id,
-                        member.status.display_label()
-                    );
-                    return std::ops::ControlFlow::Break(());
-                }
-                let verdict = if approve { "approved" } else { "rejected" };
-                let summary = if feedback.is_empty() {
-                    format!("Plan {verdict}.")
-                } else {
-                    feedback.to_string()
-                };
-                match self.submit_plan_verdict(&member.agent_id, approve, &summary) {
-                    Ok(()) => {
-                        self.append_assistant_text(&format!(
+        } else {
+            self.status = "No active team to clean up".to_string();
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/team approve`, `/team reject` sub-command.
+    ///
+    /// Returns `Break` where the arm returns early, so `slash_team`
+    /// forwards it to the dispatcher exactly as before.
+    fn team_approve(&mut self, sub: &str, rest: &str) -> std::ops::ControlFlow<()> {
+        let approve = sub == "approve";
+        let (who, feedback) = rest
+            .split_once(char::is_whitespace)
+            .map_or((rest.trim(), ""), |(n, f)| (n.trim(), f.trim()));
+        if who.is_empty() {
+            self.status = format!(
+                "Usage: /team {sub} <teammate-name>{}{}",
+                if approve { "" } else { " <feedback>" },
+                ""
+            );
+            return std::ops::ControlFlow::Break(());
+        }
+        if !approve && feedback.is_empty() {
+            // The tool refuses a rejection without feedback, so
+            // the surface refuses it before the round trip.
+            self.status = "Usage: /team reject <teammate-name> <feedback>".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+        let Some(_team) = self.session.active_team.clone() else {
+            self.status = "No active team".to_string();
+            return std::ops::ControlFlow::Break(());
+        };
+        let member = self
+            .session
+            .team_members
+            .iter()
+            .find(|m| m.name == who || m.agent_id == who)
+            .cloned();
+        let Some(member) = member else {
+            self.status = format!("team {sub}: no teammate named '{who}'");
+            return std::ops::ControlFlow::Break(());
+        };
+        if member.status != MemberStatus::PlanPending {
+            self.status = format!(
+                "team {sub}: {} ({}) is {} - a plan verdict needs a teammate in plan_pending",
+                member.name,
+                member.agent_id,
+                member.status.display_label()
+            );
+            return std::ops::ControlFlow::Break(());
+        }
+        let verdict = if approve { "approved" } else { "rejected" };
+        let summary = if feedback.is_empty() {
+            format!("Plan {verdict}.")
+        } else {
+            feedback.to_string()
+        };
+        match self.submit_plan_verdict(&member.agent_id, approve, &summary) {
+            Ok(()) => {
+                self.append_assistant_text(&format!(
                                     "From: /team {sub}\nPlan for **{}** ({}) {verdict}.\n\n{}",
                                     member.name,
                                     member.agent_id,
@@ -7990,71 +8103,63 @@ than assumed.
                                         format!("Feedback sent: {summary}\n\nThe teammate stays in plan_pending and must resubmit with `team_submit_plan`.")
                                     }
                                 ));
-                        self.status = format!("team: {sub} {}", member.name);
-                    }
-                    Err(e) => {
-                        self.append_assistant_text(&format!(
-                            "From: /team {sub}\nFailed to record the verdict for **{}**: {e}",
-                            member.name
-                        ));
-                        self.status = format!("team {sub} failed: {e}");
-                    }
-                }
+                self.status = format!("team: {sub} {}", member.name);
             }
-            "focus" => {
-                if self.session.active_team.is_none() {
-                    self.status = "No active team".to_string();
-                    return std::ops::ControlFlow::Break(());
-                }
-                if rest.is_empty() {
-                    // No arg -> clear focus
-                    self.session.focused_teammate = None;
-                    self.output_view = None;
-                    self.append_assistant_text(
-                        "From: /team focus\nTeammate focus cleared. Input returns to lead session.",
-                    );
-                    self.status = "team: focus cleared".to_string();
-                } else {
-                    match self.focus_teammate_by_name(rest) {
-                        Ok(()) => {
-                            let name = self
-                                .session
-                                .focused_teammate
-                                .as_ref()
-                                .and_then(|id| {
-                                    self.session.team_members.iter().find(|m| m.agent_id == *id)
-                                })
-                                .map(|m| m.name.clone())
-                                .unwrap_or_default();
-                            self.append_assistant_text(&format!(
+            Err(e) => {
+                self.append_assistant_text(&format!(
+                    "From: /team {sub}\nFailed to record the verdict for **{}**: {e}",
+                    member.name
+                ));
+                self.status = format!("team {sub} failed: {e}");
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/team focus` sub-command.
+    ///
+    /// Returns `Break` where the arm returns early, so `slash_team`
+    /// forwards it to the dispatcher exactly as before.
+    fn team_focus(&mut self, rest: &str) -> std::ops::ControlFlow<()> {
+        if self.session.active_team.is_none() {
+            self.status = "No active team".to_string();
+            return std::ops::ControlFlow::Break(());
+        }
+        if rest.is_empty() {
+            // No arg -> clear focus
+            self.session.focused_teammate = None;
+            self.output_view = None;
+            self.append_assistant_text(
+                "From: /team focus\nTeammate focus cleared. Input returns to lead session.",
+            );
+            self.status = "team: focus cleared".to_string();
+        } else {
+            match self.focus_teammate_by_name(rest) {
+                Ok(()) => {
+                    let name = self
+                        .session
+                        .focused_teammate
+                        .as_ref()
+                        .and_then(|id| self.session.team_members.iter().find(|m| m.agent_id == *id))
+                        .map(|m| m.name.clone())
+                        .unwrap_or_default();
+                    self.append_assistant_text(&format!(
                                         "From: /team focus\nFocused on **{}**. Messages will be routed to this teammate.\n\nUse `/team focus` (no args) or Alt+Up/Down to change focus.\nPress Esc to close the output view.",
                                         name
                                     ));
-                        }
-                        Err(e) => {
-                            self.append_assistant_text(&format!(
-                                "From: /team focus\n{e}\n\nAvailable teammates: {}",
-                                self.session
-                                    .team_members
-                                    .iter()
-                                    .map(|m| m.name.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            ));
-                            self.status = format!("team focus: {e}");
-                        }
-                    }
                 }
-            }
-            _ => {
-                self.status = format!(
-                    "Unknown /team subcommand '{}'. Usage: /team [help|status|show|create|close|delete|message|tasks|clear|cleanup|focus|approve|reject]",
-                    sub
-                );
-                self.push_log_no_agent(
-                    LogLevel::Warn,
-                    format!("unknown /team subcommand: {}", sub),
-                );
+                Err(e) => {
+                    self.append_assistant_text(&format!(
+                        "From: /team focus\n{e}\n\nAvailable teammates: {}",
+                        self.session
+                            .team_members
+                            .iter()
+                            .map(|m| m.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                    self.status = format!("team focus: {e}");
+                }
             }
         }
         std::ops::ControlFlow::Continue(())
