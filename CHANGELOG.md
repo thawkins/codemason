@@ -67,6 +67,8 @@
 
 ### Changed
 
+- Changed: `slash_team` in `crates/codemason-app-core/src/app/slash.rs` is decomposed in place (1,189 to 100 lines): the 13 `/team` sub-command arms of 30+ lines move verbatim into `team_<sub>` methods in the same `impl App`, taking the `sub`/`rest` locals they read as `&str` parameters. Arms that returned early keep their `ControlFlow::Break` returns and `slash_team` forwards them. Every string literal and pattern is unchanged (#9, car 11c).
+
 - Changed: a user turn is a card marked `You` instead of a `You:` prefix, and an assistant turn has an accent rule down its left edge instead of a `*` prefix.
 - Changed: every colour in the window comes from the theme's tokens. Widget greys, the selection blue and the xterm ANSI colours are gone; a pane that asks for an ANSI name gets the theme colour of the same meaning (red is the error colour).
 - Changed: the default dark theme draws on an off-black background (`#0f1115`) with raised surfaces for fields, buttons and dialogs, and thin outlines around widgets. Before, panels were pure black.
