@@ -34,6 +34,7 @@ pub mod sessions_sidebar_state;
 pub mod shortcuts;
 pub mod status;
 pub mod styled;
+pub mod syntax_highlight;
 pub mod text_utils;
 pub mod theme_tokens;
 pub mod tracing_layer;

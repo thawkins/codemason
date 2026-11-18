@@ -2,16 +2,18 @@
 //!
 //! [`message_to_blocks`] splits a [`Message`] into [`TranscriptBlock`]s that a
 //! frontend draws with its own widgets: the assistant's text as Markdown
-//! source, the user's text as plain text, reasoning, images, and tool calls
-//! and agent notices as the same styled lines [`crate::message_lines`]
-//! renders for them. Blocks carry meaning, not layout; how a block looks is
+//! source with its top-level fenced code blocks split out as
+//! [`TranscriptBlock::Code`], the user's text as plain text, reasoning,
+//! images, and tool calls and agent notices as the same styled lines
+//! [`crate::message_lines`] renders for them. Blocks carry meaning, not layout; how a block looks is
 //! the frontend's choice.
 //!
 //! Every text a block carries is passed through `sanitize_terminal` first
 //! (SEC-080), as the line renderer does.
 //!
-//! Depends on `codemason-types` (messages, `sanitize_terminal`) and
-//! [`crate::message_lines`] (tool-call and notice lines).
+//! Depends on `codemason-types` (messages, `sanitize_terminal`),
+//! `pulldown-cmark` (finding code blocks) and [`crate::message_lines`]
+//! (tool-call and notice lines).
 
 use std::collections::HashMap;
 use std::hash::BuildHasher;
@@ -27,8 +29,17 @@ use crate::styled::StyledLine;
 /// One block of a message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranscriptBlock {
-    /// Markdown source: the assistant's text, or a compaction summary.
+    /// Markdown source: the assistant's text, or a compaction summary, less
+    /// its top-level code blocks.
     Markdown(String),
+    /// A top-level code block of the assistant's Markdown.
+    Code {
+        /// The language named after the opening fence (its first word), if
+        /// any.
+        lang: Option<String>,
+        /// The code, without the fences or a final newline.
+        text: String,
+    },
     /// Text shown as written: what the user typed.
     Plain(String),
     /// An agent notice, as styled lines.
@@ -59,7 +70,7 @@ impl TranscriptBlock {
     #[must_use]
     pub fn plain_text(&self) -> String {
         match self {
-            Self::Markdown(text) | Self::Plain(text) => text.clone(),
+            Self::Markdown(text) | Self::Plain(text) | Self::Code { text, .. } => text.clone(),
             Self::Notice(lines) | Self::Thinking(lines) | Self::Tool { lines, .. } => lines
                 .iter()
                 .map(StyledLine::text)
@@ -81,9 +92,10 @@ impl TranscriptBlock {
 /// # Returns
 ///
 /// The message's blocks. The assistant's text is [`TranscriptBlock::Markdown`]
-/// (an agent notice is [`TranscriptBlock::Notice`]), the user's
-/// [`TranscriptBlock::Plain`], and a compaction summary Markdown. Text parts
-/// that are empty after trimming produce no block.
+/// with each top-level code block as a [`TranscriptBlock::Code`] between the
+/// Markdown around it (an agent notice is [`TranscriptBlock::Notice`]), the
+/// user's text [`TranscriptBlock::Plain`], and a compaction summary Markdown.
+/// Text that is empty after trimming produces no block.
 pub fn message_to_blocks<S: BuildHasher>(
     msg: &Message,
     tool_step_map: &HashMap<String, (String, u32, u32), S>,
@@ -92,7 +104,76 @@ pub fn message_to_blocks<S: BuildHasher>(
     msg.parts
         .iter()
         .filter_map(|part| part_block(&msg.role, part, tool_step_map, cwd))
+        .flat_map(|block| match block {
+            TranscriptBlock::Markdown(text) => split_code_blocks(&text),
+            other => vec![other],
+        })
         .collect()
+}
+
+/// Split Markdown into its top-level code blocks and the Markdown between
+/// them.
+///
+/// A code block inside a list item or block quote stays in its Markdown, so
+/// the list or quote is not cut in two. An unclosed fence (a reply still
+/// streaming) is a code block up to the end of the text, as CommonMark
+/// reads it.
+///
+/// # Returns
+///
+/// The blocks in source order; Markdown that is only whitespace is dropped.
+#[must_use]
+pub fn split_code_blocks(markdown: &str) -> Vec<TranscriptBlock> {
+    use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+
+    let mut blocks = Vec::new();
+    let push_markdown = |blocks: &mut Vec<TranscriptBlock>, text: &str| {
+        if !text.trim().is_empty() {
+            blocks.push(TranscriptBlock::Markdown(
+                text.trim_matches('\n').to_string(),
+            ));
+        }
+    };
+    let mut depth = 0usize;
+    let mut copied_to = 0usize;
+    let mut code: Option<(Option<String>, String, usize)> = None;
+    let parser = Parser::new_ext(
+        markdown,
+        Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH,
+    );
+    for (event, range) in parser.into_offset_iter() {
+        match event {
+            Event::Start(Tag::CodeBlock(kind)) if depth == 0 => {
+                let lang = match kind {
+                    CodeBlockKind::Fenced(info) => info
+                        .split_whitespace()
+                        .next()
+                        .map(str::to_string)
+                        .filter(|l| !l.is_empty()),
+                    CodeBlockKind::Indented => None,
+                };
+                code = Some((lang, String::new(), range.start));
+            }
+            Event::Text(text) if code.is_some() => {
+                if let Some((_, body, _)) = code.as_mut() {
+                    body.push_str(&text);
+                }
+            }
+            Event::End(TagEnd::CodeBlock) if code.is_some() => {
+                if let Some((lang, body, start)) = code.take() {
+                    push_markdown(&mut blocks, &markdown[copied_to..start]);
+                    let text = body.strip_suffix('\n').unwrap_or(&body).to_string();
+                    blocks.push(TranscriptBlock::Code { lang, text });
+                    copied_to = range.end;
+                }
+            }
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    push_markdown(&mut blocks, &markdown[copied_to..]);
+    blocks
 }
 
 /// The block of one part, or `None` for an empty text part.

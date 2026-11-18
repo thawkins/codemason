@@ -563,6 +563,8 @@ mod test_subagent_step_log;
 mod test_swarm_more;
 #[path = "test_swarm_offload.rs"]
 mod test_swarm_offload;
+#[path = "test_syntax_highlight.rs"]
+mod test_syntax_highlight;
 #[path = "test_tasks_panel.rs"]
 mod test_tasks_panel;
 #[path = "test_teams_message_counts.rs"]

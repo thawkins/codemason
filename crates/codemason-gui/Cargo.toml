@@ -29,6 +29,7 @@ craft-ui = { workspace = true, features = ["system_fonts"] }
 craft-window = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
+egui_commonmark = { version = "0.26", default-features = false, features = ["pulldown_cmark"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

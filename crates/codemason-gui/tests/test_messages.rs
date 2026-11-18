@@ -10,11 +10,13 @@ mod support;
 use codemason_agent::message::{Message, MessagePart, Role, ToolCallState, ToolCallStatus};
 use codemason_app_core::app::App;
 use codemason_app_core::message_lines::MESSAGE_STREAM_MIN_INTERVAL;
+use codemason_app_core::theme_tokens::{ThemeCatalog, ThemeSelection};
 use codemason_gui::Shell;
-use codemason_gui::palette::palette_for;
-use codemason_gui::panels::messages::{MESSAGES_LABEL, MessagesView};
+use codemason_gui::palette::{Palette, palette_for};
+use codemason_gui::panels::code_block::{COPY, INSERT, NO_LANGUAGE, WRAP, code_job};
+use codemason_gui::panels::messages::{MESSAGES_LABEL, MessagesView, USER_CHIP};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 /// The app plus the view under test, as one kittest state.
 struct State {
@@ -73,7 +75,7 @@ async fn test_message_view_lays_out_only_visible_rows() {
     assert!(laid_out <= 200, "laid out {laid_out} messages in one frame");
     // The view starts at the bottom of the transcript.
     harness.get_by_label_contains("message 19999");
-    assert!(harness.query_by_label_contains("message 0\n").is_none());
+    assert!(harness.query_by_label("message 0").is_none());
 }
 
 #[tokio::test]
@@ -96,7 +98,7 @@ async fn test_message_view_scroll_wheel_reveals_earlier_messages() {
     });
     harness.run();
 
-    harness.get_by_label_contains("message 0\n");
+    harness.get_by_label("message 0");
     assert!(harness.query_by_label_contains("message 499").is_none());
     assert!(harness.state().view.layout_count() <= 200);
 }
@@ -134,7 +136,8 @@ async fn test_shell_shows_messages_above_prompt() {
     let harness = Harness::new_ui_state(|ui, shell: &mut Shell| shell.show(ui), shell);
 
     harness.get_by_label(MESSAGES_LABEL);
-    harness.get_by_label_contains("You: hello there");
+    harness.get_by_label("hello there");
+    harness.get_by_label(USER_CHIP);
     harness.get_by_label("Prompt");
 }
 
@@ -321,4 +324,131 @@ async fn test_starter_action_replaces_a_draft_and_its_completion_menu() {
         app.slash_menu.is_none(),
         "the old draft's menu must not survive to act on Enter"
     );
+}
+
+/// A response with a heading, a table, a link and two fenced code blocks.
+const RICH_REPLY: &str = "# Plan\n\nRun the **tests** first.\n\n\
+| Step | Command |\n|---|---|\n| build | cargo build |\n\n\
+See [the docs](https://example.com/docs).\n\n\
+```rust\nfn main() {}\n```\n\n```\nplain block\n```\n";
+
+#[tokio::test]
+async fn test_messages_render_markdown_blocks() {
+    let mut app = support::make_app();
+    app.session.messages = vec![Message::assistant_text("s1", RICH_REPLY)];
+    let mut harness = harness(app);
+    harness.run();
+
+    harness.get_by_label("Plan");
+    harness.get_by_label_contains("tests");
+    harness.get_by_label("build");
+    harness.get_by_label("cargo build");
+    harness.get_by_role_and_label(egui::accesskit::Role::Link, "the docs");
+    // The raw Markdown is not shown.
+    assert!(harness.query_by_label_contains("# Plan").is_none());
+    assert!(harness.query_by_label_contains("**tests**").is_none());
+    assert!(harness.query_by_label_contains("```").is_none());
+    // Both code blocks are drawn with their language and buttons.
+    harness.get_by_label("fn main() {}");
+    harness.get_by_label("plain block");
+    harness.get_by_label("rust");
+    harness.get_by_label(NO_LANGUAGE);
+    for button in [COPY, WRAP, INSERT] {
+        assert_eq!(harness.query_all_by_label(button).count(), 2, "{button}");
+    }
+}
+
+#[test]
+fn test_code_block_job_uses_the_theme_syntax_colours() {
+    let themes = ThemeCatalog::builtin();
+    let palette = Palette::from_tokens(&themes.resolve(&ThemeSelection::System, true));
+    let job = code_job("fn main() {} // hi", Some("rust"), &palette);
+    let color_of = |needle: &str| {
+        job.sections
+            .iter()
+            .find(|section| {
+                job.text[section.byte_range.start.0..section.byte_range.end.0].contains(needle)
+            })
+            .map(|section| section.format.color)
+    };
+    assert_eq!(color_of("fn"), Some(palette.syntax.keyword));
+    assert_eq!(color_of("// hi"), Some(palette.syntax.comment));
+    assert_eq!(job.text, "fn main() {} // hi");
+    // An unknown language is drawn in the body text colour.
+    let plain = code_job("x = 1", Some("cobol"), &palette);
+    assert!(
+        plain
+            .sections
+            .iter()
+            .all(|s| s.format.color == palette.text)
+    );
+}
+
+#[tokio::test]
+async fn test_code_block_insert_puts_the_code_in_the_prompt() {
+    let mut app = support::make_app();
+    app.session.messages = vec![Message::assistant_text(
+        "s1",
+        "Run:\n\n```sh\ncargo test\n```",
+    )];
+    app.session.input = "please".to_string();
+    let shell = Shell::new(app);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .build_ui_state(|ui, shell: &mut Shell| shell.show(ui), shell);
+    harness.run();
+    harness.get_by_label(INSERT).click();
+    harness.run();
+    assert_eq!(harness.state().app().session.input, "please\ncargo test");
+}
+
+#[tokio::test]
+async fn test_code_block_wrap_toggles() {
+    let mut app = support::make_app();
+    app.session.messages = vec![Message::assistant_text("s1", "```\nx\n```")];
+    let mut harness = harness(app);
+    harness.run();
+    let selected = |harness: &Harness<'_, State>| {
+        harness.get_by_label(WRAP).accesskit_node().toggled()
+            == Some(egui::accesskit::Toggled::True)
+    };
+    assert!(!selected(&harness));
+    harness.get_by_label(WRAP).click();
+    harness.run();
+    assert!(selected(&harness));
+}
+
+#[tokio::test]
+async fn test_messages_user_turn_is_plain_text_with_a_chip() {
+    let mut app = support::make_app();
+    app.session.messages = vec![
+        Message::user_text("s1", "fix **this** please"),
+        Message::assistant_text("s1", "done"),
+    ];
+    let mut harness = harness(app);
+    harness.run();
+    // The user's text is shown as typed, with a `You` chip and no prefix.
+    harness.get_by_label("fix **this** please");
+    harness.get_by_label(USER_CHIP);
+    assert!(harness.query_by_label_contains("You:").is_none());
+    harness.get_by_label("done");
+}
+
+#[tokio::test]
+async fn test_messages_widgets_sit_under_the_transcript_node() {
+    let mut app = support::make_app();
+    app.session.messages = vec![Message::assistant_text("s1", "inside the log")];
+    let mut harness = harness(app);
+    harness.run();
+    let node = harness.get_by_label("inside the log");
+    let mut ancestor = node.accesskit_node().parent();
+    let mut found = false;
+    while let Some(parent) = ancestor {
+        if parent.label().as_deref() == Some(MESSAGES_LABEL) {
+            found = true;
+            break;
+        }
+        ancestor = parent.parent();
+    }
+    assert!(found, "the text is not under the {MESSAGES_LABEL} node");
 }

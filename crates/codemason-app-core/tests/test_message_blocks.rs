@@ -133,3 +133,57 @@ fn test_message_blocks_neutralise_terminal_escapes() {
     };
     assert!(!text.contains('\u{1b}'), "{text:?}");
 }
+
+#[test]
+fn test_message_blocks_split_top_level_code_blocks() {
+    use codemason_app_core::message_blocks::split_code_blocks;
+
+    let md = |t: &str| TranscriptBlock::Markdown(t.to_string());
+    let code = |lang: Option<&str>, t: &str| TranscriptBlock::Code {
+        lang: lang.map(str::to_string),
+        text: t.to_string(),
+    };
+    assert_eq!(
+        split_code_blocks(
+            "Intro.\n\n```rust title\nfn main() {}\n```\n\nBetween.\n\n```\nplain\n```"
+        ),
+        [
+            md("Intro."),
+            code(Some("rust"), "fn main() {}"),
+            md("Between."),
+            code(None, "plain"),
+        ]
+    );
+    // A code block inside a list item stays in the list's Markdown.
+    let listed = "1. Run:\n\n   ```bash\n   ls\n   ```\n2. Done";
+    assert_eq!(split_code_blocks(listed), [md(listed)]);
+    // An unclosed fence (still streaming) runs to the end.
+    assert_eq!(
+        split_code_blocks("Now:\n```py\nprint(1)\n"),
+        [md("Now:"), code(Some("py"), "print(1)")]
+    );
+    // Only a code block.
+    assert_eq!(split_code_blocks("```\nx\n```"), [code(None, "x")]);
+    assert_eq!(split_code_blocks("  \n"), []);
+}
+
+#[test]
+fn test_message_blocks_assistant_code_blocks_become_code_blocks() {
+    let msg = Message::assistant_text("s", "Try:\n\n```sh\nmake\n```");
+    assert_eq!(
+        blocks(&msg),
+        [
+            TranscriptBlock::Markdown("Try:".to_string()),
+            TranscriptBlock::Code {
+                lang: Some("sh".to_string()),
+                text: "make".to_string(),
+            },
+        ]
+    );
+    // The user's fences are left as typed.
+    let user = Message::user_text("s", "```\nx\n```");
+    assert_eq!(
+        blocks(&user),
+        [TranscriptBlock::Plain("```\nx\n```".to_string())]
+    );
+}

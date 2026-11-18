@@ -14,6 +14,7 @@
 
 use codemason_app_core::app::App;
 use codemason_app_core::styled::ThemeColor;
+use codemason_app_core::syntax_highlight::SyntaxRole;
 use codemason_app_core::theme_tokens::{Rgb, ThemeTokens};
 use egui::Color32;
 
@@ -105,6 +106,46 @@ pub struct Palette {
     pub blockquote: Color32,
     /// [`ThemeColor::Categorical`]: eight colours for telling agents apart.
     pub categorical: [Color32; 8],
+    /// Code-block highlighting colours, by [`SyntaxRole`].
+    pub syntax: SyntaxColors,
+}
+
+/// The theme's `syntax.*` colours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyntaxColors {
+    /// `syntax.keyword`.
+    pub keyword: Color32,
+    /// `syntax.string`.
+    pub string: Color32,
+    /// `syntax.comment`.
+    pub comment: Color32,
+    /// `syntax.function`.
+    pub function: Color32,
+    /// `syntax.type`.
+    pub ty: Color32,
+    /// `syntax.number`.
+    pub number: Color32,
+    /// `syntax.operator`.
+    pub operator: Color32,
+    /// `syntax.punctuation`.
+    pub punctuation: Color32,
+}
+
+impl SyntaxColors {
+    /// The colour of `role`.
+    #[must_use]
+    pub const fn color(&self, role: SyntaxRole) -> Color32 {
+        match role {
+            SyntaxRole::Keyword => self.keyword,
+            SyntaxRole::String => self.string,
+            SyntaxRole::Comment => self.comment,
+            SyntaxRole::Function => self.function,
+            SyntaxRole::Type => self.ty,
+            SyntaxRole::Number => self.number,
+            SyntaxRole::Operator => self.operator,
+            SyntaxRole::Punctuation => self.punctuation,
+        }
+    }
 }
 
 impl Palette {
@@ -137,6 +178,16 @@ impl Palette {
             code: rgb(tokens.markdown.code),
             blockquote: rgb(tokens.markdown.blockquote),
             categorical: tokens.categorical.map(rgb),
+            syntax: SyntaxColors {
+                keyword: rgb(tokens.syntax.keyword),
+                string: rgb(tokens.syntax.string),
+                comment: rgb(tokens.syntax.comment),
+                function: rgb(tokens.syntax.function),
+                ty: rgb(tokens.syntax.r#type),
+                number: rgb(tokens.syntax.number),
+                operator: rgb(tokens.syntax.operator),
+                punctuation: rgb(tokens.syntax.punctuation),
+            },
         }
     }
 

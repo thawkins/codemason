@@ -967,12 +967,31 @@ fn messages_body(ui: &mut egui::Ui, app: &mut App, messages: &mut MessagesView, 
         crate::panels::empty_state::empty_state_ui(ui, app, palette);
     }
     let transcript = messages.show(ui, app, palette);
+    if let Some(code) = messages.take_insert() {
+        insert_into_prompt(ui.ctx(), app, &code);
+    }
     let right_click = ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Secondary));
-    if right_click && transcript.hovered() && !dialogs::locks_prompt(app) {
+    // `contains_pointer`, not `hovered`: the transcript's selectable text
+    // sits on top of its hover-only node.
+    if right_click && transcript.contains_pointer() && !dialogs::locks_prompt(app) {
         // The transcript has no text selection in the GUI, so its menu has
         // nothing enabled, as the TUI's without one.
         dialogs::context_menu::open(ui.ctx(), app, SelectionPane::Messages, false);
     }
+}
+
+/// Put `code` at the end of the prompt, on a line of its own, and focus the
+/// prompt.
+fn insert_into_prompt(ctx: &egui::Context, app: &mut App, code: &str) {
+    let input = &mut app.session.input;
+    if !input.is_empty() && !input.ends_with('\n') {
+        input.push('\n');
+    }
+    input.push_str(code);
+    let end = app.session.input.chars().count();
+    // Moves the cursor to the end and refreshes the completion menus.
+    app.input_edited(end);
+    ctx.memory_mut(|memory| memory.request_focus(crate::panels::prompt::prompt_id()));
 }
 
 /// A pane with no panel of its own (the queue, drawn above the prompt): its
