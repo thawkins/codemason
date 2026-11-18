@@ -886,6 +886,19 @@ impl Shell {
         for key in keys {
             sources.runtime.block_on(self.app.handle_key(key));
         }
+        for action in self.keys.take_actions() {
+            self.run_action(ctx, &action);
+        }
+    }
+
+    /// Run the catalog action `id` that has no terminal key press: through
+    /// `App::run_action` when app-core knows it, else here.
+    fn run_action(&mut self, ctx: &egui::Context, id: &str) {
+        if self.app.run_action(id) {
+            ctx.request_repaint();
+            return;
+        }
+        tracing::debug!(action = id, "no handler for the action");
     }
 
     /// Run the key presses the dialogs' buttons sent this frame through

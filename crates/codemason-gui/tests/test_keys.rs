@@ -236,30 +236,38 @@ fn test_load_keymap_applies_overrides_file() {
     let path = scratch("override").join("gui-keys.json");
     std::fs::write(&path, r#"{ "panel.log": "Alt+K" }"#).expect("write overrides");
 
-    let keymap = load_keymap(Platform::Linux, &path);
+    let (keymap, warnings) = load_keymap(Platform::Linux, &path);
 
     assert_eq!(
         bound(&keymap, "panel.log"),
         vec![Binding::parse("Alt+K").expect("parse")]
     );
+    assert_eq!(warnings, Vec::<String>::new());
 }
 
 #[test]
 fn test_load_keymap_falls_back_on_missing_or_invalid_file() {
     let dir = scratch("fallback");
-    let missing = load_keymap(Platform::Linux, &dir.join("absent.json"));
+    let (missing, warnings) = load_keymap(Platform::Linux, &dir.join("absent.json"));
     assert_eq!(
         bound(&missing, "panel.log"),
         vec![Binding::parse("Alt+L").expect("parse")]
     );
+    assert_eq!(
+        warnings,
+        Vec::<String>::new(),
+        "a missing file is no problem"
+    );
 
     let invalid = dir.join("gui-keys.json");
     std::fs::write(&invalid, "not json {").expect("write invalid");
-    let keymap = load_keymap(Platform::Linux, &invalid);
+    let (keymap, warnings) = load_keymap(Platform::Linux, &invalid);
     assert_eq!(
         bound(&keymap, "panel.log"),
         vec![Binding::parse("Alt+L").expect("parse")]
     );
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("invalid"), "{warnings:?}");
 }
 
 /// An input state holding `events` with frame modifiers `modifiers`.
@@ -1081,4 +1089,123 @@ fn test_route_transcript_selection_keeps_ctrl_c_from_the_app() {
         }],
         "without any selection Ctrl+C reaches the App"
     );
+}
+
+#[test]
+fn test_keys_catalog_ids_are_unique_and_bound_by_default() {
+    use codemason_app_core::shortcuts::action_catalog;
+    let mut seen = std::collections::HashSet::new();
+    for action in action_catalog() {
+        assert!(seen.insert(action.id), "duplicate id {}", action.id);
+        assert!(
+            action
+                .id
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c == '.' || c == '_'),
+            "{} is not dotted lowercase",
+            action.id
+        );
+        for platform in [Platform::Linux, Platform::Mac] {
+            let keymap = default_keymap(platform);
+            let bindings = bound(&keymap, action.id);
+            let expected = if platform.is_mac() {
+                action.mac_key
+            } else {
+                action.default_key
+            };
+            match expected {
+                Some(text) => assert_eq!(
+                    bindings,
+                    vec![Binding::parse(text).expect("parse")],
+                    "{} on {platform:?}",
+                    action.id
+                ),
+                None => assert!(bindings.is_empty(), "{}", action.id),
+            }
+        }
+    }
+    // The bound defaults do not clash with each other.
+    assert!(
+        default_keymap(Platform::Linux).conflicts().is_empty(),
+        "{:?}",
+        default_keymap(Platform::Linux).conflicts()
+    );
+}
+
+/// A router over the keymap loaded from `json`, and the load's warnings.
+fn router_from(name: &str, json: &str) -> (KeyRouter, Vec<String>) {
+    let path = scratch(name).join("gui-keys.json");
+    std::fs::write(&path, json).expect("write overrides");
+    let (keymap, warnings) = load_keymap(Platform::Linux, &path);
+    (KeyRouter::new(keymap), warnings)
+}
+
+/// The presses `router` sends the App for one `key` with `modifiers`.
+fn route_press(
+    router: &mut KeyRouter,
+    key: egui::Key,
+    modifiers: egui::Modifiers,
+) -> Vec<KeyInput> {
+    let mut input = input_with(vec![press(key, modifiers)]);
+    router.route(&mut input, Focus::Elsewhere)
+}
+
+const CTRL_N: KeyInput = KeyInput {
+    key: Key::Char('n'),
+    mods: Modifiers::CTRL,
+};
+
+#[test]
+fn test_keys_rebound_action_runs_on_its_new_key() {
+    let (mut router, warnings) = router_from("rebind", r#"{ "session.new": "Ctrl+Shift+N" }"#);
+    assert_eq!(warnings, Vec::<String>::new());
+    let ctrl_shift = egui::Modifiers::CTRL | egui::Modifiers::SHIFT | egui::Modifiers::COMMAND;
+    assert_eq!(
+        route_press(&mut router, egui::Key::N, ctrl_shift),
+        vec![CTRL_N]
+    );
+}
+
+#[test]
+fn test_keys_user_binding_overrides_default() {
+    // Alt+L is panel.log's default.
+    let (mut router, warnings) = router_from("clash", r#"{ "session.new": "Alt+L" }"#);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("session.new"), "{warnings:?}");
+    assert!(warnings[0].contains("panel.log"), "{warnings:?}");
+    assert_eq!(
+        route_press(&mut router, egui::Key::L, egui::Modifiers::ALT),
+        vec![CTRL_N],
+        "the user's binding wins"
+    );
+}
+
+#[test]
+fn test_keys_unknown_action_is_a_warning_not_an_error() {
+    let (mut router, warnings) = router_from(
+        "unknown",
+        r#"{ "no.such.action": "Alt+K", "panel.log": "Alt+J" }"#,
+    );
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("no.such.action"), "{warnings:?}");
+    // The rest of the file still applies.
+    assert_eq!(
+        route_press(&mut router, egui::Key::J, egui::Modifiers::ALT),
+        vec![KeyInput {
+            key: Key::Char('l'),
+            mods: Modifiers::ALT,
+        }]
+    );
+}
+
+#[test]
+fn test_keys_action_without_a_terminal_key_is_queued_for_the_shell() {
+    let (mut router, warnings) = router_from("keyless", r#"{ "help.shortcuts": "F1" }"#);
+    assert_eq!(warnings, Vec::<String>::new());
+    assert_eq!(
+        route_press(&mut router, egui::Key::F1, egui::Modifiers::NONE),
+        Vec::<KeyInput>::new()
+    );
+    assert_eq!(router.take_actions(), ["help.shortcuts"]);
+    assert_eq!(router.take_actions(), Vec::<String>::new());
 }

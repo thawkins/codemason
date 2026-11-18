@@ -2260,13 +2260,31 @@ accessibility tree. The transcript stays virtualised: an unmeasured message's
 height is estimated from its blocks' rows (exact for plain one-paragraph
 messages) and corrected when it is drawn.
 
-Keyboard shortcuts for the window are craft-keymap commands: `panel.log`
-(`Alt+L` | `Cmd+Shift+L`), `panel.profile` (`Alt+P` | `Cmd+Shift+P`),
-`panel.tasks` (`Alt+I` | `Cmd+Shift+I`), `panel.memory` (`Alt+M` |
-`Cmd+Shift+M`), `queue.menu` (`Alt+Q` | `Cmd+Alt+Q`) and `app.quit` (`Ctrl+D` |
-`Cmd+Q`). The side-panel toggles (`Alt+S` sessions, `Alt+A` agents, `Alt+T`
-teams, `Alt+C` context) route through `App::handle_key` to the same
-`show_*_panel` state the panes read. Every other key is forwarded to
+Keyboard shortcuts for the window are craft-keymap commands built from
+app-core's action catalog (`shortcuts::action_catalog`; `ActionSpec` holds a
+dotted id, a title, default chords for Linux/Windows and macOS, and the terminal
+key press that runs it, if any). The actions and their default keys
+(Linux/Windows | macOS): `panel.log` (`Alt+L` | `Cmd+Shift+L`),
+`panel.profile` (`Alt+P` | `Cmd+Shift+P`), `panel.tasks` (`Alt+I` |
+`Cmd+Shift+I`), `panel.memory` (`Alt+M` | `Cmd+Shift+M`), `panel.context`
+(`Alt+C` | `Cmd+Shift+C`), `panel.sessions` (`Alt+S` | `Cmd+Shift+S`),
+`panel.agents` (`Alt+A` | `Cmd+Shift+A`), `panel.teams` (`Alt+T` |
+`Cmd+Shift+T`), `queue.menu` (`Alt+Q` | `Cmd+Alt+Q`), `mode.autopilot`
+(`Alt+O` | `Cmd+Shift+O`), `mode.yolo` (`Alt+Y` | `Cmd+Shift+Y`),
+`mode.edit_log` (`Alt+E` | `Cmd+Shift+E`), `mode.gcf` (`Alt+G` |
+`Cmd+Shift+G`), `attach.image` (`Alt+V` | `Cmd+Shift+V`), `session.new`
+(`Ctrl+N` | `Cmd+N`), `teammate.next` (`Alt+Down` | `Cmd+Alt+Down`),
+`teammate.prev` (`Alt+Up` | `Cmd+Alt+Up`), `app.quit` (`Ctrl+D` | `Cmd+Q`) and
+`help.shortcuts` (no default key). An action with a terminal key press runs as
+that press through `App::handle_key`, so the GUI and the terminal handler
+cannot drift; one without is queued by the router (`KeyRouter::take_actions`)
+and run by `App::run_action` or the shell. `gui-keys.json` maps action ids to
+key lists (craft-keymap `Overrides`); `keys::load_keymap` returns the keymap
+and its warnings, which go to the Log pane at startup: an unreadable or
+invalid file (defaults are used), an unknown action id, a key that does not
+parse or is reserved (each entry ignored), and a user binding that takes a
+chord another action holds by default (the default is removed so the user's
+binding runs; the warning names both ids). Every other key is forwarded to
 `App::handle_key`; an Alt+character chord with no binding is ignored and never
 typed, `Esc` stops a running agent (the `Alt+X` binding was removed), and `Tab`
 completes the slash-command menu.

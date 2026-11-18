@@ -5421,6 +5421,24 @@ impl App {
         });
     }
 
+    /// Run the catalog action `id` that has no terminal key press
+    /// (`ActionSpec::key` is `None`) and that app-core can run itself.
+    ///
+    /// # Returns
+    ///
+    /// `true` when the action was run here; `false` for an action the
+    /// frontend runs, or an unknown id.
+    pub fn run_action(&mut self, id: &str) -> bool {
+        match id {
+            "help.shortcuts" => {
+                self.show_shortcuts = true;
+                self.needs_redraw = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Open the context menu over the transcript of a frontend that lays out
     /// messages itself (the GUI).
     ///

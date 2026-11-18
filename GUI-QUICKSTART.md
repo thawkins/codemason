@@ -1184,23 +1184,35 @@ reopens maximized.
 | `Alt+P`                         | `Cmd+Shift+P`         | Toggle Profile pane                         |
 | `Alt+I`                         | `Cmd+Shift+I`         | Toggle TASKS pane                           |
 | `Alt+M`                         | `Cmd+Shift+M`         | Toggle Memory pane                          |
-| `Alt+C`                         | -                     | Toggle Context pane                         |
+| `Alt+C`                         | `Cmd+Shift+C`         | Toggle Context pane                         |
 | `Alt+Q`                         | `Cmd+Alt+Q`           | Open the queue-control menu (Next/Stop/Clear/Show) |
-| `Alt+O`                         | -                     | Toggle autopilot mode                       |
-| `Alt+S`                         | -                     | Show/focus/hide the Sessions pane           |
-| `Ctrl+N`                        | -                     | New session                                 |
+| `Alt+O`                         | `Cmd+Shift+O`         | Toggle autopilot mode                       |
+| `Alt+S`                         | `Cmd+Shift+S`         | Show/focus/hide the Sessions pane           |
+| `Ctrl+N`                        | `Cmd+N`               | New session                                 |
 | `Ctrl+Up` / `Ctrl+Down`         | -                     | Previous / next session                     |
 | `Alt+R`                         | -                     | Most recently focused session               |
-| `Alt+V`                         | -                     | Paste image from clipboard                  |
-| `Alt+Y`                         | -                     | Toggle YOLO mode on/off                     |
+| `Alt+V`                         | `Cmd+Shift+V`         | Paste image from clipboard                  |
+| `Alt+Y`                         | `Cmd+Shift+Y`         | Toggle YOLO mode on/off                     |
 | `Tab`                           | `Tab`                 | Complete the highlighted slash command      |
 | `@`                             | `@`                   | Open file mention picker                    |
 | `/`                             | `/`                   | Open slash-command menu                     |
 | `?`                             | `?`                   | Show keybindings help (when prompt is empty)|
 
 The `-` rows are not in the GUI keymap: they are the app-core chords sent as
-typed. Their keymap-bound neighbours can be rebound in `gui-keys.json`; the
-`?` panel lists every chord the window understands.
+typed. Every other row is an action you can rebind in `gui-keys.json` in the
+codemason config directory, by its id, for example:
+
+```json
+{ "session.new": "Ctrl+Shift+N", "panel.context": "Alt+K", "help.shortcuts": "F1" }
+```
+
+The ids are `panel.log`, `panel.profile`, `panel.tasks`, `panel.memory`,
+`panel.context`, `panel.sessions`, `panel.agents`, `panel.teams`, `queue.menu`,
+`mode.autopilot`, `mode.yolo`, `mode.edit_log`, `mode.gcf`, `attach.image`,
+`session.new`, `teammate.next`, `teammate.prev`, `app.quit` and
+`help.shortcuts`. A key another action uses by default moves to yours; the Log
+pane says so at startup, and lists any id or key it could not use. The `?`
+panel lists every chord the window understands.
 
 ---
 

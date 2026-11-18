@@ -208,10 +208,15 @@ fn run_window(launch: GuiLaunch) -> Result<(), GuiLaunchError> {
                 shell = shell.with_layout_file(path);
             }
             let platform = craft_keymap::egui::platform(&cc.egui_ctx);
-            let keymap = match keys::keys_path() {
+            let (keymap, key_warnings) = match keys::keys_path() {
                 Some(path) => keys::load_keymap(platform, &path),
-                None => keys::default_keymap(platform),
+                None => (keys::default_keymap(platform), Vec::new()),
             };
+            for warning in key_warnings {
+                shell
+                    .app_mut()
+                    .push_log(codemason_app_core::app::LogLevel::Warn, warning, None);
+            }
             // The macOS menu bar (About, Quit asking first, the panel
             // toggles); nothing elsewhere.
             #[cfg(target_os = "macos")]

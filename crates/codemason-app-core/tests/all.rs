@@ -501,6 +501,8 @@ mod test_session_resume;
 mod test_sessions_sidebar;
 #[path = "test_setup_dialog_chrome.rs"]
 mod test_setup_dialog_chrome;
+#[path = "test_shortcuts_catalog.rs"]
+mod test_shortcuts_catalog;
 #[path = "test_skill_command.rs"]
 mod test_skill_command;
 #[path = "test_slash_advertised_forms.rs"]
