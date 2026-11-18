@@ -475,8 +475,14 @@ mod test_research_web_author;
 #[path = "test_rollback_capture.rs"]
 mod test_rollback_capture;
 
+#[path = "test_formatter.rs"]
+mod test_formatter;
 #[path = "test_run_cost.rs"]
 mod test_run_cost;
+#[path = "test_turn_snapshot.rs"]
+mod test_turn_snapshot;
+#[path = "test_user_command.rs"]
+mod test_user_command;
 
 #[path = "test_run_cost_summary.rs"]
 mod test_run_cost_summary;

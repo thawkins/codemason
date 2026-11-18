@@ -20,6 +20,19 @@
 > macro-generated cases). The other sections below describe earlier releases and
 > are not re-measured; the `codemason-tui` rows in them describe earlier releases.
 >
+> **opencode gap work (unreleased, branch `feat/ocgap`).** Adds `/stats` and
+> `cdmn stats`, user-defined slash commands, formatters after edits, and
+> `/undo` file restore with `/redo`. No crate is added or removed. The tables
+> below are not re-measured; a full `cargo nextest run --workspace` on this tree
+> ran 15,844 tests, all passing.
+>
+> **GUI phase 0 (unreleased, branch `feat/ui-phase0`).** Empty state for new
+> sessions with the banner and logo removed, one-row status bar with a Details
+> popup and a busy spinner, `/theme`, a label-free prompt
+> that grows to eight rows, and the bundled Inter font. No crate is added or
+> removed. The tables below are not re-measured; a full
+> `cargo nextest run --workspace` on this tree ran 15,866 tests, all passing.
+>
 > **Rename:** the project is now codemason (crates `codemason-*`, binary
 > `cdmn`). The rename changes names only - no crate, binary, tool or test
 > target is added or removed - so every count below still holds.

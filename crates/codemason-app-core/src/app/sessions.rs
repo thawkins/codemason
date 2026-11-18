@@ -493,14 +493,14 @@ impl App {
         self.sid_to_display_name.remove(&short);
     }
 
-    /// Prints the session startup block into the focused session's
-    /// transcript: the codemason banner, version and links, the session id, and
-    /// the config files the session's directory resolves to. Then announces
-    /// the project instruction files (AGENTS.md and the like) for the
-    /// session; that discovery walks the project tree, so it runs on a
-    /// blocking thread and its notice arrives over the event bus. No model
-    /// call is made - the files already reach the model through the system
-    /// prompt (#38).
+    /// Writes the session startup notices to the log: the session id and the
+    /// config files the session's directory resolves to. Then reports the
+    /// project instruction files (AGENTS.md and the like) for the session;
+    /// that discovery walks the project tree, so it runs on a blocking thread
+    /// and its notice is written by [`App::poll_startup_notices`]. Nothing is
+    /// added to the transcript, so a new session starts empty and the
+    /// frontend shows its empty state. No model call is made - the files
+    /// already reach the model through the system prompt (#38).
     ///
     /// Called for every newly created session: at startup, `/session new`,
     /// `Ctrl+N`, the sidebar's `+ New session`, and the replacement created
@@ -509,16 +509,10 @@ impl App {
         let Some(session_id) = self.session.session_id.clone() else {
             return;
         };
-        let banner = crate::logo::LOGO.join("\n");
-        self.append_assistant_text(&banner);
-        self.append_assistant_text(&format!("\n  Version {}", env!("CARGO_PKG_VERSION")));
-        self.append_assistant_text("\n  Created by Tim Hawkins <tim.thawkins@gmail.com>");
-        self.append_assistant_text("\n  https://github.com/thawkins/codemason");
-        self.append_assistant_text("\n");
-        self.append_assistant_text(&format!(
-            "\n[ok] Session created: `{}`",
-            super::helpers::short_id(&session_id)
-        ));
+        self.push_log_no_agent(
+            crate::app::LogLevel::Info,
+            format!("Session created: {}", super::helpers::short_id(&session_id)),
+        );
         // The config this session runs under (MULTISESSION M6): its own
         // project file, or the launch configuration it inherits.
         let config_paths = match codemason_agent::Config::load_for(&self.cwd_path) {
@@ -529,10 +523,13 @@ impl App {
             }
         };
         if config_paths.is_empty() {
-            self.append_assistant_text("\n[i] No config file found; using defaults");
+            self.push_log_no_agent(
+                crate::app::LogLevel::Info,
+                "No config file found; using defaults".to_string(),
+            );
         } else {
             let home = std::env::var_os("HOME").map(|h| h.to_string_lossy().into_owned());
-            let mut paths_text = config_paths
+            let paths_text = config_paths
                 .iter()
                 .map(|p| {
                     let s = p.display().to_string();
@@ -542,18 +539,39 @@ impl App {
                     }
                 })
                 .collect::<Vec<_>>()
-                .join("`\n  ");
-            if config_paths.len() > 1 {
-                paths_text = format!("\n  {paths_text}");
-            }
-            self.append_assistant_text(&format!("\n[ok] Loaded config file: `{paths_text}`"));
+                .join(", ");
+            self.push_log_no_agent(
+                crate::app::LogLevel::Info,
+                format!("Loaded config file: {paths_text}"),
+            );
         }
-        let processor = std::sync::Arc::clone(&self.session_processor);
+        let working_dir = self.cwd_path.clone();
+        let notices = std::sync::Arc::clone(&self.startup_notices);
         drop(tokio::task::spawn_blocking(move || {
-            if let Err(e) = processor.announce_instruction_files(&session_id) {
-                tracing::warn!(error = %e, "Instruction-file announcement failed");
-            }
+            let (_, discovery) =
+                codemason_agent::agent::collect_agents_md_content_with_discovery(&working_dir);
+            notices
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((session_id, discovery.format_summary()));
         }));
+    }
+
+    /// Write the startup notices deposited by background work to the log.
+    ///
+    /// Called from the housekeeping pass; see [`App::startup_notices`].
+    pub fn poll_startup_notices(&mut self) {
+        let notices = std::mem::take(
+            &mut *self
+                .startup_notices
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        // Each notice is logged against the session it describes, which need
+        // not be the one focused by the time the discovery finished.
+        for (session_id, notice) in notices {
+            self.push_log_exported(crate::app::LogLevel::Info, notice, None, Some(session_id));
+        }
     }
 
     /// Checks a `/session new <path>` directory (FR-01, M6).

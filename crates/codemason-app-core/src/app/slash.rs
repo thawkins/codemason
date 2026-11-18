@@ -962,6 +962,7 @@ impl App {
                 // Mirrors the subcommands the `/db` arm actually handles.
                 vec!["prune".to_string(), "help".to_string()]
             }
+            "stats" => vec!["help".to_string()],
             "agent" | "agents" => {
                 // Suggest agent-related subcommands
                 vec!["list".to_string(), "switch".to_string(), "help".to_string()]
@@ -991,6 +992,11 @@ impl App {
                     "help".to_string(),
                 ]
             }
+            "theme" => vec![
+                "default".to_string(),
+                "high-contrast".to_string(),
+                "help".to_string(),
+            ],
             "yolo" => {
                 vec![
                     "on".to_string(),
@@ -1314,6 +1320,30 @@ impl App {
                         is_skill: true,
                         suggestions: Vec::new(),
                         parameter_hint: skill.argument_hint.clone(),
+                    });
+                }
+            }
+
+            // Collect user-defined command matches (`commands/*.md`).
+            for user_cmd in &self.user_commands {
+                let desc = if user_cmd.description.is_empty() {
+                    "user command".to_string()
+                } else {
+                    format!("{} (user command)", user_cmd.description)
+                };
+                if matches.iter().any(|m| m.trigger == user_cmd.name) {
+                    continue;
+                }
+                if needle.is_empty()
+                    || user_cmd.name.starts_with(&needle)
+                    || desc.to_lowercase().contains(&needle)
+                {
+                    matches.push(SlashMenuEntry {
+                        trigger: user_cmd.name.clone(),
+                        description: desc,
+                        is_skill: false,
+                        suggestions: Vec::new(),
+                        parameter_hint: None,
                     });
                 }
             }
@@ -2445,6 +2475,64 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                      Usage: `/db prune [--days N] [--dry-run]|help`",
                 );
                 self.status = "db: usage".to_string();
+            }
+        }
+    }
+
+    /// Dispatch the `/stats` command: usage and cost across sessions.
+    ///
+    /// `help` prints the flag table; anything else is parsed by
+    /// [`crate::usage_stats::parse_stats_args`] and rendered by
+    /// [`crate::usage_stats::usage_stats_report`]. `--project` filters on the
+    /// focused session's working directory.
+    fn handle_stats_command(&mut self, args: &str) {
+        use crate::app::helpers::from_cmd;
+        use crate::usage_stats::{STATS_USAGE, parse_stats_args, usage_stats_report};
+
+        let first = args.split_whitespace().next().unwrap_or("").to_lowercase();
+        if matches!(first.as_str(), "help" | "--help" | "-h") {
+            self.append_assistant_text(&from_cmd(
+                "stats help",
+                "## /stats - Usage and cost across sessions\n\n\
+                 Totals per model from every completed agent run stored in the \
+                 session database. `/cost` covers the current session only.\n\n\
+                 | Form | Description |\n\
+                 |---|---|\n\
+                 | `/stats` | All time, all projects |\n\
+                 | `/stats --days N` | Runs from the last N days |\n\
+                 | `/stats --project` | Sessions of the current project directory |\n\
+                 | `/stats --json` | JSON instead of a table |\n\
+                 | `/stats help` | Show this help |\n",
+            ));
+            self.status = "stats: help".to_string();
+            return;
+        }
+        let parsed = match parse_stats_args(args.split_whitespace()) {
+            Ok(parsed) => parsed,
+            Err(token) => {
+                self.append_assistant_text(&from_cmd(
+                    "stats",
+                    &format!("Unrecognised argument `{token}`. Usage: `{STATS_USAGE}`"),
+                ));
+                self.status = "stats: usage".to_string();
+                return;
+            }
+        };
+        match usage_stats_report(&self.storage, &parsed, &self.cwd_path) {
+            Ok(report) if parsed.json => {
+                self.append_assistant_text(&from_cmd("stats", &format!("```json\n{report}\n```")));
+                self.status = "stats".to_string();
+            }
+            Ok(report) => {
+                self.append_assistant_text(&from_cmd("stats", &report));
+                self.status = "stats".to_string();
+            }
+            Err(e) => {
+                self.append_assistant_text(&from_cmd(
+                    "stats",
+                    &format!("[warn] Could not read usage statistics: {e}"),
+                ));
+                self.status = "stats: failed".to_string();
             }
         }
     }
@@ -4130,6 +4218,11 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
         // Plugin-contributed commands (spec `plugins` FR-031) resolve before the
         // built-in ladder: a prompt command's body is injected into the agent as
         // an ordinary user turn (so `/commit` behaves like a Claude Code command).
+        // User-defined commands (`commands/*.md`) resolve next to them, the same
+        // way: the rendered template is sent as an ordinary user turn.
+        if self.try_user_command(cmd, args) {
+            return;
+        }
         if self.try_plugin_command(cmd, args) {
             return;
         }
@@ -4141,6 +4234,7 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
             "telemetry" => self.handle_telemetry_command(args),
             "osinfo" => self.handle_osinfo_command(args),
             "db" => self.handle_db_command(args),
+            "stats" => self.handle_stats_command(args),
             "backend" => self.handle_backend_command(args),
             "automation" => self.handle_automation_command(args).await,
             "about" => self.slash_about(),
@@ -4305,12 +4399,19 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                     return;
                 }
             }
+            "theme" => self.slash_theme(args),
             "yolo" => self.slash_yolo(args),
             // -- /undo ------------------------------------------------------
             // FR-014: Remove the last user/assistant turn pair from the conversation.
             // This allows users to correct mistakes or backtrack from unhelpful responses.
             "undo" => {
-                if self.slash_undo(args).is_break() {
+                if self.slash_undo(args).await.is_break() {
+                    return;
+                }
+            }
+            // -- /redo ------------------------------------------------------
+            "redo" => {
+                if self.slash_redo(args).await.is_break() {
                     return;
                 }
             }
@@ -5676,6 +5777,16 @@ Be concise but comprehensive. This will be injected into future agent sessions a
                     "  /{:<18} {}\n",
                     format!("{}{}", skill.name, hint),
                     desc
+                ));
+            }
+        }
+        // Append user-defined commands (`commands/*.md`).
+        if !self.user_commands.is_empty() {
+            help_lines.push_str("\nUser commands:\n");
+            for user_cmd in &self.user_commands {
+                help_lines.push_str(&format!(
+                    "  /{:<18} {}\n",
+                    user_cmd.name, user_cmd.description
                 ));
             }
         }
@@ -8510,6 +8621,61 @@ Changes are persisted immediately to `.codemason/codemason.json` and take effect
         std::ops::ControlFlow::Continue(())
     }
 
+    /// Run the `/theme` slash command.
+    ///
+    /// A bare `/theme` reports the current theme; a theme name switches to it
+    /// for the running window. The frontend restyles on its next frame from
+    /// `App::theme_mode`. The choice is not written to the config file: the
+    /// `theme` config key sets the theme used at startup.
+    fn slash_theme(&mut self, args: &str) {
+        use crate::app::helpers::from_cmd;
+        use crate::theme_mode::ThemeMode;
+
+        let sub = args.split_whitespace().next().unwrap_or("").to_lowercase();
+        match sub.as_str() {
+            "" => {
+                self.append_assistant_text(&from_cmd(
+                    "theme",
+                    &format!(
+                        "Theme: **{}**. Available: `default`, `high-contrast`.",
+                        self.theme_mode.display_name()
+                    ),
+                ));
+                self.status = format!("theme: {}", self.theme_mode.display_name());
+            }
+            "help" | "--help" | "-h" => {
+                self.append_assistant_text(&from_cmd(
+                    "theme help",
+                    "## /theme - Colour theme\n\n\
+                     | Subcommand | Description |\n|---|---|\n\
+                     | `/theme` | Show the current theme |\n\
+                     | `/theme default` | The standard dark theme |\n\
+                     | `/theme high-contrast` | Brighter text and white outlines |\n\
+                     | `/theme help` | Show this help |\n\n\
+                     The switch applies to the running window. To start in a theme, set \
+                     `\"theme\": \"high-contrast\"` in `codemason.json`.",
+                ));
+                self.status = "theme: help".to_string();
+            }
+            name => match ThemeMode::from_str(name) {
+                Some(mode) => {
+                    self.theme_mode = mode;
+                    self.status = format!("theme: {}", mode.display_name());
+                }
+                None => {
+                    self.append_assistant_text(&from_cmd(
+                        "theme",
+                        &format!(
+                            "Unknown theme `{name}`. Usage: `/theme [default|high-contrast|help]`"
+                        ),
+                    ));
+                    self.status = "theme: usage".to_string();
+                }
+            },
+        }
+        self.needs_redraw = true;
+    }
+
     /// Run the `/yolo` slash command.
     fn slash_yolo(&mut self, args: &str) {
         // `/yolo <sub>`; a bare `/yolo` toggles (spec: `/yolo on|off|status`).
@@ -8615,65 +8781,37 @@ Changes are persisted immediately to `.codemason/codemason.json` and take effect
     ///
     /// Returns `Break` where the command returns early, so the dispatcher
     /// skips its trailing UI-invariant check exactly as before.
-    fn slash_undo(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+    async fn slash_undo(&mut self, args: &str) -> std::ops::ControlFlow<()> {
         if args.trim() == "help" {
             // reason: LOW-2 - the ~44 `/X help` blocks are near-identical
             // inline `format!` tables. This is the first routed through the
             // shared `helpers::from_cmd` builder; the rest are left inline to
             // keep the M6 change surgical and are the migration target.
             self.append_assistant_text(&crate::app::helpers::from_cmd(
-                        "undo help",
-                        "## /undo - Remove the last turn\n\n| Subcommand | Description |\n|---|---|\n| `/undo` | Remove the last user message and everything after it (typically one assistant response) from the conversation |\n| `/undo help` | Show this help |",
-                    ));
+                "undo help",
+                "## /undo - Remove the last turn\n\n| Subcommand | Description |\n|---|---|\n| `/undo` | Remove the last user message and everything after it from the conversation, and restore the files that turn changed when a snapshot exists; `/redo` puts both back |\n| `/undo help` | Show this help |",
+            ));
             self.status = "undo: help".to_string();
             return std::ops::ControlFlow::Break(());
         }
-        if self.session.session_id.is_none() {
-            self.status = "[warn] No active session to undo".to_string();
+        self.handle_undo().await;
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/redo` slash command.
+    ///
+    /// Returns `Break` where the command returns early, so the dispatcher
+    /// skips its trailing UI-invariant check, as `/undo help` does.
+    async fn slash_redo(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        if args.trim() == "help" {
+            self.append_assistant_text(&crate::app::helpers::from_cmd(
+                "redo help",
+                "## /redo - Restore the last undone turn\n\n| Subcommand | Description |\n|---|---|\n| `/redo` | Put back the messages and file changes the last `/undo` removed; only while nothing has been sent since |\n| `/redo help` | Show this help |",
+            ));
+            self.status = "redo: help".to_string();
             return std::ops::ControlFlow::Break(());
         }
-        if self.session.messages.is_empty() {
-            self.status = "[warn] No messages to undo".to_string();
-            return std::ops::ControlFlow::Break(());
-        }
-
-        // Find the last user message and remove it along with any
-        // following assistant/compaction messages.
-        let mut last_user_idx = None;
-        for (idx, msg) in self.session.messages.iter().enumerate().rev() {
-            if msg.role == codemason_types::Role::User {
-                last_user_idx = Some(idx);
-                break;
-            }
-        }
-
-        match last_user_idx {
-            Some(user_idx) => {
-                // Remove the user message and all following messages
-                // (typically one assistant response, but could be more)
-                let removed_count = self.session.messages.len() - user_idx;
-                self.session.messages.truncate(user_idx);
-
-                // Reset scroll to show the new end of conversation
-                self.session.scroll_offset = 0;
-
-                self.status = format!("Undid last turn (removed {} message(s))", removed_count);
-                self.push_log_no_agent(
-                    LogLevel::Info,
-                    format!(
-                        "Undo: removed {} message(s) from end of conversation",
-                        removed_count
-                    ),
-                );
-            }
-            None => {
-                self.status = "[warn] No user message found to undo".to_string();
-                self.push_log_no_agent(
-                    LogLevel::Warn,
-                    "Undo: no user message found in conversation".to_string(),
-                );
-            }
-        }
+        self.handle_redo().await;
         std::ops::ControlFlow::Continue(())
     }
 
@@ -13301,6 +13439,51 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
         Ok(())
     }
 
+    /// Invoke a user-defined slash command (`commands/*.md`).
+    ///
+    /// Returns `true` when `cmd` matched a loaded command: its template is
+    /// rendered with the typed arguments and sent to the agent as an ordinary
+    /// user turn. Returns `false` otherwise so the remaining ladder runs.
+    fn try_user_command(&mut self, cmd: &str, args: &str) -> bool {
+        let Some(user_cmd) = self.user_commands.iter().find(|c| c.name == cmd) else {
+            return false;
+        };
+        let rendered = codemason_agent::user_command::render_user_command(&user_cmd.prompt, args);
+        let display = if args.is_empty() {
+            format!("/{cmd}")
+        } else {
+            format!("/{cmd} {args}")
+        };
+
+        let sid = self.session.session_id.clone().unwrap_or_default();
+        self.session
+            .messages
+            .push(Message::user_text(&sid, &display));
+        self.add_to_history(display);
+        self.status = format!("user command /{cmd}");
+
+        // The same agent an ordinary prompt gets: selected model, thinking
+        // level and role-mode prompt applied.
+        let agent = self.prepare_agent_for_dispatch();
+        let flag = Arc::new(AtomicBool::new(false));
+        self.session.cancel_flag = Some(flag.clone());
+        // Busy from now, not from the first `MessageStart`: a queued command
+        // must not be followed by the next queued entry while its turn starts.
+        self.session.is_processing = true;
+        // A failed turn ends the busy state set above through exactly one
+        // `AgentError`, whether or not the processor reported it itself.
+        tokio::spawn(crate::app::command_turn::run_command_turn(
+            self.session_processor.clone(),
+            self.event_bus.clone(),
+            sid,
+            rendered,
+            agent,
+            flag,
+            "user command",
+        ));
+        true
+    }
+
     /// Invoke a plugin-contributed slash command (spec `plugins` FR-031).
     ///
     /// Returns `true` when `cmd` matched a registered plugin command (and the
@@ -13351,18 +13534,25 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
         self.add_to_history(display);
         self.status = format!("plugin command /{}", plugin_cmd.trigger);
 
+        // The same agent an ordinary prompt gets: selected model, thinking
+        // level and role-mode prompt applied.
+        let agent = self.prepare_agent_for_dispatch();
         let flag = Arc::new(AtomicBool::new(false));
         self.session.cancel_flag = Some(flag.clone());
-        let processor = self.session_processor.clone();
-        let agent = Arc::new(self.session.agent_info.clone());
-        tokio::spawn(async move {
-            if let Err(e) = processor
-                .process_message(&sid, &rendered, &agent, flag)
-                .await
-            {
-                tracing::warn!(error = %e, "Failed to process plugin command prompt");
-            }
-        });
+        // Busy from now, not from the first `MessageStart`: a queued command
+        // must not be followed by the next queued entry while its turn starts.
+        self.session.is_processing = true;
+        // A failed turn ends the busy state set above through exactly one
+        // `AgentError`, whether or not the processor reported it itself.
+        tokio::spawn(crate::app::command_turn::run_command_turn(
+            self.session_processor.clone(),
+            self.event_bus.clone(),
+            sid,
+            rendered,
+            agent,
+            flag,
+            "plugin command",
+        ));
         true
     }
 

@@ -960,6 +960,43 @@ installed catalog enables translation automatically. A catalog is JSON:
 
 ---
 
+## 6b-2. Format Files After Edits
+
+Add this to `~/.config/codemason/codemason.json` to run a formatter on every
+file the agent writes:
+
+```json
+{ "formatter": { "enabled": true } }
+```
+
+Built in: `rustfmt` (`.rs`), `gofmt` (`.go`), `ruff` (`.py`) and `prettier`
+(JS/TS/JSON/CSS/HTML/YAML). Each runs only if its program is installed. Turn one
+off with `"formatters": { "prettier": { "disabled": true } }`, or add your own
+with a `command` (use `$FILE` for the path) and `extensions`. The setting is
+read from the user-global config only; a project `codemason.json` cannot set it.
+
+## 6c. Your Own Slash Commands
+
+Put a Markdown file in `.codemason/commands/` (this project) or
+`~/.config/codemason/commands/` (every project). The file name is the command.
+
+```markdown
+---
+description: Review one file for bugs
+---
+Review $1 for correctness bugs. Extra instructions: $ARGUMENTS
+```
+
+Saved as `.codemason/commands/review.md`, this adds `/review`:
+
+```
+/review src/main.rs "focus on error handling"
+```
+
+`$ARGUMENTS` is everything after the command; `$1`..`$9` are the individual
+arguments (quotes group words). A file cannot replace a built-in command or a
+skill. Restart codemason, or switch project, to pick up a new file.
+
 ## 7. Skills
 
 Skills are reusable task packages that enhance the agent's capabilities. They support both user-initiated invocation (slash commands) and agent auto-invocation (via LLM reasoning).
@@ -2057,6 +2094,10 @@ Type `/` in the input to open an autocomplete menu:
 | `/compact [help]` | Summarise and compact history |
 | `/help` | Show available commands |
 | `/log` | Toggle log panel |
+| `/theme default\|high-contrast` | Switch the colour theme (set `"theme"` in `codemason.json` to keep it) |
+| `/undo` | Remove the last turn and restore the files it changed |
+| `/redo` | Put back the turn the last `/undo` removed |
+| `/stats [--days N] [--project] [--json]` | Usage and cost per model across sessions (CLI: `cdmn stats`) |
 | `/model` | Switch model |
 | `/thinking auto|off|low|medium|high` | Switch reasoning level for the active model |
 | `/provider` | Change provider |

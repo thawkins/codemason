@@ -21,6 +21,7 @@ pub mod autofix;
 pub mod automation;
 pub mod backend;
 pub mod file_ops;
+pub mod formatter;
 pub mod goal;
 pub mod hooks;
 pub mod id;
@@ -60,6 +61,7 @@ pub mod template;
 pub mod tool;
 pub mod trigger;
 pub mod updater;
+pub mod user_command;
 
 /// Shared helpers for the `!`-prefixed bang-command feature (CLI + TUI).
 pub mod bang_command;

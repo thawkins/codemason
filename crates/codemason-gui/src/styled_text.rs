@@ -128,11 +128,12 @@ fn text_format(style: &TextStyle, palette: &Palette, bold: Bold) -> TextFormat {
 /// stand-in, so the window never draws a box ("tofu") for it.
 ///
 /// With [`crate::fonts`] installed the bundled faces draw app-core's
-/// running diamond and success dot, the block logo and box drawing, and
-/// system fonts draw the rest. The status icons no bundled face has become
-/// ASCII when no system font has them either: the error cross `x`, the info
-/// sign `i` and the warning sign `!`; any other missing character becomes
-/// `?`. Control characters are kept (egui lays them out itself).
+/// running diamond and success dot, block elements and box drawing, and
+/// system fonts draw the rest. A status icon the font in use has no glyph
+/// for becomes ASCII when no system font has it either: the error cross `x`,
+/// the info sign `i` and the warning sign `!` (the bundled UI face draws the
+/// cross and the warning sign in proportional text); any other missing
+/// character becomes `?`. Control characters are kept (egui lays them out itself).
 ///
 /// # Arguments
 ///

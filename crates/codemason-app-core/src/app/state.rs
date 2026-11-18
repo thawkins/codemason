@@ -779,15 +779,9 @@ pub enum ProviderSource {
     AutoDiscovered,
 }
 
-/// Resolve the plugin-contributed slash commands for the current session
-/// (spec `plugins` FR-031). The built-in `SLASH_COMMANDS` triggers and any
-/// user-invocable skill names are passed as the collision surface so a plugin
-/// command registers under its bare name only when free, otherwise under the
-/// namespaced `plugin:<id>:<name>` trigger (or is dropped if both are taken).
-#[must_use]
-pub fn plugin_commands_for_surface(
-    working_dir: &std::path::Path,
-) -> Vec<codemason_agent::plugin::PluginCommand> {
+/// The triggers taken by built-in commands and user-invocable skills: the
+/// collision surface for user-defined and plugin-contributed commands.
+fn builtin_and_skill_triggers(working_dir: &std::path::Path) -> BTreeSet<String> {
     let mut existing: BTreeSet<String> = SLASH_COMMANDS
         .iter()
         .map(|c| c.trigger.to_string())
@@ -802,7 +796,43 @@ pub fn plugin_commands_for_surface(
             .into_iter()
             .map(|s| s.name.clone()),
     );
+    existing
+}
+
+/// Resolve the plugin-contributed slash commands for the current session
+/// (spec `plugins` FR-031). The built-in `SLASH_COMMANDS` triggers and any
+/// user-invocable skill names are passed as the collision surface so a plugin
+/// command registers under its bare name only when free, otherwise under the
+/// namespaced `plugin:<id>:<name>` trigger (or is dropped if both are taken).
+#[must_use]
+pub fn plugin_commands_for_surface(
+    working_dir: &std::path::Path,
+) -> Vec<codemason_agent::plugin::PluginCommand> {
+    let mut existing = builtin_and_skill_triggers(working_dir);
+    existing.extend(
+        codemason_agent::user_command::load_user_commands(working_dir, &existing)
+            .0
+            .into_iter()
+            .map(|c| c.name),
+    );
     codemason_agent::plugin::plugin_commands(working_dir, &existing)
+}
+
+/// Resolve the user-defined slash commands (`commands/*.md`) for the current
+/// session. A file whose name is already a built-in command or a
+/// user-invocable skill is skipped and logged at `warn!`.
+#[must_use]
+pub fn user_commands_for_surface(
+    working_dir: &std::path::Path,
+) -> Vec<codemason_agent::user_command::UserCommand> {
+    let (commands, diagnostics) = codemason_agent::user_command::load_user_commands(
+        working_dir,
+        &builtin_and_skill_triggers(working_dir),
+    );
+    for diagnostic in diagnostics {
+        tracing::warn!(%diagnostic, "skipped user command file");
+    }
+    commands
 }
 
 /// A registered slash command.
@@ -909,6 +939,10 @@ pub const SLASH_COMMANDS: &[SlashCommandDef] = &[
         description: "Alias for /profile - toggle the agent-loop perf panel (/perf on|off|help)",
     },
     SlashCommandDef {
+        trigger: "stats",
+        description: "Usage and cost across sessions: /stats [--days N] [--project] [--json] | /stats help",
+    },
+    SlashCommandDef {
         trigger: "llmstats",
         description: "Show average LLM response time and token throughput",
     },
@@ -1011,6 +1045,10 @@ pub const SLASH_COMMANDS: &[SlashCommandDef] = &[
     SlashCommandDef {
         trigger: "dirs",
         description: "Manage directory/file permission lists: /dirs add|remove allow|deny <pattern> [--global] | show | help",
+    },
+    SlashCommandDef {
+        trigger: "theme",
+        description: "Switch the colour theme: /theme default|high-contrast, /theme shows the current one (/theme help)",
     },
     SlashCommandDef {
         trigger: "yolo",
@@ -1134,7 +1172,11 @@ pub const SLASH_COMMANDS: &[SlashCommandDef] = &[
     },
     SlashCommandDef {
         trigger: "undo",
-        description: "Remove the last user/assistant turn pair from the conversation (/undo help)",
+        description: "Remove the last turn and restore the files it changed; /redo puts it back (/undo help)",
+    },
+    SlashCommandDef {
+        trigger: "redo",
+        description: "Restore the turn the last /undo removed (/redo help)",
     },
     SlashCommandDef {
         trigger: "name",
@@ -3194,6 +3236,9 @@ pub struct App {
     /// startup. Prompt commands carry their body; inline commands (`prompt: None`)
     /// require the live plugin sandbox and are listed but not dispatchable here.
     pub plugin_commands: Vec<codemason_agent::plugin::PluginCommand>,
+    /// Slash commands defined by `commands/*.md` files in the user-global
+    /// config directory and the project's `.codemason/` directory.
+    pub user_commands: Vec<codemason_agent::user_command::UserCommand>,
     /// File reference autocomplete menu, shown when `@` is typed.
     pub file_menu: Option<FileMenuState>,
     /// Optional spec manager for reading and updating specifications.
@@ -3840,6 +3885,11 @@ pub struct App {
     /// [`SubagentLaunch`] id, so the shared queue is behind a mutex rather than
     /// owned by the event loop; [`App::poll_subagent_launch_results`] drains it.
     pub subagent_launch_results: Arc<std::sync::Mutex<Vec<SubagentLaunchOutcome>>>,
+    /// Startup notices produced off the event loop (a new session's
+    /// instruction-file discovery), each with the id of the session it is
+    /// about, waiting for [`App::poll_startup_notices`] to write them to the
+    /// log.
+    pub startup_notices: Arc<std::sync::Mutex<Vec<(String, String)>>>,
     /// Cap on concurrently in-flight launches, from
     /// `Config::effective_agents_max_launching` (D3).
     pub subagent_launch_cap: usize,

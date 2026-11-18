@@ -28,6 +28,7 @@ Per-command reference documents for the codemason GUI slash commands. Each docum
 | `/loop` | [loop](loop.md) | Goal-driven agent loop: /loop opens setup, /loop <agent> <goal> starts, /loop help shows usage |
 | `/profile` | [profile](profile.md) | Toggle the agent-loop profiler panel (/profile on\|off\|help) |
 | `/perf` | [perf](perf.md) | Alias for /profile  -  toggle the agent-loop perf panel (/perf on\|off\|help) |
+| `/stats` | [stats](stats.md) | Usage and cost across sessions: /stats [--days N] [--project] [--json] \| /stats help |
 | `/llmstats` | [llmstats](llmstats.md) | Show average LLM response time and token throughput |
 | `/model` | [model](model.md) | Switch the active model, or show metadata with /model show (/model help for usage) |
 | `/thinking` | [thinking](thinking.md) | Switch the current thinking level: /thinking auto\|off\|low\|medium\|high |
@@ -83,7 +84,9 @@ Per-command reference documents for the codemason GUI slash commands. Each docum
 | `/actionloop` | [actionloop](actionloop.md) | Agent action-loop timing: /actionloop [help\|clip] |
 | `/bug-report` | [bug-report](bug-report.md) | Generate diagnostic bug report with redacted session data (output to log/) |
 | `/triggers` | [triggers](triggers.md) | Manage trigger rules: /triggers [list\|enable\|disable\|remove\|status\|help] |
-| `/undo` | [undo](undo.md) | Remove the last user/assistant turn pair from the conversation (/undo help) |
+| `/theme` | [theme](theme.md) | Switch the colour theme: /theme default\|high-contrast, /theme shows the current one (/theme help) |
+| `/undo` | [undo](undo.md) | Remove the last turn and restore the files it changed; /redo puts it back (/undo help) |
+| `/redo` | [redo](redo.md) | Restore the turn the last /undo removed (/redo help) |
 | `/name` | [name](name.md) | Set a human-readable display name for the session: /name <display-name> \| /name help |
 | `/alog` | [alog](alog.md) | Activity log: /alog help\|on\|off\|config\|list\|status\|delete <run-id> --yes\|export <run-id> --yes |
 | `/toolchain` | [toolchain](toolchain.md) | Language toolchain report: /toolchain list [lang] [--json] \| /toolchain help |

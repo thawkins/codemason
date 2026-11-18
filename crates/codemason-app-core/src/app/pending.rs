@@ -90,6 +90,7 @@ impl App {
             || option_outstanding(&self.websearch_test_result)
             || option_outstanding(&self.active_tasks_reconcile_result)
             || queue_outstanding(&self.subagent_launch_results)
+            || queue_outstanding(&self.startup_notices)
             || queue_outstanding(&self.pending_project_sessions);
         let sessions = std::iter::once(&self.session)
             .chain(self.background.iter())

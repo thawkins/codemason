@@ -61,9 +61,9 @@ fn rig(configure: impl FnOnce(&tokio::runtime::Runtime, &mut App)) -> Rig {
     let shell = Shell::new(app)
         .with_keymap(default_keymap(Platform::Linux))
         .with_sources(events, logs, runtime.handle().clone());
-    // A new session's transcript starts with the block-character logo,
-    // which egui's bundled fonts cannot draw; these tests are about the
-    // panels, so it may draw as tofu.
+    // The core draws glyphs (status icons, box drawing) that egui's bundled
+    // fonts lack; these tests are about the panels, so they may draw as
+    // tofu.
     let harness = Harness::builder()
         .with_size(egui::vec2(1400.0, 900.0))
         .allow_missing_glyphs()

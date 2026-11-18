@@ -24,6 +24,7 @@ mod backend_panel;
 pub use self::backend_panel::{BackendPanelRow, BackendPanelState};
 
 mod bench;
+mod command_turn;
 mod compress;
 pub mod cron;
 mod event_handler;
@@ -129,6 +130,7 @@ pub use self::startup::StartupSession;
 mod subagent_events;
 mod swarm;
 pub mod toolchain;
+pub mod undo;
 mod windows;
 
 /// Why the Agents window refuses to open with nothing to show (spec

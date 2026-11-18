@@ -129,6 +129,8 @@ pub struct SessionView {
     pub agent_stack: Vec<AgentInfo>,
     /// Whether the agent is currently processing a message.
     pub is_processing: bool,
+    /// Turns removed by `/undo`, newest last, kept for `/redo`.
+    pub undo_stack: Vec<crate::app::undo::UndoneTurn>,
     /// Cancellation flag shared with the processor task; set to `true` on ESC.
     pub cancel_flag: Option<Arc<AtomicBool>>,
     /// Whether the last agent run was halted by the user (ESC).
@@ -419,6 +421,7 @@ impl SessionView {
             current_agent_index,
             agent_stack: Vec::new(),
             is_processing: false,
+            undo_stack: Vec::new(),
             cancel_flag: None,
             agent_halted: false,
             auto_compact_in_progress: false,

@@ -1083,6 +1083,45 @@ the GUI leaves stderr attached to the terminal that launched it.
 
 ---
 
+### 3.10 Per-Turn Workspace Snapshots (`/undo`, `/redo`)
+
+Immediately before a turn's first tool call, the session processor records the
+state of the session's git work tree
+(`codemason-agent/src/session/turn_snapshot.rs`). `/undo` restores that state
+and removes the turn's messages; `/redo` reverses it
+(`codemason-app-core/src/app/undo.rs`).
+
+- **Store.** One private ("shadow") git repository per project under
+  `~/.config/codemason/snapshots/<hash of the work-tree root>/`. It has its own
+  object database and index and uses the project only as its work tree, so the
+  project's `.git` is never read or written. A snapshot is a tree object
+  (`git add --all` + `git write-tree`) kept alive by the ref
+  `refs/codemason/<session>/<user message id>`. The project's `.gitignore` is
+  honoured.
+- **When.** Once per turn, for a top-level run on the `local` backend whose
+  working directory is inside a git work tree. A sub-agent's own session is not
+  recorded; its file changes fall inside the parent turn's snapshot. A snapshot
+  failure is logged at `warn!` and the turn proceeds.
+- **Undo.** The transcript and the session database hold separate copies of a
+  turn under different message ids, so the turn is resolved on both sides: the
+  transcript loses its last user message and everything after it, and storage
+  loses its last user message and everything after it
+  (`Storage::delete_messages_by_id`) when that stored turn is the same turn
+  (same id, or not older than the transcript's). The snapshot is looked up by
+  the stored user message id. The work tree is then restored with
+  `git read-tree --reset -u <tree>`, which rewrites only the paths that differ
+  and deletes files the snapshot does not contain. The state being replaced is
+  recorded first and kept for redo.
+- **Redo.** Re-creates the stored messages in one transaction
+  (`Storage::create_messages`), returns the transcript messages and restores
+  the replaced state. The undo stack is per session, in memory, and is cleared
+  when the last stored message is no longer the one the undo left.
+- **Other sessions.** A restore rewrites the whole work tree, so both commands
+  refuse while another open session is running a turn in the same git work
+  tree.
+- **Limits.** Both commands refuse while the agent is running. Changes outside
+  the work tree, ignored files and external side effects are not undone.
+
 ## 4. Security & Permissions
 
 ### 4.1 Permission Security Layers
@@ -1553,6 +1592,7 @@ privileged keys before the merge and logs each rejected key at `warn!`:
 | `yolo`, `permission` allow-rules, bash/dirs lists | would auto-approve or widen the sandbox |
 | `telemetry` | could point the OTLP endpoint at an attacker host |
 | `hooks` | runs `sh -c` outside the permission system |
+| `formatter` | runs formatter subprocesses outside the permission system (section 5.9) |
 | `openai` | enables the inbound OpenAI-compatible surface |
 | `mcp` | a stdio server spawns a subprocess with no prompt (RCE) |
 | `acp` | an ACP agent spawns verbatim, and the section controls the editor-facing server (RCE) |
@@ -2016,10 +2056,65 @@ format (FR-006).
 Toggle at runtime with `/gcf on` / `/gcf off` (persists to the loaded config
 source), inspect with `/gcf show`, and view usage with `/gcf help` (FR-002,
 FR-003). `Alt+G` toggles GCF with the same persist semantics, and a status-bar
-indicator on line 2 (compression-clamp icon, left of the codeindex icon) shows
-the enabled/disabled state.
+indicator in the status bar's `Details` popup (the text tag `GCF [ok]` or
+`GCF [x]`) shows the enabled/disabled state.
 
 ---
+
+### 5.9 Formatters After Edits (`formatter`)
+
+When `formatter.enabled` is `true`, a code formatter runs on each file a
+file-writing tool has just written (`codemason-agent/src/formatter.rs`). The
+default is off.
+
+```json
+{
+  "formatter": {
+    "enabled": true,
+    "formatters": {
+      "prettier": { "disabled": true },
+      "rustfmt": { "command": ["rustfmt", "--edition", "2024", "$FILE"] },
+      "shfmt": { "command": ["shfmt", "-w", "$FILE"], "extensions": [".sh"] }
+    }
+  }
+}
+```
+
+| Built-in | Extensions | Command |
+|---|---|---|
+| `rustfmt` | `.rs` | `rustfmt $FILE` (the edition comes from `rustfmt.toml`) |
+| `gofmt` | `.go` | `gofmt -w $FILE` |
+| `ruff` | `.py`, `.pyi` | `ruff format $FILE` |
+| `prettier` | `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`, `.json`, `.css`, `.scss`, `.less`, `.html`, `.vue`, `.yaml`, `.yml` | `prettier --write $FILE` |
+
+- **Selection.** The file name's extension picks the formatter, compared
+  without regard to case. A `formatters` key that is not a built-in name
+  defines a custom formatter (`command` and `extensions` are both required)
+  and wins over a built-in for the same extension. A key that is a built-in
+  name overrides that built-in's `command` or `extensions`, or removes it with
+  `disabled`.
+- **When it runs.** After a successful `Write`, `create`, `Edit`,
+  `multi_edit`, `apply_patch` or `append_to_file` call (and their aliases), on
+  the files named in the tool's result. `patch` reports no paths and is not
+  formatted. Formatting runs only on the `local` execution backend.
+- **Effect on the result.** When a formatter changes a file, the tool result
+  gains a line `[formatter] <name> reformatted <path>; re-read it before
+  editing it again.` and the session's read baseline for the file is refreshed
+  so the next edit is not rejected as stale.
+- **Failure.** A formatter that is not installed is skipped. One that exits
+  non-zero or runs longer than 10 seconds is logged at `debug!` and the tool
+  call still succeeds; if it rewrote the file before failing, the change is
+  reported like any other, with the failure reason appended.
+- **Dry runs and locking.** A `dry_run` result names files it did not write and
+  is never formatted. The formatter runs while holding the same per-file lock
+  the edit tools take, and the read baseline is refreshed only when it still
+  described the file as the formatter found it, so a write by another session
+  between the tool's write and the formatter stays visible to the stale-file
+  check.
+- **Trust.** The section is honoured only from the user-global config; a
+  project overlay's `formatter` section is rejected (section 5.1). The
+  formatter runs as a direct subprocess (no shell) in the session's working
+  directory, outside the permission system.
 
 ## 6. Graphical User Interface (GUI)
 
@@ -2032,8 +2127,11 @@ modes (`cdmn run`, `serve`, ACP) are unchanged, and `--no-tui` keeps the plain
 stdin/stdout mode. The window opens maximized the first time and then restores
 its size, position and maximized state (`gui-window.json`); the dock layout is
 persisted in `gui-layout.json` and shortcut overrides in `gui-keys.json`, all in
-the codemason config directory. The font stack bundles Hack Bold (MIT and
-Bitstream Vera licences, `crates/codemason-gui/assets/fonts/Hack-LICENSE.txt`).
+the codemason config directory. The font stack bundles Inter Regular and Inter
+SemiBold for proportional text and its bold weight (SIL Open Font License 1.1,
+`crates/codemason-gui/assets/fonts/Inter-LICENSE.txt`) and Hack Bold for bold
+code (MIT and Bitstream Vera licences,
+`crates/codemason-gui/assets/fonts/Hack-LICENSE.txt`).
 
 Keyboard shortcuts for the window are craft-keymap commands: `panel.log`
 (`Alt+L` | `Cmd+Shift+L`), `panel.profile` (`Alt+P` | `Cmd+Shift+P`),
@@ -2055,15 +2153,16 @@ modal dialogs:
 
 | Panel | Purpose |
 |-------|---------|
-| Chat | Conversation stream with markdown and syntax highlighting |
+| Messages | Conversation stream drawn as styled text. Markdown is not rendered and code is not syntax-highlighted; slash-command output written in Markdown is flattened to plain text. A session with no messages shows an empty state instead: the product name, the version, three starter actions that fill the prompt, and one tip (`panels/empty_state.rs`) |
 | Log | Step-numbered tool calls with pretty-printed JSON |
 | Context (`Alt+C`) | What the next request sends to the model: the selected model's context window, the tokens sent on the last turn, each partition (system prompt with its skills/memory/`agents.md` breakdown, tool catalog, tool metadata, history with its message count) with its token estimate and share of the window, the total, the free headroom and the bytes streamed to and from the model. Display-only: `codemason_app_core::context_panel` builds the lines and `crates/codemason-gui/src/panels/context.rs` draws them; percentages read `unknown` when the provider advertises no context window |
-| Status bar | Provider/model, context usage, compression indicator, YOLO state; service states use plain ASCII text tags (`CDX:`, `LOG:`, `AUTO:`, `EDIT:`, `TELE:`, `YOLO:`, `GCF:`, `BUSY: `), and message-window tool categories use ASCII marker prefixes (`[file]`, `[dir]`, `[search]`, `[exec]`, `[git]`, `[team]`, ...) |
-| Teammate strip | One row of pills under the status bar, one per active teammate (status glyph, clipped name, focused highlight, `Alt+^v:cycle` hint); omitted when no team is active (spec `agentui` FR-027) |
-| Agents window | `Agents`-button popup listing the primary agent and an ancestor-indented sub-agent tree with status, elapsed time, step count, `[stop]`/`[x]` status glyphs, and a background-shell section; openable from the keyboard with `Alt+A` (the chord resolves to `InputAction::ToggleAgentsWindow` and calls the same `App::toggle_agents_window` the button click does, so both share one visibility path, one no-subject no-op and one redraw flag - spec `agentssetup` FR-022); keyboard-first: a block cursor (`Up`/`Down`/`PgUp`/`PgDn`) selects a row, `Space` toggles suspend/resume, `Del` arms the kill confirmation, `Enter` opens the row's output view, and clicking a row selects it; the FR-077 key legend sits in the footer (spec `agentui` FR-006..FR-016) |
-| Teams window | `Teams`-button popup listing the lead plus every teammate with focus markers, status words from `MemberStatus::display_label()`, model column (inherited global model suppressed), and claimed/done/sent/recv counters; the block cursor plus `Enter`/`Space`/`Del` drive focus, suspend and shutdown; clicking a teammate selects it (spec `agentui` FR-017..FR-026) |
+| Status bar | One row (it wraps only when the window is too narrow). In the bar: a spinner while the focused session's turn is running, the status text, the Auto-fix summary, compaction state, provider health dot, model, thinking level, agent, and the share of the context window the last request used. Shown only while they apply: the quota from 80%, a non-default execution backend, `AUTO [ok]` with its countdown, a `YOLO` chip, `BUSY:cdx-idx` / `BUSY:cdx-graph`, and the `N need you` badge. A `Details` button opens a popup with the version, project directory, branch, last prompt, backend, quota, and one tag per service drawn as `<NAME> [ok]` or `<NAME> [x]` (`GCF`, `CDX`, `LOG`, `AUTO`, `EDIT`, `TELE`, `YOLO`). Message-window tool categories use ASCII marker prefixes (`[file]`, `[dir]`, `[search]`, `[exec]`, `[git]`, `[team]`, ...) |
+| Teammate strip | Not implemented in the GUI. Teammates are listed in the Teams pane (spec `agentui` FR-027 described a row of pills under the status bar) |
+| Agents window | The `Active agents` dock pane, listing the primary agent and an ancestor-indented sub-agent tree with status, elapsed time, step count, `[stop]`/`[x]` status glyphs, and a background-shell section; openable from the keyboard with `Alt+A` (the chord resolves to `InputAction::ToggleAgentsWindow` and calls the same `App::toggle_agents_window` the button click does, so both share one visibility path, one no-subject no-op and one redraw flag - spec `agentssetup` FR-022); keyboard-first: a block cursor (`Up`/`Down`/`PgUp`/`PgDn`) selects a row, `Space` toggles suspend/resume, `Del` arms the kill confirmation, `Enter` opens the row's output view, and clicking a row selects it; the FR-077 key legend sits in the footer (spec `agentui` FR-006..FR-016) |
+| Teams window | The `Teams` dock pane, listing the lead plus every teammate with focus markers, status words from `MemberStatus::display_label()`, model column (inherited global model suppressed), and claimed/done/sent/recv counters; the block cursor plus `Enter`/`Space`/`Del` drive focus, suspend and shutdown; clicking a teammate selects it (spec `agentui` FR-017..FR-026) |
 | Session sidebar | Left-hand list of every session: `+ New session`, `/ Search`, `Pinned`, then one section per project (launch project first; projects with no sessions are listed too). A project heading shows the project name, a chevron (`v` open, `>` collapsed) and `[github]` / `[gitlab]` when the remote is known. `Pinned` is always listed, even when nothing is pinned, and dragging a session row onto it pins that session. A blank, non-selectable line sits above `Pinned` and above each project heading (the cursor skips it). User sections (by name) follow `Pinned`. A session row shows the title, relative age, `#N` with the number of pull/merge requests the session has had (blue while one is bound, grey after unbinding; `#!N` when Auto-fix is paused waiting on the user; history in `session_request_history`, schema 12; a request still recorded as open is re-read from the forge at most once per 5 minutes, so the `PR/MRs` submenu shows `[merged]`/`[closed]` without Auto-fix), a branch marker `Y` with the count of pull/merge requests for the session's branch, and a right-aligned attention marker (`!` waiting, `*` running, `x` failed, `o` unread, including a persisted unread mark). Filter, per-project collapse, drag resize, `Alt+S` toggle, per-session, project-heading and multi-selection context menus (`m`, `Shift+F10`, right-click; section 6.1c); `v` or `Ctrl`+click selects sessions (marked `*`), `Esc` clears the selection; a project with no sessions whose directory no longer exists is not listed, nor is a parent folder (not a git repository, containing another project) with no open session unless codemason was launched in it; a project's remote is detected in the background the first time the sidebar is shown, without a session being opened in it(specs `MULTISESSION` M5, `projects`, `SESSIONMENU`) |
-| Input | Command-line with slash-command autocomplete |
+| Prompt | Multi-line editor with slash-command and `@` file completion. It has no visible label; it starts one row tall, grows with its text, and scrolls once the text is taller than eight rows or the pane. `Enter` sends; `Shift+Enter` or `Alt+Enter` inserts a new line. The input queue is listed above it |
+| Queue | Not shown. The `Queue` dock pane is always closed (`dock::pane_wanted`); the input queue is listed above the prompt and `Alt+Q` opens queue control |
 | Permission dialog | Modal approval dialog with live countdown (120 s) |
 | Question dialog | Modal user question (free-text or multiple-choice) |
 | Row-action dialog | Yes/No confirmation for destructive row actions (sub-agent kill, background-shell cancel, teammate suspend/shutdown) drawn over the windows, keyboard and mouse answered (spec `agentui` T-009) |
@@ -2321,6 +2420,9 @@ repository and does not use ETags.
 | `/compact` | Summarise and compact the conversation history (one-shot LLM summarisation; FR-009). `/compress` is a deprecated alias |
 | `/memory` | Structured-memory panel and summary: `/memory` / `/memory show` (same), `/memory clear` (a `Yes`/`No` dialog clears this project's memories), `/memory help` |
 | `/db` | Session database: `/db prune [--days N] [--dry-run]` deletes messages older than the retention window (the session row is kept; a real prune arms a `Yes`/`No` dialog that opens on `No`), `/db help` (also the bare form) |
+| `/theme` | Switch the window's colour theme while it runs: `/theme default\|high-contrast`, a bare `/theme` reports the current one. The `theme` config key (`"default"` or `"high-contrast"`) sets the theme at startup; `/theme` does not write it |
+| `/undo` / `/redo` | `/undo` removes the last turn from the conversation and the session database and restores the work tree to the snapshot taken before that turn's first tool call; `/redo` puts the messages and files back while nothing has been sent since (section 3.10) |
+| `/stats` | Usage and cost per model across sessions, from the persisted run-cost summaries: `/stats [--days N] [--project] [--json]`, `/stats help`; `/cost` covers the current session only. CLI parity via `cdmn stats` |
 | `/yolo` | Toggle YOLO mode (`on`/`off` set and persist the state, `status` reports it, a bare `/yolo` toggles; the toggle writes the user-global config, or the `--config` file when one was loaded) |
 | `/task` | Toggle the TASKS side panel (also Alt+T); `/task list`, `/task help` |
 | `/team create <name>` | Create a team |
@@ -3576,6 +3678,42 @@ profiles are parsed correctly. Custom agents display a `[custom]` badge in the
 agent picker.
 
 ---
+
+## 11B. User-Defined Slash Commands
+
+A Markdown file `<name>.md` defines the slash command `/<name>`
+(`codemason-agent/src/user_command.rs`). Files are read from two directories,
+and a project file replaces a user-global file of the same name:
+
+| Location | Scope |
+|---|---|
+| `~/.config/codemason/commands/` | Every project |
+| `.codemason/commands/` (nearest, walking up from the working directory) | That project |
+
+The file body is a prompt template. Running the command substitutes the
+placeholders and sends the result to the active agent as an ordinary user turn;
+the transcript shows the command as typed. An optional `---` frontmatter block
+may carry `description`, shown in the slash menu and `/help`; other frontmatter
+keys are ignored.
+
+| Placeholder | Replacement |
+|---|---|
+| `$ARGUMENTS` | Everything typed after the command |
+| `$1` .. `$9` | The Nth argument, 1-based; single or double quotes group words; empty when absent |
+
+Rules:
+
+- The name must start with a lowercase letter or digit and contain only
+  lowercase letters, digits, `-` and `_`. Subdirectories are not scanned.
+- A file whose name is already a built-in command or a user-invocable skill is
+  skipped and logged at `warn!`; it never shadows the existing command. A
+  plugin command with the same name registers under its namespaced
+  `plugin:<id>:<name>` trigger instead.
+- A file with an empty body is skipped.
+- Commands are loaded at startup and when the focused project changes. The
+  `commands_info` tool reports them under `user_commands`.
+- The template is prompt text only: it runs no shell command and grants no
+  permission, so a project-local command file needs no trust gate.
 
 ## 12. Skills System
 

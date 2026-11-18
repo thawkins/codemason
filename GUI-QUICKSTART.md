@@ -154,9 +154,18 @@ If a provider is already configured, `/model` jumps straight to that provider's
 model list instead of asking you to pick a provider again. Use `/model show` to
 print metadata for the active model.
 
-The status bar along the bottom shows the selected provider, model, and a
-health indicator for the provider: reachable, health check in progress, or
-unreachable / key missing.
+The status bar along the bottom is one row. It shows a spinner while a turn is
+running, the status text, the selected provider and model with a health
+indicator for the provider (reachable, health check in progress, or
+unreachable / key missing), the thinking level, the agent, and how much of the
+model's context window the last request used. Warnings appear in it only while
+they apply (quota from 80%, a non-default backend, `AUTO`, `YOLO`, code-index
+activity). The `Details` button at its end opens a popup with the version,
+project, branch, backend, and the on/off state of every service.
+
+A new session starts with an empty Messages pane that shows three starter
+actions; clicking one fills the prompt. `/theme high-contrast` switches to the
+high-contrast theme.
 
 When the Model Router is active the status bar shows the actual downstream
 model and tier, e.g. `Model Router (claude-sonnet-4-20250514) / complex`.

@@ -32,3 +32,24 @@ impl ThemeMode {
         }
     }
 }
+
+/// The theme the launch configuration asks for, set once by the binary.
+static STARTUP: std::sync::OnceLock<ThemeMode> = std::sync::OnceLock::new();
+
+/// Records the theme named by the launch configuration's `theme` key, so a
+/// new [`App`](crate::app::App) starts in it.
+///
+/// The binary calls this with the configuration it actually loaded (the
+/// `--config` file when one was given), which the layered config chain an App
+/// could read for itself does not always match. The first call wins.
+pub fn set_startup(mode: ThemeMode) {
+    // INTENTIONAL: a second call keeps the first theme.
+    let _ = STARTUP.set(mode);
+}
+
+/// The theme a new App starts in: the one given to [`set_startup`], else the
+/// default.
+#[must_use]
+pub fn startup() -> ThemeMode {
+    STARTUP.get().copied().unwrap_or_default()
+}

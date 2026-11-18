@@ -163,6 +163,19 @@ enum Commands {
         command: DbCommands,
     },
 
+    /// Show usage and cost per model across sessions (the `/stats` command)
+    Stats {
+        /// Only count runs from the last N days (default: all time)
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+        days: Option<u32>,
+        /// Only count sessions of the current directory's project
+        #[arg(long)]
+        project: bool,
+        /// Emit JSON instead of a table
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Manage persistent memory (list)
     Memory {
         #[command(subcommand)]
@@ -407,17 +420,6 @@ fn working_dir() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-/// Print the codemason ASCII art startup banner to stdout.
-fn print_banner() {
-    for line in codemason_app_core::logo::LOGO {
-        cliprintln!("{line}");
-    }
-    cliprintln!(
-        "  v{}  -  Rust AI coding agent\n",
-        env!("CARGO_PKG_VERSION")
-    );
-}
-
 /// Run the dry-run readiness check and exit the process.
 ///
 /// This helper is intentionally terminal: it prints the report and calls
@@ -529,6 +531,14 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
     // global file that lost the key). Logging the effective flag state at
     // startup makes such a fallback attributable instead of invisible.
     codemason_config::sync_runtime_flags(&config);
+    // The window starts in the theme this configuration names.
+    if let Some(mode) = config
+        .theme
+        .as_deref()
+        .and_then(codemason_app_core::theme_mode::ThemeMode::from_str)
+    {
+        codemason_app_core::theme_mode::set_startup(mode);
+    }
     tracing::info!(
         yolo = config.yolo,
         edit_log = config.edit_log,
@@ -827,6 +837,21 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
                 run_db_prune(days, dry_run, &config, &storage).await?;
             }
         },
+        Some(Commands::Stats {
+            days,
+            project,
+            json,
+        }) => {
+            let args = codemason_app_core::usage_stats::StatsArgs {
+                days,
+                project,
+                json,
+            };
+            let cwd = std::env::current_dir()?;
+            let report =
+                codemason_app_core::usage_stats::usage_stats_report(&storage, &args, &cwd)?;
+            writeln!(std::io::stdout(), "{report}")?;
+        }
         Some(Commands::Auth { provider, key }) => {
             storage.set_provider_auth(&provider, &key)?;
             tracing::info!(provider = %provider, "Stored API key");
@@ -1027,6 +1052,7 @@ fn init_tracing(
                 | Commands::Session { .. }
                 | Commands::Project { .. }
                 | Commands::Db { .. }
+                | Commands::Stats { .. }
                 | Commands::Config { .. }
                 | Commands::Research { .. }
         )
@@ -1369,6 +1395,9 @@ fn build_session_processor(
     stream_config: codemason_agent::StreamConfig,
     telemetry: Arc<TelemetrySubsystem>,
 ) -> (Arc<SessionManager>, Arc<SessionProcessor>) {
+    // Per-turn workspace snapshots for `/undo` and `/redo`.
+    codemason_agent::session::turn_snapshot::enable(data_dir().join("snapshots"));
+
     let session_manager = Arc::new(SessionManager::new(storage.clone(), event_bus.clone()));
     tracing::debug!("Session manager created");
     let session_processor = Arc::new(SessionProcessor {
@@ -1664,7 +1693,6 @@ async fn launch_gui(
     timings: StartupTimings,
     launcher: codemason_gui::GuiLauncher,
 ) -> Result<()> {
-    print_banner();
     // `run_gui`'s future is large; box it so it is heap-allocated
     // rather than inlined into this caller's future
     // (clippy::large_futures).

@@ -346,8 +346,7 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   message input open live control popups: the Agents window lists the primary
   agent and an ancestor-indented sub-agent tree with status, elapsed time,
   and step count plus a background-shell section; the Teams window lists the
-  lead and every teammate with focus markers, live status, and counters; a
-  single-row teammate strip sits under the status bar. Both windows are
+  lead and every teammate with focus markers, live status, and counters. Both windows are
   keyboard-first: a block cursor moves with `Up`/`Down`/`PgUp`/`PgDn`,
   `Space` toggles suspend/resume, `Del`/`Shift+K` arms the kill/shutdown
   confirmation modal, `Enter` opens the row's output view, and clicking a row
@@ -376,6 +375,14 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   during derivation; status-bar `idx`/`graph` busy indicators show progress)
 - **Memory system** — structured SQLite store with full-text (FTS5) recall,
   automatic extraction, decay, compression, and knowledge graph support
+- **Undo and redo** — `/undo` removes the last turn and restores the files it
+  changed from a per-turn workspace snapshot; `/redo` puts both back
+- **Usage statistics** — `/stats` and `cdmn stats` report tokens, cost and run
+  time per model across sessions (`--days N`, `--project`, `--json`)
+- **Your own slash commands** — a Markdown prompt template in
+  `.codemason/commands/` or `~/.config/codemason/commands/` becomes `/<name>`
+- **Formatters after edits** — opt-in `formatter` config section runs `rustfmt`,
+  `gofmt`, `ruff`, `prettier` or a custom command on files the agent writes
 - **Spec management** — `/spec` slash commands for creating, listing, searching,
   validating, and tracking specification lifecycles. The `SPEC.md`/`PLAN.md`
   round-trip is lossless for everything the lifecycle writer does not own: blank
@@ -735,6 +742,7 @@ cdmn [OPTIONS] [COMMAND]
   models       List available models
   config       Show resolved configuration
   research     Manage research items under `research/`
+  stats        Show usage and cost per model across sessions (the `/stats` command)
   spec         Run spec commands from the CLI (the `/spec` slash-command parity surface)
   new          Scaffold a new project in the current directory (the `/new` command)
 ```
@@ -1052,7 +1060,10 @@ MIT
 
 The GUI embeds font software: the Hack Bold font
 (`crates/codemason-gui/assets/fonts/Hack-Bold.ttf`, Hack v3.003, Source Foundry;
-MIT and Bitstream Vera licences) and egui's default fonts (Hack Regular, Noto
+MIT and Bitstream Vera licences), the Inter Regular and Inter SemiBold fonts
+(`crates/codemason-gui/assets/fonts/Inter-Regular.ttf`, `Inter-SemiBold.ttf`,
+Inter 4.1, The Inter Project Authors; SIL Open Font License 1.1) and egui's
+default fonts (Hack Regular, Noto
 Emoji under the SIL Open Font License 1.1, Ubuntu Light under the Ubuntu Font
 Licence 1.0, and the MIT-licensed emoji-icon-font). The full notices are in
 [`THIRD-PARTY-NOTICES.txt`](THIRD-PARTY-NOTICES.txt), which every package ships:

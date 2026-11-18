@@ -462,6 +462,12 @@ impl ToolDispatchPipeline {
         // denial) all reach this line, and none of them leaves the call awaiting
         // an answer.
         ctx.pending_verdicts.settle(session_id, &tc.id);
+        let result = match result {
+            Ok(output) => {
+                Ok(crate::formatter::format_after_write(&tc.name, output, &ctx.tool_ctx).await)
+            }
+            Err(e) => Err(e),
+        };
         let duration_ms = start.elapsed().as_millis() as u64;
 
         // Stage 13: result normalisation.

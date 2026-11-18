@@ -757,7 +757,7 @@ fn prompt_command_from_path(
 /// a `description`; everything after the block is the prompt body. A file with
 /// no frontmatter is all body, with an empty description. Frontmatter fields
 /// other than `description` (e.g. `allowed-tools`) are ignored.
-fn parse_command_markdown(content: &str) -> (String, String) {
+pub fn parse_command_markdown(content: &str) -> (String, String) {
     let trimmed = content.trim_start();
     if !trimmed.starts_with("---") {
         return (String::new(), content.to_string());
