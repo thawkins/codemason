@@ -7,11 +7,15 @@
 #[path = "support/mod.rs"]
 mod support;
 
-use codemason_agent::message::{Message, MessagePart, Role, ToolCallState, ToolCallStatus};
+use codemason_agent::message::{
+    ImageData, Message, MessagePart, Role, ToolCallState, ToolCallStatus,
+};
 use codemason_app_core::app::App;
+use codemason_app_core::app::ContextAction;
 use codemason_app_core::message_lines::MESSAGE_STREAM_MIN_INTERVAL;
 use codemason_app_core::theme_tokens::{ThemeCatalog, ThemeSelection};
 use codemason_gui::Shell;
+use codemason_gui::dialogs::image_view::{CLOSE_IMAGE, IMAGE_VIEW_TITLE};
 use codemason_gui::palette::{Palette, palette_for};
 use codemason_gui::panels::code_block::{COPY, INSERT, NO_LANGUAGE, WRAP, code_job};
 use codemason_gui::panels::messages::{MESSAGES_LABEL, MessagesView, USER_CHIP};
@@ -451,4 +455,147 @@ async fn test_messages_widgets_sit_under_the_transcript_node() {
         ancestor = parent.parent();
     }
     assert!(found, "the text is not under the {MESSAGES_LABEL} node");
+}
+
+/// A window on `app` with the whole shell.
+fn shell_harness(app: App) -> Harness<'static, Shell> {
+    Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_max_steps(64)
+        .build_ui_state(|ui, shell: &mut Shell| shell.show(ui), Shell::new(app))
+}
+
+#[tokio::test]
+async fn test_transcript_menu_quotes_the_message_in_reply() {
+    let mut app = support::make_app();
+    app.session.messages = vec![Message::assistant_text("s1", "Use **cargo**.")];
+    let mut harness = shell_harness(app);
+    harness.run();
+
+    harness.get_by_label_contains("cargo").click_secondary();
+    harness.run();
+    let menu = harness
+        .state()
+        .app()
+        .context_menu
+        .clone()
+        .expect("menu open");
+    // A press on selectable text places an egui selection there, so Copy is
+    // enabled too (it copies nothing while that selection is empty).
+    assert_eq!(
+        menu.items,
+        [
+            (ContextAction::Copy, true),
+            (ContextAction::CopyMarkdown, true),
+            (ContextAction::QuoteReply, true),
+        ]
+    );
+    harness.get_by_label("Quote in reply").click();
+    harness.run();
+    let app = harness.state().app();
+    assert!(app.context_menu.is_none());
+    assert_eq!(app.session.input, "> Use **cargo**.\n\n");
+}
+
+#[tokio::test]
+async fn test_transcript_menu_off_a_message_has_nothing_to_quote() {
+    let mut app = support::make_app();
+    app.session.messages = vec![Message::assistant_text("s1", "short")];
+    let mut harness = shell_harness(app);
+    harness.run();
+    // Below the only message, still inside the transcript.
+    let log = harness.get_by_label(MESSAGES_LABEL);
+    let rect = log.rect();
+    harness.hover_at(egui::pos2(rect.center().x, rect.bottom() - 20.0));
+    harness.run();
+    harness.event(egui::Event::PointerButton {
+        pos: egui::pos2(rect.center().x, rect.bottom() - 20.0),
+        button: egui::PointerButton::Secondary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.event(egui::Event::PointerButton {
+        pos: egui::pos2(rect.center().x, rect.bottom() - 20.0),
+        button: egui::PointerButton::Secondary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.run();
+    let menu = harness
+        .state()
+        .app()
+        .context_menu
+        .clone()
+        .expect("menu open");
+    assert!(menu.items.iter().all(|(_, enabled)| !enabled), "{menu:?}");
+}
+
+/// A message from the user with the image at `path` attached.
+fn image_message(path: &std::path::Path) -> Message {
+    Message::new(
+        "s1",
+        Role::User,
+        vec![MessagePart::Image(Box::new(ImageData {
+            mime_type: "image/png".to_string(),
+            path: path.to_path_buf(),
+        }))],
+    )
+}
+
+#[tokio::test]
+async fn test_image_thumbnail_opens_the_image_view() {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/temp/test_messages_image");
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    let path = dir.join("shot.png");
+    image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 40, 40, 255]))
+        .save(&path)
+        .expect("write png");
+    let mut app = support::make_app();
+    app.session.messages = vec![image_message(&path)];
+    let mut harness = shell_harness(app);
+    egui_extras::install_image_loaders(&harness.ctx);
+    harness.run();
+    harness.get_by_label("Image: shot.png").click();
+    harness.run();
+    let dialog = |harness: &Harness<'_, Shell>| {
+        harness
+            .query_by_role_and_label(egui::accesskit::Role::Dialog, IMAGE_VIEW_TITLE)
+            .is_some()
+    };
+    assert!(dialog(&harness));
+    harness.get_by_label(CLOSE_IMAGE).click();
+    harness.run();
+    assert!(!dialog(&harness));
+}
+
+#[tokio::test]
+async fn test_missing_image_is_named_not_drawn() {
+    let mut app = support::make_app();
+    app.session.messages = vec![image_message(std::path::Path::new(
+        "target/temp/no-such-shot.png",
+    ))];
+    let mut harness = shell_harness(app);
+    egui_extras::install_image_loaders(&harness.ctx);
+    harness.run();
+    harness.get_by_label("[image: no-such-shot.png]");
+    assert!(harness.query_by_label("Image: no-such-shot.png").is_none());
+}
+
+#[tokio::test]
+async fn test_streaming_reply_ends_with_a_caret() {
+    let mut app = support::make_app();
+    app.session.messages = vec![Message::assistant_text("s1", "partial")];
+    let mut harness = harness(app);
+    harness.run();
+    let settled = harness.state().view.message_heights()[0];
+
+    harness.state_mut().app.session.is_processing = true;
+    harness.state_mut().app.session.messages[0].edit_seq += 1;
+    harness.run();
+    let streaming = harness.state().view.message_heights()[0];
+    assert!(
+        streaming > settled,
+        "{streaming} <= {settled}: no caret row"
+    );
 }

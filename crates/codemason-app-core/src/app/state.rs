@@ -1596,6 +1596,10 @@ pub enum ContextAction {
     Copy,
     /// Insert clipboard text at the current input cursor.
     Paste,
+    /// Copy the right-clicked message's source (its Markdown).
+    CopyMarkdown,
+    /// Quote the right-clicked message into the prompt.
+    QuoteReply,
 }
 
 /// State for the right-click context menu.
@@ -3842,6 +3846,9 @@ pub struct App {
     pub(crate) permission_clock: Option<std::time::Instant>,
     /// Active right-click context menu, if any.
     pub context_menu: Option<ContextMenuState>,
+    /// The text of the message a transcript context menu was opened on,
+    /// for its Copy as Markdown and Quote in reply items.
+    pub context_menu_message: Option<String>,
     /// Path to the persistent input history file.
     pub history_file_path: Option<std::path::PathBuf>,
     /// Active history picker dialog, if any.

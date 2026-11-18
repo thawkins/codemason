@@ -52,6 +52,7 @@ use codemason_agent::message::{Message, Role as MessageRole};
 use codemason_app_core::app::App;
 use codemason_app_core::message_blocks::{TranscriptBlock, message_to_blocks};
 use codemason_app_core::message_lines::MESSAGE_STREAM_MIN_INTERVAL;
+use codemason_types::sanitize_terminal::sanitize_terminal;
 use egui::{FontId, Rect, Role, ScrollArea, Sense, WidgetInfo, pos2, vec2};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
@@ -74,6 +75,21 @@ const CARD_STROKE: f32 = 1.0;
 
 /// A card's inner margin, top and bottom together.
 const CARD_PADDING: f32 = space::SM + space::SM;
+
+/// The largest side of an image thumbnail, in points.
+pub const THUMBNAIL_SIZE: f32 = 160.0;
+
+/// Width of the caret after a reply that is still streaming, in points.
+const CARET_WIDTH: f32 = 7.0;
+
+/// What a block asked the caller to do this frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BlockAction {
+    /// Put this code into the prompt.
+    Insert(String),
+    /// Show this image at full size.
+    Enlarge(std::path::PathBuf),
+}
 
 /// The space between two blocks of one message: the added gap plus the
 /// item spacing.
@@ -98,6 +114,9 @@ struct Entry {
     role: MessageRole,
     /// The core's blocks of the message.
     blocks: Vec<TranscriptBlock>,
+    /// The message's text as written (Markdown for the assistant), for Copy
+    /// as Markdown and Quote in reply; terminal escapes removed.
+    source: String,
     /// Height in points: the last laid-out height, or an estimate for a
     /// message never laid out.
     height: f32,
@@ -112,6 +131,7 @@ impl Entry {
             edit_seq: msg.edit_seq,
             role: msg.role.clone(),
             blocks,
+            source: sanitize_terminal(&msg.text_content()).into_owned(),
             height: 0.0,
         };
         entry.height = entry.estimate(rows);
@@ -216,6 +236,11 @@ pub struct MessagesView {
     /// Code a code block's Insert button asked to put in the prompt, for
     /// the caller to take with [`MessagesView::take_insert`].
     pending_insert: Option<String>,
+    /// The index of the message under the pointer in the last frame.
+    under_pointer: Option<usize>,
+    /// An image a thumbnail click asked to show at full size, for the caller
+    /// to take with [`MessagesView::take_enlarge`].
+    pending_enlarge: Option<std::path::PathBuf>,
 }
 
 impl std::fmt::Debug for Entry {
@@ -224,6 +249,7 @@ impl std::fmt::Debug for Entry {
             .field("id", &self.id)
             .field("edit_seq", &self.edit_seq)
             .field("blocks", &self.blocks.len())
+            .field("source", &self.source.len())
             .field("height", &self.height)
             .finish()
     }
@@ -287,6 +313,8 @@ impl Default for MessagesView {
             scroll_offset: 0.0,
             markdown: CommonMarkCache::default(),
             pending_insert: None,
+            under_pointer: None,
+            pending_enlarge: None,
         }
     }
 }
@@ -392,7 +420,7 @@ impl MessagesView {
                 }
                 let to_bottom = matches!(scroll_to, Some(ScrollTo::Bottom));
                 let output = scroll.show_viewport(ui, |ui, viewport| {
-                    self.show_visible(ui, viewport, palette, node);
+                    self.show_visible(ui, viewport, palette, node, source.processing);
                     if to_bottom {
                         // Scroll to the end of the content; once there, the
                         // area sticks to the bottom as more arrives.
@@ -423,6 +451,22 @@ impl MessagesView {
     /// if any. The caller puts it in the prompt (the view only reads the App).
     pub fn take_insert(&mut self) -> Option<String> {
         self.pending_insert.take()
+    }
+
+    /// The image a thumbnail click asked to show at full size since the last
+    /// call, if any.
+    pub fn take_enlarge(&mut self) -> Option<std::path::PathBuf> {
+        self.pending_enlarge.take()
+    }
+
+    /// The text of the message under the pointer in the last frame, if it
+    /// has any: its Markdown for an assistant message, as typed for a user's.
+    #[must_use]
+    pub fn message_at_pointer(&self) -> Option<&str> {
+        self.under_pointer
+            .and_then(|i| self.entries.get(i))
+            .map(|e| e.source.as_str())
+            .filter(|source| !source.trim().is_empty())
     }
 
     /// How many messages the last frame laid out.
@@ -607,12 +651,15 @@ impl MessagesView {
     ///
     /// `viewport` is relative to the top of the scrolled content; each
     /// message's widgets are placed under the accessibility node `node`.
+    /// While `processing`, the last message, if it is the assistant's, ends
+    /// with a caret.
     fn show_visible(
         &mut self,
         ui: &mut egui::Ui,
         viewport: Rect,
         palette: &Palette,
         node: egui::Id,
+        processing: bool,
     ) {
         let width = ui.available_width().max(1.0);
         if self.offsets_dirty {
@@ -630,7 +677,10 @@ impl MessagesView {
         self.first_visible = (first < self.entries.len()).then_some(first);
         let mut height_changed = false;
         let bold = Bold::of(ui.ctx());
-        for entry in self.entries.iter_mut().skip(first) {
+        let pointer = ui.input(|i| i.pointer.hover_pos());
+        self.under_pointer = None;
+        let last = self.entries.len().saturating_sub(1);
+        for (index, entry) in self.entries.iter_mut().enumerate().skip(first) {
             if y >= viewport.max.y {
                 break;
             }
@@ -643,21 +693,23 @@ impl MessagesView {
                     .layout(egui::Layout::top_down(egui::Align::Min)),
             );
             let mut actions = Vec::new();
-            draw_message(
-                &mut child,
-                entry,
+            let style = BlockStyle {
                 palette,
                 bold,
-                &mut self.markdown,
-                &mut actions,
-            );
+                streaming: processing && index == last,
+            };
+            draw_message(&mut child, entry, style, &mut self.markdown, &mut actions);
             for action in actions {
                 match action {
-                    CodeAction::Insert(code) => self.pending_insert = Some(code),
+                    BlockAction::Insert(code) => self.pending_insert = Some(code),
+                    BlockAction::Enlarge(path) => self.pending_enlarge = Some(path),
                 }
             }
             self.laid_out += 1;
 
+            if pointer.is_some_and(|p| child.min_rect().contains(p) && ui.clip_rect().contains(p)) {
+                self.under_pointer = Some(index);
+            }
             let height = child.min_rect().height() + space::MD;
             if (entry.height - height).abs() > HEIGHT_EPSILON {
                 height_changed = true;
@@ -674,15 +726,27 @@ impl MessagesView {
     }
 }
 
+/// How a message's blocks are drawn.
+#[derive(Clone, Copy)]
+struct BlockStyle<'a> {
+    /// The active palette.
+    palette: &'a Palette,
+    /// How bold text is drawn.
+    bold: Bold,
+    /// Whether the message is the reply still streaming (it ends with a
+    /// caret).
+    streaming: bool,
+}
+
 /// Draw one message: its frame for the role, then its blocks.
 fn draw_message(
     ui: &mut egui::Ui,
     entry: &Entry,
-    palette: &Palette,
-    bold: Bold,
+    style: BlockStyle<'_>,
     markdown: &mut CommonMarkCache,
-    actions: &mut Vec<CodeAction>,
+    actions: &mut Vec<BlockAction>,
 ) {
+    let palette = style.palette;
     match entry.role {
         MessageRole::User | MessageRole::Compaction => {
             let chip = if entry.role == MessageRole::User {
@@ -703,7 +767,7 @@ fn draw_message(
                             .color(palette.muted)
                             .strong(),
                     );
-                    draw_blocks(ui, entry, palette, bold, markdown, actions);
+                    draw_blocks(ui, entry, style, markdown, actions);
                 });
         }
         MessageRole::Assistant => {
@@ -714,7 +778,7 @@ fn draw_message(
                 })
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    draw_blocks(ui, entry, palette, bold, markdown, actions);
+                    draw_blocks(ui, entry, style, markdown, actions);
                 })
                 .response;
             let rect = response.rect;
@@ -732,11 +796,15 @@ fn draw_message(
 fn draw_blocks(
     ui: &mut egui::Ui,
     entry: &Entry,
-    palette: &Palette,
-    bold: Bold,
+    style: BlockStyle<'_>,
     markdown: &mut CommonMarkCache,
-    actions: &mut Vec<CodeAction>,
+    actions: &mut Vec<BlockAction>,
 ) {
+    let BlockStyle {
+        palette,
+        bold,
+        streaming,
+    } = style;
     ui.spacing_mut().item_spacing.y = space::XS;
     for (index, block) in entry.blocks.iter().enumerate() {
         if index > 0 {
@@ -750,7 +818,11 @@ fn draw_blocks(
             }
             TranscriptBlock::Code { lang, text } => {
                 let id = ui.scope_id().with(("code", index));
-                actions.extend(code_block_ui(ui, id, lang.as_deref(), text, palette));
+                if let Some(CodeAction::Insert(code)) =
+                    code_block_ui(ui, id, lang.as_deref(), text, palette)
+                {
+                    actions.push(BlockAction::Insert(code));
+                }
             }
             TranscriptBlock::Plain(text) => {
                 ui.add(egui::Label::new(egui::RichText::new(text).color(palette.text)).wrap());
@@ -770,9 +842,35 @@ fn draw_blocks(
                     WidgetInfo::labeled(Role::Label, true, format!("{text}\n{status_label}"))
                 });
             }
-            TranscriptBlock::Image { .. } => {
-                ui.label(egui::RichText::new(block.plain_text()).color(palette.info));
+            TranscriptBlock::Image { name, path } => {
+                let uri = format!("file://{}", path.display());
+                let alt = format!("Image: {name}");
+                // A file that cannot be loaded (gone, or a format the
+                // window cannot decode) is named instead of drawn.
+                let loadable = ui
+                    .ctx()
+                    .try_load_image(&uri, egui::load::SizeHint::default())
+                    .is_ok();
+                let response = if loadable {
+                    let image = egui::Image::new(uri)
+                        .max_size(vec2(THUMBNAIL_SIZE, THUMBNAIL_SIZE))
+                        .corner_radius(radius::SM)
+                        .alt_text(alt)
+                        .sense(Sense::CLICK);
+                    ui.add(image).on_hover_text(name.as_str())
+                } else {
+                    ui.label(egui::RichText::new(block.plain_text()).color(palette.info))
+                };
+                if loadable && response.clicked() {
+                    actions.push(BlockAction::Enlarge(path.clone()));
+                }
             }
         }
+    }
+    if streaming && entry.role == MessageRole::Assistant {
+        // A caret where the reply will continue.
+        let height = ui.text_style_height(&egui::TextStyle::Body);
+        let (rect, _) = ui.allocate_exact_size(vec2(CARET_WIDTH, height), Sense::hover());
+        ui.painter().rect_filled(rect, 1.0, palette.accent);
     }
 }

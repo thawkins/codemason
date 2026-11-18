@@ -5409,6 +5409,7 @@ impl App {
         ];
         let selected = items.iter().position(|(_, en)| *en).unwrap_or(0);
 
+        self.context_menu_message = None;
         self.context_menu = Some(ContextMenuState {
             x,
             y,
@@ -5418,11 +5419,67 @@ impl App {
         });
     }
 
+    /// Open the context menu over the transcript of a frontend that lays out
+    /// messages itself (the GUI).
+    ///
+    /// The items are Copy (enabled with a text selection in the transcript),
+    /// Copy as Markdown and Quote in reply (enabled when the menu was opened
+    /// on a message). The highlight starts on the first enabled item.
+    ///
+    /// # Arguments
+    ///
+    /// * `has_selection` - whether the transcript holds a text selection.
+    /// * `message` - the source text of the message under the pointer, if
+    ///   any: its Markdown for an assistant message, as typed for a user's.
+    pub fn open_transcript_context_menu(&mut self, has_selection: bool, message: Option<String>) {
+        let on_message = message.is_some();
+        let items = vec![
+            (ContextAction::Copy, has_selection),
+            (ContextAction::CopyMarkdown, on_message),
+            (ContextAction::QuoteReply, on_message),
+        ];
+        let selected = items.iter().position(|(_, en)| *en).unwrap_or(0);
+        self.context_menu = Some(ContextMenuState {
+            x: 0,
+            y: 0,
+            pane: SelectionPane::Messages,
+            selected,
+            items,
+        });
+        self.context_menu_message = message;
+    }
+
+    /// Put `text` into the prompt as a Markdown quote: each line prefixed
+    /// with `> `, after the draft (on a line of its own) and followed by a
+    /// blank line, with the cursor at the end.
+    pub fn quote_in_reply(&mut self, text: &str) {
+        let quote: String = text
+            .trim_end()
+            .lines()
+            .map(|line| {
+                if line.is_empty() {
+                    ">\n".to_string()
+                } else {
+                    format!("> {line}\n")
+                }
+            })
+            .collect();
+        let input = &mut self.session.input;
+        if !input.is_empty() && !input.ends_with('\n') {
+            input.push('\n');
+        }
+        input.push_str(&quote);
+        input.push('\n');
+        let end = self.session.input.chars().count();
+        self.input_edited(end);
+    }
+
     /// Execute a context-menu action (copy/cut/paste/etc.) against the current
     /// text selection, dismissing the menu afterwards.
     pub fn execute_context_action(&mut self, action: ContextAction) {
         let pane = self.context_menu.as_ref().map(|m| m.pane);
         let selection = self.text_selection.clone();
+        let message = self.context_menu_message.take();
         self.context_menu = None;
 
         match action {
@@ -5452,6 +5509,17 @@ impl App {
                     if let Some(text) = Self::get_clipboard() {
                         self.handle_paste_text(&text);
                     }
+                }
+            }
+            ContextAction::CopyMarkdown => {
+                if let Some(text) = message {
+                    crate::clipboard::set_clipboard_text(&text);
+                    self.status = "Copied as Markdown".to_string();
+                }
+            }
+            ContextAction::QuoteReply => {
+                if let Some(text) = message {
+                    self.quote_in_reply(&text);
                 }
             }
         }
