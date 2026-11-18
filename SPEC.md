@@ -1554,6 +1554,7 @@ privileged keys before the merge and logs each rejected key at `warn!`:
 | `yolo`, `permission` allow-rules, bash/dirs lists | would auto-approve or widen the sandbox |
 | `telemetry` | could point the OTLP endpoint at an attacker host |
 | `hooks` | runs `sh -c` outside the permission system |
+| `formatter` | runs formatter subprocesses outside the permission system (section 5.9) |
 | `openai` | enables the inbound OpenAI-compatible surface |
 | `mcp` | a stdio server spawns a subprocess with no prompt (RCE) |
 | `acp` | an ACP agent spawns verbatim, and the section controls the editor-facing server (RCE) |
@@ -2021,6 +2022,54 @@ indicator on line 2 (compression-clamp icon, left of the codeindex icon) shows
 the enabled/disabled state.
 
 ---
+
+### 5.9 Formatters After Edits (`formatter`)
+
+When `formatter.enabled` is `true`, a code formatter runs on each file a
+file-writing tool has just written (`codemason-agent/src/formatter.rs`). The
+default is off.
+
+```json
+{
+  "formatter": {
+    "enabled": true,
+    "formatters": {
+      "prettier": { "disabled": true },
+      "rustfmt": { "command": ["rustfmt", "--edition", "2024", "$FILE"] },
+      "shfmt": { "command": ["shfmt", "-w", "$FILE"], "extensions": [".sh"] }
+    }
+  }
+}
+```
+
+| Built-in | Extensions | Command |
+|---|---|---|
+| `rustfmt` | `.rs` | `rustfmt $FILE` (the edition comes from `rustfmt.toml`) |
+| `gofmt` | `.go` | `gofmt -w $FILE` |
+| `ruff` | `.py`, `.pyi` | `ruff format $FILE` |
+| `prettier` | `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`, `.json`, `.css`, `.scss`, `.less`, `.html`, `.vue`, `.yaml`, `.yml` | `prettier --write $FILE` |
+
+- **Selection.** The file name's extension picks the formatter, compared
+  without regard to case. A `formatters` key that is not a built-in name
+  defines a custom formatter (`command` and `extensions` are both required)
+  and wins over a built-in for the same extension. A key that is a built-in
+  name overrides that built-in's `command` or `extensions`, or removes it with
+  `disabled`.
+- **When it runs.** After a successful `Write`, `create`, `Edit`,
+  `multi_edit`, `apply_patch` or `append_to_file` call (and their aliases), on
+  the files named in the tool's result. `patch` reports no paths and is not
+  formatted. Formatting runs only on the `local` execution backend.
+- **Effect on the result.** When a formatter changes a file, the tool result
+  gains a line `[formatter] <name> reformatted <path>; re-read it before
+  editing it again.` and the session's read baseline for the file is refreshed
+  so the next edit is not rejected as stale.
+- **Failure.** A formatter that is not installed, exits non-zero or runs longer
+  than 10 seconds is logged at `debug!`; the file stays as the tool wrote it
+  and the tool call still succeeds.
+- **Trust.** The section is honoured only from the user-global config; a
+  project overlay's `formatter` section is rejected (section 5.1). The
+  formatter runs as a direct subprocess (no shell) in the session's working
+  directory, outside the permission system.
 
 ## 6. Graphical User Interface (GUI)
 

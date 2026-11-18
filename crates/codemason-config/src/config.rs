@@ -6,6 +6,7 @@
 //! settings are all configured here.
 
 use crate::compaction::CompactionConfig;
+use crate::formatter::FormatterConfig;
 use crate::gcf::GcfConfig;
 use crate::i18n::I18nConfig;
 use crate::openai::OpenAiConfig;
@@ -192,6 +193,13 @@ pub struct Config {
     /// while `enabled` is `false`.
     #[serde(default, skip_serializing_if = "GcfConfig::is_default")]
     pub gcf: GcfConfig,
+    /// Formatters run on files after a file-writing tool writes them.
+    ///
+    /// Default: disabled. Honoured only from the user-global config: a
+    /// formatter is a subprocess, and several load configuration and plugins
+    /// from the project they format.
+    #[serde(default, skip_serializing_if = "FormatterConfig::is_default")]
+    pub formatter: FormatterConfig,
     /// Session-message retention configuration.
     ///
     /// Retention is opt-in: with no `storage` section no message is ever
@@ -411,6 +419,7 @@ impl Default for Config {
             memory: MemoryConfig::default(),
             compaction: CompactionConfig::default(),
             gcf: GcfConfig::default(),
+            formatter: FormatterConfig::default(),
             storage: StorageConfig::default(),
             gitlab: GitLabIntegrationConfig::default(),
             vcs: VcsConfig::default(),
@@ -3304,12 +3313,17 @@ impl Config {
     /// - `plugins`: replacing the section wipes the user's `permissions` gate,
     ///   which gives an enabled plugin the full host API, and raises budgets.
     /// - `connectors`: replaced wholesale, including catalogue URLs.
+    /// - `formatter`: runs subprocesses outside the permission system.
     /// - search API keys: a project key routes the user's queries into the
     ///   project's vendor account.
     /// - budgets and safety switches: `loop` (steps, cost, retries,
     ///   checkpoints), `prices`, `input_queue_capacity`, the background-agent
     ///   limits, `activity_log` and `edit_log`.
     fn strip_unprivileged_project_sections(&mut self, rejected: &mut Vec<&'static str>) {
+        if !self.formatter.is_default() {
+            self.formatter = FormatterConfig::default();
+            rejected.push("formatter");
+        }
         if self.execution_backend.take().is_some() {
             rejected.push("execution_backend");
         }
@@ -3541,6 +3555,11 @@ impl Config {
         // `compaction` above) so `/gcf off` in a higher-precedence config is
         // respected rather than OR-merged back to on.
         base.gcf = overlay.gcf;
+
+        // Formatter: a section that sets anything replaces the base section.
+        if !overlay.formatter.is_default() {
+            base.formatter = overlay.formatter;
+        }
 
         // Agents panel (spec `agentssetup` FR-036): overlay takes precedence,
         // so a project file can tighten the completed-history cap for its own

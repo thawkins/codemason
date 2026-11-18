@@ -149,7 +149,7 @@ Note: opencode v2 renamed config keys (`agent` to `agents`, `provider` to `provi
 | Connectors catalogue | Yes (`/connectors`, marketplaces) | No | opencode |
 | Skills | Yes (bundled and custom, `allowed-tools`) | Yes (`SKILL.md`, URL catalogues) | None |
 | Custom slash commands | Yes (`.codemason/commands/*.md`, `$ARGUMENTS`, `$1`..`$9`; no per-command agent/model) | Yes (`.opencode/commands/*.md`, `$ARGUMENTS`) | Partial: no per-command agent/model |
-| Formatters after edit | No | Yes (about 25 built in) | Codemason |
+| Formatters after edit | Yes (opt-in `formatter` section; 4 built in plus custom) | Yes (about 25 built in, on by default) | Partial: fewer built-ins, off by default |
 | Themes | No | Yes | Codemason |
 | Keybind customisation | Yes (`gui-keys.json`) | Yes (`cli.json`) | None |
 | SDK | Partial (generated TypeScript client typings) | Yes (`@opencode/sdk` embedded, `@opencode/client`) | Codemason |
@@ -215,7 +215,7 @@ Must (most users will notice):
 2. User-defined slash commands from `.codemason/commands/*.md`. – please implement. **Done 2026-11-18** (branch `feat/ocgap`)
 3. Usage and cost statistics across sessions. - Please implement. **Done 2026-11-18** (branch `feat/ocgap`)
 4. Self-update (`/update` is reserved and unimplemented). - Not required
-5. Formatters run after edits. Please implement
+5. Formatters run after edits. Please implement. **Done 2026-11-18** (branch `feat/ocgap`)
 
 Later (larger or narrower):
 

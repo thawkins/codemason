@@ -18,6 +18,7 @@ pub mod connectors;
 pub mod credential_env;
 pub mod dir_lists;
 pub mod edit_log;
+pub mod formatter;
 pub mod gcf;
 pub mod github;
 pub mod i18n;
@@ -53,6 +54,7 @@ pub use connectors::{
     ConnectorCredentialsConfig, ConnectorMarketplaceEntry, ConnectorStoreEndpoint,
     ConnectorStoresConfig, ConnectorsConfig,
 };
+pub use formatter::{FormatterConfig, FormatterEntry};
 pub use gcf::GcfConfig;
 pub use i18n::{I18nConfig, LocaleCatalog, MessageKey};
 pub use openai::OpenAiConfig;

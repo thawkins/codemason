@@ -960,6 +960,21 @@ installed catalog enables translation automatically. A catalog is JSON:
 
 ---
 
+## 6b-2. Format Files After Edits
+
+Add this to `~/.config/codemason/codemason.json` to run a formatter on every
+file the agent writes:
+
+```json
+{ "formatter": { "enabled": true } }
+```
+
+Built in: `rustfmt` (`.rs`), `gofmt` (`.go`), `ruff` (`.py`) and `prettier`
+(JS/TS/JSON/CSS/HTML/YAML). Each runs only if its program is installed. Turn one
+off with `"formatters": { "prettier": { "disabled": true } }`, or add your own
+with a `command` (use `$FILE` for the path) and `extensions`. The setting is
+read from the user-global config only; a project `codemason.json` cannot set it.
+
 ## 6c. Your Own Slash Commands
 
 Put a Markdown file in `.codemason/commands/` (this project) or
