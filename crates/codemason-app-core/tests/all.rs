@@ -115,6 +115,8 @@ pub fn permission_bits_enforced() -> bool {
 
 #[path = "test_active_tasks_reconcile.rs"]
 mod test_active_tasks_reconcile;
+#[path = "test_activity.rs"]
+mod test_activity;
 #[path = "test_agent_notice_separation.rs"]
 mod test_agent_notice_separation;
 #[path = "test_agent_switching.rs"]

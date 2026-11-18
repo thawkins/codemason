@@ -9,6 +9,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod activity;
 pub mod app;
 pub mod branch_names;
 pub mod clipboard;

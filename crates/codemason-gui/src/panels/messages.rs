@@ -159,6 +159,7 @@ impl Entry {
                     TranscriptBlock::Notice(_)
                     | TranscriptBlock::Thinking(_)
                     | TranscriptBlock::Tool { .. } => lines * rows.styled,
+                    TranscriptBlock::Activity(_) => rows.label,
                 }
             })
             .sum();
@@ -856,6 +857,7 @@ fn draw_blocks(
             TranscriptBlock::Tool {
                 lines,
                 status_label,
+                ..
             } => {
                 let job = styled_to_layout_job(lines, palette, ui.available_width(), bold);
                 let text = job.text.clone();
@@ -863,6 +865,9 @@ fn draw_blocks(
                 response.widget_info(|| {
                     WidgetInfo::labeled(Role::Label, true, format!("{text}\n{status_label}"))
                 });
+            }
+            TranscriptBlock::Activity(group) => {
+                ui.label(egui::RichText::new(group.summary.label()).color(palette.muted));
             }
             TranscriptBlock::Image { name, path } => {
                 let uri = format!("file://{}", path.display());

@@ -19,12 +19,23 @@ use std::collections::HashMap;
 use std::hash::BuildHasher;
 use std::path::PathBuf;
 
-use codemason_agent::message::{Message, MessagePart, Role};
+use codemason_agent::message::{Message, MessagePart, Role, ToolCallStatus};
 use codemason_types::sanitize_terminal::sanitize_terminal;
 
 use crate::message_lines::part_lines;
 use crate::message_text::{capitalize_tool_name, is_agent_notice};
 use crate::styled::StyledLine;
+
+/// Where a tool call is in its lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolState {
+    /// Waiting to run, or running.
+    Running,
+    /// Finished.
+    Done,
+    /// Failed.
+    Failed,
+}
 
 /// One block of a message.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,7 +62,16 @@ pub enum TranscriptBlock {
         lines: Vec<StyledLine>,
         /// `"<Tool>: <status>"`.
         status_label: String,
+        /// The tool's name as called.
+        name: String,
+        /// Where the call is in its lifecycle.
+        state: ToolState,
+        /// How long the call ran, once it finished.
+        duration_ms: Option<u64>,
     },
+    /// A run of tool calls and reasoning folded into one row (see
+    /// [`crate::activity::group_activity`]).
+    Activity(crate::activity::ActivityGroup),
     /// The model's reasoning, as styled lines (narrated tool-call markup
     /// already removed).
     Thinking(Vec<StyledLine>),
@@ -77,6 +97,7 @@ impl TranscriptBlock {
                 .collect::<Vec<_>>()
                 .join("\n"),
             Self::Image { name, .. } => format!("[image: {name}]"),
+            Self::Activity(group) => group.summary.label(),
         }
     }
 }
@@ -225,8 +246,15 @@ fn part_block<S: BuildHasher>(
             })
         }
         MessagePart::ToolCall { tool, state, .. } => Some(TranscriptBlock::Tool {
-            lines: lines(),
+            lines: crate::activity::truncate_result_lines(lines()),
             status_label: format!("{}: {}", capitalize_tool_name(tool), state.status),
+            name: tool.clone(),
+            state: match state.status {
+                ToolCallStatus::Pending | ToolCallStatus::Running => ToolState::Running,
+                ToolCallStatus::Completed => ToolState::Done,
+                ToolCallStatus::Error => ToolState::Failed,
+            },
+            duration_ms: state.duration_ms,
         }),
         MessagePart::Reasoning { .. } => {
             let lines = lines();
