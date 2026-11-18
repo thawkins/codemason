@@ -12,7 +12,6 @@
 - Added: `/theme default|high-contrast` switches the window's colour theme while it runs; the `theme` key in `codemason.json` sets it at startup. The high-contrast theme existed before but nothing could select it.
 - Added: a new session shows an empty state in the Messages pane (the product name, the version, three starter actions that fill the prompt, and one tip) instead of a blank transcript.
 - Added: a spinner at the start of the status bar while the focused session's turn is running.
-- Added: the Queue pane lists the queued prompts; before, it showed the placeholder text "Queue panel".
 - Added: the GUI bundles the Inter font (Regular and SemiBold, SIL Open Font License 1.1) for UI text and bold prose.
 
 ### Removed

@@ -540,7 +540,10 @@ pub fn prompt_ui(ui: &mut egui::Ui, app: &mut App) {
             ui.label(format!("{queued:02}>"));
         }
     };
-    let output = if scrolls {
+    // `visible` is the part of the editor on screen: its own rectangle, or
+    // the scroll area's viewport once it scrolls (the editor's rectangle then
+    // extends above and below it).
+    let (output, visible) = if scrolls {
         // A plain `horizontal` row is one text row tall; this row is given
         // the whole height budget for the scroll area to fill.
         ui.allocate_ui_with_layout(
@@ -548,27 +551,26 @@ pub fn prompt_ui(ui: &mut egui::Ui, app: &mut App) {
             egui::Layout::left_to_right(egui::Align::TOP),
             |ui| {
                 counter(ui);
-                egui::ScrollArea::vertical()
+                let scrolled = egui::ScrollArea::vertical()
                     .id_salt("prompt_scroll")
                     .max_height(max_height)
                     .auto_shrink(false)
-                    .show(ui, |ui| editor(ui, app, id, editable))
-                    .inner
+                    .show(ui, |ui| editor(ui, app, id, editable));
+                (scrolled.inner, scrolled.inner_rect)
             },
         )
         .inner
     } else {
-        ui.horizontal(|ui| {
-            counter(ui);
-            editor(ui, app, id, editable)
-        })
-        .inner
+        let output = ui
+            .horizontal(|ui| {
+                counter(ui);
+                editor(ui, app, id, editable)
+            })
+            .inner;
+        let rect = output.response.response.rect;
+        (output, rect)
     };
-    let visible_height = if scrolls {
-        max_height
-    } else {
-        output.response.response.rect.height()
-    };
+    let visible_height = visible.height();
     ui.ctx().data_mut(|data| {
         data.insert_temp(text_height_id(), output.galley.size().y);
         data.insert_temp(visible_height_id(), visible_height);
@@ -602,7 +604,7 @@ pub fn prompt_ui(ui: &mut egui::Ui, app: &mut App) {
         crate::dialogs::context_menu::open(ui.ctx(), app, SelectionPane::Input, has_selection);
     }
     if editable {
-        completion_popup(ui, app, output.response.response.rect);
+        completion_popup(ui, app, visible);
     }
 }
 

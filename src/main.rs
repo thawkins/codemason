@@ -531,6 +531,14 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
     // global file that lost the key). Logging the effective flag state at
     // startup makes such a fallback attributable instead of invisible.
     codemason_config::sync_runtime_flags(&config);
+    // The window starts in the theme this configuration names.
+    if let Some(mode) = config
+        .theme
+        .as_deref()
+        .and_then(codemason_app_core::theme_mode::ThemeMode::from_str)
+    {
+        codemason_app_core::theme_mode::set_startup(mode);
+    }
     tracing::info!(
         yolo = config.yolo,
         edit_log = config.edit_log,

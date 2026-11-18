@@ -28,7 +28,7 @@
 >
 > **GUI phase 0 (unreleased, branch `feat/ui-phase0`).** Empty state for new
 > sessions with the banner and logo removed, one-row status bar with a Details
-> popup and a busy spinner, `/theme`, a real Queue pane, a label-free prompt
+> popup and a busy spinner, `/theme`, a label-free prompt
 > that grows to eight rows, and the bundled Inter font. No crate is added or
 > removed. The tables below are not re-measured; a full
 > `cargo nextest run --workspace` on this tree ran 15,866 tests, all passing.

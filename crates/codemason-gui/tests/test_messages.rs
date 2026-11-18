@@ -292,3 +292,33 @@ async fn test_session_with_messages_has_no_empty_state() {
 
     assert!(harness.query_by_label(EMPTY_STATE_LABEL).is_none());
 }
+
+#[tokio::test]
+async fn test_starter_action_replaces_a_draft_and_its_completion_menu() {
+    let mut app = support::make_app();
+    // The user had started a slash command: its completion menu is open.
+    app.session.input = "/mod".to_string();
+    app.input_edited(4);
+    assert!(app.slash_menu.is_some(), "the slash menu is open for /mod");
+    let shell = Shell::new(app);
+    // Tall enough that the completion popup above the prompt does not cover
+    // the starter buttons at the top of the Messages pane.
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1200.0, 1400.0))
+        .build_ui_state(|ui, shell: &mut Shell| shell.show(ui), shell);
+    harness.run();
+
+    harness.get_by_label("Explain this project").click();
+    harness.run();
+
+    let app = harness.state().app();
+    assert_eq!(
+        app.session.input,
+        "Explain what this project does and how it is organised."
+    );
+    assert_eq!(app.session.input_cursor, app.session.input.chars().count());
+    assert!(
+        app.slash_menu.is_none(),
+        "the old draft's menu must not survive to act on Enter"
+    );
+}

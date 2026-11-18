@@ -572,3 +572,24 @@ async fn test_multisession_new_session_prints_startup_block_but_children_do_not(
         "sub-agent sessions get no startup block"
     );
 }
+
+#[tokio::test]
+async fn test_startup_notice_is_logged_against_its_own_session() {
+    let (mut app, a, b) = app_with_two_sessions().await;
+    assert_eq!(app.session.session_id.as_deref(), Some(b.as_str()));
+
+    // Session A's discovery finishes after the user moved to session B.
+    app.startup_notices
+        .lock()
+        .expect("notices")
+        .push((a.clone(), "Instruction File Discovery for A".to_string()));
+    app.poll_startup_notices();
+
+    let entry = app
+        .log_entries
+        .iter()
+        .find(|entry| entry.message == "Instruction File Discovery for A")
+        .expect("the notice is logged");
+    assert_eq!(entry.session_id.as_deref(), Some(a.as_str()));
+    assert!(app.startup_notices.lock().expect("notices").is_empty());
+}

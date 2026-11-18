@@ -55,9 +55,17 @@ pub fn empty_state_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
         ui.add_space(12.0);
         ui.horizontal_wrapped(|ui| {
             for (label, text) in STARTERS {
-                if ui.button(label).clicked() {
+                // Click-only: a button that can hold the keyboard focus would
+                // share Enter with the prompt, which sends the draft.
+                let starter = egui::Button::new(label).sense(egui::Sense::CLICK);
+                if ui.add(starter).clicked() {
                     app.session.input = text.to_string();
-                    app.session.input_cursor = text.chars().count();
+                    // Moves the cursor to the end and rebuilds the completion
+                    // menus for the new draft, so a menu opened for the old
+                    // one cannot act on Enter.
+                    app.input_edited(text.chars().count());
+                    ui.ctx()
+                        .memory_mut(|memory| memory.request_focus(super::prompt::prompt_id()));
                 }
             }
         });

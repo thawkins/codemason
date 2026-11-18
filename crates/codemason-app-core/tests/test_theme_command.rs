@@ -85,3 +85,14 @@ fn test_theme_config_key_parses_and_merges() {
     let replaced = codemason_config::Config::merge(base, overlay);
     assert_eq!(replaced.theme.as_deref(), Some("default"));
 }
+
+#[test]
+fn test_new_app_starts_in_the_startup_theme() {
+    // No launch configuration named a theme in this process, so the startup
+    // theme is the default, whatever the developer's own config file says.
+    assert_eq!(
+        codemason_app_core::theme_mode::startup(),
+        ThemeMode::Default
+    );
+    assert_eq!(make_app().theme_mode, ThemeMode::Default);
+}

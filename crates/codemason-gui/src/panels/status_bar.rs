@@ -292,7 +292,10 @@ fn summary(ui: &mut egui::Ui, app: &App, palette: &Palette) {
             .strong();
         ui.label(badge);
     }
-    ui.menu_button(DETAILS_LABEL, |ui| details(ui, app, palette));
+    // Click-only: a button that can hold the keyboard focus would share Enter
+    // with the prompt, which sends the draft.
+    let button = egui::Button::new(DETAILS_LABEL).sense(egui::Sense::CLICK);
+    egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| details(ui, app, palette));
 }
 
 /// The details popup: identity, place, the last prompt, the backend, the

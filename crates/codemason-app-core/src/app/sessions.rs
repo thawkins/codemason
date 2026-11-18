@@ -553,7 +553,7 @@ impl App {
             notices
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(discovery.format_summary());
+                .push((session_id, discovery.format_summary()));
         }));
     }
 
@@ -567,8 +567,10 @@ impl App {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         );
-        for notice in notices {
-            self.push_log_no_agent(crate::app::LogLevel::Info, notice);
+        // Each notice is logged against the session it describes, which need
+        // not be the one focused by the time the discovery finished.
+        for (session_id, notice) in notices {
+            self.push_log_exported(crate::app::LogLevel::Info, notice, None, Some(session_id));
         }
     }
 
