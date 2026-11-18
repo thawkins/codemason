@@ -128,8 +128,6 @@ mod test_panels;
 mod test_prompt;
 #[path = "test_provider_dialog_masking_gui.rs"]
 mod test_provider_dialog_masking_gui;
-#[path = "test_queue_pane.rs"]
-mod test_queue_pane;
 #[path = "test_research.rs"]
 mod test_research;
 #[path = "test_runtime_context.rs"]

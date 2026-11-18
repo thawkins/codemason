@@ -10,8 +10,8 @@
 //! ([`log_ui`]), the profiler table ([`profile_ui`]), the task list
 //! ([`tasks_ui`]), the memories ([`memory_ui`]), the context-window
 //! breakdown ([`context_ui`]) and the Agents and Teams window tables
-//! ([`agents_ui`], [`teams_ui`]). The queue pane lists the queued prompts
-//! ([`queue_pane_ui`]); the same list is also drawn above the prompt.
+//! ([`agents_ui`], [`teams_ui`]). The queue pane, whose list
+//! is drawn above the prompt, draws a labelled placeholder.
 //!
 //! # Dock visibility and persistence
 //!
@@ -71,7 +71,7 @@ use crate::panels::memory::memory_ui;
 use crate::panels::messages::MessagesView;
 use crate::panels::profile::profile_ui;
 use crate::panels::prompt::{PromptInput, prompt_ui};
-use crate::panels::queue::{queue_pane_ui, queue_ui};
+use crate::panels::queue::queue_ui;
 use crate::panels::research::research_ui;
 use crate::panels::sessions::SessionsView;
 use crate::panels::status_bar::status_bar_ui;
@@ -543,7 +543,7 @@ impl Shell {
                 PaneId::Context => context_ui(ui, app, palette),
                 PaneId::ActiveAgents => agents_ui(ui, app, palette),
                 PaneId::Teams => teams_ui(ui, app, palette),
-                PaneId::Queue => queue_pane_ui(ui, app),
+                PaneId::Queue => placeholder(ui, *pane),
             },
         );
         if let Some(err) = output.error {
@@ -972,6 +972,12 @@ fn messages_body(ui: &mut egui::Ui, app: &mut App, messages: &mut MessagesView, 
         // nothing enabled, as the TUI's without one.
         dialogs::context_menu::open(ui.ctx(), app, SelectionPane::Messages, false);
     }
+}
+
+/// A pane with no panel of its own (the queue, drawn above the prompt): its
+/// name, so the pane is labelled.
+fn placeholder(ui: &mut egui::Ui, pane: PaneId) {
+    ui.weak(format!("{} panel", pane.label()));
 }
 
 impl Drop for Shell {
