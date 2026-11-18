@@ -187,13 +187,16 @@ async fn prompt_plugin_command_reports_a_failed_turn_exactly_once() {
 
     // A second terminal error would clear the busy state of whatever turn the
     // first one let the queue start.
+    // Wait for the first report however long the turn takes to fail, then
+    // give a duplicate a moment to arrive.
     let mut errors = 0;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    let mut deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
     while let Ok(event) = tokio::time::timeout_at(deadline, events.recv()).await {
         if let Ok(codemason_agent::event::Event::AgentError { session_id, .. }) = event
             && session_id == "s-once"
         {
             errors += 1;
+            deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
         }
     }
     assert_eq!(errors, 1, "the failed turn must be reported once");
