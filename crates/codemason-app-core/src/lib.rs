@@ -38,6 +38,7 @@ pub mod syntax_highlight;
 pub mod text_utils;
 pub mod theme_tokens;
 pub mod tracing_layer;
+pub mod transcript_prefs;
 pub mod usage_stats;
 
 /// Self-healing staleness caps for spinner/progress latches (in seconds).

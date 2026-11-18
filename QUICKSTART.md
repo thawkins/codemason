@@ -2095,6 +2095,8 @@ Type `/` in the input to open an autocomplete menu:
 | `/help` | Show available commands |
 | `/log` | Toggle log panel |
 | `/theme [<name>\|system\|dark\|light\|list]` | Open the theme picker, or switch the colour theme (set `"theme"` in `codemason.json` to keep it) |
+| `/verbosity low\|medium\|high` | Set how much the transcript shows (config key `verbosity`) |
+| `/thinking-display show\|hide\|collapse` | Set how thinking text shows (config key `thinking_display`) |
 | `/undo` | Remove the last turn and restore the files it changed |
 | `/redo` | Put back the turn the last `/undo` removed |
 | `/stats [--days N] [--project] [--json]` | Usage and cost per model across sessions (CLI: `cdmn stats`) |

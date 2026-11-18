@@ -535,6 +535,10 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
     if let Some(theme) = config.theme.as_deref() {
         codemason_app_core::theme_tokens::set_startup(theme);
     }
+    // ... and with the transcript preferences it names.
+    codemason_app_core::transcript_prefs::set_startup(
+        codemason_app_core::transcript_prefs::TranscriptPrefs::from_config(&config),
+    );
     tracing::info!(
         yolo = config.yolo,
         edit_log = config.edit_log,

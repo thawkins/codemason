@@ -1051,6 +1051,14 @@ pub const SLASH_COMMANDS: &[SlashCommandDef] = &[
         description: "Switch the colour theme: /theme opens the picker, /theme <name>|system|dark|light switches (/theme help)",
     },
     SlashCommandDef {
+        trigger: "verbosity",
+        description: "Set how much the transcript shows: /verbosity low|medium|high",
+    },
+    SlashCommandDef {
+        trigger: "thinking-display",
+        description: "Set how thinking text shows: /thinking-display show|hide|collapse",
+    },
+    SlashCommandDef {
         trigger: "yolo",
         description: "Toggle YOLO mode - bypass all command validation and tool restrictions (/yolo help)",
     },
@@ -4044,6 +4052,9 @@ pub struct App {
     /// The theme the user picked; `/theme` changes it and the frontend
     /// restyles from it on its next frame.
     pub theme: crate::theme_tokens::ThemeSelection,
+    /// Transcript verbosity and thinking display; `/verbosity` and
+    /// `/thinking-display` change them.
+    pub transcript_prefs: crate::transcript_prefs::TranscriptPrefs,
     /// The themes that can be picked: built-in, user and project themes.
     pub themes: crate::theme_tokens::ThemeCatalog,
     /// Whether mouse input is enabled (default: true). Set to false for

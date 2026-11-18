@@ -117,6 +117,8 @@ const BLUEPRINTS_SUBS: &[&str] = &["help", "list"];
 const OSINFO_SUBS: &[&str] = &["show", "help"];
 const DB_SUBS: &[&str] = &["prune", "help"];
 const DB_FLAGS: &[&str] = &["--days", "--dry-run"];
+const VERBOSITY_SUBS: &[&str] = &["low", "medium", "high"];
+const THINKING_DISPLAY_SUBS: &[&str] = &["show", "hide", "collapse"];
 const THEME_SUBS: &[&str] = &["list", "system", "dark", "light", "high-contrast", "help"];
 const STATS_FLAGS: &[&str] = &["--days", "--project", "--json"];
 const ROUTER_SUBS: &[&str] = &[
@@ -728,6 +730,18 @@ pub const COMMAND_CATALOG: &[CommandCatalogEntry] = &[
         trigger: "theme",
         description: "Switch the colour theme: /theme opens the picker, /theme <name>|system|dark|light switches (/theme help)",
         subcommands: THEME_SUBS,
+        flags: EMPTY,
+    },
+    CommandCatalogEntry {
+        trigger: "verbosity",
+        description: "Set how much the transcript shows: /verbosity low|medium|high",
+        subcommands: VERBOSITY_SUBS,
+        flags: EMPTY,
+    },
+    CommandCatalogEntry {
+        trigger: "thinking-display",
+        description: "Set how thinking text shows: /thinking-display show|hide|collapse",
+        subcommands: THINKING_DISPLAY_SUBS,
         flags: EMPTY,
     },
     CommandCatalogEntry {

@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added: `/verbosity low|medium|high` and `/thinking-display show|hide|collapse` store how much the transcript shows and how thinking text is presented; the `verbosity` and `thinking_display` keys in `codemason.json` set them at startup. Nothing renders them yet.
 - Added: the Messages pane renders replies as Markdown: headings, lists, tables, block quotes, and links that open in the browser.
 - Added: code blocks in replies are highlighted in the theme's syntax colours (Rust, Python, JavaScript, TypeScript, Go, C, C++, Java, Bash, JSON) and have Copy, Wrap and Insert buttons; Insert puts the code into the prompt.
 - Added: transcript text is selectable. Right-clicking a message offers Copy, Copy as Markdown and Quote in reply.
