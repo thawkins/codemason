@@ -49,9 +49,12 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use codemason_agent::message::{Message, Role as MessageRole};
+use codemason_app_core::activity::{ActivityGroup, group_activity};
 use codemason_app_core::app::App;
 use codemason_app_core::message_blocks::{TranscriptBlock, message_to_blocks};
 use codemason_app_core::message_lines::MESSAGE_STREAM_MIN_INTERVAL;
+use codemason_app_core::styled::StyledLine;
+use codemason_app_core::transcript_prefs::{ThinkingDisplay, TranscriptPrefs, Verbosity};
 use codemason_types::sanitize_terminal::sanitize_terminal;
 use egui::{FontId, Rect, Role, ScrollArea, Sense, WidgetInfo, pos2, vec2};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
@@ -125,7 +128,10 @@ struct Entry {
 impl Entry {
     /// Split `msg` into blocks through the core and estimate its height.
     fn render(msg: &Message, app: &App, rows: RowHeights) -> Self {
-        let blocks = message_to_blocks(msg, &app.tool_step_map, &app.cwd);
+        let blocks = group_activity(
+            message_to_blocks(msg, &app.tool_step_map, &app.cwd),
+            app.transcript_prefs.verbosity,
+        );
         let mut entry = Self {
             id: msg.id.clone(),
             edit_seq: msg.edit_seq,
@@ -242,6 +248,9 @@ pub struct MessagesView {
     /// An image a thumbnail click asked to show at full size, for the caller
     /// to take with [`MessagesView::take_enlarge`].
     pending_enlarge: Option<std::path::PathBuf>,
+    /// The verbosity the entries' blocks were grouped for; a change
+    /// regroups every message.
+    verbosity: Option<Verbosity>,
 }
 
 impl std::fmt::Debug for Entry {
@@ -316,6 +325,7 @@ impl Default for MessagesView {
             pending_insert: None,
             under_pointer: None,
             pending_enlarge: None,
+            verbosity: None,
         }
     }
 }
@@ -421,7 +431,14 @@ impl MessagesView {
                 }
                 let to_bottom = matches!(scroll_to, Some(ScrollTo::Bottom));
                 let output = scroll.show_viewport(ui, |ui, viewport| {
-                    self.show_visible(ui, viewport, palette, node, source.processing);
+                    self.show_visible(
+                        ui,
+                        viewport,
+                        palette,
+                        node,
+                        source.processing,
+                        app.transcript_prefs,
+                    );
                     if to_bottom {
                         // Scroll to the end of the content; once there, the
                         // area sticks to the bottom as more arrives.
@@ -560,6 +577,13 @@ impl MessagesView {
         now: Instant,
     ) -> SyncOutcome {
         let messages = source.messages;
+        let verbosity = app.transcript_prefs.verbosity;
+        if self.verbosity.is_some_and(|v| v != verbosity) {
+            // The blocks are grouped by verbosity: group every message again.
+            self.entries.clear();
+            self.offsets_dirty = true;
+        }
+        self.verbosity = Some(verbosity);
         let evicted_height = self.drop_evicted_front(messages);
         self.reorder_by_id(messages);
 
@@ -683,6 +707,7 @@ impl MessagesView {
         palette: &Palette,
         node: egui::Id,
         processing: bool,
+        prefs: TranscriptPrefs,
     ) {
         let width = ui.available_width().max(1.0);
         if self.offsets_dirty {
@@ -720,6 +745,7 @@ impl MessagesView {
                 palette,
                 bold,
                 streaming: processing && index == last,
+                thinking: prefs.thinking,
             };
             draw_message(&mut child, entry, style, &mut self.markdown, &mut actions);
             for action in actions {
@@ -757,8 +783,10 @@ struct BlockStyle<'a> {
     /// How bold text is drawn.
     bold: Bold,
     /// Whether the message is the reply still streaming (it ends with a
-    /// caret).
+    /// caret, and its thinking blocks start open).
     streaming: bool,
+    /// How thinking blocks are shown.
+    thinking: ThinkingDisplay,
 }
 
 /// Draw one message: its frame for the role, then its blocks.
@@ -827,12 +855,19 @@ fn draw_blocks(
         palette,
         bold,
         streaming,
+        thinking,
     } = style;
     ui.spacing_mut().item_spacing.y = space::XS;
+    let mut drawn = 0;
     for (index, block) in entry.blocks.iter().enumerate() {
-        if index > 0 {
+        if thinking == ThinkingDisplay::Hidden && matches!(block, TranscriptBlock::Thinking(_)) {
+            continue;
+        }
+        if drawn > 0 {
             ui.add_space(space::XS);
         }
+        drawn += 1;
+        let id = block_id(&entry.id, index);
         match block {
             TranscriptBlock::Markdown(text) => {
                 ui.push_id(index, |ui| {
@@ -850,25 +885,17 @@ fn draw_blocks(
             TranscriptBlock::Plain(text) => {
                 ui.add(egui::Label::new(egui::RichText::new(text).color(palette.text)).wrap());
             }
-            TranscriptBlock::Notice(lines) | TranscriptBlock::Thinking(lines) => {
+            TranscriptBlock::Notice(lines) => {
                 let job = styled_to_layout_job(lines, palette, ui.available_width(), bold);
                 ui.add(egui::Label::new(job).wrap());
             }
+            TranscriptBlock::Thinking(lines) => thinking_ui(ui, id, lines, style),
+            TranscriptBlock::Activity(group) => activity_ui(ui, id, group, style),
             TranscriptBlock::Tool {
                 lines,
                 status_label,
                 ..
-            } => {
-                let job = styled_to_layout_job(lines, palette, ui.available_width(), bold);
-                let text = job.text.clone();
-                let response = ui.add(egui::Label::new(job).wrap());
-                response.widget_info(|| {
-                    WidgetInfo::labeled(Role::Label, true, format!("{text}\n{status_label}"))
-                });
-            }
-            TranscriptBlock::Activity(group) => {
-                ui.label(egui::RichText::new(group.summary.label()).color(palette.muted));
-            }
+            } => tool_ui(ui, lines, status_label, style),
             TranscriptBlock::Image { name, path } => {
                 let uri = format!("file://{}", path.display());
                 let alt = format!("Image: {name}");
@@ -900,4 +927,158 @@ fn draw_blocks(
         let (rect, _) = ui.allocate_exact_size(vec2(CARET_WIDTH, height), Sense::hover());
         ui.painter().rect_filled(rect, 1.0, palette.accent);
     }
+}
+
+/// The id of a message's block, for state kept across frames (whether a
+/// row is open): stable while the message streams and as the view scrolls.
+#[must_use]
+pub fn block_id(message_id: &str, block_index: usize) -> egui::Id {
+    egui::Id::unique(("transcript_block", message_id, block_index))
+}
+
+/// The label of a running activity row's spinner.
+pub const ACTIVITY_RUNNING_LABEL: &str = "Running";
+
+/// The header of a collapsed thinking block.
+pub const THINKING_LABEL: &str = "Thinking";
+
+/// A tool call's lines, labelled with its status for assistive technology.
+fn tool_ui(ui: &mut egui::Ui, lines: &[StyledLine], status_label: &str, style: BlockStyle<'_>) {
+    let job = styled_to_layout_job(lines, style.palette, ui.available_width(), style.bold);
+    let text = job.text.clone();
+    let response = ui.add(egui::Label::new(job).wrap());
+    response
+        .widget_info(|| WidgetInfo::labeled(Role::Label, true, format!("{text}\n{status_label}")));
+}
+
+/// A row that opens and closes the content under it: a disclosure triangle
+/// and `label`, as one click-only button that reports whether it is
+/// expanded. `extra` draws after the label on the same row. Whether it is
+/// open is kept under `id`; until it is first clicked it is `default_open`.
+///
+/// # Returns
+///
+/// Whether the content is open.
+fn disclosure(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    label: &str,
+    palette: &Palette,
+    default_open: bool,
+    extra: impl FnOnce(&mut egui::Ui),
+) -> bool {
+    let key = id.with("open");
+    let mut open = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(default_open);
+    ui.horizontal(|ui| {
+        let row = ui.text_style_height(&egui::TextStyle::Body);
+        let galley = egui::WidgetText::from(egui::RichText::new(label).color(palette.muted))
+            .into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                egui::TextStyle::Body,
+            );
+        let size = vec2(row + space::XS + galley.size().x, row.max(galley.size().y));
+        let (rect, response) = ui.allocate_exact_size(size, Sense::CLICK);
+        if response.clicked() {
+            open = !open;
+            ui.data_mut(|d| d.insert_temp(key, open));
+        }
+        if ui.is_rect_visible(rect) {
+            // A triangle pointing right when closed, down when open.
+            let icon = Rect::from_center_size(
+                pos2(rect.left() + row / 2.0, rect.center().y),
+                vec2(row * 0.5, row * 0.5),
+            );
+            let points = if open {
+                vec![icon.left_top(), icon.right_top(), icon.center_bottom()]
+            } else {
+                vec![icon.left_top(), icon.right_center(), icon.left_bottom()]
+            };
+            ui.painter().add(egui::Shape::convex_polygon(
+                points,
+                palette.muted,
+                egui::Stroke::NONE,
+            ));
+            let text_pos = pos2(
+                rect.left() + row + space::XS,
+                rect.center().y - galley.size().y / 2.0,
+            );
+            ui.painter().galley(text_pos, galley, palette.muted);
+        }
+        response.widget_info(|| WidgetInfo::labeled(Role::Button, true, label));
+        ui.ctx()
+            .accesskit_node_builder(response.id, |node| node.set_expanded(open));
+        extra(ui);
+    });
+    open
+}
+
+/// A thinking block, as [`ThinkingDisplay`] asks: hidden, in full, or under
+/// a "Thinking" row that is open while the reply streams.
+fn thinking_ui(ui: &mut egui::Ui, id: egui::Id, lines: &[StyledLine], style: BlockStyle<'_>) {
+    let full = |ui: &mut egui::Ui| {
+        let job = styled_to_layout_job(lines, style.palette, ui.available_width(), style.bold);
+        ui.add(egui::Label::new(job).wrap());
+    };
+    match style.thinking {
+        ThinkingDisplay::Hidden => {}
+        ThinkingDisplay::Expanded => full(ui),
+        ThinkingDisplay::Collapsed => {
+            if disclosure(
+                ui,
+                id,
+                THINKING_LABEL,
+                style.palette,
+                style.streaming,
+                |_| {},
+            ) {
+                full(ui);
+            }
+        }
+    }
+}
+
+/// An activity row: its summary, a spinner while a call runs and the
+/// failure count in the error colour; opened, every folded block.
+fn activity_ui(ui: &mut egui::Ui, id: egui::Id, group: &ActivityGroup, style: BlockStyle<'_>) {
+    let palette = style.palette;
+    let label = group.summary.label();
+    let errors = group.summary.errors;
+    let open = disclosure(ui, id, &label, palette, false, |ui| {
+        if group.running {
+            crate::panels::status_bar::busy_spinner(ui, palette, ACTIVITY_RUNNING_LABEL);
+        }
+        if errors > 0 {
+            ui.label(egui::RichText::new(format!("{errors} failed")).color(palette.error));
+        }
+    });
+    if !open {
+        return;
+    }
+    egui::Frame::NONE
+        .inner_margin(egui::Margin {
+            left: space::LG as i8,
+            ..egui::Margin::ZERO
+        })
+        .show(ui, |ui| {
+            for (index, item) in group.items.iter().enumerate() {
+                match item {
+                    TranscriptBlock::Tool {
+                        lines,
+                        status_label,
+                        ..
+                    } => tool_ui(ui, lines, status_label, style),
+                    TranscriptBlock::Thinking(lines) => {
+                        thinking_ui(ui, id.with(index), lines, style);
+                    }
+                    TranscriptBlock::Markdown(_)
+                    | TranscriptBlock::Code { .. }
+                    | TranscriptBlock::Plain(_)
+                    | TranscriptBlock::Notice(_)
+                    | TranscriptBlock::Image { .. }
+                    | TranscriptBlock::Activity(_) => {}
+                }
+            }
+        });
 }

@@ -2185,7 +2185,25 @@ common alias; code over 64 KiB or in another language is drawn plain) in the
 theme's `syntax.*` colours. Attached images are thumbnails of at most 160
 points that open full size in an `Image` view (Close or a click outside closes
 it; Esc is left to the session); an image that cannot be loaded is named
-instead. The reply still streaming ends with an accent caret. All transcript
+instead. The reply still streaming ends with an accent caret. Tool calls and
+reasoning are grouped by `activity::group_activity` according to
+`App::transcript_prefs.verbosity`: at `low` (the default) each maximal run of
+`Tool` and `Thinking` blocks becomes one `Activity` block, at `medium` only
+runs of reasoning do, at `high` nothing is folded; changing the verbosity
+regroups every message. An activity row is a click-only disclosure button
+(AccessKit `expanded` state) labelled with `ActivitySummary::label` (the
+counts of reads, edits, commands, searches, other tools and thoughts in that
+order, then the failures, then the run time from one second: "Read 4 files,
+edited 2 files, ran 1 command (12 s)"; tools are categorised by their
+canonical name), followed by a `Running` progress indicator while a call runs
+and the failure count in `state.error`; opened, it lists each call's lines and
+thinking. A tool block keeps its header and at most 20 result lines
+(`RESULT_PREVIEW_MAX_LINES`) plus "... N more lines". Reasoning follows
+`transcript_prefs.thinking`: `collapsed` shows a `Thinking` disclosure that is
+open while the reply streams and closed after, `expanded` shows it in full,
+`hidden` omits it. Whether a row is open is kept per block
+(`messages::block_id`, from the message id and block index) and survives
+streaming and scrolling. All transcript
 text is selectable; right-clicking the transcript opens a menu with `Copy`
 (egui's text selection; a press on text places an empty selection, so it is
 enabled there and copies nothing), `Copy as Markdown` and `Quote in reply`

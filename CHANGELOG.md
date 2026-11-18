@@ -4,7 +4,9 @@
 
 ### Added
 
-- Added: `/verbosity low|medium|high` and `/thinking-display show|hide|collapse` store how much the transcript shows and how thinking text is presented; the `verbosity` and `thinking_display` keys in `codemason.json` set them at startup. Nothing renders them yet.
+- Added: `/verbosity low|medium|high` and `/thinking-display show|hide|collapse`; the `verbosity` and `thinking_display` keys in `codemason.json` set them at startup.
+- Added: at the default verbosity `low`, each run of tool calls and reasoning in a reply is one row such as "Read 4 files, edited 2 files, ran 1 command (12 s)", with a spinner while a call runs and the failure count in the error colour; a click lists every call. `medium` folds only reasoning, `high` shows every call.
+- Added: reasoning shows under a "Thinking" row that is open while the reply streams and closes when it completes (`/thinking-display collapse`, the default); `show` keeps it open, `hide` removes it.
 - Added: the Messages pane renders replies as Markdown: headings, lists, tables, block quotes, and links that open in the browser.
 - Added: code blocks in replies are highlighted in the theme's syntax colours (Rust, Python, JavaScript, TypeScript, Go, C, C++, Java, Bash, JSON) and have Copy, Wrap and Insert buttons; Insert puts the code into the prompt.
 - Added: transcript text is selectable. Right-clicking a message offers Copy, Copy as Markdown and Quote in reply.
@@ -68,6 +70,7 @@
 
 ### Changed
 
+- Changed: a tool call's result lines in the transcript stop after 20 lines, with a "... N more lines" line.
 - Changed: a user turn is a card marked `You` instead of a `You:` prefix, and an assistant turn has an accent rule down its left edge instead of a `*` prefix.
 - Changed: every colour in the window comes from the theme's tokens. Widget greys, the selection blue and the xterm ANSI colours are gone; a pane that asks for an ANSI name gets the theme colour of the same meaning (red is the error colour).
 - Changed: the default dark theme draws on an off-black background (`#0f1115`) with raised surfaces for fields, buttons and dialogs, and thin outlines around widgets. Before, panels were pure black.

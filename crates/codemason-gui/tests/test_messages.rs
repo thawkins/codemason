@@ -110,6 +110,9 @@ async fn test_message_view_scroll_wheel_reveals_earlier_messages() {
 #[tokio::test]
 async fn test_message_view_tool_call_shows_status_label() {
     let mut app = support::make_app();
+    // Each call is its own block at high verbosity; low folds them into an
+    // activity row (`test_activity_rows`).
+    app.transcript_prefs.verbosity = codemason_app_core::transcript_prefs::Verbosity::High;
     app.session.messages = vec![
         tool_message(ToolCallStatus::Running),
         tool_message(ToolCallStatus::Error),

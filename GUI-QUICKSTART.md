@@ -170,6 +170,12 @@ Replies render as Markdown: headings, lists, tables, links (open in your
 browser) and highlighted code blocks. Your own turns appear in a card marked
 `You`. Attached images show as thumbnails; click one to see it full size.
 
+Tool calls fold into one row per run, such as "Read 4 files, edited 2 files,
+ran 1 command (12 s)"; click it to see each call. `/verbosity medium` folds
+only the model's reasoning and `/verbosity high` shows every call. Reasoning
+appears under a "Thinking" row that is open while the reply streams;
+`/thinking-display show` keeps it open and `/thinking-display hide` removes it.
+
 The window follows the operating system's dark or light setting. `/theme`
 opens a picker that previews each theme as you move through the list: Enter
 keeps it, Esc goes back. `/theme <name>` switches directly, for example
