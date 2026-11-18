@@ -1084,6 +1084,36 @@ the GUI leaves stderr attached to the terminal that launched it.
 
 ---
 
+### 3.10 Per-Turn Workspace Snapshots (`/undo`, `/redo`)
+
+Immediately before a turn's first tool call, the session processor records the
+state of the session's git work tree
+(`codemason-agent/src/session/turn_snapshot.rs`). `/undo` restores that state
+and removes the turn's messages; `/redo` reverses it
+(`codemason-app-core/src/app/undo.rs`).
+
+- **Store.** One private ("shadow") git repository per project under
+  `~/.config/codemason/snapshots/<hash of the work-tree root>/`. It has its own
+  object database and index and uses the project only as its work tree, so the
+  project's `.git` is never read or written. A snapshot is a tree object
+  (`git add --all` + `git write-tree`) kept alive by the ref
+  `refs/codemason/<session>/<user message id>`. The project's `.gitignore` is
+  honoured.
+- **When.** Once per turn, for a top-level run on the `local` backend whose
+  working directory is inside a git work tree. A sub-agent's own session is not
+  recorded; its file changes fall inside the parent turn's snapshot. A snapshot
+  failure is logged at `warn!` and the turn proceeds.
+- **Undo.** Deletes the last user message and every later message from memory
+  and from storage (`Storage::delete_messages_by_id`), then restores the work
+  tree with `git read-tree --reset -u <tree>`, which rewrites only the paths
+  that differ and deletes files the snapshot does not contain. The state being
+  replaced is recorded first and kept for redo.
+- **Redo.** Re-creates the messages and restores the replaced state. The undo
+  stack is per session, in memory, and is cleared when the conversation's last
+  message is no longer the one the undo left.
+- **Limits.** Both commands refuse while the agent is running. Changes outside
+  the work tree, ignored files and external side effects are not undone.
+
 ## 4. Security & Permissions
 
 ### 4.1 Permission Security Layers
@@ -2371,6 +2401,7 @@ repository and does not use ETags.
 | `/compact` | Summarise and compact the conversation history (one-shot LLM summarisation; FR-009). `/compress` is a deprecated alias |
 | `/memory` | Structured-memory panel and summary: `/memory` / `/memory show` (same), `/memory clear` (a `Yes`/`No` dialog clears this project's memories), `/memory help` |
 | `/db` | Session database: `/db prune [--days N] [--dry-run]` deletes messages older than the retention window (the session row is kept; a real prune arms a `Yes`/`No` dialog that opens on `No`), `/db help` (also the bare form) |
+| `/undo` / `/redo` | `/undo` removes the last turn from the conversation and the session database and restores the work tree to the snapshot taken before that turn's first tool call; `/redo` puts the messages and files back while nothing has been sent since (section 3.10) |
 | `/stats` | Usage and cost per model across sessions, from the persisted run-cost summaries: `/stats [--days N] [--project] [--json]`, `/stats help`; `/cost` covers the current session only. CLI parity via `cdmn stats` |
 | `/yolo` | Toggle YOLO mode (`on`/`off` set and persist the state, `status` reports it, a bare `/yolo` toggles; the toggle writes the user-global config, or the `--config` file when one was loaded) |
 | `/task` | Toggle the TASKS side panel (also Alt+T); `/task list`, `/task help` |

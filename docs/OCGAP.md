@@ -15,8 +15,8 @@ Codemason is ahead on multi-agent coordination, knowledge systems (code index, m
 
 ### Top gaps in codemason (opencode v2 has, codemason does not)
 
-1. Redo, and undo that also restores files. Codemason's `/undo` removes the last
-   turn from history only.
+1. Closed 2026-11-18: `/undo` now restores files and `/redo` exists. Still
+   missing: revert to an arbitrary earlier message.
 2. A terminal UI. Codemason removed its TUI; the choices are the egui GUI or plain stdin/stdout.
 3. Web UI, remote pairing (`opencode pair`, QR/one-time link) and one shared background service for all clients.
 4. A broad HTTP API (173 operations: PTY, worktree, VCS, permission, usage, forms) with network and embedded SDKs. Codemason serves about 19 routes.
@@ -67,7 +67,7 @@ Codemason is ahead on multi-agent coordination, knowledge systems (code index, m
 | Plan approval workflow | Yes (`team_submit_plan` / `team_approve_plan`) | No | opencode |
 | Swarm decomposition | Yes (`/swarm`) | No | opencode |
 | Autopilot / autonomous loop | Yes (`/autopilot`) | Partial (`/goal`) | None |
-| Goal with reviewer confirmation | No | Yes (`/goal` runs until a reviewer confirms) | Codemason |
+| Goal with reviewer confirmation | Partial (`/loop` goal-driven loop; `/goal` is a stub that does not persist the goal) | Yes (`/goal` runs until a reviewer confirms) | Codemason |
 | Plan mode | Yes (`EnterPlanMode` / `ExitPlanMode`, `plan` agent) | Yes (`plan` agent) | None |
 | Durable initiatives (milestones) | Yes (`initiative`) | No | opencode |
 | Agent suspend / resume / kill UI | Yes (Agents window) | UNVERIFIED | Unknown |
@@ -164,7 +164,7 @@ Note: opencode v2 renamed config keys (`agent` to `agents`, `provider` to `provi
 | Resume / list | Yes | Yes | None |
 | Fork | Yes (`/session fork`) | Yes | None |
 | Pin, archive, unread, sections | Yes | Yes (archive, unread, move) | None |
-| Undo / redo / revert to message | Partial (`/undo` drops the last turn from history; no file restore, no `/redo`) | Yes (`/undo`, `/redo`, git-object snapshots) | Codemason |
+| Undo / redo / revert to message | Yes (`/undo`, `/redo`, shadow-git snapshots per turn; no revert to an arbitrary message, redo stack in memory only) | Yes (`/undo`, `/redo`, git-object snapshots) | Partial: no revert-to-message picker |
 | Per-turn diff view | No | Yes (`/diff`) | Codemason |
 | Export / import | Yes (`export-archive`, `import`) | Yes (`export --sanitize`, `import`) | Partial: no sanitize |
 | Compaction | Yes (`/compact`, auto) | Yes (auto, background, native/summary) | None |
@@ -211,7 +211,7 @@ Note: opencode v2 renamed config keys (`agent` to `agents`, `provider` to `provi
 
 Must (most users will notice):
 
-1. Undo/redo and revert-to-message. `codemason-storage::snapshot` already takes and restores file snapshots for loop capture, so the storage half exists. – please implement
+1. Undo/redo and revert-to-message. `codemason-storage::snapshot` already takes and restores file snapshots for loop capture, so the storage half exists. – please implement. **Done 2026-11-18** (branch `feat/ocgap`)
 2. User-defined slash commands from `.codemason/commands/*.md`. – please implement. **Done 2026-11-18** (branch `feat/ocgap`)
 3. Usage and cost statistics across sessions. - Please implement. **Done 2026-11-18** (branch `feat/ocgap`)
 4. Self-update (`/update` is reserved and unimplemented). - Not required

@@ -1168,7 +1168,11 @@ pub const SLASH_COMMANDS: &[SlashCommandDef] = &[
     },
     SlashCommandDef {
         trigger: "undo",
-        description: "Remove the last user/assistant turn pair from the conversation (/undo help)",
+        description: "Remove the last turn and restore the files it changed; /redo puts it back (/undo help)",
+    },
+    SlashCommandDef {
+        trigger: "redo",
+        description: "Restore the turn the last /undo removed (/redo help)",
     },
     SlashCommandDef {
         trigger: "name",

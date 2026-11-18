@@ -479,6 +479,8 @@ mod test_rollback_capture;
 mod test_formatter;
 #[path = "test_run_cost.rs"]
 mod test_run_cost;
+#[path = "test_turn_snapshot.rs"]
+mod test_turn_snapshot;
 #[path = "test_user_command.rs"]
 mod test_user_command;
 

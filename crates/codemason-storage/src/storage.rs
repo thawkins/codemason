@@ -3285,6 +3285,60 @@ impl Storage {
         Ok(n)
     }
 
+    /// Deletes the named messages of one session.
+    ///
+    /// The same three-table cascade as [`Storage::delete_messages`] (FTS rowid,
+    /// `message_fts_keys`, `messages`) in one transaction, scoped to `ids`. An
+    /// id that does not belong to `session_id` is left alone. Returns the
+    /// number of messages deleted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a delete fails; nothing is deleted in that case.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use codemason_storage::storage::Storage;
+    /// use codemason_types::message::Message;
+    ///
+    /// let storage = Storage::open_in_memory().unwrap();
+    /// storage.create_session("sess-1", "/tmp/project").unwrap();
+    /// let keep = Message::user_text("sess-1", "keep");
+    /// let drop = Message::user_text("sess-1", "drop");
+    /// storage.create_message(&keep).unwrap();
+    /// storage.create_message(&drop).unwrap();
+    /// assert_eq!(storage.delete_messages_by_id("sess-1", &[drop.id]).unwrap(), 1);
+    /// assert_eq!(storage.get_messages("sess-1").unwrap()[0].id, keep.id);
+    /// ```
+    pub fn delete_messages_by_id(&self, session_id: &str, ids: &[String]) -> Result<usize> {
+        let mut conn = lock_conn!(self)?;
+        let tx = conn.transaction()?;
+        let mut deleted = 0;
+        for id in ids {
+            let rowids: Vec<i64> = {
+                let mut stmt = tx.prepare_cached(
+                    "SELECT rowid FROM message_fts_keys WHERE session_id = ?1 AND message_id = ?2",
+                )?;
+                stmt.query_map(params![session_id, id], |r| r.get(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            for rowid in rowids {
+                tx.execute("DELETE FROM messages_fts WHERE rowid = ?1", params![rowid])?;
+            }
+            tx.execute(
+                "DELETE FROM message_fts_keys WHERE session_id = ?1 AND message_id = ?2",
+                params![session_id, id],
+            )?;
+            deleted += tx.execute(
+                "DELETE FROM messages WHERE session_id = ?1 AND id = ?2",
+                params![session_id, id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(deleted)
+    }
+
     /// Deletes every message whose `created_at` is older than `max_age`.
     ///
     /// This is the age-based counterpart to [`Storage::delete_messages`]: the

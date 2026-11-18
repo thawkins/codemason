@@ -129,6 +129,7 @@ pub use self::startup::StartupSession;
 mod subagent_events;
 mod swarm;
 pub mod toolchain;
+pub mod undo;
 mod windows;
 
 /// Why the Agents window refuses to open with nothing to show (spec

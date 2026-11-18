@@ -695,7 +695,13 @@ pub const COMMAND_CATALOG: &[CommandCatalogEntry] = &[
     },
     CommandCatalogEntry {
         trigger: "undo",
-        description: "Remove the last user/assistant turn pair from the conversation (/undo help)",
+        description: "Remove the last turn and restore the files it changed; /redo puts it back (/undo help)",
+        subcommands: EMPTY,
+        flags: EMPTY,
+    },
+    CommandCatalogEntry {
+        trigger: "redo",
+        description: "Restore the turn the last /undo removed (/redo help)",
         subcommands: EMPTY,
         flags: EMPTY,
     },

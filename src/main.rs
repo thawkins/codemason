@@ -987,6 +987,9 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
         .attach_telemetry(Arc::clone(&telemetry));
     startup.record("Telemetry init", t0.elapsed());
 
+    // Per-turn workspace snapshots for `/undo` and `/redo`.
+    codemason_agent::session::turn_snapshot::enable(data_dir().join("snapshots"));
+
     // Create session manager and processor
     let t0 = Instant::now();
     let session_manager = Arc::new(SessionManager::new(storage.clone(), event_bus.clone()));

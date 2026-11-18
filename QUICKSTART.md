@@ -2094,6 +2094,8 @@ Type `/` in the input to open an autocomplete menu:
 | `/compact [help]` | Summarise and compact history |
 | `/help` | Show available commands |
 | `/log` | Toggle log panel |
+| `/undo` | Remove the last turn and restore the files it changed |
+| `/redo` | Put back the turn the last `/undo` removed |
 | `/stats [--days N] [--project] [--json]` | Usage and cost per model across sessions (CLI: `cdmn stats`) |
 | `/model` | Switch model |
 | `/thinking auto|off|low|medium|high` | Switch reasoning level for the active model |

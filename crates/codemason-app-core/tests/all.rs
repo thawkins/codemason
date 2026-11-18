@@ -585,6 +585,8 @@ mod test_thinking_selector;
 mod test_tool_display;
 #[path = "test_tool_event_state.rs"]
 mod test_tool_event_state;
+#[path = "test_undo_redo.rs"]
+mod test_undo_redo;
 #[path = "test_user_commands.rs"]
 mod test_user_commands;
 #[path = "test_widgets_and_events_extra.rs"]

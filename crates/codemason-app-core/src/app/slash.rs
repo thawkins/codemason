@@ -8352,58 +8352,24 @@ Changes are persisted immediately to `.codemason/codemason.json` and take effect
                     // keep the M6 change surgical and are the migration target.
                     self.append_assistant_text(&crate::app::helpers::from_cmd(
                         "undo help",
-                        "## /undo - Remove the last turn\n\n| Subcommand | Description |\n|---|---|\n| `/undo` | Remove the last user message and everything after it (typically one assistant response) from the conversation |\n| `/undo help` | Show this help |",
+                        "## /undo - Remove the last turn\n\n| Subcommand | Description |\n|---|---|\n| `/undo` | Remove the last user message and everything after it from the conversation, and restore the files that turn changed when a snapshot exists; `/redo` puts both back |\n| `/undo help` | Show this help |",
                     ));
                     self.status = "undo: help".to_string();
                     return;
                 }
-                if self.session.session_id.is_none() {
-                    self.status = "[warn] No active session to undo".to_string();
+                self.handle_undo().await;
+            }
+            // -- /redo ------------------------------------------------------
+            "redo" => {
+                if args.trim() == "help" {
+                    self.append_assistant_text(&crate::app::helpers::from_cmd(
+                        "redo help",
+                        "## /redo - Restore the last undone turn\n\n| Subcommand | Description |\n|---|---|\n| `/redo` | Put back the messages and file changes the last `/undo` removed; only while nothing has been sent since |\n| `/redo help` | Show this help |",
+                    ));
+                    self.status = "redo: help".to_string();
                     return;
                 }
-                if self.session.messages.is_empty() {
-                    self.status = "[warn] No messages to undo".to_string();
-                    return;
-                }
-
-                // Find the last user message and remove it along with any
-                // following assistant/compaction messages.
-                let mut last_user_idx = None;
-                for (idx, msg) in self.session.messages.iter().enumerate().rev() {
-                    if msg.role == codemason_types::Role::User {
-                        last_user_idx = Some(idx);
-                        break;
-                    }
-                }
-
-                match last_user_idx {
-                    Some(user_idx) => {
-                        // Remove the user message and all following messages
-                        // (typically one assistant response, but could be more)
-                        let removed_count = self.session.messages.len() - user_idx;
-                        self.session.messages.truncate(user_idx);
-
-                        // Reset scroll to show the new end of conversation
-                        self.session.scroll_offset = 0;
-
-                        self.status =
-                            format!("Undid last turn (removed {} message(s))", removed_count);
-                        self.push_log_no_agent(
-                            LogLevel::Info,
-                            format!(
-                                "Undo: removed {} message(s) from end of conversation",
-                                removed_count
-                            ),
-                        );
-                    }
-                    None => {
-                        self.status = "[warn] No user message found to undo".to_string();
-                        self.push_log_no_agent(
-                            LogLevel::Warn,
-                            "Undo: no user message found in conversation".to_string(),
-                        );
-                    }
-                }
+                self.handle_redo().await;
             }
             // -- /name ------------------------------------------------------
             // FR-015: Set a human-readable display name on the active session.

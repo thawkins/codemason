@@ -84,7 +84,8 @@ Per-command reference documents for the codemason GUI slash commands. Each docum
 | `/actionloop` | [actionloop](actionloop.md) | Agent action-loop timing: /actionloop [help\|clip] |
 | `/bug-report` | [bug-report](bug-report.md) | Generate diagnostic bug report with redacted session data (output to log/) |
 | `/triggers` | [triggers](triggers.md) | Manage trigger rules: /triggers [list\|enable\|disable\|remove\|status\|help] |
-| `/undo` | [undo](undo.md) | Remove the last user/assistant turn pair from the conversation (/undo help) |
+| `/undo` | [undo](undo.md) | Remove the last turn and restore the files it changed; /redo puts it back (/undo help) |
+| `/redo` | [redo](redo.md) | Restore the turn the last /undo removed (/redo help) |
 | `/name` | [name](name.md) | Set a human-readable display name for the session: /name <display-name> \| /name help |
 | `/alog` | [alog](alog.md) | Activity log: /alog help\|on\|off\|config\|list\|status\|delete <run-id> --yes\|export <run-id> --yes |
 | `/toolchain` | [toolchain](toolchain.md) | Language toolchain report: /toolchain list [lang] [--json] \| /toolchain help |
