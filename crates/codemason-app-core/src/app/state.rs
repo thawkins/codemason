@@ -4055,6 +4055,9 @@ pub struct App {
     /// Transcript verbosity and thinking display; `/verbosity` and
     /// `/thinking-display` change them.
     pub transcript_prefs: crate::transcript_prefs::TranscriptPrefs,
+    /// The Diff pane: the files a transcript diff opened, and where the
+    /// reader is in them.
+    pub diff_pane: crate::diff_view::DiffPaneState,
     /// The themes that can be picked: built-in, user and project themes.
     pub themes: crate::theme_tokens::ThemeCatalog,
     /// Whether mouse input is enabled (default: true). Set to false for

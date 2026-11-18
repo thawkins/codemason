@@ -546,6 +546,7 @@ impl Shell {
                 PaneId::ActiveAgents => agents_ui(ui, app, palette),
                 PaneId::Teams => teams_ui(ui, app, palette),
                 PaneId::Queue => placeholder(ui, *pane),
+                PaneId::Diff => crate::panels::diff::diff_pane_ui(ui, app, palette),
             },
         );
         if let Some(err) = output.error {
@@ -739,6 +740,9 @@ impl Shell {
         // A context-menu item chosen last frame acts on the prompt editor
         // before the prompt reads this frame's input.
         dialogs::context_menu::apply_pending(ui.ctx());
+        // The Diff pane's own keys, while it holds the keyboard focus, before
+        // the prompt or the App can take them.
+        crate::panels::diff::take_pane_keys(ui.ctx(), &mut self.app);
         // An image pasted with Ctrl+V/Cmd+V is staged as Alt+V stages one.
         clipboard::attach_pasted_images(ui.ctx(), &mut self.app);
         let focus = self.prompt.prepare(ui.ctx(), &mut self.app);

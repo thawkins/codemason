@@ -2203,7 +2203,25 @@ thinking. A tool block keeps its header and at most 20 result lines
 open while the reply streams and closed after, `expanded` shows it in full,
 `hidden` omits it. Whether a row is open is kept per block
 (`messages::block_id`, from the message id and block index) and survives
-streaming and scrolling. All transcript
+streaming and scrolling. A completed `Edit`, `multi_edit`, `Write` or `create` call
+is followed by one `Diff` block per file (`diff_view::diffs_from_tool_input`:
+`Edit`/`multi_edit` diff `old_string` against `new_string`, so their line
+numbers count from that snippet; `Write`/`create` add every line of
+`content`), folded into the activity row at `low`. `diff_view::file_diff`
+builds unified hunks with three lines of context, old and new line numbers and
+the added/removed counts, and stops after 2,000 lines (`truncated`). The
+transcript draws a diff as a card with the path, `+added -removed`, the first
+hunk (up to 40 lines) on `diff.added_bg`/`diff.removed_bg` rows with
+`diff.line_number` gutters, the number of further hunks, and an `Open diff`
+button. That button opens the `Diff` dock pane (`PaneId::Diff`, in the right
+tab group, shown while `App::diff_pane.shown`) on the message's diffs with the
+clicked one selected. The pane shows one file, unified or split (`Old` and
+`New` columns per hunk, removed runs beside the added runs that follow them),
+with buttons for the previous/next file and hunk, `Split` and `Reviewed`;
+while it holds the keyboard focus (any press inside it) `]`/`[`, `n`/`p`, `v`
+and `m` do the same and are taken out of the input, so they neither type nor
+reach the App. A reviewed file is collapsed to a note; the reviewed paths
+survive closing and reopening the pane. All transcript
 text is selectable; right-clicking the transcript opens a menu with `Copy`
 (egui's text selection; a press on text places an empty selection, so it is
 enabled there and copies nothing), `Copy as Markdown` and `Quote in reply`

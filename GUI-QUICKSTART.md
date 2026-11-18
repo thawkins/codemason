@@ -176,6 +176,11 @@ only the model's reasoning and `/verbosity high` shows every call. Reasoning
 appears under a "Thinking" row that is open while the reply streams;
 `/thinking-display show` keeps it open and `/thinking-display hide` removes it.
 
+Edits show their diff under the call; click **Open diff** to review a
+message's changed files in the Diff pane. Click in the pane, then use `]` and
+`[` for the next and previous hunk, `n` and `p` for the next and previous file,
+`v` to switch between unified and split, and `m` to mark a file reviewed.
+
 The window follows the operating system's dark or light setting. `/theme`
 opens a picker that previews each theme as you move through the list: Enter
 keeps it, Esc goes back. `/theme <name>` switches directly, for example

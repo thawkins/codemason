@@ -75,8 +75,8 @@ pub struct FileDiff {
 }
 
 /// A 1-based line number from `similar`'s 0-based index.
-fn line_no(index: Option<usize>) -> Option<u32> {
-    index.map(|i| u32::try_from(i + 1).unwrap_or(u32::MAX))
+fn line_no(index: usize) -> u32 {
+    u32::try_from(index + 1).unwrap_or(u32::MAX)
 }
 
 /// The diff of `old` to `new`, as the file at `path`.
@@ -119,8 +119,8 @@ pub fn file_diff(path: &str, old: &str, new: &str) -> FileDiff {
             kept += 1;
             lines.push(DiffLine {
                 kind,
-                old_no: line_no(change.old_index()),
-                new_no: line_no(change.new_index()),
+                old_no: change.old_index().map(line_no),
+                new_no: change.new_index().map(line_no),
                 text: change.value().trim_end_matches(['\n', '\r']).to_string(),
             });
         }
@@ -169,5 +169,98 @@ pub fn diffs_from_tool_input(tool: &str, input: &Value) -> Vec<FileDiff> {
             })
             .unwrap_or_default(),
         _ => Vec::new(),
+    }
+}
+
+/// How the Diff pane lays a file out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DiffLayout {
+    /// One column, removed lines above added ones.
+    #[default]
+    Unified,
+    /// Old text on the left, new on the right.
+    Split,
+}
+
+/// The Diff pane: the files it shows and where the reader is.
+///
+/// Opening the pane replaces its files but keeps which paths are marked
+/// reviewed, so closing and reopening it does not lose the marks.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DiffPaneState {
+    /// Whether the pane is shown.
+    pub shown: bool,
+    /// The files, in order.
+    pub files: Vec<FileDiff>,
+    /// The file shown.
+    pub selected: usize,
+    /// The hunk of that file in view.
+    pub hunk: usize,
+    /// Unified or split.
+    pub layout: DiffLayout,
+    /// The paths marked reviewed (drawn collapsed).
+    pub reviewed: std::collections::HashSet<String>,
+}
+
+impl DiffPaneState {
+    /// Show `files` with `selected` open at its first hunk.
+    pub fn open(&mut self, files: Vec<FileDiff>, selected: usize) {
+        self.selected = selected.min(files.len().saturating_sub(1));
+        self.files = files;
+        self.hunk = 0;
+        self.shown = true;
+    }
+
+    /// The file shown, if any.
+    #[must_use]
+    pub fn current(&self) -> Option<&FileDiff> {
+        self.files.get(self.selected)
+    }
+
+    /// Move to the next hunk of the file, stopping at the last.
+    pub fn next_hunk(&mut self) {
+        let last = self
+            .current()
+            .map_or(0, |f| f.hunks.len().saturating_sub(1));
+        self.hunk = (self.hunk + 1).min(last);
+    }
+
+    /// Move to the previous hunk, stopping at the first.
+    pub fn prev_hunk(&mut self) {
+        self.hunk = self.hunk.saturating_sub(1);
+    }
+
+    /// Show the next file at its first hunk, stopping at the last file.
+    pub fn next_file(&mut self) {
+        if self.selected + 1 < self.files.len() {
+            self.selected += 1;
+            self.hunk = 0;
+        }
+    }
+
+    /// Show the previous file at its first hunk, stopping at the first.
+    pub fn prev_file(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+            self.hunk = 0;
+        }
+    }
+
+    /// Switch between unified and split.
+    pub fn toggle_layout(&mut self) {
+        self.layout = match self.layout {
+            DiffLayout::Unified => DiffLayout::Split,
+            DiffLayout::Split => DiffLayout::Unified,
+        };
+    }
+
+    /// Mark the file shown reviewed, or unmark it.
+    pub fn toggle_reviewed(&mut self) {
+        let Some(path) = self.current().map(|f| f.path.clone()) else {
+            return;
+        };
+        if !self.reviewed.remove(&path) {
+            self.reviewed.insert(path);
+        }
     }
 }

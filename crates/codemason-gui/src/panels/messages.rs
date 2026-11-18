@@ -92,6 +92,8 @@ enum BlockAction {
     Insert(String),
     /// Show this image at full size.
     Enlarge(std::path::PathBuf),
+    /// Open the Diff pane on these files, with this one selected.
+    OpenDiff(Vec<codemason_app_core::diff_view::FileDiff>, usize),
 }
 
 /// The space between two blocks of one message: the added gap plus the
@@ -166,7 +168,10 @@ impl Entry {
                     | TranscriptBlock::Thinking(_)
                     | TranscriptBlock::Tool { .. } => lines * rows.styled,
                     TranscriptBlock::Activity(_) => rows.label,
-                    TranscriptBlock::Diff(_) => lines * rows.code,
+                    TranscriptBlock::Diff(diff) => {
+                        let shown = diff.hunks.first().map_or(0, |h| h.lines.len().min(40)) + 1;
+                        (shown as f32).mul_add(rows.code, rows.header + CARD_PADDING + CARD_STROKE)
+                    }
                 }
             })
             .sum();
@@ -252,6 +257,8 @@ pub struct MessagesView {
     /// The verbosity the entries' blocks were grouped for; a change
     /// regroups every message.
     verbosity: Option<Verbosity>,
+    /// The diffs an Open diff button asked the Diff pane to show.
+    pending_diff: Option<(Vec<codemason_app_core::diff_view::FileDiff>, usize)>,
 }
 
 impl std::fmt::Debug for Entry {
@@ -327,6 +334,7 @@ impl Default for MessagesView {
             under_pointer: None,
             pending_enlarge: None,
             verbosity: None,
+            pending_diff: None,
         }
     }
 }
@@ -474,7 +482,8 @@ impl MessagesView {
 
     /// Carry out what the view's blocks asked for this frame: Insert puts
     /// the code at the end of the prompt, on a line of its own, and focuses
-    /// it; a thumbnail click opens the image view. Every caller of
+    /// it; a thumbnail click opens the image view; Open diff shows the Diff
+    /// pane on the message's diffs. Every caller of
     /// [`Self::show_messages`] calls this after it, with the App it may now
     /// change.
     pub fn apply_actions(&mut self, ctx: &egui::Context, app: &mut App) {
@@ -491,6 +500,9 @@ impl MessagesView {
         }
         if let Some(path) = self.take_enlarge() {
             crate::dialogs::image_view::open(ctx, path);
+        }
+        if let Some((files, selected)) = self.pending_diff.take() {
+            app.diff_pane.open(files, selected);
         }
     }
 
@@ -753,6 +765,9 @@ impl MessagesView {
                 match action {
                     BlockAction::Insert(code) => self.pending_insert = Some(code),
                     BlockAction::Enlarge(path) => self.pending_enlarge = Some(path),
+                    BlockAction::OpenDiff(files, selected) => {
+                        self.pending_diff = Some((files, selected));
+                    }
                 }
             }
             self.laid_out += 1;
@@ -891,14 +906,8 @@ fn draw_blocks(
                 ui.add(egui::Label::new(job).wrap());
             }
             TranscriptBlock::Thinking(lines) => thinking_ui(ui, id, lines, style),
-            TranscriptBlock::Diff(_) => {
-                ui.label(
-                    egui::RichText::new(block.plain_text())
-                        .monospace()
-                        .color(palette.muted),
-                );
-            }
-            TranscriptBlock::Activity(group) => activity_ui(ui, id, group, style),
+            TranscriptBlock::Diff(diff) => diff_ui(ui, entry, diff, palette, actions),
+            TranscriptBlock::Activity(group) => activity_ui(ui, id, entry, group, style, actions),
             TranscriptBlock::Tool {
                 lines,
                 status_label,
@@ -1049,7 +1058,14 @@ fn thinking_ui(ui: &mut egui::Ui, id: egui::Id, lines: &[StyledLine], style: Blo
 
 /// An activity row: its summary, a spinner while a call runs and the
 /// failure count in the error colour; opened, every folded block.
-fn activity_ui(ui: &mut egui::Ui, id: egui::Id, group: &ActivityGroup, style: BlockStyle<'_>) {
+fn activity_ui(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    entry: &Entry,
+    group: &ActivityGroup,
+    style: BlockStyle<'_>,
+    actions: &mut Vec<BlockAction>,
+) {
     let palette = style.palette;
     let label = group.summary.label();
     let errors = group.summary.errors;
@@ -1086,14 +1102,59 @@ fn activity_ui(ui: &mut egui::Ui, id: egui::Id, group: &ActivityGroup, style: Bl
                     | TranscriptBlock::Notice(_)
                     | TranscriptBlock::Image { .. }
                     | TranscriptBlock::Activity(_) => {}
-                    TranscriptBlock::Diff(_) => {
-                        ui.label(
-                            egui::RichText::new(item.plain_text())
-                                .monospace()
-                                .color(palette.muted),
-                        );
-                    }
+                    TranscriptBlock::Diff(diff) => diff_ui(ui, entry, diff, palette, actions),
                 }
             }
         });
+}
+
+/// Every diff of `entry`, in order, folded ones included.
+fn entry_diffs(entry: &Entry) -> Vec<&codemason_app_core::diff_view::FileDiff> {
+    let mut diffs = Vec::new();
+    for block in &entry.blocks {
+        match block {
+            TranscriptBlock::Diff(diff) => diffs.push(diff),
+            TranscriptBlock::Activity(group) => {
+                diffs.extend(group.items.iter().filter_map(|item| match item {
+                    TranscriptBlock::Diff(diff) => Some(diff),
+                    TranscriptBlock::Markdown(_)
+                    | TranscriptBlock::Code { .. }
+                    | TranscriptBlock::Plain(_)
+                    | TranscriptBlock::Notice(_)
+                    | TranscriptBlock::Tool { .. }
+                    | TranscriptBlock::Thinking(_)
+                    | TranscriptBlock::Image { .. }
+                    | TranscriptBlock::Activity(_) => None,
+                }));
+            }
+            TranscriptBlock::Markdown(_)
+            | TranscriptBlock::Code { .. }
+            | TranscriptBlock::Plain(_)
+            | TranscriptBlock::Notice(_)
+            | TranscriptBlock::Tool { .. }
+            | TranscriptBlock::Thinking(_)
+            | TranscriptBlock::Image { .. } => {}
+        }
+    }
+    diffs
+}
+
+/// An inline diff; Open diff asks for the Diff pane on the message's diffs
+/// with this one selected.
+fn diff_ui(
+    ui: &mut egui::Ui,
+    entry: &Entry,
+    diff: &codemason_app_core::diff_view::FileDiff,
+    palette: &Palette,
+    actions: &mut Vec<BlockAction>,
+) {
+    if crate::panels::diff::inline_diff_ui(ui, diff, palette) {
+        let diffs = entry_diffs(entry);
+        let selected = diffs
+            .iter()
+            .position(|d| std::ptr::eq(*d, diff))
+            .unwrap_or(0);
+        let files = diffs.into_iter().cloned().collect();
+        actions.push(BlockAction::OpenDiff(files, selected));
+    }
 }

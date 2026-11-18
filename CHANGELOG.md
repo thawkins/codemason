@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added: a finished edit (`Edit`, `multi_edit`, `Write`, `create`) is followed in the transcript by its diff: the path with `+added -removed`, the first hunk with line numbers on added and removed backgrounds, and an Open diff button. Under the default verbosity the diff sits inside the activity row.
+- Added: a Diff pane (opened by Open diff) shows a message's changed files one at a time, unified or split. Buttons, or `]`/`[` (hunk), `n`/`p` (file), `v` (layout) and `m` (mark reviewed) while the pane has the keyboard, move through them; a reviewed file is collapsed, and the marks survive closing the pane.
 - Added: `/verbosity low|medium|high` and `/thinking-display show|hide|collapse`; the `verbosity` and `thinking_display` keys in `codemason.json` set them at startup.
 - Added: at the default verbosity `low`, each run of tool calls and reasoning in a reply is one row such as "Read 4 files, edited 2 files, ran 1 command (12 s)", with a spinner while a call runs and the failure count in the error colour; a click lists every call. `medium` folds only reasoning, `high` shows every call.
 - Added: reasoning shows under a "Thinking" row that is open while the reply streams and closes when it completes (`/thinking-display collapse`, the default); `show` keeps it open, `hide` removes it.

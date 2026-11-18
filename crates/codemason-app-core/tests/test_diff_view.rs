@@ -81,8 +81,14 @@ fn test_diff_view_from_tool_inputs() {
         ["d.rs", "e.rs"]
     );
 
-    assert!(diffs_from_tool_input("read", &json!({"path": "a"})).is_empty());
-    assert!(diffs_from_tool_input("Edit", &json!({})).is_empty());
+    assert_eq!(
+        diffs_from_tool_input("read", &json!({"path": "a"})),
+        [] as [codemason_app_core::diff_view::FileDiff; 0]
+    );
+    assert_eq!(
+        diffs_from_tool_input("Edit", &json!({})),
+        [] as [codemason_app_core::diff_view::FileDiff; 0]
+    );
 }
 
 #[test]

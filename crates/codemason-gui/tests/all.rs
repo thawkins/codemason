@@ -100,6 +100,8 @@ mod test_clipboard;
 mod test_dialogs;
 #[path = "test_dialogs_more.rs"]
 mod test_dialogs_more;
+#[path = "test_diff_pane.rs"]
+mod test_diff_pane;
 #[path = "test_dock.rs"]
 mod test_dock;
 #[path = "test_files.rs"]
