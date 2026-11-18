@@ -13140,18 +13140,25 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
         self.add_to_history(display);
         self.status = format!("plugin command /{}", plugin_cmd.trigger);
 
+        // The same agent an ordinary prompt gets: selected model, thinking
+        // level and role-mode prompt applied.
+        let agent = self.prepare_agent_for_dispatch();
         let flag = Arc::new(AtomicBool::new(false));
         self.session.cancel_flag = Some(flag.clone());
-        let processor = self.session_processor.clone();
-        let agent = Arc::new(self.session.agent_info.clone());
-        tokio::spawn(async move {
-            if let Err(e) = processor
-                .process_message(&sid, &rendered, &agent, flag)
-                .await
-            {
-                tracing::warn!(error = %e, "Failed to process plugin command prompt");
-            }
-        });
+        // Busy from now, not from the first `MessageStart`: a queued command
+        // must not be followed by the next queued entry while its turn starts.
+        self.session.is_processing = true;
+        // A failed turn ends the busy state set above through exactly one
+        // `AgentError`, whether or not the processor reported it itself.
+        tokio::spawn(crate::app::command_turn::run_command_turn(
+            self.session_processor.clone(),
+            self.event_bus.clone(),
+            sid,
+            rendered,
+            agent,
+            flag,
+            "plugin command",
+        ));
         true
     }
 

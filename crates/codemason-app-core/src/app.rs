@@ -24,6 +24,7 @@ mod backend_panel;
 pub use self::backend_panel::{BackendPanelRow, BackendPanelState};
 
 mod bench;
+mod command_turn;
 mod compress;
 pub mod cron;
 mod event_handler;

@@ -20,6 +20,7 @@
 
 ### Fixed
 
+- Fixed: a plugin prompt command (for example `/commit`) now runs with the model and thinking level selected with `/model` and `/thinking`, and marks the session busy as soon as it is sent, so a queued message no longer starts a second, overlapping turn. A command whose turn fails to start now reports the error.
 - Fixed: Ollama (and Ollama-compatible) streams that omit the tool-call `index` no longer merge parallel tool calls into one; each call is kept apart by its id.
 - Fixed: a model-router tier modifier (`/simple ...`, `[complex] ...`, `deep mode: ...`) is now stripped from the prompt before it is sent to the selected model, on every request including tool-loop follow-ups (FR-020).
 - Fixed: telemetry no longer exports Ollama-style model names such as `llama3:latest` or `gpt-oss:120b` as `redacted`; API keys and other secrets passed as a model name are still redacted.
