@@ -605,7 +605,7 @@ fn test_permission_double_click_answers_once() {
     harness.run();
     harness.get_by_label(ALLOW_ONCE).click();
     harness.run();
-    assert!(reply_ids(&mut bus).is_empty());
+    assert_eq!(reply_ids(&mut bus), [] as [std::string::String; 0]);
     assert_eq!(
         harness.state().app().session.permission_queue.len(),
         1,

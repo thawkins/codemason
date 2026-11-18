@@ -608,7 +608,7 @@ fn test_code_block_layout_is_reused_until_the_code_or_theme_changes() {
     let themes = ThemeCatalog::builtin();
     let dark = Palette::from_tokens(&themes.resolve(&ThemeSelection::System, true));
     let light = Palette::from_tokens(&themes.resolve(&ThemeSelection::System, false));
-    let id = egui::Id::new("code-cache-test");
+    let id = egui::Id::unique("code-cache-test");
     let slot = id.with("job");
     let mut harness = Harness::new_ui_state(
         |ui, (code, palette): &mut (String, Palette)| {

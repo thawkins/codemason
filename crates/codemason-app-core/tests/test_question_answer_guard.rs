@@ -107,7 +107,10 @@ async fn test_question_double_enter_answers_once_and_never_the_next_unread() {
     // (a second press) still does not dismiss q-2.
     echo(&mut app, "q-1").await;
     press(&mut app, KeyCode::Esc).await;
-    assert!(answers(&mut bus).is_empty());
+    assert_eq!(
+        answers(&mut bus),
+        [] as [(std::string::String, std::string::String); 0]
+    );
     assert_eq!(app.session.question_queue.len(), 1, "q-2 stays pending");
 
     wait_shown(&mut app);
