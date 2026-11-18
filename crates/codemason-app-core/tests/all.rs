@@ -329,6 +329,8 @@ mod test_mcp_remove;
 mod test_memory_clear_confirm;
 #[path = "test_memory_panel.rs"]
 mod test_memory_panel;
+#[path = "test_message_blocks.rs"]
+mod test_message_blocks;
 #[path = "test_message_edit_seq_cache.rs"]
 mod test_message_edit_seq_cache;
 #[path = "test_message_widget_duration_tests.rs"]
