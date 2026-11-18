@@ -3,7 +3,8 @@
 //! Detects three modifier formats (slash, bracket, word) that allow users to
 //! explicitly override the classifier's tier decision. When a modifier is
 //! detected, it is stripped from the prompt before forwarding to the LLM
-//! (FR-020).
+//! (FR-020): [`strip_modifiers_from_messages`] runs on every request the router
+//! delegates, including tool-loop continuations that resend the history.
 //!
 //! Modifier aliases map to tiers per FR-019:
 //! - `simple`, `basic`, `cheap` -> SIMPLE
@@ -11,7 +12,10 @@
 //! - `complex`, `advanced` -> COMPLEX
 //! - `max`, `reasoning`, `think`, `deep` -> REASONING
 
+use std::sync::Arc;
+
 use super::router_config::Tier;
+use crate::llm::{ChatContent, ChatMessage, ContentPart};
 
 /// Result of modifier detection.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +101,64 @@ fn alias_to_tier(alias: &str) -> Option<Tier> {
         "complex" | "advanced" => Some(Tier::Complex),
         "max" | "reasoning" | "think" | "deep" => Some(Tier::Reasoning),
         _ => None,
+    }
+}
+
+/// Strip a leading tier modifier from every user message before the request is
+/// forwarded to the selected model (FR-020).
+///
+/// The modifier is a routing instruction for the router, not part of the
+/// prompt. Every user message is checked (not only the last) because each call
+/// resends the history, so an earlier `/max ...` turn would otherwise reach the
+/// model on every later request. For a multi-part message the first text part
+/// is checked, the same part the router classifies.
+///
+/// A message that is only a modifier (e.g. `/max`) is left unchanged, so the
+/// model never receives an empty user turn. The shared history is copied only
+/// when there is something to strip.
+///
+/// # Arguments
+/// * `messages` - the request messages; replaced by an edited copy if needed.
+pub fn strip_modifiers_from_messages(messages: &mut Arc<Vec<ChatMessage>>) {
+    if !messages.iter().any(|m| stripped_text(m).is_some()) {
+        return;
+    }
+    for message in Arc::make_mut(messages).iter_mut() {
+        if let Some(stripped) = stripped_text(message)
+            && let Some(text) = first_text_mut(message)
+        {
+            *text = stripped;
+        }
+    }
+}
+
+/// The text a user message should carry once its modifier is stripped, or
+/// `None` when there is nothing to strip.
+fn stripped_text(message: &ChatMessage) -> Option<String> {
+    if message.role != "user" {
+        return None;
+    }
+    let text = match &message.content {
+        ChatContent::Text(text) => text.as_str(),
+        ChatContent::Parts(parts) => parts.iter().find_map(|part| match part {
+            ContentPart::Text { text } => Some(text.as_str()),
+            _ => None,
+        })?,
+    };
+    detect_modifier(text)
+        .map(|result| result.remaining_prompt)
+        .filter(|remaining| !remaining.is_empty())
+}
+
+/// The message text the router classifies: the whole text, or the first text
+/// part of a multi-part message.
+fn first_text_mut(message: &mut ChatMessage) -> Option<&mut String> {
+    match &mut message.content {
+        ChatContent::Text(text) => Some(text),
+        ChatContent::Parts(parts) => parts.iter_mut().find_map(|part| match part {
+            ContentPart::Text { text } => Some(text),
+            _ => None,
+        }),
     }
 }
 

@@ -8,10 +8,6 @@ use thiserror::Error;
 /// Structured error type for shared codemason operations.
 #[derive(Debug, Error)]
 pub enum CodemasonError {
-    /// Database or storage-layer error.
-    #[error("storage error: {0}")]
-    Storage(#[from] rusqlite::Error),
-
     /// LLM provider communication error.
     #[error("provider error ({provider}): {message}")]
     Provider {

@@ -1,4 +1,4 @@
-//! `App::new` and provider-setup helpers for the TUI.
+//! `App::new` and provider-setup helpers for the TUI and GUI.
 use std::collections::{HashMap, VecDeque};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -12,8 +12,6 @@ use codemason_agent::{
     StartupTimings, agent::AgentInfo, event::EventBus, provider::ProviderRegistry,
     session::processor::SessionProcessor, storage::Storage,
 };
-
-use crate::tips;
 
 // State types from app/state.rs
 use crate::app::state::{App, LogLevel, ScreenMode};
@@ -236,7 +234,6 @@ impl App {
             model_loading_state: None,
             model_download_state: None,
             current_screen: ScreenMode::Chat,
-            tip: tips::random_tip(),
             cwd,
             plugin_commands: crate::app::state::plugin_commands_for_surface(&cwd_path),
             user_commands: crate::app::state::user_commands_for_surface(&cwd_path),
@@ -260,10 +257,8 @@ impl App {
             input_queue_capacity: app_config.effective_input_queue_capacity(),
             queue_menu_open: false,
             queue_menu_selected: 0,
-            queue_menu_area: Area::default(),
             queue_show_open: false,
             queue_show_selected: 0,
-            queue_show_area: Area::default(),
             queue_clear_confirm_open: false,
             queue_clear_confirm_selected: crate::app::QUEUE_CLEAR_CONFIRM_NO,
             queue_clear_confirm_area: Area::default(),
@@ -271,7 +266,6 @@ impl App {
             notice_title: String::new(),
             notice_message: String::new(),
             notice_detail: None,
-            notice_area: Area::default(),
             memory_clear_confirm_open: false,
             memory_clear_confirm_selected: crate::app::MEMORY_CLEAR_CONFIRM_NO,
             db_prune_confirm_open: false,
@@ -292,7 +286,6 @@ impl App {
             plugin_store_nav_area: Area::default(),
             plugin_store_marketplace_area: Area::default(),
             plugin_store_result_area: Area::default(),
-            plugin_store_search_area: Area::default(),
             plugin_store_clear_area: Area::default(),
             connector_store: None,
             connector_catalogue_result: Arc::new(std::sync::Mutex::new(None)),
@@ -302,14 +295,11 @@ impl App {
             ),
             connector_enrich_result: Arc::new(std::sync::Mutex::new(Vec::new())),
             connector_enrich_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            connector_store_area: Area::default(),
             connector_store_nav_area: Area::default(),
             connector_store_marketplace_area: Area::default(),
             connector_store_result_area: Area::default(),
-            connector_store_search_area: Area::default(),
             connector_store_clear_area: Area::default(),
             backend_panel: None,
-            backend_panel_area: Area::default(),
             show_log,
             show_profile: false,
             show_tasks_panel: false,
@@ -318,7 +308,6 @@ impl App {
             show_context_panel: false,
             log_entries: Vec::new(),
             log_line_cache: Vec::new(),
-            log_cache_width: 0,
             log_seq: 0,
             withheld_log_exports: 0,
             log_window_path,
@@ -347,10 +336,6 @@ impl App {
             agents_cursor_subagent: None,
             agents_subagent_task_ids: Vec::new(),
             agents_row_task_ids: Vec::new(),
-            active_agents_custom_names: std::collections::HashSet::new(),
-            active_agents_custom_names_version: 0,
-            active_agents_teammate_ids: std::collections::HashSet::new(),
-            active_agents_teammate_ids_version: 0,
             scrollbar_drag: None,
             text_selection: None,
             log_content_lines: Vec::new(),
@@ -373,7 +358,6 @@ impl App {
             teams_rows_area: Area::default(),
             output_view_area: Area::default(),
             research_view_area: Area::default(),
-            memory_view_area: Area::default(),
             agents_button_area: Area::default(),
             teams_button_area: Area::default(),
             show_agents_window: false,
@@ -458,13 +442,11 @@ impl App {
             jobs_last_poll: std::time::Instant::now(),
             housekeeping_runs: 0,
             sid_to_display_name: HashMap::new(),
-            next_agent_index: 1,
             webapi_server: None,
             webapi_addr: codemason_server::DEFAULT_LISTEN_ADDR.to_string(),
             webapi_token: None,
             memory_entry_count: 0,
             memory_entry_count_pending: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            memory_last_updated: None,
             memory_stats_last_refresh: std::time::Instant::now(),
             theme_mode: crate::theme_mode::ThemeMode::Default,
             mouse_enabled: true,
@@ -472,7 +454,6 @@ impl App {
             needs_redraw: true,
             code_index: None,
             code_index_enabled: app_config.code_index.enabled,
-            code_index_stats_cache: None,
             code_index_stats_last_refresh: std::time::Instant::now(),
             code_index_busy: false,
             code_index_graph_busy: false,
@@ -494,13 +475,10 @@ impl App {
             pending_router_save: None,
             row_action_confirm: None,
             row_action_confirm_area: Area::default(),
-            row_action_confirm_yes_area: Area::default(),
-            row_action_confirm_no_area: Area::default(),
             research_progress: Vec::new(),
             research_live_runs: std::sync::Arc::default(),
             skill_registry_cache: None,
             skill_dirs_cache: Vec::new(),
-            skill_registry_last_refresh: std::time::Instant::now(),
             trigger_runtime: None,
         }; // end Self { ... }
         if let Some(ref mut st) = app.startup_timings {

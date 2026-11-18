@@ -1,4 +1,4 @@
-//! Shared clipboard helpers for the TUI.
+//! Shared clipboard helpers for the TUI and GUI.
 //!
 //! Provides thin wrappers around [`arboard`] for reading/writing text and for
 //! saving raw RGBA clipboard image data to a PNG temp file.  All TUI clipboard

@@ -10,9 +10,15 @@
 - Added: `/redo` puts back the turn the last `/undo` removed, messages and files, while nothing has been sent since.
 - Added: `docs/OCGAP.md`, a feature gap analysis against opencode v2.
 
-### Changed
+### Removed
 
-- Changed: `/undo` now deletes the last turn from the session database and restores the work tree to a snapshot taken before that turn's first tool call. Before, it only removed the turn from the view, and the model still received it. Snapshots are kept in a private git repository under `~/.config/codemason/snapshots/`; the project's own `.git` is not touched. Hand edits made after the turn started are reverted with it and return on `/redo`.
+- Removed: the unfinished `codemason-hyperresearch` draft crate and its `hyperresearch` binary (no dependents). The research features it described live in `codemason-research` and `/research`, which are unchanged.
+
+### Performance
+
+- Performance: research locus snippets are found in linear time; a keyword near the end of a 256 KiB source took seconds before.
+- Performance: `codemason-types` no longer depends on bundled SQLite, so builds no longer wait for it before compiling every other crate.
+- Performance: shipped binaries no longer compile dependencies used only by tests and benches: tower-http's `fs` and `trace` features, `memchr` in `codemason-types`, and test-only `rustc-hash`, `tempfile`, `tokio-stream`, `codemason-plugins` and `serde_json` edges.
 
 ### Security
 
@@ -22,6 +28,10 @@
 
 ### Fixed
 
+- Fixed: Ollama (and Ollama-compatible) streams that omit the tool-call `index` no longer merge parallel tool calls into one; each call is kept apart by its id.
+- Fixed: a model-router tier modifier (`/simple ...`, `[complex] ...`, `deep mode: ...`) is now stripped from the prompt before it is sent to the selected model, on every request including tool-loop follow-ups (FR-020).
+- Fixed: telemetry no longer exports Ollama-style model names such as `llama3:latest` or `gpt-oss:120b` as `redacted`; API keys and other secrets passed as a model name are still redacted.
+- Fixed: the `/plugins` and `/connectors` store ledgers (`_state.json`) are written atomically, so a crash mid-write can no longer truncate them, and a symlink at the ledger path is replaced instead of written through.
 - Fixed: the local git tools (`git_diff`, `git_show`, `git_log`, ...) no longer hang for 60 s and fail when git prints more than about 64 KiB; output is read while git runs.
 - Fixed: `bash` output larger than 2 MiB shows its real last lines and an exact "lines omitted" count; before, the tail shown was from the start of the output.
 - Fixed: a message pushed to a teammate's mailbox while a corrupt mailbox was being recovered is no longer lost; recovery moves the file aside under its lock, with a unique name.
@@ -43,6 +53,26 @@
 
 ### Changed
 
+- Changed: `/undo` now deletes the last turn from the session database and restores the work tree to a snapshot taken before that turn's first tool call. Before, it only removed the turn from the view, and the model still received it. Snapshots are kept in a private git repository under `~/.config/codemason/snapshots/`; the project's own `.git` is not touched. Hand edits made after the turn started are reverted with it and return on `/redo`.
+- Changed: `execute_slash_command_inner` in `crates/codemason-app-core/src/app/slash.rs` is decomposed in place (8,690 to 347 lines): 55 command arms of 8+ lines move verbatim into `slash_<command>` methods on `App`, leaving the function as the command dispatcher. The 30 arms that return early return `std::ops::ControlFlow<()>`, and the dispatcher turns `Break` back into `return`, so those commands still skip the trailing `assert_ui_invariants()` exactly as before. Patterns, guards and every string literal are unchanged (literal multiset diff is empty).
+
+- Changed: `process_user_message` in `crates/codemason-agent/src/session/processor.rs` is decomposed in place (2,285 to 1,700 lines): the usage listener, run-cost publisher, turn tool surface, pre-send compaction, loop suspension and budget gates, sub-agent summary nudge, verification gate, step tool-result logging, step-failure classification, spec task auto-completion, background task/shell injection, interim save and turn-end publication move into private `SessionProcessor` methods. The tool-dispatch phase stays inline because source-text tests pin its order and indentation. Every string literal is unchanged (literal multiset diff is empty).
+
+- Changed: `handle_focused_event` in `crates/codemason-app-core/src/app/event_handler.rs` is decomposed in place (2,261 to 691 lines): 53 match-arm bodies of 8+ lines and the three post-match device-flow blocks (Copilot, GitHub, GitLab) move verbatim into `on_<event>` methods on `App`, leaving the function as the event dispatcher. Patterns, guards and every string literal are unchanged (literal multiset diff is empty).
+
+- Changed: `async_main` in `src/main.rs` is decomposed in place (1,492 to 467 lines) into startup phase helpers (`init_tracing`, `load_startup_config`, `build_registries`, `resolve_startup_agent`, `init_telemetry`, `build_session_processor`, `connect_mcp_servers`, ...) and per-command handlers (`run_headless`, `serve`, `launch_gui`, `list_models`, `run_session_export`, ...); the duplicated GUI launch for the default and `session resume` paths now shares `launch_gui`. Behaviour and output strings are unchanged.
+- Changed: `WebGatherer::gather_with_observer` (research `web_gatherer.rs`) is split in place: the vault shortcut, query planning, sub-query search, hit screening, candidate fetch, page capture, open-access recovery, summarize-and-store and end-of-pass summary move into named helpers, and the pass's running counts live in one `SweepTally`; events, log lines and the gather summary are unchanged.
+- Changed: `handle_provider_setup_key` (app-core `input.rs`) is split in place: each setup step's key handling (provider, key entry, device flow, model, Azure resource, thinking level, agent, configured provider, provider config, reset, GitLab, telemetry) moves into its own `on_<step>` function; the dialog's behavior is unchanged.
+- Changed: `build_system_prompt_with_storage_inner` (agent `agent/mod.rs`) is split in place: its fixed prompt sections become named constants, and the template expansion, project-context sections and sub-agent spawning list move to helpers; every built-in agent's system prompt is byte-identical.
+- Changed: `TeamCreateTool::execute` (agent `tool/team_create.rs`) is split in place into named helpers - opening the team store, finding the blueprint directory, running `task-seed.json` and `spawn-prompts.json`, building spawn arguments, recording a pending teammate, and the roster and failed-spawn summaries; the tool's output, metadata and log messages are unchanged.
+- Changed: `create_builtin_agents` (agent `agent/mod.rs`) builds each built-in through one `builtin_agent` constructor that holds the nine fields every built-in shares; agents that differ override `hidden`, `temperature` or `thinking` with struct-update syntax. 545 -> 324 lines; the `{:#?}` dump of all 17 agents is byte-identical before and after (deep-refactor S-09, #9).
+- Changed: `call_llm_step` (agent `loop_steps.rs`) is split in place into named helpers - chat-failure and stream-error handling, the shared emergency overflow compaction (previously duplicated), finish-reason settling, the wait notice, stream flushing, argument accumulation and narrated tool-call recovery - cutting it from 845 to 428 lines with behaviour and every notice string unchanged (deep-refactor S-09, #9).
+- Changed: `tool_result_summary` (app-core `message_text.rs`) is split in place: the git, GitLab, GitHub, team, LSP, code-index, spec and cron arms move into per-family helpers in the same file, cutting the function from 1,314 to 673 lines with output unchanged (deep-refactor S-09, #9).
+- Changed: `/about` describes codemason as an interactive AI coding agent for the terminal and desktop instead of "TUI-based".
+- Changed: dead code removed (20 never-read `App` fields, the unused tips module, five zero-caller specs/codeindex functions, the `TodoRow` alias) and duplicated helpers now call the shared ones (`strutil` truncation, logical-line cursor checks, search context, team error checks); no behaviour change.
+- Changed: every streaming provider uses one stall guard (`http_client::next_chunk_or_stall`); the "stream stalled - no data received for 120s" error is unchanged.
+- Changed: the unwrap and poisoned-lock guards (`scripts/check-security-unwraps.sh`, `scripts/check-poison-locks.sh`) scan the root binary's `src/` as well as `crates/`.
+- Changed: `deny.toml` drops the stale `ring` licence clarification (ring 0.17 declares its own licence) and names `webpki-root-certs` correctly.
 - Changed: `/backend` saves the switch to the user-global config (or the `--config` file) instead of the project file; choose a per-project backend in the project's properties in the sessions sidebar.
 
 ## [1.0.170] - 2026-11-15

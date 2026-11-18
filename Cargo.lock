@@ -1568,20 +1568,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codemason-hyperresearch"
-version = "1.0.170"
-dependencies = [
- "anyhow",
- "clap",
- "codemason-config",
- "codemason-types",
- "serde",
- "serde_json",
- "serde_norway",
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "codemason-llm"
 version = "0.1.0"
 dependencies = [
@@ -1855,9 +1841,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "libc",
- "memchr",
  "regex",
- "rusqlite",
  "serde",
  "serde_json",
  "serial_test",
@@ -8863,7 +8847,6 @@ dependencies = [
  "tower",
  "tower-layer",
  "tower-service",
- "tracing",
  "url",
 ]
 

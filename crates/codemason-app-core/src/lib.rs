@@ -36,7 +36,6 @@ pub mod status;
 pub mod styled;
 pub mod text_utils;
 pub mod theme_mode;
-pub mod tips;
 pub mod tracing_layer;
 pub mod usage_stats;
 

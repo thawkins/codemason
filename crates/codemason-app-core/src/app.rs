@@ -1,4 +1,4 @@
-//! Application state and event handling for the TUI.
+//! Application state and event handling for the TUI and GUI.
 //!
 //! This module is the entry point for the TUI application logic.  The
 //! [`App`] struct and its methods are now split across several submodules

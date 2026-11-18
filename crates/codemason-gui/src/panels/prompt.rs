@@ -359,12 +359,10 @@ fn history_keys_to_app(app: &App) -> (bool, bool) {
     if app.session.history_index.is_some() || app.show_memory {
         return (true, true);
     }
-    let input = &app.session.input;
-    let byte = input
-        .char_indices()
-        .nth(app.session.input_cursor)
-        .map_or(input.len(), |(byte, _)| byte);
-    (!input[..byte].contains('\n'), !input[byte..].contains('\n'))
+    (
+        app.cursor_on_first_logical_line(),
+        app.cursor_on_last_logical_line(),
+    )
 }
 
 /// Whether the App has an `@` mention or `/` command menu open.

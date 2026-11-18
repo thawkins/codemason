@@ -1489,9 +1489,21 @@ pub fn tool_result_summary(
         .or_else(|| out.get("line_count"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as usize;
-    let trunc120 = |s: &str| truncate_str(s, 120);
+    let ctx = ResultCtx {
+        out,
+        cwd,
+        line_count,
+    };
 
     match tool {
+        t if t.starts_with("git_") => git_result_summary(t, &ctx),
+        t if t.starts_with("gitlab_") => gitlab_result_summary(t, &ctx),
+        t if t.starts_with("github_") => github_result_summary(t, &ctx),
+        t if t.starts_with("team_") => team_result_summary(t, &ctx),
+        t if t.starts_with("lsp_") => lsp_result_summary(t, &ctx),
+        t if t.starts_with("codeindex_") => codeindex_result_summary(t, &ctx),
+        t if t.starts_with("spec_") => spec_result_summary(t, &ctx),
+        t if t.starts_with("cron_") => cron_result_summary(t, &ctx),
         // ===================================================================
         //  FILE OPERATIONS
         // ===================================================================
@@ -1929,6 +1941,232 @@ pub fn tool_result_summary(
             }
         }
         // ===================================================================
+        //  DOCUMENT (PDF)
+        // ===================================================================
+        "pdf_read" => Some(format!("{} read", pluralize(line_count, "line", "lines"))),
+        "pdf_write" => {
+            let path = input["path"]
+                .as_str()
+                .map(|p| make_relative_path(p, cwd))
+                .unwrap_or_default();
+            // `pdf_write` reports a page count, not a line count.
+            Some(format!("written to {}", path))
+        }
+        // ===================================================================
+        //  UTILITY
+        // ===================================================================
+        "format" => Some("formatted".to_string()),
+        "metadata" => Some("metadata extracted".to_string()),
+        "truncate" => {
+            let original = out.get("original").and_then(|v| v.as_u64()).unwrap_or(0);
+            let truncated = out.get("truncated").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("{} → {} chars", original, truncated))
+        }
+        "read_line_range" => {
+            let start = out.get("start_line").and_then(|v| v.as_u64());
+            let end = out.get("end_line").and_then(|v| v.as_u64());
+            match (start, end) {
+                (Some(s), Some(e)) => Some(format!("lines {}-{}", s, e)),
+                (Some(s), None) => Some(format!("from line {}", s)),
+                _ => Some("line range".to_string()),
+            }
+        }
+        "memory_store" => {
+            let stored = out
+                .get("stored")
+                .and_then(|v| v.as_bool())
+                .or_else(|| out.get("id").map(|_| true))
+                .unwrap_or(false);
+            if stored {
+                Some("memory stored".to_string())
+            } else {
+                Some("memory not stored".to_string())
+            }
+        }
+        "memory_recall" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!(
+                "{} recalled",
+                pluralize(count, "memory", "memories")
+            ))
+        }
+        "memory_forget" => {
+            let deleted = out.get("deleted").and_then(|v| v.as_u64()).unwrap_or(0);
+            if deleted > 0 {
+                Some(format!(
+                    "{} forgotten",
+                    pluralize(deleted as usize, "memory", "memories")
+                ))
+            } else {
+                Some("nothing to forget".to_string())
+            }
+        }
+
+        // ===================================================================
+        //  MASTERFETCH
+        // ===================================================================
+        "mf_fetch" => {
+            let url = out.get("url").and_then(|v| v.as_str()).unwrap_or("?");
+            let status = out.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
+            let cached = out.get("cached").and_then(|v| v.as_bool()).unwrap_or(false);
+            Some(if cached {
+                format!("cached {}", trunc120(url))
+            } else if status > 0 {
+                format!("{} ({})", trunc120(url), status)
+            } else {
+                trunc120(url)
+            })
+        }
+        "mf_crawl" => {
+            let pages = out
+                .get("pages_fetched")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            Some(format!("{} crawled", pluralize(pages, "page", "pages")))
+        }
+        "mf_cache_clear" => {
+            let purged = out.get("purged").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!("{} purged", pluralize(purged, "entry", "entries")))
+        }
+        "mf_screenshot" => Some("screenshot captured".to_string()),
+        "mf_version" => Some("version info".to_string()),
+
+        // ===================================================================
+        //  APPLY PATCH / SKILLS / SEARCH
+        // ===================================================================
+        "apply_patch" => {
+            let ops = out.get("operations").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let added = out.get("added").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let removed = out.get("removed").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!(
+                "{} applied (+{} -{})",
+                pluralize(ops, "op", "ops"),
+                added,
+                removed
+            ))
+        }
+        "conversation_search" => {
+            let count = out
+                .get("result_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            Some(format!("{} found", pluralize(count, "match", "matches")))
+        }
+        "session_search" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!("{} found", pluralize(count, "match", "matches")))
+        }
+        "initiative" => {
+            let action = out.get("action").and_then(|v| v.as_str()).unwrap_or("done");
+            Some(action.to_string())
+        }
+        "Skill" => {
+            let action = out.get("action").and_then(|v| v.as_str()).unwrap_or("done");
+            Some(action.to_string())
+        }
+
+        // ===================================================================
+        //  BACKGROUND PROCESS
+        // ===================================================================
+        "bg" => {
+            let action = out.get("action").and_then(|v| v.as_str()).unwrap_or("done");
+            let task_id = out.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
+            if task_id.is_empty() {
+                Some(action.to_string())
+            } else {
+                Some(format!("{} {}", action, task_id))
+            }
+        }
+
+        // ===================================================================
+        //  OPEN
+        // ===================================================================
+        "open" => {
+            let target = out.get("target").and_then(|v| v.as_str()).unwrap_or("?");
+            let success = out
+                .get("success")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            Some(format!(
+                "{} ({})",
+                trunc120(target),
+                if success { "opened" } else { "failed" }
+            ))
+        }
+
+        // ===================================================================
+        //  MODEL INFO
+        // ===================================================================
+        "model_info" => {
+            let provider = out
+                .get("provider_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let model = out
+                .get("model_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            Some(format!("{} / {}", trunc120(provider), trunc120(model)))
+        }
+        "codemason_info" => {
+            let version = out.get("version").and_then(|v| v.as_str()).unwrap_or("?");
+            let built = out
+                .get("build_time")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let pid = out
+                .get("execution")
+                .and_then(|e| e.get("pid"))
+                .and_then(serde_json::Value::as_u64)
+                .map_or_else(|| "?".to_string(), |p| p.to_string());
+            Some(format!(
+                "v{} built {} (pid {})",
+                trunc120(version),
+                trunc120(built),
+                pid
+            ))
+        }
+
+        // ===================================================================
+        // DEFAULT: Unknown tools
+        // ===================================================================
+        _ => {
+            if tool.starts_with("team_") {
+                Some(
+                    out.get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("done")
+                        .to_string(),
+                )
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// The inputs every per-family helper of [`tool_result_summary`] reads.
+#[derive(Clone, Copy)]
+struct ResultCtx<'a> {
+    out: &'a serde_json::Value,
+    cwd: &'a str,
+    /// Output line count from `lines` / `line_count` metadata (0 when absent).
+    line_count: usize,
+}
+
+/// Truncate a display value to 120 characters.
+fn trunc120(s: &str) -> String {
+    truncate_str(s, 120)
+}
+
+/// Result summary for the team-coordination tools (`team_*`).
+///
+/// One family of [`tool_result_summary`]; `tool` is already canonical.
+/// An unknown `team_*` tool reports its `status` field (default `done`).
+fn team_result_summary(tool: &str, ctx: &ResultCtx<'_>) -> Option<String> {
+    let out = ctx.out;
+    match tool {
+        // ===================================================================
         //  TEAM COORDINATION
         // ===================================================================
         "team_create" => {
@@ -2055,6 +2293,24 @@ pub fn tool_result_summary(
         }
         "team_shutdown_teammate" => Some("shutdown requested".to_string()),
         "team_shutdown_ack" => Some("shutdown acknowledged".to_string()),
+        _ => Some(
+            out.get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("done")
+                .to_string(),
+        ),
+    }
+}
+
+/// Result summary for the LSP / code-intelligence tools (`lsp_*`).
+///
+/// One family of [`tool_result_summary`]; `tool` is already canonical.
+/// An unknown tool in this family has no summary.
+fn lsp_result_summary(tool: &str, ctx: &ResultCtx<'_>) -> Option<String> {
+    let out = ctx.out;
+    let cwd = ctx.cwd;
+    let line_count = ctx.line_count;
+    match tool {
         // ===================================================================
         //  LSP / CODE INTELLIGENCE
         // ===================================================================
@@ -2092,6 +2348,17 @@ pub fn tool_result_summary(
                 pluralize(count, "diagnostic", "diagnostics")
             ))
         }
+        _ => None,
+    }
+}
+
+/// Result summary for the code-index tools (`codeindex_*`).
+///
+/// One family of [`tool_result_summary`]; `tool` is already canonical.
+/// An unknown tool in this family has no summary.
+fn codeindex_result_summary(tool: &str, ctx: &ResultCtx<'_>) -> Option<String> {
+    let out = ctx.out;
+    match tool {
         // ===================================================================
         //  CODE INDEX
         // ===================================================================
@@ -2150,6 +2417,50 @@ pub fn tool_result_summary(
             ))
         }
         // ===================================================================
+        //  CODE INDEX GRAPH
+        // ===================================================================
+        "codeindex_godnodes" => {
+            let total = out
+                .get("total_results")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            Some(format!(
+                "{} found",
+                pluralize(total, "god node", "god nodes")
+            ))
+        }
+        "codeindex_path" => {
+            let hops = out.get("hops").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!("{} found", pluralize(hops, "hop", "hops")))
+        }
+        "codeindex_explain" => {
+            let name = out.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+            let degree = out.get("degree").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(format!("{} (degree {})", trunc120(name), degree))
+        }
+        "codeindex_communities" => {
+            let total = out
+                .get("total_communities")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            Some(format!(
+                "{} found",
+                pluralize(total, "community", "communities")
+            ))
+        }
+
+        _ => None,
+    }
+}
+
+/// Result summary for the spec-management tools (`spec_*`).
+///
+/// One family of [`tool_result_summary`]; `tool` is already canonical.
+/// An unknown tool in this family has no summary.
+fn spec_result_summary(tool: &str, ctx: &ResultCtx<'_>) -> Option<String> {
+    let out = ctx.out;
+    match tool {
+        // ===================================================================
         //  SPEC MANAGEMENT
         // ===================================================================
         "spec_list" => {
@@ -2189,21 +2500,17 @@ pub fn tool_result_summary(
                 pct, req_count, task_count
             ))
         }
-        // ===================================================================
-        //  DOCUMENT (PDF)
-        // ===================================================================
-        "pdf_read" => Some(format!("{} read", pluralize(line_count, "line", "lines"))),
-        "pdf_write" => {
-            let path = input["path"]
-                .as_str()
-                .map(|p| make_relative_path(p, cwd))
-                .unwrap_or_default();
-            // `pdf_write` reports a page count, not a line count.
-            Some(format!("written to {}", path))
-        }
-        // ===================================================================
-        //  GITHUB
-        // ===================================================================
+        _ => None,
+    }
+}
+
+/// Result summary for the git tools (`git_*`).
+///
+/// One family of [`tool_result_summary`]; `tool` is already canonical.
+/// An unknown tool in this family has no summary.
+fn git_result_summary(tool: &str, ctx: &ResultCtx<'_>) -> Option<String> {
+    let out = ctx.out;
+    match tool {
         // ===================================================================
         //  GIT
         // ===================================================================
@@ -2374,6 +2681,17 @@ pub fn tool_result_summary(
             })
         }
 
+        _ => None,
+    }
+}
+
+/// Result summary for the GitLab tools (`gitlab_*`).
+///
+/// One family of [`tool_result_summary`]; `tool` is already canonical.
+/// An unknown tool in this family has no summary.
+fn gitlab_result_summary(tool: &str, ctx: &ResultCtx<'_>) -> Option<String> {
+    let out = ctx.out;
+    match tool {
         // ===================================================================
         //  GITLAB
         // ===================================================================
@@ -2463,6 +2781,17 @@ pub fn tool_result_summary(
             Some(format!("cancel pipeline #{}", id))
         }
 
+        _ => None,
+    }
+}
+
+/// Result summary for the GitHub tools (`github_*`).
+///
+/// One family of [`tool_result_summary`]; `tool` is already canonical.
+/// An unknown tool in this family has no summary.
+fn github_result_summary(tool: &str, ctx: &ResultCtx<'_>) -> Option<String> {
+    let out = ctx.out;
+    match tool {
         // ===================================================================
         //  GITHUB
         // ===================================================================
@@ -2524,56 +2853,17 @@ pub fn tool_result_summary(
             }
             Some(s)
         }
-        // ===================================================================
-        //  UTILITY
-        // ===================================================================
-        "format" => Some("formatted".to_string()),
-        "metadata" => Some("metadata extracted".to_string()),
-        "truncate" => {
-            let original = out.get("original").and_then(|v| v.as_u64()).unwrap_or(0);
-            let truncated = out.get("truncated").and_then(|v| v.as_u64()).unwrap_or(0);
-            Some(format!("{} → {} chars", original, truncated))
-        }
-        "read_line_range" => {
-            let start = out.get("start_line").and_then(|v| v.as_u64());
-            let end = out.get("end_line").and_then(|v| v.as_u64());
-            match (start, end) {
-                (Some(s), Some(e)) => Some(format!("lines {}-{}", s, e)),
-                (Some(s), None) => Some(format!("from line {}", s)),
-                _ => Some("line range".to_string()),
-            }
-        }
-        "memory_store" => {
-            let stored = out
-                .get("stored")
-                .and_then(|v| v.as_bool())
-                .or_else(|| out.get("id").map(|_| true))
-                .unwrap_or(false);
-            if stored {
-                Some("memory stored".to_string())
-            } else {
-                Some("memory not stored".to_string())
-            }
-        }
-        "memory_recall" => {
-            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-            Some(format!(
-                "{} recalled",
-                pluralize(count, "memory", "memories")
-            ))
-        }
-        "memory_forget" => {
-            let deleted = out.get("deleted").and_then(|v| v.as_u64()).unwrap_or(0);
-            if deleted > 0 {
-                Some(format!(
-                    "{} forgotten",
-                    pluralize(deleted as usize, "memory", "memories")
-                ))
-            } else {
-                Some("nothing to forget".to_string())
-            }
-        }
+        _ => None,
+    }
+}
 
+/// Result summary for the cron-scheduler tools (`cron_*`).
+///
+/// One family of [`tool_result_summary`]; `tool` is already canonical.
+/// An unknown tool in this family has no summary.
+fn cron_result_summary(tool: &str, ctx: &ResultCtx<'_>) -> Option<String> {
+    let out = ctx.out;
+    match tool {
         // ===================================================================
         //  CRON SCHEDULER
         // ===================================================================
@@ -2610,178 +2900,6 @@ pub fn tool_result_summary(
             })
         }
 
-        // ===================================================================
-        //  MASTERFETCH
-        // ===================================================================
-        "mf_fetch" => {
-            let url = out.get("url").and_then(|v| v.as_str()).unwrap_or("?");
-            let status = out.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
-            let cached = out.get("cached").and_then(|v| v.as_bool()).unwrap_or(false);
-            Some(if cached {
-                format!("cached {}", trunc120(url))
-            } else if status > 0 {
-                format!("{} ({})", trunc120(url), status)
-            } else {
-                trunc120(url)
-            })
-        }
-        "mf_crawl" => {
-            let pages = out
-                .get("pages_fetched")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as usize;
-            Some(format!("{} crawled", pluralize(pages, "page", "pages")))
-        }
-        "mf_cache_clear" => {
-            let purged = out.get("purged").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-            Some(format!("{} purged", pluralize(purged, "entry", "entries")))
-        }
-        "mf_screenshot" => Some("screenshot captured".to_string()),
-        "mf_version" => Some("version info".to_string()),
-
-        // ===================================================================
-        //  APPLY PATCH / SKILLS / SEARCH
-        // ===================================================================
-        "apply_patch" => {
-            let ops = out.get("operations").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-            let added = out.get("added").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-            let removed = out.get("removed").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-            Some(format!(
-                "{} applied (+{} -{})",
-                pluralize(ops, "op", "ops"),
-                added,
-                removed
-            ))
-        }
-        "conversation_search" => {
-            let count = out
-                .get("result_count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as usize;
-            Some(format!("{} found", pluralize(count, "match", "matches")))
-        }
-        "session_search" => {
-            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-            Some(format!("{} found", pluralize(count, "match", "matches")))
-        }
-        "initiative" => {
-            let action = out.get("action").and_then(|v| v.as_str()).unwrap_or("done");
-            Some(action.to_string())
-        }
-        "Skill" => {
-            let action = out.get("action").and_then(|v| v.as_str()).unwrap_or("done");
-            Some(action.to_string())
-        }
-
-        // ===================================================================
-        //  BACKGROUND PROCESS
-        // ===================================================================
-        "bg" => {
-            let action = out.get("action").and_then(|v| v.as_str()).unwrap_or("done");
-            let task_id = out.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
-            if task_id.is_empty() {
-                Some(action.to_string())
-            } else {
-                Some(format!("{} {}", action, task_id))
-            }
-        }
-
-        // ===================================================================
-        //  OPEN
-        // ===================================================================
-        "open" => {
-            let target = out.get("target").and_then(|v| v.as_str()).unwrap_or("?");
-            let success = out
-                .get("success")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            Some(format!(
-                "{} ({})",
-                trunc120(target),
-                if success { "opened" } else { "failed" }
-            ))
-        }
-
-        // ===================================================================
-        //  MODEL INFO
-        // ===================================================================
-        "model_info" => {
-            let provider = out
-                .get("provider_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
-            let model = out
-                .get("model_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
-            Some(format!("{} / {}", trunc120(provider), trunc120(model)))
-        }
-        "codemason_info" => {
-            let version = out.get("version").and_then(|v| v.as_str()).unwrap_or("?");
-            let built = out
-                .get("build_time")
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
-            let pid = out
-                .get("execution")
-                .and_then(|e| e.get("pid"))
-                .and_then(serde_json::Value::as_u64)
-                .map_or_else(|| "?".to_string(), |p| p.to_string());
-            Some(format!(
-                "v{} built {} (pid {})",
-                trunc120(version),
-                trunc120(built),
-                pid
-            ))
-        }
-
-        // ===================================================================
-        //  CODE INDEX GRAPH
-        // ===================================================================
-        "codeindex_godnodes" => {
-            let total = out
-                .get("total_results")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as usize;
-            Some(format!(
-                "{} found",
-                pluralize(total, "god node", "god nodes")
-            ))
-        }
-        "codeindex_path" => {
-            let hops = out.get("hops").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-            Some(format!("{} found", pluralize(hops, "hop", "hops")))
-        }
-        "codeindex_explain" => {
-            let name = out.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-            let degree = out.get("degree").and_then(|v| v.as_u64()).unwrap_or(0);
-            Some(format!("{} (degree {})", trunc120(name), degree))
-        }
-        "codeindex_communities" => {
-            let total = out
-                .get("total_communities")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as usize;
-            Some(format!(
-                "{} found",
-                pluralize(total, "community", "communities")
-            ))
-        }
-
-        // ===================================================================
-        // DEFAULT: Unknown tools
-        // ===================================================================
-        _ => {
-            if tool.starts_with("team_") {
-                Some(
-                    out.get("status")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("done")
-                        .to_string(),
-                )
-            } else {
-                None
-            }
-        }
+        _ => None,
     }
 }

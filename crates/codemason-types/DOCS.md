@@ -20,8 +20,6 @@ None. `codemason-types` is a leaf crate consumed by most other codemason crates.
 - tracing
 - chrono
 - regex
-- memchr
-- rusqlite
 - url
 
 Dev-dependencies: tokio (full), serial_test, tempfile.

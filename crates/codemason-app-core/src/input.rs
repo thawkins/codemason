@@ -1,4 +1,4 @@
-//! Keyboard input handling for the TUI.
+//! Keyboard input handling for the TUI and GUI.
 //!
 //! Maps frontend-neutral key presses ([`KeyInput`]) to high-level [`InputAction`]s, handling both
 //! normal editing mode and the permission dialog intercept.
@@ -1256,187 +1256,171 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyInput) {
         ProviderSetupStep::SelectProvider {
             selected,
             force_key_entry,
-        } => match key.key {
-            Key::Up => {
-                let new = if selected == 0 {
-                    PROVIDER_LIST.len() - 1
-                } else {
-                    selected - 1
-                };
-                app.provider_setup = Some(ProviderSetupStep::SelectProvider {
-                    selected: new,
-                    force_key_entry,
-                });
+        } => on_select_provider(app, key, selected, force_key_entry),
+        ProviderSetupStep::EnterKey {
+            provider_id,
+            provider_name,
+            key_field,
+            endpoint_field,
+            active_field,
+            ..
+        } => on_enter_key(
+            app,
+            key,
+            provider_id,
+            provider_name,
+            key_field,
+            endpoint_field,
+            active_field,
+        ),
+        ProviderSetupStep::DeviceFlowPending {
+            flow,
+            user_code,
+            verification_uri,
+        } => on_device_flow_pending(app, key, flow, user_code, verification_uri),
+        ProviderSetupStep::SelectModel {
+            provider_id,
+            provider_name,
+            models,
+            selected,
+        } => on_select_model(app, key, provider_id, provider_name, models, selected),
+        ProviderSetupStep::SelectAzureResource {
+            entries,
+            selected,
+            error,
+        } => on_select_azure_resource(app, key, entries, selected, error),
+        ProviderSetupStep::SelectThinkingLevel {
+            provider_id,
+            provider_name,
+            model,
+            selected,
+        } => on_select_thinking_level(app, key, provider_id, provider_name, model, selected),
+        ProviderSetupStep::Done { .. } => {
+            // Any key closes the done screen and triggers a health check
+            app.provider_setup = None;
+            app.check_provider_health();
+        }
+        ProviderSetupStep::SelectAgent { agents, selected } => {
+            on_select_agent(app, key, agents, selected)
+        }
+        ProviderSetupStep::SelectConfiguredProvider {
+            providers,
+            selected,
+        } => on_select_configured_provider(app, key, providers, selected),
+        ProviderSetupStep::ShowProviderConfig {
+            providers,
+            selected,
+        } => on_show_provider_config(app, key, providers, selected),
+
+        ProviderSetupStep::ResetProvider { selected } => on_reset_provider(app, key, selected),
+
+        // -- GitLab setup (multi-field form) ------------------------------
+        ProviderSetupStep::GitLabSetup {
+            url_input,
+            url_cursor,
+            token_input,
+            token_cursor,
+            active_field,
+            error,
+        } => on_gitlab_setup(
+            app,
+            key,
+            url_input,
+            url_cursor,
+            token_input,
+            token_cursor,
+            active_field,
+            error,
+        ),
+
+        ProviderSetupStep::GitLabValidating {
+            instance_url,
+            token,
+        } => on_gitlab_validating(app, key, instance_url, token),
+
+        // -- Telemetry setup (multi-field form) ---------------------------
+        ProviderSetupStep::TelemetrySetup {
+            endpoint_field,
+            protocol,
+            interval_field,
+            timeout_field,
+            port_field,
+            logs_field,
+            active_field,
+            error: _,
+        } => on_telemetry_setup(
+            app,
+            key,
+            endpoint_field,
+            protocol,
+            interval_field,
+            timeout_field,
+            port_field,
+            logs_field,
+            active_field,
+        ),
+
+        ProviderSetupStep::LoadingModels { .. } => {
+            // Loading state is read-only; any key besides Esc just keeps it alive.
+            if key.key == Key::Esc {
+                app.provider_setup = None;
+                app.model_loading_state = None;
+            } else {
+                app.provider_setup = Some(step);
             }
-            Key::Down => {
-                let new = (selected + 1) % PROVIDER_LIST.len();
-                app.provider_setup = Some(ProviderSetupStep::SelectProvider {
-                    selected: new,
-                    force_key_entry,
-                });
-            }
-            Key::Enter => {
-                let (pid, pname) = PROVIDER_LIST[selected];
-                // If the provider is already configured and the dialog was opened
-                // via `/model` (force_key_entry == false), skip straight to the
-                // model picker. When opened via `/provider` (force_key_entry ==
-                // true) the API-key prompt is always shown so the user can edit
-                // the key.
-                //
-                // The Model Router is an exception: it is a virtual provider with
-                // no API key of its own, so selecting it always opens the cluster
-                // setup UI regardless of force_key_entry.
-                //
-                // Azure Resource is also an exception: it has no API key, only a
-                // resource-file picker, so it always opens that picker.
-                let already_configured = App::get_configured_providers(&app.storage)
-                    .iter()
-                    .any(|p| p.id == pid);
-                if already_configured && !force_key_entry {
-                    if pid == "azure_resource" {
-                        app.refresh_provider();
-                        let provider =
-                            codemason_agent::provider::azure_resource::AzureResourceProvider::new();
-                        let entries = provider.entries();
-                        if entries.is_empty() {
-                            app.provider_setup = Some(ProviderSetupStep::SelectAzureResource {
-                                entries: Vec::new(),
-                                selected: 0,
-                                error: Some(
-                                    "No Azure resources found. Check azureresources.json."
-                                        .to_string(),
-                                ),
-                            });
-                        } else {
-                            // Try to restore last selection
-                            let mut selected = 0usize;
-                            if let Ok(Some(last)) =
-                                app.storage.get_setting("azure_resource_last_selection")
-                            {
-                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&last)
-                                {
-                                    if let Some(last_id) = parsed.get("id").and_then(|v| v.as_str())
-                                    {
-                                        if let Some(idx) =
-                                            entries.iter().position(|e| e.id == last_id)
-                                        {
-                                            selected = idx;
-                                        } else {
-                                            let _ = app  // INTENTIONAL: fallible wiring/persistence call; the in-memory state is authoritative
-                                                .storage
-                                                .delete_setting("azure_resource_last_selection");
-                                        }
-                                    }
-                                }
-                            }
-                            app.provider_setup = Some(ProviderSetupStep::SelectAzureResource {
-                                entries,
-                                selected,
-                                error: None,
-                            });
-                        }
-                        return;
-                    }
-                    if pid == "router" {
-                        let providers = App::get_configured_providers_for_router(&app.storage);
-                        if providers.is_empty() {
-                            app.status =
-                                "[warn] No concrete providers - configure one first".to_string();
-                            app.push_log_no_agent(
-                                crate::app::LogLevel::Warn,
-                                "provider router: no concrete providers configured".to_string(),
-                            );
-                            app.provider_setup = Some(ProviderSetupStep::SelectProvider {
-                                selected,
-                                force_key_entry,
-                            });
-                        } else {
-                            app.provider_setup = Some(app.seeded_router_setup_step(providers));
-                        }
-                        return;
-                    }
+        }
+        ProviderSetupStep::SetupRouter { .. } => {
+            app.provider_setup = Some(step);
+            handle_router_setup_key(app, key);
+        }
+        ProviderSetupStep::SelectRouterModel { .. } => {
+            app.provider_setup = Some(step);
+            handle_router_model_picker_key(app, key);
+        }
+    }
+}
+
+/// Handle a key while the provider setup dialog shows the provider picker.
+fn on_select_provider(app: &mut App, key: KeyInput, selected: usize, force_key_entry: bool) {
+    match key.key {
+        Key::Up => {
+            let new = if selected == 0 {
+                PROVIDER_LIST.len() - 1
+            } else {
+                selected - 1
+            };
+            app.provider_setup = Some(ProviderSetupStep::SelectProvider {
+                selected: new,
+                force_key_entry,
+            });
+        }
+        Key::Down => {
+            let new = (selected + 1) % PROVIDER_LIST.len();
+            app.provider_setup = Some(ProviderSetupStep::SelectProvider {
+                selected: new,
+                force_key_entry,
+            });
+        }
+        Key::Enter => {
+            let (pid, pname) = PROVIDER_LIST[selected];
+            // If the provider is already configured and the dialog was opened
+            // via `/model` (force_key_entry == false), skip straight to the
+            // model picker. When opened via `/provider` (force_key_entry ==
+            // true) the API-key prompt is always shown so the user can edit
+            // the key.
+            //
+            // The Model Router is an exception: it is a virtual provider with
+            // no API key of its own, so selecting it always opens the cluster
+            // setup UI regardless of force_key_entry.
+            //
+            // Azure Resource is also an exception: it has no API key, only a
+            // resource-file picker, so it always opens that picker.
+            let already_configured = App::get_configured_providers(&app.storage)
+                .iter()
+                .any(|p| p.id == pid);
+            if already_configured && !force_key_entry {
+                if pid == "azure_resource" {
                     app.refresh_provider();
-                    app.provider_setup = Some(ProviderSetupStep::LoadingModels {
-                        provider_id: pid.to_string(),
-                        provider_name: pname.to_string(),
-                    });
-                    app.start_model_discovery(pid.to_string(), pname.to_string());
-                } else if pid == "ollama" {
-                    // Ollama doesn't require a key - store empty and mark configured
-                    let _ = app.storage.set_provider_auth(pid, ""); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
-                    let _ = app // INTENTIONAL: fallible wiring/persistence call; the in-memory state is authoritative
-                        .storage
-                        .delete_setting(&format!("provider_{pid}_disabled"));
-                    app.refresh_provider();
-                    app.provider_setup = Some(ProviderSetupStep::LoadingModels {
-                        provider_id: pid.to_string(),
-                        provider_name: pname.to_string(),
-                    });
-                    app.start_model_discovery(pid.to_string(), pname.to_string());
-                } else if pid == "copilot" {
-                    // Copilot: try auto-discover and verify token exchange
-                    let storage = app.storage.clone();
-                    let db_lookup = || {
-                        storage
-                            .get_provider_auth("copilot")
-                            .ok()
-                            .flatten()
-                            .filter(|k| !k.is_empty())
-                    };
-                    let token = codemason_agent::provider::copilot::resolve_copilot_github_token(
-                        Some(&db_lookup),
-                    );
-                    if let Some(ref tk) = token {
-                        // Token exchange is a network call - run it in a
-                        // background task so the UI thread never blocks
-                        // (FR-002, FR-004).  Show the loading spinner while we
-                        // wait for `CopilotTokenExchangeResult`.
-                        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                            app.provider_setup = Some(ProviderSetupStep::LoadingModels {
-                                provider_id: pid.to_string(),
-                                provider_name: pname.to_string(),
-                            });
-                            app.model_loading_state = Some(crate::app::ModelLoadingState {
-                                provider_id: pid.to_string(),
-                                provider_name: pname.to_string(),
-                                started_at: std::time::Instant::now(),
-                            });
-                            let event_bus = app.event_bus.clone();
-                            let tk_clone = tk.clone();
-                            handle.spawn(async move {
-                                let result =
-                                    codemason_agent::provider::copilot::resolve_copilot_auth(
-                                        &tk_clone, None,
-                                    )
-                                    .await;
-                                let (success, api_base, error) = match result {
-                                    Ok(auth) => {
-                                        if !auth.base_url.contains("models.inference.ai.azure.com")
-                                        {
-                                            (true, Some(auth.base_url), None)
-                                        } else {
-                                            // Azure-hosted Copilot endpoint - treat as
-                                            // needing device flow for proper setup.
-                                            (false, None, None)
-                                        }
-                                    }
-                                    Err(e) => (false, None, Some(format!("{e:#}"))),
-                                };
-                                event_bus.publish(
-                                    codemason_agent::event::Event::CopilotTokenExchangeResult {
-                                        success,
-                                        api_base,
-                                        error,
-                                    },
-                                );
-                            });
-                            return;
-                        }
-                    }
-                    // No token or no runtime - start device flow
-                    start_copilot_device_flow_setup(app);
-                } else if pid == "azure_resource" {
-                    // Azure Resource: load entries from azureresources.json
                     let provider =
                         codemason_agent::provider::azure_resource::AzureResourceProvider::new();
                     let entries = provider.entries();
@@ -1461,8 +1445,8 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyInput) {
                                         selected = idx;
                                     } else {
                                         let _ = app  // INTENTIONAL: fallible wiring/persistence call; the in-memory state is authoritative
-                                            .storage
-                                            .delete_setting("azure_resource_last_selection");
+                                                .storage
+                                                .delete_setting("azure_resource_last_selection");
                                     }
                                 }
                             }
@@ -1473,10 +1457,9 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyInput) {
                             error: None,
                         });
                     }
-                } else if pid == "router" {
-                    // The Model Router is a virtual provider with no API key of
-                    // its own. Selecting it from the provider picker opens the
-                    // router cluster setup panel, mirroring `/provider router`.
+                    return;
+                }
+                if pid == "router" {
                     let providers = App::get_configured_providers_for_router(&app.storage);
                     if providers.is_empty() {
                         app.status =
@@ -1485,8 +1468,6 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyInput) {
                             crate::app::LogLevel::Warn,
                             "provider router: no concrete providers configured".to_string(),
                         );
-                        // Keep the picker open so the user can choose a concrete
-                        // provider to configure first.
                         app.provider_setup = Some(ProviderSetupStep::SelectProvider {
                             selected,
                             force_key_entry,
@@ -1494,69 +1475,210 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyInput) {
                     } else {
                         app.provider_setup = Some(app.seeded_router_setup_step(providers));
                     }
+                    return;
+                }
+                app.refresh_provider();
+                app.provider_setup = Some(ProviderSetupStep::LoadingModels {
+                    provider_id: pid.to_string(),
+                    provider_name: pname.to_string(),
+                });
+                app.start_model_discovery(pid.to_string(), pname.to_string());
+            } else if pid == "ollama" {
+                // Ollama doesn't require a key - store empty and mark configured
+                let _ = app.storage.set_provider_auth(pid, ""); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
+                let _ = app // INTENTIONAL: fallible wiring/persistence call; the in-memory state is authoritative
+                    .storage
+                    .delete_setting(&format!("provider_{pid}_disabled"));
+                app.refresh_provider();
+                app.provider_setup = Some(ProviderSetupStep::LoadingModels {
+                    provider_id: pid.to_string(),
+                    provider_name: pname.to_string(),
+                });
+                app.start_model_discovery(pid.to_string(), pname.to_string());
+            } else if pid == "copilot" {
+                // Copilot: try auto-discover and verify token exchange
+                let storage = app.storage.clone();
+                let db_lookup = || {
+                    storage
+                        .get_provider_auth("copilot")
+                        .ok()
+                        .flatten()
+                        .filter(|k| !k.is_empty())
+                };
+                let token = codemason_agent::provider::copilot::resolve_copilot_github_token(Some(
+                    &db_lookup,
+                ));
+                if let Some(ref tk) = token {
+                    // Token exchange is a network call - run it in a
+                    // background task so the UI thread never blocks
+                    // (FR-002, FR-004).  Show the loading spinner while we
+                    // wait for `CopilotTokenExchangeResult`.
+                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                        app.provider_setup = Some(ProviderSetupStep::LoadingModels {
+                            provider_id: pid.to_string(),
+                            provider_name: pname.to_string(),
+                        });
+                        app.model_loading_state = Some(crate::app::ModelLoadingState {
+                            provider_id: pid.to_string(),
+                            provider_name: pname.to_string(),
+                            started_at: std::time::Instant::now(),
+                        });
+                        let event_bus = app.event_bus.clone();
+                        let tk_clone = tk.clone();
+                        handle.spawn(async move {
+                            let result = codemason_agent::provider::copilot::resolve_copilot_auth(
+                                &tk_clone, None,
+                            )
+                            .await;
+                            let (success, api_base, error) = match result {
+                                Ok(auth) => {
+                                    if !auth.base_url.contains("models.inference.ai.azure.com") {
+                                        (true, Some(auth.base_url), None)
+                                    } else {
+                                        // Azure-hosted Copilot endpoint - treat as
+                                        // needing device flow for proper setup.
+                                        (false, None, None)
+                                    }
+                                }
+                                Err(e) => (false, None, Some(format!("{e:#}"))),
+                            };
+                            event_bus.publish(
+                                codemason_agent::event::Event::CopilotTokenExchangeResult {
+                                    success,
+                                    api_base,
+                                    error,
+                                },
+                            );
+                        });
+                        return;
+                    }
+                }
+                // No token or no runtime - start device flow
+                start_copilot_device_flow_setup(app);
+            } else if pid == "azure_resource" {
+                // Azure Resource: load entries from azureresources.json
+                let provider =
+                    codemason_agent::provider::azure_resource::AzureResourceProvider::new();
+                let entries = provider.entries();
+                if entries.is_empty() {
+                    app.provider_setup = Some(ProviderSetupStep::SelectAzureResource {
+                        entries: Vec::new(),
+                        selected: 0,
+                        error: Some(
+                            "No Azure resources found. Check azureresources.json.".to_string(),
+                        ),
+                    });
                 } else {
-                    // Pre-fill the key field with the existing stored key (if
-                    // any) so the user can edit it rather than re-entering
-                    // from scratch.
-                    let existing_key = app.provider_api_key(pid).unwrap_or_default();
-                    app.provider_setup = Some(ProviderSetupStep::EnterKey {
-                        provider_id: pid.to_string(),
-                        provider_name: pname.to_string(),
-                        key_field: crate::input_field::InputField::with_text(existing_key),
-                        endpoint_field: if pid == "generic_openai" {
-                            crate::input_field::InputField::with_text(
-                                app.storage
-                                    .get_setting("generic_openai_api_base")
-                                    .ok()
-                                    .flatten()
-                                    .unwrap_or_default(),
-                            )
-                        } else if pid == "azure_foundry" {
-                            crate::input_field::InputField::with_text(
-                                app.storage
-                                    .get_setting("azure_foundry_api_base")
-                                    .ok()
-                                    .flatten()
-                                    .unwrap_or_default(),
-                            )
-                        } else {
-                            crate::input_field::InputField::new()
-                        },
-                        active_field: 0,
+                    // Try to restore last selection
+                    let mut selected = 0usize;
+                    if let Ok(Some(last)) = app.storage.get_setting("azure_resource_last_selection")
+                    {
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&last) {
+                            if let Some(last_id) = parsed.get("id").and_then(|v| v.as_str()) {
+                                if let Some(idx) = entries.iter().position(|e| e.id == last_id) {
+                                    selected = idx;
+                                } else {
+                                    let _ = app // INTENTIONAL: fallible wiring/persistence call; the in-memory state is authoritative
+                                        .storage
+                                        .delete_setting("azure_resource_last_selection");
+                                }
+                            }
+                        }
+                    }
+                    app.provider_setup = Some(ProviderSetupStep::SelectAzureResource {
+                        entries,
+                        selected,
                         error: None,
                     });
                 }
-            }
-            _ => {
-                app.provider_setup = Some(ProviderSetupStep::SelectProvider {
-                    selected,
-                    force_key_entry,
+            } else if pid == "router" {
+                // The Model Router is a virtual provider with no API key of
+                // its own. Selecting it from the provider picker opens the
+                // router cluster setup panel, mirroring `/provider router`.
+                let providers = App::get_configured_providers_for_router(&app.storage);
+                if providers.is_empty() {
+                    app.status = "[warn] No concrete providers - configure one first".to_string();
+                    app.push_log_no_agent(
+                        crate::app::LogLevel::Warn,
+                        "provider router: no concrete providers configured".to_string(),
+                    );
+                    // Keep the picker open so the user can choose a concrete
+                    // provider to configure first.
+                    app.provider_setup = Some(ProviderSetupStep::SelectProvider {
+                        selected,
+                        force_key_entry,
+                    });
+                } else {
+                    app.provider_setup = Some(app.seeded_router_setup_step(providers));
+                }
+            } else {
+                // Pre-fill the key field with the existing stored key (if
+                // any) so the user can edit it rather than re-entering
+                // from scratch.
+                let existing_key = app.provider_api_key(pid).unwrap_or_default();
+                app.provider_setup = Some(ProviderSetupStep::EnterKey {
+                    provider_id: pid.to_string(),
+                    provider_name: pname.to_string(),
+                    key_field: crate::input_field::InputField::with_text(existing_key),
+                    endpoint_field: if pid == "generic_openai" {
+                        crate::input_field::InputField::with_text(
+                            app.storage
+                                .get_setting("generic_openai_api_base")
+                                .ok()
+                                .flatten()
+                                .unwrap_or_default(),
+                        )
+                    } else if pid == "azure_foundry" {
+                        crate::input_field::InputField::with_text(
+                            app.storage
+                                .get_setting("azure_foundry_api_base")
+                                .ok()
+                                .flatten()
+                                .unwrap_or_default(),
+                        )
+                    } else {
+                        crate::input_field::InputField::new()
+                    },
+                    active_field: 0,
+                    error: None,
                 });
             }
-        },
-        ProviderSetupStep::EnterKey {
-            provider_id,
-            provider_name,
-            mut key_field,
-            mut endpoint_field,
-            mut active_field,
-            ..
-        } => match key.key {
-            Key::Enter => {
-                let trimmed = key_field.text().trim().to_string();
-                if trimmed.is_empty() {
-                    app.provider_setup = Some(ProviderSetupStep::EnterKey {
-                        provider_id,
-                        provider_name,
-                        key_field,
-                        endpoint_field,
-                        active_field,
-                        error: Some("API key cannot be empty.".to_string()),
-                    });
-                } else if provider_id == "copilot"
-                    && codemason_agent::provider::copilot::is_pat_token(&trimmed)
-                {
-                    app.provider_setup = Some(ProviderSetupStep::EnterKey {
+        }
+        _ => {
+            app.provider_setup = Some(ProviderSetupStep::SelectProvider {
+                selected,
+                force_key_entry,
+            });
+        }
+    }
+}
+
+/// Handle a key while the provider setup dialog shows the API-key / endpoint entry form.
+fn on_enter_key(
+    app: &mut App,
+    key: KeyInput,
+    provider_id: String,
+    provider_name: String,
+    mut key_field: crate::input_field::InputField,
+    mut endpoint_field: crate::input_field::InputField,
+    mut active_field: u8,
+) {
+    match key.key {
+        Key::Enter => {
+            let trimmed = key_field.text().trim().to_string();
+            if trimmed.is_empty() {
+                app.provider_setup = Some(ProviderSetupStep::EnterKey {
+                    provider_id,
+                    provider_name,
+                    key_field,
+                    endpoint_field,
+                    active_field,
+                    error: Some("API key cannot be empty.".to_string()),
+                });
+            } else if provider_id == "copilot"
+                && codemason_agent::provider::copilot::is_pat_token(&trimmed)
+            {
+                app.provider_setup = Some(ProviderSetupStep::EnterKey {
                           provider_id,
                           provider_name,
                           key_field,
@@ -1567,11 +1689,33 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyInput) {
                                   .to_string(),
                           ),
                       });
-                } else {
-                    // FUNC-027: a failed credential write must be surfaced, not
-                    // silently dropped while the dialog advances as if the key
-                    // had been saved.
-                    if let Err(e) = app.storage.set_provider_auth(&provider_id, &trimmed) {
+            } else {
+                // FUNC-027: a failed credential write must be surfaced, not
+                // silently dropped while the dialog advances as if the key
+                // had been saved.
+                if let Err(e) = app.storage.set_provider_auth(&provider_id, &trimmed) {
+                    app.provider_setup = Some(ProviderSetupStep::EnterKey {
+                        provider_id,
+                        provider_name,
+                        key_field,
+                        endpoint_field,
+                        active_field,
+                        error: Some(format!(
+                            "Failed to save API key: {e}. Check the credential store and retry."
+                        )),
+                    });
+                    return;
+                }
+                if provider_id == "generic_openai" || provider_id == "azure_foundry" {
+                    let endpoint = endpoint_field.text().trim();
+                    let endpoint_result = if endpoint.is_empty() {
+                        app.storage
+                            .delete_setting(&format!("{provider_id}_api_base"))
+                    } else {
+                        app.storage
+                            .set_setting(&format!("{provider_id}_api_base"), endpoint)
+                    };
+                    if let Err(e) = endpoint_result {
                         app.provider_setup = Some(ProviderSetupStep::EnterKey {
                             provider_id,
                             provider_name,
@@ -1579,849 +1723,825 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyInput) {
                             endpoint_field,
                             active_field,
                             error: Some(format!(
-                                "Failed to save API key: {e}. Check the credential store and retry."
+                                "Failed to save endpoint: {e}. Check the credential store and retry."
                             )),
                         });
                         return;
                     }
-                    if provider_id == "generic_openai" || provider_id == "azure_foundry" {
-                        let endpoint = endpoint_field.text().trim();
-                        let endpoint_result = if endpoint.is_empty() {
-                            app.storage
-                                .delete_setting(&format!("{provider_id}_api_base"))
+                }
+                let _ = app // INTENTIONAL: fallible wiring/persistence call; the in-memory state is authoritative
+                    .storage
+                    .delete_setting(&format!("provider_{provider_id}_disabled"));
+                app.refresh_provider();
+                app.provider_setup = Some(ProviderSetupStep::LoadingModels {
+                    provider_id: provider_id.clone(),
+                    provider_name: provider_name.clone(),
+                });
+                app.start_model_discovery(provider_id, provider_name);
+            }
+        }
+        Key::Tab if provider_id == "generic_openai" || provider_id == "azure_foundry" => {
+            active_field = if active_field == 0 { 1 } else { 0 };
+            app.provider_setup = Some(ProviderSetupStep::EnterKey {
+                provider_id,
+                provider_name,
+                key_field,
+                endpoint_field,
+                active_field,
+                error: None,
+            });
+        }
+        _ => {
+            let is_endpoint = provider_id == "generic_openai" || provider_id == "azure_foundry";
+            let target = if is_endpoint && active_field == 1 {
+                &mut endpoint_field
+            } else {
+                &mut key_field
+            };
+            let consumed = target.handle_key(key);
+            if !consumed
+                && matches!(key.key, Key::Char('v') | Key::Char('V'))
+                && key.mods.contains(Modifiers::CTRL)
+                && !key.mods.contains(Modifiers::ALT)
+            {
+                target.paste_text_from_clipboard();
+            }
+            app.provider_setup = Some(ProviderSetupStep::EnterKey {
+                provider_id,
+                provider_name,
+                key_field,
+                endpoint_field,
+                active_field,
+                error: None,
+            });
+        }
+    }
+}
+
+/// Handle a key while the provider setup dialog shows the pending device-flow sign-in.
+fn on_device_flow_pending(
+    app: &mut App,
+    key: KeyInput,
+    flow: crate::app::DeviceFlowKind,
+    user_code: String,
+    verification_uri: String,
+) {
+    match key.key {
+        Key::Esc => {
+            app.provider_setup = None;
+        }
+        Key::Char('c') => {
+            crate::clipboard::set_clipboard_text(&user_code);
+            app.status = "[ok] Device code copied to clipboard".to_string();
+            app.provider_setup = Some(ProviderSetupStep::DeviceFlowPending {
+                flow,
+                user_code,
+                verification_uri,
+            });
+        }
+        _ => {
+            // Keep showing the device flow pending UI - polling happens
+            // in a background task and completes via the appropriate
+            // device-flow completion event.
+            app.provider_setup = Some(ProviderSetupStep::DeviceFlowPending {
+                flow,
+                user_code,
+                verification_uri,
+            });
+        }
+    }
+}
+
+/// Handle a key while the provider setup dialog shows the model picker.
+fn on_select_model(
+    app: &mut App,
+    key: KeyInput,
+    provider_id: String,
+    provider_name: String,
+    models: Vec<ModelPickerEntry>,
+    selected: usize,
+) {
+    match key.key {
+        Key::Up => {
+            let new = if models.is_empty() {
+                0
+            } else if selected == 0 {
+                models.len() - 1
+            } else {
+                selected - 1
+            };
+            app.provider_setup = Some(ProviderSetupStep::SelectModel {
+                provider_id,
+                provider_name,
+                models,
+                selected: new,
+            });
+        }
+        Key::Down => {
+            let new = if models.is_empty() {
+                0
+            } else {
+                (selected + 1) % models.len()
+            };
+            app.provider_setup = Some(ProviderSetupStep::SelectModel {
+                provider_id,
+                provider_name,
+                models,
+                selected: new,
+            });
+        }
+        Key::Enter => {
+            if let Some(entry) = models.get(selected).cloned() {
+                // Ollama-family providers are boolean thinkers, but model
+                // detection of reasoning support is unreliable. Always
+                // show the reasoning selector so the user can override it.
+                let force_selector =
+                    is_ollama_family(&provider_id) || !entry.thinking_levels.is_empty();
+                if force_selector {
+                    let default_level = App::default_thinking_level_for_entry(&entry);
+                    let thinking_levels =
+                        if entry.thinking_levels.is_empty() && is_ollama_family(&provider_id) {
+                            codemason_llm::providers::thinking::full_reasoning_levels()
                         } else {
-                            app.storage
-                                .set_setting(&format!("{provider_id}_api_base"), endpoint)
+                            entry.thinking_levels.clone()
                         };
-                        if let Err(e) = endpoint_result {
-                            app.provider_setup = Some(ProviderSetupStep::EnterKey {
-                                provider_id,
-                                provider_name,
-                                key_field,
-                                endpoint_field,
-                                active_field,
-                                error: Some(format!(
-                                    "Failed to save endpoint: {e}. Check the credential store and retry."
-                                )),
-                            });
-                            return;
-                        }
-                    }
-                    let _ = app // INTENTIONAL: fallible wiring/persistence call; the in-memory state is authoritative
-                        .storage
-                        .delete_setting(&format!("provider_{provider_id}_disabled"));
-                    app.refresh_provider();
-                    app.provider_setup = Some(ProviderSetupStep::LoadingModels {
-                        provider_id: provider_id.clone(),
-                        provider_name: provider_name.clone(),
+                    let selected_level = thinking_levels
+                        .iter()
+                        .position(|level| *level == default_level)
+                        .unwrap_or(0);
+                    app.provider_setup = Some(ProviderSetupStep::SelectThinkingLevel {
+                        provider_id,
+                        provider_name,
+                        model: ModelPickerEntry {
+                            thinking_levels,
+                            ..entry
+                        },
+                        selected: selected_level,
                     });
-                    app.start_model_discovery(provider_id, provider_name);
-                }
-            }
-            Key::Tab if provider_id == "generic_openai" || provider_id == "azure_foundry" => {
-                active_field = if active_field == 0 { 1 } else { 0 };
-                app.provider_setup = Some(ProviderSetupStep::EnterKey {
-                    provider_id,
-                    provider_name,
-                    key_field,
-                    endpoint_field,
-                    active_field,
-                    error: None,
-                });
-            }
-            _ => {
-                let is_endpoint = provider_id == "generic_openai" || provider_id == "azure_foundry";
-                let target = if is_endpoint && active_field == 1 {
-                    &mut endpoint_field
                 } else {
-                    &mut key_field
-                };
-                let consumed = target.handle_key(key);
-                if !consumed
-                    && matches!(key.key, Key::Char('v') | Key::Char('V'))
-                    && key.mods.contains(Modifiers::CTRL)
-                    && !key.mods.contains(Modifiers::ALT)
-                {
-                    target.paste_text_from_clipboard();
-                }
-                app.provider_setup = Some(ProviderSetupStep::EnterKey {
-                    provider_id,
-                    provider_name,
-                    key_field,
-                    endpoint_field,
-                    active_field,
-                    error: None,
-                });
-            }
-        },
-        ProviderSetupStep::DeviceFlowPending {
-            flow,
-            user_code,
-            verification_uri,
-        } => match key.key {
-            Key::Esc => {
-                app.provider_setup = None;
-            }
-            Key::Char('c') => {
-                crate::clipboard::set_clipboard_text(&user_code);
-                app.status = "[ok] Device code copied to clipboard".to_string();
-                app.provider_setup = Some(ProviderSetupStep::DeviceFlowPending {
-                    flow,
-                    user_code,
-                    verification_uri,
-                });
-            }
-            _ => {
-                // Keep showing the device flow pending UI - polling happens
-                // in a background task and completes via the appropriate
-                // device-flow completion event.
-                app.provider_setup = Some(ProviderSetupStep::DeviceFlowPending {
-                    flow,
-                    user_code,
-                    verification_uri,
-                });
-            }
-        },
-        ProviderSetupStep::SelectModel {
-            provider_id,
-            provider_name,
-            models,
-            selected,
-        } => match key.key {
-            Key::Up => {
-                let new = if models.is_empty() {
-                    0
-                } else if selected == 0 {
-                    models.len() - 1
-                } else {
-                    selected - 1
-                };
-                app.provider_setup = Some(ProviderSetupStep::SelectModel {
-                    provider_id,
-                    provider_name,
-                    models,
-                    selected: new,
-                });
-            }
-            Key::Down => {
-                let new = if models.is_empty() {
-                    0
-                } else {
-                    (selected + 1) % models.len()
-                };
-                app.provider_setup = Some(ProviderSetupStep::SelectModel {
-                    provider_id,
-                    provider_name,
-                    models,
-                    selected: new,
-                });
-            }
-            Key::Enter => {
-                if let Some(entry) = models.get(selected).cloned() {
-                    // Ollama-family providers are boolean thinkers, but model
-                    // detection of reasoning support is unreliable. Always
-                    // show the reasoning selector so the user can override it.
-                    let force_selector =
-                        is_ollama_family(&provider_id) || !entry.thinking_levels.is_empty();
-                    if force_selector {
-                        let default_level = App::default_thinking_level_for_entry(&entry);
-                        let thinking_levels =
-                            if entry.thinking_levels.is_empty() && is_ollama_family(&provider_id) {
-                                codemason_llm::providers::thinking::full_reasoning_levels()
-                            } else {
-                                entry.thinking_levels.clone()
-                            };
-                        let selected_level = thinking_levels
-                            .iter()
-                            .position(|level| *level == default_level)
-                            .unwrap_or(0);
-                        app.provider_setup = Some(ProviderSetupStep::SelectThinkingLevel {
-                            provider_id,
-                            provider_name,
-                            model: ModelPickerEntry {
-                                thinking_levels,
-                                ..entry
-                            },
-                            selected: selected_level,
-                        });
-                    } else {
-                        let model_name = app.finalize_model_selection(
-                            provider_id,
-                            provider_name.clone(),
-                            &entry,
-                            ThinkingLevel::Off,
-                        );
-                        app.provider_setup = Some(ProviderSetupStep::Done {
-                            provider_name,
-                            model_name: Some(model_name),
-                        });
-                    }
-                } else {
+                    let model_name = app.finalize_model_selection(
+                        provider_id,
+                        provider_name.clone(),
+                        &entry,
+                        ThinkingLevel::Off,
+                    );
                     app.provider_setup = Some(ProviderSetupStep::Done {
                         provider_name,
-                        model_name: None,
+                        model_name: Some(model_name),
                     });
                 }
-            }
-            _ => {
-                app.provider_setup = Some(ProviderSetupStep::SelectModel {
-                    provider_id,
-                    provider_name,
-                    models,
-                    selected,
-                });
-            }
-        },
-        ProviderSetupStep::SelectAzureResource {
-            entries,
-            selected,
-            error,
-        } => match key.key {
-            Key::Up => {
-                let new = if selected == 0 {
-                    entries.len().saturating_sub(1)
-                } else {
-                    selected - 1
-                };
-                app.provider_setup = Some(ProviderSetupStep::SelectAzureResource {
-                    entries,
-                    selected: new,
-                    error,
-                });
-            }
-            Key::Down => {
-                let new = if entries.is_empty() {
-                    0
-                } else {
-                    (selected + 1) % entries.len()
-                };
-                app.provider_setup = Some(ProviderSetupStep::SelectAzureResource {
-                    entries,
-                    selected: new,
-                    error,
-                });
-            }
-            Key::Enter => {
-                if let Some(entry) = entries.get(selected) {
-                    // Persist selection (include api_type for re-hydration)
-                    let payload = serde_json::json!({
-                        "id": entry.id,
-                        "endpoint": entry.endpoint,
-                        "api_key": entry.api_key,
-                        "api_key_env": entry.api_key_env,
-                        "api_type": entry.api_type,
-                    });
-                    // FUNC-027: persist the Azure Resource selection explicitly
-                    // and surface a storage failure instead of silently dropping
-                    // it while advancing to Done as if the choice was saved.
-                    let mut persist_err: Option<anyhow::Error> = None;
-                    for (key, value) in [
-                        ("azure_resource_last_selection", payload.to_string()),
-                        ("preferred_provider", "azure_resource".to_string()),
-                        ("azure_resource_api_base", entry.endpoint.clone()),
-                        ("selected_model", format!("azure_resource/{}", entry.id)),
-                        (
-                            "selected_model_ctx_window",
-                            entry.context_window.unwrap_or(128_000).to_string(),
-                        ),
-                    ] {
-                        if let Err(e) = app.storage.set_setting(key, &value) {
-                            tracing::warn!(key, error = %e, "failed to persist azure_resource selection");
-                            persist_err = Some(e);
-                        }
-                    }
-                    if let Some(e) = persist_err {
-                        app.provider_setup = Some(ProviderSetupStep::SelectAzureResource {
-                            entries,
-                            selected,
-                            error: Some(format!(
-                                "Failed to save selection: {e}. Check the credential store and retry."
-                            )),
-                        });
-                        return;
-                    }
-                    app.session.selected_model = Some(format!("azure_resource/{}", entry.id));
-                    app.session.selected_model_ctx_window =
-                        Some(entry.context_window.unwrap_or(128_000));
-                    app.configured_provider = Some(ConfiguredProvider {
-                        id: "azure_resource".to_string(),
-                        name: "Azure Resource (File)".to_string(),
-                        source: ProviderSource::Database,
-                    });
-                    app.provider_setup = Some(ProviderSetupStep::Done {
-                        provider_name: "Azure Resource (File)".to_string(),
-                        model_name: Some(entry.name.clone()),
-                    });
-                }
-            }
-            _ => {
-                app.provider_setup = Some(ProviderSetupStep::SelectAzureResource {
-                    entries,
-                    selected,
-                    error,
-                });
-            }
-        },
-        ProviderSetupStep::SelectThinkingLevel {
-            provider_id,
-            provider_name,
-            model,
-            selected,
-        } => match key.key {
-            Key::Up => {
-                let new = if selected == 0 {
-                    model.thinking_levels.len().saturating_sub(1)
-                } else {
-                    selected - 1
-                };
-                app.provider_setup = Some(ProviderSetupStep::SelectThinkingLevel {
-                    provider_id,
-                    provider_name,
-                    model,
-                    selected: new,
-                });
-            }
-            Key::Down => {
-                let new = if model.thinking_levels.is_empty() {
-                    0
-                } else {
-                    (selected + 1) % model.thinking_levels.len()
-                };
-                app.provider_setup = Some(ProviderSetupStep::SelectThinkingLevel {
-                    provider_id,
-                    provider_name,
-                    model,
-                    selected: new,
-                });
-            }
-            Key::Enter => {
-                let level = model
-                    .thinking_levels
-                    .get(selected)
-                    .copied()
-                    .unwrap_or(ThinkingLevel::Off);
-                let model_name =
-                    app.finalize_model_selection(provider_id, provider_name.clone(), &model, level);
+            } else {
                 app.provider_setup = Some(ProviderSetupStep::Done {
                     provider_name,
-                    model_name: Some(model_name),
+                    model_name: None,
                 });
             }
-            _ => {
-                app.provider_setup = Some(ProviderSetupStep::SelectThinkingLevel {
-                    provider_id,
-                    provider_name,
-                    model,
-                    selected,
-                });
-            }
-        },
-        ProviderSetupStep::Done { .. } => {
-            // Any key closes the done screen and triggers a health check
-            app.provider_setup = None;
-            app.check_provider_health();
         }
-        ProviderSetupStep::SelectAgent { agents, selected } => match key.key {
-            Key::Up => {
-                let new = if agents.is_empty() {
-                    0
-                } else if selected == 0 {
-                    agents.len() - 1
-                } else {
-                    selected - 1
-                };
-                app.provider_setup = Some(ProviderSetupStep::SelectAgent {
-                    agents,
-                    selected: new,
+        _ => {
+            app.provider_setup = Some(ProviderSetupStep::SelectModel {
+                provider_id,
+                provider_name,
+                models,
+                selected,
+            });
+        }
+    }
+}
+
+/// Handle a key while the provider setup dialog shows the Azure resource picker.
+fn on_select_azure_resource(
+    app: &mut App,
+    key: KeyInput,
+    entries: Vec<codemason_agent::provider::azure_resource::AzureResourceEntry>,
+    selected: usize,
+    error: Option<String>,
+) {
+    match key.key {
+        Key::Up => {
+            let new = if selected == 0 {
+                entries.len().saturating_sub(1)
+            } else {
+                selected - 1
+            };
+            app.provider_setup = Some(ProviderSetupStep::SelectAzureResource {
+                entries,
+                selected: new,
+                error,
+            });
+        }
+        Key::Down => {
+            let new = if entries.is_empty() {
+                0
+            } else {
+                (selected + 1) % entries.len()
+            };
+            app.provider_setup = Some(ProviderSetupStep::SelectAzureResource {
+                entries,
+                selected: new,
+                error,
+            });
+        }
+        Key::Enter => {
+            if let Some(entry) = entries.get(selected) {
+                // Persist selection (include api_type for re-hydration)
+                let payload = serde_json::json!({
+                    "id": entry.id,
+                    "endpoint": entry.endpoint,
+                    "api_key": entry.api_key,
+                    "api_key_env": entry.api_key_env,
+                    "api_type": entry.api_type,
                 });
-            }
-            Key::Down => {
-                let new = if agents.is_empty() {
-                    0
-                } else {
-                    (selected + 1) % agents.len()
-                };
-                app.provider_setup = Some(ProviderSetupStep::SelectAgent {
-                    agents,
-                    selected: new,
-                });
-            }
-            Key::Enter => {
-                if let Some((name, _desc, _is_custom)) = agents.get(selected) {
-                    if let Some(idx) = app.cycleable_agents.iter().position(|a| a.name == *name) {
-                        app.session.current_agent_index = idx;
-                        app.session.agent_info = app.cycleable_agents[idx].clone();
-                        app.session.agent_name = app.session.agent_info.name.clone();
-                        app.status = format!("Agent: {}", app.session.agent_name);
+                // FUNC-027: persist the Azure Resource selection explicitly
+                // and surface a storage failure instead of silently dropping
+                // it while advancing to Done as if the choice was saved.
+                let mut persist_err: Option<anyhow::Error> = None;
+                for (key, value) in [
+                    ("azure_resource_last_selection", payload.to_string()),
+                    ("preferred_provider", "azure_resource".to_string()),
+                    ("azure_resource_api_base", entry.endpoint.clone()),
+                    ("selected_model", format!("azure_resource/{}", entry.id)),
+                    (
+                        "selected_model_ctx_window",
+                        entry.context_window.unwrap_or(128_000).to_string(),
+                    ),
+                ] {
+                    if let Err(e) = app.storage.set_setting(key, &value) {
+                        tracing::warn!(key, error = %e, "failed to persist azure_resource selection");
+                        persist_err = Some(e);
                     }
                 }
-                app.provider_setup = None;
-            }
-            _ => {
-                app.provider_setup = Some(ProviderSetupStep::SelectAgent { agents, selected });
-            }
-        },
-        ProviderSetupStep::SelectConfiguredProvider {
-            providers,
-            selected,
-        } => match key.key {
-            Key::Up => {
-                let new = if selected == 0 {
-                    providers.len().saturating_sub(1)
-                } else {
-                    selected - 1
-                };
-                app.provider_setup = Some(ProviderSetupStep::SelectConfiguredProvider {
-                    providers,
-                    selected: new,
-                });
-            }
-            Key::Down => {
-                let new = if providers.is_empty() {
-                    0
-                } else {
-                    (selected + 1) % providers.len()
-                };
-                app.provider_setup = Some(ProviderSetupStep::SelectConfiguredProvider {
-                    providers,
-                    selected: new,
-                });
-            }
-            Key::Enter => {
-                if let Some(prov) = providers.get(selected).cloned() {
-                    let prov_id = prov.id.clone();
-                    let prov_name = prov.name.clone();
-                    // FR-003/FR-004: try persisted model restore, fallback to picker.
-                    if app
-                        .try_restore_provider_model(&prov_id, &prov_name)
-                        .is_some()
-                    {
-                        // Model was restored - show the Done confirmation.
-                        app.provider_setup = Some(ProviderSetupStep::Done {
-                            provider_name: prov_name,
-                            model_name: app
-                                .session
-                                .selected_model
-                                .as_ref()
-                                .and_then(|m| crate::app::model_part_from_selected_model(m))
-                                .map(String::from),
-                        });
-                    } else {
-                        app.provider_setup = Some(ProviderSetupStep::LoadingModels {
-                            provider_id: prov_id.clone(),
-                            provider_name: prov_name.clone(),
-                        });
-                        app.start_model_discovery(prov_id, prov_name);
-                    }
-                } else {
-                    app.provider_setup = None;
+                if let Some(e) = persist_err {
+                    app.provider_setup = Some(ProviderSetupStep::SelectAzureResource {
+                        entries,
+                        selected,
+                        error: Some(format!(
+                            "Failed to save selection: {e}. Check the credential store and retry."
+                        )),
+                    });
+                    return;
                 }
-            }
-            _ => {
-                app.provider_setup = Some(ProviderSetupStep::SelectConfiguredProvider {
-                    providers,
-                    selected,
+                app.session.selected_model = Some(format!("azure_resource/{}", entry.id));
+                app.session.selected_model_ctx_window =
+                    Some(entry.context_window.unwrap_or(128_000));
+                app.configured_provider = Some(ConfiguredProvider {
+                    id: "azure_resource".to_string(),
+                    name: "Azure Resource (File)".to_string(),
+                    source: ProviderSource::Database,
+                });
+                app.provider_setup = Some(ProviderSetupStep::Done {
+                    provider_name: "Azure Resource (File)".to_string(),
+                    model_name: Some(entry.name.clone()),
                 });
             }
-        },
-        ProviderSetupStep::ShowProviderConfig {
-            providers,
-            selected,
-        } => match key.key {
-            Key::Up => {
-                let new = if selected == 0 {
-                    providers.len().saturating_sub(1)
-                } else {
-                    selected - 1
-                };
-                app.provider_setup = Some(ProviderSetupStep::ShowProviderConfig {
-                    providers,
-                    selected: new,
-                });
-            }
-            Key::Down => {
-                let new = if providers.is_empty() {
-                    0
-                } else {
-                    (selected + 1) % providers.len()
-                };
-                app.provider_setup = Some(ProviderSetupStep::ShowProviderConfig {
-                    providers,
-                    selected: new,
-                });
-            }
-            Key::Enter => {
-                if let Some(prov) = providers.get(selected).cloned() {
-                    let report = if prov.id == "router" {
-                        app.router_config_report(&app.provider_registry.clone())
-                    } else {
-                        app.provider_config_report(&prov)
-                    };
-                    app.append_assistant_text(&report);
-                    app.status = format!("provider show: {}", prov.name);
-                }
-                app.provider_setup = None;
-            }
-            _ => {
-                app.provider_setup = Some(ProviderSetupStep::ShowProviderConfig {
-                    providers,
-                    selected,
-                });
-            }
-        },
+        }
+        _ => {
+            app.provider_setup = Some(ProviderSetupStep::SelectAzureResource {
+                entries,
+                selected,
+                error,
+            });
+        }
+    }
+}
 
-        ProviderSetupStep::ResetProvider { selected } => match key.key {
-            Key::Up => {
-                let new = if selected == 0 {
-                    PROVIDER_LIST.len() - 1
-                } else {
-                    selected - 1
-                };
-                app.provider_setup = Some(ProviderSetupStep::ResetProvider { selected: new });
-            }
-            Key::Down => {
-                let new = (selected + 1) % PROVIDER_LIST.len();
-                app.provider_setup = Some(ProviderSetupStep::ResetProvider { selected: new });
-            }
-            Key::Enter => {
-                let (pid, pname) = PROVIDER_LIST[selected];
-                let _ = app.storage.delete_provider_auth(pid); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
-                let _ = app // INTENTIONAL: fallible wiring/persistence call; the in-memory state is authoritative
-                    .storage
-                    .set_setting(&format!("provider_{pid}_disabled"), "true");
-                // Clear provider-specific settings
-                let _ = app // INTENTIONAL: fallible wiring/persistence call; the in-memory state is authoritative
-                    .storage
-                    .delete_setting(&format!("provider_{pid}_last_model"));
-                if pid == "copilot" {
-                    let _ = app.storage.delete_setting("copilot_api_base"); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
-                } else if pid == "generic_openai" {
-                    let _ = app.storage.delete_setting("generic_openai_api_base"); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
-                } else if pid == "azure_foundry" {
-                    let _ = app.storage.delete_setting("azure_foundry_api_base"); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
-                }
-                let is_active = app
-                    .configured_provider
-                    .as_ref()
-                    .map_or(false, |p| p.id == pid);
-                if is_active {
-                    app.configured_provider = None;
-                    app.session.selected_model = None;
-                    app.session.selected_model_ctx_window = None;
-                    app.session.selected_thinking_level = None;
-                    let _ = app.storage.delete_setting("selected_model"); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
-                    let _ = app.storage.delete_setting("selected_model_ctx_window"); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
-                    let _ = app.storage.delete_setting("thinking_level"); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
-                    let _ = app.storage.delete_setting("thinking_level_explicit"); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
-                    app.session
-                        .provider_health
-                        .store(0, std::sync::atomic::Ordering::Relaxed);
-                }
-                app.status = format!("[ok] Provider {} reset - credentials removed", pname);
-                app.provider_setup = None;
-            }
-            _ => {
-                app.provider_setup = Some(ProviderSetupStep::ResetProvider { selected });
-            }
-        },
+/// Handle a key while the provider setup dialog shows the thinking-level picker.
+fn on_select_thinking_level(
+    app: &mut App,
+    key: KeyInput,
+    provider_id: String,
+    provider_name: String,
+    model: ModelPickerEntry,
+    selected: usize,
+) {
+    match key.key {
+        Key::Up => {
+            let new = if selected == 0 {
+                model.thinking_levels.len().saturating_sub(1)
+            } else {
+                selected - 1
+            };
+            app.provider_setup = Some(ProviderSetupStep::SelectThinkingLevel {
+                provider_id,
+                provider_name,
+                model,
+                selected: new,
+            });
+        }
+        Key::Down => {
+            let new = if model.thinking_levels.is_empty() {
+                0
+            } else {
+                (selected + 1) % model.thinking_levels.len()
+            };
+            app.provider_setup = Some(ProviderSetupStep::SelectThinkingLevel {
+                provider_id,
+                provider_name,
+                model,
+                selected: new,
+            });
+        }
+        Key::Enter => {
+            let level = model
+                .thinking_levels
+                .get(selected)
+                .copied()
+                .unwrap_or(ThinkingLevel::Off);
+            let model_name =
+                app.finalize_model_selection(provider_id, provider_name.clone(), &model, level);
+            app.provider_setup = Some(ProviderSetupStep::Done {
+                provider_name,
+                model_name: Some(model_name),
+            });
+        }
+        _ => {
+            app.provider_setup = Some(ProviderSetupStep::SelectThinkingLevel {
+                provider_id,
+                provider_name,
+                model,
+                selected,
+            });
+        }
+    }
+}
 
-        // -- GitLab setup (multi-field form) ------------------------------
-        ProviderSetupStep::GitLabSetup {
-            mut url_input,
-            mut url_cursor,
-            mut token_input,
-            mut token_cursor,
-            mut active_field,
-            error,
-        } => match key.key {
-            Key::Tab | Key::BackTab => {
-                active_field = if active_field == 0 { 1 } else { 0 };
-                app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
-                    url_input,
-                    url_cursor,
-                    token_input,
-                    token_cursor,
-                    active_field,
-                    error,
-                });
+/// Handle a key while the provider setup dialog shows the agent picker.
+fn on_select_agent(
+    app: &mut App,
+    key: KeyInput,
+    agents: Vec<(String, String, bool)>,
+    selected: usize,
+) {
+    match key.key {
+        Key::Up => {
+            let new = if agents.is_empty() {
+                0
+            } else if selected == 0 {
+                agents.len() - 1
+            } else {
+                selected - 1
+            };
+            app.provider_setup = Some(ProviderSetupStep::SelectAgent {
+                agents,
+                selected: new,
+            });
+        }
+        Key::Down => {
+            let new = if agents.is_empty() {
+                0
+            } else {
+                (selected + 1) % agents.len()
+            };
+            app.provider_setup = Some(ProviderSetupStep::SelectAgent {
+                agents,
+                selected: new,
+            });
+        }
+        Key::Enter => {
+            if let Some((name, _desc, _is_custom)) = agents.get(selected) {
+                if let Some(idx) = app.cycleable_agents.iter().position(|a| a.name == *name) {
+                    app.session.current_agent_index = idx;
+                    app.session.agent_info = app.cycleable_agents[idx].clone();
+                    app.session.agent_name = app.session.agent_info.name.clone();
+                    app.status = format!("Agent: {}", app.session.agent_name);
+                }
             }
-            Key::Enter => {
-                let url = url_input.trim().to_string();
-                let tok = token_input.trim().to_string();
-                if url.is_empty() || tok.is_empty() {
-                    app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
-                        url_input,
-                        url_cursor,
-                        token_input,
-                        token_cursor,
-                        active_field,
-                        error: Some("Both URL and token are required.".to_string()),
+            app.provider_setup = None;
+        }
+        _ => {
+            app.provider_setup = Some(ProviderSetupStep::SelectAgent { agents, selected });
+        }
+    }
+}
+
+/// Handle a key while the provider setup dialog shows the configured-provider picker.
+fn on_select_configured_provider(
+    app: &mut App,
+    key: KeyInput,
+    providers: Vec<ConfiguredProvider>,
+    selected: usize,
+) {
+    match key.key {
+        Key::Up => {
+            let new = if selected == 0 {
+                providers.len().saturating_sub(1)
+            } else {
+                selected - 1
+            };
+            app.provider_setup = Some(ProviderSetupStep::SelectConfiguredProvider {
+                providers,
+                selected: new,
+            });
+        }
+        Key::Down => {
+            let new = if providers.is_empty() {
+                0
+            } else {
+                (selected + 1) % providers.len()
+            };
+            app.provider_setup = Some(ProviderSetupStep::SelectConfiguredProvider {
+                providers,
+                selected: new,
+            });
+        }
+        Key::Enter => {
+            if let Some(prov) = providers.get(selected).cloned() {
+                let prov_id = prov.id.clone();
+                let prov_name = prov.name.clone();
+                // FR-003/FR-004: try persisted model restore, fallback to picker.
+                if app
+                    .try_restore_provider_model(&prov_id, &prov_name)
+                    .is_some()
+                {
+                    // Model was restored - show the Done confirmation.
+                    app.provider_setup = Some(ProviderSetupStep::Done {
+                        provider_name: prov_name,
+                        model_name: app
+                            .session
+                            .selected_model
+                            .as_ref()
+                            .and_then(|m| crate::app::model_part_from_selected_model(m))
+                            .map(String::from),
                     });
                 } else {
-                    // Start async validation
-                    app.provider_setup = Some(ProviderSetupStep::GitLabValidating {
-                        instance_url: url.clone(),
-                        token: tok.clone(),
+                    app.provider_setup = Some(ProviderSetupStep::LoadingModels {
+                        provider_id: prov_id.clone(),
+                        provider_name: prov_name.clone(),
                     });
-                    start_gitlab_validation(app, url, tok);
+                    app.start_model_discovery(prov_id, prov_name);
                 }
+            } else {
+                app.provider_setup = None;
             }
-            Key::Char(c) => {
-                if active_field == 0 {
-                    url_input.insert(char_byte_offset(&url_input, url_cursor), c);
-                    url_cursor += 1;
-                } else {
-                    token_input.insert(char_byte_offset(&token_input, token_cursor), c);
-                    token_cursor += 1;
-                }
-                app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
-                    url_input,
-                    url_cursor,
-                    token_input,
-                    token_cursor,
-                    active_field,
-                    error: None,
-                });
-            }
-            Key::Backspace => {
-                if active_field == 0 {
-                    if url_cursor > 0 {
-                        url_cursor -= 1;
-                        url_input.remove(char_byte_offset(&url_input, url_cursor));
-                    }
-                } else if token_cursor > 0 {
-                    token_cursor -= 1;
-                    token_input.remove(char_byte_offset(&token_input, token_cursor));
-                }
-                app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
-                    url_input,
-                    url_cursor,
-                    token_input,
-                    token_cursor,
-                    active_field,
-                    error: None,
-                });
-            }
-            Key::Left => {
-                if active_field == 0 {
-                    url_cursor = url_cursor.saturating_sub(1);
-                } else {
-                    token_cursor = token_cursor.saturating_sub(1);
-                }
-                app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
-                    url_input,
-                    url_cursor,
-                    token_input,
-                    token_cursor,
-                    active_field,
-                    error,
-                });
-            }
-            Key::Right => {
-                if active_field == 0 {
-                    if url_cursor < url_input.chars().count() {
-                        url_cursor += 1;
-                    }
-                } else if token_cursor < token_input.chars().count() {
-                    token_cursor += 1;
-                }
-                app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
-                    url_input,
-                    url_cursor,
-                    token_input,
-                    token_cursor,
-                    active_field,
-                    error,
-                });
-            }
-            Key::Home => {
-                if active_field == 0 {
-                    url_cursor = 0;
-                } else {
-                    token_cursor = 0;
-                }
-                app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
-                    url_input,
-                    url_cursor,
-                    token_input,
-                    token_cursor,
-                    active_field,
-                    error,
-                });
-            }
-            Key::End => {
-                if active_field == 0 {
-                    url_cursor = url_input.chars().count();
-                } else {
-                    token_cursor = token_input.chars().count();
-                }
-                app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
-                    url_input,
-                    url_cursor,
-                    token_input,
-                    token_cursor,
-                    active_field,
-                    error,
-                });
-            }
-            _ => {
-                app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
-                    url_input,
-                    url_cursor,
-                    token_input,
-                    token_cursor,
-                    active_field,
-                    error,
-                });
-            }
-        },
+        }
+        _ => {
+            app.provider_setup = Some(ProviderSetupStep::SelectConfiguredProvider {
+                providers,
+                selected,
+            });
+        }
+    }
+}
 
-        ProviderSetupStep::GitLabValidating {
-            instance_url,
-            token,
-        } => {
-            // Esc cancels and returns to the form
-            if key.key == Key::Esc {
+/// Handle a key while the provider setup dialog shows the provider configuration view.
+fn on_show_provider_config(
+    app: &mut App,
+    key: KeyInput,
+    providers: Vec<ConfiguredProvider>,
+    selected: usize,
+) {
+    match key.key {
+        Key::Up => {
+            let new = if selected == 0 {
+                providers.len().saturating_sub(1)
+            } else {
+                selected - 1
+            };
+            app.provider_setup = Some(ProviderSetupStep::ShowProviderConfig {
+                providers,
+                selected: new,
+            });
+        }
+        Key::Down => {
+            let new = if providers.is_empty() {
+                0
+            } else {
+                (selected + 1) % providers.len()
+            };
+            app.provider_setup = Some(ProviderSetupStep::ShowProviderConfig {
+                providers,
+                selected: new,
+            });
+        }
+        Key::Enter => {
+            if let Some(prov) = providers.get(selected).cloned() {
+                let report = if prov.id == "router" {
+                    app.router_config_report(&app.provider_registry.clone())
+                } else {
+                    app.provider_config_report(&prov)
+                };
+                app.append_assistant_text(&report);
+                app.status = format!("provider show: {}", prov.name);
+            }
+            app.provider_setup = None;
+        }
+        _ => {
+            app.provider_setup = Some(ProviderSetupStep::ShowProviderConfig {
+                providers,
+                selected,
+            });
+        }
+    }
+}
+
+/// Handle a key while the provider setup dialog shows the provider reset confirmation.
+fn on_reset_provider(app: &mut App, key: KeyInput, selected: usize) {
+    match key.key {
+        Key::Up => {
+            let new = if selected == 0 {
+                PROVIDER_LIST.len() - 1
+            } else {
+                selected - 1
+            };
+            app.provider_setup = Some(ProviderSetupStep::ResetProvider { selected: new });
+        }
+        Key::Down => {
+            let new = (selected + 1) % PROVIDER_LIST.len();
+            app.provider_setup = Some(ProviderSetupStep::ResetProvider { selected: new });
+        }
+        Key::Enter => {
+            let (pid, pname) = PROVIDER_LIST[selected];
+            let _ = app.storage.delete_provider_auth(pid); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
+            let _ = app // INTENTIONAL: fallible wiring/persistence call; the in-memory state is authoritative
+                .storage
+                .set_setting(&format!("provider_{pid}_disabled"), "true");
+            // Clear provider-specific settings
+            let _ = app // INTENTIONAL: fallible wiring/persistence call; the in-memory state is authoritative
+                .storage
+                .delete_setting(&format!("provider_{pid}_last_model"));
+            if pid == "copilot" {
+                let _ = app.storage.delete_setting("copilot_api_base"); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
+            } else if pid == "generic_openai" {
+                let _ = app.storage.delete_setting("generic_openai_api_base"); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
+            } else if pid == "azure_foundry" {
+                let _ = app.storage.delete_setting("azure_foundry_api_base"); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
+            }
+            let is_active = app
+                .configured_provider
+                .as_ref()
+                .map_or(false, |p| p.id == pid);
+            if is_active {
+                app.configured_provider = None;
+                app.session.selected_model = None;
+                app.session.selected_model_ctx_window = None;
+                app.session.selected_thinking_level = None;
+                let _ = app.storage.delete_setting("selected_model"); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
+                let _ = app.storage.delete_setting("selected_model_ctx_window"); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
+                let _ = app.storage.delete_setting("thinking_level"); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
+                let _ = app.storage.delete_setting("thinking_level_explicit"); // INTENTIONAL: best-effort persistence; the in-memory state is authoritative
+                app.session
+                    .provider_health
+                    .store(0, std::sync::atomic::Ordering::Relaxed);
+            }
+            app.status = format!("[ok] Provider {} reset - credentials removed", pname);
+            app.provider_setup = None;
+        }
+        _ => {
+            app.provider_setup = Some(ProviderSetupStep::ResetProvider { selected });
+        }
+    }
+}
+
+/// Handle a key while the provider setup dialog shows the GitLab setup form.
+fn on_gitlab_setup(
+    app: &mut App,
+    key: KeyInput,
+    mut url_input: String,
+    mut url_cursor: usize,
+    mut token_input: String,
+    mut token_cursor: usize,
+    mut active_field: u8,
+    error: Option<String>,
+) {
+    match key.key {
+        Key::Tab | Key::BackTab => {
+            active_field = if active_field == 0 { 1 } else { 0 };
+            app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
+                url_input,
+                url_cursor,
+                token_input,
+                token_cursor,
+                active_field,
+                error,
+            });
+        }
+        Key::Enter => {
+            let url = url_input.trim().to_string();
+            let tok = token_input.trim().to_string();
+            if url.is_empty() || tok.is_empty() {
                 app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
-                    url_input: instance_url,
-                    url_cursor: 0,
-                    token_input: token,
-                    token_cursor: 0,
-                    active_field: 0,
-                    error: Some("Validation cancelled.".to_string()),
+                    url_input,
+                    url_cursor,
+                    token_input,
+                    token_cursor,
+                    active_field,
+                    error: Some("Both URL and token are required.".to_string()),
                 });
             } else {
+                // Start async validation
                 app.provider_setup = Some(ProviderSetupStep::GitLabValidating {
-                    instance_url,
-                    token,
+                    instance_url: url.clone(),
+                    token: tok.clone(),
                 });
+                start_gitlab_validation(app, url, tok);
             }
         }
-
-        // -- Telemetry setup (multi-field form) ---------------------------
-        ProviderSetupStep::TelemetrySetup {
-            mut endpoint_field,
-            mut protocol,
-            mut interval_field,
-            mut timeout_field,
-            mut port_field,
-            mut logs_field,
-            mut active_field,
-            error: _,
-        } => {
-            let is_text_field = active_field != 1;
-            // FUNC-043: resolve the active text field by index, returning
-            // None for the protocol (non-text) field instead of panicking.
-            fn telemetry_field<'a>(
-                idx: u8,
-                endpoint: &'a mut crate::input_field::InputField,
-                interval: &'a mut crate::input_field::InputField,
-                timeout: &'a mut crate::input_field::InputField,
-                port: &'a mut crate::input_field::InputField,
-                logs: &'a mut crate::input_field::InputField,
-            ) -> Option<&'a mut crate::input_field::InputField> {
-                match idx {
-                    0 => Some(endpoint),
-                    2 => Some(interval),
-                    3 => Some(timeout),
-                    4 => Some(port),
-                    5 => Some(logs),
-                    _ => None,
-                }
+        Key::Char(c) => {
+            if active_field == 0 {
+                url_input.insert(char_byte_offset(&url_input, url_cursor), c);
+                url_cursor += 1;
+            } else {
+                token_input.insert(char_byte_offset(&token_input, token_cursor), c);
+                token_cursor += 1;
             }
-            match key.key {
-                Key::Tab => {
-                    active_field = (active_field + 1) % 6;
+            app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
+                url_input,
+                url_cursor,
+                token_input,
+                token_cursor,
+                active_field,
+                error: None,
+            });
+        }
+        Key::Backspace => {
+            if active_field == 0 {
+                if url_cursor > 0 {
+                    url_cursor -= 1;
+                    url_input.remove(char_byte_offset(&url_input, url_cursor));
                 }
-                Key::BackTab => {
-                    active_field = if active_field == 0 {
-                        5
-                    } else {
-                        active_field - 1
-                    };
+            } else if token_cursor > 0 {
+                token_cursor -= 1;
+                token_input.remove(char_byte_offset(&token_input, token_cursor));
+            }
+            app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
+                url_input,
+                url_cursor,
+                token_input,
+                token_cursor,
+                active_field,
+                error: None,
+            });
+        }
+        Key::Left => {
+            if active_field == 0 {
+                url_cursor = url_cursor.saturating_sub(1);
+            } else {
+                token_cursor = token_cursor.saturating_sub(1);
+            }
+            app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
+                url_input,
+                url_cursor,
+                token_input,
+                token_cursor,
+                active_field,
+                error,
+            });
+        }
+        Key::Right => {
+            if active_field == 0 {
+                if url_cursor < url_input.chars().count() {
+                    url_cursor += 1;
                 }
-                Key::Up | Key::Down if active_field == 1 => {
-                    let (next, from_port, to_port) = match protocol {
-                        codemason_config::OtelProtocol::Http => {
-                            (codemason_config::OtelProtocol::Grpc, ":4318", ":4317")
-                        }
-                        codemason_config::OtelProtocol::Grpc => {
-                            (codemason_config::OtelProtocol::Http, ":4317", ":4318")
-                        }
-                    };
-                    protocol = next;
-                    // Follow the protocol with the endpoint's port when it is
-                    // still the OTLP default for the old protocol (4318 for
-                    // HTTP, 4317 for gRPC); a custom port is left alone.
-                    if let Some(swapped) =
-                        swap_otlp_default_port(endpoint_field.text(), from_port, to_port)
-                    {
-                        endpoint_field = crate::input_field::InputField::with_text(&swapped);
-                    }
+            } else if token_cursor < token_input.chars().count() {
+                token_cursor += 1;
+            }
+            app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
+                url_input,
+                url_cursor,
+                token_input,
+                token_cursor,
+                active_field,
+                error,
+            });
+        }
+        Key::Home => {
+            if active_field == 0 {
+                url_cursor = 0;
+            } else {
+                token_cursor = 0;
+            }
+            app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
+                url_input,
+                url_cursor,
+                token_input,
+                token_cursor,
+                active_field,
+                error,
+            });
+        }
+        Key::End => {
+            if active_field == 0 {
+                url_cursor = url_input.chars().count();
+            } else {
+                token_cursor = token_input.chars().count();
+            }
+            app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
+                url_input,
+                url_cursor,
+                token_input,
+                token_cursor,
+                active_field,
+                error,
+            });
+        }
+        _ => {
+            app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
+                url_input,
+                url_cursor,
+                token_input,
+                token_cursor,
+                active_field,
+                error,
+            });
+        }
+    }
+}
+
+/// Handle a key while the provider setup dialog shows the GitLab credential validation step.
+fn on_gitlab_validating(app: &mut App, key: KeyInput, instance_url: String, token: String) {
+    // Esc cancels and returns to the form
+    if key.key == Key::Esc {
+        app.provider_setup = Some(ProviderSetupStep::GitLabSetup {
+            url_input: instance_url,
+            url_cursor: 0,
+            token_input: token,
+            token_cursor: 0,
+            active_field: 0,
+            error: Some("Validation cancelled.".to_string()),
+        });
+    } else {
+        app.provider_setup = Some(ProviderSetupStep::GitLabValidating {
+            instance_url,
+            token,
+        });
+    }
+}
+
+/// Handle a key while the provider setup dialog shows the telemetry setup form.
+fn on_telemetry_setup(
+    app: &mut App,
+    key: KeyInput,
+    mut endpoint_field: crate::input_field::InputField,
+    mut protocol: codemason_config::OtelProtocol,
+    mut interval_field: crate::input_field::InputField,
+    mut timeout_field: crate::input_field::InputField,
+    mut port_field: crate::input_field::InputField,
+    mut logs_field: crate::input_field::InputField,
+    mut active_field: u8,
+) {
+    let is_text_field = active_field != 1;
+    // FUNC-043: resolve the active text field by index, returning
+    // None for the protocol (non-text) field instead of panicking.
+    fn telemetry_field<'a>(
+        idx: u8,
+        endpoint: &'a mut crate::input_field::InputField,
+        interval: &'a mut crate::input_field::InputField,
+        timeout: &'a mut crate::input_field::InputField,
+        port: &'a mut crate::input_field::InputField,
+        logs: &'a mut crate::input_field::InputField,
+    ) -> Option<&'a mut crate::input_field::InputField> {
+        match idx {
+            0 => Some(endpoint),
+            2 => Some(interval),
+            3 => Some(timeout),
+            4 => Some(port),
+            5 => Some(logs),
+            _ => None,
+        }
+    }
+    match key.key {
+        Key::Tab => {
+            active_field = (active_field + 1) % 6;
+        }
+        Key::BackTab => {
+            active_field = if active_field == 0 {
+                5
+            } else {
+                active_field - 1
+            };
+        }
+        Key::Up | Key::Down if active_field == 1 => {
+            let (next, from_port, to_port) = match protocol {
+                codemason_config::OtelProtocol::Http => {
+                    (codemason_config::OtelProtocol::Grpc, ":4318", ":4317")
                 }
-                Key::Enter => {
-                    let endpoint = endpoint_field.text().trim().to_string();
-                    let interval_str = interval_field.text().trim();
-                    let timeout_str = timeout_field.text().trim();
-                    let port_str = port_field.text().trim();
-                    let logs_str = logs_field.text().trim().to_ascii_lowercase();
+                codemason_config::OtelProtocol::Grpc => {
+                    (codemason_config::OtelProtocol::Http, ":4317", ":4318")
+                }
+            };
+            protocol = next;
+            // Follow the protocol with the endpoint's port when it is
+            // still the OTLP default for the old protocol (4318 for
+            // HTTP, 4317 for gRPC); a custom port is left alone.
+            if let Some(swapped) = swap_otlp_default_port(endpoint_field.text(), from_port, to_port)
+            {
+                endpoint_field = crate::input_field::InputField::with_text(&swapped);
+            }
+        }
+        Key::Enter => {
+            let endpoint = endpoint_field.text().trim().to_string();
+            let interval_str = interval_field.text().trim();
+            let timeout_str = timeout_field.text().trim();
+            let port_str = port_field.text().trim();
+            let logs_str = logs_field.text().trim().to_ascii_lowercase();
 
-                    let interval = interval_str.parse::<u64>().unwrap_or(0);
-                    let timeout = timeout_str.parse::<u64>().unwrap_or(0);
-                    let internal_port = if port_str.is_empty() {
-                        None
-                    } else {
-                        match port_str.parse::<u16>() {
-                            Ok(p) => Some(p),
-                            Err(_) => {
-                                app.provider_setup = Some(ProviderSetupStep::TelemetrySetup {
-                                    endpoint_field,
-                                    protocol,
-                                    interval_field,
-                                    timeout_field,
-                                    port_field,
-                                    logs_field,
-                                    active_field,
-                                    error: Some(format!(
-                                        "Internal port must be a number between 0 and {}.",
-                                        u16::MAX
-                                    )),
-                                });
-                                return;
-                            }
-                        }
-                    };
-
-                    // The logs field is the OTLP logs-signal export level. Log
-                    // export follows telemetry itself (spec `otel` FR-036), so
-                    // this draft always enables both signals and an empty
-                    // field simply keeps the default level.
-                    let logs = codemason_config::OtelLogsConfig {
-                        enabled: true,
-                        level: if logs_str.is_empty() {
-                            "info".to_string()
-                        } else {
-                            logs_str
-                        },
-                    };
-                    // Merge the form onto the stored block: the dialog has no
-                    // rows for `service_name`, `resource_attributes`, the
-                    // per-metric toggles or `cardinality_limit`, and building
-                    // a fresh block reset all of them to their defaults on
-                    // every save.
-                    let draft = codemason_config::OtelConfig {
-                        enabled: true,
-                        endpoint,
-                        protocol,
-                        export_interval_seconds: interval,
-                        export_timeout_seconds: timeout,
-                        internal_port,
-                        logs,
-                        ..app.telemetry_config_snapshot()
-                    };
-
-                    let problems = draft.validate();
-                    if !problems.is_empty() {
+            let interval = interval_str.parse::<u64>().unwrap_or(0);
+            let timeout = timeout_str.parse::<u64>().unwrap_or(0);
+            let internal_port = if port_str.is_empty() {
+                None
+            } else {
+                match port_str.parse::<u16>() {
+                    Ok(p) => Some(p),
+                    Err(_) => {
                         app.provider_setup = Some(ProviderSetupStep::TelemetrySetup {
                             endpoint_field,
                             protocol,
@@ -2430,181 +2550,209 @@ pub(crate) fn handle_provider_setup_key(app: &mut App, key: KeyInput) {
                             port_field,
                             logs_field,
                             active_field,
-                            error: Some(problems.join("; ")),
+                            error: Some(format!(
+                                "Internal port must be a number between 0 and {}.",
+                                u16::MAX
+                            )),
                         });
                         return;
                     }
+                }
+            };
 
-                    match app.save_telemetry_otel(&draft) {
-                        Ok(()) => {
-                            app.session_processor.invalidate_config_cache();
-                            // Bug fix: `/telemetry setup` used to persist the
-                            // new block and stop there, so an operator who had
-                            // already enabled telemetry kept exporting with
-                            // the OLD endpoint/protocol/interval until the
-                            // next restart. Reconfigure the live subsystem
-                            // exactly as `/telemetry on` does, so saving the
-                            // form takes effect immediately.
-                            let reconfigure_error = app
-                                .session_processor
-                                .telemetry
-                                .reconfigure(draft)
-                                .err()
-                                .map(|e| e.to_string());
-                            app.provider_setup = None;
-                            let mut message = String::from(
-                                "From: /telemetry setup\n[ok] **Telemetry configuration saved.**",
-                            );
-                            match reconfigure_error {
-                                // Reconfiguring a disabled subsystem is a
-                                // no-op, and a save with telemetry off is the
-                                // expected path for an operator preparing a
-                                // config, not a failure to report.
-                                None => message.push_str(
-                                    "\n\nThe change is already live: the telemetry subsystem \
+            // The logs field is the OTLP logs-signal export level. Log
+            // export follows telemetry itself (spec `otel` FR-036), so
+            // this draft always enables both signals and an empty
+            // field simply keeps the default level.
+            let logs = codemason_config::OtelLogsConfig {
+                enabled: true,
+                level: if logs_str.is_empty() {
+                    "info".to_string()
+                } else {
+                    logs_str
+                },
+            };
+            // Merge the form onto the stored block: the dialog has no
+            // rows for `service_name`, `resource_attributes`, the
+            // per-metric toggles or `cardinality_limit`, and building
+            // a fresh block reset all of them to their defaults on
+            // every save.
+            let draft = codemason_config::OtelConfig {
+                enabled: true,
+                endpoint,
+                protocol,
+                export_interval_seconds: interval,
+                export_timeout_seconds: timeout,
+                internal_port,
+                logs,
+                ..app.telemetry_config_snapshot()
+            };
+
+            let problems = draft.validate();
+            if !problems.is_empty() {
+                app.provider_setup = Some(ProviderSetupStep::TelemetrySetup {
+                    endpoint_field,
+                    protocol,
+                    interval_field,
+                    timeout_field,
+                    port_field,
+                    logs_field,
+                    active_field,
+                    error: Some(problems.join("; ")),
+                });
+                return;
+            }
+
+            match app.save_telemetry_otel(&draft) {
+                Ok(()) => {
+                    app.session_processor.invalidate_config_cache();
+                    // Bug fix: `/telemetry setup` used to persist the
+                    // new block and stop there, so an operator who had
+                    // already enabled telemetry kept exporting with
+                    // the OLD endpoint/protocol/interval until the
+                    // next restart. Reconfigure the live subsystem
+                    // exactly as `/telemetry on` does, so saving the
+                    // form takes effect immediately.
+                    let reconfigure_error = app
+                        .session_processor
+                        .telemetry
+                        .reconfigure(draft)
+                        .err()
+                        .map(|e| e.to_string());
+                    app.provider_setup = None;
+                    let mut message = String::from(
+                        "From: /telemetry setup\n[ok] **Telemetry configuration saved.**",
+                    );
+                    match reconfigure_error {
+                        // Reconfiguring a disabled subsystem is a
+                        // no-op, and a save with telemetry off is the
+                        // expected path for an operator preparing a
+                        // config, not a failure to report.
+                        None => message.push_str(
+                            "\n\nThe change is already live: the telemetry subsystem \
                                      was reconfigured in place.",
-                                ),
-                                Some(e) => message.push_str(&format!(
-                                    "\n\n[err] The new configuration was saved but could not be \
+                        ),
+                        Some(e) => message.push_str(&format!(
+                            "\n\n[err] The new configuration was saved but could not be \
                                      applied to the running telemetry subsystem: {e}\n\nThe \
                                      settings take effect on the next codemason start."
-                                )),
-                            }
-                            app.append_assistant_text(&message);
-                            app.status = "telemetry: saved".to_string();
-                        }
-                        Err(e) => {
-                            app.provider_setup = Some(ProviderSetupStep::TelemetrySetup {
-                                endpoint_field,
-                                protocol,
-                                interval_field,
-                                timeout_field,
-                                port_field,
-                                logs_field,
-                                active_field,
-                                error: Some(e),
-                            });
-                        }
+                        )),
                     }
-                    return;
+                    app.append_assistant_text(&message);
+                    app.status = "telemetry: saved".to_string();
                 }
-                Key::Char(c) if is_text_field => {
-                    let Some(target) = telemetry_field(
+                Err(e) => {
+                    app.provider_setup = Some(ProviderSetupStep::TelemetrySetup {
+                        endpoint_field,
+                        protocol,
+                        interval_field,
+                        timeout_field,
+                        port_field,
+                        logs_field,
                         active_field,
-                        &mut endpoint_field,
-                        &mut interval_field,
-                        &mut timeout_field,
-                        &mut port_field,
-                        &mut logs_field,
-                    ) else {
-                        // Not a text field (protocol); no-op rather than panic.
-                        return;
-                    };
-                    target.insert_char(c);
+                        error: Some(e),
+                    });
                 }
-                Key::Backspace if is_text_field => {
-                    let Some(target) = telemetry_field(
-                        active_field,
-                        &mut endpoint_field,
-                        &mut interval_field,
-                        &mut timeout_field,
-                        &mut port_field,
-                        &mut logs_field,
-                    ) else {
-                        // Not a text field (protocol); no-op rather than panic.
-                        return;
-                    };
-                    target.backspace();
-                }
-                Key::Left if is_text_field => {
-                    let Some(target) = telemetry_field(
-                        active_field,
-                        &mut endpoint_field,
-                        &mut interval_field,
-                        &mut timeout_field,
-                        &mut port_field,
-                        &mut logs_field,
-                    ) else {
-                        // Not a text field (protocol); no-op rather than panic.
-                        return;
-                    };
-                    target.move_left();
-                }
-                Key::Right if is_text_field => {
-                    let Some(target) = telemetry_field(
-                        active_field,
-                        &mut endpoint_field,
-                        &mut interval_field,
-                        &mut timeout_field,
-                        &mut port_field,
-                        &mut logs_field,
-                    ) else {
-                        // Not a text field (protocol); no-op rather than panic.
-                        return;
-                    };
-                    target.move_right();
-                }
-                Key::Home if is_text_field => {
-                    let Some(target) = telemetry_field(
-                        active_field,
-                        &mut endpoint_field,
-                        &mut interval_field,
-                        &mut timeout_field,
-                        &mut port_field,
-                        &mut logs_field,
-                    ) else {
-                        // Not a text field (protocol); no-op rather than panic.
-                        return;
-                    };
-                    target.move_home();
-                }
-                Key::End if is_text_field => {
-                    let Some(target) = telemetry_field(
-                        active_field,
-                        &mut endpoint_field,
-                        &mut interval_field,
-                        &mut timeout_field,
-                        &mut port_field,
-                        &mut logs_field,
-                    ) else {
-                        // Not a text field (protocol); no-op rather than panic.
-                        return;
-                    };
-                    target.move_end();
-                }
-                _ => {}
             }
-
-            app.provider_setup = Some(ProviderSetupStep::TelemetrySetup {
-                endpoint_field,
-                protocol,
-                interval_field,
-                timeout_field,
-                port_field,
-                logs_field,
+            return;
+        }
+        Key::Char(c) if is_text_field => {
+            let Some(target) = telemetry_field(
                 active_field,
-                error: None,
-            });
+                &mut endpoint_field,
+                &mut interval_field,
+                &mut timeout_field,
+                &mut port_field,
+                &mut logs_field,
+            ) else {
+                // Not a text field (protocol); no-op rather than panic.
+                return;
+            };
+            target.insert_char(c);
         }
-
-        ProviderSetupStep::LoadingModels { .. } => {
-            // Loading state is read-only; any key besides Esc just keeps it alive.
-            if key.key == Key::Esc {
-                app.provider_setup = None;
-                app.model_loading_state = None;
-            } else {
-                app.provider_setup = Some(step);
-            }
+        Key::Backspace if is_text_field => {
+            let Some(target) = telemetry_field(
+                active_field,
+                &mut endpoint_field,
+                &mut interval_field,
+                &mut timeout_field,
+                &mut port_field,
+                &mut logs_field,
+            ) else {
+                // Not a text field (protocol); no-op rather than panic.
+                return;
+            };
+            target.backspace();
         }
-        ProviderSetupStep::SetupRouter { .. } => {
-            app.provider_setup = Some(step);
-            handle_router_setup_key(app, key);
+        Key::Left if is_text_field => {
+            let Some(target) = telemetry_field(
+                active_field,
+                &mut endpoint_field,
+                &mut interval_field,
+                &mut timeout_field,
+                &mut port_field,
+                &mut logs_field,
+            ) else {
+                // Not a text field (protocol); no-op rather than panic.
+                return;
+            };
+            target.move_left();
         }
-        ProviderSetupStep::SelectRouterModel { .. } => {
-            app.provider_setup = Some(step);
-            handle_router_model_picker_key(app, key);
+        Key::Right if is_text_field => {
+            let Some(target) = telemetry_field(
+                active_field,
+                &mut endpoint_field,
+                &mut interval_field,
+                &mut timeout_field,
+                &mut port_field,
+                &mut logs_field,
+            ) else {
+                // Not a text field (protocol); no-op rather than panic.
+                return;
+            };
+            target.move_right();
         }
+        Key::Home if is_text_field => {
+            let Some(target) = telemetry_field(
+                active_field,
+                &mut endpoint_field,
+                &mut interval_field,
+                &mut timeout_field,
+                &mut port_field,
+                &mut logs_field,
+            ) else {
+                // Not a text field (protocol); no-op rather than panic.
+                return;
+            };
+            target.move_home();
+        }
+        Key::End if is_text_field => {
+            let Some(target) = telemetry_field(
+                active_field,
+                &mut endpoint_field,
+                &mut interval_field,
+                &mut timeout_field,
+                &mut port_field,
+                &mut logs_field,
+            ) else {
+                // Not a text field (protocol); no-op rather than panic.
+                return;
+            };
+            target.move_end();
+        }
+        _ => {}
     }
+
+    app.provider_setup = Some(ProviderSetupStep::TelemetrySetup {
+        endpoint_field,
+        protocol,
+        interval_field,
+        timeout_field,
+        port_field,
+        logs_field,
+        active_field,
+        error: None,
+    });
 }
 /// Starts the Copilot device flow and spawns a background polling task.
 ///

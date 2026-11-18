@@ -969,7 +969,6 @@ The project is a Cargo workspace built from 20 focused crates:
 | `codemason-config`         | Configuration types, defaults, and parsing                               |
 | `codemason-connectors`     | Connector catalogue, store, providers, MCP bridge, `/connectors`       |
 | `codemason-gui`            | egui desktop frontend: dockable panes, native dialogs, craft-keymap shortcuts |
-| `codemason-hyperresearch`  | Deep-research engine: decomposition, notes, citation graph, vault       |
 | `codemason-llm`            | Provider clients and model registry (every built-in provider + Model Router) |
 | `codemason-plugins`        | Codex/Claude dialect plugins, sandboxed JS runtime, `/plugins`         |
 | `codemason-research`       | Web/local research gathering, synthesis, dated report output             |

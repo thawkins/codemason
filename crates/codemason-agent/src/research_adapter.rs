@@ -586,10 +586,11 @@ fn parse_mf_search_metadata(metadata: &serde_json::Value, tool_name: &str) -> Ve
 struct AgentWebFetchTool {
     tool: Arc<dyn AgentTool>,
     ctx: AgentToolContext,
-    /// Verifier hook used to enforce the mandatory readability guarantee on
-    /// the legacy `webfetch` path (which does not report which extraction
-    /// stage produced its output). `None` disables verification (used in
-    /// tests to exercise the bail branch deterministically).
+    /// Test-only override for the readability check on the legacy `webfetch`
+    /// path (which does not report which extraction stage produced its
+    /// output). `Some(f)` replaces the check with `f()`, so a test can drive
+    /// the bail branch deterministically; `None` runs the real
+    /// `verify_readability_on_raw_html` check.
     #[cfg(test)]
     legacy_verifier: Option<Box<dyn Fn() -> bool + Send + Sync>>,
 }
@@ -1551,59 +1552,3 @@ fn parse_specs_list(content: &str) -> Vec<String> {
 #[cfg(test)]
 #[path = "../tests/inline/research_adapter_tests.rs"]
 mod tests;
-
-#[test]
-fn test_parse_mf_search_metadata_extracts_hits_and_engine_provenance() {
-    let metadata = serde_json::json!({
-        "query": "rust lifetimes",
-        "results": [
-            {
-                "title": "Rust Lifetimes",
-                "url": "https://doc.rust-lang.org/nomicon/lifetimes.html",
-                "snippet": "A deep dive into lifetimes.",
-                "source": "openalex, wikipedia",
-                "search_engine": "openalex, wikipedia",
-                "position": 1,
-                "relevance_score": 0.95,
-                "fetch_relevance": "high",
-                "engines_consensus": 2
-            }
-        ]
-    });
-    let hits = parse_mf_search_metadata(&metadata, "mf_search");
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].title, "Rust Lifetimes");
-    assert_eq!(
-        hits[0].url,
-        "https://doc.rust-lang.org/nomicon/lifetimes.html"
-    );
-    assert_eq!(hits[0].snippet, "A deep dive into lifetimes.");
-    assert_eq!(hits[0].search_tool, "mf_search");
-    assert_eq!(hits[0].search_engine, "openalex, wikipedia");
-}
-
-#[test]
-fn test_parse_mf_search_metadata_falls_back_to_source_field() {
-    let metadata = serde_json::json!({
-        "results": [
-            {
-                "title": "No engine field",
-                "url": "https://example.com",
-                "snippet": "fallback",
-                "source": "wikipedia"
-            }
-        ]
-    });
-    let hits = parse_mf_search_metadata(&metadata, "mf_search");
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].search_engine, "wikipedia");
-}
-
-#[test]
-fn test_parse_mf_search_metadata_returns_empty_on_missing_results() {
-    let hits = parse_mf_search_metadata(&serde_json::json!({"query": "x"}), "mf_search");
-    assert!(
-        hits.is_empty(),
-        "no in-project files should match an unrelated topic"
-    );
-}

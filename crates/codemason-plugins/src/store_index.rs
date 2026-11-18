@@ -234,33 +234,9 @@ pub fn marketplace_name_for(
         .unwrap_or_else(|| kind.label().to_string())
 }
 
-/// Where a store's effective endpoint came from (FR-031).
-///
-/// Produced by [`StoreKind::effective_endpoint_with_source`] so the
-/// `/plugins stores` report can tell the user whether a
-/// `plugins.stores.<name>.url` override is in effect.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EndpointSource {
-    /// A non-empty `plugins.stores.<name>.url` override (FR-028).
-    Config,
-    /// The compiled default endpoint (FR-027).
-    Default,
-    /// An additional named marketplace added through
-    /// `/plugins marketplace <store> add` (FR-048).
-    Added,
-}
-
-impl EndpointSource {
-    /// The lowercase tag used by the `/plugins stores` report (FR-031).
-    #[must_use]
-    pub const fn tag(self) -> &'static str {
-        match self {
-            Self::Config => "config",
-            Self::Default => "default",
-            Self::Added => "added",
-        }
-    }
-}
+/// Where a store's effective endpoint came from; shared with the other
+/// store family in [`codemason_surface::store`].
+pub use codemason_surface::store::EndpointSource;
 
 impl std::fmt::Display for StoreKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

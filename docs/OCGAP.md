@@ -195,7 +195,7 @@ Note: opencode v2 renamed config keys (`agent` to `agents`, `provider` to `provi
 | Code index and semantic graph | Yes | No | opencode |
 | Persistent memory | Yes | No | opencode |
 | Spec-driven development (`/spec`) | Yes | No | opencode |
-| Research system (`/research`, hyperresearch) | Yes | No | opencode |
+| Research system (`/research`) | Yes | No | opencode |
 | Project scaffolding (`/new`) | Yes | No | opencode |
 | Scheduling | Yes (`/cron`) | Yes (`/schedule`, experimental) | None |
 | Webhook-triggered automations | Yes (`/automation`, `POST /auto/{id}`) | No | opencode |

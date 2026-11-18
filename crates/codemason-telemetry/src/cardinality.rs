@@ -96,7 +96,7 @@ impl CardinalityCache {
                     kv.key.clone(),
                     match &kv.value {
                         opentelemetry::Value::String(s) => {
-                            crate::sensitive::sanitize_attr_value(s.as_str())
+                            crate::sensitive::sanitize_attr_for_key(kv.key.as_str(), s.as_str())
                         }
                         _ => NON_STRING_ATTR.to_string(),
                     },
@@ -180,11 +180,9 @@ impl Default for CardinalityCache {
 #[cfg(feature = "telemetry")]
 impl Clone for CardinalityCache {
     fn clone(&self) -> Self {
-        // Clone the inner state so that each InstrumentRegistry clone
-        // shares the same cardinality tracking. Actually - we want all
-        // clones to share the SAME state, so we use Arc externally.
-        // This Clone impl is only used if someone explicitly clones the
-        // cache (not the normal path). It creates a snapshot copy.
+        // A snapshot copy: the clone starts with the seen signatures at this
+        // moment and then tracks independently. Registry clones do not take
+        // this path; they share one cache through the `Arc` that holds it.
         let seen = self.seen.read().map(|s| s.clone()).unwrap_or_default();
         Self {
             seen: RwLock::new(seen),

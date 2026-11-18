@@ -61,6 +61,9 @@ mod test_http_client_helpers;
 #[path = "test_http_client_stream_chunk.rs"]
 mod test_http_client_stream_chunk;
 
+#[path = "test_stream_stall.rs"]
+mod test_stream_stall;
+
 #[path = "test_m5_6_provider_consistency.rs"]
 mod test_m5_6_provider_consistency;
 
@@ -79,6 +82,9 @@ mod test_ollama_cloud_real;
 #[path = "test_ollama_shared.rs"]
 mod test_ollama_shared;
 
+#[path = "test_ollama_tool_index.rs"]
+mod test_ollama_tool_index;
+
 #[path = "test_ollama_tool_handling.rs"]
 mod test_ollama_tool_handling;
 
@@ -96,6 +102,9 @@ mod test_provider_offline_coverage;
 
 #[path = "test_rate_limit_retry.rs"]
 mod test_rate_limit_retry;
+
+#[path = "test_router_modifier_strip.rs"]
+mod test_router_modifier_strip;
 
 #[path = "test_router_client.rs"]
 mod test_router_client;

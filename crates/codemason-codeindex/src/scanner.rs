@@ -286,12 +286,6 @@ fn build_exclude_matcher(patterns: &[String]) -> Option<globset::GlobSet> {
     }
 }
 
-/// Compute the blake3 hash of a file on disk.
-pub fn hash_file(path: &Path) -> Result<String> {
-    let content = fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
-    Ok(hash_content(&content))
-}
-
 /// Detect the programming language of a file based on its extension.
 ///
 /// Returns `None` for unrecognised extensions.

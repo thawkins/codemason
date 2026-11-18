@@ -246,16 +246,6 @@ impl SpecImplRunner {
         groups
     }
 
-    /// Get the task ID at the given 1-based rank in the execution order.
-    ///
-    /// Returns `None` if `rank` is out of range (rank < 1 or rank > total).
-    #[must_use]
-    pub fn task_id_at(&self, rank: usize) -> Option<&str> {
-        self.execution_order
-            .get(rank.checked_sub(1)?)
-            .map(|&idx| self.tasks[idx].id.as_str())
-    }
-
     /// Build a focused single-task prompt for the task at the given 1-based
     /// rank in the execution order.
     ///
@@ -565,37 +555,6 @@ impl SpecImplRunner {
         } else {
             parts.join(", ")
         }
-    }
-
-    /// Extract requirement text from SPEC.md for a given requirement reference
-    /// (FR-022).
-    ///
-    /// Looks up requirement IDs (e.g. "FR-014") in the spec and returns
-    /// the full text for each.
-    pub async fn resolve_requirements(
-        specs_root: &PathBuf,
-        spec_name: &str,
-        requirement_refs: &[String],
-    ) -> HashMap<String, String> {
-        let spec_id = match SpecId::new(spec_name) {
-            Some(id) => id,
-            None => return HashMap::new(),
-        };
-        let mgr = SpecManager::new(specs_root);
-        let spec = match mgr.read_spec(&spec_id).await {
-            Ok(s) => s,
-            Err(_) => return HashMap::new(),
-        };
-
-        let mut resolved = HashMap::new();
-        for ref_id in requirement_refs {
-            for req in &spec.requirements {
-                if req.id == *ref_id {
-                    resolved.insert(ref_id.clone(), req.text.clone());
-                }
-            }
-        }
-        resolved
     }
 
     // -- File Creation Order (FR-014, T-025) --

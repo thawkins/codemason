@@ -10,6 +10,9 @@
 //! (`http://localhost:11434`). No API key is required for local servers.
 
 use anyhow::{Context, Result, bail};
+// The inline tests reach `StreamExt` through `use super::*`; production code
+// polls the stream via `http_client::next_chunk_or_stall`.
+#[cfg(test)]
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -363,7 +366,7 @@ impl LlmClient for OllamaClient {
             .to_string();
         let stream = response.bytes_stream();
         let event_stream = async_stream::stream! {
-              // PERF-063: pre-size the SSE accumulation buffer so a long stream does
+            // PERF-063: pre-size the SSE accumulation buffer so a long stream does
             // not repeatedly realloc/copy as it grows.
             let mut buffer = String::with_capacity(8 * 1024);
             // FUNC-033: hold an incomplete trailing multibyte character from the
@@ -376,29 +379,19 @@ impl LlmClient for OllamaClient {
             // FR-004: the `/v1/chat/completions` shape keys tool calls by
             // `tool_calls[].index`; the shared accumulator owns the open calls.
             let mut acc = ToolCallAccumulator::new(OPENAI_CHAT, "ollama");
+            // #19: which accumulator key each tool-call index / id belongs to.
+            let mut tool_keys = ToolKeyResolver::default();
             let mut stream_done = false;
             let mut yielded_event = false;
 
             futures::pin_mut!(stream);
 
             while !stream_done {
-                let chunk_result = match tokio::time::timeout(
-                    std::time::Duration::from_secs(
-                        super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS,
-                    ),
-                    stream.next(),
-                )
-                .await
-                {
+                let chunk_result = match super::http_client::next_chunk_or_stall(&mut stream, "Ollama").await {
                     Ok(Some(r)) => r,
                     Ok(None) => break,
-                    Err(_) => {
-                        yield StreamEvent::Error {
-                            message: format!(
-                                "Ollama: stream stalled - no data received for {}s",
-                                super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS
-                            ),
-                        };
+                    Err(message) => {
+                        yield StreamEvent::Error { message };
                         break;
                     }
                 };
@@ -422,31 +415,18 @@ impl LlmClient for OllamaClient {
                 };
 
                 // SEC-codemason-llm-004 (SECTASKS T-028): fail the stream when a
-
                 // peer dribbles bytes without ever emitting a newline instead
-
                 // of letting the accumulation buffer grow without bound.
-
                 if let Err(e) = super::http_client::append_chunk_guarded(
-
                     &mut buffer,
-
                     &mut pending_utf8,
-
                     &chunk,
-
                     "Ollama",
-
                 ) {
-
                     yield StreamEvent::Error {
-
                         message: e.to_string(),
-
                     };
-
                     return;
-
                 }
 
                 while let Some(line) = super::http_client::take_sse_line(&mut buffer) {
@@ -463,17 +443,24 @@ impl LlmClient for OllamaClient {
                     if data == "[DONE]" {
                         stream_done = true;
                         break;
-                    }                      let parsed: Value = match serde_json::from_str(data) {
-                          Ok(v) => v,
-                          Err(e) => {
-                              // SEC: the raw SSE frame carries streamed model output;
-                              // redact before logging.
-                              tracing::warn!(provider = "ollama", line = %crate::provider::http_client::redact_frame(data), error = %e, "failed to parse SSE line");
-                              continue;
-                          }
-                      };
+                    }
 
-                      // Usage info
+                    let parsed: Value = match serde_json::from_str(data) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            // SEC: the raw SSE frame carries streamed model output;
+                            // redact before logging.
+                            tracing::warn!(
+                                provider = "ollama",
+                                line = %crate::provider::http_client::redact_frame(data),
+                                error = %e,
+                                "failed to parse SSE line"
+                            );
+                            continue;
+                        }
+                    };
+
+                    // Usage info
                     if let Some(usage) = parsed.get("usage")
                         && !usage.is_null()
                     {
@@ -539,8 +526,22 @@ impl LlmClient for OllamaClient {
                             && let Some(tool_calls) = delta["tool_calls"].as_array()
                         {
                             for tc in tool_calls {
-                                let index = tc["index"].as_u64().unwrap_or(0);
-                                let key = StreamKey::Index(index);
+                                // #19: key by `index`, else by the call `id`, so
+                                // parallel calls from a server that omits the
+                                // index stay separate (an `unwrap_or(0)` merged
+                                // them); see `ToolKeyResolver` for continuations.
+                                let Some(key) = tool_keys.resolve(
+                                    tc["index"].as_u64(),
+                                    tc["id"].as_str(),
+                                    tc.get("function").and_then(|f| f["name"].as_str()),
+                                ) else {
+                                    tracing::warn!(
+                                        provider = "ollama",
+                                        frame = %crate::provider::http_client::redact_frame(&tc.to_string()),
+                                        "tool_call frame cannot be attributed to one call; skipping it"
+                                    );
+                                    continue;
+                                };
 
                                 if let Some(id) = tc["id"].as_str() {
                                     acc.set_id(&key, id);
@@ -569,15 +570,16 @@ impl LlmClient for OllamaClient {
                             }
                         }
 
-                          // Finish reason
-                          if let Some(finish_reason) = choice["finish_reason"].as_str() {
-                              // End the open calls in index order (see the shared
-                              // accumulator for the rationale).
-                              for event in acc.end_all() {
-                                  yield event;
-                              }
+                        // Finish reason
+                        if let Some(finish_reason) = choice["finish_reason"].as_str() {
+                            // End the open calls in index order (see the shared
+                            // accumulator for the rationale).
+                            for event in acc.end_all() {
+                                yield event;
+                            }
+                            tool_keys = ToolKeyResolver::default();
 
-                              let reason = match finish_reason {
+                            let reason = match finish_reason {
                                 "tool_calls" => FinishReason::ToolUse,
                                 "length" => FinishReason::Length,
                                 "content_filter" => FinishReason::ContentFilter,
@@ -591,6 +593,148 @@ impl LlmClient for OllamaClient {
         };
 
         Ok(Box::pin(event_stream))
+    }
+}
+
+/// Maps the `index` / `id` labels of Ollama tool-call frames to accumulator
+/// keys (#19).
+///
+/// - An explicit `index` names a call: a new index is a new call, even when
+///   it repeats an id another call already used (the accumulator then gives
+///   the second call a fresh output id). An id seen on two calls is ambiguous,
+///   and an id-only frame naming it cannot be attributed.
+/// - A frame with no index is keyed by its `id`.
+/// - A label not seen before is inferred onto the single open call only when
+///   that call has no label of that kind yet and the frame names no other
+///   tool (an indexed start followed by an id-only delta, or the reverse).
+/// - A frame with neither label continues the single open call when it names
+///   no tool or repeats that call's name; with several calls open it cannot be
+///   attributed.
+#[derive(Debug, Default)]
+struct ToolKeyResolver {
+    by_index: HashMap<u64, StreamKey>,
+    by_id: HashMap<String, StreamKey>,
+    ambiguous_ids: std::collections::HashSet<String>,
+    open: Vec<OpenToolCall>,
+}
+
+/// One call the resolver has keyed, with the labels and name it has carried.
+#[derive(Debug)]
+struct OpenToolCall {
+    key: StreamKey,
+    name: Option<String>,
+    has_index: bool,
+    has_id: bool,
+}
+
+impl ToolKeyResolver {
+    /// The key for a frame with this `index`, `id` and tool `name`, or `None`
+    /// when the frame cannot be attributed to exactly one call.
+    fn resolve(
+        &mut self,
+        index: Option<u64>,
+        id: Option<&str>,
+        name: Option<&str>,
+    ) -> Option<StreamKey> {
+        let id = id.filter(|id| !id.is_empty());
+        let name = name.filter(|name| !name.is_empty());
+        let key = match (index, id) {
+            (Some(index), _) => match self.by_index.get(&index) {
+                Some(key) => key.clone(),
+                None => self
+                    .call_with_id_and_no_index(id)
+                    .or_else(|| self.infer_onto_sole_call(name, |call| !call.has_index))
+                    .unwrap_or(StreamKey::Index(index)),
+            },
+            (None, Some(id)) => {
+                if self.ambiguous_ids.contains(id) {
+                    return None;
+                }
+                match self.by_id.get(id) {
+                    Some(key) => key.clone(),
+                    None => self
+                        .infer_onto_sole_call(name, |call| !call.has_id)
+                        .unwrap_or_else(|| StreamKey::CallId(id.to_string())),
+                }
+            }
+            (None, None) => match self.open.as_slice() {
+                [] => StreamKey::Index(0),
+                [call] if name.is_none() || name == call.name.as_deref() => call.key.clone(),
+                _ => return None,
+            },
+        };
+        self.record(&key, index, id, name);
+        Some(key)
+    }
+
+    /// The key of the call `id` names, when that call has carried no index
+    /// yet (an id-keyed call whose later frames add the index). A call that
+    /// already has a different index is another call reusing the id.
+    fn call_with_id_and_no_index(&self, id: Option<&str>) -> Option<StreamKey> {
+        let key = self.by_id.get(id?)?;
+        self.open
+            .iter()
+            .find(|call| &call.key == key && !call.has_index)
+            .map(|call| call.key.clone())
+    }
+
+    /// The single open call's key, if exactly one call is open, `accepts` it,
+    /// and the frame names no tool other than that call's.
+    fn infer_onto_sole_call(
+        &self,
+        name: Option<&str>,
+        accepts: impl Fn(&OpenToolCall) -> bool,
+    ) -> Option<StreamKey> {
+        match self.open.as_slice() {
+            [call] if accepts(call) && (name.is_none() || name == call.name.as_deref()) => {
+                Some(call.key.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// Remember the labels and name a frame carried for `key`.
+    fn record(
+        &mut self,
+        key: &StreamKey,
+        index: Option<u64>,
+        id: Option<&str>,
+        name: Option<&str>,
+    ) {
+        if let Some(index) = index {
+            self.by_index.entry(index).or_insert_with(|| key.clone());
+        }
+        if let Some(id) = id {
+            match self.by_id.get(id) {
+                Some(existing) if existing != key => {
+                    self.by_id.remove(id);
+                    self.ambiguous_ids.insert(id.to_string());
+                }
+                Some(_) => {}
+                None if !self.ambiguous_ids.contains(id) => {
+                    self.by_id.insert(id.to_string(), key.clone());
+                }
+                None => {}
+            }
+        }
+        let position = match self.open.iter().position(|call| &call.key == key) {
+            Some(position) => position,
+            None => {
+                self.open.push(OpenToolCall {
+                    key: key.clone(),
+                    name: None,
+                    has_index: false,
+                    has_id: false,
+                });
+                self.open.len() - 1
+            }
+        };
+        let call = &mut self.open[position];
+        call.has_index |= index.is_some();
+        call.has_id |= id.is_some();
+        if call.name.is_none() {
+            call.name = name.map(str::to_string);
+        }
     }
 }
 

@@ -144,7 +144,9 @@ impl StoreLedger {
     pub fn save(&self, store_dir: &Path) -> Result<(), PluginError> {
         std::fs::create_dir_all(store_dir).map_err(PluginError::io)?;
         let bytes = serde_json::to_vec_pretty(self).map_err(PluginError::io)?;
-        std::fs::write(store_dir.join(STATE_FILE), bytes).map_err(PluginError::io)
+        // Temp file plus rename, so a crash mid-write cannot truncate the ledger.
+        codemason_types::guard::write_atomic(&store_dir.join(STATE_FILE), &bytes)
+            .map_err(PluginError::io)
     }
 
     /// Mutable access to one plugin's state, inserting the default when absent.

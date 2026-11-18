@@ -1,4 +1,4 @@
-//! Session, team, and miscellaneous operations for the TUI.
+//! Session, team, and miscellaneous operations for the TUI and GUI.
 use std::collections::BTreeSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, LockResult, MutexGuard};
@@ -3937,12 +3937,22 @@ impl App {
         self.assert_input_cursor_invariant();
     }
 
-    pub(crate) fn cursor_on_first_logical_line(&self) -> bool {
+    /// Whether the input cursor sits on the first logical line of the prompt,
+    /// i.e. no `\n` precedes it.
+    ///
+    /// # Returns
+    /// `true` when the input before the cursor contains no newline.
+    pub fn cursor_on_first_logical_line(&self) -> bool {
         let byte = self.cursor_byte_pos();
         !self.session.input[..byte].contains('\n')
     }
 
-    pub(crate) fn cursor_on_last_logical_line(&self) -> bool {
+    /// Whether the input cursor sits on the last logical line of the prompt,
+    /// i.e. no `\n` follows it.
+    ///
+    /// # Returns
+    /// `true` when the input from the cursor onward contains no newline.
+    pub fn cursor_on_last_logical_line(&self) -> bool {
         let byte = self.cursor_byte_pos();
         !self.session.input[byte..].contains('\n')
     }
@@ -4126,8 +4136,7 @@ impl App {
             // set means the graph build holds the lock - not indexing.
             let graph_busy = idx.graph_busy();
 
-            if let Some(stats) = idx.try_status() {
-                self.code_index_stats_cache = Some(stats);
+            if idx.try_status().is_some() {
                 self.code_index_stats_last_refresh = std::time::Instant::now();
                 if self.code_index_busy && !reindex_active {
                     self.code_index_busy = false;
@@ -4160,7 +4169,6 @@ impl App {
                 self.needs_redraw = true;
             }
         } else {
-            self.code_index_stats_cache = None;
             self.code_index_stats_last_refresh = std::time::Instant::now();
             self.code_index_busy = false;
             if self.code_index_graph_busy {

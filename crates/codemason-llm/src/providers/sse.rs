@@ -17,7 +17,6 @@
 //! `dedup_tool_call_start` opt-out is gone: a switch that could turn the
 //! guarantee off was a contract with a way out of it.
 
-use futures::StreamExt;
 use serde_json::Value;
 use std::pin::Pin;
 
@@ -130,14 +129,7 @@ pub(crate) fn parse_openai_sse_stream(
         futures::pin_mut!(stream);
 
         loop {
-            let chunk = match tokio::time::timeout(
-                std::time::Duration::from_secs(
-                    super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS,
-                ),
-                stream.next(),
-            )
-            .await
-            {
+            let chunk = match super::http_client::next_chunk_or_stall(&mut stream, &provider_name).await {
                 Ok(Some(r)) => match r {
                     Ok(c) => c,
                     Err(e) => {
@@ -179,14 +171,8 @@ pub(crate) fn parse_openai_sse_stream(
                     }
                 },
                 Ok(None) => break,
-                Err(_) => {
-                    yield StreamEvent::Error {
-                        message: format!(
-                            "{}: stream stalled - no data received for {}s",
-                            provider_name,
-                            super::http_client::STREAM_CHUNK_IDLE_TIMEOUT_SECS
-                        ),
-                    };
+                Err(message) => {
+                    yield StreamEvent::Error { message };
                     break;
                 }
             };

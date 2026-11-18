@@ -88,7 +88,6 @@ impl App {
         self.code_index = services.code_index;
         self.code_index_watch_session = services.watch_session;
         self.code_index_enabled = services.code_index_enabled;
-        self.code_index_stats_cache = None;
         self.code_index_busy = false;
         self.spec_manager = Some(Arc::new(codemason_specs::SpecManager::new(
             self.cwd_path.join("specs"),

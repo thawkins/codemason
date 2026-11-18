@@ -39,7 +39,7 @@ use codemason_agent::team::{
 use codemason_app_core::app::App;
 use codemason_app_core::geometry::Area;
 use codemason_app_core::styled::ThemeColor;
-use codemason_types::strutil::{format_duration_compact, short_suffix};
+use codemason_types::strutil::{format_duration_compact, short_suffix, truncate_chars_no_ellipsis};
 use egui::{Color32, Role};
 
 use super::agents::rows_in_view;
@@ -86,11 +86,6 @@ const STOP_W: usize = 9;
 
 /// Claimed and done task counts per teammate agent id.
 type TaskCounts = HashMap<String, (usize, usize)>;
-
-/// `text` cut to `budget` characters.
-fn clip(text: &str, budget: usize) -> String {
-    text.chars().take(budget).collect()
-}
 
 /// A message count, `-` for none.
 fn count_cell(n: u32) -> String {
@@ -189,7 +184,10 @@ fn model_column(member: &TeamMember, global: Option<&str>, palette: &Palette) ->
     if global == Some(rendered.as_str()) {
         return ("(inherited)".to_string(), palette.muted);
     }
-    (clip(&rendered, MODEL_W), palette.color(ThemeColor::Magenta))
+    (
+        truncate_chars_no_ellipsis(&rendered, MODEL_W),
+        palette.color(ThemeColor::Magenta),
+    )
 }
 
 /// The parked-member hint, while any member is blocked or suspended.
@@ -310,9 +308,15 @@ fn rows(app: &App, palette: &Palette) -> Vec<(Line, String)> {
     let lead = Line::new()
         .push(format!("{:<MARKER_W$}", "* "), green)
         .push(format!("{:<ID_W$} ", short_suffix(&lead_session, 8)), green)
-        .push(format!("{:<LABEL_W$} ", clip(name, LABEL_W)), green)
         .push(
-            format!("{:<AGENT_TYPE_W$} ", clip(name, AGENT_TYPE_W)),
+            format!("{:<LABEL_W$} ", truncate_chars_no_ellipsis(name, LABEL_W)),
+            green,
+        )
+        .push(
+            format!(
+                "{:<AGENT_TYPE_W$} ",
+                truncate_chars_no_ellipsis(name, AGENT_TYPE_W)
+            ),
             green,
         )
         .push(format!("{:<STATUS_W$} ", "active"), green)
@@ -348,7 +352,7 @@ fn rows(app: &App, palette: &Palette) -> Vec<(Line, String)> {
             (palette.color(ThemeColor::Blue), palette.text)
         };
         let (model, model_color) = model_column(member, global.as_deref(), palette);
-        let label = clip(&format!("{}-{short}", member.name), LABEL_W);
+        let label = truncate_chars_no_ellipsis(&format!("{}-{short}", member.name), LABEL_W);
         let steps = member
             .session_id
             .as_deref()
@@ -372,7 +376,10 @@ fn rows(app: &App, palette: &Palette) -> Vec<(Line, String)> {
             .push(format!("{short:<ID_W$} "), palette.color(ThemeColor::Cyan))
             .push(format!("{label:<LABEL_W$} "), name_color)
             .push(
-                format!("{:<AGENT_TYPE_W$} ", clip(&member.agent_type, AGENT_TYPE_W)),
+                format!(
+                    "{:<AGENT_TYPE_W$} ",
+                    truncate_chars_no_ellipsis(&member.agent_type, AGENT_TYPE_W)
+                ),
                 palette.text,
             )
             .push(

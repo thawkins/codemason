@@ -483,9 +483,7 @@ redacted_debug_impl!(Config);
 /// never panic and never leaks a partially-rendered value.
 ///
 /// Public so a secret-bearing config in another crate can reuse this one
-/// implementation rather than hand-writing a second `Debug` body:
-/// `codemason_hyperresearch::Config` holds its provider API keys in a plain
-/// `Vec<(String, String)>` and routes its `Debug` through this function.
+/// implementation rather than hand-writing a second `Debug` body.
 #[must_use]
 pub fn render_redacted<T: serde::Serialize>(value: &T) -> String {
     match serde_json::to_string_pretty(value) {

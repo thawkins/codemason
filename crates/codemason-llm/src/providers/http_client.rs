@@ -39,6 +39,36 @@ const REQUEST_TIMEOUT_SECS: u64 = 120;
 /// [`DEFAULT_STREAM_TIMEOUT_SECS`].
 pub const STREAM_CHUNK_IDLE_TIMEOUT_SECS: u64 = 120;
 
+/// Await the next item of a provider response stream, giving up after
+/// [`STREAM_CHUNK_IDLE_TIMEOUT_SECS`] without data.
+///
+/// This is the one owner of the per-chunk stall guard every streaming provider
+/// shares.
+///
+/// # Arguments
+/// * `stream` - the response stream (any `Unpin` stream; a `pin_mut!` binding
+///   works as `&mut stream`).
+/// * `label` - the provider name that prefixes the stall message.
+///
+/// # Returns
+/// `Ok(Some(item))` for the next item, `Ok(None)` at end of stream, or `Err`
+/// holding the user-facing message
+/// `"{label}: stream stalled - no data received for {N}s"`.
+pub async fn next_chunk_or_stall<S>(stream: &mut S, label: &str) -> Result<Option<S::Item>, String>
+where
+    S: futures::Stream + Unpin,
+{
+    use futures::StreamExt as _;
+    tokio::time::timeout(
+        Duration::from_secs(STREAM_CHUNK_IDLE_TIMEOUT_SECS),
+        stream.next(),
+    )
+    .await
+    .map_err(|_| {
+        format!("{label}: stream stalled - no data received for {STREAM_CHUNK_IDLE_TIMEOUT_SECS}s")
+    })
+}
+
 /// Default first-byte (whole-request) timeout for providers that wrap the chat
 /// POST in a `tokio::time::timeout` and let callers override it via
 /// `ChatRequest::stream_timeout_secs`.
@@ -118,8 +148,10 @@ pub fn append_stream_chunk(out: &mut String, pending: &mut Vec<u8>, chunk: &[u8]
 ///
 /// Unlike `buffer = buffer[pos + 1..].to_string()` (which re-allocates and
 /// copies the entire unconsumed remainder on every line - quadratic for long
-/// streams), this drains the consumed prefix in place so the remaining bytes
-/// are reused without an allocation per line (C-003).
+/// streams), this drains the consumed prefix in place, so the buffer's
+/// allocation is reused (C-003). `drain` still shifts the unconsumed suffix to
+/// the front, so pulling many lines out of one large buffered chunk copies the
+/// remainder once per line. The returned line itself is a new `String`.
 ///
 /// Returns `None` when no complete line is present yet.
 pub fn take_sse_line(buffer: &mut String) -> Option<String> {

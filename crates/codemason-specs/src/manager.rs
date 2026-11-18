@@ -170,17 +170,6 @@ impl SpecManager {
         .await
     }
 
-    /// Create a new spec directory with SPEC.md and PLAN.md.
-    pub async fn create_spec(
-        &self,
-        id: &SpecId,
-        spec_md: &str,
-        plan_md: &str,
-    ) -> Result<(), SpecError> {
-        SpecIo::create_spec_dir(&self.specs_root, id, spec_md, plan_md).await?;
-        Ok(())
-    }
-
     /// Delete a spec directory from the workspace.
     pub async fn delete_spec(&self, id: &SpecId) -> Result<(), SpecError> {
         let dir = self.specs_root.join(id.dir_name());
@@ -430,14 +419,6 @@ impl SpecManager {
     /// Archived specs are excluded by default; pass `include_archived: true` to include them.
     pub async fn search_specs(&self, query: &str) -> Result<Vec<SpecSearchResult>, SpecError> {
         self.search_specs_filtered(query, false).await
-    }
-
-    /// Full-text search with explicit archive inclusion.
-    pub async fn search_specs_with_archived(
-        &self,
-        query: &str,
-    ) -> Result<Vec<SpecSearchResult>, SpecError> {
-        self.search_specs_filtered(query, true).await
     }
 
     /// Common search implementation with archive filtering.

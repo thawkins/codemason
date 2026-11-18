@@ -235,7 +235,7 @@ fn extract_snippet(body: &str, keyword: &str) -> String {
     let Some(pos) = body
         .char_indices()
         .map(|(i, _)| i)
-        .find(|&i| body[i..].to_lowercase().starts_with(&kw_lower))
+        .find(|&i| lowercase_starts_with(&body[i..], &kw_lower))
     else {
         return String::new();
     };
@@ -244,6 +244,26 @@ fn extract_snippet(body: &str, keyword: &str) -> String {
     let end = body.ceil_char_boundary((pos + keyword.len() + 40).min(body.len()));
     let snippet = &body[start..end];
     snippet.replace('\n', " ").trim().to_string()
+}
+
+/// Whether `text`, lowercased, starts with `prefix_lower`.
+///
+/// Lowercases `text` one char at a time and stops at the first mismatch, so
+/// each call costs about `prefix_lower.len()` chars instead of lowercasing the
+/// whole remainder (D-18: that made [`extract_snippet`] quadratic, 4.75 s on a
+/// 256 KiB body). Per-char lowering differs from `str::to_lowercase` only for
+/// a word-final capital sigma, which never matches the ASCII dimension
+/// keywords.
+fn lowercase_starts_with(text: &str, prefix_lower: &str) -> bool {
+    let mut expected = prefix_lower.chars();
+    for lowered in text.chars().flat_map(char::to_lowercase) {
+        match expected.next() {
+            None => return true,
+            Some(want) if want == lowered => {}
+            Some(_) => return false,
+        }
+    }
+    expected.next().is_none()
 }
 
 /// Look up the human-readable label for a dimension keyword.

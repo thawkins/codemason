@@ -317,7 +317,6 @@ graph TB
 | `codemason-plugins` | Plugin discovery, dialect manifests, sandboxed JS runtime, lifecycle, skills/MCP/commands/agents/hooks bridges, `/plugins` surface | ~11,400 |
 | `codemason-surface` | Shared surface helpers for the plugin/connector families: attribution, subcommand tokeniser, store-dir resolution, harness step model, schema samples | ~1,200 |
 | `codemason-telemetry` | OpenTelemetry metrics export subsystem | ~6,400 |
-| `codemason-hyperresearch` | Deep-research engine: persistent vault, fetch/scholarly providers, claims, graph, MCP and HTTP surfaces | ~1,200 |
 
 ### 2.2 Crate Dependency Graph
 
@@ -5738,7 +5737,7 @@ Three consequences are part of the contract:
   vault root is explicit `AppState::research_root` state (production passes
   `<working dir>/research`, tests pass `target/temp/codemason-server-research/`),
   `session::history::set_subagent_log_root` redirects diverted `wait_agents`
-  batches, and `codemason_tui::app::set_log_root_override` /
+  batches, and `codemason_app_core::app::set_log_root_override` /
   `use_scratch_log_root_for_tests` redirect the GUI log-window spools. All three
   are `#[doc(hidden)]` `OnceLock` setters — production never calls them, so the
   shipped defaults (`<working dir>/log`, `<working dir>/research`) are unchanged.

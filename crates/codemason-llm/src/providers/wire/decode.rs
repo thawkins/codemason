@@ -476,10 +476,10 @@ impl ToolCallAccumulator {
     pub fn end_all(&mut self) -> Vec<StreamEvent> {
         let mut open = std::mem::take(&mut self.open);
         if self.keying == StreamKeying::ByIndex {
-            open.sort_unstable_by_key(|call| match &call.key {
+            // Stable, so calls keyed by id (a `ByIndex` stream from a server that
+            // omitted the index, #19) keep their open order; they sort first.
+            open.sort_by_key(|call| match &call.key {
                 StreamKey::Index(index) => *index,
-                // Unreachable for a `ByIndex` profile, whose callers only pass
-                // `StreamKey::Index`; a mixed key sorts first rather than panicking.
                 StreamKey::CallId(_) => 0,
             });
         }

@@ -46,6 +46,8 @@ hex = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.14"
+# `test-util` lets the stall-guard test pause time instead of waiting 120 s.
+tokio = { version = "1.42", features = ["full", "test-util"] }
 
 [lints]
 workspace = true
