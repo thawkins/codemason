@@ -9128,8 +9128,7 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
     /// Returns `Break` where the command returns early, so the dispatcher
     /// skips its trailing UI-invariant check exactly as before.
     async fn slash_spec(&mut self, args: &str) -> std::ops::ControlFlow<()> {
-        use codemason_specs::spec::SpecStatus;
-        use codemason_specs::{SddFlags, SpecCommand, SpecFilter, validate_with_flags};
+        use codemason_specs::SpecCommand;
 
         // Build the canonical `SpecManager` for the focused session's
         // directory. Single construction point for the `/spec` arms so
@@ -9138,10 +9137,6 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
         let specs_root = self.cwd_path.join("specs");
         let spec_manager = || SpecManager::new(&specs_root);
 
-        /// Parse a spec ID from a command argument.
-        fn parse_spec_id(spec_id: &str) -> Option<codemason_specs::spec::SpecId> {
-            codemason_specs::spec::SpecId::new(spec_id)
-        }
         let cmd = SpecCommand::parse(args);
         match cmd {
             SpecCommand::Help => {
@@ -9154,514 +9149,38 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                 from_research,
                 folder,
             } => {
-                let sid = self.session.session_id.clone().unwrap_or_default();
-                self.append_assistant_text(&SpecCommand::build_create_message(&specname));
-                self.push_log_no_agent(
-                    LogLevel::Info,
-                    SpecCommand::build_create_log(&specname, &feature),
-                );
-
-                let agent = self.select_general_agent();
-
-                // FR-027: an explicit `--folder <path>` targets that
-                // project's `specs/` root (used by `/spec reverse
-                // --folder` chaining); otherwise the invoking directory
-                // is used, as before.
-                let task = match folder {
-                    Some(target) => format!(
-                        "{}\n\nWrite the spec directory under `{target}/specs/` \
-                                 (absolute path), not the current directory.",
-                        SpecCommand::build_create_prompt(
-                            &specname,
-                            &feature,
-                            from_research.as_deref(),
-                        )
-                    ),
-                    None => SpecCommand::build_create_prompt(
-                        &specname,
-                        &feature,
-                        from_research.as_deref(),
-                    ),
-                };
-                let msg = Message::user_text(&sid, &task);
-                self.session.messages.push(msg);
-
-                let processor = self.session_processor.clone();
-                let flag = Arc::new(AtomicBool::new(false));
-                self.session.cancel_flag = Some(flag.clone());
-                self.session.is_processing = true;
-                self.status = SpecCommand::build_create_status(&specname);
-
-                let event_bus = self.event_bus.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = processor.process_message(&sid, &task, &agent, flag).await {
-                        tracing::warn!(error = %e, "spec: generation failed");
-                        event_bus.publish(codemason_agent::event::Event::AgentError {
-                            session_id: sid,
-                            error: format!("spec generation failed: {e}"),
-                        });
-                    }
-                });
+                self.spec_create(specname, feature, from_research, folder)
+                    .await;
             }
             SpecCommand::Jtbd {
                 spec_id,
                 force,
                 agent,
             } => {
-                let working_dir = self.cwd_path.clone();
-                let specs_root = working_dir.join("specs");
-
-                // FR-008: validate spec ID format
-                let id = match codemason_specs::spec::SpecId::new(&spec_id) {
-                    Some(id) => id,
-                    None => {
-                        self.status = format!("spec: invalid spec ID: {}", spec_id);
-                        self.append_assistant_text(&format!(
-                            "From: /spec jtbd\n\n**Error:** Invalid spec ID \
-                                     `{}`. Spec IDs must be alphanumeric with hyphens or \
-                                     underscores only.",
-                            spec_id
-                        ));
-                        return std::ops::ControlFlow::Break(());
-                    }
-                };
-
-                let spec_dir = specs_root.join(id.as_str());
-                let spec_md_path = spec_dir.join("SPEC.md");
-                let jtbd_path = spec_dir.join("JTBD.md");
-
-                let rt = tokio::runtime::Handle::current();
-                let spec_id_owned = spec_id.clone();
-                // Validation returns Ok(jtbd_exists) so the caller can
-                // enforce the overwrite guard (FR-003 / FR-004).
-                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                let validation: Result<bool, String> = tokio::task::block_in_place(|| {
-                    rt.block_on(async {
-                        // FR-008: confirm spec directory exists
-                        if !spec_dir.is_dir() {
-                            return Err(format!(
-                                "spec `{}` not found at {}",
-                                spec_id_owned,
-                                spec_dir.display()
-                            ));
-                        }
-                        // FR-009: confirm SPEC.md exists and is readable
-                        match tokio::fs::read_to_string(&spec_md_path).await {
-                            Ok(content) if content.trim().is_empty() => {
-                                return Err(format!(
-                                    "SPEC.md is empty: {}",
-                                    spec_md_path.display()
-                                ));
-                            }
-                            Ok(_) => {}
-                            Err(e) => {
-                                return Err(format!(
-                                    "SPEC.md not readable at {}: {}",
-                                    spec_md_path.display(),
-                                    e
-                                ));
-                            }
-                        }
-                        // FR-003/FR-004: check whether JTBD.md already exists
-                        let jtbd_exists = tokio::fs::metadata(&jtbd_path).await.is_ok();
-                        Ok(jtbd_exists)
-                    })
-                });
-                let jtbd_exists = match validation {
-                    Ok(exists) => exists,
-                    Err(e) => {
-                        self.status = format!("spec: {}", e);
-                        self.append_assistant_text(&format!(
-                            "From: /spec jtbd\n\n**Error:** {}",
-                            e
-                        ));
-                        return std::ops::ControlFlow::Break(());
-                    }
-                };
-
-                // FR-003: refuse if JTBD.md exists and --force not given
-                if jtbd_exists && !force {
-                    self.status = format!("spec jtbd: {} already has JTBD.md", spec_id);
-                    self.append_assistant_text(&format!(
-                        "From: /spec jtbd\n\n\
-                                 **JTBD.md already exists** at `specs/{}/JTBD.md`.\n\
-                                 Re-run with `--force` to overwrite:\n\n\
-                                 `/spec jtbd {} --force`",
-                        spec_id, spec_id
-                    ));
+                if self.spec_jtbd(spec_id, force, agent).await.is_break() {
                     return std::ops::ControlFlow::Break(());
                 }
-                // FR-004: when --force is present the guard is bypassed
-                // and the agent task below will overwrite JTBD.md.
-
-                // FR-011: status, message, and log parity with /spec create
-                let sid = self.session.session_id.clone().unwrap_or_default();
-                self.append_assistant_text(&SpecCommand::build_jtbd_message(&spec_id));
-                self.push_log_no_agent(
-                    LogLevel::Info,
-                    SpecCommand::build_jtbd_log(&spec_id, force, agent.as_deref()),
-                );
-
-                // FR-005: optional --agent <name> override
-                let mut selected_agent = if let Some(ref agent_name) = agent {
-                    match self
-                        .cycleable_agents
-                        .iter()
-                        .find(|a| a.name == *agent_name)
-                        .cloned()
-                    {
-                        Some(a) => a,
-                        None => {
-                            self.status = format!("spec: agent '{}' not found", agent_name);
-                            self.append_assistant_text(&format!(
-                                "From: /spec jtbd\n\n**Error:** Agent \
-                                         `{}` not found. No task was spawned.",
-                                agent_name
-                            ));
-                            return std::ops::ControlFlow::Break(());
-                        }
-                    }
-                } else {
-                    // FR-002: default to general agent, fallback to current agent
-                    self.select_general_agent()
-                };
-                self.apply_selected_model_and_thinking(&mut selected_agent);
-
-                // FR-002, FR-006, FR-007: build the JTBD analysis prompt
-                let task = SpecCommand::build_jtbd_prompt(&spec_id);
-                let msg = Message::user_text(&sid, &task);
-                self.session.messages.push(msg);
-
-                let processor = self.session_processor.clone();
-                let flag = Arc::new(AtomicBool::new(false));
-                self.session.cancel_flag = Some(flag.clone());
-                self.session.is_processing = true;
-                self.status = SpecCommand::build_jtbd_status(&spec_id);
-
-                let event_bus = self.event_bus.clone();
-                // FR-014: clone path + spec_id for cancellation cleanup
-                let jtbd_path_for_cleanup = jtbd_path.clone();
-                let spec_id_for_cleanup = spec_id.clone();
-                let cancel_flag_for_check = flag.clone();
-                tokio::spawn(async move {
-                    let result = processor
-                        .process_message(&sid, &task, &selected_agent, flag)
-                        .await;
-
-                    // FR-014: if cancelled, remove partial JTBD.md and notify
-                    if cancel_flag_for_check.load(Ordering::Acquire) {
-                        // FR-013: remove any partially-written file so a
-                        // subsequent --force re-run starts clean.
-                        if jtbd_path_for_cleanup.exists() {
-                            if let Err(e) = tokio::fs::remove_file(&jtbd_path_for_cleanup).await {
-                                tracing::warn!(
-                                    error = %e,
-                                    "spec jtbd: failed to remove partial JTBD.md"
-                                );
-                            }
-                        }
-                        event_bus.publish(codemason_agent::event::Event::AgentNotice {
-                            session_id: sid.clone(),
-                            message: format!(
-                                "spec jtbd: cancelled - partial JTBD.md for `{}` removed",
-                                spec_id_for_cleanup
-                            ),
-                        });
-                        return;
-                    }
-
-                    if let Err(e) = result {
-                        tracing::warn!(error = %e, "spec jtbd: analysis failed");
-                        event_bus.publish(codemason_agent::event::Event::AgentError {
-                            session_id: sid,
-                            error: format!("spec jtbd analysis failed: {e}"),
-                        });
-                    }
-                });
             }
             SpecCommand::Validate { spec_id } => {
-                // FR-019: Build SDD flags from loaded config so
-                // SDD-specific checks are opt-in.
-                let sdd_cfg = codemason_agent::Config::load_for(&self.cwd_path)
-                    .unwrap_or_default()
-                    .sdd;
-                let flags = SddFlags::from_bools(
-                    sdd_cfg.clarification_markers,
-                    sdd_cfg.quality_checklists,
-                    sdd_cfg.consistency_checks,
-                    sdd_cfg.phase_minus_one_gates,
-                    sdd_cfg.constitution,
-                    sdd_cfg.feedback_loop,
-                );
-                let mgr = spec_manager();
-                let rt = tokio::runtime::Handle::current();
-                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                let result: Result<String, String> = tokio::task::block_in_place(|| {
-                    rt.block_on(async {
-                        let specs = if let Some(id_str) = spec_id {
-                            match codemason_specs::spec::SpecId::new(&id_str) {
-                                Some(id) => match mgr.read_spec(&id).await {
-                                    Ok(spec) => vec![spec],
-                                    Err(e) => {
-                                        return Err(format!("failed to read {}: {}", id_str, e));
-                                    }
-                                },
-                                None => {
-                                    return Err(format!("spec: invalid spec ID: {}", id_str));
-                                }
-                            }
-                        } else {
-                            match mgr.discover_specs().await {
-                                Ok(specs) => specs,
-                                Err(e) => {
-                                    return Err(format!("discovery failed: {}", e));
-                                }
-                            }
-                        };
-                        if specs.is_empty() {
-                            return Ok("No specs found.".to_string());
-                        }
-                        let mut lines = vec!["From: /spec validate".to_string()];
-                        for spec in &specs {
-                            let report = validate_with_flags(spec, &flags);
-                            lines.push(format!("\n## Validation: `{}`", spec.id));
-                            lines.push(report.format(spec.id.as_str()));
-                        }
-                        Ok(lines.join("\n"))
-                    })
-                });
-                match result {
-                    Ok(output) => {
-                        self.append_assistant_text(&output);
-                        self.status = "spec: validation complete".to_string();
-                    }
-                    Err(e) => {
-                        self.status = format!("spec: {}", e);
-                        self.append_assistant_text(&format!(
-                            "From: /spec validate\n\n**Error:** {}",
-                            e
-                        ));
-                    }
-                }
+                self.spec_validate(&spec_manager, spec_id).await;
             }
             SpecCommand::List { args } => {
-                let mgr = spec_manager();
-                let mut filter = SpecFilter::new();
-                // Accept both the documented `--status <s>` form and
-                // `--status=<s>`; reject anything unrecognised rather
-                // than silently listing every spec.
-                const USAGE: &str = "Usage: /spec list [--status <status>] \
-                                             [--prefix <prefix>] [--archived]";
-                let mut arg_error: Option<String> = None;
-                let mut tokens = args.split_whitespace().peekable();
-                while let Some(token) = tokens.next() {
-                    let (flag, inline) = match token.split_once('=') {
-                        Some((f, v)) => (f, Some(v)),
-                        None => (token, None),
-                    };
-                    match flag {
-                        "--archived" if inline.is_none() => {
-                            filter = filter.with_archived();
-                        }
-                        "--status" | "--prefix" => {
-                            // A following option (`--archived`) is not a value:
-                            // leave it to be parsed as its own flag.
-                            let Some(val) = inline
-                                .or_else(|| tokens.next_if(|t| !t.starts_with("--")))
-                                .filter(|v| !v.is_empty())
-                            else {
-                                arg_error = Some(format!("{flag} needs a value. {USAGE}"));
-                                break;
-                            };
-                            if flag == "--prefix" {
-                                filter = filter.with_id_prefix(val);
-                            } else if let Some(status) = SpecStatus::parse(val) {
-                                filter = filter.with_status(status);
-                                // Listing archived specs by status must
-                                // not be hidden by the default filter.
-                                if status == SpecStatus::Archived {
-                                    filter = filter.with_archived();
-                                }
-                            } else {
-                                let valid = SpecStatus::ALL
-                                    .iter()
-                                    .map(|s| s.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join(", ");
-                                arg_error = Some(format!("unknown status '{val}'. Valid: {valid}"));
-                                break;
-                            }
-                        }
-                        _ => {
-                            arg_error = Some(format!("unknown argument '{token}'. {USAGE}"));
-                            break;
-                        }
-                    }
-                }
-                if let Some(e) = arg_error {
-                    self.append_assistant_text(&format!("From: /spec list\n\n**Error:** {e}"));
-                    self.status = format!("spec: {e}");
+                if self.spec_list(&spec_manager, args).await.is_break() {
                     return std::ops::ControlFlow::Break(());
-                }
-                let rt = tokio::runtime::Handle::current();
-                let result: Result<(usize, String), String> =
-                            // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                            tokio::task::block_in_place(|| {
-                                rt.block_on(async {
-                                    let specs = match mgr.list_specs(&filter).await {
-                                        Ok(s) => s,
-                                        Err(e) => return Err(format!("list failed: {}", e)),
-                                    };
-                                    let count = specs.len();
-                                    if specs.is_empty() {
-                                        return Ok((
-                                            0,
-                                            "From: /spec list\n\nNo specs found.".to_string(),
-                                        ));
-                                    }
-                                    let mut lines =
-                                        vec!["From: /spec list".to_string(), String::new()];
-                                    lines.push(format!(
-                                        "| {:<20} | {:<12} | {:<30} |",
-                                        "ID", "Status", "Title"
-                                    ));
-                                    lines.push(
-                                        "|".to_string()
-                                            + &"-".repeat(22)
-                                            + "|"
-                                            + &"-".repeat(14)
-                                            + "|"
-                                            + &"-".repeat(32)
-                                            + "|",
-                                    );
-                                    for spec in &specs {
-                                        lines.push(format!(
-                                            "| {:<20} | {:<12} | {:<30} |",
-                                            spec.id.as_str(),
-                                            spec.status.as_str(),
-                                            spec.title.chars().take(30).collect::<String>()
-                                        ));
-                                    }
-                                    Ok((count, lines.join("\n")))
-                                })
-                            });
-                match result {
-                    Ok((count, output)) => {
-                        self.append_assistant_text(&output);
-                        self.status = format!("spec: {count} spec(s) listed");
-                    }
-                    Err(e) => {
-                        self.status = format!("spec: {}", e);
-                    }
                 }
             }
             SpecCommand::Search { query } => {
-                let mgr = spec_manager();
-                let rt = tokio::runtime::Handle::current();
-                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                let result: Result<String, String> = tokio::task::block_in_place(|| {
-                    rt.block_on(async {
-                        let results = match mgr.search_specs(&query).await {
-                            Ok(r) => r,
-                            Err(e) => return Err(format!("search failed: {}", e)),
-                        };
-                        if results.is_empty() {
-                            return Ok(format!("No specs found matching '{}'.", query));
-                        }
-                        let mut lines =
-                            vec![format!("From: /spec search '{}'", query), String::new()];
-                        for r in &results {
-                            lines.push(format!(
-                                "## {} (score: {}, status: {})",
-                                r.spec.id, r.score, r.spec.status
-                            ));
-                            lines.push(format!("**{}**", r.spec.title));
-                            for snippet in &r.snippets {
-                                lines.push(format!("- {}", snippet));
-                            }
-                            lines.push(String::new());
-                        }
-                        Ok(lines.join("\n"))
-                    })
-                });
-                match result {
-                    Ok(output) => {
-                        self.append_assistant_text(&output);
-                        self.status = format!("spec: search complete");
-                    }
-                    Err(e) => {
-                        self.status = format!("spec: {}", e);
-                    }
-                }
+                self.spec_search(&spec_manager, query).await;
             }
             SpecCommand::Status {
                 spec_id,
                 new_status,
             } => {
-                let mgr = spec_manager();
-                let Some(id) = parse_spec_id(&spec_id) else {
-                    self.report_invalid_spec_id(&spec_id);
+                if self
+                    .spec_status(&spec_manager, spec_id, new_status)
+                    .is_break()
+                {
                     return std::ops::ControlFlow::Break(());
-                };
-                let rt = tokio::runtime::Handle::current();
-                // FR-019: gate the SDD checks via config flags.
-                let sdd_cfg = codemason_agent::Config::load_for(&self.cwd_path)
-                    .unwrap_or_default()
-                    .sdd;
-                let flags = SddFlags::from_bools(
-                    sdd_cfg.clarification_markers,
-                    sdd_cfg.quality_checklists,
-                    sdd_cfg.consistency_checks,
-                    sdd_cfg.phase_minus_one_gates,
-                    sdd_cfg.constitution,
-                    sdd_cfg.feedback_loop,
-                );
-                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                let result: Result<String, String> = tokio::task::block_in_place(|| {
-                    rt.block_on(mgr.status_command(
-                        id.as_str(),
-                        new_status.as_deref(),
-                        "user",
-                        &flags,
-                    ))
-                })
-                .map(|outcome| match outcome {
-                    codemason_specs::StatusOutcome::Transitioned { id, from, to } => {
-                        format!(
-                            "From: /spec status\n\n**{}** transitioned from `{}` to `{}`.",
-                            id,
-                            from.as_str(),
-                            to.as_str()
-                        )
-                    }
-                    codemason_specs::StatusOutcome::Current {
-                        id,
-                        status,
-                        allowed,
-                    } => format!(
-                        "From: /spec status\n\n**{}** - current status: `{}`\n\
-                                 Allowed transitions: {}",
-                        id,
-                        status.as_str(),
-                        allowed
-                            .iter()
-                            .map(|s| s.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                });
-                match result {
-                    Ok(output) => {
-                        self.append_assistant_text(&output);
-                        self.status = "spec: status updated".to_string();
-                    }
-                    Err(e) => {
-                        self.status = format!("spec: {}", e);
-                        self.append_assistant_text(&format!(
-                            "From: /spec status\n\n**Error:** {}",
-                            e
-                        ));
-                    }
                 }
             }
             SpecCommand::Task {
@@ -9669,203 +9188,17 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                 task_id,
                 new_status,
             } => {
-                let mgr = spec_manager();
-                let Some(id) = parse_spec_id(&spec_id) else {
-                    self.report_invalid_spec_id(&spec_id);
+                if self
+                    .spec_task(&spec_manager, spec_id, task_id, new_status)
+                    .await
+                    .is_break()
+                {
                     return std::ops::ControlFlow::Break(());
-                };
-                let rt = tokio::runtime::Handle::current();
-                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                let result: Result<String, String> = tokio::task::block_in_place(|| {
-                    rt.block_on(async {
-                        let mut spec = match mgr.read_spec(&id).await {
-                            Ok(s) => s,
-                            Err(e) => {
-                                return Err(format!("failed to read {}: {}", spec_id, e));
-                            }
-                        };
-                        if let Some(task_id_str) = task_id {
-                            if let Some(new_status_str) = new_status {
-                                use codemason_specs::spec::TaskStatus;
-                                let Some(new_status) = TaskStatus::parse(&new_status_str) else {
-                                    return Err(format!("unknown task status '{new_status_str}'"));
-                                };
-                                mgr.update_task_status(&mut spec, &task_id_str, new_status)
-                                    .await
-                                    .map_err(|e| format!("task update failed: {e}"))?;
-                                Ok(format!(
-                                    "From: /spec task\n\n\
-                                **{}** task `{}` updated to `{}`.",
-                                    spec.id,
-                                    task_id_str,
-                                    new_status.as_str()
-                                ))
-                            } else {
-                                // Show specific task
-                                let task = spec.tasks.iter().find(|t| t.id == task_id_str);
-                                match task {
-                                    Some(t) => {
-                                        let mut lines = vec![
-                                            format!(
-                                                "From: /spec task\n\n## Task {} - {}",
-                                                t.id, t.title
-                                            ),
-                                            format!("- **Status:** {}", t.status.as_str()),
-                                            format!("- **Effort:** {}", t.effort),
-                                            format!("- **Priority:** {}", t.priority),
-                                        ];
-                                        if !t.linked_requirements.is_empty() {
-                                            lines.push(format!(
-                                                "- **Requirements:** {}",
-                                                t.linked_requirements.join(", ")
-                                            ));
-                                        }
-                                        if !t.dependencies.is_empty() {
-                                            lines.push(format!(
-                                                "- **Dependencies:** {}",
-                                                t.dependencies.join(", ")
-                                            ));
-                                        }
-                                        // Stored as UTC epoch seconds; shown
-                                        // in the user's local time zone.
-                                        let completed = t
-                                            .completed_at
-                                            .and_then(|s| i64::try_from(s).ok())
-                                            .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
-                                            .map(|dt| {
-                                                dt.with_timezone(&chrono::Local)
-                                                    .format("%Y-%m-%d %H:%M %Z")
-                                                    .to_string()
-                                            });
-                                        if let Some(when) = completed {
-                                            lines.push(format!("- **Completed:** {when}"));
-                                        }
-                                        Ok(lines.join("\n"))
-                                    }
-                                    None => Err(format!(
-                                        "task {} not found in {}",
-                                        task_id_str, spec.id
-                                    )),
-                                }
-                            }
-                        } else {
-                            // List all tasks
-                            let mut lines =
-                                vec![format!("From: /spec task\n\n## Tasks for **{}**", spec.id)];
-                            if spec.tasks.is_empty() {
-                                lines.push("No tasks found.".to_string());
-                            } else {
-                                lines.extend(
-                                    [
-                                        "| ID | Title | Status | Effort | Priority |",
-                                        "|----|-------|--------|--------|----------|",
-                                    ]
-                                    .map(String::from),
-                                );
-                                for t in &spec.tasks {
-                                    lines.push(format!(
-                                        "| {} | {} | {} | {} | {} |",
-                                        t.id,
-                                        t.title,
-                                        t.status.as_str(),
-                                        t.effort,
-                                        t.priority
-                                    ));
-                                }
-                            }
-                            Ok(lines.join("\n"))
-                        }
-                    })
-                });
-                match result {
-                    Ok(output) => {
-                        self.append_assistant_text(&output);
-                        self.status = "spec: task complete".to_string();
-                    }
-                    Err(e) => {
-                        self.status = format!("spec: {}", e);
-                        self.append_assistant_text(&format!(
-                            "From: /spec task\n\n**Error:** {}",
-                            e
-                        ));
-                    }
                 }
             }
             SpecCommand::Activate { spec_id } => {
-                let mgr = spec_manager();
-                let Some(id) = parse_spec_id(&spec_id) else {
-                    self.report_invalid_spec_id(&spec_id);
+                if self.spec_activate(&spec_manager, spec_id).await.is_break() {
                     return std::ops::ControlFlow::Break(());
-                };
-                let rt = tokio::runtime::Handle::current();
-                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                let result: Result<_, String> = tokio::task::block_in_place(|| {
-                    rt.block_on(async {
-                        match mgr.read_spec(&id).await {
-                            Ok(spec) => Ok(spec),
-                            Err(e) => Err(format!("failed to read {}: {}", spec_id, e)),
-                        }
-                    })
-                });
-                match result {
-                    Ok(spec) => {
-                        self.session.active_spec = Some(spec_id.clone());
-                        self.spec_manager = Some(Arc::new(mgr));
-                        // Also set on the session processor so auto-updates work.
-                        // Wrap the nested `block_on` in `block_in_place` so it
-                        // releases the current worker instead of deadlocking on
-                        // the UI runtime (FUNC-015).
-                        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                        let _ = tokio::task::block_in_place(|| {
-                            // INTENTIONAL: bridge to the async spec manager; the value is the spec id, not an error
-                            rt.block_on(async {
-                                self.session_processor
-                                    .active_spec
-                                    .write()
-                                    .await
-                                    .replace(spec_id.clone())
-                            })
-                        });
-                        // P-24: invalidate the cached spec section so the
-                        // next turn re-reads the newly-activated spec.
-                        self.session_processor
-                            .system_prompt_cache()
-                            .invalidate_spec_cache();
-                        let _ = self // INTENTIONAL: in-memory state is authoritative
-                            .session_processor
-                            .spec_manager
-                            // Reuse the manager Arc built above instead of
-                            // constructing a second SpecManager for the same
-                            // specs_root.
-                            .set(
-                                self.spec_manager
-                                    .clone()
-                                    .unwrap_or_else(|| Arc::new(spec_manager())),
-                            );
-                        self.append_assistant_text(&format!(
-                            "From: /spec activate\n\n\
-                                     [ok] **{}** is now the active spec.\n\n\
-                                     Status: {}\n\
-                                     Title: {}\n\
-                                     Requirements: {}\n\
-                                     Tasks: {}\n\n\
-                                     This spec's requirements and tasks will be injected into the \
-                                     agent's system prompt.",
-                            spec.id,
-                            spec.status.as_str(),
-                            spec.title,
-                            spec.requirements.len(),
-                            spec.tasks.len()
-                        ));
-                        self.status = format!("spec: {} activated", spec_id);
-                    }
-                    Err(e) => {
-                        self.status = format!("spec: {}", e);
-                        self.append_assistant_text(&format!(
-                            "From: /spec activate\n\n**Error:** {}",
-                            e
-                        ));
-                    }
                 }
             }
             SpecCommand::Deactivate => {
@@ -9883,89 +9216,17 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                 }
             }
             SpecCommand::Delete { spec_id, yes } => {
-                let mgr = spec_manager();
-                let Some(id) = parse_spec_id(&spec_id) else {
-                    self.report_invalid_spec_id(&spec_id);
+                if self
+                    .spec_delete(&spec_manager, spec_id, yes)
+                    .await
+                    .is_break()
+                {
                     return std::ops::ControlFlow::Break(());
-                };
-                if !yes {
-                    self.append_assistant_text(&format!(
-                        "From: /spec delete\n\nRefusing to delete specs/{spec_id} without \
-                                 confirmation. Run `/spec delete {spec_id} --yes` to confirm."
-                    ));
-                    return std::ops::ControlFlow::Break(());
-                }
-                let rt = tokio::runtime::Handle::current();
-                // Run inline (not spawned) so the active spec can be
-                // cleared only after the directory is really gone.
-                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                let result = tokio::task::block_in_place(|| {
-                    rt.block_on(async { mgr.delete_spec(&id).await })
-                });
-                match result {
-                    Ok(()) => {
-                        // A deleted spec must not stay injected into
-                        // the agent's system prompt.
-                        let was_active = self.session.active_spec.as_deref() == Some(&spec_id);
-                        if was_active {
-                            self.clear_active_spec();
-                        }
-                        let note = if was_active {
-                            " It was the active spec and has been deactivated."
-                        } else {
-                            ""
-                        };
-                        self.append_assistant_text(&format!(
-                            "From: /spec delete\n\n[ok] Deleted specs/{spec_id}.{note}"
-                        ));
-                        self.status = format!("spec: deleted specs/{spec_id}");
-                    }
-                    Err(e) => {
-                        self.append_assistant_text(&format!(
-                            "From: /spec delete\n\n**Error:** {e}"
-                        ));
-                        self.status = format!("spec: delete failed: {e}");
-                    }
                 }
             }
             SpecCommand::Coverage { spec_id } => {
-                let mgr = spec_manager();
-                let Some(id) = parse_spec_id(&spec_id) else {
-                    self.report_invalid_spec_id(&spec_id);
+                if self.spec_coverage(&spec_manager, spec_id).await.is_break() {
                     return std::ops::ControlFlow::Break(());
-                };
-                let rt = tokio::runtime::Handle::current();
-                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                let result: Result<String, String> = tokio::task::block_in_place(|| {
-                    rt.block_on(async {
-                        let spec = match mgr.read_spec(&id).await {
-                            Ok(s) => s,
-                            Err(e) => {
-                                return Err(format!("failed to read {}: {}", spec_id, e));
-                            }
-                        };
-                        // Rendering lives in `Spec::coverage_report`
-                        // (codemason-specs) so this arm and the
-                        // `spec_coverage` agent tool always agree on
-                        // format and status symbols.
-                        Ok(format!(
-                            "From: /spec coverage\n\n{}",
-                            spec.coverage_report()
-                        ))
-                    })
-                });
-                match result {
-                    Ok(output) => {
-                        self.append_assistant_text(&output);
-                        self.status = "spec: coverage complete".to_string();
-                    }
-                    Err(e) => {
-                        self.status = format!("spec: {}", e);
-                        self.append_assistant_text(&format!(
-                            "From: /spec coverage\n\n**Error:** {}",
-                            e
-                        ));
-                    }
                 }
             }
             SpecCommand::Impl {
@@ -9973,199 +9234,12 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                 task_id,
                 dry_run,
             } => {
-                use codemason_specs::{ImplOptions, SpecImplRunner};
-                let working_dir = self.cwd_path.clone();
-                let specs_root = working_dir.join("specs");
-
-                // Validate spec exists
-                let Some(sid) = codemason_specs::spec::SpecId::new(&spec_id) else {
-                    self.status = format!("spec: invalid spec ID: {}", spec_id);
+                if self
+                    .spec_impl(&spec_manager, spec_id, task_id, dry_run)
+                    .await
+                    .is_break()
+                {
                     return std::ops::ControlFlow::Break(());
-                };
-
-                // Check spec exists on disk and read its status
-                let mgr = spec_manager();
-                let rt = tokio::runtime::Handle::current();
-                let (spec_exists, spec_status): (
-                    bool,
-                    Option<codemason_specs::spec::SpecStatus>,
-                    // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                ) = tokio::task::block_in_place(|| {
-                    rt.block_on(async {
-                        let spec = mgr.read_spec(&sid).await;
-                        match spec {
-                            Ok(s) => (true, Some(s.status)),
-                            Err(_) => (false, None),
-                        }
-                    })
-                });
-                if !spec_exists {
-                    // List available specs with plans
-                    // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                    let available: Vec<String> = tokio::task::block_in_place(|| {
-                        rt.block_on(async {
-                            match mgr.discover_specs().await {
-                                Ok(specs) => specs
-                                    .iter()
-                                    .map(|s| format!("  - {} ({})", s.id, s.status.as_str()))
-                                    .collect(),
-                                Err(_) => vec![],
-                            }
-                        })
-                    });
-                    let avail_str = if available.is_empty() {
-                        "  (none found)".to_string()
-                    } else {
-                        available.join("\n")
-                    };
-                    self.append_assistant_text(&format!(
-                        "From: /spec impl\n\n**Error:** Spec `{}` not found.\n\n\
-                                 Available specs:\n{}",
-                        spec_id, avail_str
-                    ));
-                    self.status = format!("spec: spec {} not found", spec_id);
-                    return std::ops::ControlFlow::Break(());
-                }
-
-                // Check if already implemented (FR-026)
-                if let Some(status) = spec_status {
-                    if matches!(
-                        status,
-                        codemason_specs::spec::SpecStatus::Implemented
-                            | codemason_specs::spec::SpecStatus::Verified
-                    ) {
-                        // Only `implemented` can reopen; a verified spec
-                        // is closed and must be archived and re-drafted.
-                        let hint = if status == codemason_specs::spec::SpecStatus::Implemented {
-                            format!(
-                                "To re-implement, reopen it first: \
-                                         `/spec status {spec_id} in_progress`"
-                            )
-                        } else {
-                            "A verified spec cannot be reopened; archive it and start \
-                                     again from `draft`."
-                                .to_string()
-                        };
-                        self.append_assistant_text(&format!(
-                            "From: /spec impl\n\n[warn] Spec **{spec_id}** is already \
-                                     marked as **{}**.\n\n{hint}",
-                            status.as_str()
-                        ));
-                        self.status = format!("spec: {} is {}", spec_id, status.as_str());
-                        return std::ops::ControlFlow::Break(());
-                    }
-                }
-
-                // Build options
-                let mut opts = ImplOptions::new();
-                if let Some(ref tid) = task_id {
-                    opts = opts.with_task(tid);
-                }
-                if dry_run {
-                    opts = opts.with_dry_run();
-                }
-                // FR-019: gate the in_progress transition checks with
-                // the configured SDD flags, as `/spec status` does.
-                let sdd_cfg = codemason_agent::Config::load_for(&self.cwd_path)
-                    .unwrap_or_default()
-                    .sdd;
-                opts = opts.with_sdd_flags(SddFlags::from_bools(
-                    sdd_cfg.clarification_markers,
-                    sdd_cfg.quality_checklists,
-                    sdd_cfg.consistency_checks,
-                    sdd_cfg.phase_minus_one_gates,
-                    sdd_cfg.constitution,
-                    sdd_cfg.feedback_loop,
-                ));
-
-                // Create runner
-                let runner_result: Result<SpecImplRunner, String> =
-                            // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                            tokio::task::block_in_place(|| {
-                                rt.block_on(async {
-                                    match SpecImplRunner::new(&spec_id, specs_root.clone(), opts)
-                                        .await
-                                    {
-                                        Ok(r) => Ok(r),
-                                        Err(e) => Err(format!("spec impl failed: {}", e)),
-                                    }
-                                })
-                            });
-
-                match runner_result {
-                    Ok(runner) => {
-                        let is_dry_run = dry_run;
-                        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                        let result: Result<_, String> = tokio::task::block_in_place(|| {
-                            rt.block_on(async {
-                                match runner.run().await {
-                                    Ok(r) => Ok(r),
-                                    Err(e) => Err(format!("spec impl failed: {e}")),
-                                }
-                            })
-                        });
-                        match result {
-                            Ok(impl_result) => {
-                                // Display summary
-                                self.append_assistant_text(&impl_result.summary);
-
-                                if is_dry_run || impl_result.total_tasks == 0 {
-                                    self.status = format!("spec: {} dry-run complete", spec_id);
-                                } else {
-                                    // Drive tasks ONE AT A TIME. The previous
-                                    // implementation injected the entire compound
-                                    // prompt in a single `process_message` call,
-                                    // which meant the agent would often stop after
-                                    // the first task (considering its immediate goal
-                                    // satisfied) and never reach the remaining
-                                    // tasks. Instead, we store the execution order
-                                    // and dispatch the first task's prompt now; the
-                                    // `Event::MessageEnd` handler advances to the
-                                    // next task once the agent marks the current
-                                    // one `completed`.
-                                    let task_ids: Vec<String> = runner
-                                        .execution_order()
-                                        .iter()
-                                        .map(|&i| runner.tasks()[i].id.clone())
-                                        .collect();
-                                    let total = task_ids.len();
-
-                                    // The session task tracker is populated
-                                    // lazily by `spec_task_update` calls from
-                                    // the agent (creates-or-updates), not by
-                                    // pre-created milestone rows here.
-                                    self.session.spec_impl_state =
-                                        Some(crate::app::state::SpecImplState {
-                                            spec_id: spec_id.clone(),
-                                            specs_root: specs_root.clone(),
-                                            task_ids,
-                                            current_rank: 1,
-                                            total,
-                                            runner: runner.clone(),
-                                        });
-
-                                    // Dispatch the first task's prompt.
-                                    if let Some(prompt) = runner.task_prompt(1) {
-                                        self.dispatch_spec_impl_task(prompt, &spec_id, 1, total);
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                self.append_assistant_text(&format!(
-                                    "From: /spec impl\n\n**Error:** {}",
-                                    e
-                                ));
-                                self.status = format!("spec: {}", e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        self.append_assistant_text(&format!(
-                            "From: /spec impl\n\n**Error:** {}",
-                            e
-                        ));
-                        self.status = format!("spec: {}", e);
-                    }
                 }
             }
             SpecCommand::Unknown(sub)
@@ -10218,253 +9292,12 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                 self.status = format!("Usage: /spec {sub} - try /spec help");
             }
             SpecCommand::Add { spec_id, feature } => {
-                self.append_assistant_text(&SpecCommand::build_add_message(&spec_id, &feature));
-                self.push_log_no_agent(
-                    crate::app::LogLevel::Info,
-                    SpecCommand::build_add_log(&spec_id, &feature),
-                );
-
-                let mgr = spec_manager();
-                let rt = tokio::runtime::Handle::current();
-
-                // Load existing spec to get content and next IDs
-                let spec_id_owned = spec_id.clone();
-                let feature_owned = feature.clone();
-                let result: Result<(String, u32, u32, u32), String> =
-                            // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                            tokio::task::block_in_place(|| {
-                                rt.block_on(async {
-                                    use codemason_specs::id_scanner;
-                                    let sid = match codemason_specs::spec::SpecId::new(&spec_id_owned)
-                                    {
-                                        Some(id) => id,
-                                        None => {
-                                            return Err(format!(
-                                                "spec: invalid spec ID: {}",
-                                                spec_id_owned
-                                            ));
-                                        }
-                                    };
-                                    let spec = match mgr.read_spec(&sid).await {
-                                        Ok(s) => s,
-                                        Err(e) => {
-                                            return Err(format!(
-                                                "spec: failed to read {}: {}",
-                                                spec_id_owned, e
-                                            ));
-                                        }
-                                    };
-                                    if spec.status == codemason_specs::spec::SpecStatus::Archived {
-                                        return Err(format!(
-                                            "spec: '{}' is archived and cannot be modified",
-                                            spec_id_owned
-                                        ));
-                                    }
-                                    let next_fr = id_scanner::highest_fr(&spec.spec_md) + 1;
-                                    let next_nfr = id_scanner::highest_nfr(&spec.spec_md) + 1;
-                                    let next_task = id_scanner::highest_task(&spec.plan_md) + 1;
-                                    let prompt = SpecCommand::build_add_prompt(
-                                        &spec_id_owned,
-                                        &feature_owned,
-                                        &spec.spec_md,
-                                        &spec.plan_md,
-                                        next_fr,
-                                        next_nfr,
-                                        next_task,
-                                    );
-                                    Ok((prompt, next_fr, next_nfr, next_task))
-                                })
-                            });
-
-                match result {
-                    Ok((prompt, _next_fr, _next_nfr, _next_task)) => {
-                        let sid = self.session.session_id.clone().unwrap_or_default();
-                        // Select general agent (not explore - add requires
-                        // editing SPEC.md and PLAN.md, and explore's prompt
-                        // says "Do NOT modify any files").
-                        let agent = self.select_general_agent();
-
-                        let msg = Message::user_text(&sid, &prompt);
-                        self.session.messages.push(msg);
-
-                        let processor = self.session_processor.clone();
-                        let flag = Arc::new(AtomicBool::new(false));
-                        self.session.cancel_flag = Some(flag.clone());
-                        self.session.is_processing = true;
-                        self.status = SpecCommand::build_add_status(&spec_id);
-
-                        let event_bus = self.event_bus.clone();
-                        let specs_root_phase2 = self.cwd_path.clone().join("specs");
-                        let spec_id_phase2 = spec_id.clone();
-                        tokio::spawn(async move {
-                            // Phase 1: incremental add - the LLM uses the
-                            // `read` and `Edit` tools directly to insert new
-                            // requirements into SPEC.md and new task rows
-                            // into PLAN.md. No post-processing needed.
-                            let phase1_result =
-                                processor.process_message(&sid, &prompt, &agent, flag).await;
-                            if let Err(e) = phase1_result {
-                                tracing::warn!(error = %e, "spec: add generation failed");
-                                event_bus.publish(codemason_agent::event::Event::AgentError {
-                                    session_id: sid,
-                                    error: format!("spec add generation failed: {e}"),
-                                });
-                                return;
-                            }
-
-                            // Phase 2: regenerate PLAN.md + TESTPLAN.md
-                            // (same as /spec update - re-read the updated
-                            // SPEC.md and fully regenerate both files)
-                            let sid2 = match codemason_specs::spec::SpecId::new(&spec_id_phase2) {
-                                Some(id) => id,
-                                None => {
-                                    tracing::warn!(
-                                        "spec: invalid spec ID after add phase: {}",
-                                        spec_id_phase2
-                                    );
-                                    return;
-                                }
-                            };
-                            let mgr2 = SpecManager::new(&specs_root_phase2);
-                            let plan_md = match mgr2.read_spec(&sid2).await {
-                                Ok(spec) => spec.plan_md,
-                                Err(e) => {
-                                    tracing::warn!(
-                                        error = %e,
-                                        "spec: failed to read spec after add phase"
-                                    );
-                                    return;
-                                }
-                            };
-
-                            let update_prompt =
-                                SpecCommand::build_update_prompt(&spec_id_phase2, &plan_md);
-                            let flag2 = Arc::new(AtomicBool::new(false));
-                            if let Err(e) = processor
-                                .process_message(&sid, &update_prompt, &agent, flag2)
-                                .await
-                            {
-                                tracing::warn!(
-                                    error = %e,
-                                    "spec: update generation failed after add"
-                                );
-                                event_bus.publish(codemason_agent::event::Event::AgentError {
-                                    session_id: sid,
-                                    error: format!("spec update generation failed after add: {e}"),
-                                });
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        self.status = format!("spec: {}", e);
-                        self.append_assistant_text(&format!("From: /spec add\n\n**Error:** {}", e));
-                    }
-                }
+                self.spec_add(&spec_manager, spec_id, feature).await;
             }
             SpecCommand::Update { spec_id } => {
-                // FR-006: validate spec ID format
-                let sid = match codemason_specs::spec::SpecId::new(&spec_id) {
-                    Some(id) => id,
-                    None => {
-                        self.status = format!("spec: invalid spec ID: {}", spec_id);
-                        self.append_assistant_text(&format!(
-                            "From: /spec update\n\n**Error:** Invalid spec ID \
-                                     `{}`. Spec IDs must be alphanumeric with hyphens or \
-                                     underscores only.",
-                            spec_id
-                        ));
-                        return std::ops::ControlFlow::Break(());
-                    }
-                };
-
-                let mgr = spec_manager();
-                let rt = tokio::runtime::Handle::current();
-
-                // FR-005/FR-010: read spec, guard archived, read PLAN.md
-                let spec_id_owned = spec_id.clone();
-                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                let result: Result<String, String> = tokio::task::block_in_place(|| {
-                    rt.block_on(async {
-                        let spec = match mgr.read_spec(&sid).await {
-                            Ok(s) => s,
-                            Err(_e) => {
-                                // List available specs on not-found
-                                let available: Vec<String> = match mgr.discover_specs().await {
-                                    Ok(specs) => specs
-                                        .iter()
-                                        .map(|s| format!("  - {} ({})", s.id, s.status.as_str()))
-                                        .collect(),
-                                    Err(_) => vec![],
-                                };
-                                let avail_str = if available.is_empty() {
-                                    "  (none found)".to_string()
-                                } else {
-                                    available.join("\n")
-                                };
-                                return Err(format!(
-                                    "Spec `{}` not found.\n\nAvailable specs:\n{}",
-                                    spec_id_owned, avail_str
-                                ));
-                            }
-                        };
-                        // FR-013: guard archived specs
-                        if spec.status == codemason_specs::spec::SpecStatus::Archived {
-                            return Err(format!(
-                                "spec: '{}' is archived and cannot be updated",
-                                spec_id_owned
-                            ));
-                        }
-                        // FR-011: read existing PLAN.md for status preservation
-                        Ok(spec.plan_md)
-                    })
-                });
-
-                let plan_md = match result {
-                    Ok(p) => p,
-                    Err(e) => {
-                        self.status = format!("spec: {}", e);
-                        self.append_assistant_text(&format!(
-                            "From: /spec update\n\n**Error:** {}",
-                            e
-                        ));
-                        return std::ops::ControlFlow::Break(());
-                    }
-                };
-
-                // FR-009: status, message, and log
-                self.append_assistant_text(&SpecCommand::build_update_message(&spec_id));
-                self.push_log_no_agent(
-                    crate::app::LogLevel::Info,
-                    SpecCommand::build_update_log(&spec_id),
-                );
-
-                // Select general agent (not explore - update requires
-                // writing files, and explore's prompt says "Do NOT
-                // modify any files").
-                let agent = self.select_general_agent();
-
-                // FR-008/FR-011: build prompt with plan_md for status preservation
-                let prompt = SpecCommand::build_update_prompt(&spec_id, &plan_md);
-                let sid = self.session.session_id.clone().unwrap_or_default();
-                let msg = Message::user_text(&sid, &prompt);
-                self.session.messages.push(msg);
-
-                let processor = self.session_processor.clone();
-                let flag = Arc::new(AtomicBool::new(false));
-                self.session.cancel_flag = Some(flag.clone());
-                self.session.is_processing = true;
-                self.status = SpecCommand::build_update_status(&spec_id);
-
-                let event_bus = self.event_bus.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = processor.process_message(&sid, &prompt, &agent, flag).await {
-                        tracing::warn!(error = %e, "spec: update generation failed");
-                        event_bus.publish(codemason_agent::event::Event::AgentError {
-                            session_id: sid,
-                            error: format!("spec update generation failed: {e}"),
-                        });
-                    }
-                });
+                if self.spec_update(&spec_manager, spec_id).await.is_break() {
+                    return std::ops::ControlFlow::Break(());
+                }
             }
             SpecCommand::Unknown(sub) => {
                 if let Some(reason) = sub.strip_prefix("reverse-usage: ") {
@@ -10486,475 +9319,32 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                 feature,
                 from_research,
             } => {
-                let sid = self.session.session_id.clone().unwrap_or_default();
-                self.append_assistant_text(&SpecCommand::build_specify_message(&specname));
-                self.push_log_no_agent(
-                    LogLevel::Info,
-                    SpecCommand::build_specify_log(&specname, &feature),
-                );
-
-                // FR-009: optionally create a git branch for the spec.
-                let sdd_cfg = codemason_agent::Config::load_for(&self.cwd_path)
-                    .unwrap_or_default()
-                    .sdd;
-                if sdd_cfg.branch_per_spec {
-                    let working_dir = self.cwd_path.clone();
-                    let branch_result =
-                        codemason_specs::create_spec_branch(&specname, &working_dir);
-                    self.append_assistant_text(&SpecCommand::build_branch_message(&branch_result));
-                    self.push_log_no_agent(
-                        LogLevel::Info,
-                        SpecCommand::build_branch_log(&specname, &branch_result),
-                    );
-                }
-
-                let agent = self.select_general_agent();
-
-                let task = SpecCommand::build_specify_prompt(
-                    &specname,
-                    &feature,
-                    from_research.as_deref(),
-                );
-                let msg = Message::user_text(&sid, &task);
-                self.session.messages.push(msg);
-
-                let processor = self.session_processor.clone();
-                let flag = Arc::new(AtomicBool::new(false));
-                self.session.cancel_flag = Some(flag.clone());
-                self.session.is_processing = true;
-                self.status = SpecCommand::build_specify_status(&specname);
-
-                let event_bus = self.event_bus.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = processor.process_message(&sid, &task, &agent, flag).await {
-                        tracing::warn!(error = %e, "spec: specify generation failed");
-                        event_bus.publish(codemason_agent::event::Event::AgentError {
-                            session_id: sid,
-                            error: format!("spec specify generation failed: {e}"),
-                        });
-                    }
-                });
+                self.spec_specify(specname, feature, from_research).await;
             }
             SpecCommand::Plan {
                 spec_id,
                 tech_context,
             } => {
-                // FR-006: validate spec ID format
-                let sid = match codemason_specs::spec::SpecId::new(&spec_id) {
-                    Some(id) => id,
-                    None => {
-                        self.status = format!("spec: invalid spec ID: {}", spec_id);
-                        self.append_assistant_text(&format!(
-                            "From: /spec plan\n\n**Error:** Invalid spec ID \
-                                     `{}`. Spec IDs must be alphanumeric with hyphens or \
-                                     underscores only.",
-                            spec_id
-                        ));
-                        return std::ops::ControlFlow::Break(());
-                    }
-                };
-
-                let mgr = spec_manager();
-                let rt = tokio::runtime::Handle::current();
-
-                // Read SPEC.md (and existing PLAN.md for status preservation)
-                let spec_id_owned = spec_id.clone();
-                let result: Result<(String, String, String), String> =
-                            // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                            tokio::task::block_in_place(|| {
-                                rt.block_on(async {
-                                    let spec = match mgr.read_spec(&sid).await {
-                                        Ok(s) => s,
-                                        Err(_e) => {
-                                            let available: Vec<String> =
-                                                match mgr.discover_specs().await {
-                                                    Ok(specs) => specs
-                                                        .iter()
-                                                        .map(|s| {
-                                format!(
-                                "  - {} ({})",
-                                s.id,
-                                s.status.as_str()
-                                )
-                                                        })
-                                                        .collect(),
-                                                    Err(_) => vec![],
-                                                };
-                                            let avail_str = if available.is_empty() {
-                                                "  (none found)".to_string()
-                                            } else {
-                                                available.join("\n")
-                                            };
-                                            return Err(format!(
-                                                "Spec `{}` not found.\n\nAvailable specs:\n{}",
-                                                spec_id_owned, avail_str
-                                            ));
-                                        }
-                                    };
-                                    if spec.status == codemason_specs::spec::SpecStatus::Archived {
-                                        return Err(format!(
-                                            "spec: '{}' is archived and cannot be updated",
-                                            spec_id_owned
-                                        ));
-                                    }
-                                    Ok((spec.spec_md, spec.plan_md, spec.feedback_md.clone()))
-                                })
-                            });
-
-                let (spec_md, plan_md, feedback_md) = match result {
-                    Ok(v) => v,
-                    Err(e) => {
-                        self.status = format!("spec: {}", e);
-                        self.append_assistant_text(&format!(
-                            "From: /spec plan\n\n**Error:** {}",
-                            e
-                        ));
-                        return std::ops::ControlFlow::Break(());
-                    }
-                };
-
-                // FR-011/FR-012/FR-017: check whether data-model,
-                // contracts, and feedback surfacing are enabled
-                let sdd_cfg = codemason_agent::Config::load_for(&self.cwd_path)
-                    .unwrap_or_default()
-                    .sdd;
-                let data_model_enabled = sdd_cfg.data_model;
-                let contracts_enabled = sdd_cfg.contracts;
-                let feedback_enabled = sdd_cfg.feedback_loop;
-                // FR-017: load FEEDBACK.md content when feedback loop is
-                // enabled, so it can be surfaced during plan regeneration
-                let feedback_md = if feedback_enabled {
-                    feedback_md.as_str()
-                } else {
-                    ""
-                };
-
-                self.append_assistant_text(&SpecCommand::build_plan_message(
-                    &spec_id,
-                    &tech_context,
-                    data_model_enabled,
-                    contracts_enabled,
-                    feedback_enabled,
-                ));
-                self.push_log_no_agent(
-                    crate::app::LogLevel::Info,
-                    SpecCommand::build_plan_log(&spec_id, &tech_context),
-                );
-
-                let agent = self.select_general_agent();
-
-                let prompt = SpecCommand::build_plan_prompt(
-                    &spec_id,
-                    &tech_context,
-                    &spec_md,
-                    &plan_md,
-                    data_model_enabled,
-                    contracts_enabled,
-                    feedback_md,
-                );
-                let sid_msg = self.session.session_id.clone().unwrap_or_default();
-                let msg = Message::user_text(&sid_msg, &prompt);
-                self.session.messages.push(msg);
-
-                let processor = self.session_processor.clone();
-                let flag = Arc::new(AtomicBool::new(false));
-                self.session.cancel_flag = Some(flag.clone());
-                self.session.is_processing = true;
-                self.status = SpecCommand::build_plan_status(&spec_id);
-
-                let event_bus = self.event_bus.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = processor
-                        .process_message(&sid_msg, &prompt, &agent, flag)
-                        .await
-                    {
-                        tracing::warn!(error = %e, "spec: plan generation failed");
-                        event_bus.publish(codemason_agent::event::Event::AgentError {
-                            session_id: sid_msg,
-                            error: format!("spec plan generation failed: {e}"),
-                        });
-                    }
-                });
-            }
-            SpecCommand::Tasks { spec_id } => {
-                let working_dir = self.cwd_path.clone();
-                let specs_root = working_dir.join("specs");
-
-                // FR-006: validate spec ID format
-                let sid = match codemason_specs::spec::SpecId::new(&spec_id) {
-                    Some(id) => id,
-                    None => {
-                        self.status = format!("spec: invalid spec ID: {}", spec_id);
-                        self.append_assistant_text(&format!(
-                            "From: /spec tasks\n\n**Error:** Invalid \
-                                     spec ID `{}`. Spec IDs must be \
-                                     alphanumeric with hyphens or \
-                                     underscores only.",
-                            spec_id
-                        ));
-                        return std::ops::ControlFlow::Break(());
-                    }
-                };
-
-                let mgr = spec_manager();
-                let rt = tokio::runtime::Handle::current();
-
-                // Read spec to get plan_md and title
-                let spec_id_owned = spec_id.clone();
-                let result: Result<
-                    (String, String, String, codemason_specs::spec::SpecStatus),
-                    String,
-                    // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                > = tokio::task::block_in_place(|| {
-                    rt.block_on(async {
-                        let spec = match mgr.read_spec(&sid).await {
-                            Ok(s) => s,
-                            Err(_e) => {
-                                let available: Vec<String> = match mgr.discover_specs().await {
-                                    Ok(specs) => specs
-                                        .iter()
-                                        .map(|s| format!("  - {} ({})", s.id, s.status.as_str()))
-                                        .collect(),
-                                    Err(_) => vec![],
-                                };
-                                let avail_str = if available.is_empty() {
-                                    "  (none found)".to_string()
-                                } else {
-                                    available.join("\n")
-                                };
-                                return Err(format!(
-                                    "Spec `{}` not found.\n\nAvailable specs:\n{}",
-                                    spec_id_owned, avail_str
-                                ));
-                            }
-                        };
-                        if spec.status == codemason_specs::spec::SpecStatus::Archived {
-                            return Err(format!(
-                                "spec: '{}' is archived and cannot be updated",
-                                spec_id_owned
-                            ));
-                        }
-                        Ok((spec.spec_md, spec.plan_md, spec.title, spec.status))
-                    })
-                });
-
-                let (spec_md, plan_md, title, _status) = match result {
-                    Ok(v) => v,
-                    Err(e) => {
-                        self.status = format!("spec: {}", e);
-                        self.append_assistant_text(&format!(
-                            "From: /spec tasks\n\n**Error:** {}",
-                            e
-                        ));
-                        return std::ops::ControlFlow::Break(());
-                    }
-                };
-
-                // Check PLAN.md is not empty
-                if plan_md.trim().is_empty() {
-                    self.status = format!("spec: PLAN.md is empty for {}", spec_id);
-                    self.append_assistant_text(&SpecCommand::build_tasks_no_plan_error(&spec_id));
+                if self
+                    .spec_plan(&spec_manager, spec_id, tech_context)
+                    .await
+                    .is_break()
+                {
                     return std::ops::ControlFlow::Break(());
                 }
-
-                // Generate TASKS.md content from the task table. A
-                // malformed table is reported as a parse error rather
-                // than silently treated as "no tasks" (FUNC-024).
-                let tasks_md = match SpecCommand::build_tasks_md(&spec_id, &title, &plan_md) {
-                    Ok(Some(md)) => md,
-                    Ok(None) => {
-                        self.status = format!("spec: no tasks found in PLAN.md for {}", spec_id);
-                        self.append_assistant_text(&SpecCommand::build_tasks_no_tasks_error(
-                            &spec_id,
-                        ));
-                        return std::ops::ControlFlow::Break(());
-                    }
-                    Err(e) => {
-                        self.status = format!("spec: PLAN.md parse error for {}", spec_id);
-                        self.append_assistant_text(&format!(
-                            "From: /spec tasks\n\n**Error:** failed to parse \
-                                     `specs/{spec_id}/PLAN.md`: {e}"
-                        ));
-                        return std::ops::ControlFlow::Break(());
-                    }
-                };
-
-                // Write TASKS.md atomically
-                let tasks_path = specs_root.join(&spec_id).join("TASKS.md");
-                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                let write_result = tokio::task::block_in_place(|| {
-                    rt.block_on(async {
-                        codemason_specs::io::SpecIo::atomic_write(&tasks_path, &tasks_md).await
-                    })
-                });
-
-                match write_result {
-                    Ok(()) => {
-                        // Count tasks for the completion message
-                        let task_count = codemason_specs::PlanParser::parse(&plan_md)
-                            .map(|t| t.len())
-                            .unwrap_or(0);
-
-                        // FR-013, T-023: also generate quickstart.md
-                        // with key validation scenarios from SPEC.md
-                        let quickstart_path = specs_root.join(&spec_id).join("quickstart.md");
-                        let quickstart_md =
-                            SpecCommand::build_quickstart_md(&spec_id, &title, &spec_md);
-                        let quickstart_written = match &quickstart_md {
-                            Some(qs_md) => {
-                                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                                let qs_result = tokio::task::block_in_place(|| {
-                                    rt.block_on(async {
-                                        codemason_specs::io::SpecIo::atomic_write(
-                                            &quickstart_path,
-                                            qs_md,
-                                        )
-                                        .await
-                                    })
-                                });
-                                qs_result.is_ok()
-                            }
-                            None => false,
-                        };
-
-                        self.append_assistant_text(&SpecCommand::build_tasks_completion_message(
-                            &spec_id, task_count,
-                        ));
-                        self.push_log_no_agent(
-                            crate::app::LogLevel::Info,
-                            SpecCommand::build_tasks_log(&spec_id),
-                        );
-                        if quickstart_written {
-                            self.status = format!(
-                                "spec: wrote specs/{}/TASKS.md ({} tasks) + \
-                                         quickstart.md",
-                                spec_id, task_count
-                            );
-                        } else {
-                            self.status = format!(
-                                "spec: wrote specs/{}/TASKS.md ({} tasks)",
-                                spec_id, task_count
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        self.status = format!("spec: failed to write TASKS.md: {}", e);
-                        self.append_assistant_text(&format!(
-                            "From: /spec tasks\n\n**Error:** Failed \
-                                     to write `specs/{}/TASKS.md`: {}",
-                            spec_id, e
-                        ));
-                    }
+            }
+            SpecCommand::Tasks { spec_id } => {
+                if self.spec_tasks(&spec_manager, spec_id).await.is_break() {
+                    return std::ops::ControlFlow::Break(());
                 }
             }
             SpecCommand::Feedback { spec_id, note } => {
-                let working_dir = self.cwd_path.clone();
-                let specs_root = working_dir.join("specs");
-
-                // Validate spec ID format
-                let sid = match codemason_specs::spec::SpecId::new(&spec_id) {
-                    Some(id) => id,
-                    None => {
-                        self.status = format!("spec: invalid spec ID: {}", spec_id);
-                        self.append_assistant_text(&format!(
-                            "From: /spec feedback\n\n**Error:** Invalid spec ID \
-                                     `{}`. Spec IDs must be alphanumeric with hyphens or \
-                                     underscores only.",
-                            spec_id
-                        ));
-                        return std::ops::ControlFlow::Break(());
-                    }
-                };
-
-                let mgr = spec_manager();
-                let rt = tokio::runtime::Handle::current();
-
-                // Read spec to validate it exists and get title + existing FEEDBACK.md
-                let spec_id_owned = spec_id.clone();
-                let note_owned = note.clone();
-                let result: Result<(String, String), String> =
-                            // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                            tokio::task::block_in_place(|| {
-                                rt.block_on(async {
-                                    let spec = match mgr.read_spec(&sid).await {
-                                        Ok(s) => s,
-                                        Err(_e) => {
-                                            let available: Vec<String> =
-                                                match mgr.discover_specs().await {
-                                                    Ok(specs) => specs
-                                                        .iter()
-                                                        .map(|s| {
-                                format!(
-                                "  - {} ({})",
-                                s.id,
-                                s.status.as_str()
-                                )
-                                                        })
-                                                        .collect(),
-                                                    Err(_) => vec![],
-                                                };
-                                            let avail_str = if available.is_empty() {
-                                                "  (none found)".to_string()
-                                            } else {
-                                                available.join("\n")
-                                            };
-                                            return Err(format!(
-                                                "Spec `{}` not found.\n\nAvailable specs:\n{}",
-                                                spec_id_owned, avail_str
-                                            ));
-                                        }
-                                    };
-                                    Ok((spec.title.clone(), spec.feedback_md.clone()))
-                                })
-                            });
-
-                let (title, existing_feedback) = match result {
-                    Ok(v) => v,
-                    Err(e) => {
-                        self.status = format!("spec: {}", e);
-                        self.append_assistant_text(&format!(
-                            "From: /spec feedback\n\n**Error:** {}",
-                            e
-                        ));
-                        return std::ops::ControlFlow::Break(());
-                    }
-                };
-
-                // Build the updated FEEDBACK.md content
-                let updated_feedback =
-                    SpecCommand::append_feedback_note(&existing_feedback, &title, &note_owned);
-
-                // Write FEEDBACK.md to disk
-                let feedback_path = specs_root.join(sid.dir_name()).join("FEEDBACK.md");
-                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
-                let write_result: Result<(), String> = tokio::task::block_in_place(|| {
-                    rt.block_on(async {
-                        codemason_specs::io::SpecIo::atomic_write(&feedback_path, &updated_feedback)
-                            .await
-                            .map_err(|e| e.to_string())
-                    })
-                });
-
-                match write_result {
-                    Ok(()) => {
-                        self.append_assistant_text(&SpecCommand::build_feedback_message(
-                            &spec_id,
-                            &note_owned,
-                        ));
-                        self.push_log_no_agent(
-                            crate::app::LogLevel::Info,
-                            SpecCommand::build_feedback_log(&spec_id, &note_owned),
-                        );
-                        self.status = SpecCommand::build_feedback_status(&spec_id);
-                    }
-                    Err(e) => {
-                        self.status = format!("spec: failed to write FEEDBACK.md: {}", e);
-                        self.append_assistant_text(&format!(
-                            "From: /spec feedback\n\n**Error:** Failed to \
-                                     write `specs/{}/FEEDBACK.md`: {}",
-                            spec_id, e
-                        ));
-                    }
+                if self
+                    .spec_feedback(&spec_manager, spec_id, note)
+                    .await
+                    .is_break()
+                {
+                    return std::ops::ControlFlow::Break(());
                 }
             }
             SpecCommand::GovCreate {
@@ -11006,6 +9396,1827 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                     crate::app::reverse::reverse_help_message()
                 ));
                 self.status = "spec: reverse usage".to_string();
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/spec` `SpecCommand::Create` arm.
+    async fn spec_create(
+        &mut self,
+        specname: String,
+        feature: String,
+        from_research: Option<String>,
+        folder: Option<String>,
+    ) {
+        use codemason_specs::SpecCommand;
+
+        let sid = self.session.session_id.clone().unwrap_or_default();
+        self.append_assistant_text(&SpecCommand::build_create_message(&specname));
+        self.push_log_no_agent(
+            LogLevel::Info,
+            SpecCommand::build_create_log(&specname, &feature),
+        );
+
+        let agent = self.select_general_agent();
+
+        // FR-027: an explicit `--folder <path>` targets that
+        // project's `specs/` root (used by `/spec reverse
+        // --folder` chaining); otherwise the invoking directory
+        // is used, as before.
+        let task = match folder {
+            Some(target) => format!(
+                "{}\n\nWrite the spec directory under `{target}/specs/` \
+                                 (absolute path), not the current directory.",
+                SpecCommand::build_create_prompt(&specname, &feature, from_research.as_deref(),)
+            ),
+            None => SpecCommand::build_create_prompt(&specname, &feature, from_research.as_deref()),
+        };
+        let msg = Message::user_text(&sid, &task);
+        self.session.messages.push(msg);
+
+        let processor = self.session_processor.clone();
+        let flag = Arc::new(AtomicBool::new(false));
+        self.session.cancel_flag = Some(flag.clone());
+        self.session.is_processing = true;
+        self.status = SpecCommand::build_create_status(&specname);
+
+        let event_bus = self.event_bus.clone();
+        tokio::spawn(async move {
+            if let Err(e) = processor.process_message(&sid, &task, &agent, flag).await {
+                tracing::warn!(error = %e, "spec: generation failed");
+                event_bus.publish(codemason_agent::event::Event::AgentError {
+                    session_id: sid,
+                    error: format!("spec generation failed: {e}"),
+                });
+            }
+        });
+    }
+
+    /// Run the `/spec` `SpecCommand::Jtbd` arm.
+    ///
+    /// Returns `Break` where the arm returns early, so `slash_spec`
+    /// forwards it to the dispatcher exactly as before.
+    async fn spec_jtbd(
+        &mut self,
+        spec_id: String,
+        force: bool,
+        agent: Option<String>,
+    ) -> std::ops::ControlFlow<()> {
+        use codemason_specs::SpecCommand;
+
+        let working_dir = self.cwd_path.clone();
+        let specs_root = working_dir.join("specs");
+
+        // FR-008: validate spec ID format
+        let id = match codemason_specs::spec::SpecId::new(&spec_id) {
+            Some(id) => id,
+            None => {
+                self.status = format!("spec: invalid spec ID: {}", spec_id);
+                self.append_assistant_text(&format!(
+                    "From: /spec jtbd\n\n**Error:** Invalid spec ID \
+                                     `{}`. Spec IDs must be alphanumeric with hyphens or \
+                                     underscores only.",
+                    spec_id
+                ));
+                return std::ops::ControlFlow::Break(());
+            }
+        };
+
+        let spec_dir = specs_root.join(id.as_str());
+        let spec_md_path = spec_dir.join("SPEC.md");
+        let jtbd_path = spec_dir.join("JTBD.md");
+
+        let rt = tokio::runtime::Handle::current();
+        let spec_id_owned = spec_id.clone();
+        // Validation returns Ok(jtbd_exists) so the caller can
+        // enforce the overwrite guard (FR-003 / FR-004).
+        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+        let validation: Result<bool, String> = tokio::task::block_in_place(|| {
+            rt.block_on(async {
+                // FR-008: confirm spec directory exists
+                if !spec_dir.is_dir() {
+                    return Err(format!(
+                        "spec `{}` not found at {}",
+                        spec_id_owned,
+                        spec_dir.display()
+                    ));
+                }
+                // FR-009: confirm SPEC.md exists and is readable
+                match tokio::fs::read_to_string(&spec_md_path).await {
+                    Ok(content) if content.trim().is_empty() => {
+                        return Err(format!("SPEC.md is empty: {}", spec_md_path.display()));
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        return Err(format!(
+                            "SPEC.md not readable at {}: {}",
+                            spec_md_path.display(),
+                            e
+                        ));
+                    }
+                }
+                // FR-003/FR-004: check whether JTBD.md already exists
+                let jtbd_exists = tokio::fs::metadata(&jtbd_path).await.is_ok();
+                Ok(jtbd_exists)
+            })
+        });
+        let jtbd_exists = match validation {
+            Ok(exists) => exists,
+            Err(e) => {
+                self.status = format!("spec: {}", e);
+                self.append_assistant_text(&format!("From: /spec jtbd\n\n**Error:** {}", e));
+                return std::ops::ControlFlow::Break(());
+            }
+        };
+
+        // FR-003: refuse if JTBD.md exists and --force not given
+        if jtbd_exists && !force {
+            self.status = format!("spec jtbd: {} already has JTBD.md", spec_id);
+            self.append_assistant_text(&format!(
+                "From: /spec jtbd\n\n\
+                                 **JTBD.md already exists** at `specs/{}/JTBD.md`.\n\
+                                 Re-run with `--force` to overwrite:\n\n\
+                                 `/spec jtbd {} --force`",
+                spec_id, spec_id
+            ));
+            return std::ops::ControlFlow::Break(());
+        }
+        // FR-004: when --force is present the guard is bypassed
+        // and the agent task below will overwrite JTBD.md.
+
+        // FR-011: status, message, and log parity with /spec create
+        let sid = self.session.session_id.clone().unwrap_or_default();
+        self.append_assistant_text(&SpecCommand::build_jtbd_message(&spec_id));
+        self.push_log_no_agent(
+            LogLevel::Info,
+            SpecCommand::build_jtbd_log(&spec_id, force, agent.as_deref()),
+        );
+
+        // FR-005: optional --agent <name> override
+        let mut selected_agent = if let Some(ref agent_name) = agent {
+            match self
+                .cycleable_agents
+                .iter()
+                .find(|a| a.name == *agent_name)
+                .cloned()
+            {
+                Some(a) => a,
+                None => {
+                    self.status = format!("spec: agent '{}' not found", agent_name);
+                    self.append_assistant_text(&format!(
+                        "From: /spec jtbd\n\n**Error:** Agent \
+                                         `{}` not found. No task was spawned.",
+                        agent_name
+                    ));
+                    return std::ops::ControlFlow::Break(());
+                }
+            }
+        } else {
+            // FR-002: default to general agent, fallback to current agent
+            self.select_general_agent()
+        };
+        self.apply_selected_model_and_thinking(&mut selected_agent);
+
+        // FR-002, FR-006, FR-007: build the JTBD analysis prompt
+        let task = SpecCommand::build_jtbd_prompt(&spec_id);
+        let msg = Message::user_text(&sid, &task);
+        self.session.messages.push(msg);
+
+        let processor = self.session_processor.clone();
+        let flag = Arc::new(AtomicBool::new(false));
+        self.session.cancel_flag = Some(flag.clone());
+        self.session.is_processing = true;
+        self.status = SpecCommand::build_jtbd_status(&spec_id);
+
+        let event_bus = self.event_bus.clone();
+        // FR-014: clone path + spec_id for cancellation cleanup
+        let jtbd_path_for_cleanup = jtbd_path.clone();
+        let spec_id_for_cleanup = spec_id.clone();
+        let cancel_flag_for_check = flag.clone();
+        tokio::spawn(async move {
+            let result = processor
+                .process_message(&sid, &task, &selected_agent, flag)
+                .await;
+
+            // FR-014: if cancelled, remove partial JTBD.md and notify
+            if cancel_flag_for_check.load(Ordering::Acquire) {
+                // FR-013: remove any partially-written file so a
+                // subsequent --force re-run starts clean.
+                if jtbd_path_for_cleanup.exists() {
+                    if let Err(e) = tokio::fs::remove_file(&jtbd_path_for_cleanup).await {
+                        tracing::warn!(
+                            error = %e,
+                            "spec jtbd: failed to remove partial JTBD.md"
+                        );
+                    }
+                }
+                event_bus.publish(codemason_agent::event::Event::AgentNotice {
+                    session_id: sid.clone(),
+                    message: format!(
+                        "spec jtbd: cancelled - partial JTBD.md for `{}` removed",
+                        spec_id_for_cleanup
+                    ),
+                });
+                return;
+            }
+
+            if let Err(e) = result {
+                tracing::warn!(error = %e, "spec jtbd: analysis failed");
+                event_bus.publish(codemason_agent::event::Event::AgentError {
+                    session_id: sid,
+                    error: format!("spec jtbd analysis failed: {e}"),
+                });
+            }
+        });
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/spec` `SpecCommand::Validate` arm.
+    async fn spec_validate(
+        &mut self,
+        spec_manager: &(impl Fn() -> SpecManager + Sync),
+        spec_id: Option<String>,
+    ) {
+        use codemason_specs::SddFlags;
+        use codemason_specs::validate_with_flags;
+
+        // FR-019: Build SDD flags from loaded config so
+        // SDD-specific checks are opt-in.
+        let sdd_cfg = codemason_agent::Config::load_for(&self.cwd_path)
+            .unwrap_or_default()
+            .sdd;
+        let flags = SddFlags::from_bools(
+            sdd_cfg.clarification_markers,
+            sdd_cfg.quality_checklists,
+            sdd_cfg.consistency_checks,
+            sdd_cfg.phase_minus_one_gates,
+            sdd_cfg.constitution,
+            sdd_cfg.feedback_loop,
+        );
+        let mgr = spec_manager();
+        let rt = tokio::runtime::Handle::current();
+        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+        let result: Result<String, String> = tokio::task::block_in_place(|| {
+            rt.block_on(async {
+                let specs = if let Some(id_str) = spec_id {
+                    match codemason_specs::spec::SpecId::new(&id_str) {
+                        Some(id) => match mgr.read_spec(&id).await {
+                            Ok(spec) => vec![spec],
+                            Err(e) => {
+                                return Err(format!("failed to read {}: {}", id_str, e));
+                            }
+                        },
+                        None => {
+                            return Err(format!("spec: invalid spec ID: {}", id_str));
+                        }
+                    }
+                } else {
+                    match mgr.discover_specs().await {
+                        Ok(specs) => specs,
+                        Err(e) => {
+                            return Err(format!("discovery failed: {}", e));
+                        }
+                    }
+                };
+                if specs.is_empty() {
+                    return Ok("No specs found.".to_string());
+                }
+                let mut lines = vec!["From: /spec validate".to_string()];
+                for spec in &specs {
+                    let report = validate_with_flags(spec, &flags);
+                    lines.push(format!("\n## Validation: `{}`", spec.id));
+                    lines.push(report.format(spec.id.as_str()));
+                }
+                Ok(lines.join("\n"))
+            })
+        });
+        match result {
+            Ok(output) => {
+                self.append_assistant_text(&output);
+                self.status = "spec: validation complete".to_string();
+            }
+            Err(e) => {
+                self.status = format!("spec: {}", e);
+                self.append_assistant_text(&format!("From: /spec validate\n\n**Error:** {}", e));
+            }
+        }
+    }
+
+    /// Run the `/spec` `SpecCommand::List` arm.
+    ///
+    /// Returns `Break` where the arm returns early, so `slash_spec`
+    /// forwards it to the dispatcher exactly as before.
+    async fn spec_list(
+        &mut self,
+        spec_manager: &(impl Fn() -> SpecManager + Sync),
+        args: String,
+    ) -> std::ops::ControlFlow<()> {
+        use codemason_specs::SpecFilter;
+        use codemason_specs::spec::SpecStatus;
+
+        let mgr = spec_manager();
+        let mut filter = SpecFilter::new();
+        // Accept both the documented `--status <s>` form and
+        // `--status=<s>`; reject anything unrecognised rather
+        // than silently listing every spec.
+        const USAGE: &str = "Usage: /spec list [--status <status>] \
+                                             [--prefix <prefix>] [--archived]";
+        let mut arg_error: Option<String> = None;
+        let mut tokens = args.split_whitespace().peekable();
+        while let Some(token) = tokens.next() {
+            let (flag, inline) = match token.split_once('=') {
+                Some((f, v)) => (f, Some(v)),
+                None => (token, None),
+            };
+            match flag {
+                "--archived" if inline.is_none() => {
+                    filter = filter.with_archived();
+                }
+                "--status" | "--prefix" => {
+                    // A following option (`--archived`) is not a value:
+                    // leave it to be parsed as its own flag.
+                    let Some(val) = inline
+                        .or_else(|| tokens.next_if(|t| !t.starts_with("--")))
+                        .filter(|v| !v.is_empty())
+                    else {
+                        arg_error = Some(format!("{flag} needs a value. {USAGE}"));
+                        break;
+                    };
+                    if flag == "--prefix" {
+                        filter = filter.with_id_prefix(val);
+                    } else if let Some(status) = SpecStatus::parse(val) {
+                        filter = filter.with_status(status);
+                        // Listing archived specs by status must
+                        // not be hidden by the default filter.
+                        if status == SpecStatus::Archived {
+                            filter = filter.with_archived();
+                        }
+                    } else {
+                        let valid = SpecStatus::ALL
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        arg_error = Some(format!("unknown status '{val}'. Valid: {valid}"));
+                        break;
+                    }
+                }
+                _ => {
+                    arg_error = Some(format!("unknown argument '{token}'. {USAGE}"));
+                    break;
+                }
+            }
+        }
+        if let Some(e) = arg_error {
+            self.append_assistant_text(&format!("From: /spec list\n\n**Error:** {e}"));
+            self.status = format!("spec: {e}");
+            return std::ops::ControlFlow::Break(());
+        }
+        let rt = tokio::runtime::Handle::current();
+        let result: Result<(usize, String), String> =
+                            // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                            tokio::task::block_in_place(|| {
+                                rt.block_on(async {
+                                    let specs = match mgr.list_specs(&filter).await {
+                                        Ok(s) => s,
+                                        Err(e) => return Err(format!("list failed: {}", e)),
+                                    };
+                                    let count = specs.len();
+                                    if specs.is_empty() {
+                                        return Ok((
+                                            0,
+                                            "From: /spec list\n\nNo specs found.".to_string(),
+                                        ));
+                                    }
+                                    let mut lines =
+                                        vec!["From: /spec list".to_string(), String::new()];
+                                    lines.push(format!(
+                                        "| {:<20} | {:<12} | {:<30} |",
+                                        "ID", "Status", "Title"
+                                    ));
+                                    lines.push(
+                                        "|".to_string()
+                                            + &"-".repeat(22)
+                                            + "|"
+                                            + &"-".repeat(14)
+                                            + "|"
+                                            + &"-".repeat(32)
+                                            + "|",
+                                    );
+                                    for spec in &specs {
+                                        lines.push(format!(
+                                            "| {:<20} | {:<12} | {:<30} |",
+                                            spec.id.as_str(),
+                                            spec.status.as_str(),
+                                            spec.title.chars().take(30).collect::<String>()
+                                        ));
+                                    }
+                                    Ok((count, lines.join("\n")))
+                                })
+                            });
+        match result {
+            Ok((count, output)) => {
+                self.append_assistant_text(&output);
+                self.status = format!("spec: {count} spec(s) listed");
+            }
+            Err(e) => {
+                self.status = format!("spec: {}", e);
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/spec` `SpecCommand::Search` arm.
+    async fn spec_search(
+        &mut self,
+        spec_manager: &(impl Fn() -> SpecManager + Sync),
+        query: String,
+    ) {
+        let mgr = spec_manager();
+        let rt = tokio::runtime::Handle::current();
+        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+        let result: Result<String, String> = tokio::task::block_in_place(|| {
+            rt.block_on(async {
+                let results = match mgr.search_specs(&query).await {
+                    Ok(r) => r,
+                    Err(e) => return Err(format!("search failed: {}", e)),
+                };
+                if results.is_empty() {
+                    return Ok(format!("No specs found matching '{}'.", query));
+                }
+                let mut lines = vec![format!("From: /spec search '{}'", query), String::new()];
+                for r in &results {
+                    lines.push(format!(
+                        "## {} (score: {}, status: {})",
+                        r.spec.id, r.score, r.spec.status
+                    ));
+                    lines.push(format!("**{}**", r.spec.title));
+                    for snippet in &r.snippets {
+                        lines.push(format!("- {}", snippet));
+                    }
+                    lines.push(String::new());
+                }
+                Ok(lines.join("\n"))
+            })
+        });
+        match result {
+            Ok(output) => {
+                self.append_assistant_text(&output);
+                self.status = format!("spec: search complete");
+            }
+            Err(e) => {
+                self.status = format!("spec: {}", e);
+            }
+        }
+    }
+
+    /// Run the `/spec` `SpecCommand::Status` arm.
+    ///
+    /// Returns `Break` where the arm returns early, so `slash_spec`
+    /// forwards it to the dispatcher exactly as before.
+    fn spec_status(
+        &mut self,
+        spec_manager: &(impl Fn() -> SpecManager + Sync),
+        spec_id: String,
+        new_status: Option<String>,
+    ) -> std::ops::ControlFlow<()> {
+        use codemason_specs::SddFlags;
+
+        let mgr = spec_manager();
+        let Some(id) = parse_spec_id(&spec_id) else {
+            self.report_invalid_spec_id(&spec_id);
+            return std::ops::ControlFlow::Break(());
+        };
+        let rt = tokio::runtime::Handle::current();
+        // FR-019: gate the SDD checks via config flags.
+        let sdd_cfg = codemason_agent::Config::load_for(&self.cwd_path)
+            .unwrap_or_default()
+            .sdd;
+        let flags = SddFlags::from_bools(
+            sdd_cfg.clarification_markers,
+            sdd_cfg.quality_checklists,
+            sdd_cfg.consistency_checks,
+            sdd_cfg.phase_minus_one_gates,
+            sdd_cfg.constitution,
+            sdd_cfg.feedback_loop,
+        );
+        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+        let result: Result<String, String> = tokio::task::block_in_place(|| {
+            rt.block_on(mgr.status_command(id.as_str(), new_status.as_deref(), "user", &flags))
+        })
+        .map(|outcome| match outcome {
+            codemason_specs::StatusOutcome::Transitioned { id, from, to } => {
+                format!(
+                    "From: /spec status\n\n**{}** transitioned from `{}` to `{}`.",
+                    id,
+                    from.as_str(),
+                    to.as_str()
+                )
+            }
+            codemason_specs::StatusOutcome::Current {
+                id,
+                status,
+                allowed,
+            } => format!(
+                "From: /spec status\n\n**{}** - current status: `{}`\n\
+                                 Allowed transitions: {}",
+                id,
+                status.as_str(),
+                allowed
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        });
+        match result {
+            Ok(output) => {
+                self.append_assistant_text(&output);
+                self.status = "spec: status updated".to_string();
+            }
+            Err(e) => {
+                self.status = format!("spec: {}", e);
+                self.append_assistant_text(&format!("From: /spec status\n\n**Error:** {}", e));
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/spec` `SpecCommand::Task` arm.
+    ///
+    /// Returns `Break` where the arm returns early, so `slash_spec`
+    /// forwards it to the dispatcher exactly as before.
+    async fn spec_task(
+        &mut self,
+        spec_manager: &(impl Fn() -> SpecManager + Sync),
+        spec_id: String,
+        task_id: Option<String>,
+        new_status: Option<String>,
+    ) -> std::ops::ControlFlow<()> {
+        let mgr = spec_manager();
+        let Some(id) = parse_spec_id(&spec_id) else {
+            self.report_invalid_spec_id(&spec_id);
+            return std::ops::ControlFlow::Break(());
+        };
+        let rt = tokio::runtime::Handle::current();
+        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+        let result: Result<String, String> = tokio::task::block_in_place(|| {
+            rt.block_on(async {
+                let mut spec = match mgr.read_spec(&id).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        return Err(format!("failed to read {}: {}", spec_id, e));
+                    }
+                };
+                if let Some(task_id_str) = task_id {
+                    if let Some(new_status_str) = new_status {
+                        use codemason_specs::spec::TaskStatus;
+                        let Some(new_status) = TaskStatus::parse(&new_status_str) else {
+                            return Err(format!("unknown task status '{new_status_str}'"));
+                        };
+                        mgr.update_task_status(&mut spec, &task_id_str, new_status)
+                            .await
+                            .map_err(|e| format!("task update failed: {e}"))?;
+                        Ok(format!(
+                            "From: /spec task\n\n\
+                                **{}** task `{}` updated to `{}`.",
+                            spec.id,
+                            task_id_str,
+                            new_status.as_str()
+                        ))
+                    } else {
+                        // Show specific task
+                        let task = spec.tasks.iter().find(|t| t.id == task_id_str);
+                        match task {
+                            Some(t) => {
+                                let mut lines = vec![
+                                    format!("From: /spec task\n\n## Task {} - {}", t.id, t.title),
+                                    format!("- **Status:** {}", t.status.as_str()),
+                                    format!("- **Effort:** {}", t.effort),
+                                    format!("- **Priority:** {}", t.priority),
+                                ];
+                                if !t.linked_requirements.is_empty() {
+                                    lines.push(format!(
+                                        "- **Requirements:** {}",
+                                        t.linked_requirements.join(", ")
+                                    ));
+                                }
+                                if !t.dependencies.is_empty() {
+                                    lines.push(format!(
+                                        "- **Dependencies:** {}",
+                                        t.dependencies.join(", ")
+                                    ));
+                                }
+                                // Stored as UTC epoch seconds; shown
+                                // in the user's local time zone.
+                                let completed = t
+                                    .completed_at
+                                    .and_then(|s| i64::try_from(s).ok())
+                                    .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
+                                    .map(|dt| {
+                                        dt.with_timezone(&chrono::Local)
+                                            .format("%Y-%m-%d %H:%M %Z")
+                                            .to_string()
+                                    });
+                                if let Some(when) = completed {
+                                    lines.push(format!("- **Completed:** {when}"));
+                                }
+                                Ok(lines.join("\n"))
+                            }
+                            None => Err(format!("task {} not found in {}", task_id_str, spec.id)),
+                        }
+                    }
+                } else {
+                    // List all tasks
+                    let mut lines =
+                        vec![format!("From: /spec task\n\n## Tasks for **{}**", spec.id)];
+                    if spec.tasks.is_empty() {
+                        lines.push("No tasks found.".to_string());
+                    } else {
+                        lines.extend(
+                            [
+                                "| ID | Title | Status | Effort | Priority |",
+                                "|----|-------|--------|--------|----------|",
+                            ]
+                            .map(String::from),
+                        );
+                        for t in &spec.tasks {
+                            lines.push(format!(
+                                "| {} | {} | {} | {} | {} |",
+                                t.id,
+                                t.title,
+                                t.status.as_str(),
+                                t.effort,
+                                t.priority
+                            ));
+                        }
+                    }
+                    Ok(lines.join("\n"))
+                }
+            })
+        });
+        match result {
+            Ok(output) => {
+                self.append_assistant_text(&output);
+                self.status = "spec: task complete".to_string();
+            }
+            Err(e) => {
+                self.status = format!("spec: {}", e);
+                self.append_assistant_text(&format!("From: /spec task\n\n**Error:** {}", e));
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/spec` `SpecCommand::Activate` arm.
+    ///
+    /// Returns `Break` where the arm returns early, so `slash_spec`
+    /// forwards it to the dispatcher exactly as before.
+    async fn spec_activate(
+        &mut self,
+        spec_manager: &(impl Fn() -> SpecManager + Sync),
+        spec_id: String,
+    ) -> std::ops::ControlFlow<()> {
+        let mgr = spec_manager();
+        let Some(id) = parse_spec_id(&spec_id) else {
+            self.report_invalid_spec_id(&spec_id);
+            return std::ops::ControlFlow::Break(());
+        };
+        let rt = tokio::runtime::Handle::current();
+        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+        let result: Result<_, String> = tokio::task::block_in_place(|| {
+            rt.block_on(async {
+                match mgr.read_spec(&id).await {
+                    Ok(spec) => Ok(spec),
+                    Err(e) => Err(format!("failed to read {}: {}", spec_id, e)),
+                }
+            })
+        });
+        match result {
+            Ok(spec) => {
+                self.session.active_spec = Some(spec_id.clone());
+                self.spec_manager = Some(Arc::new(mgr));
+                // Also set on the session processor so auto-updates work.
+                // Wrap the nested `block_on` in `block_in_place` so it
+                // releases the current worker instead of deadlocking on
+                // the UI runtime (FUNC-015).
+                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                let _ = tokio::task::block_in_place(|| {
+                    // INTENTIONAL: bridge to the async spec manager; the value is the spec id, not an error
+                    rt.block_on(async {
+                        self.session_processor
+                            .active_spec
+                            .write()
+                            .await
+                            .replace(spec_id.clone())
+                    })
+                });
+                // P-24: invalidate the cached spec section so the
+                // next turn re-reads the newly-activated spec.
+                self.session_processor
+                    .system_prompt_cache()
+                    .invalidate_spec_cache();
+                let _ = self // INTENTIONAL: in-memory state is authoritative
+                    .session_processor
+                    .spec_manager
+                    // Reuse the manager Arc built above instead of
+                    // constructing a second SpecManager for the same
+                    // specs_root.
+                    .set(
+                        self.spec_manager
+                            .clone()
+                            .unwrap_or_else(|| Arc::new(spec_manager())),
+                    );
+                self.append_assistant_text(&format!(
+                    "From: /spec activate\n\n\
+                                     [ok] **{}** is now the active spec.\n\n\
+                                     Status: {}\n\
+                                     Title: {}\n\
+                                     Requirements: {}\n\
+                                     Tasks: {}\n\n\
+                                     This spec's requirements and tasks will be injected into the \
+                                     agent's system prompt.",
+                    spec.id,
+                    spec.status.as_str(),
+                    spec.title,
+                    spec.requirements.len(),
+                    spec.tasks.len()
+                ));
+                self.status = format!("spec: {} activated", spec_id);
+            }
+            Err(e) => {
+                self.status = format!("spec: {}", e);
+                self.append_assistant_text(&format!("From: /spec activate\n\n**Error:** {}", e));
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/spec` `SpecCommand::Delete` arm.
+    ///
+    /// Returns `Break` where the arm returns early, so `slash_spec`
+    /// forwards it to the dispatcher exactly as before.
+    async fn spec_delete(
+        &mut self,
+        spec_manager: &(impl Fn() -> SpecManager + Sync),
+        spec_id: String,
+        yes: bool,
+    ) -> std::ops::ControlFlow<()> {
+        let mgr = spec_manager();
+        let Some(id) = parse_spec_id(&spec_id) else {
+            self.report_invalid_spec_id(&spec_id);
+            return std::ops::ControlFlow::Break(());
+        };
+        if !yes {
+            self.append_assistant_text(&format!(
+                "From: /spec delete\n\nRefusing to delete specs/{spec_id} without \
+                                 confirmation. Run `/spec delete {spec_id} --yes` to confirm."
+            ));
+            return std::ops::ControlFlow::Break(());
+        }
+        let rt = tokio::runtime::Handle::current();
+        // Run inline (not spawned) so the active spec can be
+        // cleared only after the directory is really gone.
+        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+        let result =
+            tokio::task::block_in_place(|| rt.block_on(async { mgr.delete_spec(&id).await }));
+        match result {
+            Ok(()) => {
+                // A deleted spec must not stay injected into
+                // the agent's system prompt.
+                let was_active = self.session.active_spec.as_deref() == Some(&spec_id);
+                if was_active {
+                    self.clear_active_spec();
+                }
+                let note = if was_active {
+                    " It was the active spec and has been deactivated."
+                } else {
+                    ""
+                };
+                self.append_assistant_text(&format!(
+                    "From: /spec delete\n\n[ok] Deleted specs/{spec_id}.{note}"
+                ));
+                self.status = format!("spec: deleted specs/{spec_id}");
+            }
+            Err(e) => {
+                self.append_assistant_text(&format!("From: /spec delete\n\n**Error:** {e}"));
+                self.status = format!("spec: delete failed: {e}");
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/spec` `SpecCommand::Coverage` arm.
+    ///
+    /// Returns `Break` where the arm returns early, so `slash_spec`
+    /// forwards it to the dispatcher exactly as before.
+    async fn spec_coverage(
+        &mut self,
+        spec_manager: &(impl Fn() -> SpecManager + Sync),
+        spec_id: String,
+    ) -> std::ops::ControlFlow<()> {
+        let mgr = spec_manager();
+        let Some(id) = parse_spec_id(&spec_id) else {
+            self.report_invalid_spec_id(&spec_id);
+            return std::ops::ControlFlow::Break(());
+        };
+        let rt = tokio::runtime::Handle::current();
+        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+        let result: Result<String, String> = tokio::task::block_in_place(|| {
+            rt.block_on(async {
+                let spec = match mgr.read_spec(&id).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        return Err(format!("failed to read {}: {}", spec_id, e));
+                    }
+                };
+                // Rendering lives in `Spec::coverage_report`
+                // (codemason-specs) so this arm and the
+                // `spec_coverage` agent tool always agree on
+                // format and status symbols.
+                Ok(format!(
+                    "From: /spec coverage\n\n{}",
+                    spec.coverage_report()
+                ))
+            })
+        });
+        match result {
+            Ok(output) => {
+                self.append_assistant_text(&output);
+                self.status = "spec: coverage complete".to_string();
+            }
+            Err(e) => {
+                self.status = format!("spec: {}", e);
+                self.append_assistant_text(&format!("From: /spec coverage\n\n**Error:** {}", e));
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/spec` `SpecCommand::Impl` arm.
+    ///
+    /// Returns `Break` where the arm returns early, so `slash_spec`
+    /// forwards it to the dispatcher exactly as before.
+    async fn spec_impl(
+        &mut self,
+        spec_manager: &(impl Fn() -> SpecManager + Sync),
+        spec_id: String,
+        task_id: Option<String>,
+        dry_run: bool,
+    ) -> std::ops::ControlFlow<()> {
+        use codemason_specs::SddFlags;
+
+        use codemason_specs::{ImplOptions, SpecImplRunner};
+        let working_dir = self.cwd_path.clone();
+        let specs_root = working_dir.join("specs");
+
+        // Validate spec exists
+        let Some(sid) = codemason_specs::spec::SpecId::new(&spec_id) else {
+            self.status = format!("spec: invalid spec ID: {}", spec_id);
+            return std::ops::ControlFlow::Break(());
+        };
+
+        // Check spec exists on disk and read its status
+        let mgr = spec_manager();
+        let rt = tokio::runtime::Handle::current();
+        let (spec_exists, spec_status): (
+            bool,
+            Option<codemason_specs::spec::SpecStatus>,
+            // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+        ) = tokio::task::block_in_place(|| {
+            rt.block_on(async {
+                let spec = mgr.read_spec(&sid).await;
+                match spec {
+                    Ok(s) => (true, Some(s.status)),
+                    Err(_) => (false, None),
+                }
+            })
+        });
+        if !spec_exists {
+            // List available specs with plans
+            // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+            let available: Vec<String> = tokio::task::block_in_place(|| {
+                rt.block_on(async {
+                    match mgr.discover_specs().await {
+                        Ok(specs) => specs
+                            .iter()
+                            .map(|s| format!("  - {} ({})", s.id, s.status.as_str()))
+                            .collect(),
+                        Err(_) => vec![],
+                    }
+                })
+            });
+            let avail_str = if available.is_empty() {
+                "  (none found)".to_string()
+            } else {
+                available.join("\n")
+            };
+            self.append_assistant_text(&format!(
+                "From: /spec impl\n\n**Error:** Spec `{}` not found.\n\n\
+                                 Available specs:\n{}",
+                spec_id, avail_str
+            ));
+            self.status = format!("spec: spec {} not found", spec_id);
+            return std::ops::ControlFlow::Break(());
+        }
+
+        // Check if already implemented (FR-026)
+        if let Some(status) = spec_status {
+            if matches!(
+                status,
+                codemason_specs::spec::SpecStatus::Implemented
+                    | codemason_specs::spec::SpecStatus::Verified
+            ) {
+                // Only `implemented` can reopen; a verified spec
+                // is closed and must be archived and re-drafted.
+                let hint = if status == codemason_specs::spec::SpecStatus::Implemented {
+                    format!(
+                        "To re-implement, reopen it first: \
+                                         `/spec status {spec_id} in_progress`"
+                    )
+                } else {
+                    "A verified spec cannot be reopened; archive it and start \
+                                     again from `draft`."
+                        .to_string()
+                };
+                self.append_assistant_text(&format!(
+                    "From: /spec impl\n\n[warn] Spec **{spec_id}** is already \
+                                     marked as **{}**.\n\n{hint}",
+                    status.as_str()
+                ));
+                self.status = format!("spec: {} is {}", spec_id, status.as_str());
+                return std::ops::ControlFlow::Break(());
+            }
+        }
+
+        // Build options
+        let mut opts = ImplOptions::new();
+        if let Some(ref tid) = task_id {
+            opts = opts.with_task(tid);
+        }
+        if dry_run {
+            opts = opts.with_dry_run();
+        }
+        // FR-019: gate the in_progress transition checks with
+        // the configured SDD flags, as `/spec status` does.
+        let sdd_cfg = codemason_agent::Config::load_for(&self.cwd_path)
+            .unwrap_or_default()
+            .sdd;
+        opts = opts.with_sdd_flags(SddFlags::from_bools(
+            sdd_cfg.clarification_markers,
+            sdd_cfg.quality_checklists,
+            sdd_cfg.consistency_checks,
+            sdd_cfg.phase_minus_one_gates,
+            sdd_cfg.constitution,
+            sdd_cfg.feedback_loop,
+        ));
+
+        // Create runner
+        let runner_result: Result<SpecImplRunner, String> =
+                            // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                            tokio::task::block_in_place(|| {
+                                rt.block_on(async {
+                                    match SpecImplRunner::new(&spec_id, specs_root.clone(), opts)
+                                        .await
+                                    {
+                                        Ok(r) => Ok(r),
+                                        Err(e) => Err(format!("spec impl failed: {}", e)),
+                                    }
+                                })
+                            });
+
+        match runner_result {
+            Ok(runner) => {
+                let is_dry_run = dry_run;
+                // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                let result: Result<_, String> = tokio::task::block_in_place(|| {
+                    rt.block_on(async {
+                        match runner.run().await {
+                            Ok(r) => Ok(r),
+                            Err(e) => Err(format!("spec impl failed: {e}")),
+                        }
+                    })
+                });
+                match result {
+                    Ok(impl_result) => {
+                        // Display summary
+                        self.append_assistant_text(&impl_result.summary);
+
+                        if is_dry_run || impl_result.total_tasks == 0 {
+                            self.status = format!("spec: {} dry-run complete", spec_id);
+                        } else {
+                            // Drive tasks ONE AT A TIME. The previous
+                            // implementation injected the entire compound
+                            // prompt in a single `process_message` call,
+                            // which meant the agent would often stop after
+                            // the first task (considering its immediate goal
+                            // satisfied) and never reach the remaining
+                            // tasks. Instead, we store the execution order
+                            // and dispatch the first task's prompt now; the
+                            // `Event::MessageEnd` handler advances to the
+                            // next task once the agent marks the current
+                            // one `completed`.
+                            let task_ids: Vec<String> = runner
+                                .execution_order()
+                                .iter()
+                                .map(|&i| runner.tasks()[i].id.clone())
+                                .collect();
+                            let total = task_ids.len();
+
+                            // The session task tracker is populated
+                            // lazily by `spec_task_update` calls from
+                            // the agent (creates-or-updates), not by
+                            // pre-created milestone rows here.
+                            self.session.spec_impl_state = Some(crate::app::state::SpecImplState {
+                                spec_id: spec_id.clone(),
+                                specs_root: specs_root.clone(),
+                                task_ids,
+                                current_rank: 1,
+                                total,
+                                runner: runner.clone(),
+                            });
+
+                            // Dispatch the first task's prompt.
+                            if let Some(prompt) = runner.task_prompt(1) {
+                                self.dispatch_spec_impl_task(prompt, &spec_id, 1, total);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.append_assistant_text(&format!(
+                            "From: /spec impl\n\n**Error:** {}",
+                            e
+                        ));
+                        self.status = format!("spec: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                self.append_assistant_text(&format!("From: /spec impl\n\n**Error:** {}", e));
+                self.status = format!("spec: {}", e);
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/spec` `SpecCommand::Add` arm.
+    async fn spec_add(
+        &mut self,
+        spec_manager: &(impl Fn() -> SpecManager + Sync),
+        spec_id: String,
+        feature: String,
+    ) {
+        use codemason_specs::SpecCommand;
+
+        self.append_assistant_text(&SpecCommand::build_add_message(&spec_id, &feature));
+        self.push_log_no_agent(
+            crate::app::LogLevel::Info,
+            SpecCommand::build_add_log(&spec_id, &feature),
+        );
+
+        let mgr = spec_manager();
+        let rt = tokio::runtime::Handle::current();
+
+        // Load existing spec to get content and next IDs
+        let spec_id_owned = spec_id.clone();
+        let feature_owned = feature.clone();
+        let result: Result<(String, u32, u32, u32), String> =
+                            // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                            tokio::task::block_in_place(|| {
+                                rt.block_on(async {
+                                    use codemason_specs::id_scanner;
+                                    let sid = match codemason_specs::spec::SpecId::new(&spec_id_owned)
+                                    {
+                                        Some(id) => id,
+                                        None => {
+                                            return Err(format!(
+                                                "spec: invalid spec ID: {}",
+                                                spec_id_owned
+                                            ));
+                                        }
+                                    };
+                                    let spec = match mgr.read_spec(&sid).await {
+                                        Ok(s) => s,
+                                        Err(e) => {
+                                            return Err(format!(
+                                                "spec: failed to read {}: {}",
+                                                spec_id_owned, e
+                                            ));
+                                        }
+                                    };
+                                    if spec.status == codemason_specs::spec::SpecStatus::Archived {
+                                        return Err(format!(
+                                            "spec: '{}' is archived and cannot be modified",
+                                            spec_id_owned
+                                        ));
+                                    }
+                                    let next_fr = id_scanner::highest_fr(&spec.spec_md) + 1;
+                                    let next_nfr = id_scanner::highest_nfr(&spec.spec_md) + 1;
+                                    let next_task = id_scanner::highest_task(&spec.plan_md) + 1;
+                                    let prompt = SpecCommand::build_add_prompt(
+                                        &spec_id_owned,
+                                        &feature_owned,
+                                        &spec.spec_md,
+                                        &spec.plan_md,
+                                        next_fr,
+                                        next_nfr,
+                                        next_task,
+                                    );
+                                    Ok((prompt, next_fr, next_nfr, next_task))
+                                })
+                            });
+
+        match result {
+            Ok((prompt, _next_fr, _next_nfr, _next_task)) => {
+                let sid = self.session.session_id.clone().unwrap_or_default();
+                // Select general agent (not explore - add requires
+                // editing SPEC.md and PLAN.md, and explore's prompt
+                // says "Do NOT modify any files").
+                let agent = self.select_general_agent();
+
+                let msg = Message::user_text(&sid, &prompt);
+                self.session.messages.push(msg);
+
+                let processor = self.session_processor.clone();
+                let flag = Arc::new(AtomicBool::new(false));
+                self.session.cancel_flag = Some(flag.clone());
+                self.session.is_processing = true;
+                self.status = SpecCommand::build_add_status(&spec_id);
+
+                let event_bus = self.event_bus.clone();
+                let specs_root_phase2 = self.cwd_path.clone().join("specs");
+                let spec_id_phase2 = spec_id.clone();
+                tokio::spawn(async move {
+                    // Phase 1: incremental add - the LLM uses the
+                    // `read` and `Edit` tools directly to insert new
+                    // requirements into SPEC.md and new task rows
+                    // into PLAN.md. No post-processing needed.
+                    let phase1_result =
+                        processor.process_message(&sid, &prompt, &agent, flag).await;
+                    if let Err(e) = phase1_result {
+                        tracing::warn!(error = %e, "spec: add generation failed");
+                        event_bus.publish(codemason_agent::event::Event::AgentError {
+                            session_id: sid,
+                            error: format!("spec add generation failed: {e}"),
+                        });
+                        return;
+                    }
+
+                    // Phase 2: regenerate PLAN.md + TESTPLAN.md
+                    // (same as /spec update - re-read the updated
+                    // SPEC.md and fully regenerate both files)
+                    let sid2 = match codemason_specs::spec::SpecId::new(&spec_id_phase2) {
+                        Some(id) => id,
+                        None => {
+                            tracing::warn!(
+                                "spec: invalid spec ID after add phase: {}",
+                                spec_id_phase2
+                            );
+                            return;
+                        }
+                    };
+                    let mgr2 = SpecManager::new(&specs_root_phase2);
+                    let plan_md = match mgr2.read_spec(&sid2).await {
+                        Ok(spec) => spec.plan_md,
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "spec: failed to read spec after add phase"
+                            );
+                            return;
+                        }
+                    };
+
+                    let update_prompt = SpecCommand::build_update_prompt(&spec_id_phase2, &plan_md);
+                    let flag2 = Arc::new(AtomicBool::new(false));
+                    if let Err(e) = processor
+                        .process_message(&sid, &update_prompt, &agent, flag2)
+                        .await
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            "spec: update generation failed after add"
+                        );
+                        event_bus.publish(codemason_agent::event::Event::AgentError {
+                            session_id: sid,
+                            error: format!("spec update generation failed after add: {e}"),
+                        });
+                    }
+                });
+            }
+            Err(e) => {
+                self.status = format!("spec: {}", e);
+                self.append_assistant_text(&format!("From: /spec add\n\n**Error:** {}", e));
+            }
+        }
+    }
+
+    /// Run the `/spec` `SpecCommand::Update` arm.
+    ///
+    /// Returns `Break` where the arm returns early, so `slash_spec`
+    /// forwards it to the dispatcher exactly as before.
+    async fn spec_update(
+        &mut self,
+        spec_manager: &(impl Fn() -> SpecManager + Sync),
+        spec_id: String,
+    ) -> std::ops::ControlFlow<()> {
+        use codemason_specs::SpecCommand;
+
+        // FR-006: validate spec ID format
+        let sid = match codemason_specs::spec::SpecId::new(&spec_id) {
+            Some(id) => id,
+            None => {
+                self.status = format!("spec: invalid spec ID: {}", spec_id);
+                self.append_assistant_text(&format!(
+                    "From: /spec update\n\n**Error:** Invalid spec ID \
+                                     `{}`. Spec IDs must be alphanumeric with hyphens or \
+                                     underscores only.",
+                    spec_id
+                ));
+                return std::ops::ControlFlow::Break(());
+            }
+        };
+
+        let mgr = spec_manager();
+        let rt = tokio::runtime::Handle::current();
+
+        // FR-005/FR-010: read spec, guard archived, read PLAN.md
+        let spec_id_owned = spec_id.clone();
+        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+        let result: Result<String, String> = tokio::task::block_in_place(|| {
+            rt.block_on(async {
+                let spec = match mgr.read_spec(&sid).await {
+                    Ok(s) => s,
+                    Err(_e) => {
+                        // List available specs on not-found
+                        let available: Vec<String> = match mgr.discover_specs().await {
+                            Ok(specs) => specs
+                                .iter()
+                                .map(|s| format!("  - {} ({})", s.id, s.status.as_str()))
+                                .collect(),
+                            Err(_) => vec![],
+                        };
+                        let avail_str = if available.is_empty() {
+                            "  (none found)".to_string()
+                        } else {
+                            available.join("\n")
+                        };
+                        return Err(format!(
+                            "Spec `{}` not found.\n\nAvailable specs:\n{}",
+                            spec_id_owned, avail_str
+                        ));
+                    }
+                };
+                // FR-013: guard archived specs
+                if spec.status == codemason_specs::spec::SpecStatus::Archived {
+                    return Err(format!(
+                        "spec: '{}' is archived and cannot be updated",
+                        spec_id_owned
+                    ));
+                }
+                // FR-011: read existing PLAN.md for status preservation
+                Ok(spec.plan_md)
+            })
+        });
+
+        let plan_md = match result {
+            Ok(p) => p,
+            Err(e) => {
+                self.status = format!("spec: {}", e);
+                self.append_assistant_text(&format!("From: /spec update\n\n**Error:** {}", e));
+                return std::ops::ControlFlow::Break(());
+            }
+        };
+
+        // FR-009: status, message, and log
+        self.append_assistant_text(&SpecCommand::build_update_message(&spec_id));
+        self.push_log_no_agent(
+            crate::app::LogLevel::Info,
+            SpecCommand::build_update_log(&spec_id),
+        );
+
+        // Select general agent (not explore - update requires
+        // writing files, and explore's prompt says "Do NOT
+        // modify any files").
+        let agent = self.select_general_agent();
+
+        // FR-008/FR-011: build prompt with plan_md for status preservation
+        let prompt = SpecCommand::build_update_prompt(&spec_id, &plan_md);
+        let sid = self.session.session_id.clone().unwrap_or_default();
+        let msg = Message::user_text(&sid, &prompt);
+        self.session.messages.push(msg);
+
+        let processor = self.session_processor.clone();
+        let flag = Arc::new(AtomicBool::new(false));
+        self.session.cancel_flag = Some(flag.clone());
+        self.session.is_processing = true;
+        self.status = SpecCommand::build_update_status(&spec_id);
+
+        let event_bus = self.event_bus.clone();
+        tokio::spawn(async move {
+            if let Err(e) = processor.process_message(&sid, &prompt, &agent, flag).await {
+                tracing::warn!(error = %e, "spec: update generation failed");
+                event_bus.publish(codemason_agent::event::Event::AgentError {
+                    session_id: sid,
+                    error: format!("spec update generation failed: {e}"),
+                });
+            }
+        });
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/spec` `SpecCommand::Specify` arm.
+    async fn spec_specify(
+        &mut self,
+        specname: String,
+        feature: String,
+        from_research: Option<String>,
+    ) {
+        use codemason_specs::SpecCommand;
+
+        let sid = self.session.session_id.clone().unwrap_or_default();
+        self.append_assistant_text(&SpecCommand::build_specify_message(&specname));
+        self.push_log_no_agent(
+            LogLevel::Info,
+            SpecCommand::build_specify_log(&specname, &feature),
+        );
+
+        // FR-009: optionally create a git branch for the spec.
+        let sdd_cfg = codemason_agent::Config::load_for(&self.cwd_path)
+            .unwrap_or_default()
+            .sdd;
+        if sdd_cfg.branch_per_spec {
+            let working_dir = self.cwd_path.clone();
+            let branch_result = codemason_specs::create_spec_branch(&specname, &working_dir);
+            self.append_assistant_text(&SpecCommand::build_branch_message(&branch_result));
+            self.push_log_no_agent(
+                LogLevel::Info,
+                SpecCommand::build_branch_log(&specname, &branch_result),
+            );
+        }
+
+        let agent = self.select_general_agent();
+
+        let task = SpecCommand::build_specify_prompt(&specname, &feature, from_research.as_deref());
+        let msg = Message::user_text(&sid, &task);
+        self.session.messages.push(msg);
+
+        let processor = self.session_processor.clone();
+        let flag = Arc::new(AtomicBool::new(false));
+        self.session.cancel_flag = Some(flag.clone());
+        self.session.is_processing = true;
+        self.status = SpecCommand::build_specify_status(&specname);
+
+        let event_bus = self.event_bus.clone();
+        tokio::spawn(async move {
+            if let Err(e) = processor.process_message(&sid, &task, &agent, flag).await {
+                tracing::warn!(error = %e, "spec: specify generation failed");
+                event_bus.publish(codemason_agent::event::Event::AgentError {
+                    session_id: sid,
+                    error: format!("spec specify generation failed: {e}"),
+                });
+            }
+        });
+    }
+
+    /// Run the `/spec` `SpecCommand::Plan` arm.
+    ///
+    /// Returns `Break` where the arm returns early, so `slash_spec`
+    /// forwards it to the dispatcher exactly as before.
+    async fn spec_plan(
+        &mut self,
+        spec_manager: &(impl Fn() -> SpecManager + Sync),
+        spec_id: String,
+        tech_context: String,
+    ) -> std::ops::ControlFlow<()> {
+        use codemason_specs::SpecCommand;
+
+        // FR-006: validate spec ID format
+        let sid = match codemason_specs::spec::SpecId::new(&spec_id) {
+            Some(id) => id,
+            None => {
+                self.status = format!("spec: invalid spec ID: {}", spec_id);
+                self.append_assistant_text(&format!(
+                    "From: /spec plan\n\n**Error:** Invalid spec ID \
+                                     `{}`. Spec IDs must be alphanumeric with hyphens or \
+                                     underscores only.",
+                    spec_id
+                ));
+                return std::ops::ControlFlow::Break(());
+            }
+        };
+
+        let mgr = spec_manager();
+        let rt = tokio::runtime::Handle::current();
+
+        // Read SPEC.md (and existing PLAN.md for status preservation)
+        let spec_id_owned = spec_id.clone();
+        let result: Result<(String, String, String), String> =
+                            // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                            tokio::task::block_in_place(|| {
+                                rt.block_on(async {
+                                    let spec = match mgr.read_spec(&sid).await {
+                                        Ok(s) => s,
+                                        Err(_e) => {
+                                            let available: Vec<String> =
+                                                match mgr.discover_specs().await {
+                                                    Ok(specs) => specs
+                                                        .iter()
+                                                        .map(|s| {
+                                format!(
+                                "  - {} ({})",
+                                s.id,
+                                s.status.as_str()
+                                )
+                                                        })
+                                                        .collect(),
+                                                    Err(_) => vec![],
+                                                };
+                                            let avail_str = if available.is_empty() {
+                                                "  (none found)".to_string()
+                                            } else {
+                                                available.join("\n")
+                                            };
+                                            return Err(format!(
+                                                "Spec `{}` not found.\n\nAvailable specs:\n{}",
+                                                spec_id_owned, avail_str
+                                            ));
+                                        }
+                                    };
+                                    if spec.status == codemason_specs::spec::SpecStatus::Archived {
+                                        return Err(format!(
+                                            "spec: '{}' is archived and cannot be updated",
+                                            spec_id_owned
+                                        ));
+                                    }
+                                    Ok((spec.spec_md, spec.plan_md, spec.feedback_md.clone()))
+                                })
+                            });
+
+        let (spec_md, plan_md, feedback_md) = match result {
+            Ok(v) => v,
+            Err(e) => {
+                self.status = format!("spec: {}", e);
+                self.append_assistant_text(&format!("From: /spec plan\n\n**Error:** {}", e));
+                return std::ops::ControlFlow::Break(());
+            }
+        };
+
+        // FR-011/FR-012/FR-017: check whether data-model,
+        // contracts, and feedback surfacing are enabled
+        let sdd_cfg = codemason_agent::Config::load_for(&self.cwd_path)
+            .unwrap_or_default()
+            .sdd;
+        let data_model_enabled = sdd_cfg.data_model;
+        let contracts_enabled = sdd_cfg.contracts;
+        let feedback_enabled = sdd_cfg.feedback_loop;
+        // FR-017: load FEEDBACK.md content when feedback loop is
+        // enabled, so it can be surfaced during plan regeneration
+        let feedback_md = if feedback_enabled {
+            feedback_md.as_str()
+        } else {
+            ""
+        };
+
+        self.append_assistant_text(&SpecCommand::build_plan_message(
+            &spec_id,
+            &tech_context,
+            data_model_enabled,
+            contracts_enabled,
+            feedback_enabled,
+        ));
+        self.push_log_no_agent(
+            crate::app::LogLevel::Info,
+            SpecCommand::build_plan_log(&spec_id, &tech_context),
+        );
+
+        let agent = self.select_general_agent();
+
+        let prompt = SpecCommand::build_plan_prompt(
+            &spec_id,
+            &tech_context,
+            &spec_md,
+            &plan_md,
+            data_model_enabled,
+            contracts_enabled,
+            feedback_md,
+        );
+        let sid_msg = self.session.session_id.clone().unwrap_or_default();
+        let msg = Message::user_text(&sid_msg, &prompt);
+        self.session.messages.push(msg);
+
+        let processor = self.session_processor.clone();
+        let flag = Arc::new(AtomicBool::new(false));
+        self.session.cancel_flag = Some(flag.clone());
+        self.session.is_processing = true;
+        self.status = SpecCommand::build_plan_status(&spec_id);
+
+        let event_bus = self.event_bus.clone();
+        tokio::spawn(async move {
+            if let Err(e) = processor
+                .process_message(&sid_msg, &prompt, &agent, flag)
+                .await
+            {
+                tracing::warn!(error = %e, "spec: plan generation failed");
+                event_bus.publish(codemason_agent::event::Event::AgentError {
+                    session_id: sid_msg,
+                    error: format!("spec plan generation failed: {e}"),
+                });
+            }
+        });
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/spec` `SpecCommand::Tasks` arm.
+    ///
+    /// Returns `Break` where the arm returns early, so `slash_spec`
+    /// forwards it to the dispatcher exactly as before.
+    async fn spec_tasks(
+        &mut self,
+        spec_manager: &(impl Fn() -> SpecManager + Sync),
+        spec_id: String,
+    ) -> std::ops::ControlFlow<()> {
+        use codemason_specs::SpecCommand;
+
+        let working_dir = self.cwd_path.clone();
+        let specs_root = working_dir.join("specs");
+
+        // FR-006: validate spec ID format
+        let sid = match codemason_specs::spec::SpecId::new(&spec_id) {
+            Some(id) => id,
+            None => {
+                self.status = format!("spec: invalid spec ID: {}", spec_id);
+                self.append_assistant_text(&format!(
+                    "From: /spec tasks\n\n**Error:** Invalid \
+                                     spec ID `{}`. Spec IDs must be \
+                                     alphanumeric with hyphens or \
+                                     underscores only.",
+                    spec_id
+                ));
+                return std::ops::ControlFlow::Break(());
+            }
+        };
+
+        let mgr = spec_manager();
+        let rt = tokio::runtime::Handle::current();
+
+        // Read spec to get plan_md and title
+        let spec_id_owned = spec_id.clone();
+        let result: Result<
+            (String, String, String, codemason_specs::spec::SpecStatus),
+            String,
+            // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+        > = tokio::task::block_in_place(|| {
+            rt.block_on(async {
+                let spec = match mgr.read_spec(&sid).await {
+                    Ok(s) => s,
+                    Err(_e) => {
+                        let available: Vec<String> = match mgr.discover_specs().await {
+                            Ok(specs) => specs
+                                .iter()
+                                .map(|s| format!("  - {} ({})", s.id, s.status.as_str()))
+                                .collect(),
+                            Err(_) => vec![],
+                        };
+                        let avail_str = if available.is_empty() {
+                            "  (none found)".to_string()
+                        } else {
+                            available.join("\n")
+                        };
+                        return Err(format!(
+                            "Spec `{}` not found.\n\nAvailable specs:\n{}",
+                            spec_id_owned, avail_str
+                        ));
+                    }
+                };
+                if spec.status == codemason_specs::spec::SpecStatus::Archived {
+                    return Err(format!(
+                        "spec: '{}' is archived and cannot be updated",
+                        spec_id_owned
+                    ));
+                }
+                Ok((spec.spec_md, spec.plan_md, spec.title, spec.status))
+            })
+        });
+
+        let (spec_md, plan_md, title, _status) = match result {
+            Ok(v) => v,
+            Err(e) => {
+                self.status = format!("spec: {}", e);
+                self.append_assistant_text(&format!("From: /spec tasks\n\n**Error:** {}", e));
+                return std::ops::ControlFlow::Break(());
+            }
+        };
+
+        // Check PLAN.md is not empty
+        if plan_md.trim().is_empty() {
+            self.status = format!("spec: PLAN.md is empty for {}", spec_id);
+            self.append_assistant_text(&SpecCommand::build_tasks_no_plan_error(&spec_id));
+            return std::ops::ControlFlow::Break(());
+        }
+
+        // Generate TASKS.md content from the task table. A
+        // malformed table is reported as a parse error rather
+        // than silently treated as "no tasks" (FUNC-024).
+        let tasks_md = match SpecCommand::build_tasks_md(&spec_id, &title, &plan_md) {
+            Ok(Some(md)) => md,
+            Ok(None) => {
+                self.status = format!("spec: no tasks found in PLAN.md for {}", spec_id);
+                self.append_assistant_text(&SpecCommand::build_tasks_no_tasks_error(&spec_id));
+                return std::ops::ControlFlow::Break(());
+            }
+            Err(e) => {
+                self.status = format!("spec: PLAN.md parse error for {}", spec_id);
+                self.append_assistant_text(&format!(
+                    "From: /spec tasks\n\n**Error:** failed to parse \
+                                     `specs/{spec_id}/PLAN.md`: {e}"
+                ));
+                return std::ops::ControlFlow::Break(());
+            }
+        };
+
+        // Write TASKS.md atomically
+        let tasks_path = specs_root.join(&spec_id).join("TASKS.md");
+        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+        let write_result = tokio::task::block_in_place(|| {
+            rt.block_on(async {
+                codemason_specs::io::SpecIo::atomic_write(&tasks_path, &tasks_md).await
+            })
+        });
+
+        match write_result {
+            Ok(()) => {
+                // Count tasks for the completion message
+                let task_count = codemason_specs::PlanParser::parse(&plan_md)
+                    .map(|t| t.len())
+                    .unwrap_or(0);
+
+                // FR-013, T-023: also generate quickstart.md
+                // with key validation scenarios from SPEC.md
+                let quickstart_path = specs_root.join(&spec_id).join("quickstart.md");
+                let quickstart_md = SpecCommand::build_quickstart_md(&spec_id, &title, &spec_md);
+                let quickstart_written = match &quickstart_md {
+                    Some(qs_md) => {
+                        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                        let qs_result = tokio::task::block_in_place(|| {
+                            rt.block_on(async {
+                                codemason_specs::io::SpecIo::atomic_write(&quickstart_path, qs_md)
+                                    .await
+                            })
+                        });
+                        qs_result.is_ok()
+                    }
+                    None => false,
+                };
+
+                self.append_assistant_text(&SpecCommand::build_tasks_completion_message(
+                    &spec_id, task_count,
+                ));
+                self.push_log_no_agent(
+                    crate::app::LogLevel::Info,
+                    SpecCommand::build_tasks_log(&spec_id),
+                );
+                if quickstart_written {
+                    self.status = format!(
+                        "spec: wrote specs/{}/TASKS.md ({} tasks) + \
+                                         quickstart.md",
+                        spec_id, task_count
+                    );
+                } else {
+                    self.status = format!(
+                        "spec: wrote specs/{}/TASKS.md ({} tasks)",
+                        spec_id, task_count
+                    );
+                }
+            }
+            Err(e) => {
+                self.status = format!("spec: failed to write TASKS.md: {}", e);
+                self.append_assistant_text(&format!(
+                    "From: /spec tasks\n\n**Error:** Failed \
+                                     to write `specs/{}/TASKS.md`: {}",
+                    spec_id, e
+                ));
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run the `/spec` `SpecCommand::Feedback` arm.
+    ///
+    /// Returns `Break` where the arm returns early, so `slash_spec`
+    /// forwards it to the dispatcher exactly as before.
+    async fn spec_feedback(
+        &mut self,
+        spec_manager: &(impl Fn() -> SpecManager + Sync),
+        spec_id: String,
+        note: String,
+    ) -> std::ops::ControlFlow<()> {
+        use codemason_specs::SpecCommand;
+
+        let working_dir = self.cwd_path.clone();
+        let specs_root = working_dir.join("specs");
+
+        // Validate spec ID format
+        let sid = match codemason_specs::spec::SpecId::new(&spec_id) {
+            Some(id) => id,
+            None => {
+                self.status = format!("spec: invalid spec ID: {}", spec_id);
+                self.append_assistant_text(&format!(
+                    "From: /spec feedback\n\n**Error:** Invalid spec ID \
+                                     `{}`. Spec IDs must be alphanumeric with hyphens or \
+                                     underscores only.",
+                    spec_id
+                ));
+                return std::ops::ControlFlow::Break(());
+            }
+        };
+
+        let mgr = spec_manager();
+        let rt = tokio::runtime::Handle::current();
+
+        // Read spec to validate it exists and get title + existing FEEDBACK.md
+        let spec_id_owned = spec_id.clone();
+        let note_owned = note.clone();
+        let result: Result<(String, String), String> =
+                            // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+                            tokio::task::block_in_place(|| {
+                                rt.block_on(async {
+                                    let spec = match mgr.read_spec(&sid).await {
+                                        Ok(s) => s,
+                                        Err(_e) => {
+                                            let available: Vec<String> =
+                                                match mgr.discover_specs().await {
+                                                    Ok(specs) => specs
+                                                        .iter()
+                                                        .map(|s| {
+                                format!(
+                                "  - {} ({})",
+                                s.id,
+                                s.status.as_str()
+                                )
+                                                        })
+                                                        .collect(),
+                                                    Err(_) => vec![],
+                                                };
+                                            let avail_str = if available.is_empty() {
+                                                "  (none found)".to_string()
+                                            } else {
+                                                available.join("\n")
+                                            };
+                                            return Err(format!(
+                                                "Spec `{}` not found.\n\nAvailable specs:\n{}",
+                                                spec_id_owned, avail_str
+                                            ));
+                                        }
+                                    };
+                                    Ok((spec.title.clone(), spec.feedback_md.clone()))
+                                })
+                            });
+
+        let (title, existing_feedback) = match result {
+            Ok(v) => v,
+            Err(e) => {
+                self.status = format!("spec: {}", e);
+                self.append_assistant_text(&format!("From: /spec feedback\n\n**Error:** {}", e));
+                return std::ops::ControlFlow::Break(());
+            }
+        };
+
+        // Build the updated FEEDBACK.md content
+        let updated_feedback =
+            SpecCommand::append_feedback_note(&existing_feedback, &title, &note_owned);
+
+        // Write FEEDBACK.md to disk
+        let feedback_path = specs_root.join(sid.dir_name()).join("FEEDBACK.md");
+        // reason: FUNC-015 nested-runtime bridge; converting to async is tracked in ANTIPAT M6.1
+        let write_result: Result<(), String> = tokio::task::block_in_place(|| {
+            rt.block_on(async {
+                codemason_specs::io::SpecIo::atomic_write(&feedback_path, &updated_feedback)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+        });
+
+        match write_result {
+            Ok(()) => {
+                self.append_assistant_text(&SpecCommand::build_feedback_message(
+                    &spec_id,
+                    &note_owned,
+                ));
+                self.push_log_no_agent(
+                    crate::app::LogLevel::Info,
+                    SpecCommand::build_feedback_log(&spec_id, &note_owned),
+                );
+                self.status = SpecCommand::build_feedback_status(&spec_id);
+            }
+            Err(e) => {
+                self.status = format!("spec: failed to write FEEDBACK.md: {}", e);
+                self.append_assistant_text(&format!(
+                    "From: /spec feedback\n\n**Error:** Failed to \
+                                     write `specs/{}/FEEDBACK.md`: {}",
+                    spec_id, e
+                ));
             }
         }
         std::ops::ControlFlow::Continue(())
@@ -15426,4 +15637,9 @@ fn handle_skill_command(app: &mut App, args: &str) {
         ));
         app.push_log_no_agent(LogLevel::Warn, format!("skill not found: {name}"));
     }
+}
+
+/// Parse a spec ID from a command argument.
+fn parse_spec_id(spec_id: &str) -> Option<codemason_specs::spec::SpecId> {
+    codemason_specs::spec::SpecId::new(spec_id)
 }

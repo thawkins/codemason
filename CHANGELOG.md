@@ -59,6 +59,8 @@
 
 ### Changed
 
+- Changed: `slash_spec` in `crates/codemason-app-core/src/app/slash.rs` is decomposed in place (1,883 to 273 lines): 17 `SpecCommand` arms of 30+ lines move verbatim into `spec_<variant>` methods in the same `impl App`, taking the arm's bindings as owned parameters and the `spec_manager` closure by reference, so the specs root is still built in one place. Arms that returned early keep their `ControlFlow::Break` returns and `slash_spec` forwards them; the nested `parse_spec_id` helper moves to module level. Every string literal and pattern is unchanged (#9, car 11b).
+
 - Changed: the status bar is one row. It shows the turn state, model, thinking level, agent and context-window use, plus the states that need attention while they apply (quota from 80%, a non-default backend, `AUTO [ok]` with its countdown, `YOLO`, code-index busy tags, the "N need you" badge). The version, project, branch, last prompt, backend, quota and every service tag (`GCF`, `CDX`, `LOG`, `AUTO`, `EDIT`, `TELE`, `YOLO`) moved to a `Details` popup opened from the bar.
 - Changed: a new session's transcript starts empty. The session id, the config files in use and the instruction-file discovery report are written to the Log pane instead.
 - Changed: the prompt editor has no "Prompt" label, grows with its text, and scrolls once the text is taller than eight rows.
