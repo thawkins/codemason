@@ -453,6 +453,28 @@ impl MessagesView {
         self.pending_insert.take()
     }
 
+    /// Carry out what the view's blocks asked for this frame: Insert puts
+    /// the code at the end of the prompt, on a line of its own, and focuses
+    /// it; a thumbnail click opens the image view. Every caller of
+    /// [`Self::show_messages`] calls this after it, with the App it may now
+    /// change.
+    pub fn apply_actions(&mut self, ctx: &egui::Context, app: &mut App) {
+        if let Some(code) = self.take_insert() {
+            let input = &mut app.session.input;
+            if !input.is_empty() && !input.ends_with('\n') {
+                input.push('\n');
+            }
+            input.push_str(&code);
+            let end = app.session.input.chars().count();
+            // Moves the cursor to the end and refreshes the completion menus.
+            app.input_edited(end);
+            ctx.memory_mut(|m| m.request_focus(crate::panels::prompt::prompt_id()));
+        }
+        if let Some(path) = self.take_enlarge() {
+            crate::dialogs::image_view::open(ctx, path);
+        }
+    }
+
     /// The image a thumbnail click asked to show at full size since the last
     /// call, if any.
     pub fn take_enlarge(&mut self) -> Option<std::path::PathBuf> {

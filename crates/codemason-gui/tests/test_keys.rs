@@ -1051,3 +1051,34 @@ fn test_keys_prompt_forwards_only_the_shown_windows_own_keys() {
     assert!(!is_prompt_app_key(plain(Key::Up), focus(None)));
     assert!(!is_prompt_app_key(plain(Key::Char(' ')), focus(None)));
 }
+
+#[test]
+fn test_route_transcript_selection_keeps_ctrl_c_from_the_app() {
+    let ctrl_c = || {
+        input_mods(
+            vec![egui::Event::Copy],
+            egui::Modifiers::CTRL | egui::Modifiers::COMMAND,
+        )
+    };
+    let mut router = KeyRouter::new(default_keymap(Platform::Linux));
+    router.set_label_selection(true);
+    assert_eq!(
+        router.route(&mut ctrl_c(), Focus::Elsewhere),
+        Vec::new(),
+        "Ctrl+C copies the transcript selection and does not arm quit"
+    );
+    assert_eq!(
+        router.route(&mut ctrl_c(), TYPING),
+        Vec::new(),
+        "the same with the prompt focused"
+    );
+    router.set_label_selection(false);
+    assert_eq!(
+        router.route(&mut ctrl_c(), Focus::Elsewhere),
+        vec![KeyInput {
+            key: Key::Char('c'),
+            mods: Modifiers::CTRL,
+        }],
+        "without any selection Ctrl+C reaches the App"
+    );
+}

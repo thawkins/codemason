@@ -17,7 +17,7 @@ use codemason_app_core::theme_tokens::{ThemeCatalog, ThemeSelection};
 use codemason_gui::Shell;
 use codemason_gui::dialogs::image_view::{CLOSE_IMAGE, IMAGE_VIEW_TITLE};
 use codemason_gui::palette::{Palette, palette_for};
-use codemason_gui::panels::code_block::{COPY, INSERT, NO_LANGUAGE, WRAP, code_job};
+use codemason_gui::panels::code_block::{COPY, INSERT, NO_LANGUAGE, WRAP, code_block_ui, code_job};
 use codemason_gui::panels::messages::{MESSAGES_LABEL, MessagesView, USER_CHIP};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -598,4 +598,66 @@ async fn test_streaming_reply_ends_with_a_caret() {
         streaming > settled,
         "{streaming} <= {settled}: no caret row"
     );
+}
+
+#[test]
+fn test_code_block_layout_is_reused_until_the_code_or_theme_changes() {
+    let themes = ThemeCatalog::builtin();
+    let dark = Palette::from_tokens(&themes.resolve(&ThemeSelection::System, true));
+    let light = Palette::from_tokens(&themes.resolve(&ThemeSelection::System, false));
+    let id = egui::Id::new("code-cache-test");
+    let slot = id.with("job");
+    let mut harness = Harness::new_ui_state(
+        |ui, (code, palette): &mut (String, Palette)| {
+            let _ = code_block_ui(ui, id, Some("rust"), code, palette);
+        },
+        ("fn a() {}".to_string(), dark),
+    );
+    let cached = |harness: &Harness<'_, (String, Palette)>| {
+        harness
+            .ctx
+            .data(|d| d.get_temp::<(u64, std::sync::Arc<egui::text::LayoutJob>)>(slot))
+            .expect("cached layout")
+    };
+    harness.run();
+    let (key, first) = cached(&harness);
+    harness.run();
+    let (same_key, again) = cached(&harness);
+    assert_eq!(key, same_key);
+    assert!(
+        std::sync::Arc::ptr_eq(&first, &again),
+        "the layout is reused"
+    );
+    harness.state_mut().0 = "fn b() {}".to_string();
+    harness.run();
+    let (code_key, _) = cached(&harness);
+    assert_ne!(key, code_key, "changed code is laid out again");
+    harness.state_mut().1 = light;
+    harness.run();
+    let (theme_key, _) = cached(&harness);
+    assert_ne!(code_key, theme_key, "a theme change is laid out again");
+}
+
+#[tokio::test]
+async fn test_output_view_code_block_insert_reaches_the_prompt() {
+    let mut view = MessagesView::default();
+    let mut app = support::make_app();
+    app.session.messages = vec![Message::assistant_text("s1", "```\nmake\n```")];
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(800.0, 600.0))
+        .build_ui_state(
+            |ui, state: &mut State| {
+                let palette = palette_for(&state.app, ui.ctx());
+                state.view.show(ui, &state.app, &palette);
+                state.view.apply_actions(ui.ctx(), &mut state.app);
+            },
+            State {
+                app,
+                view: std::mem::take(&mut view),
+            },
+        );
+    harness.run();
+    harness.get_by_label(INSERT).click();
+    harness.run();
+    assert_eq!(harness.state().app.session.input, "make");
 }

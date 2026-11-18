@@ -111,7 +111,7 @@ pub struct Palette {
 }
 
 /// The theme's `syntax.*` colours.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SyntaxColors {
     /// `syntax.keyword`.
     pub keyword: Color32,

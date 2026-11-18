@@ -187,3 +187,33 @@ fn test_message_blocks_assistant_code_blocks_become_code_blocks() {
         [TranscriptBlock::Plain("```\nx\n```".to_string())]
     );
 }
+
+#[test]
+fn test_message_blocks_reference_links_resolve_across_code_blocks() {
+    use codemason_app_core::message_blocks::split_code_blocks;
+
+    let md =
+        "See [the docs][d].\n\n```\ncode\n```\n\nAlso [d].\n\n[d]: https://example.com \"Docs\"\n";
+    let blocks = split_code_blocks(md);
+    let [
+        TranscriptBlock::Markdown(before),
+        TranscriptBlock::Code { .. },
+        TranscriptBlock::Markdown(after),
+    ] = blocks.as_slice()
+    else {
+        panic!("markdown, code, markdown expected: {blocks:?}");
+    };
+    // The fragment before the code carries the definition from after it.
+    assert!(before.starts_with("See [the docs][d]."), "{before:?}");
+    assert!(
+        before.contains("[d]: https://example.com \"Docs\""),
+        "{before:?}"
+    );
+    assert!(after.contains("[d]: https://example.com"), "{after:?}");
+    // Without a code block the Markdown is left as written.
+    let plain = "[a][x]\n\n[x]: https://x.test";
+    assert_eq!(
+        split_code_blocks(plain),
+        [TranscriptBlock::Markdown(plain.to_string())]
+    );
+}

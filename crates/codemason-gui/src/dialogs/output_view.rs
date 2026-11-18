@@ -158,6 +158,8 @@ fn show_with(ctx: &egui::Context, app: &mut App, state: &mut OutputView) -> bool
         view.scroll_offset = from_bottom.min(max_lines);
         state.last_offset = Some(view.scroll_offset);
     }
+    // A code block's Insert or an image thumbnail clicked in the overlay.
+    state.view.apply_actions(ctx, app);
     true
 }
 
