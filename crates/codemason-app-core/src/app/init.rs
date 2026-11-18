@@ -239,6 +239,7 @@ impl App {
             tip: tips::random_tip(),
             cwd,
             plugin_commands: crate::app::state::plugin_commands_for_surface(&cwd_path),
+            user_commands: crate::app::state::user_commands_for_surface(&cwd_path),
             cwd_path: cwd_path.clone(),
             git_branch,
             provider_setup: None,

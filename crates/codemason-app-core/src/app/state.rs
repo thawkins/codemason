@@ -779,15 +779,9 @@ pub enum ProviderSource {
     AutoDiscovered,
 }
 
-/// Resolve the plugin-contributed slash commands for the current session
-/// (spec `plugins` FR-031). The built-in `SLASH_COMMANDS` triggers and any
-/// user-invocable skill names are passed as the collision surface so a plugin
-/// command registers under its bare name only when free, otherwise under the
-/// namespaced `plugin:<id>:<name>` trigger (or is dropped if both are taken).
-#[must_use]
-pub fn plugin_commands_for_surface(
-    working_dir: &std::path::Path,
-) -> Vec<codemason_agent::plugin::PluginCommand> {
+/// The triggers taken by built-in commands and user-invocable skills: the
+/// collision surface for user-defined and plugin-contributed commands.
+fn builtin_and_skill_triggers(working_dir: &std::path::Path) -> BTreeSet<String> {
     let mut existing: BTreeSet<String> = SLASH_COMMANDS
         .iter()
         .map(|c| c.trigger.to_string())
@@ -802,7 +796,43 @@ pub fn plugin_commands_for_surface(
             .into_iter()
             .map(|s| s.name.clone()),
     );
+    existing
+}
+
+/// Resolve the plugin-contributed slash commands for the current session
+/// (spec `plugins` FR-031). The built-in `SLASH_COMMANDS` triggers and any
+/// user-invocable skill names are passed as the collision surface so a plugin
+/// command registers under its bare name only when free, otherwise under the
+/// namespaced `plugin:<id>:<name>` trigger (or is dropped if both are taken).
+#[must_use]
+pub fn plugin_commands_for_surface(
+    working_dir: &std::path::Path,
+) -> Vec<codemason_agent::plugin::PluginCommand> {
+    let mut existing = builtin_and_skill_triggers(working_dir);
+    existing.extend(
+        codemason_agent::user_command::load_user_commands(working_dir, &existing)
+            .0
+            .into_iter()
+            .map(|c| c.name),
+    );
     codemason_agent::plugin::plugin_commands(working_dir, &existing)
+}
+
+/// Resolve the user-defined slash commands (`commands/*.md`) for the current
+/// session. A file whose name is already a built-in command or a
+/// user-invocable skill is skipped and logged at `warn!`.
+#[must_use]
+pub fn user_commands_for_surface(
+    working_dir: &std::path::Path,
+) -> Vec<codemason_agent::user_command::UserCommand> {
+    let (commands, diagnostics) = codemason_agent::user_command::load_user_commands(
+        working_dir,
+        &builtin_and_skill_triggers(working_dir),
+    );
+    for diagnostic in diagnostics {
+        tracing::warn!(%diagnostic, "skipped user command file");
+    }
+    commands
 }
 
 /// A registered slash command.
@@ -3200,6 +3230,9 @@ pub struct App {
     /// startup. Prompt commands carry their body; inline commands (`prompt: None`)
     /// require the live plugin sandbox and are listed but not dispatchable here.
     pub plugin_commands: Vec<codemason_agent::plugin::PluginCommand>,
+    /// Slash commands defined by `commands/*.md` files in the user-global
+    /// config directory and the project's `.codemason/` directory.
+    pub user_commands: Vec<codemason_agent::user_command::UserCommand>,
     /// File reference autocomplete menu, shown when `@` is typed.
     pub file_menu: Option<FileMenuState>,
     /// Optional spec manager for reading and updating specifications.

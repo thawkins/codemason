@@ -94,6 +94,7 @@ impl App {
             self.cwd_path.join("specs"),
         )));
         self.plugin_commands = crate::app::state::plugin_commands_for_surface(&self.cwd_path);
+        self.user_commands = crate::app::state::user_commands_for_surface(&self.cwd_path);
         for diagnostic in self.reload_custom_agents() {
             self.push_log_no_agent(LogLevel::Warn, format!("[agents] {diagnostic}"));
         }

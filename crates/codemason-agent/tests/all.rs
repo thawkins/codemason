@@ -477,6 +477,8 @@ mod test_rollback_capture;
 
 #[path = "test_run_cost.rs"]
 mod test_run_cost;
+#[path = "test_user_command.rs"]
+mod test_user_command;
 
 #[path = "test_run_cost_summary.rs"]
 mod test_run_cost_summary;

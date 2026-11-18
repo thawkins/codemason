@@ -66,6 +66,17 @@ struct PluginCommandInfo {
     is_prompt_command: bool,
 }
 
+/// One user-defined slash command in the `commands_info` report.
+#[derive(Debug, Clone, Serialize)]
+struct UserCommandInfo {
+    /// The slash trigger (the command file's stem).
+    trigger: String,
+    /// Human-readable description.
+    description: String,
+    /// The Markdown file that defines the command.
+    path: String,
+}
+
 /// JSON envelope returned by [`CommandsInfoTool`].
 #[derive(Debug, Clone, Serialize)]
 struct CommandsInfoReport {
@@ -73,7 +84,9 @@ struct CommandsInfoReport {
     builtin: Vec<super::command_catalog::CommandCatalogEntry>,
     /// Slash commands contributed by enabled plugins (live resolution).
     plugin_commands: Vec<PluginCommandInfo>,
-    /// Total number of slash commands (builtin + plugin).
+    /// Slash commands defined by `commands/*.md` files (live resolution).
+    user_commands: Vec<UserCommandInfo>,
+    /// Total number of slash commands (builtin + plugin + user).
     total: usize,
 }
 
@@ -190,10 +203,21 @@ impl Tool for CommandsInfoTool {
     }
 
     async fn execute(&self, _input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
-        let existing: std::collections::BTreeSet<String> = COMMAND_CATALOG
+        let mut existing: std::collections::BTreeSet<String> = COMMAND_CATALOG
             .iter()
             .map(|c| c.trigger.to_string())
             .collect();
+        let user_commands: Vec<UserCommandInfo> =
+            crate::user_command::load_user_commands(&ctx.working_dir, &existing)
+                .0
+                .into_iter()
+                .map(|cmd| UserCommandInfo {
+                    trigger: cmd.name,
+                    description: cmd.description,
+                    path: cmd.path.display().to_string(),
+                })
+                .collect();
+        existing.extend(user_commands.iter().map(|c| c.trigger.clone()));
         let plugin_commands: Vec<PluginCommandInfo> =
             crate::plugin::plugin_commands(&ctx.working_dir, &existing)
                 .into_iter()
@@ -207,8 +231,9 @@ impl Tool for CommandsInfoTool {
                 .collect();
         let report = CommandsInfoReport {
             builtin: COMMAND_CATALOG.to_vec(),
-            total: COMMAND_CATALOG.len() + plugin_commands.len(),
+            total: COMMAND_CATALOG.len() + plugin_commands.len() + user_commands.len(),
             plugin_commands,
+            user_commands,
         };
         let value = serde_json::to_value(&report)?;
         Ok(ToolOutput {

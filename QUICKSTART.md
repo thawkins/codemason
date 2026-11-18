@@ -960,6 +960,28 @@ installed catalog enables translation automatically. A catalog is JSON:
 
 ---
 
+## 6c. Your Own Slash Commands
+
+Put a Markdown file in `.codemason/commands/` (this project) or
+`~/.config/codemason/commands/` (every project). The file name is the command.
+
+```markdown
+---
+description: Review one file for bugs
+---
+Review $1 for correctness bugs. Extra instructions: $ARGUMENTS
+```
+
+Saved as `.codemason/commands/review.md`, this adds `/review`:
+
+```
+/review src/main.rs "focus on error handling"
+```
+
+`$ARGUMENTS` is everything after the command; `$1`..`$9` are the individual
+arguments (quotes group words). A file cannot replace a built-in command or a
+skill. Restart codemason, or switch project, to pick up a new file.
+
 ## 7. Skills
 
 Skills are reusable task packages that enhance the agent's capabilities. They support both user-initiated invocation (slash commands) and agent auto-invocation (via LLM reasoning).

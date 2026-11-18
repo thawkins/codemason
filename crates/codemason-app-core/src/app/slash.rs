@@ -1319,6 +1319,30 @@ impl App {
                 }
             }
 
+            // Collect user-defined command matches (`commands/*.md`).
+            for user_cmd in &self.user_commands {
+                let desc = if user_cmd.description.is_empty() {
+                    "user command".to_string()
+                } else {
+                    format!("{} (user command)", user_cmd.description)
+                };
+                if matches.iter().any(|m| m.trigger == user_cmd.name) {
+                    continue;
+                }
+                if needle.is_empty()
+                    || user_cmd.name.starts_with(&needle)
+                    || desc.to_lowercase().contains(&needle)
+                {
+                    matches.push(SlashMenuEntry {
+                        trigger: user_cmd.name.clone(),
+                        description: desc,
+                        is_skill: false,
+                        suggestions: Vec::new(),
+                        parameter_hint: None,
+                    });
+                }
+            }
+
             // Collect plugin-contributed command matches (spec `plugins` FR-031).
             for plugin_cmd in &self.plugin_commands {
                 let desc = if plugin_cmd.description.is_empty() {
@@ -4189,6 +4213,11 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
         // Plugin-contributed commands (spec `plugins` FR-031) resolve before the
         // built-in ladder: a prompt command's body is injected into the agent as
         // an ordinary user turn (so `/commit` behaves like a Claude Code command).
+        // User-defined commands (`commands/*.md`) resolve next to them, the same
+        // way: the rendered template is sent as an ordinary user turn.
+        if self.try_user_command(cmd, args) {
+            return;
+        }
         if self.try_plugin_command(cmd, args) {
             return;
         }
@@ -5394,6 +5423,16 @@ Be concise but comprehensive. This will be injected into future agent sessions a
                             "  /{:<18} {}\n",
                             format!("{}{}", skill.name, hint),
                             desc
+                        ));
+                    }
+                }
+                // Append user-defined commands (`commands/*.md`).
+                if !self.user_commands.is_empty() {
+                    help_lines.push_str("\nUser commands:\n");
+                    for user_cmd in &self.user_commands {
+                        help_lines.push_str(&format!(
+                            "  /{:<18} {}\n",
+                            user_cmd.name, user_cmd.description
                         ));
                     }
                 }
@@ -12964,6 +13003,44 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
         }
         self.session.team_task_counts_dirty = true;
         Ok(())
+    }
+
+    /// Invoke a user-defined slash command (`commands/*.md`).
+    ///
+    /// Returns `true` when `cmd` matched a loaded command: its template is
+    /// rendered with the typed arguments and sent to the agent as an ordinary
+    /// user turn. Returns `false` otherwise so the remaining ladder runs.
+    fn try_user_command(&mut self, cmd: &str, args: &str) -> bool {
+        let Some(user_cmd) = self.user_commands.iter().find(|c| c.name == cmd) else {
+            return false;
+        };
+        let rendered = codemason_agent::user_command::render_user_command(&user_cmd.prompt, args);
+        let display = if args.is_empty() {
+            format!("/{cmd}")
+        } else {
+            format!("/{cmd} {args}")
+        };
+
+        let sid = self.session.session_id.clone().unwrap_or_default();
+        self.session
+            .messages
+            .push(Message::user_text(&sid, &display));
+        self.add_to_history(display);
+        self.status = format!("user command /{cmd}");
+
+        let flag = Arc::new(AtomicBool::new(false));
+        self.session.cancel_flag = Some(flag.clone());
+        let processor = self.session_processor.clone();
+        let agent = Arc::new(self.session.agent_info.clone());
+        tokio::spawn(async move {
+            if let Err(e) = processor
+                .process_message(&sid, &rendered, &agent, flag)
+                .await
+            {
+                tracing::warn!(error = %e, "Failed to process user command prompt");
+            }
+        });
+        true
     }
 
     /// Invoke a plugin-contributed slash command (spec `plugins` FR-031).

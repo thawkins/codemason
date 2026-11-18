@@ -3579,6 +3579,42 @@ agent picker.
 
 ---
 
+## 11B. User-Defined Slash Commands
+
+A Markdown file `<name>.md` defines the slash command `/<name>`
+(`codemason-agent/src/user_command.rs`). Files are read from two directories,
+and a project file replaces a user-global file of the same name:
+
+| Location | Scope |
+|---|---|
+| `~/.config/codemason/commands/` | Every project |
+| `.codemason/commands/` (nearest, walking up from the working directory) | That project |
+
+The file body is a prompt template. Running the command substitutes the
+placeholders and sends the result to the active agent as an ordinary user turn;
+the transcript shows the command as typed. An optional `---` frontmatter block
+may carry `description`, shown in the slash menu and `/help`; other frontmatter
+keys are ignored.
+
+| Placeholder | Replacement |
+|---|---|
+| `$ARGUMENTS` | Everything typed after the command |
+| `$1` .. `$9` | The Nth argument, 1-based; single or double quotes group words; empty when absent |
+
+Rules:
+
+- The name must start with a lowercase letter or digit and contain only
+  lowercase letters, digits, `-` and `_`. Subdirectories are not scanned.
+- A file whose name is already a built-in command or a user-invocable skill is
+  skipped and logged at `warn!`; it never shadows the existing command. A
+  plugin command with the same name registers under its namespaced
+  `plugin:<id>:<name>` trigger instead.
+- A file with an empty body is skipped.
+- Commands are loaded at startup and when the focused project changes. The
+  `commands_info` tool reports them under `user_commands`.
+- The template is prompt text only: it runs no shell command and grants no
+  permission, so a project-local command file needs no trust gate.
+
 ## 12. Skills System
 
 ### 12.1 Overview
