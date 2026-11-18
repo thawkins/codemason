@@ -254,3 +254,41 @@ async fn test_message_view_throttles_streaming_rerenders() {
     assert_eq!(harness.state().view.render_count() - before_finish, 1);
     harness.get_by_label_contains("chunk done");
 }
+
+#[tokio::test]
+async fn test_empty_session_shows_the_empty_state() {
+    use codemason_gui::panels::empty_state::{EMPTY_STATE_LABEL, STARTERS, TIP, WORDMARK};
+
+    let app = support::make_app();
+    assert!(app.session.messages.is_empty());
+    let shell = Shell::new(app);
+    let mut harness = Harness::new_ui_state(|ui, shell: &mut Shell| shell.show(ui), shell);
+    harness.run();
+
+    harness.get_by_label(EMPTY_STATE_LABEL);
+    harness.get_by_label(WORDMARK);
+    harness.get_by_label(&format!("Version {}", env!("CARGO_PKG_VERSION")));
+    harness.get_by_label(TIP);
+    for (label, _) in STARTERS {
+        harness.get_by_label(label);
+    }
+
+    // A starter action fills the prompt and leaves sending to the user.
+    harness.get_by_label("List the commands").click();
+    harness.run();
+    assert_eq!(harness.state().app().session.input, "/help");
+    assert!(harness.state().app().session.messages.is_empty());
+}
+
+#[tokio::test]
+async fn test_session_with_messages_has_no_empty_state() {
+    use codemason_gui::panels::empty_state::EMPTY_STATE_LABEL;
+
+    let mut app = support::make_app();
+    app.session.messages = vec![Message::user_text("s1", "hello there")];
+    let shell = Shell::new(app);
+    let mut harness = Harness::new_ui_state(|ui, shell: &mut Shell| shell.show(ui), shell);
+    harness.run();
+
+    assert!(harness.query_by_label(EMPTY_STATE_LABEL).is_none());
+}

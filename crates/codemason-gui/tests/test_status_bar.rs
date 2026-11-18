@@ -37,8 +37,8 @@ fn rig(configure: impl FnOnce(&tokio::runtime::Runtime, &mut App)) -> Rig {
     let shell = Shell::new(app)
         .with_keymap(default_keymap(Platform::Linux))
         .with_sources(events, logs, runtime.handle().clone());
-    // The startup logo uses block glyphs egui's bundled fonts cannot draw;
-    // these tests are about the status bar.
+    // The core draws glyphs (status icons, box drawing) that egui's bundled
+    // fonts lack; these tests are about the status bar.
     let harness = Harness::builder()
         .with_size(egui::vec2(1600.0, 800.0))
         .allow_missing_glyphs()

@@ -408,6 +408,7 @@ impl App {
             teams_row_agent_ids: Vec::new(),
             subagent_launches: Vec::new(),
             subagent_launch_results: Arc::new(std::sync::Mutex::new(Vec::new())),
+            startup_notices: Arc::new(std::sync::Mutex::new(Vec::new())),
             subagent_launch_cap: app_config.effective_agents_max_launching(),
             next_subagent_launch_id: 1,
             bench_result: Arc::new(std::sync::Mutex::new(None)),

@@ -962,6 +962,9 @@ fn is_focus_move(event: &egui::Event) -> bool {
 /// menu.
 fn messages_body(ui: &mut egui::Ui, app: &mut App, messages: &mut MessagesView, palette: &Palette) {
     research_ui(ui, app, palette);
+    if crate::panels::empty_state::is_empty_session(app) {
+        crate::panels::empty_state::empty_state_ui(ui, app, palette);
+    }
     let transcript = messages.show(ui, app, palette);
     let right_click = ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Secondary));
     if right_click && transcript.hovered() && !dialogs::locks_prompt(app) {

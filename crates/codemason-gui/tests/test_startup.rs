@@ -148,14 +148,14 @@ async fn test_run_gui_new_starts_a_fresh_session() {
 async fn test_run_gui_startup_notice_reaches_the_gui_receiver() {
     let _env = scratch_env("notice");
 
-    // A fresh session announces its instruction files with an
-    // `AgentNotice` during startup, before the window exists; the receiver
-    // the launch carries must already hold it.
+    // A fresh session is created during startup, before the window exists;
+    // the receiver the launch carries must already hold its `SessionCreated`
+    // event.
     let ((focused, notice), _stored) = Box::pin(launched_with(
         |_| StartupSession::New,
         |launch| loop {
             match launch.events.blocking_recv() {
-                Ok(codemason_agent::event::Event::AgentNotice { session_id, .. }) => {
+                Ok(codemason_agent::event::Event::SessionCreated { session_id, .. }) => {
                     break Some(session_id);
                 }
                 Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}

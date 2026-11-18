@@ -21,7 +21,6 @@ pub mod input_field;
 pub mod input_prompt;
 pub mod line_wrap;
 pub mod log_channel;
-pub mod logo;
 pub mod markdown;
 pub mod message_lines;
 pub mod message_text;

@@ -3885,6 +3885,10 @@ pub struct App {
     /// [`SubagentLaunch`] id, so the shared queue is behind a mutex rather than
     /// owned by the event loop; [`App::poll_subagent_launch_results`] drains it.
     pub subagent_launch_results: Arc<std::sync::Mutex<Vec<SubagentLaunchOutcome>>>,
+    /// Startup notices produced off the event loop (a new session's
+    /// instruction-file discovery), waiting for
+    /// [`App::poll_startup_notices`] to write them to the log.
+    pub startup_notices: Arc<std::sync::Mutex<Vec<String>>>,
     /// Cap on concurrently in-flight launches, from
     /// `Config::effective_agents_max_launching` (D3).
     pub subagent_launch_cap: usize,

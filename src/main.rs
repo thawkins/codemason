@@ -420,17 +420,6 @@ fn working_dir() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-/// Print the codemason ASCII art startup banner to stdout.
-fn print_banner() {
-    for line in codemason_app_core::logo::LOGO {
-        cliprintln!("{line}");
-    }
-    cliprintln!(
-        "  v{}  -  Rust AI coding agent\n",
-        env!("CARGO_PKG_VERSION")
-    );
-}
-
 /// Run the dry-run readiness check and exit the process.
 ///
 /// This helper is intentionally terminal: it prints the report and calls
@@ -1696,7 +1685,6 @@ async fn launch_gui(
     timings: StartupTimings,
     launcher: codemason_gui::GuiLauncher,
 ) -> Result<()> {
-    print_banner();
     // `run_gui`'s future is large; box it so it is heap-allocated
     // rather than inlined into this caller's future
     // (clippy::large_futures).
