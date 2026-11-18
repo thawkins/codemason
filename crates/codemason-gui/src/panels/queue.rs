@@ -57,6 +57,38 @@ pub fn queue_ui(ui: &mut egui::Ui, app: &App) {
     }
 }
 
+/// Accessible name of the Queue pane's list.
+pub const QUEUE_PANE_LABEL: &str = "Queued prompts";
+
+/// Text the Queue pane shows when nothing is queued.
+pub const QUEUE_PANE_EMPTY: &str = "No queued prompts. A message sent while the agent is running waits here. Alt+Q opens queue control.";
+
+/// Draw the Queue pane: every queued prompt, oldest first, or a note that
+/// the queue is empty.
+///
+/// The pane is a read-only view. The queue is still drawn above the prompt
+/// by [`queue_ui`], which also owns the queue-control overlays.
+///
+/// # Arguments
+///
+/// * `ui` - the pane's ui.
+/// * `app` - the App whose `session.input_queue` is shown.
+pub fn queue_pane_ui(ui: &mut egui::Ui, app: &App) {
+    let queue = &app.session.input_queue;
+    if queue.is_empty() {
+        ui.weak(QUEUE_PANE_EMPTY);
+        return;
+    }
+    let list = ui.vertical(|ui| {
+        ui.weak(format!("{} queued", queue.len()));
+        for (i, entry) in queue.iter().enumerate() {
+            ui.label(format!("{}. {}", i + 1, preview(&entry.text)));
+        }
+    });
+    list.response
+        .widget_info(|| WidgetInfo::labeled(Role::List, true, QUEUE_PANE_LABEL));
+}
+
 /// The queued prompts, oldest first. While the menu's `Show` panel is open
 /// its highlighted entry is marked.
 fn queue_list(ui: &mut egui::Ui, app: &App) {
