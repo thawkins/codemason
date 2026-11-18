@@ -368,6 +368,9 @@ window's own File menu.
 
 ### Permission prompts
 
+When the agent asks to edit a file or run a command, the dialog shows the
+diff it will make or the full command, so you can check it before allowing it.
+
 When codemason wants to run a shell command, write a file, or perform another
 protected action, a permission dialog appears over the window. You
 have 120 seconds to:

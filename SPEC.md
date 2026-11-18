@@ -2221,7 +2221,14 @@ with buttons for the previous/next file and hunk, `Split` and `Reviewed`;
 while it holds the keyboard focus (any press inside it) `]`/`[`, `n`/`p`, `v`
 and `m` do the same and are taken out of the input, so they neither type nor
 reach the App. A reviewed file is collapsed to a note; the reviewed paths
-survive closing and reopening the pane. All transcript
+survive closing and reopening the pane. The permission dialog previews the call a request is about
+(`permission_preview::permission_preview`): the request names only
+`"<tool>: <resource>"` (the resource is the input's `path`, `command`, `url`,
+`pattern` or `query`, else `tool:<tool>`), so the dialog looks for exactly one
+pending or running tool call in the transcript with that tool and resource. An
+edit call is shown as its diffs under `Changes:` (each with `Open diff`), a
+`Bash` call as its full command under `Command:`; with no match, or two, the
+dialog shows the request text under `Details:` as before. All transcript
 text is selectable; right-clicking the transcript opens a menu with `Copy`
 (egui's text selection; a press on text places an empty selection, so it is
 enabled there and copies nothing), `Copy as Markdown` and `Quote in reply`

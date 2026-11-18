@@ -28,6 +28,7 @@ pub mod message_blocks;
 pub mod message_lines;
 pub mod message_text;
 pub mod open_in;
+pub mod permission_preview;
 pub mod project_properties;
 pub mod research_adapter;
 pub mod research_progress;

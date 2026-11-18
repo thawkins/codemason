@@ -2,7 +2,11 @@
 //!
 //! Draws the front of `App::session.permission_queue` the way the TUI's
 //! `render_permission_dialog` does: the permission, its first pattern, the
-//! time left before the request expires and how many more are queued. The
+//! time left before the request expires and how many more are queued. When
+//! the request is about an unfinished call in the transcript
+//! ([`permission_preview`]), the pattern is replaced by a preview: the diff
+//! of each file an edit will change (with Open diff), or the full command a
+//! shell call will run. The
 //! TUI offers three answers, `y` (allow once), `a` (always allow) and `n`
 //! (deny); each button sends that key to the App, whose handler publishes
 //! the reply. The keys themselves reach the App through the router.
@@ -18,6 +22,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use codemason_app_core::app::App;
 use codemason_app_core::input_event::Key;
+use codemason_app_core::permission_preview::{PermissionPreview, permission_preview};
 
 use super::{key_buttons, modal, plain};
 
@@ -32,6 +37,12 @@ pub const ALWAYS_ALLOW: &str = "Always allow";
 
 /// The button that denies the request (`n`).
 pub const DENY: &str = "Deny";
+
+/// The heading over an edit's diffs.
+pub const CHANGES_LABEL: &str = "Changes:";
+
+/// The heading over a shell call's command.
+pub const COMMAND_LABEL: &str = "Command:";
 
 /// Seconds a request waits when it carries no `timeout_secs` (the TUI's
 /// default).
@@ -59,10 +70,41 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
     let countdown = countdown(&request.metadata);
     let detail = request.patterns.first().cloned().unwrap_or_default();
     let permission = request.permission.clone();
+    let preview = permission_preview(&app.session.messages, &detail);
+    let palette = crate::palette::palette_for(app, ctx);
+    let mut open_diff = None;
     modal(ctx, "codemason_permission_dialog", PERMISSION_TITLE, |ui| {
         ui.label(format!("Permission: {permission}"));
-        ui.label("Details:");
-        ui.monospace(detail);
+        match &preview {
+            Some(PermissionPreview::Diffs(diffs)) => {
+                ui.label(CHANGES_LABEL);
+                let height = ctx.content_rect().height() * 0.5;
+                egui::ScrollArea::vertical()
+                    .max_height(height)
+                    .show(ui, |ui| {
+                        for (index, diff) in diffs.iter().enumerate() {
+                            if crate::panels::diff::inline_diff_ui(ui, diff, &palette) {
+                                open_diff = Some(index);
+                            }
+                        }
+                    });
+            }
+            Some(PermissionPreview::Command(command)) => {
+                ui.label(COMMAND_LABEL);
+                egui::Frame::NONE
+                    .fill(palette.raised1)
+                    .stroke(egui::Stroke::new(1.0, palette.border))
+                    .corner_radius(crate::metrics::radius::SM)
+                    .inner_margin(crate::metrics::space::SM)
+                    .show(ui, |ui| {
+                        ui.add(egui::Label::new(egui::RichText::new(command).monospace()).wrap());
+                    });
+            }
+            None => {
+                ui.label("Details:");
+                ui.monospace(detail);
+            }
+        }
         ui.weak(countdown);
         if queued > 1 {
             ui.weak(format!("{queued} queued"));
@@ -80,6 +122,9 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         });
         ui.weak("Press y to allow, a to always allow, n to deny");
     });
+    if let (Some(index), Some(PermissionPreview::Diffs(diffs))) = (open_diff, preview) {
+        app.diff_pane.open(diffs, index);
+    }
     // The countdown changes every second; disabled buttons wake sooner.
     ctx.request_repaint_after(if answerable {
         Duration::from_secs(1)

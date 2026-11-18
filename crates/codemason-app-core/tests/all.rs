@@ -377,6 +377,8 @@ mod test_perf_render_idle;
 mod test_permission_answer_guard;
 #[path = "test_permission_countdown.rs"]
 mod test_permission_countdown;
+#[path = "test_permission_preview.rs"]
+mod test_permission_preview;
 #[path = "test_picker_empty_guard.rs"]
 mod test_picker_empty_guard;
 #[path = "test_plugin_commands.rs"]

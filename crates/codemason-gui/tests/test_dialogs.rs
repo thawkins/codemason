@@ -19,11 +19,14 @@ use codemason_gui::Shell;
 use codemason_gui::dialogs::model_picker::{
     FILTER_LABEL, MODEL_PICKER_TITLE, MODELS_LABEL, filter_field_id,
 };
-use codemason_gui::dialogs::permission::{ALLOW_ONCE, ALWAYS_ALLOW, DENY, PERMISSION_TITLE};
+use codemason_gui::dialogs::permission::{
+    ALLOW_ONCE, ALWAYS_ALLOW, CHANGES_LABEL, COMMAND_LABEL, DENY, PERMISSION_TITLE,
+};
 use codemason_gui::dialogs::provider::{CONTINUE, PROVIDER_CHOICE_LABEL, SELECT_PROVIDER_TITLE};
 use codemason_gui::dialogs::shortcuts::SHORTCUTS_TITLE;
 use codemason_gui::dialogs::{ActiveDialog, active};
 use codemason_gui::keys::default_keymap;
+use codemason_gui::panels::diff::OPEN_DIFF;
 use codemason_gui::panels::prompt::PROMPT_LABEL;
 use craft_keymap::Platform;
 use egui::accesskit::Role;
@@ -789,4 +792,83 @@ fn test_permission_late_reply_keeps_the_next_request() {
         app.permission_answerable(),
         "and does not restart req-h's answer delay"
     );
+}
+
+/// The agent asks for permission with `description`, as the session's
+/// permission check does (`"<tool>: <resource>"`).
+fn request_with(events: &UnboundedSender<Event>, id: &str, permission: &str, description: &str) {
+    events
+        .send(Event::PermissionRequested {
+            session_id: SESSION.to_string(),
+            request_id: id.to_string(),
+            permission: permission.to_string(),
+            description: description.to_string(),
+            options: Vec::new(),
+        })
+        .expect("send permission request");
+}
+
+/// An assistant message with one unfinished call of `tool` with `input`.
+fn pending_call(tool: &str, input: serde_json::Value) -> codemason_agent::message::Message {
+    use codemason_agent::message::{Message, MessagePart, Role, ToolCallState, ToolCallStatus};
+    Message::new(
+        SESSION,
+        Role::Assistant,
+        vec![MessagePart::ToolCall {
+            tool: tool.to_string(),
+            call_id: "call-1".to_string(),
+            state: Box::new(ToolCallState {
+                status: ToolCallStatus::Running,
+                input,
+                output: None,
+                error: None,
+                duration_ms: None,
+            }),
+        }],
+    )
+}
+
+#[test]
+fn test_permission_dialog_previews_an_edit_as_a_diff() {
+    let (_rt, events, mut harness) = rig(|app| {
+        app.session.messages = vec![pending_call(
+            "Edit",
+            serde_json::json!({"file_path": "src/a.rs", "old_string": "old\n", "new_string": "new\n"}),
+        )];
+    });
+    request_with(&events, "req-edit", "edit", "Edit: tool:Edit");
+    harness.run();
+    wait_shown(&mut harness);
+    harness.get_by_label(CHANGES_LABEL);
+    harness.get_by_label(OPEN_DIFF);
+    harness.get_by_label_contains("- old");
+    harness.get_by_label_contains("+ new");
+}
+
+#[test]
+fn test_permission_dialog_shows_a_full_command() {
+    let command = "cargo build --release && cargo nextest run --workspace";
+    let (_rt, events, mut harness) = rig(|app| {
+        app.session.messages = vec![pending_call(
+            "Bash",
+            serde_json::json!({ "command": command }),
+        )];
+    });
+    request_with(&events, "req-bash", "bash", &format!("Bash: {command}"));
+    harness.run();
+    wait_shown(&mut harness);
+    harness.get_by_label(COMMAND_LABEL);
+    harness.get_by_label(command);
+}
+
+#[test]
+fn test_permission_dialog_without_a_matching_call_shows_the_request() {
+    let (_rt, events, mut harness) = rig(|_| {});
+    request_permission(&events, "req-plain");
+    harness.run();
+    wait_shown(&mut harness);
+    harness.get_by_label("Details:");
+    harness.get_by_label("rm -rf target/temp/x");
+    assert!(harness.query_by_label(COMMAND_LABEL).is_none());
+    assert!(harness.query_by_label(CHANGES_LABEL).is_none());
 }
