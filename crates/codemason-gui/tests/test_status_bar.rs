@@ -129,3 +129,18 @@ fn test_status_bar_surfaces_the_default_local_backend() {
     });
     rig.harness.get_by_label("Backend:local");
 }
+
+#[test]
+fn test_status_bar_shows_a_spinner_only_while_a_turn_runs() {
+    use codemason_gui::panels::status_bar::BUSY_LABEL;
+    use egui::accesskit::Role;
+
+    let idle = rig(|_, _| {});
+    assert!(idle.harness.query_by_label(BUSY_LABEL).is_none());
+
+    // `rig` runs the harness to rest: the spinner must not keep it awake by
+    // asking for an immediate repaint every frame.
+    let busy = rig(|_, app| app.session.is_processing = true);
+    busy.harness
+        .get_by_role_and_label(Role::ProgressIndicator, BUSY_LABEL);
+}

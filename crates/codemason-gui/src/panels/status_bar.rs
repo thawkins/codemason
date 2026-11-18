@@ -38,6 +38,38 @@ use crate::styled_text::drawable;
 /// Accessible label of the status bar.
 pub const STATUS_BAR_LABEL: &str = "Status bar";
 
+/// Accessible label of the spinner shown while a turn is running.
+pub const BUSY_LABEL: &str = "Working";
+
+/// How often the busy spinner asks for a new frame.
+const SPINNER_FRAME: std::time::Duration = std::time::Duration::from_millis(60);
+
+/// The turn-in-progress spinner: a three-quarter arc that turns once a second.
+///
+/// It asks for its next frame after [`SPINNER_FRAME`] instead of at once, so
+/// an idle window still sleeps between frames.
+fn busy_spinner(ui: &mut egui::Ui, palette: &Palette) {
+    let size = ui.text_style_height(&egui::TextStyle::Body);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let radius = size.mul_add(0.5, -2.0);
+        let start = (ui.input(|i| i.time) * std::f64::consts::TAU) as f32;
+        let points: Vec<egui::Pos2> = (0..=24)
+            .map(|step| {
+                let sweep = step as f32 / 24.0 * std::f32::consts::TAU;
+                let angle = sweep.mul_add(0.75, start);
+                rect.center() + radius * egui::vec2(angle.cos(), angle.sin())
+            })
+            .collect();
+        ui.painter().add(egui::Shape::line(
+            points,
+            egui::Stroke::new(2.0, palette.accent),
+        ));
+    }
+    ui.ctx().request_repaint_after(SPINNER_FRAME);
+    response.widget_info(|| WidgetInfo::labeled(Role::ProgressIndicator, true, BUSY_LABEL));
+}
+
 /// Characters of the last prompt shown in its tag, as in the TUI.
 const PROMPT_TAG_CHARS: usize = 48;
 
@@ -97,6 +129,9 @@ fn indicator(ui: &mut egui::Ui, name: &str, enabled: bool, palette: &Palette) {
 
 /// Line 1: identity, place, prompt and status.
 fn line1(ui: &mut egui::Ui, app: &App, palette: &Palette) {
+    if app.session.is_processing {
+        busy_spinner(ui, palette);
+    }
     item(
         ui,
         format!("codemason v{}", env!("CARGO_PKG_VERSION")),
