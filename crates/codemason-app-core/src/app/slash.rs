@@ -12427,353 +12427,13 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
         let sub = args.split_whitespace().next().unwrap_or("");
         match sub {
             "on" | "enable" => {
-                self.code_index_enabled = true;
-                // Persist by writing `code_index.enabled: true` into the
-                // loaded source file, and only that key. A config that
-                // fails to load is reported, never replaced by defaults:
-                // `unwrap_or_default()` here once saved an empty config
-                // over the user's global file.
-                let persisted = codemason_agent::Config::load_for(&self.cwd_path).and_then(|cfg| {
-                    cfg.set_source_value(&["code_index", "enabled"], serde_json::json!(true))
-                });
-                if self.code_index.is_some() {
-                    // Already active - just ensure watcher is running
-                    if self.code_index_watch_session.is_none() {
-                        if let Some(ref idx) = self.code_index {
-                            match codemason_codeindex::start_watching(
-                                idx.clone(),
-                                codemason_codeindex::worker::WorkerConfig::default(),
-                            ) {
-                                Ok(session) => {
-                                    self.code_index_watch_session = Some(session);
-                                    self.append_assistant_text(
-                                                "[ok] **Code index** is already active. File watcher started.",
-                                            );
-                                }
-                                Err(e) => {
-                                    self.append_assistant_text(&format!(
-                                                "[ok] **Code index** is already active.\n\n[warn] Could not start file watcher: {e}",
-                                            ));
-                                }
-                            }
-                        }
-                    } else {
-                        self.append_assistant_text(
-                            "[ok] **Code index** is already active and enabled.",
-                        );
-                    }
-                } else {
-                    // Create and initialize the code index
-                    let cwd = self.cwd_path.clone();
-                    let index_config = codemason_codeindex::types::CodeIndexConfig {
-                        enabled: true,
-                        project_root: cwd.clone(),
-                        index_dir: cwd.join(".codemason/codeindex"),
-                        scan_config: codemason_codeindex::types::ScanConfig::default(),
-                    };
-                    match codemason_codeindex::CodeIndex::open(&index_config) {
-                        Ok(idx) => {
-                            let arc_idx = Arc::new(idx);
-                            // Start watching - this performs an initial full reindex
-                            // to catch any changes made while the index was disabled.
-                            match codemason_codeindex::start_watching(
-                                arc_idx.clone(),
-                                codemason_codeindex::worker::WorkerConfig::default(),
-                            ) {
-                                Ok(session) => {
-                                    self.code_index_watch_session = Some(session);
-                                }
-                                Err(e) => {
-                                    tracing::warn!(error = %e, "Failed to start file watcher on codeindex enable");
-                                }
-                            }
-                            self.set_code_index(Some(arc_idx));
-                            self.append_assistant_text(
-                                        "[ok] **Code index:** enabled and activated. Background reindex in progress.",
-                                    );
-                        }
-                        Err(e) => {
-                            self.append_assistant_text(&format!(
-                                "[err] **Code index:** could not open index: {e}",
-                            ));
-                        }
-                    }
-                }
-                match persisted {
-                    Ok(_) => {
-                        // P-2: invalidate the cached config so the next turn
-                        // picks up the newly-saved file.
-                        self.session_processor.invalidate_config_cache();
-                        self.status = "codeindex: on".to_string();
-                    }
-                    Err(e) => {
-                        self.append_assistant_text(&format!(
-                                    "[warn] **Code index:** enabled in memory, but saving config failed: {e}",
-                                ));
-                        self.status = "codeindex: on (unsaved)".to_string();
-                        self.push_log_no_agent(
-                            LogLevel::Warn,
-                            format!("codeindex enable save failed: {}", e),
-                        );
-                    }
-                }
+                self.codeindex_on();
             }
             "off" | "disable" => {
-                self.code_index_enabled = false;
-                // Persist by writing `code_index.enabled: false` into the
-                // loaded source file, and only that key. A config that
-                // fails to load is reported, never replaced by defaults:
-                // `unwrap_or_default()` here once saved an empty config
-                // over the user's global file.
-                let persisted = codemason_agent::Config::load_for(&self.cwd_path).and_then(|cfg| {
-                    cfg.set_source_value(&["code_index", "enabled"], serde_json::json!(false))
-                });
-                let was_active = self.code_index.is_some();
-                // Stop the file watcher + background worker first
-                if let Some(ref mut session) = self.code_index_watch_session {
-                    session.stop();
-                }
-                self.code_index_watch_session = None;
-                self.code_index = None;
-                if was_active {
-                    self.append_assistant_text(
-                                "[no] **Code index:** disabled and deactivated. Codeindex tools will no longer be available.\n\n\
-                                 Use `/codeindex on` and restart to re-enable.",
-                            );
-                } else {
-                    self.append_assistant_text(
-                        "[i] **Code index:** disabled. It was not currently active.",
-                    );
-                }
-                match persisted {
-                    Ok(_) => {
-                        // P-2: invalidate the cached config so the next turn
-                        // picks up the newly-saved file.
-                        self.session_processor.invalidate_config_cache();
-                        self.status = "codeindex: off".to_string();
-                    }
-                    Err(e) => {
-                        self.append_assistant_text(&format!(
-                                    "[warn] **Code index:** disabled in memory, but saving config failed: {e}",
-                                ));
-                        self.status = "codeindex: off (unsaved)".to_string();
-                        self.push_log_no_agent(
-                            LogLevel::Warn,
-                            format!("codeindex disable save failed: {}", e),
-                        );
-                    }
-                }
+                self.codeindex_off();
             }
             "show" | "status" | "" => {
-                let config_enabled = self.code_index_enabled;
-                // Check if we have an active code index with real stats.
-                // Non-blocking probe: report busy immediately instead of
-                // stalling while a background reindex/graph build holds
-                // the store lock.
-                if let Some(ref idx) = self.code_index {
-                    match idx.try_status() {
-                        Some(stats) => {
-                            let mut output = String::from("## Code Index Status\n\n");
-                            output.push_str(&format!(
-                                "**Enabled:** {}\n",
-                                if config_enabled {
-                                    "\u{2713} yes"
-                                } else {
-                                    "\u{2717} no"
-                                }
-                            ));
-                            output
-                                .push_str(&format!("**Files indexed:** {}\n", stats.files_indexed));
-                            output
-                                .push_str(&format!("**Total symbols:** {}\n", stats.total_symbols));
-                            output
-                                .push_str(&format!("**FTS documents:** {}\n", stats.fts_doc_count));
-                            output
-                                .push_str(&format!("**References:** {}\n", stats.total_references));
-                            output.push_str(&format!(
-                                "**Total size:** {:.1} KB\n",
-                                stats.total_bytes as f64 / 1024.0
-                            ));
-
-                            // FTS sync warning
-                            if stats.total_symbols > 0 && stats.fts_doc_count == 0 {
-                                output.push_str("\n\u{26a0}\u{fe0f} **FTS index is empty** - search will not work. Use `/codeindex rebuild` to fix.\n");
-                            } else if stats.fts_doc_count > 0
-                                && (stats.fts_doc_count as f64 / stats.total_symbols.max(1) as f64)
-                                    < 0.5
-                            {
-                                output.push_str(&format!(
-                                            "\n\u{26a0}\u{fe0f} **FTS index may be out of sync** ({} FTS docs vs {} symbols). Use `/codeindex rebuild` to fix.\n",
-                                            stats.fts_doc_count, stats.total_symbols
-                                        ));
-                            }
-
-                            if !stats.languages.is_empty() {
-                                output.push_str("**Languages:** ");
-                                let langs: Vec<String> = stats
-                                    .languages
-                                    .iter()
-                                    .map(|(lang, count)| format!("{lang} ({count})"))
-                                    .collect();
-                                output.push_str(&langs.join(", "));
-                                output.push('\n');
-                            }
-
-                            if let Some(ts) = &stats.last_full_index {
-                                output.push_str(&format!("**Last full index:** {ts}\n"));
-                            }
-                            if let Some(ts) = &stats.last_incremental_update {
-                                output.push_str(&format!("**Last incremental:** {ts}\n"));
-                            }
-                            output.push_str(&format!(
-                                "**Index size:** {:.1} KB\n",
-                                stats.index_size_bytes as f64 / 1024.0
-                            ));
-
-                            // Graph data set status (FR-015). The graph
-                            // is built separately via `/codeindex graph
-                            // build`, so it may be empty even when the
-                            // index is populated.
-                            output.push_str("\n## Graph Dataset\n\n");
-                            if idx.graph_busy() {
-                                let (gdone, gtotal) = idx.graph_build_progress();
-                                output.push_str("\u{26a0}\u{fe0f} **Graph:** building...\n");
-                                if gtotal > 0 {
-                                    output.push_str(&format!(
-                                        "**Progress:** {gdone}/{gtotal} files\n"
-                                    ));
-                                }
-                            }
-                            match idx.try_graph_status() {
-                                Some(gs) => {
-                                    if gs.total_edges == 0 {
-                                        output.push_str(
-                                            "**Graph:** not built (0 edges).\n\n\
-                                                     Run `/codeindex graph build` to derive \
-                                                     the semantic edge graph from the \
-                                                     indexed symbols.\n",
-                                        );
-                                    } else {
-                                        output.push_str(&format!(
-                                            "**Total edges:** {}\n",
-                                            gs.total_edges
-                                        ));
-                                        output.push_str(&format!("**Nodes:** {}\n", gs.nodes));
-                                        output.push_str(&format!(
-                                            "**Edges by confidence:** {} EXTRACTED, {} INFERRED\n",
-                                            gs.edges_extracted, gs.edges_inferred
-                                        ));
-                                        output.push_str(&format!(
-                                            "**Communities:** {}\n",
-                                            gs.communities
-                                        ));
-                                        output.push_str("**Edges by kind:**\n");
-                                        output.push_str(&format!(
-                                                    "- calls: {}\n- imports: {}\n- inherits: {}\n- references: {}\n- mixes_in: {}\n- implements: {}\n",
-                                                    gs.edges_calls,
-                                                    gs.edges_imports,
-                                                    gs.edges_inherits,
-                                                    gs.edges_references,
-                                                    gs.edges_mixes_in,
-                                                    gs.edges_implements,
-                                                ));
-                                    }
-                                }
-                                None => {
-                                    // Graph stats unavailable because the
-                                    // store lock is held; try_status()
-                                    // succeeded so this is transient.
-                                    output.push_str(
-                                        "\u{26a0}\u{fe0f} Graph stats unavailable \
-                                                 (index busy - retry shortly).\n",
-                                    );
-                                }
-                            }
-
-                            self.append_assistant_text(&output);
-                            self.status = format!(
-                                "codeindex: {} files, {} symbols, {} FTS docs",
-                                stats.files_indexed, stats.total_symbols, stats.fts_doc_count
-                            );
-                        }
-                        None => {
-                            // Store/FTS lock held by a background
-                            // reindex or graph build. Report busy
-                            // immediately from the lock-free atomics.
-                            // Attribute the lock holder before claiming
-                            // the index is busy: a graph build holds the
-                            // store lock only briefly (snapshot/persist),
-                            // so during a graph build the index itself is
-                            // still available.
-                            let (done, total) = idx.reindex_progress();
-                            let reindexing = total > 0 && done < total;
-                            let graph_busy = idx.graph_busy();
-                            let (gdone, gtotal) = idx.graph_build_progress();
-
-                            let mut output = String::from("## Code Index Status\n\n");
-                            output.push_str(&format!(
-                                "**Enabled:** {}\n",
-                                if config_enabled {
-                                    "\u{2713} yes"
-                                } else {
-                                    "\u{2717} no"
-                                }
-                            ));
-                            if reindexing {
-                                output.push_str("**Index:** busy - reindexing in progress\n");
-                                output.push_str(&format!("**Reindexing:** {done}/{total} files\n"));
-                                if graph_busy {
-                                    output.push_str(&format!(
-                                        "**Graph:** building ({gdone}/{gtotal} files)\n"
-                                    ));
-                                }
-                            } else if graph_busy {
-                                output.push_str(&format!(
-                                    "**Graph:** building ({gdone}/{gtotal} files)\n"
-                                ));
-                                output.push_str(
-                                    "**Index:** available - the graph build holds the \
-                                             store lock only briefly for its \
-                                             snapshot/persist phases\n",
-                                );
-                            } else {
-                                output.push_str(
-                                    "**Index:** busy - the store lock is held by a \
-                                             background operation\n",
-                                );
-                                output.push_str(
-                                    "Wait a moment and retry - the background \
-                                             operation will release the lock when done.\n",
-                                );
-                            }
-
-                            self.append_assistant_text(&output);
-                            self.status = if reindexing {
-                                "codeindex: busy (reindexing)".to_string()
-                            } else if graph_busy {
-                                "codeindex: graph building".to_string()
-                            } else {
-                                "codeindex: busy".to_string()
-                            };
-                        }
-                    }
-                } else {
-                    // No active code index
-                    let state = if config_enabled {
-                        "enabled"
-                    } else {
-                        "disabled"
-                    };
-                    self.append_assistant_text(&format!(
-                                "## Code Index Status\n\n\
-                                 **Enabled:** {}\n\n\
-                                 Code index is not currently active. It may not yet be initialised.\n\n\
-                                 Use `/codeindex on` to enable indexing, \
-                                 or run `/codeindex help` for available sub-commands.",
-                                if config_enabled { "\u{2713} yes" } else { "\u{2717} no" }
-                            ));
-                    self.status = format!("codeindex: {state}").to_string();
-                }
+                self.codeindex_show();
             }
             "reindex" => {
                 if self.code_index.is_some() {
@@ -13181,7 +12841,357 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                 }
             }
             "help" | "--help" | "-h" => {
+                self.codeindex_help();
+            }
+            _ => {
                 self.append_assistant_text(
+                            "Usage: `/codeindex on|off|show|status|lang|reindex|rebuild|graph <build|export|lang>|explain <symbol>|path <A> <B>|communities|godnodes|skillgen|help`",
+                        );
+            }
+        }
+    }
+
+    /// Run the `/codeindex on`, `/codeindex enable` sub-command.
+    fn codeindex_on(&mut self) {
+        self.code_index_enabled = true;
+        // Persist by writing `code_index.enabled: true` into the
+        // loaded source file, and only that key. A config that
+        // fails to load is reported, never replaced by defaults:
+        // `unwrap_or_default()` here once saved an empty config
+        // over the user's global file.
+        let persisted = codemason_agent::Config::load_for(&self.cwd_path).and_then(|cfg| {
+            cfg.set_source_value(&["code_index", "enabled"], serde_json::json!(true))
+        });
+        if self.code_index.is_some() {
+            // Already active - just ensure watcher is running
+            if self.code_index_watch_session.is_none() {
+                if let Some(ref idx) = self.code_index {
+                    match codemason_codeindex::start_watching(
+                        idx.clone(),
+                        codemason_codeindex::worker::WorkerConfig::default(),
+                    ) {
+                        Ok(session) => {
+                            self.code_index_watch_session = Some(session);
+                            self.append_assistant_text(
+                                "[ok] **Code index** is already active. File watcher started.",
+                            );
+                        }
+                        Err(e) => {
+                            self.append_assistant_text(&format!(
+                                                "[ok] **Code index** is already active.\n\n[warn] Could not start file watcher: {e}",
+                                            ));
+                        }
+                    }
+                }
+            } else {
+                self.append_assistant_text("[ok] **Code index** is already active and enabled.");
+            }
+        } else {
+            // Create and initialize the code index
+            let cwd = self.cwd_path.clone();
+            let index_config = codemason_codeindex::types::CodeIndexConfig {
+                enabled: true,
+                project_root: cwd.clone(),
+                index_dir: cwd.join(".codemason/codeindex"),
+                scan_config: codemason_codeindex::types::ScanConfig::default(),
+            };
+            match codemason_codeindex::CodeIndex::open(&index_config) {
+                Ok(idx) => {
+                    let arc_idx = Arc::new(idx);
+                    // Start watching - this performs an initial full reindex
+                    // to catch any changes made while the index was disabled.
+                    match codemason_codeindex::start_watching(
+                        arc_idx.clone(),
+                        codemason_codeindex::worker::WorkerConfig::default(),
+                    ) {
+                        Ok(session) => {
+                            self.code_index_watch_session = Some(session);
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Failed to start file watcher on codeindex enable");
+                        }
+                    }
+                    self.set_code_index(Some(arc_idx));
+                    self.append_assistant_text(
+                                        "[ok] **Code index:** enabled and activated. Background reindex in progress.",
+                                    );
+                }
+                Err(e) => {
+                    self.append_assistant_text(&format!(
+                        "[err] **Code index:** could not open index: {e}",
+                    ));
+                }
+            }
+        }
+        match persisted {
+            Ok(_) => {
+                // P-2: invalidate the cached config so the next turn
+                // picks up the newly-saved file.
+                self.session_processor.invalidate_config_cache();
+                self.status = "codeindex: on".to_string();
+            }
+            Err(e) => {
+                self.append_assistant_text(&format!(
+                    "[warn] **Code index:** enabled in memory, but saving config failed: {e}",
+                ));
+                self.status = "codeindex: on (unsaved)".to_string();
+                self.push_log_no_agent(
+                    LogLevel::Warn,
+                    format!("codeindex enable save failed: {}", e),
+                );
+            }
+        }
+    }
+
+    /// Run the `/codeindex off`, `/codeindex disable` sub-command.
+    fn codeindex_off(&mut self) {
+        self.code_index_enabled = false;
+        // Persist by writing `code_index.enabled: false` into the
+        // loaded source file, and only that key. A config that
+        // fails to load is reported, never replaced by defaults:
+        // `unwrap_or_default()` here once saved an empty config
+        // over the user's global file.
+        let persisted = codemason_agent::Config::load_for(&self.cwd_path).and_then(|cfg| {
+            cfg.set_source_value(&["code_index", "enabled"], serde_json::json!(false))
+        });
+        let was_active = self.code_index.is_some();
+        // Stop the file watcher + background worker first
+        if let Some(ref mut session) = self.code_index_watch_session {
+            session.stop();
+        }
+        self.code_index_watch_session = None;
+        self.code_index = None;
+        if was_active {
+            self.append_assistant_text(
+                                "[no] **Code index:** disabled and deactivated. Codeindex tools will no longer be available.\n\n\
+                                 Use `/codeindex on` and restart to re-enable.",
+                            );
+        } else {
+            self.append_assistant_text(
+                "[i] **Code index:** disabled. It was not currently active.",
+            );
+        }
+        match persisted {
+            Ok(_) => {
+                // P-2: invalidate the cached config so the next turn
+                // picks up the newly-saved file.
+                self.session_processor.invalidate_config_cache();
+                self.status = "codeindex: off".to_string();
+            }
+            Err(e) => {
+                self.append_assistant_text(&format!(
+                    "[warn] **Code index:** disabled in memory, but saving config failed: {e}",
+                ));
+                self.status = "codeindex: off (unsaved)".to_string();
+                self.push_log_no_agent(
+                    LogLevel::Warn,
+                    format!("codeindex disable save failed: {}", e),
+                );
+            }
+        }
+    }
+
+    /// Run the `/codeindex show`, `/codeindex status` sub-command.
+    fn codeindex_show(&mut self) {
+        let config_enabled = self.code_index_enabled;
+        // Check if we have an active code index with real stats.
+        // Non-blocking probe: report busy immediately instead of
+        // stalling while a background reindex/graph build holds
+        // the store lock.
+        if let Some(ref idx) = self.code_index {
+            match idx.try_status() {
+                Some(stats) => {
+                    let mut output = String::from("## Code Index Status\n\n");
+                    output.push_str(&format!(
+                        "**Enabled:** {}\n",
+                        if config_enabled {
+                            "\u{2713} yes"
+                        } else {
+                            "\u{2717} no"
+                        }
+                    ));
+                    output.push_str(&format!("**Files indexed:** {}\n", stats.files_indexed));
+                    output.push_str(&format!("**Total symbols:** {}\n", stats.total_symbols));
+                    output.push_str(&format!("**FTS documents:** {}\n", stats.fts_doc_count));
+                    output.push_str(&format!("**References:** {}\n", stats.total_references));
+                    output.push_str(&format!(
+                        "**Total size:** {:.1} KB\n",
+                        stats.total_bytes as f64 / 1024.0
+                    ));
+
+                    // FTS sync warning
+                    if stats.total_symbols > 0 && stats.fts_doc_count == 0 {
+                        output.push_str("\n\u{26a0}\u{fe0f} **FTS index is empty** - search will not work. Use `/codeindex rebuild` to fix.\n");
+                    } else if stats.fts_doc_count > 0
+                        && (stats.fts_doc_count as f64 / stats.total_symbols.max(1) as f64) < 0.5
+                    {
+                        output.push_str(&format!(
+                                            "\n\u{26a0}\u{fe0f} **FTS index may be out of sync** ({} FTS docs vs {} symbols). Use `/codeindex rebuild` to fix.\n",
+                                            stats.fts_doc_count, stats.total_symbols
+                                        ));
+                    }
+
+                    if !stats.languages.is_empty() {
+                        output.push_str("**Languages:** ");
+                        let langs: Vec<String> = stats
+                            .languages
+                            .iter()
+                            .map(|(lang, count)| format!("{lang} ({count})"))
+                            .collect();
+                        output.push_str(&langs.join(", "));
+                        output.push('\n');
+                    }
+
+                    if let Some(ts) = &stats.last_full_index {
+                        output.push_str(&format!("**Last full index:** {ts}\n"));
+                    }
+                    if let Some(ts) = &stats.last_incremental_update {
+                        output.push_str(&format!("**Last incremental:** {ts}\n"));
+                    }
+                    output.push_str(&format!(
+                        "**Index size:** {:.1} KB\n",
+                        stats.index_size_bytes as f64 / 1024.0
+                    ));
+
+                    // Graph data set status (FR-015). The graph
+                    // is built separately via `/codeindex graph
+                    // build`, so it may be empty even when the
+                    // index is populated.
+                    output.push_str("\n## Graph Dataset\n\n");
+                    if idx.graph_busy() {
+                        let (gdone, gtotal) = idx.graph_build_progress();
+                        output.push_str("\u{26a0}\u{fe0f} **Graph:** building...\n");
+                        if gtotal > 0 {
+                            output.push_str(&format!("**Progress:** {gdone}/{gtotal} files\n"));
+                        }
+                    }
+                    match idx.try_graph_status() {
+                        Some(gs) => {
+                            if gs.total_edges == 0 {
+                                output.push_str(
+                                    "**Graph:** not built (0 edges).\n\n\
+                                                     Run `/codeindex graph build` to derive \
+                                                     the semantic edge graph from the \
+                                                     indexed symbols.\n",
+                                );
+                            } else {
+                                output.push_str(&format!("**Total edges:** {}\n", gs.total_edges));
+                                output.push_str(&format!("**Nodes:** {}\n", gs.nodes));
+                                output.push_str(&format!(
+                                    "**Edges by confidence:** {} EXTRACTED, {} INFERRED\n",
+                                    gs.edges_extracted, gs.edges_inferred
+                                ));
+                                output.push_str(&format!("**Communities:** {}\n", gs.communities));
+                                output.push_str("**Edges by kind:**\n");
+                                output.push_str(&format!(
+                                                    "- calls: {}\n- imports: {}\n- inherits: {}\n- references: {}\n- mixes_in: {}\n- implements: {}\n",
+                                                    gs.edges_calls,
+                                                    gs.edges_imports,
+                                                    gs.edges_inherits,
+                                                    gs.edges_references,
+                                                    gs.edges_mixes_in,
+                                                    gs.edges_implements,
+                                                ));
+                            }
+                        }
+                        None => {
+                            // Graph stats unavailable because the
+                            // store lock is held; try_status()
+                            // succeeded so this is transient.
+                            output.push_str(
+                                "\u{26a0}\u{fe0f} Graph stats unavailable \
+                                                 (index busy - retry shortly).\n",
+                            );
+                        }
+                    }
+
+                    self.append_assistant_text(&output);
+                    self.status = format!(
+                        "codeindex: {} files, {} symbols, {} FTS docs",
+                        stats.files_indexed, stats.total_symbols, stats.fts_doc_count
+                    );
+                }
+                None => {
+                    // Store/FTS lock held by a background
+                    // reindex or graph build. Report busy
+                    // immediately from the lock-free atomics.
+                    // Attribute the lock holder before claiming
+                    // the index is busy: a graph build holds the
+                    // store lock only briefly (snapshot/persist),
+                    // so during a graph build the index itself is
+                    // still available.
+                    let (done, total) = idx.reindex_progress();
+                    let reindexing = total > 0 && done < total;
+                    let graph_busy = idx.graph_busy();
+                    let (gdone, gtotal) = idx.graph_build_progress();
+
+                    let mut output = String::from("## Code Index Status\n\n");
+                    output.push_str(&format!(
+                        "**Enabled:** {}\n",
+                        if config_enabled {
+                            "\u{2713} yes"
+                        } else {
+                            "\u{2717} no"
+                        }
+                    ));
+                    if reindexing {
+                        output.push_str("**Index:** busy - reindexing in progress\n");
+                        output.push_str(&format!("**Reindexing:** {done}/{total} files\n"));
+                        if graph_busy {
+                            output.push_str(&format!(
+                                "**Graph:** building ({gdone}/{gtotal} files)\n"
+                            ));
+                        }
+                    } else if graph_busy {
+                        output.push_str(&format!("**Graph:** building ({gdone}/{gtotal} files)\n"));
+                        output.push_str(
+                            "**Index:** available - the graph build holds the \
+                                             store lock only briefly for its \
+                                             snapshot/persist phases\n",
+                        );
+                    } else {
+                        output.push_str(
+                            "**Index:** busy - the store lock is held by a \
+                                             background operation\n",
+                        );
+                        output.push_str(
+                            "Wait a moment and retry - the background \
+                                             operation will release the lock when done.\n",
+                        );
+                    }
+
+                    self.append_assistant_text(&output);
+                    self.status = if reindexing {
+                        "codeindex: busy (reindexing)".to_string()
+                    } else if graph_busy {
+                        "codeindex: graph building".to_string()
+                    } else {
+                        "codeindex: busy".to_string()
+                    };
+                }
+            }
+        } else {
+            // No active code index
+            let state = if config_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            };
+            self.append_assistant_text(&format!(
+                                "## Code Index Status\n\n\
+                                 **Enabled:** {}\n\n\
+                                 Code index is not currently active. It may not yet be initialised.\n\n\
+                                 Use `/codeindex on` to enable indexing, \
+                                 or run `/codeindex help` for available sub-commands.",
+                                if config_enabled { "\u{2713} yes" } else { "\u{2717} no" }
+                            ));
+            self.status = format!("codeindex: {state}").to_string();
+        }
+    }
+
+    /// Run the `/codeindex help`, `/codeindex --help`, `/codeindex -h` sub-command.
+    fn codeindex_help(&mut self) {
+        self.append_assistant_text(
                                                   "## /codeindex \u{2014} Codebase Index Management\n\n\
                                                    **Sub-commands:**\n\n\
                                                    `/codeindex on` \u{2014} Enable codebase indexing\n\
@@ -13211,14 +13221,7 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                                                    - `codeindex_communities` \u{2014} List communities\n\
                                                    - `codeindex_godnodes` \u{2014} List high-degree hub symbols",
                                               );
-                self.status = "codeindex: help".to_string();
-            }
-            _ => {
-                self.append_assistant_text(
-                            "Usage: `/codeindex on|off|show|status|lang|reindex|rebuild|graph <build|export|lang>|explain <symbol>|path <A> <B>|communities|godnodes|skillgen|help`",
-                        );
-            }
-        }
+        self.status = "codeindex: help".to_string();
     }
 
     /// Run the `/router` slash command.

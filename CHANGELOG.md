@@ -74,6 +74,8 @@
 
 ### Changed
 
+- Changed: `slash_codeindex` in `crates/codemason-app-core/src/app/slash.rs` is decomposed in place (797 to 427 lines): the `on`, `off`, `show` and `help` sub-command arms move verbatim into `codeindex_<sub>` methods in the same `impl App`. The `graph`, `godnodes`, `explain`, `path` and `communities` arms stay inline because source-text tests search a fixed window after each of their patterns. Every string literal and pattern is unchanged (#9, car 11d).
+
 - Changed: a tool call's result lines in the transcript stop after 20 lines, with a "... N more lines" line.
 - Changed: `slash_team` in `crates/codemason-app-core/src/app/slash.rs` is decomposed in place (1,189 to 100 lines): the 13 `/team` sub-command arms of 30+ lines move verbatim into `team_<sub>` methods in the same `impl App`, taking the `sub`/`rest` locals they read as `&str` parameters. Arms that returned early keep their `ControlFlow::Break` returns and `slash_team` forwards them. Every string literal and pattern is unchanged (#9, car 11c).
 
