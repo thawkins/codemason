@@ -40,6 +40,7 @@ pub mod bridge;
 pub mod dialogs;
 pub mod dock;
 pub mod fonts;
+pub mod icons;
 pub mod keys;
 pub mod main_thread;
 pub mod metrics;

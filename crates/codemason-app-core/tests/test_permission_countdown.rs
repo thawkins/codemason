@@ -140,6 +140,7 @@ async fn test_permission_requested_event_queues_120_second_timeout() {
         permission: "file:write".to_string(),
         description: "create: crates/codemason-tui/tests/test_permission_countdown.rs".to_string(),
         options: vec![],
+        tool_call: None,
     })
     .await;
 

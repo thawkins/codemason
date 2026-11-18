@@ -98,6 +98,7 @@ fn all_variants() -> Vec<(Event, &'static str, Option<&'static str>)> {
                 permission: s("file:write"),
                 description: s("d"),
                 options: vec![],
+                tool_call: None,
             },
             "PermissionRequested",
             Some("s"),

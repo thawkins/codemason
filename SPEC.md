@@ -2131,7 +2131,18 @@ the codemason config directory. The font stack bundles Inter Regular and Inter
 SemiBold for proportional text and its bold weight (SIL Open Font License 1.1,
 `crates/codemason-gui/assets/fonts/Inter-LICENSE.txt`) and Hack Bold for bold
 code (MIT and Bitstream Vera licences,
-`crates/codemason-gui/assets/fonts/Hack-LICENSE.txt`).
+`crates/codemason-gui/assets/fonts/Hack-LICENSE.txt`). The Lucide icon font
+(`crates/codemason-gui/assets/fonts/lucide.ttf`, lucide-static 1.66.0, ISC
+licence with the Feather-derived icons under MIT,
+`crates/codemason-gui/assets/fonts/Lucide-LICENSE.txt`) sits alone in the
+`codemason-icons` family, so its private-use code points never stand in for
+text. `icons::Icon` names the icons the window draws (read, edit, command,
+search, agent, check, cross, warning, info, the two chevrons and copy), each
+with an ASCII stand-in `icons::icon_label` draws when the stack lacks the
+font. An activity row starts with the icon of its main kind of work (edit,
+then command, search, read, other tool), and a finished tool call's `* ` or
+`[x] ` marker is drawn as a check (`state.success`) or cross (`state.error`)
+icon beside its lines.
 
 **Themes.** Every colour in the window comes from a theme: a set of semantic
 tokens (`ThemeTokens` in `crates/codemason-app-core/src/theme_tokens.rs`, no
@@ -2185,7 +2196,61 @@ common alias; code over 64 KiB or in another language is drawn plain) in the
 theme's `syntax.*` colours. Attached images are thumbnails of at most 160
 points that open full size in an `Image` view (Close or a click outside closes
 it; Esc is left to the session); an image that cannot be loaded is named
-instead. The reply still streaming ends with an accent caret. All transcript
+instead. The reply still streaming ends with an accent caret. Tool calls and
+reasoning are grouped by `activity::group_activity` according to
+`App::transcript_prefs.verbosity`: at `low` (the default) each maximal run of
+`Tool` and `Thinking` blocks becomes one `Activity` block, at `medium` only
+runs of reasoning do, at `high` nothing is folded; changing the verbosity
+regroups every message. An activity row is a click-only disclosure button
+(AccessKit `expanded` state) labelled with `ActivitySummary::label` (the
+counts of reads, edits, commands, searches, other tools and thoughts in that
+order, then the failures, then the run time from one second: "Read 4 files,
+edited 2 files, ran 1 command (12 s)"; tools are categorised by their
+canonical name), followed by a `Running` progress indicator while a call runs
+and the failure count in `state.error`; opened, it lists each call's lines and
+thinking. A tool block keeps its header and at most 20 result lines
+(`RESULT_PREVIEW_MAX_LINES`) plus "... N more lines". Reasoning follows
+`transcript_prefs.thinking`: `collapsed` shows a `Thinking` disclosure that is
+open while the reply streams and closed after, `expanded` shows it in full,
+`hidden` omits it. The same applies to a `think` tool call's thought (its
+header line stays) and to an activity group that holds only reasoning, which
+is drawn as its thinking blocks with no row of its own. Whether a row is open is kept per block
+(`messages::block_id`, from the message id and block index) and survives
+streaming and scrolling. A completed `Edit`, `multi_edit`, `Write` or `create` call
+is followed by one `Diff` block per file (`diff_view::diffs_from_tool_input`:
+`Edit`/`multi_edit` diff `old_string` against `new_string`, so their line
+numbers count from that snippet; `Write`/`create` add every line of `content`
+and are marked `whole_file`, shown as "replaces the whole file; earlier
+contents not shown" instead of a removed count), folded into the activity row
+at `low`. A call run with `dry_run: true` changed nothing and gets no `Diff`
+block. `diff_view::file_diff`
+builds unified hunks with three lines of context, old and new line numbers and
+the added/removed counts, and stops after 2,000 lines (`truncated`). The
+transcript draws a diff as a card with the path, `+added -removed`, the first
+hunk (up to 40 lines) on `diff.added_bg`/`diff.removed_bg` rows with
+`diff.line_number` gutters, the number of further hunks, and an `Open diff`
+button. That button opens the `Diff` dock pane (`PaneId::Diff`, in the right
+tab group, shown while `App::diff_pane.shown`) on the message's diffs with the
+clicked one selected. The pane shows one file, unified or split (`Old` and
+`New` columns per hunk, removed runs beside the added runs that follow them),
+with buttons for the previous/next file and hunk, `Split` and `Reviewed`;
+while it holds the keyboard focus (any press inside it) `]`/`[`, `n`/`p`, `v`
+and `m` do the same and are taken out of the input, so they neither type nor
+reach the App. A reviewed file is collapsed to a note; a mark is for one
+change (`FileDiff::identity`, its path and lines), so a later change to the
+same path is not reviewed, and the marks survive closing and reopening the
+pane. A `PermissionRequested` event raised for a tool call
+carries that call (`tool_call`: id, name and the input it will run with, after
+any `pre_tool_use` hook; `dispatch_tool_with_permissions` sets it through
+`check_permission_for_call`, a task-local around its permission checks, and the
+SSE payload leaves it out). The App keeps it in the queued request's metadata
+and `tool_call_id`, and the permission dialog previews exactly that input
+(`permission_preview::permission_preview`): an edit as every hunk of each file
+it will change, drawn in the dialog (which scrolls) since the Diff pane would
+sit behind it; a `Write` or `create` of an existing file (up to 1 MiB) diffed
+against its current contents; a `Bash` call as its full command under
+`Command:`. A request without a call shows its text under `Details:` as
+before. All transcript
 text is selectable; right-clicking the transcript opens a menu with `Copy`
 (egui's text selection; a press on text places an empty selection, so it is
 enabled there and copies nothing), `Copy as Markdown` and `Quote in reply`
@@ -2483,6 +2548,8 @@ repository and does not use ETags.
 | `/memory` | Structured-memory panel and summary: `/memory` / `/memory show` (same), `/memory clear` (a `Yes`/`No` dialog clears this project's memories), `/memory help` |
 | `/db` | Session database: `/db prune [--days N] [--dry-run]` deletes messages older than the retention window (the session row is kept; a real prune arms a `Yes`/`No` dialog that opens on `No`), `/db help` (also the bare form) |
 | `/theme` | Switch the window's colour theme while it runs. A bare `/theme` opens the theme picker (Up/Down or a click previews, Enter keeps, Esc restores); `/theme list` reports the current theme and the catalog; `/theme <name>`, `/theme system`, `/theme dark` and `/theme light` switch directly. The `theme` config key sets the theme at startup (`"system"` when unset or unknown); `/theme` does not write it |
+| `/verbosity` | Set how much the transcript shows: `/verbosity low\|medium\|high` (default `low`); a bare `/verbosity` reports it. The `verbosity` config key sets the startup level; `/verbosity` does not write it |
+| `/thinking-display` | Set how thinking text shows: `/thinking-display show\|hide\|collapse` (expanded, hidden, collapsed; default collapsed); a bare form reports it. The `thinking_display` config key (`collapsed`, `expanded`, `hidden`) sets the startup mode. Distinct from `/thinking`, which sets the model's thinking level |
 | `/undo` / `/redo` | `/undo` removes the last turn from the conversation and the session database and restores the work tree to the snapshot taken before that turn's first tool call; `/redo` puts the messages and files back while nothing has been sent since (section 3.10) |
 | `/stats` | Usage and cost per model across sessions, from the persisted run-cost summaries: `/stats [--days N] [--project] [--json]`, `/stats help`; `/cost` covers the current session only. CLI parity via `cdmn stats` |
 | `/yolo` | Toggle YOLO mode (`on`/`off` set and persist the state, `status` reports it, a bare `/yolo` toggles; the toggle writes the user-global config, or the `--config` file when one was loaded) |

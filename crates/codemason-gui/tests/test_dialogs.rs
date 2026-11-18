@@ -19,11 +19,14 @@ use codemason_gui::Shell;
 use codemason_gui::dialogs::model_picker::{
     FILTER_LABEL, MODEL_PICKER_TITLE, MODELS_LABEL, filter_field_id,
 };
-use codemason_gui::dialogs::permission::{ALLOW_ONCE, ALWAYS_ALLOW, DENY, PERMISSION_TITLE};
+use codemason_gui::dialogs::permission::{
+    ALLOW_ONCE, ALWAYS_ALLOW, CHANGES_LABEL, COMMAND_LABEL, DENY, PERMISSION_TITLE,
+};
 use codemason_gui::dialogs::provider::{CONTINUE, PROVIDER_CHOICE_LABEL, SELECT_PROVIDER_TITLE};
 use codemason_gui::dialogs::shortcuts::SHORTCUTS_TITLE;
 use codemason_gui::dialogs::{ActiveDialog, active};
 use codemason_gui::keys::default_keymap;
+use codemason_gui::panels::diff::OPEN_DIFF;
 use codemason_gui::panels::prompt::PROMPT_LABEL;
 use craft_keymap::Platform;
 use egui::accesskit::Role;
@@ -74,6 +77,7 @@ fn request_permission(events: &UnboundedSender<Event>, id: &str) {
             permission: "bash".to_string(),
             description: "rm -rf target/temp/x".to_string(),
             options: Vec::new(),
+            tool_call: None,
         })
         .expect("send permission request");
 }
@@ -605,7 +609,7 @@ fn test_permission_double_click_answers_once() {
     harness.run();
     harness.get_by_label(ALLOW_ONCE).click();
     harness.run();
-    assert!(reply_ids(&mut bus).is_empty());
+    assert_eq!(reply_ids(&mut bus), [] as [std::string::String; 0]);
     assert_eq!(
         harness.state().app().session.permission_queue.len(),
         1,
@@ -789,4 +793,83 @@ fn test_permission_late_reply_keeps_the_next_request() {
         app.permission_answerable(),
         "and does not restart req-h's answer delay"
     );
+}
+
+/// The agent asks for permission for the call of `tool` with `input`, as
+/// the session's permission check does.
+fn request_for_call(
+    events: &UnboundedSender<Event>,
+    id: &str,
+    description: &str,
+    tool: &str,
+    input: serde_json::Value,
+) {
+    events
+        .send(Event::PermissionRequested {
+            session_id: SESSION.to_string(),
+            request_id: id.to_string(),
+            permission: "edit".to_string(),
+            description: description.to_string(),
+            options: Vec::new(),
+            tool_call: Some(codemason_types::event::PermissionToolCall {
+                id: "call-1".to_string(),
+                name: tool.to_string(),
+                input,
+            }),
+        })
+        .expect("send permission request");
+}
+
+#[test]
+fn test_permission_dialog_shows_the_whole_diff_of_an_edit() {
+    let old: String = (1..=20).map(|i| format!("line {i}\n")).collect();
+    let new = old
+        .replace("line 2\n", "line two\n")
+        .replace("line 18\n", "line eighteen\n");
+    let (_rt, events, mut harness) = rig(|_| {});
+    request_for_call(
+        &events,
+        "req-edit",
+        "Edit: tool:Edit",
+        "Edit",
+        serde_json::json!({"file_path": "src/a.rs", "old_string": old, "new_string": new}),
+    );
+    harness.run();
+    wait_shown(&mut harness);
+    harness.get_by_label(CHANGES_LABEL);
+    // Both hunks are in the dialog; it does not send the reader to the Diff
+    // pane, which would sit behind it.
+    harness.get_by_label_contains("+ line two");
+    harness.get_by_label_contains("+ line eighteen");
+    assert!(harness.query_by_label(OPEN_DIFF).is_none());
+}
+
+#[test]
+fn test_permission_dialog_shows_a_full_command() {
+    let command = "cargo build --release && cargo nextest run --workspace";
+    let (_rt, events, mut harness) = rig(|_| {});
+    // A Bash prompt's description names only the command.
+    request_for_call(
+        &events,
+        "req-bash",
+        "Bash: cargo",
+        "Bash",
+        serde_json::json!({ "command": command }),
+    );
+    harness.run();
+    wait_shown(&mut harness);
+    harness.get_by_label(COMMAND_LABEL);
+    harness.get_by_label(command);
+}
+
+#[test]
+fn test_permission_dialog_without_a_call_shows_the_request() {
+    let (_rt, events, mut harness) = rig(|_| {});
+    request_permission(&events, "req-plain");
+    harness.run();
+    wait_shown(&mut harness);
+    harness.get_by_label("Details:");
+    harness.get_by_label("rm -rf target/temp/x");
+    assert!(harness.query_by_label(COMMAND_LABEL).is_none());
+    assert!(harness.query_by_label(CHANGES_LABEL).is_none());
 }

@@ -21,6 +21,7 @@
 pub mod agents;
 pub mod code_block;
 pub mod context;
+pub mod diff;
 pub mod empty_state;
 pub mod log;
 pub mod memory;

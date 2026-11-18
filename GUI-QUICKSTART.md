@@ -170,6 +170,17 @@ Replies render as Markdown: headings, lists, tables, links (open in your
 browser) and highlighted code blocks. Your own turns appear in a card marked
 `You`. Attached images show as thumbnails; click one to see it full size.
 
+Tool calls fold into one row per run, such as "Read 4 files, edited 2 files,
+ran 1 command (12 s)"; click it to see each call. `/verbosity medium` folds
+only the model's reasoning and `/verbosity high` shows every call. Reasoning
+appears under a "Thinking" row that is open while the reply streams;
+`/thinking-display show` keeps it open and `/thinking-display hide` removes it.
+
+Edits show their diff under the call; click **Open diff** to review a
+message's changed files in the Diff pane. Click in the pane, then use `]` and
+`[` for the next and previous hunk, `n` and `p` for the next and previous file,
+`v` to switch between unified and split, and `m` to mark a file reviewed.
+
 The window follows the operating system's dark or light setting. `/theme`
 opens a picker that previews each theme as you move through the list: Enter
 keeps it, Esc goes back. `/theme <name>` switches directly, for example
@@ -356,6 +367,9 @@ window's own File menu.
   plain-text transcript) to the system clipboard in one step.
 
 ### Permission prompts
+
+When the agent asks to edit a file or run a command, the dialog shows the
+diff it will make or the full command, so you can check it before allowing it.
 
 When codemason wants to run a shell command, write a file, or perform another
 protected action, a permission dialog appears over the window. You

@@ -4,6 +4,13 @@
 
 ### Added
 
+- Added: the GUI bundles the Lucide icon font (lucide-static 1.66.0, ISC licence; Feather-derived icons MIT). Activity rows show an icon for their main kind of work, and a finished tool call shows a check or a cross; without the font they fall back to ASCII.
+- Added: the permission dialog previews exactly the call it asks about, with the input it will run with after any hook: every hunk of an edit (a write to an existing file is diffed against its current contents), or a shell call's full command. Permission requests raised for a tool call now carry that call (`tool_call` on `PermissionRequested`; not in the SSE payload).
+- Added: a finished edit (`Edit`, `multi_edit`, `Write`, `create`) is followed in the transcript by its diff: the path with `+added -removed`, the first hunk with line numbers on added and removed backgrounds, and an Open diff button. Under the default verbosity the diff sits inside the activity row.
+- Added: a Diff pane (opened by Open diff) shows a message's changed files one at a time, unified or split. Buttons, or `]`/`[` (hunk), `n`/`p` (file), `v` (layout) and `m` (mark reviewed) while the pane has the keyboard, move through them; a reviewed change is collapsed, a later change to the same file is not, and the marks survive closing the pane. Whole-file writes say they replace the file, and dry runs show no diff.
+- Added: `/verbosity low|medium|high` and `/thinking-display show|hide|collapse`; the `verbosity` and `thinking_display` keys in `codemason.json` set them at startup.
+- Added: at the default verbosity `low`, each run of tool calls and reasoning in a reply is one row such as "Read 4 files, edited 2 files, ran 1 command (12 s)", with a spinner while a call runs and the failure count in the error colour; a click lists every call. `medium` folds only reasoning, `high` shows every call.
+- Added: reasoning shows under a "Thinking" row that is open while the reply streams and closes when it completes (`/thinking-display collapse`, the default); `show` keeps it open, `hide` removes it.
 - Added: the Messages pane renders replies as Markdown: headings, lists, tables, block quotes, and links that open in the browser.
 - Added: code blocks in replies are highlighted in the theme's syntax colours (Rust, Python, JavaScript, TypeScript, Go, C, C++, Java, Bash, JSON) and have Copy, Wrap and Insert buttons; Insert puts the code into the prompt.
 - Added: transcript text is selectable. Right-clicking a message offers Copy, Copy as Markdown and Quote in reply.
@@ -67,6 +74,7 @@
 
 ### Changed
 
+- Changed: a tool call's result lines in the transcript stop after 20 lines, with a "... N more lines" line.
 - Changed: `slash_team` in `crates/codemason-app-core/src/app/slash.rs` is decomposed in place (1,189 to 100 lines): the 13 `/team` sub-command arms of 30+ lines move verbatim into `team_<sub>` methods in the same `impl App`, taking the `sub`/`rest` locals they read as `&str` parameters. Arms that returned early keep their `ControlFlow::Break` returns and `slash_team` forwards them. Every string literal and pattern is unchanged (#9, car 11c).
 
 - Changed: a user turn is a card marked `You` instead of a `You:` prefix, and an assistant turn has an accent rule down its left edge instead of a `*` prefix.

@@ -125,7 +125,10 @@ fn test_pasted_image_while_a_dialog_owns_the_window_is_left_alone() {
     harness.input_mut().events.push(pasted_image());
     harness.run();
 
-    assert!(harness.state().app().session.pending_attachments.is_empty());
+    assert_eq!(
+        harness.state().app().session.pending_attachments,
+        [] as [std::path::PathBuf; 0]
+    );
     assert_eq!(
         std::fs::read_dir(&paste_dir.0).expect("paste dir").count(),
         0,

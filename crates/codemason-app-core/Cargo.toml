@@ -45,6 +45,8 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 html2text = { workspace = true }
 pulldown-cmark = "0.13"
+# Line diffs of edit tool calls (`diff_view`).
+similar = { workspace = true }
 # Code-block syntax highlighting (`syntax_highlight`): the grammars
 # `codemason-codeindex` already builds, plus Bash and JSON.
 tree-sitter = "0.27"

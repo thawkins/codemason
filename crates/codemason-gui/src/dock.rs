@@ -66,11 +66,13 @@ pub enum PaneId {
     Teams,
     /// The queued prompts.
     Queue,
+    /// The diff of an edit, opened from the transcript.
+    Diff,
 }
 
 impl PaneId {
     /// Every pane, in declaration order.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Messages,
         Self::Prompt,
         Self::Sessions,
@@ -82,6 +84,7 @@ impl PaneId {
         Self::ActiveAgents,
         Self::Teams,
         Self::Queue,
+        Self::Diff,
     ];
 
     /// The pane's name: its tab text and the accessible label of its panel.
@@ -103,6 +106,7 @@ impl PaneId {
             Self::ActiveAgents => "Active agents",
             Self::Teams => "Teams",
             Self::Queue => "Queue",
+            Self::Diff => "Diff",
         }
     }
 
@@ -130,7 +134,8 @@ impl PaneId {
             | Self::Context
             | Self::ActiveAgents
             | Self::Teams
-            | Self::Queue => Permissions::default(),
+            | Self::Queue
+            | Self::Diff => Permissions::default(),
         }
     }
 }
@@ -161,6 +166,7 @@ pub fn pane_wanted(app: &App, pane: PaneId) -> bool {
         PaneId::ActiveAgents => app.show_agents_window,
         PaneId::Teams => app.show_teams_window,
         PaneId::Queue => false,
+        PaneId::Diff => app.diff_pane.shown,
     }
 }
 
@@ -207,6 +213,10 @@ pub fn close_in_app(app: &mut App, pane: PaneId) -> Option<KeyInput> {
             app.close_teams_window();
             return None;
         }
+        PaneId::Diff => {
+            app.diff_pane.shown = false;
+            return None;
+        }
         PaneId::Log => "panel.log",
         PaneId::Profile => "panel.profile",
         PaneId::Tasks => "panel.tasks",
@@ -246,7 +256,8 @@ pub fn pane_takes_keys(app: &App, pane: PaneId) -> bool {
         | PaneId::Profile
         | PaneId::Tasks
         | PaneId::Context
-        | PaneId::Queue => false,
+        | PaneId::Queue
+        | PaneId::Diff => false,
     }
 }
 
@@ -331,8 +342,10 @@ fn split(
 /// Build the layout a first launch (or an unreadable layout file) uses.
 ///
 /// Sessions, profile and memory sit in a left column; the transcript sits
-/// above the prompt in the centre; agents, teams, tasks, the queue and the
-/// context breakdown sit above the log in a right column. Every [`PaneId`] is shown.
+/// above the prompt in the centre; agents, teams, tasks, the queue, the
+/// context breakdown and the diff sit above the log in a right column. Every
+/// [`PaneId`] is placed; [`sync_visibility`] then hides the ones the App does
+/// not want, keeping their place.
 ///
 /// # Returns
 ///
@@ -354,6 +367,7 @@ pub fn default_layout() -> Layout<PaneId> {
             PaneId::Tasks,
             PaneId::Queue,
             PaneId::Context,
+            PaneId::Diff,
         ]),
         tabs(vec![PaneId::Log]),
     );

@@ -96,6 +96,14 @@ pub struct Palette {
     pub diff_added: Color32,
     /// [`ThemeColor::DiffRemoved`].
     pub diff_removed: Color32,
+    /// Unchanged diff lines.
+    pub diff_context: Color32,
+    /// The background of an added diff line.
+    pub diff_added_bg: Color32,
+    /// The background of a removed diff line.
+    pub diff_removed_bg: Color32,
+    /// Diff line numbers and hunk headers.
+    pub diff_line_number: Color32,
     /// [`ThemeColor::Heading`].
     pub heading: Color32,
     /// [`ThemeColor::Link`].
@@ -173,6 +181,10 @@ impl Palette {
             selection: mix(background, accent, SELECTION_MIX),
             diff_added: rgb(tokens.diff.added),
             diff_removed: rgb(tokens.diff.removed),
+            diff_context: rgb(tokens.diff.context),
+            diff_added_bg: rgb(tokens.diff.added_bg),
+            diff_removed_bg: rgb(tokens.diff.removed_bg),
+            diff_line_number: rgb(tokens.diff.line_number),
             heading: rgb(tokens.markdown.heading),
             link: rgb(tokens.markdown.link),
             code: rgb(tokens.markdown.code),

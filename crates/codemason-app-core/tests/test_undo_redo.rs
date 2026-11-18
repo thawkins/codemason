@@ -129,7 +129,7 @@ async fn test_undo_without_snapshot_leaves_files_alone() {
     app.execute_slash_command("/undo").await;
 
     assert!(app.session.messages.is_empty());
-    assert!(stored_texts(&app).is_empty());
+    assert_eq!(stored_texts(&app), [] as [std::string::String; 0]);
     assert_eq!(read(&project, "a.txt").as_deref(), Some("user edit"));
     assert!(!app.status.contains("file(s) changed"), "{}", app.status);
 }
@@ -144,7 +144,7 @@ async fn test_multiple_undo_then_redo_in_reverse_order() {
 
     app.execute_slash_command("/undo").await;
     app.execute_slash_command("/undo").await;
-    assert!(stored_texts(&app).is_empty());
+    assert_eq!(stored_texts(&app), [] as [std::string::String; 0]);
 
     app.execute_slash_command("/redo").await;
     assert_eq!(stored_texts(&app), ["q1", "a1"]);

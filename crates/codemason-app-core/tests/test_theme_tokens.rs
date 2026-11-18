@@ -162,7 +162,7 @@ fn test_load_dir_adds_overrides_and_reports_bad_files() {
 fn test_load_dir_of_a_missing_directory_adds_nothing() {
     let mut themes = ThemeCatalog::builtin();
     let warnings = themes.load_dir(&scratch("missing").join("nope"));
-    assert!(warnings.is_empty());
+    assert_eq!(warnings, [] as [std::string::String; 0]);
     assert_eq!(themes, ThemeCatalog::builtin());
 }
 

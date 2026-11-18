@@ -137,7 +137,10 @@ fn test_cancelled_dialog_changes_nothing() {
 
     assert_eq!(requests.borrow().len(), 3, "each item asked once");
     let app = harness.state().app();
-    assert!(app.session.pending_attachments.is_empty());
+    assert_eq!(
+        app.session.pending_attachments,
+        [] as [std::path::PathBuf; 0]
+    );
     assert_eq!(app.session.messages.len(), messages);
     assert_eq!(log_lines(app), logs);
     assert_eq!(app.status, status);
@@ -280,7 +283,10 @@ fn test_unavailable_dialog_is_logged_and_changes_nothing_else() {
     choose(&mut harness, ATTACH_LABEL);
 
     let app = harness.state().app();
-    assert!(app.session.pending_attachments.is_empty());
+    assert_eq!(
+        app.session.pending_attachments,
+        [] as [std::path::PathBuf; 0]
+    );
     assert!(
         log_lines(app)
             .iter()

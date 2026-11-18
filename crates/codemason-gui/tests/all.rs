@@ -90,6 +90,8 @@ pub fn permission_bits_enforced() -> bool {
     })
 }
 
+#[path = "test_activity_rows.rs"]
+mod test_activity_rows;
 #[path = "test_bridge.rs"]
 mod test_bridge;
 #[path = "test_clipboard.rs"]
@@ -98,6 +100,8 @@ mod test_clipboard;
 mod test_dialogs;
 #[path = "test_dialogs_more.rs"]
 mod test_dialogs_more;
+#[path = "test_diff_pane.rs"]
+mod test_diff_pane;
 #[path = "test_dock.rs"]
 mod test_dock;
 #[path = "test_files.rs"]

@@ -49,13 +49,18 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use codemason_agent::message::{Message, Role as MessageRole};
+use codemason_app_core::activity::{ActivityGroup, group_activity};
 use codemason_app_core::app::App;
-use codemason_app_core::message_blocks::{TranscriptBlock, message_to_blocks};
+use codemason_app_core::message_blocks::{ToolState, TranscriptBlock, message_to_blocks};
 use codemason_app_core::message_lines::MESSAGE_STREAM_MIN_INTERVAL;
+use codemason_app_core::message_text::canonical_tool_name;
+use codemason_app_core::styled::StyledLine;
+use codemason_app_core::transcript_prefs::{ThinkingDisplay, TranscriptPrefs, Verbosity};
 use codemason_types::sanitize_terminal::sanitize_terminal;
 use egui::{FontId, Rect, Role, ScrollArea, Sense, WidgetInfo, pos2, vec2};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
+use crate::icons::{Icon, icon_label};
 use crate::metrics::{radius, space, text_size};
 use crate::palette::Palette;
 use crate::panels::code_block::{CodeAction, code_block_ui};
@@ -89,6 +94,8 @@ enum BlockAction {
     Insert(String),
     /// Show this image at full size.
     Enlarge(std::path::PathBuf),
+    /// Open the Diff pane on these files, with this one selected.
+    OpenDiff(Vec<codemason_app_core::diff_view::FileDiff>, usize),
 }
 
 /// The space between two blocks of one message: the added gap plus the
@@ -125,7 +132,10 @@ struct Entry {
 impl Entry {
     /// Split `msg` into blocks through the core and estimate its height.
     fn render(msg: &Message, app: &App, rows: RowHeights) -> Self {
-        let blocks = message_to_blocks(msg, &app.tool_step_map, &app.cwd);
+        let blocks = group_activity(
+            message_to_blocks(msg, &app.tool_step_map, &app.cwd),
+            app.transcript_prefs.verbosity,
+        );
         let mut entry = Self {
             id: msg.id.clone(),
             edit_seq: msg.edit_seq,
@@ -159,6 +169,11 @@ impl Entry {
                     TranscriptBlock::Notice(_)
                     | TranscriptBlock::Thinking(_)
                     | TranscriptBlock::Tool { .. } => lines * rows.styled,
+                    TranscriptBlock::Activity(_) => rows.label,
+                    TranscriptBlock::Diff(diff) => {
+                        let shown = diff.hunks.first().map_or(0, |h| h.lines.len().min(40)) + 1;
+                        (shown as f32).mul_add(rows.code, rows.header + CARD_PADDING + CARD_STROKE)
+                    }
                 }
             })
             .sum();
@@ -241,6 +256,11 @@ pub struct MessagesView {
     /// An image a thumbnail click asked to show at full size, for the caller
     /// to take with [`MessagesView::take_enlarge`].
     pending_enlarge: Option<std::path::PathBuf>,
+    /// The verbosity the entries' blocks were grouped for; a change
+    /// regroups every message.
+    verbosity: Option<Verbosity>,
+    /// The diffs an Open diff button asked the Diff pane to show.
+    pending_diff: Option<(Vec<codemason_app_core::diff_view::FileDiff>, usize)>,
 }
 
 impl std::fmt::Debug for Entry {
@@ -315,6 +335,8 @@ impl Default for MessagesView {
             pending_insert: None,
             under_pointer: None,
             pending_enlarge: None,
+            verbosity: None,
+            pending_diff: None,
         }
     }
 }
@@ -420,7 +442,14 @@ impl MessagesView {
                 }
                 let to_bottom = matches!(scroll_to, Some(ScrollTo::Bottom));
                 let output = scroll.show_viewport(ui, |ui, viewport| {
-                    self.show_visible(ui, viewport, palette, node, source.processing);
+                    self.show_visible(
+                        ui,
+                        viewport,
+                        palette,
+                        node,
+                        source.processing,
+                        app.transcript_prefs,
+                    );
                     if to_bottom {
                         // Scroll to the end of the content; once there, the
                         // area sticks to the bottom as more arrives.
@@ -455,7 +484,8 @@ impl MessagesView {
 
     /// Carry out what the view's blocks asked for this frame: Insert puts
     /// the code at the end of the prompt, on a line of its own, and focuses
-    /// it; a thumbnail click opens the image view. Every caller of
+    /// it; a thumbnail click opens the image view; Open diff shows the Diff
+    /// pane on the message's diffs. Every caller of
     /// [`Self::show_messages`] calls this after it, with the App it may now
     /// change.
     pub fn apply_actions(&mut self, ctx: &egui::Context, app: &mut App) {
@@ -472,6 +502,9 @@ impl MessagesView {
         }
         if let Some(path) = self.take_enlarge() {
             crate::dialogs::image_view::open(ctx, path);
+        }
+        if let Some((files, selected)) = self.pending_diff.take() {
+            app.diff_pane.open(files, selected);
         }
     }
 
@@ -559,6 +592,13 @@ impl MessagesView {
         now: Instant,
     ) -> SyncOutcome {
         let messages = source.messages;
+        let verbosity = app.transcript_prefs.verbosity;
+        if self.verbosity.is_some_and(|v| v != verbosity) {
+            // The blocks are grouped by verbosity: group every message again.
+            self.entries.clear();
+            self.offsets_dirty = true;
+        }
+        self.verbosity = Some(verbosity);
         let evicted_height = self.drop_evicted_front(messages);
         self.reorder_by_id(messages);
 
@@ -682,6 +722,7 @@ impl MessagesView {
         palette: &Palette,
         node: egui::Id,
         processing: bool,
+        prefs: TranscriptPrefs,
     ) {
         let width = ui.available_width().max(1.0);
         if self.offsets_dirty {
@@ -719,12 +760,16 @@ impl MessagesView {
                 palette,
                 bold,
                 streaming: processing && index == last,
+                thinking: prefs.thinking,
             };
             draw_message(&mut child, entry, style, &mut self.markdown, &mut actions);
             for action in actions {
                 match action {
                     BlockAction::Insert(code) => self.pending_insert = Some(code),
                     BlockAction::Enlarge(path) => self.pending_enlarge = Some(path),
+                    BlockAction::OpenDiff(files, selected) => {
+                        self.pending_diff = Some((files, selected));
+                    }
                 }
             }
             self.laid_out += 1;
@@ -756,8 +801,10 @@ struct BlockStyle<'a> {
     /// How bold text is drawn.
     bold: Bold,
     /// Whether the message is the reply still streaming (it ends with a
-    /// caret).
+    /// caret, and its thinking blocks start open).
     streaming: bool,
+    /// How thinking blocks are shown.
+    thinking: ThinkingDisplay,
 }
 
 /// Draw one message: its frame for the role, then its blocks.
@@ -826,12 +873,30 @@ fn draw_blocks(
         palette,
         bold,
         streaming,
+        thinking,
     } = style;
     ui.spacing_mut().item_spacing.y = space::XS;
+    let mut drawn = 0;
     for (index, block) in entry.blocks.iter().enumerate() {
-        if index > 0 {
+        let hidden_thinking = match block {
+            TranscriptBlock::Thinking(_) => true,
+            TranscriptBlock::Activity(group) => thinking_only(group).is_some(),
+            TranscriptBlock::Markdown(_)
+            | TranscriptBlock::Code { .. }
+            | TranscriptBlock::Plain(_)
+            | TranscriptBlock::Notice(_)
+            | TranscriptBlock::Tool { .. }
+            | TranscriptBlock::Image { .. }
+            | TranscriptBlock::Diff(_) => false,
+        };
+        if thinking == ThinkingDisplay::Hidden && hidden_thinking {
+            continue;
+        }
+        if drawn > 0 {
             ui.add_space(space::XS);
         }
+        drawn += 1;
+        let id = block_id(&entry.id, index);
         match block {
             TranscriptBlock::Markdown(text) => {
                 ui.push_id(index, |ui| {
@@ -849,21 +914,20 @@ fn draw_blocks(
             TranscriptBlock::Plain(text) => {
                 ui.add(egui::Label::new(egui::RichText::new(text).color(palette.text)).wrap());
             }
-            TranscriptBlock::Notice(lines) | TranscriptBlock::Thinking(lines) => {
+            TranscriptBlock::Notice(lines) => {
                 let job = styled_to_layout_job(lines, palette, ui.available_width(), bold);
                 ui.add(egui::Label::new(job).wrap());
             }
+            TranscriptBlock::Thinking(lines) => thinking_ui(ui, id, lines, style),
+            TranscriptBlock::Diff(diff) => diff_ui(ui, entry, diff, palette, actions),
+            TranscriptBlock::Activity(group) => activity_ui(ui, id, entry, group, style, actions),
             TranscriptBlock::Tool {
                 lines,
                 status_label,
-            } => {
-                let job = styled_to_layout_job(lines, palette, ui.available_width(), bold);
-                let text = job.text.clone();
-                let response = ui.add(egui::Label::new(job).wrap());
-                response.widget_info(|| {
-                    WidgetInfo::labeled(Role::Label, true, format!("{text}\n{status_label}"))
-                });
-            }
+                state,
+                name,
+                ..
+            } => tool_ui(ui, id, name, lines, status_label, *state, style),
             TranscriptBlock::Image { name, path } => {
                 let uri = format!("file://{}", path.display());
                 let alt = format!("Image: {name}");
@@ -895,4 +959,317 @@ fn draw_blocks(
         let (rect, _) = ui.allocate_exact_size(vec2(CARET_WIDTH, height), Sense::hover());
         ui.painter().rect_filled(rect, 1.0, palette.accent);
     }
+}
+
+/// The id of a message's block, for state kept across frames (whether a
+/// row is open): stable while the message streams and as the view scrolls.
+#[must_use]
+pub fn block_id(message_id: &str, block_index: usize) -> egui::Id {
+    egui::Id::unique(("transcript_block", message_id, block_index))
+}
+
+/// The label of a running activity row's spinner.
+pub const ACTIVITY_RUNNING_LABEL: &str = "Running";
+
+/// The header of a collapsed thinking block.
+pub const THINKING_LABEL: &str = "Thinking";
+
+/// A tool call's lines, labelled with its status for assistive technology.
+/// A `think` call's thought is drawn as thinking. A finished call's leading
+/// marker (`* ` or `[x] `) is drawn as a check or
+/// a cross icon beside the lines instead.
+#[allow(clippy::too_many_arguments)]
+fn tool_ui(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    name: &str,
+    lines: &[StyledLine],
+    status_label: &str,
+    state: ToolState,
+    style: BlockStyle<'_>,
+) {
+    // A `think` call's reasoning follows the thinking display, like the
+    // model's own reasoning: its header is the call, the lines under it the
+    // thought.
+    if canonical_tool_name(name) == "think" && lines.len() > 1 {
+        tool_ui(ui, id, "", &lines[..1], status_label, state, style);
+        thinking_ui(ui, id.with("thought"), &lines[1..], style);
+        return;
+    }
+    let icon = match state {
+        ToolState::Done => Some((Icon::Check, style.palette.success)),
+        ToolState::Failed => Some((Icon::Cross, style.palette.error)),
+        ToolState::Running => None,
+    };
+    let mut lines = lines.to_vec();
+    let marked = lines
+        .first()
+        .and_then(|l| l.spans.first())
+        .is_some_and(|marker| matches!(marker.text.as_str(), "* " | "[x] "));
+    let Some((icon, color)) = icon.filter(|_| marked) else {
+        draw_tool_lines(ui, &lines, status_label, style);
+        return;
+    };
+    if let Some(first) = lines.first_mut() {
+        first.spans.remove(0);
+    }
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = space::XS;
+        ui.label(icon_label(ui.ctx(), icon, FONT_SIZE, color));
+        draw_tool_lines(ui, &lines, status_label, style);
+    });
+}
+
+/// A tool call's lines as one selectable label.
+fn draw_tool_lines(
+    ui: &mut egui::Ui,
+    lines: &[StyledLine],
+    status_label: &str,
+    style: BlockStyle<'_>,
+) {
+    let job = styled_to_layout_job(lines, style.palette, ui.available_width(), style.bold);
+    let text = job.text.clone();
+    let response = ui.add(egui::Label::new(job).wrap());
+    response
+        .widget_info(|| WidgetInfo::labeled(Role::Label, true, format!("{text}\n{status_label}")));
+}
+
+/// A row that opens and closes the content under it: a disclosure triangle
+/// and `label`, as one click-only button that reports whether it is
+/// expanded. `extra` draws after the label on the same row. Whether it is
+/// open is kept under `id`; until it is first clicked it is `default_open`.
+///
+/// # Returns
+///
+/// Whether the content is open.
+fn disclosure(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    label: &str,
+    icon: Option<Icon>,
+    palette: &Palette,
+    default_open: bool,
+    extra: impl FnOnce(&mut egui::Ui),
+) -> bool {
+    let key = id.with("open");
+    let mut open = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(default_open);
+    ui.horizontal(|ui| {
+        if let Some(icon) = icon {
+            let size = egui::TextStyle::Body.resolve(ui.style()).size;
+            ui.label(icon_label(ui.ctx(), icon, size, palette.muted));
+        }
+        let row = ui.text_style_height(&egui::TextStyle::Body);
+        let galley = egui::WidgetText::from(egui::RichText::new(label).color(palette.muted))
+            .into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                egui::TextStyle::Body,
+            );
+        let size = vec2(row + space::XS + galley.size().x, row.max(galley.size().y));
+        let (rect, response) = ui.allocate_exact_size(size, Sense::CLICK);
+        if response.clicked() {
+            open = !open;
+            ui.data_mut(|d| d.insert_temp(key, open));
+        }
+        if ui.is_rect_visible(rect) {
+            // A triangle pointing right when closed, down when open.
+            let icon = Rect::from_center_size(
+                pos2(rect.left() + row / 2.0, rect.center().y),
+                vec2(row * 0.5, row * 0.5),
+            );
+            let points = if open {
+                vec![icon.left_top(), icon.right_top(), icon.center_bottom()]
+            } else {
+                vec![icon.left_top(), icon.right_center(), icon.left_bottom()]
+            };
+            ui.painter().add(egui::Shape::convex_polygon(
+                points,
+                palette.muted,
+                egui::Stroke::NONE,
+            ));
+            let text_pos = pos2(
+                rect.left() + row + space::XS,
+                rect.center().y - galley.size().y / 2.0,
+            );
+            ui.painter().galley(text_pos, galley, palette.muted);
+        }
+        response.widget_info(|| WidgetInfo::labeled(Role::Button, true, label));
+        ui.ctx()
+            .accesskit_node_builder(response.id, |node| node.set_expanded(open));
+        extra(ui);
+    });
+    open
+}
+
+/// A thinking block, as [`ThinkingDisplay`] asks: hidden, in full, or under
+/// a "Thinking" row that is open while the reply streams.
+fn thinking_ui(ui: &mut egui::Ui, id: egui::Id, lines: &[StyledLine], style: BlockStyle<'_>) {
+    let full = |ui: &mut egui::Ui| {
+        let job = styled_to_layout_job(lines, style.palette, ui.available_width(), style.bold);
+        ui.add(egui::Label::new(job).wrap());
+    };
+    match style.thinking {
+        ThinkingDisplay::Hidden => {}
+        ThinkingDisplay::Expanded => full(ui),
+        ThinkingDisplay::Collapsed => {
+            if disclosure(
+                ui,
+                id,
+                THINKING_LABEL,
+                None,
+                style.palette,
+                style.streaming,
+                |_| {},
+            ) {
+                full(ui);
+            }
+        }
+    }
+}
+
+/// An activity row: its summary, a spinner while a call runs and the
+/// failure count in the error colour; opened, every folded block.
+fn activity_ui(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    entry: &Entry,
+    group: &ActivityGroup,
+    style: BlockStyle<'_>,
+    actions: &mut Vec<BlockAction>,
+) {
+    // A group of reasoning only is drawn as its thinking blocks, so the
+    // thinking display alone decides whether and how it shows.
+    if let Some(thoughts) = thinking_only(group) {
+        for (index, lines) in thoughts.into_iter().enumerate() {
+            thinking_ui(ui, id.with(index), lines, style);
+        }
+        return;
+    }
+    let palette = style.palette;
+    let label = group.summary.label();
+    let errors = group.summary.errors;
+    let summary = group.summary;
+    let kind = if summary.edits > 0 {
+        Icon::Edit
+    } else if summary.commands > 0 {
+        Icon::Command
+    } else if summary.searches > 0 {
+        Icon::Search
+    } else if summary.reads > 0 {
+        Icon::Read
+    } else if summary.other > 0 {
+        Icon::Agent
+    } else {
+        Icon::Info
+    };
+    let open = disclosure(ui, id, &label, Some(kind), palette, false, |ui| {
+        if group.running {
+            crate::panels::status_bar::busy_spinner(ui, palette, ACTIVITY_RUNNING_LABEL);
+        }
+        if errors > 0 {
+            ui.label(egui::RichText::new(format!("{errors} failed")).color(palette.error));
+        }
+    });
+    if !open {
+        return;
+    }
+    egui::Frame::NONE
+        .inner_margin(egui::Margin {
+            left: space::LG as i8,
+            ..egui::Margin::ZERO
+        })
+        .show(ui, |ui| {
+            for (index, item) in group.items.iter().enumerate() {
+                match item {
+                    TranscriptBlock::Tool {
+                        lines,
+                        status_label,
+                        state,
+                        name,
+                        ..
+                    } => tool_ui(ui, id.with(index), name, lines, status_label, *state, style),
+                    TranscriptBlock::Thinking(lines) => {
+                        thinking_ui(ui, id.with(index), lines, style);
+                    }
+                    TranscriptBlock::Markdown(_)
+                    | TranscriptBlock::Code { .. }
+                    | TranscriptBlock::Plain(_)
+                    | TranscriptBlock::Notice(_)
+                    | TranscriptBlock::Image { .. }
+                    | TranscriptBlock::Activity(_) => {}
+                    TranscriptBlock::Diff(diff) => diff_ui(ui, entry, diff, palette, actions),
+                }
+            }
+        });
+}
+
+/// Every diff of `entry`, in order, folded ones included.
+fn entry_diffs(entry: &Entry) -> Vec<&codemason_app_core::diff_view::FileDiff> {
+    let mut diffs = Vec::new();
+    for block in &entry.blocks {
+        match block {
+            TranscriptBlock::Diff(diff) => diffs.push(diff),
+            TranscriptBlock::Activity(group) => {
+                diffs.extend(group.items.iter().filter_map(|item| match item {
+                    TranscriptBlock::Diff(diff) => Some(diff),
+                    TranscriptBlock::Markdown(_)
+                    | TranscriptBlock::Code { .. }
+                    | TranscriptBlock::Plain(_)
+                    | TranscriptBlock::Notice(_)
+                    | TranscriptBlock::Tool { .. }
+                    | TranscriptBlock::Thinking(_)
+                    | TranscriptBlock::Image { .. }
+                    | TranscriptBlock::Activity(_) => None,
+                }));
+            }
+            TranscriptBlock::Markdown(_)
+            | TranscriptBlock::Code { .. }
+            | TranscriptBlock::Plain(_)
+            | TranscriptBlock::Notice(_)
+            | TranscriptBlock::Tool { .. }
+            | TranscriptBlock::Thinking(_)
+            | TranscriptBlock::Image { .. } => {}
+        }
+    }
+    diffs
+}
+
+/// An inline diff; Open diff asks for the Diff pane on the message's diffs
+/// with this one selected.
+fn diff_ui(
+    ui: &mut egui::Ui,
+    entry: &Entry,
+    diff: &codemason_app_core::diff_view::FileDiff,
+    palette: &Palette,
+    actions: &mut Vec<BlockAction>,
+) {
+    if crate::panels::diff::inline_diff_ui(ui, diff, palette) {
+        let diffs = entry_diffs(entry);
+        let selected = diffs
+            .iter()
+            .position(|d| std::ptr::eq(*d, diff))
+            .unwrap_or(0);
+        let files = diffs.into_iter().cloned().collect();
+        actions.push(BlockAction::OpenDiff(files, selected));
+    }
+}
+
+/// The thinking blocks of `group` when it holds nothing else.
+fn thinking_only(group: &ActivityGroup) -> Option<Vec<&[StyledLine]>> {
+    group
+        .items
+        .iter()
+        .map(|item| match item {
+            TranscriptBlock::Thinking(lines) => Some(lines.as_slice()),
+            TranscriptBlock::Markdown(_)
+            | TranscriptBlock::Code { .. }
+            | TranscriptBlock::Plain(_)
+            | TranscriptBlock::Notice(_)
+            | TranscriptBlock::Tool { .. }
+            | TranscriptBlock::Image { .. }
+            | TranscriptBlock::Activity(_)
+            | TranscriptBlock::Diff(_) => None,
+        })
+        .collect()
 }

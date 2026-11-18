@@ -284,6 +284,13 @@ pub(crate) async fn dispatch_tool_with_permissions(
         return dispatch_tool_leaf(tool, tool_input, tool_ctx).await;
     }
     let resource = extract_resource_from_input(&tool_input, &tc.name);
+    // Every prompt raised below carries the call and the input it will run
+    // with (after any hook), so the frontend previews exactly what is asked.
+    let call = codemason_types::event::PermissionToolCall {
+        id: tc.id.clone(),
+        name: tc.name.clone(),
+        input: tool_input.clone(),
+    };
     if tc.name == "Bash" {
         let sub_commands = split_bash_command(&resource);
         use codemason_tools_core::bash::is_safe_command;
@@ -298,20 +305,23 @@ pub(crate) async fn dispatch_tool_with_permissions(
         let mut all_approved = true;
         for sub_cmd in &sub_commands {
             let cmd_name = extract_command_name(sub_cmd);
-            let permission_action = check_permission_with_prompt(
-                permission_checker,
-                event_bus,
-                session_id_for_perm,
-                perm_category,
-                &cmd_name,
-                &tc.name,
-                auto_approve,
-                Some(&tool_ctx.canonical_cache),
-                checkpoint_forced,
-                checkpoint_timeout_secs,
-                security_approved,
-                subagent_yolo,
-                &tool_ctx.working_dir,
+            let permission_action = crate::session::permissions::check_permission_for_call(
+                call.clone(),
+                check_permission_with_prompt(
+                    permission_checker,
+                    event_bus,
+                    session_id_for_perm,
+                    perm_category,
+                    &cmd_name,
+                    &tc.name,
+                    auto_approve,
+                    Some(&tool_ctx.canonical_cache),
+                    checkpoint_forced,
+                    checkpoint_timeout_secs,
+                    security_approved,
+                    subagent_yolo,
+                    &tool_ctx.working_dir,
+                ),
             )
             .await;
             match permission_action {
@@ -346,20 +356,23 @@ pub(crate) async fn dispatch_tool_with_permissions(
             "Permission denied for one or more sub-commands"
         ));
     }
-    let permission_action = check_permission_with_prompt(
-        permission_checker,
-        event_bus,
-        session_id_for_perm,
-        perm_category,
-        &resource,
-        &tc.name,
-        auto_approve,
-        Some(&tool_ctx.canonical_cache),
-        checkpoint_forced,
-        checkpoint_timeout_secs,
-        security_approved,
-        subagent_yolo,
-        &tool_ctx.working_dir,
+    let permission_action = crate::session::permissions::check_permission_for_call(
+        call.clone(),
+        check_permission_with_prompt(
+            permission_checker,
+            event_bus,
+            session_id_for_perm,
+            perm_category,
+            &resource,
+            &tc.name,
+            auto_approve,
+            Some(&tool_ctx.canonical_cache),
+            checkpoint_forced,
+            checkpoint_timeout_secs,
+            security_approved,
+            subagent_yolo,
+            &tool_ctx.working_dir,
+        ),
     )
     .await;
     // SEC-codemason-agent-001 (SECTASKS T-007): a hook approval may satisfy the
