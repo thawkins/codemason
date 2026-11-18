@@ -265,7 +265,7 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
             });
         list.inner
             .widget_info(|| egui::WidgetInfo::labeled(egui::Role::List, true, MODELS_LABEL));
-        ui.add_space(6.0);
+        ui.add_space(crate::metrics::space::SM);
         ui.add_enabled_ui(!shown.is_empty(), |ui| {
             key_buttons(ui, &[(SELECT, plain(Key::Enter))]);
         });

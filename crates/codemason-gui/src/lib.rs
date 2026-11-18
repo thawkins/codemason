@@ -22,7 +22,7 @@
 //!   face, system fonts for CJK and the rest) the window installs at start.
 //! - [`platform`] holds the native file dialogs ([`platform::files`]) and
 //!   the clipboard paste and copy wiring ([`platform::clipboard`]).
-//! - [`theme`] installs the egui visuals of the App's theme mode and
+//! - [`theme`] installs the egui visuals of the App's theme and
 //!   restyles the window when the mode changes.
 //! - [`bridge::spawn_event_bridge`] forwards agent events from the
 //!   [`EventBus`] into the shell's queue and wakes egui.
@@ -42,6 +42,7 @@ pub mod dock;
 pub mod fonts;
 pub mod keys;
 pub mod main_thread;
+pub mod metrics;
 pub mod palette;
 pub mod panels;
 pub mod platform;

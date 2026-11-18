@@ -185,7 +185,7 @@ impl MessagesView {
     ///
     /// * `ui` - where to draw.
     /// * `app` - the application whose `session.messages` are shown.
-    /// * `palette` - the colours of the current theme mode.
+    /// * `palette` - the colours of the current theme.
     ///
     /// # Returns
     ///
@@ -217,7 +217,7 @@ impl MessagesView {
     /// * `app` - the application, for the core's message rendering (tool
     ///   step numbers, display names, working directory).
     /// * `source` - the messages to show and whether they are streaming.
-    /// * `palette` - the colours of the current theme mode.
+    /// * `palette` - the colours of the current theme.
     /// * `scroll_to` - where to move this frame (a keyboard scroll, or
     ///   keeping a rebuilt view in place); `None` keeps the user's scrolling.
     ///

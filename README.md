@@ -165,7 +165,11 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   (`Alt+I` | `Cmd+Shift+I`), the context panel (`Alt+C`, what the next request
   sends to the model: the window, each prompt partition with its share, the
   total and the free headroom), agents and teams. The window opens maximized the
-  first time, then remembers its size, position and layout. Without a display
+  first time, then remembers its size, position and layout. It follows the
+  system's dark or light setting; `/theme` opens a picker over seven built-in
+  themes (dark, light, high contrast, Catppuccin Mocha, Gruvbox, Nord, Tokyo
+  Night), and your own themes are JSON files in `~/.config/codemason/themes/`
+  or `.codemason/themes/`. Without a display
   (an SSH session) `cdmn` exits with a pointer to `cdmn run`
 - **Telemetry export health** — every OTLP metric export outcome is classified
   (success, non-2xx collector response, transport error, export timeout) and a

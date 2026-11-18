@@ -109,7 +109,7 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
     let mut clicked: Option<(usize, bool)> = None;
     modal(ctx, "codemason_question_dialog", QUESTION_TITLE, |ui| {
         ui.label(question.as_str());
-        ui.add_space(4.0);
+        ui.add_space(crate::metrics::space::XS);
         if options.is_empty() {
             let field = ui
                 .horizontal(|ui| {
@@ -128,7 +128,7 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
             if ctx.memory(|m| m.focused().is_none_or(|id| id == prompt_id())) {
                 field.request_focus();
             }
-            ui.add_space(6.0);
+            ui.add_space(crate::metrics::space::SM);
             ui.add_enabled_ui(answerable, |ui| {
                 key_buttons(
                     ui,
@@ -154,7 +154,7 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
             });
             list.response
                 .widget_info(|| egui::WidgetInfo::labeled(egui::Role::List, true, OPTIONS_LABEL));
-            ui.add_space(6.0);
+            ui.add_space(crate::metrics::space::SM);
             ui.add_enabled_ui(answerable, |ui| {
                 key_buttons(
                     ui,

@@ -58,7 +58,7 @@ fn lines(snapshot: &ProfileSnapshot, palette: &Palette) -> Vec<Line> {
             .push("ops ", palette.muted)
             .push(snapshot.operations.len().to_string(), palette.text)
             .push("  sorted by self time", palette.muted),
-        Line::new().push(HEADER, palette.color(ThemeColor::Yellow)),
+        Line::new().push(HEADER, palette.color(ThemeColor::Warning)),
     ];
     if snapshot.operations.is_empty() {
         lines.push(Line::new().push(WAITING_TEXT, palette.muted));

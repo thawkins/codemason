@@ -18,7 +18,7 @@ use crate::palette::Palette;
 
 /// Font size, in points, of transcript text (proportional and monospace
 /// alike, so a code line is as tall as a prose line).
-pub const FONT_SIZE: f32 = 14.0;
+pub const FONT_SIZE: f32 = crate::metrics::text_size::BODY;
 
 /// Opacity factor applied to `dim` text.
 const DIM_FACTOR: f32 = 0.6;

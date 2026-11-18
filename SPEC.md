@@ -2133,6 +2133,36 @@ SemiBold for proportional text and its bold weight (SIL Open Font License 1.1,
 code (MIT and Bitstream Vera licences,
 `crates/codemason-gui/assets/fonts/Hack-LICENSE.txt`).
 
+**Themes.** Every colour in the window comes from a theme: a set of semantic
+tokens (`ThemeTokens` in `crates/codemason-app-core/src/theme_tokens.rs`, no
+egui types) covering `text.{base,muted,subtle}`,
+`bg.{base,raised1,raised2,overlay}`, `border.{base,focus}`, `accent`,
+`state.{success,warning,error,info}`, `diff.*`, `syntax.*`, `markdown.*` and
+eight `categorical` colours. app-core styles text with semantic `ThemeColor`
+roles (`Heading`, `DiffAdded`, `Subtle`, ...); the GUI's `Palette` maps a role
+to the theme's colour and builds the egui `Visuals` from the same tokens. The
+ANSI `ThemeColor` names resolve to the theme colour of the same meaning (red is
+`state.error`), so no pane draws a fixed hue. `scripts/check-theme-literals.sh`
+(in CI) fails on a literal colour or an ANSI name outside
+`crates/codemason-gui/src/palette.rs` and
+`crates/codemason-app-core/src/styled.rs`.
+
+Themes are JSON in the token shape. Seven are built in
+(`crates/codemason-app-core/themes/`): `codemason-dark`, `codemason-light`,
+`high-contrast`, and ports of Catppuccin Mocha, Gruvbox dark, Nord and Tokyo
+Night (MIT-licensed palettes, credited in each file). User themes load at
+startup from `~/.config/codemason/themes/*.json`, then the project's
+`.codemason/themes/*.json`; a later theme of the same name wins. A file that
+does not parse or exceeds 64 KiB is skipped, and a loaded theme whose text is
+below WCAG contrast (4.5:1 for `text.base` and `text.muted` on `bg.base`, 3:1
+for `text.subtle`, `accent` and the state colours) is used; both are reported
+as warnings in the Log pane. The selection is `system` (the default, following
+the operating system between `codemason-dark` and `codemason-light`; no
+reported preference counts as dark) or a named theme, and changing it restyles
+the window on the next frame. Spacing, corner radii and text sizes come from
+the scales in `crates/codemason-gui/src/metrics.rs` (spacing 4/8/12/16/24,
+radii 4/6/10, text 12/14/16/20).
+
 Keyboard shortcuts for the window are craft-keymap commands: `panel.log`
 (`Alt+L` | `Cmd+Shift+L`), `panel.profile` (`Alt+P` | `Cmd+Shift+P`),
 `panel.tasks` (`Alt+I` | `Cmd+Shift+I`), `panel.memory` (`Alt+M` |
@@ -2420,7 +2450,7 @@ repository and does not use ETags.
 | `/compact` | Summarise and compact the conversation history (one-shot LLM summarisation; FR-009). `/compress` is a deprecated alias |
 | `/memory` | Structured-memory panel and summary: `/memory` / `/memory show` (same), `/memory clear` (a `Yes`/`No` dialog clears this project's memories), `/memory help` |
 | `/db` | Session database: `/db prune [--days N] [--dry-run]` deletes messages older than the retention window (the session row is kept; a real prune arms a `Yes`/`No` dialog that opens on `No`), `/db help` (also the bare form) |
-| `/theme` | Switch the window's colour theme while it runs: `/theme default\|high-contrast`, a bare `/theme` reports the current one. The `theme` config key (`"default"` or `"high-contrast"`) sets the theme at startup; `/theme` does not write it |
+| `/theme` | Switch the window's colour theme while it runs. A bare `/theme` opens the theme picker (Up/Down or a click previews, Enter keeps, Esc restores); `/theme list` reports the current theme and the catalog; `/theme <name>`, `/theme system`, `/theme dark` and `/theme light` switch directly. The `theme` config key sets the theme at startup (`"system"` when unset or unknown); `/theme` does not write it |
 | `/undo` / `/redo` | `/undo` removes the last turn from the conversation and the session database and restores the work tree to the snapshot taken before that turn's first tool call; `/redo` puts the messages and files back while nothing has been sent since (section 3.10) |
 | `/stats` | Usage and cost per model across sessions, from the persisted run-cost summaries: `/stats [--days N] [--project] [--json]`, `/stats help`; `/cost` covers the current session only. CLI parity via `cdmn stats` |
 | `/yolo` | Toggle YOLO mode (`on`/`off` set and persist the state, `status` reports it, a bare `/yolo` toggles; the toggle writes the user-global config, or the `--config` file when one was loaded) |

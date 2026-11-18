@@ -30,7 +30,7 @@ fn harness(app: App) -> Harness<'static, State> {
         .with_max_steps(64)
         .build_ui_state(
             |ui, state: &mut State| {
-                let palette = palette_for(state.app.theme_mode);
+                let palette = palette_for(&state.app, ui.ctx());
                 state.view.show(ui, &state.app, &palette);
             },
             State {

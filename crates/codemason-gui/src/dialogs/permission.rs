@@ -67,7 +67,7 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         if queued > 1 {
             ui.weak(format!("{queued} queued"));
         }
-        ui.add_space(6.0);
+        ui.add_space(crate::metrics::space::SM);
         ui.add_enabled_ui(answerable, |ui| {
             key_buttons(
                 ui,

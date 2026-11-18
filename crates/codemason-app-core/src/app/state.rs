@@ -1048,7 +1048,7 @@ pub const SLASH_COMMANDS: &[SlashCommandDef] = &[
     },
     SlashCommandDef {
         trigger: "theme",
-        description: "Switch the colour theme: /theme default|high-contrast, /theme shows the current one (/theme help)",
+        description: "Switch the colour theme: /theme opens the picker, /theme <name>|system|dark|light switches (/theme help)",
     },
     SlashCommandDef {
         trigger: "yolo",
@@ -1446,6 +1446,17 @@ pub struct HistoryPickerState {
     pub selected: usize,
     /// Scroll offset for the list (rows from the top).
     pub scroll_offset: usize,
+}
+
+/// State of the `/theme` picker overlay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThemePickerState {
+    /// What can be picked: `system`, then the catalog's theme names.
+    pub entries: Vec<String>,
+    /// Currently highlighted row; the window previews this theme.
+    pub selected: usize,
+    /// The selection to restore when the picker is cancelled.
+    pub original: crate::theme_tokens::ThemeSelection,
 }
 
 /// State of the `/config list` save-picker overlay.
@@ -3835,6 +3846,8 @@ pub struct App {
     pub history_file_path: Option<std::path::PathBuf>,
     /// Active history picker dialog, if any.
     pub history_picker: Option<HistoryPickerState>,
+    /// The `/theme` picker overlay, while it is open.
+    pub theme_picker: Option<ThemePickerState>,
     /// Active config-save picker dialog (`/config list`), if any.
     pub config_save_picker: Option<ConfigSavePickerState>,
     /// Index of the selected agent in the agents panel (for keyboard/mouse navigation).
@@ -4021,8 +4034,11 @@ pub struct App {
     pub memory_entry_count_pending: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// When the cached memory stats were last refreshed.
     pub memory_stats_last_refresh: std::time::Instant,
-    /// Current theme mode (default or high-contrast for accessibility)
-    pub theme_mode: crate::theme_mode::ThemeMode,
+    /// The theme the user picked; `/theme` changes it and the frontend
+    /// restyles from it on its next frame.
+    pub theme: crate::theme_tokens::ThemeSelection,
+    /// The themes that can be picked: built-in, user and project themes.
+    pub themes: crate::theme_tokens::ThemeCatalog,
     /// Whether mouse input is enabled (default: true). Set to false for
     /// keyboard-only accessibility mode.
     pub mouse_enabled: bool,

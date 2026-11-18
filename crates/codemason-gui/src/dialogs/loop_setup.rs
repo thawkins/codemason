@@ -159,7 +159,7 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         if let Some(error) = state.error.as_deref() {
             ui.colored_label(ui.visuals().error_fg_color, format!("error: {error}"));
         }
-        ui.add_space(6.0);
+        ui.add_space(crate::metrics::space::SM);
         key_buttons(ui, &[(START, plain(Key::Enter)), (CANCEL, plain(Key::Esc))]);
         ui.weak("Tab next field - Up/Down navigate - Enter start - Esc cancel");
     });

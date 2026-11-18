@@ -29,7 +29,9 @@ use codemason_gui::dialogs::confirm::{
     ROUTER_SAVE_TITLE, db_prune_title,
 };
 use codemason_gui::dialogs::loop_setup::{LOOP_TITLE, START};
-use codemason_gui::dialogs::pickers::{CONFIG_SAVES_TITLE, HISTORY_TITLE, SELECT_ENTRY};
+use codemason_gui::dialogs::pickers::{
+    APPLY_THEME, CANCEL_THEME, CONFIG_SAVES_TITLE, HISTORY_TITLE, SELECT_ENTRY, THEME_TITLE,
+};
 use codemason_gui::dialogs::properties::properties_title;
 use codemason_gui::dialogs::question::{ANSWER_LABEL, QUESTION_TITLE, SELECT_OPTION};
 use codemason_gui::dialogs::session_menu::SESSION_MENU_TITLE;
@@ -592,6 +594,81 @@ fn test_history_picker_click_and_select_fills_the_prompt() {
     let app = harness.state().app();
     assert!(app.history_picker.is_none());
     assert_eq!(app.session.input, "older");
+}
+
+/// A rig whose App has the built-in theme catalog, the `system` theme and
+/// the theme picker open.
+fn theme_picker_rig() -> (
+    tokio::runtime::Runtime,
+    UnboundedSender<Event>,
+    Harness<'static, Shell>,
+) {
+    rig(|app| {
+        app.themes = codemason_app_core::theme_tokens::ThemeCatalog::builtin();
+        app.theme = codemason_app_core::theme_tokens::ThemeSelection::System;
+        app.open_theme_picker();
+    })
+}
+
+/// The built-in theme `name` as a selection.
+fn theme_named(name: &str) -> codemason_app_core::theme_tokens::ThemeSelection {
+    codemason_app_core::theme_tokens::ThemeSelection::Named(name.to_string())
+}
+
+/// The egui visuals of the built-in theme `name`.
+fn theme_visuals(name: &str) -> egui::Visuals {
+    let themes = codemason_app_core::theme_tokens::ThemeCatalog::builtin();
+    codemason_gui::theme::visuals_for(&themes.get(name).expect("built-in theme"))
+}
+
+#[test]
+fn test_theme_picker_previews_on_click_and_cancel_restores() {
+    let (_rt, _events, mut harness) = theme_picker_rig();
+    harness.run();
+    assert!(dialog_shown(&harness, THEME_TITLE));
+
+    // A click on an entry previews that theme at once.
+    harness.get_by_label("nord").click();
+    harness.run();
+    assert_eq!(harness.state().app().theme, theme_named("nord"));
+    assert_eq!(harness.ctx.global_style().visuals, theme_visuals("nord"));
+    assert!(harness.state().app().theme_picker.is_some());
+
+    // Cancel restores the theme the picker opened on.
+    harness.get_by_label(CANCEL_THEME).click();
+    harness.run();
+    let app = harness.state().app();
+    assert_eq!(
+        app.theme,
+        codemason_app_core::theme_tokens::ThemeSelection::System
+    );
+    assert!(app.theme_picker.is_none());
+    assert_eq!(
+        harness.ctx.global_style().visuals,
+        theme_visuals("codemason-dark")
+    );
+}
+
+#[test]
+fn test_theme_picker_keys_preview_and_apply_keeps_the_theme() {
+    let (_rt, _events, mut harness) = theme_picker_rig();
+    harness.run();
+
+    // Down moves the highlight from `system` to the first theme.
+    type_key(&mut harness, egui::Key::ArrowDown, None);
+    assert_eq!(harness.state().app().theme, theme_named("codemason-dark"));
+
+    harness.get_by_label("codemason-light").click();
+    harness.run();
+    harness.get_by_label(APPLY_THEME).click();
+    harness.run();
+    let app = harness.state().app();
+    assert_eq!(app.theme, theme_named("codemason-light"));
+    assert!(app.theme_picker.is_none());
+    assert_eq!(
+        harness.ctx.global_style().visuals,
+        theme_visuals("codemason-light")
+    );
 }
 
 #[test]

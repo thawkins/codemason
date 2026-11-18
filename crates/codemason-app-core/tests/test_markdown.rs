@@ -15,7 +15,7 @@ fn test_markdown_code_block_is_monospace() {
         .expect("code line rendered");
     assert_eq!(code.text(), "  let x = 1;");
     assert!(code.spans.iter().all(|s| s.style.monospace));
-    assert_eq!(code.spans[0].style.fg, Some(ThemeColor::DarkGray));
+    assert_eq!(code.spans[0].style.fg, Some(ThemeColor::Code));
     let intro = lines
         .iter()
         .find(|l| l.text() == "intro")
@@ -32,8 +32,8 @@ fn test_markdown_inline_code_is_monospace() {
         .find(|s| s.text == " `cargo` ")
         .expect("inline code span");
     assert!(span.style.monospace);
-    assert_eq!(span.style.fg, Some(ThemeColor::Green));
-    assert_eq!(span.style.bg, Some(ThemeColor::Black));
+    assert_eq!(span.style.fg, Some(ThemeColor::Code));
+    assert_eq!(span.style.bg, Some(ThemeColor::Raised));
     assert!(span.style.bold);
 }
 
@@ -50,18 +50,15 @@ fn test_markdown_heading_levels_keep_tui_styles() {
     };
     assert_eq!(
         style_of("One"),
-        TextStyle::new()
-            .fg(ThemeColor::White)
-            .bg(ThemeColor::Blue)
-            .bold()
+        TextStyle::new().fg(ThemeColor::Heading).bold().underline()
     );
     assert_eq!(
         style_of("Two"),
-        TextStyle::new().fg(ThemeColor::Cyan).bold()
+        TextStyle::new().fg(ThemeColor::Heading).bold()
     );
     assert_eq!(
         style_of("Three"),
-        TextStyle::new().fg(ThemeColor::Yellow).bold()
+        TextStyle::new().fg(ThemeColor::Text).bold()
     );
 }
 

@@ -9,7 +9,10 @@
 - Added: formatters after edits. With `"formatter": { "enabled": true }` in the user-global config, `rustfmt`, `gofmt`, `ruff` or `prettier` (or a custom command) runs on each file a file-writing tool writes. Off by default; a project config cannot set it.
 - Added: `/redo` puts back the turn the last `/undo` removed, messages and files, while nothing has been sent since.
 - Added: `docs/OCGAP.md`, a feature gap analysis against opencode v2.
-- Added: `/theme default|high-contrast` switches the window's colour theme while it runs; the `theme` key in `codemason.json` sets it at startup. The high-contrast theme existed before but nothing could select it.
+- Added: `/theme` switches the window's colour theme while it runs; the `theme` key in `codemason.json` sets it at startup. A bare `/theme` opens a picker that previews each theme as the highlight moves (Enter keeps it, Esc restores the previous one); `/theme list` lists them and `/theme <name>` switches directly.
+- Added: seven built-in themes: `codemason-dark`, `codemason-light`, `high-contrast`, `catppuccin-mocha`, `gruvbox-dark`, `nord` and `tokyo-night`. The default is `system`, which follows the operating system between the dark and light themes.
+- Added: user themes. A JSON file in `~/.config/codemason/themes/` or the project's `.codemason/themes/` adds a theme or replaces one of the same name. A file that does not parse is skipped, and a theme with low-contrast text is reported, both as warnings in the Log pane.
+- Added: `scripts/check-theme-literals.sh` (in CI) fails on a literal colour or an ANSI colour name outside the theme modules.
 - Added: a new session shows an empty state in the Messages pane (the product name, the version, three starter actions that fill the prompt, and one tip) instead of a blank transcript.
 - Added: a spinner at the start of the status bar while the focused session's turn is running.
 - Added: the GUI bundles the Inter font (Regular and SemiBold, SIL Open Font License 1.1) for UI text and bold prose.
@@ -59,6 +62,12 @@
 
 ### Changed
 
+- Changed: every colour in the window comes from the theme's tokens. Widget greys, the selection blue and the xterm ANSI colours are gone; a pane that asks for an ANSI name gets the theme colour of the same meaning (red is the error colour).
+- Changed: the default dark theme draws on an off-black background (`#0f1115`) with raised surfaces for fields, buttons and dialogs, and thin outlines around widgets. Before, panels were pure black.
+- Changed: the window no longer forces dark mode. With no `theme` set it follows the operating system, so a system in light mode now gets the light theme. Set `"theme": "dark"` to keep the dark one.
+- Changed: `"theme": "default"` and `/theme default` now mean `system`. Before, they meant the dark theme.
+- Changed: Markdown headings, links and code, diff counts and tool status lines are coloured by role (heading, link, code, added, removed, success, error). A level-1 heading is bold and underlined in the heading colour, not white on blue.
+- Changed: dialog spacing uses one scale (4, 8, 12, 16, 24 points); the 6-point gaps became 8. Widget corners are 4 points, menus 6, dialogs 10.
 - Changed: `slash_spec` in `crates/codemason-app-core/src/app/slash.rs` is decomposed in place (1,883 to 273 lines): 17 `SpecCommand` arms of 30+ lines move verbatim into `spec_<variant>` methods in the same `impl App`, taking the arm's bindings as owned parameters and the `spec_manager` closure by reference, so the specs root is still built in one place. Arms that returned early keep their `ControlFlow::Break` returns and `slash_spec` forwards them; the nested `parse_spec_id` helper moves to module level. Every string literal and pattern is unchanged (#9, car 11b).
 
 - Changed: the status bar is one row. It shows the turn state, model, thinking level, agent and context-window use, plus the states that need attention while they apply (quota from 80%, a non-default backend, `AUTO [ok]` with its countdown, `YOLO`, code-index busy tags, the "N need you" badge). The version, project, branch, last prompt, backend, quota and every service tag (`GCF`, `CDX`, `LOG`, `AUTO`, `EDIT`, `TELE`, `YOLO`) moved to a `Details` popup opened from the bar.

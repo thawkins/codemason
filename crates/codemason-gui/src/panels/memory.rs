@@ -62,7 +62,7 @@ fn lines(app: &App, palette: &Palette) -> Vec<(Line, Option<usize>)> {
         lines.push((Line::new().push(EMPTY_TEXT, palette.muted), None));
         return lines;
     }
-    let magenta = palette.color(ThemeColor::Magenta);
+    let magenta = palette.color(ThemeColor::Categorical(4));
     // The cache is sorted by category then id, so the cursor index of a row
     // is its position in the cache.
     let mut by_category: BTreeMap<&str, Vec<(usize, &codemason_storage::MemoryRow)>> =
@@ -85,7 +85,7 @@ fn lines(app: &App, palette: &Palette) -> Vec<(Line, Option<usize>)> {
                     .push(" ", palette.text)
                     .push(
                         format!("{:.2}", row.confidence),
-                        palette.color(ThemeColor::Yellow),
+                        palette.color(ThemeColor::Warning),
                     )
                     .push(" ", palette.text)
                     .push(format!("{}b", row.content.len()), palette.muted)
@@ -97,7 +97,7 @@ fn lines(app: &App, palette: &Palette) -> Vec<(Line, Option<usize>)> {
                 lines.push((
                     Line::new()
                         .push("    tags: ", palette.muted)
-                        .push(tags.join(", "), palette.color(ThemeColor::Cyan)),
+                        .push(tags.join(", "), palette.color(ThemeColor::Info)),
                     None,
                 ));
             }

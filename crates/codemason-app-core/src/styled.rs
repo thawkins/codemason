@@ -10,8 +10,10 @@ pub enum ThemeColor {
     /// Default text color.
     #[default]
     Text,
-    /// Secondary, de-emphasised text.
+    /// Secondary text.
     Muted,
+    /// De-emphasised text: timestamps, hints, gutters.
+    Subtle,
     /// Error state.
     Error,
     /// Warning state.
@@ -22,6 +24,23 @@ pub enum ThemeColor {
     Info,
     /// Border color.
     Border,
+    /// A raised surface, e.g. the background of inline code.
+    Raised,
+    /// Added lines and counts in a diff.
+    DiffAdded,
+    /// Removed lines and counts in a diff.
+    DiffRemoved,
+    /// Markdown headings.
+    Heading,
+    /// Markdown links.
+    Link,
+    /// Markdown inline code and code blocks.
+    Code,
+    /// Markdown block quotes.
+    Blockquote,
+    /// One of the theme's eight categorical colors (index modulo 8), for
+    /// telling agents apart.
+    Categorical(u8),
     /// Literal RGB color.
     Rgb(u8, u8, u8),
     /// The frontend's default color (explicitly reset, unlike `None`).

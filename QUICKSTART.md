@@ -2094,7 +2094,7 @@ Type `/` in the input to open an autocomplete menu:
 | `/compact [help]` | Summarise and compact history |
 | `/help` | Show available commands |
 | `/log` | Toggle log panel |
-| `/theme default\|high-contrast` | Switch the colour theme (set `"theme"` in `codemason.json` to keep it) |
+| `/theme [<name>\|system\|dark\|light\|list]` | Open the theme picker, or switch the colour theme (set `"theme"` in `codemason.json` to keep it) |
 | `/undo` | Remove the last turn and restore the files it changed |
 | `/redo` | Put back the turn the last `/undo` removed |
 | `/stats [--days N] [--project] [--json]` | Usage and cost per model across sessions (CLI: `cdmn stats`) |

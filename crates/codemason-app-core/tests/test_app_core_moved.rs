@@ -11,8 +11,8 @@ fn same_app(_: &codemason_app_core::app::App) {}
 /// Accepts only the core `StartupSession`.
 fn same_startup(_: Option<&codemason_app_core::app::StartupSession>) {}
 
-/// Accepts only the core `ThemeMode`.
-fn same_theme_mode(_: codemason_app_core::theme_mode::ThemeMode) {}
+/// Accepts only the core `ThemeSelection`.
+fn same_theme_selection(_: codemason_app_core::theme_tokens::ThemeSelection) {}
 
 #[test]
 fn test_app_core_moved_app_is_reexported() {
@@ -20,7 +20,7 @@ fn test_app_core_moved_app_is_reexported() {
     // function over the tui path type-checks only if the two types are one.
     let _check: fn(&codemason_app_core::app::App) = same_app;
     same_startup(None::<&codemason_app_core::app::StartupSession>);
-    same_theme_mode(codemason_app_core::theme_mode::ThemeMode::default());
+    same_theme_selection(codemason_app_core::theme_tokens::ThemeSelection::default());
     assert!(
         std::any::type_name::<codemason_app_core::app::App>().starts_with("codemason_app_core::")
     );

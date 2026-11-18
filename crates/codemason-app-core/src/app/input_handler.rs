@@ -38,6 +38,69 @@ fn alt_o_default_autopilot_time_limit() -> u64 {
 }
 
 impl App {
+    /// Opens the `/theme` picker on the current theme.
+    pub fn open_theme_picker(&mut self) {
+        let entries: Vec<String> = std::iter::once("system")
+            .chain(self.themes.names())
+            .map(str::to_string)
+            .collect();
+        let current = self.theme.display_name();
+        let selected = entries.iter().position(|e| e == current).unwrap_or(0);
+        self.theme_picker = Some(crate::app::state::ThemePickerState {
+            entries,
+            selected,
+            original: self.theme.clone(),
+        });
+    }
+
+    /// Moves the `/theme` picker's highlight to `index` and previews that
+    /// theme in the window. An index past the list is ignored.
+    pub fn theme_picker_select(&mut self, index: usize) {
+        let Some(picker) = self.theme_picker.as_mut() else {
+            return;
+        };
+        let Some(entry) = picker.entries.get(index) else {
+            return;
+        };
+        // Row 0 is `system`; every other row is a catalog name, taken as is
+        // so a user theme called `dark` is not read as the `dark` alias.
+        let selection = if index == 0 {
+            crate::theme_tokens::ThemeSelection::System
+        } else {
+            crate::theme_tokens::ThemeSelection::Named(entry.clone())
+        };
+        picker.selected = index;
+        self.theme = selection;
+        self.needs_redraw = true;
+    }
+
+    /// Serves a key while the `/theme` picker is open: Up/Down (or k/j) move
+    /// the highlight and preview the theme, Enter keeps it, Esc or `q`
+    /// restores the theme the picker opened on.
+    pub(crate) fn handle_theme_picker_key(&mut self, key: KeyInput) {
+        use crate::input_event::Key;
+        let Some(picker) = self.theme_picker.as_ref() else {
+            return;
+        };
+        let selected = picker.selected;
+        match key.key {
+            Key::Esc | Key::Char('q') => {
+                if let Some(picker) = self.theme_picker.take() {
+                    self.theme = picker.original;
+                }
+                self.status = format!("theme: {}", self.theme.display_name());
+            }
+            Key::Up | Key::Char('k') if selected > 0 => self.theme_picker_select(selected - 1),
+            Key::Down | Key::Char('j') => self.theme_picker_select(selected + 1),
+            Key::Enter => {
+                self.theme_picker = None;
+                self.status = format!("theme: {}", self.theme.display_name());
+            }
+            _ => {}
+        }
+        self.needs_redraw = true;
+    }
+
     pub(crate) fn handle_history_picker_key(&mut self, key: KeyInput) {
         use crate::input_event::Key;
         let picker = match self.history_picker.as_mut() {
@@ -1206,6 +1269,14 @@ impl App {
             self.handle_config_save_picker_key(key);
             self.assert_ui_invariants();
             self.debug_log_input_transition("key-config-save-picker", &before_input, before_cursor);
+            return;
+        }
+        // The theme picker intercepts all keys while it is open, except the
+        // global quit keys.
+        if self.theme_picker.is_some() && !input::is_global_quit_key(key) {
+            self.handle_theme_picker_key(key);
+            self.assert_ui_invariants();
+            self.debug_log_input_transition("key-theme-picker", &before_input, before_cursor);
             return;
         }
         // History picker intercepts all keys while it is open - except the

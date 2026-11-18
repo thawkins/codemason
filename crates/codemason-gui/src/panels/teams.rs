@@ -99,15 +99,15 @@ fn count_cell(n: u32) -> String {
 /// The colour of a member's status word, as in the TUI.
 fn status_color(status: &MemberStatus, palette: &Palette) -> Color32 {
     palette.color(match status {
-        MemberStatus::Spawning => ThemeColor::Yellow,
-        MemberStatus::Working => ThemeColor::Cyan,
-        MemberStatus::Idle => ThemeColor::Green,
-        MemberStatus::PlanPending => ThemeColor::Magenta,
-        MemberStatus::Blocked => ThemeColor::Red,
-        MemberStatus::Suspended => ThemeColor::DarkGray,
-        MemberStatus::ShuttingDown => ThemeColor::Yellow,
+        MemberStatus::Spawning => ThemeColor::Warning,
+        MemberStatus::Working => ThemeColor::Info,
+        MemberStatus::Idle => ThemeColor::Success,
+        MemberStatus::PlanPending => ThemeColor::Categorical(4),
+        MemberStatus::Blocked => ThemeColor::Error,
+        MemberStatus::Suspended => ThemeColor::Subtle,
+        MemberStatus::ShuttingDown => ThemeColor::Warning,
         MemberStatus::Stopped => ThemeColor::Muted,
-        MemberStatus::Failed => ThemeColor::Red,
+        MemberStatus::Failed => ThemeColor::Error,
     })
 }
 
@@ -186,7 +186,7 @@ fn model_column(member: &TeamMember, global: Option<&str>, palette: &Palette) ->
     }
     (
         truncate_chars_no_ellipsis(&rendered, MODEL_W),
-        palette.color(ThemeColor::Magenta),
+        palette.color(ThemeColor::Categorical(4)),
     )
 }
 
@@ -233,19 +233,19 @@ fn counters(
         .push(format!(" {steps:>STEPS_W$}"), hint)
         .push(
             format!(" {claimed_text:>CLAIMED_W$}"),
-            lit(claimed.unwrap_or(0) > 0, ThemeColor::Yellow),
+            lit(claimed.unwrap_or(0) > 0, ThemeColor::Warning),
         )
         .push(
             format!(" {done_text:>DONE_W$}"),
-            lit(done.unwrap_or(0) > 0, ThemeColor::Green),
+            lit(done.unwrap_or(0) > 0, ThemeColor::Success),
         )
         .push(
             format!(" {sent_text:>SENT_W$}"),
-            lit(sent.unwrap_or(0) > 0, ThemeColor::Cyan),
+            lit(sent.unwrap_or(0) > 0, ThemeColor::Info),
         )
         .push(
             format!(" {recv_text:>RECV_W$}"),
-            lit(recv.unwrap_or(0) > 0, ThemeColor::Cyan),
+            lit(recv.unwrap_or(0) > 0, ThemeColor::Info),
         )
 }
 
@@ -296,7 +296,7 @@ fn rows(app: &App, palette: &Palette) -> Vec<(Line, String)> {
         ),
         String::new(),
     )];
-    let green = palette.color(ThemeColor::Green);
+    let green = palette.color(ThemeColor::Success);
     let name = &app.session.agent_name;
     let (lead_sent, lead_recv) = app
         .session
@@ -346,10 +346,10 @@ fn rows(app: &App, palette: &Palette) -> Vec<(Line, String)> {
         };
         let focus = if focused { ">" } else { " " };
         let (marker_color, name_color) = if focused {
-            let yellow = palette.color(ThemeColor::Yellow);
+            let yellow = palette.color(ThemeColor::Warning);
             (yellow, yellow)
         } else {
-            (palette.color(ThemeColor::Blue), palette.text)
+            (palette.color(ThemeColor::Accent), palette.text)
         };
         let (model, model_color) = model_column(member, global.as_deref(), palette);
         let label = truncate_chars_no_ellipsis(&format!("{}-{short}", member.name), LABEL_W);
@@ -373,7 +373,7 @@ fn rows(app: &App, palette: &Palette) -> Vec<(Line, String)> {
         };
         let line = Line::new()
             .push(format!("{focus}{connector}"), marker_color)
-            .push(format!("{short:<ID_W$} "), palette.color(ThemeColor::Cyan))
+            .push(format!("{short:<ID_W$} "), palette.color(ThemeColor::Info))
             .push(format!("{label:<LABEL_W$} "), name_color)
             .push(
                 format!(
@@ -399,11 +399,14 @@ fn rows(app: &App, palette: &Palette) -> Vec<(Line, String)> {
         );
         if !is_terminal(&member.status) {
             let (left, left_color, right, right_color) = match member.status {
-                MemberStatus::PlanPending => {
-                    ("[approve]", ThemeColor::Green, "[reject]", ThemeColor::Red)
-                }
-                MemberStatus::Suspended => (">", ThemeColor::Green, "[x]", ThemeColor::Red),
-                _ => ("[stop]", ThemeColor::Yellow, "[x]", ThemeColor::Red),
+                MemberStatus::PlanPending => (
+                    "[approve]",
+                    ThemeColor::Success,
+                    "[reject]",
+                    ThemeColor::Error,
+                ),
+                MemberStatus::Suspended => (">", ThemeColor::Success, "[x]", ThemeColor::Error),
+                _ => ("[stop]", ThemeColor::Warning, "[x]", ThemeColor::Error),
             };
             line = line
                 .push(format!("  {left:<STOP_W$}  "), palette.color(left_color))
@@ -422,7 +425,7 @@ fn rows(app: &App, palette: &Palette) -> Vec<(Line, String)> {
                     .push(format!("{:MARKER_W$}", ""), hint)
                     .push(
                         "plan awaiting approval: ",
-                        palette.color(ThemeColor::Magenta),
+                        palette.color(ThemeColor::Categorical(4)),
                     )
                     .push(excerpt, palette.text),
                 String::new(),
@@ -434,7 +437,7 @@ fn rows(app: &App, palette: &Palette) -> Vec<(Line, String)> {
             Line::new()
                 .push(
                     "  parked - Del resumes a blocked member, Space resumes a suspended one",
-                    palette.color(ThemeColor::Yellow),
+                    palette.color(ThemeColor::Warning),
                 )
                 .push(format!(" {parked_hint}"), hint),
             String::new(),

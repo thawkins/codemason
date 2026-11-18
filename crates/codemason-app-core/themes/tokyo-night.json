@@ -1,0 +1,61 @@
+{
+  "name": "tokyo-night",
+  "dark": true,
+  "credit": "Palette: Tokyo Night, (c) enkia, MIT licence",
+  "text": {
+    "base": "#c0caf5",
+    "muted": "#a9b1d6",
+    "subtle": "#737aa2"
+  },
+  "bg": {
+    "base": "#1a1b26",
+    "raised1": "#16161e",
+    "raised2": "#292e42",
+    "overlay": "#1f2335"
+  },
+  "border": {
+    "base": "#3b4261",
+    "focus": "#7aa2f7"
+  },
+  "accent": "#7aa2f7",
+  "state": {
+    "success": "#9ece6a",
+    "warning": "#e0af68",
+    "error": "#f7768e",
+    "info": "#7dcfff"
+  },
+  "diff": {
+    "added": "#9ece6a",
+    "removed": "#f7768e",
+    "context": "#a9b1d6",
+    "added_bg": "#20303b",
+    "removed_bg": "#37222c",
+    "line_number": "#737aa2"
+  },
+  "syntax": {
+    "keyword": "#bb9af7",
+    "string": "#9ece6a",
+    "comment": "#737aa2",
+    "function": "#7aa2f7",
+    "type": "#2ac3de",
+    "number": "#ff9e64",
+    "operator": "#89ddff",
+    "punctuation": "#a9b1d6"
+  },
+  "markdown": {
+    "heading": "#7aa2f7",
+    "link": "#7dcfff",
+    "code": "#e0af68",
+    "blockquote": "#a9b1d6"
+  },
+  "categorical": [
+    "#7aa2f7",
+    "#9ece6a",
+    "#e0af68",
+    "#f7768e",
+    "#bb9af7",
+    "#7dcfff",
+    "#ff9e64",
+    "#73daca"
+  ]
+}

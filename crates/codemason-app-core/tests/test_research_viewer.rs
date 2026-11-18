@@ -325,38 +325,38 @@ fn test_markdown_to_lines_exact_styles_are_stable() {
     let expected: Vec<Line> = vec![
         Line::from(Span::styled(
             "H1",
-            Style::default().fg(Color::White).bg(Color::Blue).bold(),
+            Style::default().fg(Color::Heading).bold().underline(),
         )),
-        Line::from(Span::styled("H2", Style::default().fg(Color::Cyan).bold())),
         Line::from(Span::styled(
-            "H3",
-            Style::default().fg(Color::Yellow).bold(),
+            "H2",
+            Style::default().fg(Color::Heading).bold(),
         )),
+        Line::from(Span::styled("H3", Style::default().fg(Color::Text).bold())),
         Line::from(vec![
             Span::raw("* item "),
             Span::styled(
                 " `x` ",
-                Style::default().fg(Color::Green).bg(Color::Black).bold(),
+                Style::default().fg(Color::Code).bg(Color::Raised).bold(),
             ),
         ]),
-        Line::from(Span::styled("  code", Style::default().fg(Color::DarkGray))),
+        Line::from(Span::styled("  code", Style::default().fg(Color::Code))),
         Line::from(Span::styled(
             "\u{2500}".repeat(10),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Subtle),
         )),
         Line::from(vec![
-            Span::styled("[t]", Style::default().fg(Color::White)),
-            Span::styled("(u)", Style::default().fg(Color::Cyan).underline()),
+            Span::styled("[t]", Style::default().fg(Color::Text)),
+            Span::styled("(u)", Style::default().fg(Color::Link).underline()),
         ]),
         Line::from(Span::styled(
             "[Mermaid diagram - rendered as text below]",
-            Style::default().fg(Color::Magenta).bold(),
+            Style::default().fg(Color::Accent).bold(),
         )),
-        Line::from(Span::styled("  A-->B", Style::default().fg(Color::Cyan))),
+        Line::from(Span::styled("  A-->B", Style::default().fg(Color::Info))),
         Line::from(Vec::<Span>::new()),
         Line::from(Span::styled(
             "[Esc to close * images shown as placeholders * links are plain text]",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Subtle),
         )),
     ];
     // The terminal compared these lines after its lossless style adapter,

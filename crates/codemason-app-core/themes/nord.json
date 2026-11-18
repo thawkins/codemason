@@ -1,0 +1,61 @@
+{
+  "name": "nord",
+  "dark": true,
+  "credit": "Palette: Nord, (c) Arctic Ice Studio and Sven Greb, MIT licence",
+  "text": {
+    "base": "#eceff4",
+    "muted": "#d8dee9",
+    "subtle": "#9aa5b8"
+  },
+  "bg": {
+    "base": "#2e3440",
+    "raised1": "#3b4252",
+    "raised2": "#434c5e",
+    "overlay": "#3b4252"
+  },
+  "border": {
+    "base": "#4c566a",
+    "focus": "#88c0d0"
+  },
+  "accent": "#88c0d0",
+  "state": {
+    "success": "#a3be8c",
+    "warning": "#ebcb8b",
+    "error": "#d0717b",
+    "info": "#8fbcbb"
+  },
+  "diff": {
+    "added": "#a3be8c",
+    "removed": "#d0717b",
+    "context": "#d8dee9",
+    "added_bg": "#3a4a45",
+    "removed_bg": "#4a3540",
+    "line_number": "#9aa5b8"
+  },
+  "syntax": {
+    "keyword": "#81a1c1",
+    "string": "#a3be8c",
+    "comment": "#9aa5b8",
+    "function": "#88c0d0",
+    "type": "#8fbcbb",
+    "number": "#b48ead",
+    "operator": "#81a1c1",
+    "punctuation": "#d8dee9"
+  },
+  "markdown": {
+    "heading": "#88c0d0",
+    "link": "#8fbcbb",
+    "code": "#ebcb8b",
+    "blockquote": "#d8dee9"
+  },
+  "categorical": [
+    "#88c0d0",
+    "#a3be8c",
+    "#ebcb8b",
+    "#d0717b",
+    "#b48ead",
+    "#8fbcbb",
+    "#d08770",
+    "#81a1c1"
+  ]
+}

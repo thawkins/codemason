@@ -47,10 +47,12 @@ pub struct Config {
     /// Display name of the user.
     #[serde(default)]
     pub username: Option<String>,
-    /// GUI colour theme at startup: `"default"` or `"high-contrast"`.
+    /// GUI colour theme at startup: `"system"` (follow the operating system
+    /// between dark and light), `"dark"`, `"light"`, or a theme name such as
+    /// `"high-contrast"` or `"nord"`.
     ///
-    /// Unset or unrecognised means the default theme. `/theme` switches the
-    /// theme for the running window without writing this key.
+    /// Unset or unrecognised means `"system"`. `/theme` switches the theme for
+    /// the running window without writing this key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
     /// Name of the agent to use when none is specified.

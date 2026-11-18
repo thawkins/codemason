@@ -532,12 +532,8 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
     // startup makes such a fallback attributable instead of invisible.
     codemason_config::sync_runtime_flags(&config);
     // The window starts in the theme this configuration names.
-    if let Some(mode) = config
-        .theme
-        .as_deref()
-        .and_then(codemason_app_core::theme_mode::ThemeMode::from_str)
-    {
-        codemason_app_core::theme_mode::set_startup(mode);
+    if let Some(theme) = config.theme.as_deref() {
+        codemason_app_core::theme_tokens::set_startup(theme);
     }
     tracing::info!(
         yolo = config.yolo,

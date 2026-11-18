@@ -164,8 +164,15 @@ activity). The `Details` button at its end opens a popup with the version,
 project, branch, backend, and the on/off state of every service.
 
 A new session starts with an empty Messages pane that shows three starter
-actions; clicking one fills the prompt. `/theme high-contrast` switches to the
-high-contrast theme.
+actions; clicking one fills the prompt.
+
+The window follows the operating system's dark or light setting. `/theme`
+opens a picker that previews each theme as you move through the list: Enter
+keeps it, Esc goes back. `/theme <name>` switches directly, for example
+`/theme light`, `/theme high-contrast` or `/theme nord`. To keep a theme, set
+`"theme": "<name>"` in `codemason.json`. Your own themes are JSON files in
+`~/.config/codemason/themes/` or the project's `.codemason/themes/`; see
+[`docs/howtos/slashcommands/theme.md`](docs/howtos/slashcommands/theme.md).
 
 When the Model Router is active the status bar shows the actual downstream
 model and tier, e.g. `Model Router (claude-sonnet-4-20250514) / complex`.

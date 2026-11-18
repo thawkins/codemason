@@ -187,7 +187,7 @@ fn summary(ui: &mut egui::Ui, app: &App, palette: &Palette) {
             item(
                 ui,
                 format!("web:{}:{:02}", secs / 60, secs % 60),
-                palette.color(ThemeColor::Cyan),
+                palette.color(ThemeColor::Info),
                 true,
             );
         }
@@ -256,7 +256,7 @@ fn summary(ui: &mut egui::Ui, app: &App, palette: &Palette) {
         item(
             ui,
             format!("Backend:{}", app.session.active_backend),
-            palette.color(ThemeColor::Cyan),
+            palette.color(ThemeColor::Info),
             false,
         );
     }
@@ -273,7 +273,7 @@ fn summary(ui: &mut egui::Ui, app: &App, palette: &Palette) {
     }
     if codemason_config::yolo::is_enabled() {
         let chip = RichText::new(" YOLO ")
-            .color(palette.ansi[0])
+            .color(palette.background)
             .background_color(palette.warning)
             .strong();
         ui.label(chip);
@@ -282,12 +282,12 @@ fn summary(ui: &mut egui::Ui, app: &App, palette: &Palette) {
         item(ui, "BUSY:cdx-idx", palette.warning, true);
     }
     if app.code_index_graph_busy {
-        item(ui, "BUSY:cdx-graph", palette.color(ThemeColor::Cyan), true);
+        item(ui, "BUSY:cdx-graph", palette.color(ThemeColor::Info), true);
     }
     let waiting = app.background.waiting_count();
     if waiting > 0 {
         let badge = RichText::new(format!(" {waiting} need you "))
-            .color(palette.ansi[0])
+            .color(palette.background)
             .background_color(palette.warning)
             .strong();
         ui.label(badge);
@@ -323,13 +323,13 @@ fn details(ui: &mut egui::Ui, app: &App, palette: &Palette) {
     }
     let tag = prompt_tag(&app.session.last_prompt);
     if !tag.is_empty() {
-        item(ui, tag, palette.color(ThemeColor::Cyan), true);
+        item(ui, tag, palette.color(ThemeColor::Info), true);
     }
     if !app.session.active_backend.is_empty() {
         item(
             ui,
             format!("Backend:{}", app.session.active_backend),
-            palette.color(ThemeColor::Cyan),
+            palette.color(ThemeColor::Info),
             false,
         );
     }

@@ -39,13 +39,13 @@ fn level_tag(entry: &LogEntry, palette: &Palette) -> (&'static str, Color32) {
             || lower.contains("completed")
             || lower.contains("triggered"));
     if compaction {
-        return ("CMP", palette.color(ThemeColor::LightGreen));
+        return ("CMP", palette.color(ThemeColor::Success));
     }
     match entry.level {
-        LogLevel::Info => ("INF", palette.color(ThemeColor::Blue)),
-        LogLevel::Tool => ("TUL", palette.color(ThemeColor::Cyan)),
-        LogLevel::Warn => ("WRN", palette.color(ThemeColor::Yellow)),
-        LogLevel::Error => ("ERR", palette.color(ThemeColor::Red)),
+        LogLevel::Info => ("INF", palette.color(ThemeColor::Accent)),
+        LogLevel::Tool => ("TUL", palette.color(ThemeColor::Info)),
+        LogLevel::Warn => ("WRN", palette.color(ThemeColor::Warning)),
+        LogLevel::Error => ("ERR", palette.color(ThemeColor::Error)),
     }
 }
 
@@ -65,7 +65,7 @@ fn entry_job(ctx: &egui::Context, entry: &LogEntry, palette: &Palette) -> Layout
         job.append(
             &format!("[{agent}] "),
             0.0,
-            format(palette.color(ThemeColor::Magenta)),
+            format(palette.color(ThemeColor::Categorical(4))),
         );
     }
     let message: String = entry

@@ -166,7 +166,7 @@ fn research_rows(ui: &mut egui::Ui, progress: &ResearchProgress, palette: &Palet
                 "Web fetch totals: {} fetched, {} failed{excluded}",
                 progress.fetched_count, progress.failed_count
             ),
-            palette.color(ThemeColor::Cyan),
+            palette.color(ThemeColor::Info),
         );
     }
     if let Some(deadline) = progress.web_phase_deadline {

@@ -1,7 +1,12 @@
-//! The input history picker (`App::history_picker`) and the `/config list`
-//! save picker (`App::config_save_picker`).
+//! The input history picker (`App::history_picker`), the `/config list`
+//! save picker (`App::config_save_picker`) and the `/theme` picker
+//! (`App::theme_picker`).
 //!
-//! app-core runs both (`handle_history_picker_key` and
+//! The theme picker previews: moving its highlight restyles the window in
+//! that theme, Enter keeps it and Esc restores the theme it opened on
+//! (`handle_theme_picker_key`).
+//!
+//! app-core runs the other two (`handle_history_picker_key` and
 //! `handle_config_save_picker_key` in `app/input_handler.rs`): Up/Down (or
 //! k/j) move the highlight, Enter takes the highlighted entry (the history
 //! picker puts it in the prompt, the save picker restores that backup over
@@ -25,6 +30,15 @@ pub const HISTORY_TITLE: &str = "History";
 
 /// Title of the config save picker.
 pub const CONFIG_SAVES_TITLE: &str = "Saved configurations";
+
+/// Title of the theme picker.
+pub const THEME_TITLE: &str = "Theme";
+
+/// The theme picker's button that keeps the previewed theme (Enter).
+pub const APPLY_THEME: &str = "Apply";
+
+/// The theme picker's button that restores the previous theme (Esc).
+pub const CANCEL_THEME: &str = "Cancel";
 
 /// Accessible label of a picker's entry list.
 pub const ENTRIES_LABEL: &str = "Entries";
@@ -94,7 +108,7 @@ pub fn show_history(ctx: &egui::Context, app: &mut App) -> bool {
     modal(ctx, "codemason_history_picker", HISTORY_TITLE, |ui| {
         ui.weak(format!("{} entries", rows.len()));
         clicked = entry_list(ui, ENTRIES_LABEL, &rows, selected);
-        ui.add_space(6.0);
+        ui.add_space(crate::metrics::space::SM);
         ui.add_enabled_ui(!rows.is_empty(), |ui| {
             key_buttons(
                 ui,
@@ -111,6 +125,47 @@ pub fn show_history(ctx: &egui::Context, app: &mut App) -> bool {
         && let Some(picker) = app.history_picker.as_mut()
     {
         picker.selected = i;
+        if choose {
+            send_key(ctx, plain(Key::Enter));
+        }
+    }
+    true
+}
+
+/// Draw the `/theme` picker while the App shows it.
+///
+/// A click on an entry previews that theme; a double click also applies it.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context.
+/// * `app` - the App whose `theme_picker` is drawn.
+///
+/// # Returns
+///
+/// `true` while the picker is open.
+pub fn show_theme(ctx: &egui::Context, app: &mut App) -> bool {
+    let Some(picker) = app.theme_picker.as_ref() else {
+        return false;
+    };
+    let rows = picker.entries.clone();
+    let selected = picker.selected;
+    let mut clicked = None;
+    modal(ctx, "codemason_theme_picker", THEME_TITLE, |ui| {
+        ui.weak("The window previews the highlighted theme.");
+        clicked = entry_list(ui, ENTRIES_LABEL, &rows, selected);
+        ui.add_space(crate::metrics::space::SM);
+        key_buttons(
+            ui,
+            &[
+                (APPLY_THEME, plain(Key::Enter)),
+                (CANCEL_THEME, plain(Key::Esc)),
+            ],
+        );
+        ui.weak("Up/Down preview * Enter apply * Esc cancel");
+    });
+    if let Some((i, choose)) = clicked {
+        app.theme_picker_select(i);
         if choose {
             send_key(ctx, plain(Key::Enter));
         }
@@ -152,7 +207,7 @@ pub fn show_config_saves(ctx: &egui::Context, app: &mut App) -> bool {
         |ui| {
             ui.weak(format!("{} entries in {dir}", rows.len()));
             clicked = entry_list(ui, ENTRIES_LABEL, &rows, selected);
-            ui.add_space(6.0);
+            ui.add_space(crate::metrics::space::SM);
             ui.add_enabled_ui(!rows.is_empty(), |ui| {
                 key_buttons(ui, &[(RESTORE, plain(Key::Enter))]);
             });
