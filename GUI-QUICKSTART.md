@@ -331,6 +331,10 @@ Add unit tests for the bash permission command-name extraction logic
 ### Mentions and attachments
 
 - Type **`@`** to open the file picker and mention a file in your prompt.
+  Add `#20-45` (or `#20`) after the path to send only those lines:
+  `@src/main.rs#20-45`.
+- Type **`/editor`** (or press `Ctrl+G` then `e`) to write the prompt in
+  `$VISUAL` or `$EDITOR`; save and quit the editor to put the text back.
 - Type **`/`** to open the slash-command menu. **`Tab`** completes the highlighted
   command; `Up`/`Down` move the highlight and `Esc` closes the menu.
 - Attach images: see "Attaching files" below.
@@ -1184,23 +1188,42 @@ reopens maximized.
 | `Alt+P`                         | `Cmd+Shift+P`         | Toggle Profile pane                         |
 | `Alt+I`                         | `Cmd+Shift+I`         | Toggle TASKS pane                           |
 | `Alt+M`                         | `Cmd+Shift+M`         | Toggle Memory pane                          |
-| `Alt+C`                         | -                     | Toggle Context pane                         |
+| `Alt+C`                         | `Cmd+Shift+C`         | Toggle Context pane                         |
 | `Alt+Q`                         | `Cmd+Alt+Q`           | Open the queue-control menu (Next/Stop/Clear/Show) |
-| `Alt+O`                         | -                     | Toggle autopilot mode                       |
-| `Alt+S`                         | -                     | Show/focus/hide the Sessions pane           |
-| `Ctrl+N`                        | -                     | New session                                 |
+| `Alt+O`                         | `Cmd+Shift+O`         | Toggle autopilot mode                       |
+| `Alt+S`                         | `Cmd+Shift+S`         | Show/focus/hide the Sessions pane           |
+| `Ctrl+N`                        | `Cmd+N`               | New session                                 |
 | `Ctrl+Up` / `Ctrl+Down`         | -                     | Previous / next session                     |
 | `Alt+R`                         | -                     | Most recently focused session               |
-| `Alt+V`                         | -                     | Paste image from clipboard                  |
-| `Alt+Y`                         | -                     | Toggle YOLO mode on/off                     |
+| `Alt+V`                         | `Cmd+Shift+V`         | Paste image from clipboard                  |
+| `Alt+Y`                         | `Cmd+Shift+Y`         | Toggle YOLO mode on/off                     |
 | `Tab`                           | `Tab`                 | Complete the highlighted slash command      |
 | `@`                             | `@`                   | Open file mention picker                    |
 | `/`                             | `/`                   | Open slash-command menu                     |
 | `?`                             | `?`                   | Show keybindings help (when prompt is empty)|
+| `Ctrl+P`                        | `Cmd+P`               | Command palette: search actions, commands, themes, agents and sessions |
+| `Ctrl+G`, then a key            | `Ctrl+G`, then a key  | Leader: `m` model, `a` agent, `s` session, `e` external editor, `u` undo, `r` redo, `b` Sessions pane |
+| `F2`                            | `F2`                  | Switch to the next of the 5 most recent models |
+| `Ctrl+F` (model picker)         | `Ctrl+F` (model picker) | Mark or unmark the highlighted model as a favourite (listed first, marked `*`) |
 
 The `-` rows are not in the GUI keymap: they are the app-core chords sent as
-typed. Their keymap-bound neighbours can be rebound in `gui-keys.json`; the
-`?` panel lists every chord the window understands.
+typed. Every other row is an action you can rebind in `gui-keys.json` in the
+codemason config directory, by its id, for example:
+
+```json
+{ "session.new": "Ctrl+Shift+N", "panel.context": "Alt+K", "help.shortcuts": "F1" }
+```
+
+The ids are `panel.log`, `panel.profile`, `panel.tasks`, `panel.memory`,
+`panel.context`, `panel.sessions`, `panel.agents`, `panel.teams`, `queue.menu`,
+`mode.autopilot`, `mode.yolo`, `mode.edit_log`, `mode.gcf`, `attach.image`,
+`session.new`, `teammate.next`, `teammate.prev`, `app.quit`, `palette.show`,
+`model.cycle_recent`, `picker.model`, `picker.agent`, `picker.session`,
+`session.undo`, `session.redo`, `prompt.editor` and `help.shortcuts`. Write `"<leader> x"` to bind a key after the leader, e.g.
+`{ "panel.log": "<leader> l" }`; `leader` in `codemason.json` changes the
+leader itself (`"none"` turns it off). A key another action uses by default moves to yours; the Log
+pane says so at startup, and lists any id or key it could not use. The `?`
+panel lists every chord the window understands.
 
 ---
 

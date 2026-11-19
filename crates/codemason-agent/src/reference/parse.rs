@@ -2,7 +2,9 @@
 //!
 //! Detects patterns like `@filename`, `@path/to/file`, `@path/to/dir/`,
 //! and `@https://example.com` within prompt text and classifies each into
-//! a [`FileRef`] variant.
+//! a [`FileRef`] variant. A file reference may name a line range:
+//! `@src/a.rs#20-45` or `@src/a.rs#20` ([`parse_mention`]); the resolver then
+//! includes only those lines.
 //!
 //! # Examples
 //!
@@ -40,6 +42,81 @@ pub struct ParsedRef {
     pub kind: FileRef,
     /// Byte range in the original input string covering `@raw`.
     pub span: Range<usize>,
+    /// The 1-based, inclusive line range a `#from-to` or `#line` suffix
+    /// names; `None` for the whole file.
+    pub range: Option<(u32, u32)>,
+}
+
+/// A file mention with an optional line range, as `@path#from-to`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileMention {
+    /// The path as written, without `@` and the range suffix.
+    pub path: String,
+    /// The 1-based, inclusive line range; `None` for the whole file.
+    pub range: Option<(u32, u32)>,
+}
+
+/// Parse one mention token: `@src/a.rs#20-45`, `@src/a.rs#20` (one line) or
+/// `@src/a.rs`. The leading `@` is optional.
+///
+/// # Arguments
+///
+/// * `token` - the mention text, up to the next whitespace.
+///
+/// # Returns
+///
+/// The path and range, or `None` when the token is empty or its `#` suffix is
+/// not a valid range (not numeric, a zero line, or `from > to`, e.g. `#45-20`).
+///
+/// # Examples
+///
+/// ```
+/// use codemason_agent::reference::parse::parse_mention;
+///
+/// let m = parse_mention("@src/a.rs#20-45").expect("mention");
+/// assert_eq!(m.path, "src/a.rs");
+/// assert_eq!(m.range, Some((20, 45)));
+/// assert!(parse_mention("@src/a.rs#45-20").is_none());
+/// ```
+#[must_use]
+pub fn parse_mention(token: &str) -> Option<FileMention> {
+    let raw = token.strip_prefix('@').unwrap_or(token);
+    match raw.rsplit_once('#') {
+        None if raw.is_empty() => None,
+        None => Some(FileMention {
+            path: raw.to_string(),
+            range: None,
+        }),
+        Some(("", _)) => None,
+        Some((path, spec)) => Some(FileMention {
+            path: path.to_string(),
+            range: Some(parse_line_range(spec)?),
+        }),
+    }
+}
+
+/// Split a valid `#range` suffix off a non-URL reference.
+fn split_line_range(raw: &str) -> Option<(&str, (u32, u32))> {
+    if codemason_types::strutil::is_http_url(raw) {
+        return None;
+    }
+    let (path, spec) = raw.rsplit_once('#')?;
+    if path.is_empty() {
+        return None;
+    }
+    Some((path, parse_line_range(spec)?))
+}
+
+/// Parse `from-to` or `line` (1-based, `from <= to`).
+fn parse_line_range(spec: &str) -> Option<(u32, u32)> {
+    let (from, to) = match spec.split_once('-') {
+        Some((from, to)) => (from.parse().ok()?, to.parse().ok()?),
+        None => {
+            let line = spec.parse().ok()?;
+            (line, line)
+        }
+    };
+    (from >= 1 && from <= to).then_some((from, to))
 }
 
 /// Detect and classify all `@` references in the input text.
@@ -93,11 +170,16 @@ pub fn parse_refs(input: &str) -> Vec<ParsedRef> {
                     continue;
                 }
 
-                let kind = classify_ref(raw);
+                // A valid `#range` suffix on a non-URL names lines of the
+                // file; anything else after `#` stays part of the path.
+                let (path, range) =
+                    split_line_range(raw).map_or((raw, None), |(p, r)| (p, Some(r)));
+                let kind = classify_ref(path);
                 refs.push(ParsedRef {
                     raw: raw.to_string(),
                     kind,
                     span: start..i,
+                    range,
                 });
             }
         } else {

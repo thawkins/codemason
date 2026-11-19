@@ -4,6 +4,15 @@
 
 ### Added
 
+- Added: line-range mentions. `@src/a.rs#20-45` (or `#20`) sends only those lines of the file, clamped to its length.
+- Added: `/editor` (leader `e`) edits the prompt in `$VISUAL` or `$EDITOR`; the prompt is locked until the editor exits.
+- Added: model favourites. In the model picker `Ctrl+F` marks or unmarks the highlighted model; favourites are listed first and marked `*`. The picker's filter now matches fuzzily on name or id.
+- Added: `F2` switches to the next of your 5 most recently chosen models (`model.cycle_recent`, rebindable).
+- Added: agent and session pickers with fuzzy search: leader `a` (`picker.agent`) and leader `s` (`picker.session`).
+- Added: a leader key, `Ctrl+G` by default (`leader` and `leader_timeout_ms` in `codemason.json`): press it, then `m` choose model, `a` choose agent, `u` undo, `r` redo, `b` Sessions panel. After a moment a popup lists the keys. Bind your own in `gui-keys.json` as `"<leader> x"`.
+- Added: a command palette (`Ctrl+P` | `Cmd+P`). It searches every shortcut action, slash command, theme, agent and session with fuzzy matching; Enter runs the top row, Esc closes. A slash command that takes arguments is put in the prompt to finish. Action rows show their current key.
+- Added: every GUI shortcut is an action in one catalog with a dotted id (`panel.context`, `session.new`, `mode.yolo`, `help.shortcuts`, ...), so all of them can be rebound in `gui-keys.json`. Problems in that file (an unknown id, a key that does not parse) and a binding that takes another action's default key are reported in the Log pane at startup; your binding wins.
+- Added: macOS gets Cmd+Shift chords for the context, sessions, agents and teams panels and for the autopilot, YOLO, edit-log, GCF and image-paste toggles.
 - Added: the GUI bundles the Lucide icon font (lucide-static 1.66.0, ISC licence; Feather-derived icons MIT). Activity rows show an icon for their main kind of work, and a finished tool call shows a check or a cross; without the font they fall back to ASCII.
 - Added: the permission dialog previews exactly the call it asks about, with the input it will run with after any hook: every hunk of an edit (a write to an existing file is diffed against its current contents), or a shell call's full command. Permission requests raised for a tool call now carry that call (`tool_call` on `PermissionRequested`; not in the SSE payload).
 - Added: a finished edit (`Edit`, `multi_edit`, `Write`, `create`) is followed in the transcript by its diff: the path with `+added -removed`, the first hunk with line numbers on added and removed backgrounds, and an Open diff button. Under the default verbosity the diff sits inside the activity row.

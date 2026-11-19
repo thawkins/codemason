@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, LockResult, MutexGuard};
 
 use crate::geometry::Area;
+use crate::palette::PaletteScope;
 
 use codemason_agent::team::{Mailbox, MessageType, TeamStore};
 use codemason_agent::{
@@ -1234,8 +1235,10 @@ impl App {
             || self.config_save_picker.is_some()
             || self.history_picker.is_some()
             || self.theme_picker.is_some()
+            || self.palette.is_some()
             || self.context_menu.is_some()
             || self.show_shortcuts
+            || self.external_editor_open
             || self.session.compact_in_progress
             || self.session.auto_compact_in_progress
             || self.session.pending_send_after_compact.is_some()
@@ -3685,6 +3688,7 @@ impl App {
             "thinking-display" => Some("[show|hide|collapse]".to_string()),
             "theme" => Some("[<name>|system|dark|light|list|help]".to_string()),
             "redo" => None,
+            "editor" => None,
             "compact" | "compress" => None,
             "halt" => None,
             "resume" => None,
@@ -5001,6 +5005,12 @@ impl App {
             return;
         };
         let query = active.query(&self.session.input).to_string();
+        // `@path#20-45`: the file is chosen and a line range is being typed;
+        // the menu would replace the mention and drop the range.
+        if query.contains('#') {
+            self.file_menu = None;
+            return;
+        }
 
         if let Some(dir) = self.file_menu.as_ref().and_then(|m| m.current_dir.clone()) {
             self.populate_directory_menu(&dir, Some(&query));
@@ -5419,6 +5429,53 @@ impl App {
             selected,
             items,
         });
+    }
+
+    /// Run the catalog action `id` that has no terminal key press
+    /// (`ActionSpec::key` is `None`) and that app-core can run itself.
+    ///
+    /// # Returns
+    ///
+    /// `true` when the action was run here; `false` for an action the
+    /// frontend runs, or an unknown id.
+    pub async fn run_action(&mut self, id: &str) -> bool {
+        match id {
+            "help.shortcuts" => {
+                self.show_shortcuts = true;
+                self.needs_redraw = true;
+                true
+            }
+            "palette.show" => {
+                self.open_palette();
+                true
+            }
+            "picker.model" => {
+                let _ = self.slash_model_picker(); // INTENTIONAL: opening the picker reports in the UI
+                self.needs_redraw = true;
+                true
+            }
+            "picker.agent" => {
+                self.open_palette_scoped(PaletteScope::Agent);
+                true
+            }
+            "picker.session" => {
+                self.open_palette_scoped(PaletteScope::Session);
+                true
+            }
+            "model.cycle_recent" => {
+                self.cycle_recent_model();
+                true
+            }
+            "session.undo" => {
+                Box::pin(self.execute_slash_command("/undo")).await;
+                true
+            }
+            "session.redo" => {
+                Box::pin(self.execute_slash_command("/redo")).await;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Open the context menu over the transcript of a frontend that lays out

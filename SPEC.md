@@ -2260,16 +2260,126 @@ accessibility tree. The transcript stays virtualised: an unmeasured message's
 height is estimated from its blocks' rows (exact for plain one-paragraph
 messages) and corrected when it is drawn.
 
-Keyboard shortcuts for the window are craft-keymap commands: `panel.log`
-(`Alt+L` | `Cmd+Shift+L`), `panel.profile` (`Alt+P` | `Cmd+Shift+P`),
-`panel.tasks` (`Alt+I` | `Cmd+Shift+I`), `panel.memory` (`Alt+M` |
-`Cmd+Shift+M`), `queue.menu` (`Alt+Q` | `Cmd+Alt+Q`) and `app.quit` (`Ctrl+D` |
-`Cmd+Q`). The side-panel toggles (`Alt+S` sessions, `Alt+A` agents, `Alt+T`
-teams, `Alt+C` context) route through `App::handle_key` to the same
-`show_*_panel` state the panes read. Every other key is forwarded to
+Keyboard shortcuts for the window are craft-keymap commands built from
+app-core's action catalog (`shortcuts::action_catalog`; `ActionSpec` holds a
+dotted id, a title, default chords for Linux/Windows and macOS, and the terminal
+key press that runs it, if any). The actions and their default keys
+(Linux/Windows | macOS): `panel.log` (`Alt+L` | `Cmd+Shift+L`),
+`panel.profile` (`Alt+P` | `Cmd+Shift+P`), `panel.tasks` (`Alt+I` |
+`Cmd+Shift+I`), `panel.memory` (`Alt+M` | `Cmd+Shift+M`), `panel.context`
+(`Alt+C` | `Cmd+Shift+C`), `panel.sessions` (`Alt+S` | `Cmd+Shift+S`),
+`panel.agents` (`Alt+A` | `Cmd+Shift+A`), `panel.teams` (`Alt+T` |
+`Cmd+Shift+T`), `queue.menu` (`Alt+Q` | `Cmd+Alt+Q`), `mode.autopilot`
+(`Alt+O` | `Cmd+Shift+O`), `mode.yolo` (`Alt+Y` | `Cmd+Shift+Y`),
+`mode.edit_log` (`Alt+E` | `Cmd+Shift+E`), `mode.gcf` (`Alt+G` |
+`Cmd+Shift+G`), `attach.image` (`Alt+V` | `Cmd+Shift+V`), `session.new`
+(`Ctrl+N` | `Cmd+N`), `teammate.next` (`Alt+Down` | `Cmd+Alt+Down`),
+`teammate.prev` (`Alt+Up` | `Cmd+Alt+Up`), `app.quit` (`Ctrl+D` | `Cmd+Q`),
+`palette.show` (`Ctrl+P` | `Cmd+P`), `model.cycle_recent` (`F2`),
+`picker.model`, `picker.agent`, `picker.session`, `session.undo`,
+`session.redo`, `prompt.editor` and `help.shortcuts` (no default chord; all
+but the first and last have leader keys, below). An action with a terminal key press runs as
+that press through `App::handle_key`, so the GUI and the terminal handler
+cannot drift; one without is queued by the router (`KeyRouter::take_actions`)
+and run by `App::run_action` or the shell. `gui-keys.json` maps action ids to
+key lists (craft-keymap `Overrides`); `keys::load_keymap` returns the keymap
+and its warnings, which go to the Log pane at startup: an unreadable or
+invalid file (defaults are used), an unknown action id, a key that does not
+parse or is reserved (each entry ignored), and a user binding that takes a
+chord another action holds by default (the default is removed so the user's
+binding runs; the warning names both ids). An action moved off its default
+chord no longer runs on that chord: the router drops the raw press that
+app-core would still map to it. Every other key is forwarded to
 `App::handle_key`; an Alt+character chord with no binding is ignored and never
 typed, `Esc` stops a running agent (the `Alt+X` binding was removed), and `Tab`
 completes the slash-command menu.
+
+**Command palette.** `palette.show` opens `App::palette`
+(`crates/codemason-app-core/src/palette.rs`), which lists every catalog action
+(`action:<id>`, with its key), every slash command (`slash:<trigger>`), every
+theme (`theme:<name>`), every cycleable agent (`agent:<name>`) and every
+session in the sidebar (`session:<id>`, hinted with its project). The rows are
+the entries ranked against the query by `fuzzy::fuzzy_rank` on their title (a
+case-insensitive subsequence match scoring each matched character, more at a
+word start and after the previous match; equal scores keep catalog order), at
+most 50. app-core owns the palette's keys: Up/Down move the highlight, Enter
+runs the highlighted row and closes, Esc closes. Running a row: an action runs
+as its terminal key press or through `App::run_action`, else the frontend runs
+it (`App::take_frontend_action`); a slash command that takes arguments
+(`get_parameter_hint`) is put in the prompt as `/<trigger> `, one that does not
+runs; a theme is selected; an agent runs `/agent <name>`; a session is switched
+to. A slash command or agent row is queued for the next turn boundary while a
+turn runs, as a typed command is, and the user's draft in the prompt is kept.
+Keyless actions (the palette, the pickers) do not run while a modal dialog has
+the keyboard, and Enter or an arrow typed in the same frame as query text runs
+after the query is updated (`dialogs::palette::prepare`). The GUI dialog (`dialogs::palette`) draws a focused search field that edits
+the query in place and the rows with their hint and, for an action, the key the
+keymap binds it to now (`KeyRouter::action_keys`); a click highlights a row, a
+double click runs it.
+
+**Agent and session pickers.** `picker.agent` and `picker.session` open the
+palette scoped to one kind of entry (`PaletteState::scope`, a `PaletteScope`):
+only `agent:` or only `session:` rows, with the same fuzzy ranking and keys,
+under the title "Choose agent" or "Choose session". A bare `/agent` still opens
+the provider-setup agent list.
+
+**Model favourites and recent models.** In the model picker (`SelectModel`),
+`Ctrl+F` toggles the highlighted model as a favourite; favourites are listed
+first (`App::sort_favorites_first`, applied by `models_for_provider` and
+`picker_entries_from_models`) and the GUI marks them with `*`. Choosing a model
+in the picker records it in the recent list, newest first, distinct, at most 5
+(`RECENT_MODELS_MAX`). `model.cycle_recent` (`F2`) switches to the recent model
+after the current one, wrapping, without reordering the list, skipping a model
+whose provider is no longer configured or no longer lists it
+(`App::cycle_recent_model`). Both lists are JSON in the storage settings
+(`favorite_models`, an array of `provider/id`; `recent_models`, an array of
+`RecentModel`), beside `selected_model`. The GUI model picker's filter is a
+fuzzy match on the name or id (`fuzzy::fuzzy_score`), best match first.
+
+**Line-range mentions.** A file mention may name lines: `@src/a.rs#20-45`
+(lines 20 to 45, 1-based, inclusive) or `@src/a.rs#20` (one line)
+(`reference::parse_mention`, `FileMention`). `parse_refs` splits a valid range
+off a non-URL reference into `ParsedRef::range`; an invalid suffix (`#45-20`,
+`#0`, not numeric) stays part of the path, and a URL keeps its `#` fragment.
+The resolver includes only those lines, under their own numbers, clamped to
+the file's length (for a PDF, lines of the extracted text, before the size
+cap), and tags the block `<file path=".." lines="20-45">`. The
+`@` file menu closes once a `#` follows the path, so Enter sends the mention
+rather than replacing it.
+
+**External editor.** `/editor` and the action `prompt.editor` (leader `e`)
+edit the prompt in `$VISUAL`, else `$EDITOR`
+(`external_editor::edit_in_external_editor`): the prompt is written to a
+temporary file, the editor command runs through the shell with the file as
+its last argument, and the saved text (less one trailing newline) replaces the
+prompt of the session it was started in, focused or not. App-core locks the
+prompt meanwhile (`App::begin_external_edit` / `finish_external_edit`,
+`external_editor_open`): no key edits or submits it, Esc still stops a running
+agent, and dialogs keep their keys. A draft in the prompt survives `/editor`
+run from the palette or the queue; a failure or a missing editor
+is reported in the status line and keeps the prompt. `/editor` asks the
+frontend (`prompt.editor` frontend action); the GUI runs the editor on a
+worker thread (`external_edit::ExternalEdit`) so the window keeps drawing.
+
+**Leader key.** The `leader` config key (default `Ctrl+G`; `"none"` turns it
+off) and `leader_timeout_ms` (default 2000) set a key that starts a two-key
+sequence (`shortcuts::LeaderSettings`, recorded by the binary from the loaded
+configuration). The key router takes the leader and the next key press out of
+the input (neither types, and neither reaches the App): the second key runs the
+action bound to it, or nothing when none is; a wait longer than the timeout
+ends with no action, and a modal dialog cancels the wait. Default sequences
+come from each catalog action's `leader_key`: `m` choose model
+(`picker.model`), `a` choose agent (`picker.agent`), `s` choose session
+(`picker.session`), `e` edit the prompt externally (`prompt.editor`), `u` undo
+the last turn
+(`session.undo`), `r` redo (`session.redo`) and `b` the Sessions panel
+(`panel.sessions`). In `gui-keys.json` a text `"<leader> x"` binds `x` after
+the leader to that action (`keys::load_leader_bindings`; an unknown id or more
+than one key after `<leader>` is a warning); those texts are kept out of
+craft-keymap's overrides. After the leader has waited 400 ms the which-key
+popup (`dialogs::which_key`, "Leader keys") lists every key bound after it with
+its action's title. Ctrl+X keeps cutting the prompt's selection and, without
+one, cancelling a running agent.
 
 ### 6.1 GUI Layout
 

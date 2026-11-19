@@ -96,6 +96,8 @@ mod test_activity_rows;
 mod test_bridge;
 #[path = "test_clipboard.rs"]
 mod test_clipboard;
+#[path = "test_command_palette.rs"]
+mod test_command_palette;
 #[path = "test_dialogs.rs"]
 mod test_dialogs;
 #[path = "test_dialogs_more.rs"]
@@ -104,6 +106,8 @@ mod test_dialogs_more;
 mod test_diff_pane;
 #[path = "test_dock.rs"]
 mod test_dock;
+#[path = "test_external_edit.rs"]
+mod test_external_edit;
 #[path = "test_files.rs"]
 mod test_files;
 #[path = "test_fonts.rs"]

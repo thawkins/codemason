@@ -1271,6 +1271,14 @@ impl App {
             self.debug_log_input_transition("key-config-save-picker", &before_input, before_cursor);
             return;
         }
+        // The command palette takes its keys while it is open, except the
+        // global quit keys; typing goes to its search field.
+        if self.palette.is_some() && !input::is_global_quit_key(key) {
+            self.handle_palette_key(key).await;
+            self.assert_ui_invariants();
+            self.debug_log_input_transition("key-palette", &before_input, before_cursor);
+            return;
+        }
         // The theme picker intercepts all keys while it is open, except the
         // global quit keys.
         if self.theme_picker.is_some() && !input::is_global_quit_key(key) {

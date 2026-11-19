@@ -780,6 +780,14 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
         }
     }
 
+    // While the prompt is out in an external editor (`/editor`) nothing may
+    // edit or submit it: the editor's result replaces it. Esc still stops a
+    // running agent; the confirmation dialogs above keep their keys.
+    if app.external_editor_open {
+        return (key.key == Key::Esc && app.session.is_processing)
+            .then_some(InputAction::CancelAgent);
+    }
+
     // If slash menu is active, intercept navigation keys
     if app.slash_menu.is_some() {
         match key.key {
@@ -1822,6 +1830,31 @@ fn on_select_model(
     selected: usize,
 ) {
     match key.key {
+        Key::Char('f') if key.mods.contains(Modifiers::CTRL) => {
+            // Toggle the highlighted model as a favourite and re-sort, keeping
+            // the highlight on the same model.
+            let mut models = models;
+            let mut selected = selected;
+            if let Some(entry) = models.get(selected).cloned() {
+                let favorite = app.toggle_favorite_model(&entry.provider_id, &entry.id);
+                app.sort_favorites_first(&mut models);
+                selected = models
+                    .iter()
+                    .position(|m| m.provider_id == entry.provider_id && m.id == entry.id)
+                    .unwrap_or(0);
+                app.status = if favorite {
+                    format!("favourite: {}", entry.name)
+                } else {
+                    format!("not a favourite: {}", entry.name)
+                };
+            }
+            app.provider_setup = Some(ProviderSetupStep::SelectModel {
+                provider_id,
+                provider_name,
+                models,
+                selected,
+            });
+        }
         Key::Up => {
             let new = if models.is_empty() {
                 0

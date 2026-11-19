@@ -6,7 +6,9 @@
 //! as the TUI's model table does.
 //!
 //! A filter field above the list narrows it to the models whose name or id
-//! contains the typed text (ignoring case). The filter is a view over the
+//! fuzzy-matches the typed text (`codemason_app_core::fuzzy`), best match
+//! first. Favourite models are marked with a star and listed first; Ctrl+F
+//! (app-core's) toggles the highlighted model as a favourite. The filter is a view over the
 //! App's list: it only chooses which rows are shown and keeps the App's
 //! highlight on a shown row. The choice itself is app-core's: Enter (the key,
 //! the Select button or a double click) runs the TUI's `Enter` arm, which
@@ -19,6 +21,7 @@
 //! Dependencies: `codemason-app-core` and `egui`.
 
 use codemason_app_core::app::{App, ModelPickerEntry, ProviderSetupStep};
+use codemason_app_core::fuzzy::fuzzy_score;
 use codemason_app_core::input_event::Key;
 use egui::Id;
 
@@ -38,6 +41,9 @@ pub const SELECT: &str = "Select";
 
 /// The button that closes the picker (Esc).
 pub const CANCEL: &str = "Cancel";
+
+/// The mark before a favourite model's name.
+pub const FAVORITE_MARK: &str = "*";
 
 /// The egui memory slot of the filter text.
 fn filter_id() -> Id {
@@ -100,8 +106,9 @@ pub fn reset(ctx: &egui::Context) {
     ctx.data_mut(|d| d.remove_temp::<String>(filter_id()));
 }
 
-/// The indices of the models whose name or id contains `filter`, ignoring
-/// case; every index when `filter` is empty.
+/// The indices of the models whose name or id fuzzy-matches `filter`, best
+/// first (ties keep list order); every index, in list order, when `filter`
+/// is empty.
 ///
 /// # Arguments
 ///
@@ -110,20 +117,21 @@ pub fn reset(ctx: &egui::Context) {
 ///
 /// # Returns
 ///
-/// The indices in list order.
+/// The indices to show, in display order.
 #[must_use]
 pub fn matching(models: &[ModelPickerEntry], filter: &str) -> Vec<usize> {
-    let needle = filter.trim().to_lowercase();
-    models
+    let query = filter.trim();
+    let mut scored: Vec<(u32, usize)> = models
         .iter()
         .enumerate()
-        .filter(|(_, m)| {
-            needle.is_empty()
-                || m.name.to_lowercase().contains(&needle)
-                || m.id.to_lowercase().contains(&needle)
+        .filter_map(|(i, m)| {
+            let by_name = fuzzy_score(query, &m.name);
+            let by_id = fuzzy_score(query, &m.id);
+            by_name.max(by_id).map(|score| (score, i))
         })
-        .map(|(i, _)| i)
-        .collect()
+        .collect();
+    scored.sort_by_key(|&(score, i)| (std::cmp::Reverse(score), i));
+    scored.into_iter().map(|(_, i)| i).collect()
 }
 
 /// Handle Up, Down and Enter before the router while the filter hides rows:
@@ -209,6 +217,7 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         return false;
     };
     let provider_name = provider_name.to_string();
+    let favorites = app.favorite_models();
     let rows: Vec<(String, String)> = models
         .iter()
         .map(|m| {
@@ -218,7 +227,13 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
                 context_label(m.context_window),
                 m.cost_tier
             );
-            (m.name.clone(), detail)
+            let favorite = favorites.contains(&format!("{}/{}", m.provider_id, m.id));
+            let name = if favorite {
+                format!("{FAVORITE_MARK} {}", m.name)
+            } else {
+                m.name.clone()
+            };
+            (name, detail)
         })
         .collect();
     let mut text = filter(ctx);
@@ -270,7 +285,7 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
             key_buttons(ui, &[(SELECT, plain(Key::Enter))]);
         });
         key_buttons(ui, &[(CANCEL, plain(Key::Esc))]);
-        ui.weak("Up/Down move  Enter select  Esc cancel");
+        ui.weak("Up/Down move  Enter select  Ctrl+F favourite  Esc cancel");
     });
     ctx.data_mut(|d| d.insert_temp(filter_id(), text));
     if let Some((i, choose)) = clicked {

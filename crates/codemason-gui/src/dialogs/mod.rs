@@ -45,6 +45,7 @@ pub mod lists;
 pub mod loop_setup;
 pub mod model_picker;
 pub mod output_view;
+pub mod palette;
 pub mod permission;
 pub mod pickers;
 pub mod progress;
@@ -54,6 +55,7 @@ pub mod question;
 pub mod session_menu;
 pub mod shortcuts;
 pub mod stores;
+pub mod which_key;
 
 use codemason_app_core::app::{App, ProviderSetupStep};
 use codemason_app_core::input_event::{Key, KeyInput, Modifiers};
@@ -66,6 +68,8 @@ use crate::panels::prompt::prompt_id;
 pub enum ActiveDialog {
     /// The `/config list` save picker (`App::config_save_picker`).
     ConfigSavePicker,
+    /// The command palette (`App::palette`).
+    Palette,
     /// The `/theme` picker (`App::theme_picker`).
     ThemePicker,
     /// The input history picker (`App::history_picker`).
@@ -146,6 +150,9 @@ pub enum ActiveDialog {
 pub fn active(app: &App) -> Option<ActiveDialog> {
     if app.config_save_picker.is_some() {
         return Some(ActiveDialog::ConfigSavePicker);
+    }
+    if app.palette.is_some() {
+        return Some(ActiveDialog::Palette);
     }
     if app.theme_picker.is_some() {
         return Some(ActiveDialog::ThemePicker);
@@ -312,6 +319,7 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
     banner::show(ctx, app);
     match dialog {
         Some(ActiveDialog::ConfigSavePicker) => pickers::show_config_saves(ctx, app),
+        Some(ActiveDialog::Palette) => palette::show(ctx, app),
         Some(ActiveDialog::ThemePicker) => pickers::show_theme(ctx, app),
         Some(ActiveDialog::HistoryPicker) => pickers::show_history(ctx, app),
         Some(ActiveDialog::RouterSave) => confirm::show_router_save(ctx, app),
@@ -364,6 +372,7 @@ pub fn prepare(ctx: &egui::Context, app: &mut App) {
         Some(ActiveDialog::Properties) => properties::prepare(ctx, app),
         Some(ActiveDialog::LoopSetup) => loop_setup::prepare(ctx, app),
         Some(ActiveDialog::ContextMenu) => context_menu::prepare(ctx, app),
+        Some(ActiveDialog::Palette) => palette::prepare(ctx),
         Some(
             ActiveDialog::ConfigSavePicker
             | ActiveDialog::ThemePicker

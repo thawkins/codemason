@@ -451,6 +451,8 @@ mod test_prompt_context_cache;
 #[path = "test_codemason_info_tool.rs"]
 mod test_codemason_info_tool;
 
+#[path = "test_mentions.rs"]
+mod test_mentions;
 #[path = "test_reference_resolve.rs"]
 mod test_reference_resolve;
 

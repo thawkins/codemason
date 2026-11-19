@@ -94,6 +94,8 @@ chrono = { workspace = true }
 [dev-dependencies]
 # Only the `#[cfg(test)]` compaction-runner tests and `tests/` use it.
 tokio-stream = { workspace = true }
+# Builds the text PDF for the ranged `@file.pdf#a-b` mention test.
+lopdf = { workspace = true }
 anyhow = { workspace = true }
 tempfile = "3.5"
 # SERIALISES process-global-state tests (perf profiling atomics); the inline

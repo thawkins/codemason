@@ -1187,6 +1187,10 @@ pub const SLASH_COMMANDS: &[SlashCommandDef] = &[
         description: "Restore the turn the last /undo removed (/redo help)",
     },
     SlashCommandDef {
+        trigger: "editor",
+        description: "Edit the prompt in $VISUAL or $EDITOR (GUI)",
+    },
+    SlashCommandDef {
         trigger: "name",
         description: "Set a human-readable display name for the session: /name <display-name> | /name help",
     },
@@ -3843,6 +3847,13 @@ pub struct App {
     pub bg_tasks: Vec<BgTaskView>,
     /// Whether the keybindings help panel is currently visible.
     pub show_shortcuts: bool,
+    /// Whether the prompt is out in an external editor (`/editor`); the
+    /// prompt is locked meanwhile.
+    pub external_editor_open: bool,
+    /// The session whose prompt is out in the external editor (`None` for a
+    /// view with no session yet), so the result goes back to that session
+    /// even when another one is focused by then.
+    pub external_editor_owner: Option<String>,
     /// Whether this frontend draws the keybindings help panel. When `false`,
     /// `?` on an empty prompt is typed like any other character instead of
     /// opening an invisible, input-locking panel. Defaults to `true`.
@@ -3863,6 +3874,10 @@ pub struct App {
     pub history_picker: Option<HistoryPickerState>,
     /// The `/theme` picker overlay, while it is open.
     pub theme_picker: Option<ThemePickerState>,
+    /// The command palette, while it is open.
+    pub palette: Option<crate::palette::PaletteState>,
+    /// An action a palette row asked the frontend to run.
+    pub frontend_action: Option<String>,
     /// Active config-save picker dialog (`/config list`), if any.
     pub config_save_picker: Option<ConfigSavePickerState>,
     /// Index of the selected agent in the agents panel (for keyboard/mouse navigation).

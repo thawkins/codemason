@@ -65,6 +65,15 @@ pub struct Config {
     /// `"hidden"`. Unset or unrecognised means `collapsed`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_display: Option<String>,
+    /// The GUI's leader key, e.g. `"Ctrl+G"`: pressed before a second key
+    /// (`<leader> m` opens the model picker). Unset means `Ctrl+G`; `"none"`
+    /// turns leader sequences off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader: Option<String>,
+    /// How long, in milliseconds, the GUI waits for the key after the
+    /// leader. Unset means 2000.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader_timeout_ms: Option<u64>,
     /// Name of the agent to use when none is specified.
     #[serde(default = "default_agent_name", alias = "defaultAgent")]
     pub default_agent: String,
@@ -413,6 +422,8 @@ impl Default for Config {
             theme: None,
             verbosity: None,
             thinking_display: None,
+            leader: None,
+            leader_timeout_ms: None,
             default_agent: default_agent_name(),
             specified_default_agent: false,
             provider: HashMap::new(),
@@ -3415,6 +3426,12 @@ impl Config {
         }
         if overlay.thinking_display.is_some() {
             base.thinking_display = overlay.thinking_display;
+        }
+        if overlay.leader.is_some() {
+            base.leader = overlay.leader;
+        }
+        if overlay.leader_timeout_ms.is_some() {
+            base.leader_timeout_ms = overlay.leader_timeout_ms;
         }
         if overlay.specified_default_agent {
             base.default_agent = overlay.default_agent;
