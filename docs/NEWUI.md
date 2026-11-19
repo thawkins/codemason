@@ -292,3 +292,12 @@ Total: about 12 to 16 working days. Phases 1 and 2 can run in parallel; 4 and
    (`platform/menu.rs`) is kept unchanged (Phase 4 step 1).
 3. **Default theme:** unchanged. `document-light` / `document-dark` are
    available through `/theme` only (Phase 1 step 3, Phase 6 step 1).
+
+## Follow-up after merge (owner's request)
+
+- The layout no longer depends on the theme: the title strip, ribbon,
+  Material panes, drawer rows and zoom slider are drawn on every theme, in
+  that theme's Material roles (derived for themes without an `m3` block).
+  The `File` menu bar is removed; its three items are ribbon buttons.
+- The transcript and prompt fill their panes; the 816-point page column
+  and desk margins are gone.

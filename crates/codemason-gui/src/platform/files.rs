@@ -1,7 +1,8 @@
 //! Native file dialogs for the window, built on craft-dialogs.
 //!
 //! The GUI asks for a path in the three places the terminal frontend has
-//! the user type one:
+//! the user type one (from the ribbon's File and Insert tabs,
+//! [`crate::ribbon`]):
 //!
 //! | [`FileIntent`] | Dialog | Typed TUI path it stands for |
 //! |---|---|---|
@@ -24,7 +25,7 @@
 //! answers, through the context bound with [`FileDialogs::bind`].
 //!
 //! Dependencies: `craft-dialogs` (queued native dialogs over `rfd`),
-//! `egui` (the File menu and the repaint wake), `eframe` (the parent
+//! `egui` (the repaint wake), `eframe` (the parent
 //! window), `codemason-app-core` (the
 //! actions the answers run) and `tracing`.
 
@@ -37,15 +38,6 @@ use craft_dialogs::{Answer, Dialogs, FileDialog, Override};
 /// The extensions the attach dialog offers: the ones app-core accepts as
 /// images (`is_image_path`).
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "tif"];
-
-/// The File menu's label.
-pub const FILE_MENU_LABEL: &str = "File";
-/// The File menu item that attaches images.
-pub const ATTACH_LABEL: &str = "Attach Images...";
-/// The File menu item that registers a project folder.
-pub const OPEN_PROJECT_LABEL: &str = "Open Project...";
-/// The File menu item that starts a session in a new project's folder.
-pub const NEW_PROJECT_DIR_LABEL: &str = "New Project Folder...";
 
 /// What a file dialog's answer is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -189,33 +181,6 @@ impl FileDialogs {
     pub fn set_override(&mut self, answer_with: Option<Override>) {
         self.dialogs.set_override(answer_with);
     }
-}
-
-/// Draw the File menu, whose items queue the dialogs.
-///
-/// # Arguments
-///
-/// * `ui` - the menu bar.
-/// * `files` - the dialogs the items queue.
-/// * `start` - the folder the dialogs open in (the focused session's).
-/// * `enabled` - whether the items can be used (not while an app-core modal
-///   owns the window).
-pub fn file_menu(ui: &mut egui::Ui, files: &mut FileDialogs, start: &Path, enabled: bool) {
-    let start = (!start.as_os_str().is_empty()).then_some(start);
-    ui.add_enabled_ui(enabled, |ui| {
-        ui.menu_button(FILE_MENU_LABEL, |ui| {
-            for (label, intent) in [
-                (ATTACH_LABEL, FileIntent::Attach),
-                (OPEN_PROJECT_LABEL, FileIntent::OpenProject),
-                (NEW_PROJECT_DIR_LABEL, FileIntent::NewProjectDir),
-            ] {
-                if ui.button(label).clicked() {
-                    files.ask(intent, start);
-                    ui.close();
-                }
-            }
-        });
-    });
 }
 
 /// Run what a dialog's answer asks for.

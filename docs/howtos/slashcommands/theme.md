@@ -13,7 +13,7 @@
 | `codemason-light` | The standard light theme (alias `light`) |
 | `high-contrast` | White text and white outlines on black |
 | `catppuccin-mocha`, `gruvbox-dark`, `nord`, `tokyo-night` | Ports of those palettes |
-| `document-light`, `document-dark` | Material Design 3 colour schemes from one blue seed, for the word-processor layout planned in `docs/NEWUI.md` |
+| `document-light`, `document-dark` | Material Design 3 colour schemes from one blue seed, made for the window's word-processor layout |
 
 The switch lasts until codemason exits. To start in a theme, set the `theme`
 key in `codemason.json`:

@@ -1,8 +1,7 @@
 //! Tests for the word-processor frame (`codemason_gui::ribbon`,
 //! `codemason_gui::page`): every ribbon command is one the window already
-//! has, the frame is drawn only for themes with their own Material roles,
-//! tabs switch and the ribbon collapses, a ribbon click runs its command,
-//! and the page column's width.
+//! has, the frame is drawn on every theme, tabs switch and the ribbon
+//! collapses, and a ribbon click runs its command.
 
 #[path = "support/mod.rs"]
 mod support;
@@ -12,7 +11,6 @@ use codemason_app_core::log_channel::tui_log_channel;
 use codemason_app_core::theme_tokens::{ThemeCatalog, ThemeSelection};
 use codemason_gui::Shell;
 use codemason_gui::keys::{command_key_input, default_keymap};
-use codemason_gui::page::{DESK_MARGIN, PAGE_WIDTH, page_width};
 use codemason_gui::platform::menu::MenuAction;
 use codemason_gui::ribbon::{HOME_TAB, QUICK_ACCESS, RibbonAction, RibbonItem, TABS};
 use craft_keymap::{CommandRef, Platform};
@@ -97,20 +95,17 @@ fn test_ribbon_commands_are_ones_the_window_has() {
 }
 
 #[test]
-fn test_ribbon_page_width_is_capped_and_never_negative() {
-    assert!((page_width(2000.0) - PAGE_WIDTH).abs() < f32::EPSILON);
-    assert!((page_width(500.0) - DESK_MARGIN.mul_add(-2.0, 500.0)).abs() < f32::EPSILON);
-    assert!(page_width(10.0).abs() < f32::EPSILON);
-}
-
-#[test]
-fn test_ribbon_drawn_only_for_document_themes() {
-    let legacy = rig("codemason-light");
-    assert!(legacy.harness.query_by_label("Home").is_none());
-    assert!(legacy.harness.query_by_label("Compact").is_none());
-    let document = rig("document-light");
-    document.harness.get_by_label("Home");
-    document.harness.get_by_label("Compact");
+fn test_ribbon_drawn_on_every_theme() {
+    for theme in [
+        "codemason-light",
+        "codemason-dark",
+        "document-light",
+        "nord",
+    ] {
+        let rig = rig(theme);
+        rig.harness.get_by_label("Home");
+        rig.harness.get_by_label("Compact");
+    }
 }
 
 #[test]

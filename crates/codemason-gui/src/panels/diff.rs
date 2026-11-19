@@ -342,8 +342,18 @@ pub fn diff_pane_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
     let pressed_inside = ui.input(|i| {
         i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| area.contains(p))
     });
-    if pressed_inside {
+    // A press on the diff's selectable text clears the focus at the end of
+    // that frame (egui's text selection does), so the pane claims it again
+    // on the frame after the press as well.
+    let claim = pane_focus_id().with("claim");
+    let claimed_last_frame = ui
+        .data_mut(|d| d.remove_temp::<bool>(claim))
+        .unwrap_or(false);
+    if pressed_inside || claimed_last_frame {
         focus.request_focus();
+    }
+    if pressed_inside {
+        ui.data_mut(|d| d.insert_temp(claim, true));
     }
     focus.widget_info(|| WidgetInfo::labeled(Role::Pane, true, DIFF_PANE_LABEL));
     let pane = &mut app.diff_pane;

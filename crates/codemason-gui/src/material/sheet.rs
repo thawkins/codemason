@@ -92,7 +92,7 @@ pub fn drawer_item(
         ui.painter().galley(egui::pos2(x, y), glyph, content);
         x += ICON_SIZE + ICON_GAP;
     }
-    let text = text_galley(ui, label, label_large(), content);
+    let text = text_galley(ui, label, label_large(ui.ctx()), content);
     let y = rect.center().y - text.size().y / 2.0;
     ui.painter().galley(egui::pos2(x, y), text, content);
     response

@@ -189,9 +189,26 @@ pub(crate) fn text_galley(
 }
 
 /// The M3 "label large" font: 14 pt medium, used on buttons, tabs and chips.
+///
+/// # Arguments
+///
+/// * `ctx` - the window's context, for its installed fonts.
+///
+/// # Returns
+///
+/// The bold UI family ([`crate::fonts::BOLD_FAMILY`]) when the window's
+/// font stack is installed, else egui's proportional family, so a context
+/// without the stack (a test harness) still draws the label.
 #[must_use]
-pub fn label_large() -> egui::FontId {
-    crate::fonts::bold_font(crate::metrics::text_size::BODY, false)
+pub fn label_large(ctx: &egui::Context) -> egui::FontId {
+    let size = crate::metrics::text_size::BODY;
+    let bold = egui::FontFamily::Name(crate::fonts::BOLD_FAMILY.into());
+    let installed = ctx.fonts_mut(|fonts| fonts.definitions().families.contains_key(&bold));
+    if installed {
+        crate::fonts::bold_font(size, false)
+    } else {
+        egui::FontId::proportional(size)
+    }
 }
 
 /// The Material "standard" motion duration, in seconds.

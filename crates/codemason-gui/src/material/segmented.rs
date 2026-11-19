@@ -49,7 +49,7 @@ pub fn segmented_buttons(
 ) -> Response {
     let m3 = &palette.m3;
     let check_width = ICON_SIZE + ICON_GAP;
-    let font = label_large();
+    let font = label_large(ui.ctx());
     let widths: Vec<f32> = options
         .iter()
         .map(|label| {

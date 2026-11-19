@@ -74,16 +74,13 @@ You can also open the provider setup directly from the prompt:
 
 ### Word-processor layout
 
-The `document-light` and `document-dark` themes switch the window to a
-word-processor layout:
-
-```text
-/theme document-light
-```
+The window has a word-processor layout on every theme (the
+`document-light` and `document-dark` themes are Material colour schemes made
+for it):
 
 - A title strip shows the project and four quick buttons: New session,
   Undo, Copy transcript and Stop.
-- A ribbon replaces the `File` menu. Its tabs are File (open a project, a
+- A ribbon carries the commands. Its tabs are File (open a project, a
   new project folder, About, Quit), Home (sessions, undo and redo, copy,
   stop, compact), Insert (attach images, templates), Agent (model, agent,
   loop), View (the Log, Profile, Tasks and Memory panels, theme) and Review
@@ -91,13 +88,11 @@ word-processor layout:
   hover it to see its name.
 - The chevron at the right of the tabs collapses the ribbon to its tabs;
   clicking any tab opens it again.
-- The transcript is a page on a grey desk, at most 816 points wide, and the
-  prompt is an outlined field under it.
-- The side panels use the same Material surfaces, the sessions list has
-  roomier rows, and the status bar ends with a zoom slider (50% to 200%;
+- The transcript fills its pane as a page, and the prompt is an outlined
+  field under it, as wide as its pane.
+- The side panels use the theme's Material surfaces, the sessions list has
+  wider rows, and the status bar ends with a zoom slider (50% to 200%;
   Ctrl+Plus and Ctrl+Minus still work).
-
-Every other theme keeps the plain `File` menu bar.
 
 ### Title bar
 
@@ -384,17 +379,16 @@ Add unit tests for the bash permission command-name extraction logic
 
 ### Attaching files
 
-- **File menu** — choose **File > Attach Images...** to open the native file
-  dialog and pick one or more images (png, jpg, jpeg, gif, webp, bmp, tiff).
-  Cancelling the dialog changes nothing.
+- **Ribbon** — choose **Insert > Images** to open the native file dialog and
+  pick one or more images (png, jpg, jpeg, gif, webp, bmp, tiff). Cancelling
+  the dialog changes nothing.
 - **Clipboard** — paste an image from the clipboard into the prompt, or press
   **`Alt+V`** (Linux/Windows), to stage it as an attachment.
 
-The same **File** menu has **Open Project...** (register a project folder, as
-`/project add <path>`) and **New Project Folder...** (start a session in a new
-folder, as `/session new <path>`). On macOS the menu bar carries About, Quit
-(`Cmd+Q`) and a View menu with the panel toggles; the File items are in the
-window's own File menu.
+The ribbon's **File** tab has **Open project** (register a project folder, as
+`/project add <path>`) and **New folder** (start a session in a new folder, as
+`/session new <path>`). On macOS the menu bar also carries About, Quit
+(`Cmd+Q`) and a View menu with the panel toggles.
 
 ### Clipboard
 

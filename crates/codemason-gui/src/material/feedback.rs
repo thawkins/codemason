@@ -276,7 +276,7 @@ pub fn snackbar(
                         action.is_some_and(|action| {
                             ui.add_space(24.0);
                             let label = egui::RichText::new(action)
-                                .font(label_large())
+                                .font(label_large(ui.ctx()))
                                 .color(rgb(m3.inverse_primary));
                             ui.add(egui::Button::new(label).frame(false)).clicked()
                         })

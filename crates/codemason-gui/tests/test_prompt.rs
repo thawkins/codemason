@@ -314,10 +314,11 @@ fn test_queue_menu_shows_queued_items() {
     harness.run();
 
     assert!(harness.state().app().queue_menu_open);
-    harness.get_by_label(QUEUE_MENU_LABEL);
+    let menu = harness.get_by_label(QUEUE_MENU_LABEL);
     harness.get_by_label_contains("2 pending");
+    // Within the menu: the ribbon has a Stop button of its own.
     for row in ["Next", "Stop", "Clear", "Show"] {
-        harness.get_by_label_contains(row);
+        menu.get_by_label_contains(row);
     }
 
     harness.key_press(egui::Key::Escape);

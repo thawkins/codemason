@@ -404,7 +404,10 @@ async fn test_code_block_insert_puts_the_code_in_the_prompt() {
         .with_size(egui::vec2(1000.0, 700.0))
         .build_ui_state(|ui, shell: &mut Shell| shell.show(ui), shell);
     harness.run();
-    harness.get_by_label(INSERT).click();
+    // The code block's button, not the ribbon's Insert tab.
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::Button, INSERT)
+        .click();
     harness.run();
     assert_eq!(harness.state().app().session.input, "please\ncargo test");
 }
@@ -660,7 +663,10 @@ async fn test_output_view_code_block_insert_reaches_the_prompt() {
             },
         );
     harness.run();
-    harness.get_by_label(INSERT).click();
+    // The code block's button, not the ribbon's Insert tab.
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::Button, INSERT)
+        .click();
     harness.run();
     assert_eq!(harness.state().app.session.input, "make");
 }

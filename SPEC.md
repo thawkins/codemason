@@ -310,7 +310,7 @@ graph TB
 | `codemason-codeindex` | Tree-sitter parsing, SQLite/Tantivy index, file watcher | ~14,200 |
 | `codemason-server` | Axum HTTP routes and SSE streaming | ~6,100 |
 | `codemason-app-core` | Frontend-neutral application core: `App` state, key handling, slash commands, event handlers | ~67,300 |
-| `codemason-gui` | egui desktop frontend: dockable panes, native dialogs, craft-keymap shortcuts, Material Design 3 components (`material`), the word-processor ribbon and page layout of the `document-*` themes (`ribbon`, `page`), the app-drawn window title bar (`title_bar`, craft-window's frame policy) | ~12,500 |
+| `codemason-gui` | egui desktop frontend: dockable panes, native dialogs, craft-keymap shortcuts, Material Design 3 components (`material`), the word-processor ribbon and page layout (`ribbon`, `page`), the app-drawn window title bar (`title_bar`, craft-window's frame policy) | ~12,500 |
 | `codemason-bench` | Criterion benchmarks shared between GUI and CLI | ~6,800 |
 | `codemason-specs` | Spec lifecycle management, SDD artifact generation, consistency validation, constitution parsing | ~9,100 |
 | `codemason-research` | Research types, gatherers, and plan-dep parser | ~39,000 |
