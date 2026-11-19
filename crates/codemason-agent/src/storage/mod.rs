@@ -23,5 +23,5 @@
 pub use codemason_storage::{
     ActivityLog, InitiativeMilestone, InitiativeRow, KgEntityRow, KgRelationshipRow, MemoryRow,
     ProjectRemoteRow, ProjectRow, RunCostSummaryRow, SessionCheckout, SessionRow, Storage, TaskRow,
-    TaskUpdateParams, decrypt_key, deobfuscate_key, encrypt_key, obfuscate_key,
+    TaskUpdateParams, decrypt_key, encrypt_key,
 };

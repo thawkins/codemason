@@ -554,44 +554,6 @@ fn deobfuscate_key_v1(encoded: &str) -> std::result::Result<String, &'static str
     String::from_utf8(bytes).map_err(|_| "decoded bytes are not valid UTF-8")
 }
 
-/// Obfuscates an API key using repeating-key XOR and base64 encoding.
-///
-/// **Deprecated:** Use [`encrypt_key`] instead. This function is retained
-/// for backward compatibility with tests and migration scenarios.
-///
-/// # Examples
-///
-/// ```
-/// use codemason_storage::storage::obfuscate_key;
-///
-/// let obfuscated = obfuscate_key("sk-secret-key");
-/// assert!(!obfuscated.is_empty());
-/// assert_ne!(obfuscated, "sk-secret-key");
-/// ```
-#[must_use]
-pub fn obfuscate_key(key: &str) -> String {
-    encrypt_key(key)
-}
-
-/// Reverses [`obfuscate_key`], recovering the original API key.
-///
-/// **Deprecated:** Use [`decrypt_key`] instead. This function handles both
-/// v1 (legacy XOR) and v2 (blake3 encrypted) formats.
-///
-/// # Examples
-///
-/// ```
-/// use codemason_storage::storage::{obfuscate_key, deobfuscate_key};
-///
-/// let obfuscated = obfuscate_key("my-api-key");
-/// let recovered = deobfuscate_key(&obfuscated);
-/// assert_eq!(recovered, "my-api-key");
-/// ```
-#[must_use]
-pub fn deobfuscate_key(encoded: &str) -> String {
-    decrypt_key(encoded)
-}
-
 /// SQLite-backed storage for sessions, messages, and provider credentials.
 ///
 /// # Error style (intentional asymmetry, C-5)
@@ -3705,11 +3667,11 @@ impl Storage {
     pub fn set_provider_auth(&self, provider_id: &str, api_key: &str) -> Result<()> {
         let conn = lock_conn!(self)?;
         let now = Utc::now().to_rfc3339();
-        let obfuscated = obfuscate_key(api_key);
+        let encrypted = encrypt_key(api_key);
         conn.execute(
             "INSERT OR REPLACE INTO provider_auth (provider_id, api_key, updated_at) \
              VALUES (?1, ?2, ?3)",
-            params![provider_id, obfuscated, now],
+            params![provider_id, encrypted, now],
         )?;
         // Register in the in-memory secret registry for exact-match redaction.
         crate::sanitize::register_secret(api_key);
