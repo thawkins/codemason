@@ -477,7 +477,16 @@ impl Shell {
             });
         }
         egui::Panel::bottom("status_bar").show(ui, |ui| {
-            status_bar_ui(ui, &mut self.app, &palette);
+            if document {
+                ui.horizontal(|ui| {
+                    status_bar_ui(ui, &mut self.app, &palette);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        crate::panels::status_bar::zoom_ui(ui, &palette);
+                    });
+                });
+            } else {
+                status_bar_ui(ui, &mut self.app, &palette);
+            }
         });
         let mut sessions_rect = None;
         egui::CentralPanel::default().show(ui, |ui| {
@@ -627,7 +636,10 @@ impl Shell {
         palette: &Palette,
         document: bool,
     ) -> Option<egui::Rect> {
-        let style = DockStyle::from_ui(ui);
+        let mut style = DockStyle::from_ui(ui);
+        if document {
+            m3_dock_style(&mut style, palette);
+        }
         let mut sessions_rect = None;
         let Self {
             app,
@@ -660,6 +672,9 @@ impl Shell {
                     prompt_ui(ui, app);
                 }
                 PaneId::Sessions => {
+                    if document {
+                        crate::material::sheet::drawer_style(ui.style_mut(), palette);
+                    }
                     sessions.show(ui, app, palette);
                     sessions_rect = Some(ui.max_rect());
                 }
@@ -1091,6 +1106,26 @@ fn is_focus_move(event: &egui::Event) -> bool {
             ..
         }
     )
+}
+
+/// Restyle the dock as Material side sheets (the word-processor layout):
+/// panes on `surface_container_low` (the desk), tab strips on
+/// `surface_container`, the open tab as a tonal (`secondary_container`)
+/// tab, the accent in `primary` and dividers in `outline_variant`.
+fn m3_dock_style(style: &mut DockStyle, palette: &Palette) {
+    use crate::palette::rgb;
+
+    let m3 = &palette.m3;
+    style.background = rgb(m3.surface_container_low);
+    style.tab_background = rgb(m3.surface_container);
+    style.active_background = rgb(m3.secondary_container);
+    style.text = rgb(m3.on_secondary_container);
+    style.inactive_text = rgb(m3.on_surface_variant);
+    style.accent = rgb(m3.primary);
+    style.border = egui::Stroke::new(1.0, rgb(m3.outline_variant));
+    style.tab_height = 32.0;
+    style.floating_background = rgb(m3.surface_container_high);
+    style.floating_stroke = egui::Stroke::new(1.0, rgb(m3.outline_variant));
 }
 
 /// The Messages pane: the transcript, whose right-click opens the context

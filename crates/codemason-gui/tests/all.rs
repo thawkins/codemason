@@ -104,6 +104,8 @@ mod test_dialogs_more;
 mod test_diff_pane;
 #[path = "test_dock.rs"]
 mod test_dock;
+#[path = "test_document_panes.rs"]
+mod test_document_panes;
 #[path = "test_files.rs"]
 mod test_files;
 #[path = "test_fonts.rs"]

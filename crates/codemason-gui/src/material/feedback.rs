@@ -68,10 +68,31 @@ pub fn slider(
     range: RangeInclusive<f32>,
     label: &str,
 ) -> Response {
+    let size = Vec2::new(ui.available_width(), SLIDER_HEIGHT);
+    slider_sized(ui, palette, value, range, label, size)
+}
+
+/// Draw a slider of a given size, e.g. a compact one in a status bar.
+///
+/// # Arguments
+///
+/// * `size` - the slider's touch area; the track runs across its middle.
+/// * the others as for [`slider`].
+///
+/// # Returns
+///
+/// The slider's response, marked changed when `value` changed.
+pub fn slider_sized(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    value: &mut f32,
+    range: RangeInclusive<f32>,
+    label: &str,
+    size: Vec2,
+) -> Response {
     let m3 = &palette.m3;
     let (start, end) = (*range.start(), *range.end());
     let span = (end - start).max(f32::EPSILON);
-    let size = Vec2::new(ui.available_width(), SLIDER_HEIGHT);
     let (rect, mut response) = ui.allocate_exact_size(size, Sense::click_and_drag());
     let track = rect.shrink2(Vec2::new(HANDLE_SIZE / 2.0, 0.0));
     let before = *value;

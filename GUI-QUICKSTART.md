@@ -93,6 +93,9 @@ word-processor layout:
   clicking any tab opens it again.
 - The transcript is a page on a grey desk, at most 816 points wide, and the
   prompt is an outlined field under it.
+- The side panels use the same Material surfaces, the sessions list has
+  roomier rows, and the status bar ends with a zoom slider (50% to 200%;
+  Ctrl+Plus and Ctrl+Minus still work).
 
 Every other theme keeps the plain `File` menu bar.
 

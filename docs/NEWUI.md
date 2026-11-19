@@ -199,7 +199,21 @@ Done, with these differences:
    - Verify: kittest layout tests for page width clamp, ribbon tab switching,
      and that every ribbon button maps to an existing command (table-driven).
 
-### Phase 5: panes, status bar and dialogs (3 days)
+### Phase 5: panes, status bar and dialogs (3 days) - DONE
+
+Done for the `document-*` themes, with these differences:
+- Panes are restyled through craft-ui's `DockStyle` (sheet colours, tonal
+  tabs, 32 pt tab strip) rather than wrapped in a second header: the dock's
+  own tab already carries the title and the close button.
+- The sessions sidebar keeps its own rows (pinning, search, project groups)
+  and gets the drawer look from `material::sheet::drawer_style`.
+- The status bar gains the zoom slider; no "focus mode" or "split diff"
+  buttons were added, as the window has no such commands.
+- Dialogs are not rebuilt: the Phase 3 visuals already give egui's windows
+  the M3 dialog surface, 28 pt corners and shadow, and their buttons the
+  tonal style.
+- The slider holds a new zoom until the pointer is released: applying it
+  while dragging rescales the slider under the pointer.
 
 1. **Left drawer**: Sessions pane framed as a standard navigation drawer
    (`surface_container_low`, active row as `secondary_container` pill).

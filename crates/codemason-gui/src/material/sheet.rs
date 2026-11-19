@@ -128,3 +128,28 @@ pub fn sheet_header(ui: &mut egui::Ui, palette: &Palette, title: &str) -> bool {
     ui.add_space(space::SM);
     closed
 }
+
+/// Restyle egui's own selectable rows as navigation drawer items, for a
+/// pane that draws its rows with egui widgets (the sessions sidebar): pill
+/// corners, roomier padding, and the selected row on `secondary_container`.
+///
+/// # Arguments
+///
+/// * `style` - the pane's style, changed in place.
+/// * `palette` - the colours.
+pub fn drawer_style(style: &mut egui::Style, palette: &Palette) {
+    let m3 = &palette.m3;
+    let pill = CornerRadius::same((ITEM_HEIGHT / 2.0) as u8);
+    let widgets = &mut style.visuals.widgets;
+    for widget in [
+        &mut widgets.inactive,
+        &mut widgets.hovered,
+        &mut widgets.active,
+        &mut widgets.open,
+    ] {
+        widget.corner_radius = pill;
+    }
+    style.visuals.selection.bg_fill = rgb(m3.secondary_container);
+    style.visuals.selection.stroke = egui::Stroke::new(1.0, rgb(m3.on_secondary_container));
+    style.spacing.button_padding = Vec2::new(ITEM_PADDING, space::SM);
+}
