@@ -245,6 +245,10 @@ fn session_text(
 /// The Sessions pane's dock tab title: the pane name and the session count,
 /// e.g. `Sessions (12)`. The panel itself draws no heading.
 ///
+/// While the sidebar is shown, its data is refreshed first if it is dirty,
+/// so the count is current even when another tab is in front and the panel
+/// body (which also refreshes) is not drawn.
+///
 /// # Arguments
 ///
 /// * `app` - the App whose sidebar groups are counted.
@@ -252,8 +256,10 @@ fn session_text(
 /// # Returns
 ///
 /// The tab title.
-#[must_use]
-pub fn tab_title(app: &App) -> String {
+pub fn tab_title(app: &mut App) -> String {
+    if app.sidebar.visible {
+        refresh_if_dirty(app);
+    }
     let total: usize = app.sidebar.groups.iter().map(|g| g.sessions.len()).sum();
     format!("{SESSIONS_LABEL} ({total})")
 }
@@ -321,11 +327,19 @@ impl SessionsView {
                     egui::Button::selectable(highlighted, row_text(ui, app, row, palette))
                         .frame_when_inactive(false)
                         .min_size(egui::vec2(ui.available_width(), row_height))
+                        // One line per row: `show_rows` and the cursor
+                        // scrolling assume a fixed row height.
+                        .truncate()
                         .atom_ui(ui);
-                if let SidebarRow::Header { key, collapsed, .. } = row
-                    && let Some(slot) = response.rect(disclosure_id())
-                {
-                    paint_disclosure(ui, slot, *collapsed, header_colour(key, palette));
+                if let SidebarRow::Header { key, collapsed, .. } = row {
+                    if let Some(slot) = response.rect(disclosure_id()) {
+                        paint_disclosure(ui, slot, *collapsed, header_colour(key, palette));
+                    }
+                    // The triangle is only painted: tell assistive
+                    // technology whether the section is open.
+                    ui.ctx().accesskit_node_builder(response.id, |node| {
+                        node.set_expanded(!*collapsed);
+                    });
                 }
                 if response.clicked() {
                     let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.mac_cmd);

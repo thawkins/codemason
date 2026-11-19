@@ -451,7 +451,7 @@ fn test_dock_closing_the_sessions_tab_hides_the_sidebar() {
     let mut rig = rig(|_, app| app.sidebar.visible = true);
     rig.harness.run();
 
-    let tab = tab_title(rig.harness.state().app());
+    let tab = tab_title(rig.harness.state_mut().app_mut());
     rig.harness
         .get_by_role_and_label(Role::Tab, &tab)
         .click_secondary();
