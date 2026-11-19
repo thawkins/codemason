@@ -54,11 +54,55 @@ pub enum Icon {
     ChevronDown,
     /// Copy (`content_copy`).
     Copy,
+    /// A new session (`add_comment`).
+    Add,
+    /// The session list (`forum`).
+    Sessions,
+    /// Undo (`undo`).
+    Undo,
+    /// Redo (`redo`).
+    Redo,
+    /// Stop the running turn (`stop_circle`).
+    Stop,
+    /// Compact the conversation (`compress`).
+    Compact,
+    /// An image (`image`).
+    Image,
+    /// A prompt template (`article`).
+    Template,
+    /// Open a folder (`folder_open`).
+    FolderOpen,
+    /// A new folder (`create_new_folder`).
+    NewFolder,
+    /// The model (`psychology`).
+    Model,
+    /// An agent loop (`repeat`).
+    Loop,
+    /// The log (`receipt_long`).
+    Log,
+    /// The profiler (`speed`).
+    Profile,
+    /// The task list (`checklist`).
+    Tasks,
+    /// Memory (`memory`).
+    Memory,
+    /// The colour theme (`palette`).
+    Theme,
+    /// Cost (`payments`).
+    Cost,
+    /// Usage statistics (`bar_chart`).
+    Stats,
+    /// Diagnostics (`health_and_safety`).
+    Doctor,
+    /// Quit (`logout`).
+    Quit,
+    /// Collapse (`expand_less`).
+    ChevronUp,
 }
 
 impl Icon {
     /// Every icon.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 34] = [
         Self::Read,
         Self::Edit,
         Self::Command,
@@ -71,6 +115,28 @@ impl Icon {
         Self::ChevronRight,
         Self::ChevronDown,
         Self::Copy,
+        Self::Add,
+        Self::Sessions,
+        Self::Undo,
+        Self::Redo,
+        Self::Stop,
+        Self::Compact,
+        Self::Image,
+        Self::Template,
+        Self::FolderOpen,
+        Self::NewFolder,
+        Self::Model,
+        Self::Loop,
+        Self::Log,
+        Self::Profile,
+        Self::Tasks,
+        Self::Memory,
+        Self::Theme,
+        Self::Cost,
+        Self::Stats,
+        Self::Doctor,
+        Self::Quit,
+        Self::ChevronUp,
     ];
 
     /// The icon's character in the Material Symbols font.
@@ -89,6 +155,28 @@ impl Icon {
             Self::ChevronRight => "\u{e5cc}",
             Self::ChevronDown => "\u{e5cf}",
             Self::Copy => "\u{e14d}",
+            Self::Add => "\u{e266}",
+            Self::Sessions => "\u{e8af}",
+            Self::Undo => "\u{e166}",
+            Self::Redo => "\u{e15a}",
+            Self::Stop => "\u{ef71}",
+            Self::Compact => "\u{e94d}",
+            Self::Image => "\u{e3f4}",
+            Self::Template => "\u{ef42}",
+            Self::FolderOpen => "\u{e2c8}",
+            Self::NewFolder => "\u{e2cc}",
+            Self::Model => "\u{ea4a}",
+            Self::Loop => "\u{e040}",
+            Self::Log => "\u{ef6e}",
+            Self::Profile => "\u{e9e4}",
+            Self::Tasks => "\u{e6b1}",
+            Self::Memory => "\u{e322}",
+            Self::Theme => "\u{e40a}",
+            Self::Cost => "\u{ef63}",
+            Self::Stats => "\u{e26b}",
+            Self::Doctor => "\u{e1d5}",
+            Self::Quit => "\u{e9ba}",
+            Self::ChevronUp => "\u{e5ce}",
         }
     }
 
@@ -108,6 +196,28 @@ impl Icon {
             Self::ChevronRight => ">",
             Self::ChevronDown => "v",
             Self::Copy => "cp",
+            Self::Add => "+",
+            Self::Sessions => "=",
+            Self::Undo => "<-",
+            Self::Redo => "->",
+            Self::Stop => "[]",
+            Self::Compact => "><",
+            Self::Image => "img",
+            Self::Template => "tpl",
+            Self::FolderOpen => "dir",
+            Self::NewFolder => "+dir",
+            Self::Model => "llm",
+            Self::Loop => "oo",
+            Self::Log => "log",
+            Self::Profile => "prf",
+            Self::Tasks => "tsk",
+            Self::Memory => "mem",
+            Self::Theme => "thm",
+            Self::Cost => "$$",
+            Self::Stats => "#",
+            Self::Doctor => "dr",
+            Self::Quit => "q",
+            Self::ChevronUp => "^",
         }
     }
 }

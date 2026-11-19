@@ -241,6 +241,8 @@ mod test_plugins_list_panel_gui;
 mod test_project_menu_gui;
 #[path = "test_render_cost_scaling_gui.rs"]
 mod test_render_cost_scaling_gui;
+#[path = "test_ribbon.rs"]
+mod test_ribbon;
 #[path = "test_router_setup_gui.rs"]
 mod test_router_setup_gui;
 #[path = "test_row_action_confirm_gui.rs"]

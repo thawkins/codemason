@@ -144,7 +144,25 @@ widget not yet migrated already looks M3-adjacent.
 - Verify: one kittest file per component checking size, state colours, and
   keyboard focus ring visibility.
 
-### Phase 4: window chrome, the Word-style frame (3 to 4 days)
+### Phase 4: window chrome, the Word-style frame (3 to 4 days) - DONE
+
+Done, with these differences:
+- The frame is drawn only for themes with their own Material roles (the
+  `document-*` themes); every other theme keeps the `File` menu bar,
+  following the decision that the new look is opt-in through `/theme`.
+- The title strip shows `codemason - <project folder>`, not the session
+  title: the session title is only read from the database, too costly per
+  frame. Its quick access buttons are New session, Undo, Copy transcript
+  (`/clip`) and Stop (Esc).
+- File is an ordinary ribbon tab (project folders, About, Quit), not a
+  full-window backstage sheet.
+- The prompt keeps its own editor (completion, history, attachments) inside
+  an outlined frame; it is not replaced by `material::text_field`.
+- The collapsed state is not persisted yet; it resets on restart.
+- craft-libs: the ribbon's tab strip and `material::tabs` use
+  `craft_ui::tabs` (`Tab`, `fit_whole`). `craft_window::title_bar` (the app
+  strip as the real window title bar) needs an undecorated window, which is
+  decided at startup for every theme; it is left as an open option.
 
 1. **Title strip** (`shell.rs`, replaces `egui::Panel::top("menu_bar")`):
    small top app bar showing `codemason - <session title>` and a Quick Access

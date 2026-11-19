@@ -72,6 +72,30 @@ You can also open the provider setup directly from the prompt:
 /provider
 ```
 
+### Word-processor layout
+
+The `document-light` and `document-dark` themes switch the window to a
+word-processor layout:
+
+```text
+/theme document-light
+```
+
+- A title strip shows the project and four quick buttons: New session,
+  Undo, Copy transcript and Stop.
+- A ribbon replaces the `File` menu. Its tabs are File (open a project, a
+  new project folder, About, Quit), Home (sessions, undo and redo, copy,
+  stop, compact), Insert (attach images, templates), Agent (model, agent,
+  loop), View (the Log, Profile, Tasks and Memory panels, theme) and Review
+  (cost, stats, doctor). Every button runs a command codemason already has;
+  hover it to see its name.
+- The chevron at the right of the tabs collapses the ribbon to its tabs;
+  clicking any tab opens it again.
+- The transcript is a page on a grey desk, at most 816 points wide, and the
+  prompt is an outlined field under it.
+
+Every other theme keeps the plain `File` menu bar.
+
 ---
 
 ## 2. Creating an `AGENTS.md` file for your project

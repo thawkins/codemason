@@ -63,6 +63,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use crate::dialogs;
 use crate::dock::{self, HiddenPanes, PaneId};
 use crate::keys::{Focus, KeyRouter, default_keymap};
+use crate::page::{PageStyle, page_ui};
 use crate::palette::Palette;
 use crate::panels::agents::agents_ui;
 use crate::panels::context::context_ui;
@@ -81,6 +82,7 @@ use crate::platform::clipboard;
 use crate::platform::files::{self, FileDialogs, file_menu};
 use crate::platform::menu::{self, MenuAction};
 use crate::platform::window::{CloseGuard, WindowGeometry};
+use crate::ribbon::{RibbonAction, RibbonState, ribbon_ui, title_strip_ui};
 use crate::theme::ThemeApplier;
 
 /// Most log records moved into the app per frame, so a burst cannot stall
@@ -137,6 +139,9 @@ pub struct Shell {
     geometry: Option<WindowGeometry>,
     /// Set by the Ctrl+C / SIGTERM task ([`crate::signal`]): quit.
     shutdown_signal: Option<Arc<AtomicBool>>,
+    /// The ribbon's open tab and collapsed state (the word-processor
+    /// layout of the `document-*` themes).
+    ribbon: RibbonState,
 }
 
 impl std::fmt::Debug for Shell {
@@ -187,6 +192,7 @@ impl Shell {
             native_menu: None,
             geometry: None,
             shutdown_signal: None,
+            ribbon: RibbonState::default(),
         }
     }
 
@@ -414,17 +420,38 @@ impl Shell {
         self.sync_dock(ui.ctx());
         let palette = Palette::from_tokens(&tokens);
         let menus_enabled = !dialogs::locks_prompt(&self.app);
-        egui::Panel::top("menu_bar").show(ui, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                file_menu(ui, &mut self.files, &self.app.cwd_path, menus_enabled);
+        // The word-processor layout belongs to the themes with their own
+        // Material roles; every other theme keeps the plain menu bar.
+        let document = tokens.m3.is_some();
+        if document {
+            let title = self.window_title();
+            let mut chosen = None;
+            egui::Panel::top("title_strip").show(ui, |ui| {
+                ui.add_enabled_ui(menus_enabled, |ui| {
+                    chosen = title_strip_ui(ui, &palette, &title);
+                });
             });
-        });
+            egui::Panel::top("ribbon").show(ui, |ui| {
+                ui.add_enabled_ui(menus_enabled, |ui| {
+                    chosen = ribbon_ui(ui, &palette, &mut self.ribbon).or(chosen);
+                });
+            });
+            if let Some(action) = chosen {
+                self.run_ribbon_action(ui.ctx(), action);
+            }
+        } else {
+            egui::Panel::top("menu_bar").show(ui, |ui| {
+                egui::MenuBar::new().ui(ui, |ui| {
+                    file_menu(ui, &mut self.files, &self.app.cwd_path, menus_enabled);
+                });
+            });
+        }
         egui::Panel::bottom("status_bar").show(ui, |ui| {
             status_bar_ui(ui, &mut self.app, &palette);
         });
         let mut sessions_rect = None;
         egui::CentralPanel::default().show(ui, |ui| {
-            sessions_rect = self.show_dock(ui, &palette);
+            sessions_rect = self.show_dock(ui, &palette, document);
         });
         dialogs::show(ui.ctx(), &mut self.app);
         dialogs::image_view::show(ui.ctx());
@@ -512,7 +539,57 @@ impl Shell {
 
     /// Draw the dock and apply what the user did to it; returns the
     /// sessions sidebar's rectangle when it was drawn.
-    fn show_dock(&mut self, ui: &mut egui::Ui, palette: &Palette) -> Option<egui::Rect> {
+    /// The title strip's text: the app name and the project folder.
+    fn window_title(&self) -> String {
+        match self.app.cwd_path.file_name() {
+            Some(name) => format!("codemason - {}", name.to_string_lossy()),
+            None => "codemason".to_string(),
+        }
+    }
+
+    /// Run a ribbon or quick access command, as the native menu runs its
+    /// commands: a key press through `App::handle_key`, a slash command
+    /// through `App::execute_slash_command`, a panel toggle as its keymap
+    /// command's key press, and a file dialog through the File menu's
+    /// dialogs. Without attached sources there is no runtime, so key presses
+    /// and slash commands are dropped.
+    fn run_ribbon_action(&mut self, ctx: &egui::Context, action: RibbonAction) {
+        let key = match action {
+            RibbonAction::Files(intent) => {
+                let start = &self.app.cwd_path;
+                let start = (!start.as_os_str().is_empty()).then_some(start.as_path());
+                self.files.ask(intent, start);
+                return;
+            }
+            RibbonAction::Panel(command) => {
+                crate::keys::command_key_input(&craft_keymap::CommandRef::new(command))
+                    .map(MenuAction::Key)
+            }
+            RibbonAction::Menu(menu_action) => Some(menu_action),
+        };
+        let (Some(menu_action), Some(sources)) = (key, self.sources.as_ref()) else {
+            tracing::debug!(?action, "ribbon command not run");
+            return;
+        };
+        match menu_action {
+            MenuAction::Key(key) => {
+                sources.runtime.block_on(self.app.handle_key(key));
+            }
+            MenuAction::Slash(line) => {
+                sources
+                    .runtime
+                    .block_on(self.app.execute_slash_command(line));
+            }
+        }
+        ctx.request_repaint();
+    }
+
+    fn show_dock(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &Palette,
+        document: bool,
+    ) -> Option<egui::Rect> {
         let style = DockStyle::from_ui(ui);
         let mut sessions_rect = None;
         let Self {
@@ -529,7 +606,18 @@ impl Shell {
             |pane: &PaneId| pane.label().to_string(),
             |pane: &PaneId| pane.permissions(),
             |ui, pane| match pane {
+                PaneId::Messages if document => {
+                    page_ui(ui, palette, PageStyle::Page, |ui| {
+                        messages_body(ui, app, messages, palette);
+                    });
+                }
                 PaneId::Messages => messages_body(ui, app, messages, palette),
+                PaneId::Prompt if document => {
+                    page_ui(ui, palette, PageStyle::Field, |ui| {
+                        queue_ui(ui, app);
+                        prompt_ui(ui, app);
+                    });
+                }
                 PaneId::Prompt => {
                     queue_ui(ui, app);
                     prompt_ui(ui, app);

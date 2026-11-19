@@ -26,7 +26,10 @@ fn test_material_tabs_share_the_width_and_switch_on_click() {
     harness.run();
     assert_eq!(*harness.state(), 1);
     assert_eq!(
-        harness.get_by_label("Insert").accesskit_node().toggled(),
-        Some(egui::accesskit::Toggled::True)
+        harness
+            .get_by_label("Insert")
+            .accesskit_node()
+            .is_selected(),
+        Some(true)
     );
 }
